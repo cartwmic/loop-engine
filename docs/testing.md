@@ -91,15 +91,23 @@ Every operation has primary valid-path E2E scenario. Additional required facets 
 | Operation characteristic | Mandatory facets |
 |---|---|
 | Every operation | Valid path through production CLI, runtime operation-ID proof, correlated trace file, request/outcome payloads, and start/finish envelope |
-| State mutation | Fresh-process CLI query verifies authoritative state and journal |
-| Rejectable mutation | Rejected path verifies state unchanged and rejection journaled |
-| Provider invoking | Completed use, provider-reported rejection, missing provider, timeout, crash, malformed protocol, and bounded output |
+| Run-state or run-journal mutation | Fresh-process CLI query verifies authoritative run state and journal |
+| Successful creation | Fresh-process CLI query verifies new authoritative run and creation journal atomically |
+| Rejected/error creation | Fresh-process CLI query verifies no run and no run journal |
+| Provider-catalog mutation | Fresh-process `provider.list` verifies authoritative catalog state; no per-run journal is created per I40 |
+| Rejectable run mutation after run lookup | Rejected path verifies run state unchanged and rejection journaled |
+| Rejectable provider-catalog mutation | Rejected path verifies catalog unchanged and no per-run journal entry; invocation trace records outcome |
+| Provider invoking | Completed role-valid result; role-defined denial, finding, incompatibility, or evaluation error when applicable; missing provider, timeout, crash, malformed protocol, invalid UTF-8, and bounded output |
 | Gate driven | Complete passing/failing verdict set, explicit incompatibility, evaluation error, exact-set violation, empty-gate no-invocation, provider evidence pass/fail persistence, and malformed provider evidence |
 | Read | Structured output contract plus invalid/not-found input |
-| Lifecycle | Active, neutral final with domain meaning in state ID, intentional zero-final ongoing run, non-final terminate-only sink, explicit termination/note, empty terminal requestable events, no reopen, terminal annotation, invalid post-terminal event/advisory request, and repeated termination rejection |
+| Lifecycle family | Applicable command-owned slice of: active, neutral final with domain meaning in state ID, intentional zero-final ongoing run, non-final terminate-only sink, explicit termination/note, empty terminal requestable events, no reopen, terminal evidence/annotation allowance, terminal label/event/advisory/compatibility rejection, and repeated termination rejection |
 | Compatibility sensitive | Non-latching check completes with per-capability findings; supported/gate-free request remains usable and selected unsupported capability rejects |
+| Provider-free under missing provider | Applicable safe read/mutation still completes or reaches its stored-policy result with registration/executable unavailable; provider ledger remains empty |
+| Journal required | Fresh-process history proves exact required creation, event/guidance/per-run-compatibility attempt, provider drift observation, evidence, annotation, label, or termination fact and ordering |
+| Trace provider boundary | Every provider-invoking path proves configured invocation facts, complete bounded payloads/streams, and finish/failure event |
+| Trace persistence boundary | Every persistence path proves attempted transaction/read, applicable version check, and commit/rollback/read outcome |
 
-No lower-level test can waive applicable facet.
+Lifecycle ownership is distributed, not repeated wholesale by every lifecycle-aware command: list/show/terminate own lifecycle visibility and terminal-state family; evidence/annotation own terminal append allowance; label/request/guidance/compatibility own their terminal rejection. Facet inventory must assign every family member to at least one exposure and each operation must close its applicable slice before exposure. Names in operation facet inventories must match this table exactly. No lower-level test can waive an assigned facet.
 
 ## Required reference acceptance
 
@@ -179,7 +187,7 @@ Each scenario uses:
 - no test-order dependency;
 - fresh CLI processes across persistent operations.
 
-Network is disabled unless scenario explicitly tests provider network policy. Ordinary behavioral assertions use CLI output rather than direct database queries. Direct fixture construction is permitted for migration and corruption setup.
+Network is disabled unless scenario explicitly tests provider network policy. Ordinary behavioral assertions use CLI output rather than direct database queries. Direct fixture construction is permitted for migration/corruption and narrowly for schema-valid prerequisite state whose owning operation is not yet exposed. Such setup uses production schema, is never behavioral evidence for operation that would create state, and must be repeated through production CLI after owning operation exposes.
 
 Required scenarios cannot be ignored, quarantined, or accepted as known failures.
 
