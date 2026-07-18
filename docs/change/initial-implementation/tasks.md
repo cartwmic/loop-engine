@@ -1,6 +1,6 @@
 # Initial Implementation Task List
 
-**Status:** Not started
+**Status:** In progress — Phase 0
 
 Follow [execution protocol](README.md#execution-protocol), resolve [decision gates](decisions.md), and maintain [coverage map](coverage.md). Every task is sized for one fresh subagent unless its stop condition requires owner escalation.
 
@@ -66,7 +66,7 @@ Global rules for every task:
 
 ## Phase 0 — Freeze implementation contracts
 
-### T001 [ ] Resolve runtime packaging and persistence direction
+### T001 [x] Resolve runtime packaging and persistence direction
 - **Depends:** none
 - **Read:** `decisions.md` D001; foundation technology, architecture, invariants C1–C4.
 - **Files:** `decisions.md`, `../../invariants.md`, `../../technology.md`, `../../architecture.md`, `../../testing.md`.
@@ -75,7 +75,7 @@ Global rules for every task:
 - **Done when:** no dependent task must treat C1–C4 as candidate.
 - **Stop:** owner rejects recommendation; re-plan every persistence/tooling task.
 
-### T002 [ ] Resolve supported platforms
+### T002 [x] Resolve supported platforms
 - **Depends:** T001
 - **Read:** D002; foundation trace, subprocess, distribution, and test isolation sections.
 - **Files:** `decisions.md`, `../../technology.md`, `../../testing.md`.
@@ -84,16 +84,16 @@ Global rules for every task:
 - **Done when:** process, permission, path, fixture, and CI tasks share one platform scope.
 - **Stop:** Windows included; reopen D005, D007, D010, and D013 first.
 
-### T003 [ ] Select project license
+### T003 [x] Select project license
 - **Depends:** T001
 - **Read:** D003 and dependency/release requirements.
-- **Files:** `decisions.md`, new `../../../LICENSE-MIT`, new `../../../LICENSE-APACHE`, new `../../../README.md` as selected by D003.
+- **Files:** `decisions.md`, `../../technology.md`, new `../../../LICENSE-MIT`, new `../../../LICENSE-APACHE`, new `../../../README.md` as selected by D003.
 - **Deliver:** owner-selected canonical license file(s), root README license notice, and resolution record; T017 consumes decision into exact package metadata.
 - **Verify:** exact canonical license text and `git diff --check`.
 - **Done when:** dependency allowlist and package metadata can use one explicit policy.
 - **Stop:** owner has not selected MIT or MIT/Apache-2.0.
 
-### T004 [ ] Freeze application operation catalog
+### T004 [x] Freeze application operation catalog
 - **Depends:** T001
 - **Read:** D004; architecture operation list; all UX storyboards; testing closed-catalog rule.
 - **Files:** `decisions.md`, new `../../operation-catalog.md`, `quality/facets/v1/{schema.json,README.md}`, `../../architecture.md`, `../../testing.md`, `../../ux-storyboards.md`.
@@ -102,7 +102,7 @@ Global rules for every task:
 - **Done when:** exact catalog accepted and coverage table can be mechanical.
 - **Stop:** any operation split/merge remains disputed.
 
-### T005 [ ] Freeze provider protocol v1 transport
+### T005 [x] Freeze provider protocol v1 transport
 - **Depends:** T001, T002
 - **Read:** D005; provider model in intent/architecture/technology; I4, I6, I8, I9, I20, I32, I37–I40, I43–I44.
 - **Files:** `decisions.md`, new `../../provider-protocol-v1.md`, `../../technology.md`, `../../architecture.md`.
@@ -111,7 +111,7 @@ Global rules for every task:
 - **Done when:** independent provider author could implement transport without Rust source.
 - **Stop:** persistent process, streaming protocol, or Windows support requested; re-design before schemas.
 
-### T006 [ ] Freeze structured CLI and exit contract
+### T006 [x] Freeze structured CLI and exit contract
 - **Depends:** T004
 - **Read:** D006; I18, I27, I34, I46; UX automation storyboard.
 - **Files:** `decisions.md`, new `../../cli-contract.md`, `../../ux-storyboards.md`, `../../testing.md`.
@@ -120,7 +120,7 @@ Global rules for every task:
 - **Done when:** renderer and E2E parser require no schema guesses.
 - **Stop:** human and structured semantics diverge.
 
-### T007 [ ] Freeze machine-local paths and configuration
+### T007 [x] Freeze machine-local paths and configuration
 - **Depends:** T001, T002
 - **Read:** D007; intent configuration; I16, I40–I41; technology persistence direction.
 - **Files:** `decisions.md`, new `../../configuration.md`, `../../technology.md`, `../../architecture.md`.
@@ -129,7 +129,7 @@ Global rules for every task:
 - **Done when:** project defaults cannot rebind an existing run.
 - **Stop:** multiple state stores or provider definitions in project config proposed.
 
-### T008 [ ] Freeze bounds and timeout defaults
+### T008 [x] Freeze bounds and timeout defaults
 - **Depends:** T005, T006, T007
 - **Read:** D008; evidence, provider, trace, and diagnostic bounds in foundation.
 - **Files:** `decisions.md`, `../../provider-protocol-v1.md`, `../../configuration.md`, `../../technology.md`, `../../cli-contract.md`.
@@ -138,7 +138,7 @@ Global rules for every task:
 - **Done when:** no implementation task needs a magic number.
 - **Stop:** selected evidence would be truncated; foundation requires rejection instead.
 
-### T009 [ ] Freeze SQLite and migration policy
+### T009 [x] Freeze SQLite and migration policy
 - **Depends:** T001, T007
 - **Read:** D009; persistence authority; I12–I16, I35–I36, I45.
 - **Files:** `decisions.md`, new `../../persistence.md`, `../../technology.md`, `../../architecture.md`, `../../testing.md`.
@@ -147,7 +147,7 @@ Global rules for every task:
 - **Done when:** migration `0001` can be designed without semantic gaps.
 - **Stop:** event sourcing, ORM, dual authority, or provider-spanning write transaction proposed.
 
-### T010 [ ] Freeze operational trace contract
+### T010 [x] Freeze operational trace contract
 - **Depends:** T002, T006–T008
 - **Read:** D010; I42, I46; architecture/technology trace sections; UX trace contract.
 - **Files:** `decisions.md`, new `../../operational-trace.md`, `../../technology.md`, `../../testing.md`, `../../ux-storyboards.md`.
@@ -156,7 +156,7 @@ Global rules for every task:
 - **Done when:** trace cannot become competing state/journal authority.
 - **Stop:** design requires trace context in every function or claims impossible crash completeness.
 
-### T011 [ ] Freeze journal entry model
+### T011 [x] Freeze journal entry model
 - **Depends:** T008–T009
 - **Read:** D011; I8, I11–I15, I35; reference journal expectations.
 - **Files:** `decisions.md`, new `../../journal-contract.md`, `../../architecture.md`, `../../ux-storyboards.md`.
@@ -165,7 +165,7 @@ Global rules for every task:
 - **Done when:** persistence schema and history renderer share one immutable model.
 - **Stop:** proposed model requires reconstructing current state by replay.
 
-### T012 [ ] Freeze semantic judge contract and provisioning
+### T012 [x] Freeze semantic judge contract and provisioning
 - **Depends:** T001
 - **Read:** D012; I47; testing Git enforcement; architecture composition/enforcement.
 - **Files:** `decisions.md`, new `../../development-policy.md`, `../../testing.md`, `../../architecture.md`.
@@ -174,7 +174,7 @@ Global rules for every task:
 - **Done when:** owner proves real judge runs locally and records exact T029 provisioning handoff without storing credentials.
 - **Stop:** fixture/fake judge is proposed as publication authority.
 
-### T013 [ ] Freeze provider-fixture implementation strategy
+### T013 [x] Freeze provider-fixture implementation strategy
 - **Depends:** T002, T005
 - **Read:** D013; no-mock doctrine; reference provider boundary.
 - **Files:** `decisions.md`, `../../testing.md`, `../../technology.md`.
@@ -183,7 +183,7 @@ Global rules for every task:
 - **Done when:** CI/runtime prerequisites are known.
 - **Stop:** fixture imports product internals or accesses authoritative DB.
 
-### T014 [ ] Freeze canonical graph encoding
+### T014 [x] Freeze canonical graph encoding
 - **Depends:** T005, T008
 - **Read:** D014; I6–I8, I32, I37, I43; graph validation direction.
 - **Files:** `decisions.md`, `../../provider-protocol-v1.md`, new `../../graph-projection.md`, `../../technology.md`.
@@ -192,7 +192,7 @@ Global rules for every task:
 - **Done when:** no persisted run can later receive accidental digest redefinition.
 - **Stop:** canonical form depends on hash-map iteration or provider raw JSON formatting.
 
-### T015 [ ] Freeze audit export scope
+### T015 [x] Freeze audit export scope
 - **Depends:** T004, T006, T009, T011
 - **Read:** D015; I24, I41, I45; persistence/export testing requirements.
 - **Files:** `decisions.md`, new `../../export-contract.md`, `../../operation-catalog.md`, `../../testing.md`, `../../technology.md`.
@@ -201,7 +201,7 @@ Global rules for every task:
 - **Done when:** optional foundation language and required test language agree.
 - **Stop:** export to stdout would violate one-envelope structured mode without explicit design.
 
-### T016 [ ] Freeze project-default discovery and close C0
+### T016 [x] Freeze project-default discovery and close C0
 - **Depends:** T001–T015
 - **Read:** D016; I40–I41; clean-room/no-discovery constraints.
 - **Files:** `decisions.md`, `../../configuration.md`, `../../technology.md`.
@@ -1384,11 +1384,11 @@ Each exposure task first registers production route and both runtime catalog IDs
 - **Done when:** no auto-selection/truncation/dereference occurs.
 
 ### T173 [ ] Cover journal/state/evidence atomicity with fault injection
-- **Depends:** T108, T111–T118, T149, T151, T159, T161–T163
+- **Depends:** T108, T111–T118, T149, T151, T159, T161–T165
 - **Files:** `cli/tests/e2e/atomicity.rs`, `test-support/sqlite/faults/*.sql`.
-- **Deliver:** abort each creation/mutation/attempt write boundary and inspect via fresh CLI.
-- **Verify:** old-or-new complete state only; response never falsely claims recording.
-- **Done when:** every durable mutation/attempt class has rollback evidence.
+- **Deliver:** abort each creation/mutation/attempt write boundary—including post-lookup `run.guidance` and `run.compatibility` attempt journal commits under I14—and inspect via fresh CLI.
+- **Verify:** old-or-new complete state only; response never falsely claims recording; deterministic fault-injection rollback/atomicity proof for every post-lookup `run.guidance` and `run.compatibility` attempt journal boundary.
+- **Done when:** every durable mutation/attempt class, including guidance and per-run compatibility attempts, has rollback evidence under I14.
 
 ### T174 [ ] Cover lifecycle family end to end
 - **Depends:** T149–T166

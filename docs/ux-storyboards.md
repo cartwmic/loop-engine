@@ -1,12 +1,13 @@
 # Loop Engine Interaction Storyboards
 
-**Status:** Normative product interaction semantics. Command flags, JSON field names, and numeric exit codes are illustrative until CLI/protocol schemas are designed.
+**Status:** Normative product interaction semantics. Stable operation IDs and CLI argv are frozen in [operation-catalog.md](operation-catalog.md) (T004). Structured envelope field names, human parity mapping, and exit codes are frozen in [cli-contract.md](cli-contract.md) (T006; [D006](change/initial-implementation/decisions.md#d006--structured-cli-contract)).
 
 Related documents:
 
 - [Product intent](intent.md)
 - [System invariants](invariants.md)
 - [Code architecture](architecture.md)
+- [Journal entry contract](journal-contract.md)
 - [Testing doctrine](testing.md)
 - [Reference workflow](reference-workflow.md)
 
@@ -33,6 +34,8 @@ Operation completion is distinct from run completion. A `completed` inspection o
 Detailed reason code explains exact denial/failure. Every dispatched result exposes request ID and operational-trace location. Run-related result reports current lifecycle/state, whether state identifier changed, and next **requestable** events when run remains readable. Completed self-loop reports unchanged state while history records transition. Requestable means graph permits event request from current state; it does not promise gates will pass.
 
 ## Operational trace contract
+
+Normative JSONL v1 schema, permissions, budget, and late sink-failure rules: [operational-trace.md](operational-trace.md) (T010).
 
 Every CLI invocation initializes one current-user-only structured JSONL trace before operation dispatch. Failure to initialize secure trace stops invocation before provider execution, persistence mutation, or dispatch and emits rich stderr failure. When trace exists, request ID correlates human/structured result with exact file.
 
@@ -127,7 +130,7 @@ EVIDENCE          KIND    LOCATOR                              DIGEST
 01J-EVIDENCE...   design  file:///work/checkout/docs/design.md sha256:...
 ```
 
-History and evidence inventory execute no provider code. Stable evidence IDs, kinds, locators, digests/metadata, and prior event associations support cold-session handoff. Selection defaults empty and remains caller-owned; static/live guidance may recommend IDs but engine never auto-selects.
+History and evidence inventory execute no provider code. Each history row is one immutable aggregate journal entry per [journal-contract.md](journal-contract.md) (sequence-ordered, append-only, non-replay). Stable evidence IDs, kinds, locators, digests/metadata, and prior event associations support cold-session handoff. Selection defaults empty and remains caller-owned; static/live guidance may recommend IDs but engine never auto-selects.
 
 ### Explicit live guidance
 
@@ -236,6 +239,27 @@ For provider-dependent request, tombstoned/missing registration or executable, p
 
 Missing/incompatible provider does not block provider-free show/graph/history, evidence/annotation, termination, or gate-free events.
 
+### Per-run compatibility check
+
+Registration-wide `provider check … --active-runs` reports across active graphs without per-run journal fan-out. Explicit per-run inspection is a separate operation:
+
+```console
+$ loop-engine run compatibility 01J...
+
+Outcome: completed
+Provider executed: yes
+
+Findings:
+  event.approved: compatible
+  guidance.live: incompatible
+    stored guidance contract no longer supported
+
+State: design-review (unchanged)
+Lifecycle: active
+```
+
+`run compatibility` targets one active stored run. It completes with non-latching per-capability findings even when findings include incompatibility. After run lookup it atomically appends compatibility-attempt and provider-observation journal facts (including drift) without changing workflow state or version. Terminal lifecycle rejects the request. Unsupported selected capabilities on `run request` or `run guidance` reject while supported and gate-free events remain usable.
+
 ## Storyboard 6: Provider update and removal
 
 ```text
@@ -270,38 +294,41 @@ Provider-dependent live guidance/compatibility execution on terminal run rejects
 
 Automation invokes same operations as human caller.
 
-Structured mode emits exactly one authoritative JSON envelope on stdout for every dispatched completed, rejected, or error outcome. Always-on trace is separate file and never contaminates stdout. Stderr is reserved for rich failures before dispatch or inability to construct envelope. Provider stdout/stderr never bypass engine envelope and is retained only through bounded operational trace capture.
+Structured mode emits exactly one authoritative JSON outcome envelope on stdout for every dispatched completed, rejected, or error outcome. Always-on trace is separate file and never contaminates stdout. Stderr is reserved for rich failures before dispatch or inability to construct envelope. Provider stdout/stderr never bypass engine envelope and is retained only through bounded operational trace capture.
 
-Illustrative shape:
+Frozen envelope shape ([cli-contract.md](cli-contract.md)):
 
 ```json
 {
+  "schema_version": 1,
   "operation": "run.request",
   "request_id": "01J...",
-  "trace": "/machine-local/logs/01J....jsonl",
+  "trace": "/machine-local/state/loop-engine/traces/01J....jsonl",
   "outcome": "rejected",
   "reason": {
     "code": "gate.failed",
     "message": "One or more required gates failed"
   },
-  "run": {
-    "id": "01J...",
-    "label": "checkout-redesign",
-    "lifecycle": "active",
-    "state": "design-review",
-    "state_changed": false
+  "data": {
+    "run": {
+      "id": "01J...",
+      "label": "checkout-redesign",
+      "lifecycle": "active",
+      "state": "design-review",
+      "state_changed": false
+    },
+    "evidence_recorded": {
+      "inline": true,
+      "selected_associations": true,
+      "provider": true
+    },
+    "requestable_events": ["approved", "changes-requested"]
   },
-  "evidence_recorded": {
-    "inline": true,
-    "selected_associations": true,
-    "provider": true
-  },
-  "requestable_events": ["approved", "changes-requested"],
   "diagnostics": []
 }
 ```
 
-Completed, rejected, and error outcomes have distinct stable process exit behavior. Exact numeric codes and envelope field schema are implementation-stage decisions.
+Human mode presents the same semantics: `Outcome: rejected` corresponds to `"outcome": "rejected"` and exit `2`; `Outcome: completed` to exit `0`; `Outcome: error` to exit `1`. Pre-dispatch failures exit `64` with rich stderr and no stdout envelope.
 
 ## MVP exclusions exposed by storyboards
 

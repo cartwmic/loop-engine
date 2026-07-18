@@ -1,6 +1,6 @@
 # Loop Engine Code Architecture
 
-**Status:** Three-crate structure, executable-provider boundary, per-run graph snapshots, and authoritative-state-plus-journal model are settled. Technology choices marked candidate remain open.
+**Status:** Three-crate structure, executable-provider boundary, per-run graph snapshots, authoritative-state-plus-journal model, selected SQLite persistence integration (pragmas, migrations, transaction boundaries, and CAS semantics frozen in [persistence.md](persistence.md), T009), journal entry wire shapes (frozen in [journal-contract.md](journal-contract.md), T011), and machine-local configuration layout are settled. Remaining technology choices marked open in [technology.md](technology.md) stay open until their Phase 0 tasks resolve.
 
 Related documents:
 
@@ -11,6 +11,11 @@ Related documents:
 - [Testing doctrine](testing.md)
 - [Technology direction](technology.md)
 - [Interaction storyboards](ux-storyboards.md)
+- [Application operation catalog](operation-catalog.md)
+- [Provider protocol v1 transport](provider-protocol-v1.md)
+- [Machine-local configuration](configuration.md)
+- [SQLite persistence policy](persistence.md)
+- [Journal entry contract](journal-contract.md)
 
 ## Architectural rule
 
@@ -62,7 +67,7 @@ Internal sections:
 
 - `model`: validated workflow graphs, optional immutable run inputs, run state, state/event/gate identifiers, transitions, gate verdicts, append-only evidence, provider identity, journal facts, and deterministic transition decisions.
 - `capabilities`: contracts consumed by operations, including atomic run persistence, provider invocation, time, and identifier generation.
-- `operations`: provider registration list/add/rename/disable/restore/validation/conformance, compatibility check, run creation/list/show/graph-inspect, evidence append/list, event request, annotate, label, terminate, history, and explicitly requested live-guidance orchestration.
+- `operations`: provider registration list/add/update/rename/disable/restore/validation/conformance, compatibility check, run creation/list/show/graph-inspect, evidence append/list, event request, annotate, label, terminate, history, audit export, and explicitly requested live-guidance orchestration.
 
 Internal dependency direction:
 
@@ -81,8 +86,8 @@ Integrations translate external systems and representations to core capabilities
 
 Expected integrations:
 
-- executable-provider subprocess protocol;
-- selected transactional local persistence integration (SQLite is current candidate);
+- executable-provider subprocess protocol ([provider-protocol-v1.md](provider-protocol-v1.md));
+- selected SQLite transactional persistence integration;
 - machine-local provider registration and global/project CLI-default loading;
 - system clock;
 - identifier generation;
@@ -99,7 +104,7 @@ CLI is production delivery mechanism and sole composition root.
 It owns:
 
 - argument parsing;
-- machine-catalog and CLI-default location resolution;
+- machine-catalog and CLI-default location resolution per [configuration.md](configuration.md);
 - stable provider-registration resolution;
 - human-readable rendering;
 - structured JSON response rendering;
@@ -110,13 +115,23 @@ It owns:
 
 CLI must not select transitions, reinterpret provider verdicts, or make workflow-policy decisions.
 
+## Application operation catalog
+
+MVP exposes exactly **21** stable application operation IDs frozen by [operation-catalog.md](operation-catalog.md) (D004). Two namespaces:
+
+**Provider (7):** `provider.add`, `provider.list`, `provider.check`, `provider.update`, `provider.rename`, `provider.disable`, `provider.restore`
+
+**Run (14):** `run.create`, `run.list`, `run.show`, `run.graph`, `run.history`, `run.evidence.add`, `run.evidence.list`, `run.annotate`, `run.label`, `run.request`, `run.guidance`, `run.compatibility`, `run.terminate`, `run.export`
+
+Provider-catalog mutations are authoritative catalog changes, not run-state mutations; verification uses fresh `provider.list` with no per-run journal (I40). Registration-wide active-graph conformance is owned by `provider.check --active-runs`; per-run explicit compatibility with journal facts is owned by `run.compatibility`. CLI help, `--list-operations`, version display, and internal provider protocol roles are not application operations.
+
 ## Provider model
 
-Workflow authoring is code-only. Any executable language may implement provider protocol.
+Workflow authoring is code-only. Any executable language may implement the provider protocol defined in [provider-protocol-v1.md](provider-protocol-v1.md).
 
-Immutable machine-local registration ID is logical workflow identity. Enabled registration also has mutable human handle unique among enabled registrations and explicitly names executable, arguments, and working directory. Active run stores ID, so caller CWD, handle rename, and project defaults cannot rebind it. Same executable may back several registrations. Engine computes graph-revision identity from canonical validated projection; provider path/observed executable digest and self-reported version remain best-effort invocation audit facts, not complete semantic identity.
+Immutable machine-local registration ID is logical workflow identity. Enabled registration also has mutable human handle unique among enabled registrations and explicitly names executable, arguments, and working directory. Active run stores ID, so caller CWD, handle rename, and project defaults cannot rebind it. Same executable may back several registrations. Registration `executable` and `working_directory` are stored as lexical-normalized absolute paths at mutation time ([configuration.md](configuration.md)); provider invocation uses those stored absolutes, never caller CWD. Engine computes graph-revision identity from canonical validated projection; provider path/observed executable digest and self-reported version remain best-effort invocation audit facts, not complete semantic identity.
 
-Provider protocol has stable major compatibility contract and five narrow operations:
+Provider protocol v1 transport (fresh process, stdin/stdout JSON envelopes, `protocol_major` 1) is frozen in [provider-protocol-v1.md](provider-protocol-v1.md). Five narrow roles:
 
 - describe complete input-independent graph, optional run-input declarations, static guidance, and live-guidance capability without candidate values;
 - validate candidate creation inputs without returning topology;
@@ -212,9 +227,11 @@ Provider graph changes affect new runs only. MVP has no active-run graph migrati
 
 ## Persistence authority
 
+Normative SQLite pragmas, migration policy, transaction boundaries, workflow/registration CAS, catalog-mutation digest guards, and rollback narratives: [persistence.md](persistence.md) (D009, T009).
+
 Current run state and lifecycle are authoritative records. Internal workflow-state/lifecycle version guards evaluated transitions and is not caller-managed token; annotation/label versions do not invalidate gate evaluation. Journal is append-only explanatory history.
 
-Every run mutation and required journal fact commit in one transaction. Completed transition transaction contains at minimum:
+Every run mutation and required journal fact commit in one transaction. No write transaction spans provider subprocess execution ([persistence.md](persistence.md) § No write lock across provider). Completed transition transaction contains at minimum:
 
 - evaluated workflow-state/lifecycle version and prior state;
 - state/lifecycle update;
@@ -232,7 +249,7 @@ External representations use dedicated DTOs:
 
 - provider graph/result JSON DTO to core graph/verdict/evidence;
 - engine config DTO to resolved settings;
-- selected persistence-record DTO (SQLite candidate) to core state and journal facts;
+- selected SQLite persistence-record DTO to core state and journal facts;
 - CLI argument DTO to operation request;
 - operation outcome to human or structured CLI response DTO.
 
@@ -281,7 +298,7 @@ Concrete construction occurs only in CLI composition root. Core does not instant
 
 Cargo manifests enforce crate-level direction. Automated architecture check must enforce core's internal model/capabilities/operations direction, prohibit outer dependencies in core, and prevent direct provider/persistence/dispatch bypass outside approved integrations and composition root.
 
-Development tooling invokes replaceable semantic judges through one versioned generic executable contract. Focused rubrics cover documentation impact, observability, architecture/tenet adherence including KISS, and behavioral evidence. Every commit is evaluated against parent revision's rubric and exact diff; judge tooling remains outside product runtime and creates no core dependency.
+Development tooling invokes replaceable semantic judges through one versioned generic executable contract frozen at [quality/semantic-judge/v1/README.md](../quality/semantic-judge/v1/README.md) (T012). Focused rubrics cover documentation impact, observability, architecture/tenet adherence including KISS, and behavioral evidence. Until T025 lands focused rubric files, the parent rubric is the foundation seed manifest at [quality/rubrics/manifest.json](../quality/rubrics/manifest.json) anchored to `7552af5968b4a2c10aefd01fbfa6c351817e1b8b`. Every commit is evaluated against parent revision's rubric and exact diff; judge tooling remains outside product runtime and creates no core dependency. Local and publication dispositions are defined in [development-policy.md](development-policy.md).
 
 Do not create generic repositories, catch-all services, `util`, `common`, or interfaces beside implementations. Add capability only for external side effect or genuine contract boundary.
 

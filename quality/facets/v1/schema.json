@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loop-engine.local/quality/facets/v1/schema.json",
+  "title": "Operation facet inventory v1",
+  "description": "Machine-readable behavioral facet closure manifest for one exposed application operation. Frozen by T004.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "operation_id",
+    "facets"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Facet inventory schema major version."
+    },
+    "operation_id": {
+      "type": "string",
+      "pattern": "^(provider\\.(add|list|check|update|rename|disable|restore)|run\\.(create|list|show|graph|history|evidence\\.add|evidence\\.list|annotate|label|request|guidance|compatibility|terminate|export))$",
+      "description": "Stable D004 operation identifier. Must match manifest filename stem."
+    },
+    "facets": {
+      "type": "array",
+      "minItems": 1,
+      "contains": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "const": "Valid path through production CLI, runtime operation-ID proof, correlated trace file, request/outcome payloads, and start/finish envelope"
+          }
+        }
+      },
+      "items": {
+        "$ref": "#/$defs/facet_row"
+      },
+      "description": "Applicable facet rows for this operation, including exactly one universal valid-path row. Closure validator MUST reject duplicate name values even when other fields differ; JSON Schema cannot express that constraint."
+    }
+  },
+  "$defs": {
+    "facet_name": {
+      "type": "string",
+      "enum": [
+        "Valid path through production CLI, runtime operation-ID proof, correlated trace file, request/outcome payloads, and start/finish envelope",
+        "Run-state or run-journal mutation",
+        "Successful creation",
+        "Rejected/error creation",
+        "Provider-catalog mutation",
+        "Rejectable provider-catalog mutation",
+        "Rejectable run mutation after run lookup",
+        "Provider invoking",
+        "Gate driven",
+        "Read",
+        "Lifecycle family",
+        "Compatibility sensitive",
+        "Provider-free under missing provider",
+        "Journal required",
+        "Trace provider boundary",
+        "Trace persistence boundary"
+      ]
+    },
+    "facet_status": {
+      "type": "string",
+      "enum": [
+        "open",
+        "closed"
+      ],
+      "description": "open = not yet proven by named production CLI evidence; closed = proven and recorded."
+    },
+    "evidence_ref": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable evidence pointer: E2E filter name, invocation request ID, trace path, or acceptance report key."
+    },
+    "facet_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "status"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/facet_name"
+        },
+        "status": {
+          "$ref": "#/$defs/facet_status"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence_ref"
+          },
+          "description": "Required when status is closed. Names exact passing production CLI proof."
+        },
+        "owner_task": {
+          "type": "string",
+          "pattern": "^T[0-9]{3}$",
+          "description": "Exposure or aggregate task that closed this row, when applicable."
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Optional human context; not authoritative over testing.md."
+        }
+      },
+      "if": {
+        "properties": {
+          "status": {
+            "const": "closed"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "evidence"
+        ],
+        "properties": {
+          "evidence": {
+            "minItems": 1
+          }
+        }
+      }
+    }
+  }
+}

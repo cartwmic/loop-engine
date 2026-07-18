@@ -1,6 +1,6 @@
 # Loop Engine System Invariants
 
-**Status:** Living foundation. Settled invariants are normative. Candidate invariants are explicitly unresolved and must not be treated as decisions.
+**Status:** Living foundation. Settled invariants are normative. Packaging and tooling invariants C1–C4 are settled by T001. Remaining candidate recommendations elsewhere are explicitly unresolved and must not be treated as decisions.
 
 Normative terms **MUST**, **MUST NOT**, **SHOULD**, and **MAY** express requirement strength.
 
@@ -311,25 +311,25 @@ Every commit **MUST** independently leave relevant documentation coherent with b
 
 Determinate local judge failure **MUST** block commit. Local unavailable/indeterminate judge **MAY** warn and allow commit. Before publication, every commit **MUST** receive determinate pass; fail, unavailable, or indeterminate result blocks pre-push/authoritative gate. Later commit **MUST NOT** substitute for required same-commit documentation. Deterministic formatting/link/schema checks remain separate and cannot replace semantic judgment.
 
-## Candidate invariants pending decision
+## Settled packaging and tooling invariants
 
-These are current recommendations, not settled requirements.
+Atomic local transactional persistence remains the authority model (I12–I14). SQLite through bundled `rusqlite` is the selected persistence integration that satisfies that model in MVP.
 
 ### C1. Control plane ships as one native executable
 
-Candidate: `loop-engine` requires no daemon or external database. Workflow providers may explicitly depend on shells, language runtimes, binaries, services, or network resources.
+The control plane **MUST** ship as one native `loop-engine` executable. It **MUST NOT** require a daemon or external database service. Workflow providers **MAY** explicitly depend on shells, language runtimes, binaries, services, or network resources.
 
 ### C2. State and journal use SQLite with JSON/JSONL export
 
-Candidate: SQLite supplies local transactions, locking, and querying while stable JSON and JSONL exports keep state and journal inspectable.
+Authoritative state and journal **MUST** persist through the selected SQLite integration with bundled SQLite. Stable JSON state export and JSONL journal export **MUST** remain available for inspection and **MUST NOT** become competing write authorities.
 
 ### C3. Exact revisions are gated before publication
 
-Candidate: versioned local hooks run canonical checks, and an eventual protected remote requires the same gate before merge or release.
+Every local commit and every publication **MUST** pass the canonical exact-revision quality gate. Versioned local hooks **MUST** delegate to one non-duplicated implementation. An eventual protected remote **MUST** require the same gate before merge or release.
 
 ### C4. Build tooling uses a Rust `xtask`
 
-Candidate: non-shipping `xtask` installs/version-checks hooks, runs the canonical quality gate, and coordinates exact-revision checks.
+Non-shipping workspace member `xtask` **MUST** be the sole canonical implementation of hook installation, exact-revision quality execution, documentation/architecture/dependency checks, and publication coordination. Product runtime **MUST NOT** depend on `xtask`.
 
 ## Explicit non-invariants
 

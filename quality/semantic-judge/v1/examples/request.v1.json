@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "mode": "publication",
+  "parent_revision": "7552af5968b4a2c10aefd01fbfa6c351817e1b8b",
+  "candidate_revision": "581c23bb085718d37d994d77d59d3d70b7ea309f",
+  "diff": "diff --git a/docs/testing.md b/docs/testing.md\n...",
+  "relevant_docs": [
+    {
+      "path": "docs/change/initial-implementation/README.md",
+      "content": "..."
+    }
+  ],
+  "rubrics": [
+    {
+      "id": "foundation-seed",
+      "content": "..."
+    }
+  ],
+  "deterministic_evidence": [
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "timeout_seconds": 300
+}

@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "parent_revision": "7552af5968b4a2c10aefd01fbfa6c351817e1b8b",
+  "bootstrap_publication_consumed": true,
+  "no_second_bootstrap": true,
+  "focused_rubrics_effective_after_task": "T025",
+  "active_rubric_set": "foundation-seed",
+  "rubrics": [
+    {
+      "id": "foundation-seed",
+      "version": 1,
+      "parent_revision": "7552af5968b4a2c10aefd01fbfa6c351817e1b8b",
+      "content_path": "foundation-seed.v1.md",
+      "content_sha256": "3f1bd3489401ca6114ac1ef756ad4e87798a2d1ed3973c16625fd87167c1b3cd",
+      "source_anchors": [
+        {
+          "path": "docs/invariants.md",
+          "section": "I47"
+        },
+        {
+          "path": "docs/testing.md",
+          "section": "Git enforcement direction"
+        },
+        {
+          "path": "docs/tenets.md",
+          "section": "27. Documentation evolves with every commit"
+        },
+        {
+          "path": "docs/architecture.md",
+          "section": "Composition and enforcement"
+        }
+      ]
+    }
+  ]
+}

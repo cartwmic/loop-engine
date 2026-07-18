@@ -151,7 +151,7 @@ Candidate-commit ritual for every authorized boundary:
 
 1. confirm working tree contains only completion-reported files from current boundary range; compare against range ledger, then stage exact union of those paths plus same-commit docs—never blind `git add -A`; boundary task's own Files field is not limit on accumulated range;
 2. run task Verify commands, canonical currently-implemented quality manifest, and `git diff --cached --check` against staged candidate;
-3. invoke real local judge on exact staged tree and parent rubric (`development-policy.md` command for C0; `cargo run -p xtask -- judge --staged` after T024); determinate fail blocks, unavailable/indeterminate records warning locally;
+3. invoke real local judge on exact staged tree and parent rubric (`quality/semantic-judge/v1/build-exact-staged-request | quality/semantic-judge/v1/judge` for C0; `cargo run -p xtask -- judge --staged` after T024); determinate fail blocks, unavailable/indeterminate records warning locally;
 4. inspect staged name/status and diff; orchestrator commits with `type(scope): checkpoint description`; record task IDs, commands, judge disposition, and documentation impact in commit body;
 5. subagent stops; only orchestrator may invoke publication gate or push. Publication uses T028/T029 exact-commit range gate and requires determinate pass for every unpublished commit.
 
