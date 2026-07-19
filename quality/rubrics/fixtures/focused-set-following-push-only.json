@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "example_id": "focused-set-following-commit-only",
-  "parent_revision": "COMMIT_THAT_INTRODUCED_FOCUSED_RUBRICS",
-  "candidate_revision": "FOLLOWING_COMMIT",
+  "example_id": "focused-set-following-push-only",
+  "parent_revision": "PUSH_THAT_INTRODUCED_FOCUSED_RUBRICS",
+  "candidate_revision": "FOLLOWING_PUSH_HEAD",
   "verdict": "pass",
   "citations": [
     {
@@ -21,5 +21,5 @@
       ]
     }
   ],
-  "message": "Example decision semantics: focused rubrics loaded from the parent revision apply only to the following commit; the introducing commit itself remains judged by the prior parent rubric and never by candidate self-judgment."
+  "message": "Example decision semantics: focused rubrics loaded from the remote base revision apply only to the following push; the introducing range remains judged by the prior base rubric and never by candidate self-judgment."
 }

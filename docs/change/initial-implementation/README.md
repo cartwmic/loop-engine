@@ -39,11 +39,11 @@ A native Rust CLI with:
 - always-on secure per-invocation JSONL diagnostics;
 - black-box production-CLI acceptance with real persistence and executable providers;
 - mechanically closed operation/driver/E2E/trace coverage;
-- generic per-commit semantic documentation judgment and exact-revision publication gates.
+- generic aggregate publication-checkpoint semantic judgment and exact base-to-head publication gates.
 
 ## Plan-publication precondition
 
-Before T001, locally commit this four-file change pack plus its `docs/testing.md` facet clarification as one coherent candidate: `docs(plan): define initial implementation`. Stage those exact paths, run current documentation checks, attempt foundation-seed semantic judgment, and record unavailable/indeterminate only as local warning. Do not publish until T029 can judge every unpublished commit determinately. Implementation starts from clean working tree. Task-marker and coverage-key edits ride each later authorized boundary commit.
+Before T001, locally commit this four-file change pack plus its `docs/testing.md` facet clarification as one coherent candidate: `docs(plan): define initial implementation`. That historical local preparation is complete. R001 supersedes the former requirement to judge every unpublished commit independently: publication now judges one exact remote-base-to-candidate-head checkpoint. Implementation continues only after R002–R005 repair and validate hooks, publication, and CI.
 
 ## Execution protocol
 
@@ -94,16 +94,15 @@ For public behavior:
 
 Lower-level tests may guide implementation but never replace required CLI acceptance. No mock framework or mock-based behavioral test is permitted. T-task implementation authors scenarios as deliverables; execution and red/green confirmation occur in junction V-mode and boundary ritual, not after each individual T-task.
 
-### Documentation coherence
+### Publication-checkpoint coherence
 
-Every commit must be independently coherent. Before committing:
+Every accepted push must leave the destination tip coherent. Commits inside one unpublished range may be incomplete and may repair one another. Before committing:
 
-- update affected foundation, protocol, CLI, schema, migration, provider-author, and operator documentation in the same commit;
-- run deterministic documentation checks;
-- run the configured semantic judge against exact parent-to-candidate diff using parent rubric;
-- never defer documentation repair to a later commit.
+- keep boundary-range implementation and affected documentation together before publication;
+- run fast exact-staged deterministic documentation, architecture, formatting, and diff checks;
+- use explicit staged semantic judgment only when early advisory feedback is useful.
 
-Before pushing, every unpublished commit must receive determinate semantic-judge pass. Unavailable or indeterminate judge blocks publication.
+Before pushing, run one exact aggregate gate from advertised remote destination tip to candidate local head. That range must receive determinate semantic-judge pass; fail, unavailable, or indeterminate blocks publication.
 
 ### Public exposure rule
 
@@ -117,7 +116,7 @@ Internal implementation may land before a user-facing operation. A stable applic
 - applicable facet E2Es;
 - operation envelope and trace observation;
 - exact catalog-closure pass;
-- same-commit documentation.
+- same-publication-checkpoint documentation.
 
 Do not add placeholder operations to runtime catalog. Every exposure task may register its route/catalog ID in a deliberately uncommitted candidate tree before running production-CLI E2Es and closure. “Private until green” means unpublished, not unreachable in candidate binary. Failed candidate removes/reworks registration before any commit.
 
@@ -131,15 +130,15 @@ Assign each full range to one fresh owner. Within group, `Depends` on prior grou
 
 ### Commit ownership
 
-Commit and push agency belongs only to orchestrator and is never delegated to blind review subagents. Every authorized boundary implicitly ends with `stop for orchestrator commit` under message/scope listed here; task prose saying candidate or authorized commit describes readiness, never permission. Foundation commit `7552af5968b4a2c10aefd01fbfa6c351817e1b8b` already consumed bootstrap publication exception and is parent seed rubric. T012 freezes how real judge reads that committed foundation rubric before focused files exist; T025 rubrics apply only to following commit. No implementation commit may push before T029, and first post-foundation push must show determinate judgment for every C0/C1 commit—no second bootstrap exception.
+Commit and push agency belongs only to orchestrator and is never delegated to blind review subagents. Every authorized boundary implicitly ends with `stop for orchestrator commit` under message/scope listed here; task prose saying candidate or authorized commit describes readiness, never permission. Foundation commit `7552af5968b4a2c10aefd01fbfa6c351817e1b8b` remains the base seed. T012 freezes generic judge protocol; R001 supersedes its per-commit scheduling policy and owner-selects one aggregate migration rubric for exact foundation-base transition. A changed rubric applies to following push. No implementation work beyond C1 may proceed until R002–R005 install and validate aggregate publication-checkpoint governance.
 
 Candidate-commit ritual for every authorized boundary:
 
-1. confirm working tree contains only completion-reported files from current boundary range; compare against range ledger, then stage exact union of those paths plus same-commit docs—never blind `git add -A`; boundary task's own Files field is not limit on accumulated range;
+1. confirm working tree contains only completion-reported files from current boundary range; compare against range ledger, then stage exact union of those paths plus range-coherent docs—never blind `git add -A`; boundary task's own Files field is not limit on accumulated range;
 2. where a junction (V/F) gates this boundary, confirm its validation/fix cycle closed clean; run the canonical currently-implemented quality manifest and `git diff --cached --check` against staged candidate;
-3. invoke real local judge on exact staged tree and parent rubric (`quality/semantic-judge/v1/build-exact-staged-request | quality/semantic-judge/v1/judge` for C0; `cargo run -p xtask -- judge --staged` after T024); determinate fail blocks, unavailable/indeterminate records warning locally;
-4. inspect staged name/status and diff; orchestrator commits with `type(scope): checkpoint description`; record task IDs, commands, judge disposition, and documentation impact in commit body;
-5. stop boundary work; orchestrator alone may invoke publication gate or push. Publication uses T028/T029 exact-commit range gate and requires determinate pass for every unpublished commit.
+3. run exact-staged fast pre-commit checks; explicit `cargo run -p xtask -- judge --staged` is optional advisory feedback and does not gate commit;
+4. inspect staged name/status and diff; orchestrator commits with `type(scope): checkpoint description`; record task IDs, commands, and documentation impact in commit body;
+5. stop boundary work; orchestrator alone may invoke publication gate or push. Publication uses R003/R004 aggregate range gate and requires one determinate pass for exact remote destination tip to candidate local head.
 
 Authorized internal no-public-behavior boundaries: T052 `feat(core): establish domain model`; T083 `feat(core): add private operations`; T103 `feat(integrations): add provider config and trace substrate`; T119 `feat(persistence): add transactional state and journal`; T134 `feat(cli): add private driver and contracts`; T145 `test(e2e): establish black-box harness`; T167 `test(e2e): close operation catalogs`; T184 `test(e2e): close cross-operation acceptance`; T189 `test(reference): prove reference behaviors`; T191 `test(report): add immutable acceptance evidence`; T194 `docs: finalize operations and recovery`; T197 `chore(quality): finalize gate and flake audit`; T198 `chore(repo): enforce protected quality gate`.
 
@@ -215,7 +214,7 @@ A reviewer returns `CLEARED` when no valid P0/P1 remains, even if P2/P3 are list
 | C11 | Reference acceptance | all 21 reference behaviors and model-based tests pass |
 | C12 | Release-quality MVP | operation closure, hardening, docs, dependency policy, hooks, CI, and clean audit pass |
 
-Each checkpoint may contain several commits, but every commit must remain buildable, documentation-coherent, and semantically judged. Internal preparatory commits must not claim unavailable public behavior.
+Each publication checkpoint may contain several commits. Intermediate commits may be incomplete; candidate checkpoint head must be buildable, documentation-coherent, and semantically judged. Internal preparatory commits must not claim unavailable public behavior at an accepted checkpoint.
 
 ## Global definition of done
 
@@ -231,7 +230,7 @@ This change is complete only when:
 - required tests contain no mocks, ignored cases, quarantine, or known-failure allowance;
 - migrations, corruption, rollback, overlap, crash, and trace rotation scenarios pass;
 - canonical quality gate passes from a clean checkout;
-- every unpublished commit receives determinate parent-rubric semantic-judge pass;
+- every accepted push range receives one determinate base-rubric semantic-judge pass;
 - authoritative CI passes and branch protection requires it;
 - user/provider/operator documentation describes shipped behavior exactly;
 - no excluded MVP feature or software-specific reference-workflow policy leaks into core.

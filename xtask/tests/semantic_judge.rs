@@ -1,4 +1,5 @@
 use std::fs;
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -453,7 +454,7 @@ fn manifest_without_consumed_bootstrap_is_rejected() {
 }
 
 #[test]
-fn first_unpublished_range_judges_every_commit_fail_closed() {
+fn unpublished_range_is_one_aggregate_fail_closed_judgment() {
     let repo = init_repo();
     write(repo.path(), "docs/note.md", "foundation\n");
     let foundation = commit_all(repo.path(), "foundation-like");
@@ -468,20 +469,17 @@ fn first_unpublished_range_judges_every_commit_fail_closed() {
         &head,
     )
     .expect("range pass");
-    assert_eq!(range.commits.len(), 2);
-    assert!(
-        range
-            .commits
-            .iter()
-            .all(|commit| commit.outcome.response.verdict == Verdict::Pass)
-    );
+    assert_eq!(range.commits.len(), 1);
+    assert_eq!(range.commits[0].parent_revision, foundation);
+    assert_eq!(range.commits[0].candidate_revision, head);
+    assert_eq!(range.commits[0].outcome.response.verdict, Verdict::Pass);
 
     let blocked = semantic_judge::judge_unpublished_range(
         &options(repo.path(), Mode::Publication, "judge-indeterminate"),
         &foundation,
         &head,
     )
-    .expect("range still returns per-commit outcomes");
+    .expect("range returns one aggregate outcome");
     assert!(
         blocked
             .commits
@@ -491,7 +489,7 @@ fn first_unpublished_range_judges_every_commit_fail_closed() {
 }
 
 #[test]
-fn changed_rubric_applies_only_to_following_commit() {
+fn changed_rubric_applies_only_to_following_publication_pair() {
     let repo = init_repo();
     write(repo.path(), "docs/note.md", "base\n");
     commit_all(repo.path(), "base");
@@ -559,7 +557,7 @@ fn changed_rubric_applies_only_to_following_commit() {
     write(repo.path(), "docs/note.md", "rubric-change-commit\n");
     let rubric_change_commit = commit_all(repo.path(), "change-rubric");
 
-    // The rubric-changing commit is judged by parent v1 content.
+    // Rubric-changing range is judged by base v1 content.
     let changing = semantic_judge::judge_revision_pair(
         &options(repo.path(), Mode::Publication, "judge-pass"),
         &parent_with_v1,
@@ -581,13 +579,126 @@ fn changed_rubric_applies_only_to_following_commit() {
         &rubric_change_commit,
         &following,
     )
-    .expect("following commit");
+    .expect("following publication pair");
     assert!(
         next.request["rubrics"][0]["content"]
             .as_str()
             .unwrap()
             .contains("next-commit-only")
     );
+}
+
+#[test]
+fn owner_migration_rubric_is_exact_foundation_base_only() {
+    let repo = real_repo_root();
+    let head = git(&repo, &["rev-parse", "HEAD"]);
+    let mut migration = options(&repo, Mode::Publication, "judge-migration-pass");
+    migration.publication_migration_rubric =
+        Some(repo.join("quality/semantic-judge/v1/migrations/publication-checkpoint-v1.md"));
+
+    let outcome =
+        semantic_judge::judge_revision_pair(&migration, FOUNDATION_PARENT_REVISION, &head)
+            .expect("exact foundation-base migration request");
+    assert_eq!(
+        outcome.request["rubrics"][0]["id"],
+        "publication-checkpoint-migration"
+    );
+    assert_eq!(outcome.response.verdict, Verdict::Pass);
+    assert_eq!(outcome.disposition, Disposition::Allow);
+    let migration_diff = outcome.request["diff"].as_str().expect("migration diff");
+    assert!(migration_diff.contains("docs/development-policy.md"));
+    assert_eq!(
+        outcome.request["relevant_docs"]
+            .as_array()
+            .expect("migration resulting docs")
+            .len(),
+        0
+    );
+    let evidence = outcome.request["deterministic_evidence"]
+        .as_array()
+        .expect("migration evidence");
+    let binding = evidence
+        .iter()
+        .find(|item| {
+            item["command"]
+                .as_str()
+                .is_some_and(|command| command.contains("full publication diff sha256"))
+        })
+        .expect("full-range binding evidence");
+    assert_eq!(binding["exit_code"], 0);
+    let binding_text = binding["stdout"].as_str().expect("binding stdout");
+    assert!(
+        binding_text.contains("semantic_projection_base=30f210d2a064c679c44f7880b67958fc23efe21e")
+    );
+    let digest = binding_text
+        .split_whitespace()
+        .find_map(|token| token.strip_prefix("sha256="))
+        .expect("full-range digest");
+    assert_eq!(digest.len(), 64);
+    assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    let expected_projection = Command::new("git")
+        .args(["diff", "30f210d2a064c679c44f7880b67958fc23efe21e", &head])
+        .current_dir(&repo)
+        .output()
+        .expect("projection diff");
+    assert!(expected_projection.status.success());
+    assert_eq!(
+        migration_diff.as_bytes(),
+        expected_projection.stdout.as_slice(),
+        "migration semantic projection must be exact"
+    );
+    assert!(
+        serde_json::to_vec(&outcome.request)
+            .expect("serialize request")
+            .len()
+            < 500_000,
+        "migration request must fit configured judge context"
+    );
+    let rubric = outcome.request["rubrics"][0]
+        .as_object()
+        .expect("migration rubric object");
+    assert_eq!(rubric.len(), 2);
+    assert!(rubric.contains_key("id") && rubric.contains_key("content"));
+
+    let error = semantic_judge::judge_revision_pair(
+        &migration,
+        FOUNDATION_PARENT_REVISION,
+        FOUNDATION_PARENT_REVISION,
+    )
+    .expect_err("migration candidate must descend from reviewed repair base");
+    assert!(error.to_string().contains("reviewed repair base"));
+
+    let altered_dir = TempDir::new().expect("altered rubric tempdir");
+    let altered_path = altered_dir.path().join("migration.md");
+    fs::write(&altered_path, "# weaker rubric\n").expect("write altered rubric");
+    let mut altered = options(&repo, Mode::Publication, "judge-migration-pass");
+    altered.publication_migration_rubric = Some(altered_path);
+    let error = semantic_judge::judge_revision_pair(&altered, FOUNDATION_PARENT_REVISION, &head)
+        .expect_err("modified migration rubric must fail");
+    assert!(error.to_string().contains("digest mismatch"));
+
+    let link_path = altered_dir.path().join("migration-link.md");
+    symlink(
+        repo.join("quality/semantic-judge/v1/migrations/publication-checkpoint-v1.md"),
+        &link_path,
+    )
+    .expect("migration symlink");
+    let mut linked = options(&repo, Mode::Publication, "judge-migration-pass");
+    linked.publication_migration_rubric = Some(link_path);
+    let error = semantic_judge::judge_revision_pair(&linked, FOUNDATION_PARENT_REVISION, &head)
+        .expect_err("symlinked migration rubric must fail");
+    assert!(error.to_string().contains("regular file"));
+
+    let temp = init_repo();
+    write(temp.path(), "docs/note.md", "base\n");
+    let base = commit_all(temp.path(), "base");
+    write(temp.path(), "docs/note.md", "head\n");
+    let candidate = commit_all(temp.path(), "candidate");
+    let mut invalid = options(temp.path(), Mode::Publication, "judge-pass");
+    invalid.publication_migration_rubric = migration.publication_migration_rubric;
+    let error = semantic_judge::judge_revision_pair(&invalid, &base, &candidate)
+        .expect_err("migration override on non-foundation base must fail");
+    assert!(error.to_string().contains("exact foundation base"));
 }
 
 #[test]
@@ -754,8 +865,8 @@ fn workspace_focused_manifest_hashes_match_rubric_files() {
             "digest mismatch for {expected_id}"
         );
         assert!(
-            content.contains("Applies to the following commit only"),
-            "{expected_id} must declare following-commit-only semantics"
+            content.contains("Applies to the following push only"),
+            "{expected_id} must declare following-push-only semantics"
         );
         assert!(
             content.contains("never read from the candidate working tree"),
@@ -808,7 +919,7 @@ fn focused_parent_manifest_loads_exact_hashes_and_ignores_candidate_tree() {
 }
 
 #[test]
-fn focused_rubrics_apply_only_to_following_commit_never_candidate_self_judgment() {
+fn focused_rubrics_apply_only_to_following_push_never_candidate_self_judgment() {
     let repo = init_repo();
     write(repo.path(), "docs/note.md", "base\n");
     commit_all(repo.path(), "base");
@@ -857,7 +968,7 @@ fn focused_rubrics_apply_only_to_following_commit_never_candidate_self_judgment(
         &introducing,
         &following,
     )
-    .expect("following commit judged by focused parent");
+    .expect("following push judged by focused base");
     let next_rubrics = next.request["rubrics"].as_array().unwrap();
     assert_eq!(next_rubrics.len(), 4);
     for (index, (id, _path, content)) in focused_entries.iter().enumerate() {

@@ -1,8 +1,9 @@
-//! Versioned git hook installer and local adapters (T027/T028).
+//! Versioned git hook installer and local adapters (T027/T028, repaired by R002/R003).
 //!
-//! Local pre-commit runs deterministic checks plus a semantic-judge attempt
-//! against the **exact staged index tree**. Pre-push delegates to the exact-
-//! commit publication gate. Hooks never rewrite user files.
+//! Local pre-commit runs bounded deterministic checks against the **exact staged
+//! index tree**. Semantic judgment is an explicit command, not default commit
+//! latency. Pre-push delegates to the aggregate publication gate. Hooks never
+//! rewrite user files.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,11 +16,10 @@ use anyhow::{Context, Result, bail};
 use crate::architecture;
 use crate::docs_check;
 use crate::publication::{self, PublicationOptions, PushUpdate};
-use crate::quality;
-use crate::semantic_judge::{self, Disposition, JudgeOptions, JudgeOutcome, Mode};
+use crate::semantic_judge;
 
 /// Current version embedded in versioned hook adapters.
-pub const HOOK_VERSION: u32 = 1;
+pub const HOOK_VERSION: u32 = 2;
 
 /// Repository-relative directory containing versioned hooks.
 pub const HOOKS_DIR: &str = ".githooks";
@@ -36,28 +36,20 @@ const VERSION_MARKER_PREFIX: &str = "loop-engine-hook-version:";
 #[derive(Debug, Clone)]
 pub struct PreCommitOptions {
     pub repo_root: PathBuf,
-    pub judge_executable: Option<PathBuf>,
-    pub timeout_seconds: Option<u64>,
-    /// Optional Git root used to load immutable foundation seed blobs in tests.
-    pub foundation_git_root: Option<PathBuf>,
 }
 
 impl PreCommitOptions {
     pub fn new(repo_root: impl Into<PathBuf>) -> Self {
         Self {
             repo_root: repo_root.into(),
-            judge_executable: None,
-            timeout_seconds: None,
-            foundation_git_root: None,
         }
     }
 }
 
-/// Outcome of a local pre-commit attempt.
+/// Outcome of the bounded local pre-commit checks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreCommitOutcome {
-    pub warnings: Vec<String>,
-    pub judge: JudgeOutcome,
+    pub checks: Vec<&'static str>,
 }
 
 /// Repository root used by hook commands when no override is supplied.
@@ -112,79 +104,44 @@ pub fn verify(repo_root: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-/// Run the local pre-commit gate against the exact staged index tree.
+/// Run the bounded local pre-commit gate against the exact staged index tree.
 ///
-/// Current manifest-driven deterministic checks execute against a temporary
-/// materialization of `git write-tree` / index contents. Before the quality manifest
-/// exists, documentation and architecture form the compatibility baseline. Semantic
-/// judgment uses the staged-index request builder. Neither path reads unstaged
-/// working-tree files or rewrites user content.
+/// The default path deliberately excludes the quality manifest, tests, Clippy,
+/// dependency/advisory scans, and semantic judgment. Those belong to aggregate
+/// publication. This path never reads unstaged working-tree content or rewrites it.
 pub fn pre_commit(options: &PreCommitOptions) -> Result<PreCommitOutcome> {
     let root = resolve_root(Some(&options.repo_root))?;
+    eprintln!("pre-commit: staged diff check");
     git_run(&root, &["diff", "--cached", "--check", "HEAD"])
         .context("git diff --cached --check failed for exact staged candidate")?;
+
     let staged_revision = git_output_trimmed(&root, &["write-tree"])?;
     let staged = materialize_staged_tree(&root)?;
-    let quality_manifest_path = staged.path.join(quality::MANIFEST_PATH);
 
-    let quality_evidence = if quality_manifest_path.is_file() {
-        let manifest = quality::load_manifest(&staged.path, Some(&quality_manifest_path))?;
-        let report = quality::run_manifest(
-            &staged.path,
-            &manifest,
-            &quality_manifest_path,
-            &staged_revision,
+    eprintln!("pre-commit: documentation check");
+    docs_check::run(Some(&staged.path)).with_context(|| {
+        format!(
+            "deterministic docs-check failed for exact staged tree {staged_revision} at {}",
+            staged.path.display()
         )
-        .with_context(|| {
-            format!(
-                "manifest-driven quality checks failed for exact staged tree {}",
-                staged_revision
-            )
-        })?;
-        report.deterministic_evidence()
-    } else {
-        docs_check::run(Some(&staged.path)).with_context(|| {
-            format!(
-                "deterministic docs-check failed for exact staged tree at {}",
-                staged.path.display()
-            )
-        })?;
+    })?;
 
-        let manifest = staged.path.join("Cargo.toml");
-        architecture::run(Some(&manifest)).with_context(|| {
-            format!(
-                "deterministic architecture check failed for exact staged tree at {}",
-                staged.path.display()
-            )
-        })?;
-        Vec::new()
-    };
+    eprintln!("pre-commit: architecture check");
+    let manifest = staged.path.join("Cargo.toml");
+    architecture::run(Some(&manifest)).with_context(|| {
+        format!(
+            "deterministic architecture check failed for exact staged tree {staged_revision} at {}",
+            staged.path.display()
+        )
+    })?;
 
-    // Drop the staged materialization before semantic judgment so temporary files
-    // cannot be mistaken for working-tree inputs.
-    drop(staged);
+    eprintln!("pre-commit: formatting check");
+    run_cargo_fmt(&staged.path)
+        .with_context(|| format!("cargo fmt failed for exact staged tree {staged_revision}"))?;
 
-    let mut judge_options = JudgeOptions::new(&root, Mode::Local);
-    judge_options.executable = options.judge_executable.clone();
-    judge_options.timeout_seconds = options.timeout_seconds;
-    judge_options.foundation_git_root = options.foundation_git_root.clone();
-    judge_options.extra_deterministic_evidence = quality_evidence;
-
-    let judge = semantic_judge::judge_staged(&judge_options)?;
-    let mut warnings = Vec::new();
-    if let Some(warning) = &judge.warning {
-        eprintln!("warning: {warning}");
-        warnings.push(warning.clone());
-    }
-
-    match judge.disposition {
-        Disposition::Allow | Disposition::WarnAllow => Ok(PreCommitOutcome { warnings, judge }),
-        Disposition::Block => bail!(
-            "semantic judge blocked local commit (verdict={:?}): {}",
-            judge.response.verdict,
-            judge.response.message
-        ),
-    }
+    Ok(PreCommitOutcome {
+        checks: vec!["diff-check", "docs-check", "architecture", "fmt"],
+    })
 }
 
 /// CLI entrypoint for hook subcommands.
@@ -202,20 +159,14 @@ pub fn run_verify(repo_root: Option<&Path>) -> Result<()> {
 }
 
 /// CLI entrypoint for the local pre-commit adapter.
-pub fn run_pre_commit(
-    repo_root: Option<&Path>,
-    judge_executable: Option<&Path>,
-    timeout_seconds: Option<u64>,
-) -> Result<()> {
+pub fn run_pre_commit(repo_root: Option<&Path>) -> Result<()> {
     let root = resolve_root(repo_root)?;
-    let mut options = PreCommitOptions::new(root);
-    options.judge_executable = judge_executable.map(Path::to_path_buf);
-    options.timeout_seconds = timeout_seconds;
+    let options = PreCommitOptions::new(root);
     let _outcome = pre_commit(&options)?;
     Ok(())
 }
 
-/// Run the exact-commit pre-push / publication adapter.
+/// Run the aggregate base-to-head pre-push / publication adapter.
 ///
 /// Reads git pre-push remote-update lines from stdin and delegates to the
 /// canonical publication gate. Never rewrites the user working tree.
@@ -250,6 +201,8 @@ pub fn pre_push(
 ) -> Result<Vec<publication::PublicationOutcome>> {
     let mut options = PublicationOptions::new(repo_root);
     options.judge_executable = judge_executable.map(Path::to_path_buf);
+    options.publication_migration_rubric =
+        std::env::var_os("LOOP_ENGINE_OWNER_MIGRATION_RUBRIC").map(PathBuf::from);
     options.remote_name = remote_name.map(str::to_owned);
     options.remote_url = remote_url.map(str::to_owned);
     options.timeout_seconds = timeout_seconds;
@@ -366,13 +319,6 @@ fn materialize_staged_tree(repo_root: &Path) -> Result<StagedTree> {
             path.display()
         )
     })?;
-    // Candidate tests may need immutable historical blobs (notably the consumed
-    // foundation rubric seed). A gitfile exposes the source repository's object
-    // database while all candidate file reads still resolve inside this exact
-    // index materialization.
-    let git_dir = git_output_trimmed(repo_root, &["rev-parse", "--absolute-git-dir"])?;
-    fs::write(path.join(".git"), format!("gitdir: {git_dir}\n"))
-        .context("failed linking exact staged tree to source Git object database")?;
     Ok(StagedTree { path })
 }
 
@@ -390,6 +336,22 @@ fn create_temp_dir(label: &str) -> Result<PathBuf> {
     fs::create_dir_all(&path)
         .with_context(|| format!("failed to create temporary directory {}", path.display()))?;
     Ok(path)
+}
+
+fn run_cargo_fmt(check_root: &Path) -> Result<()> {
+    let output = Command::new("cargo")
+        .args(["fmt", "--all", "--check"])
+        .current_dir(check_root)
+        .output()
+        .context("failed to execute cargo fmt --all --check")?;
+    if !output.status.success() {
+        bail!(
+            "cargo fmt --all --check failed: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
 }
 
 fn git_run(repo_root: &Path, args: &[&str]) -> Result<()> {

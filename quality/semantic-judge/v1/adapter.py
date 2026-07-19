@@ -157,6 +157,42 @@ def validate_request(request: dict[str, Any], binding: RevisionBinding) -> None:
         ):
             reject("deterministic evidence candidate_revision must be non-empty string")
 
+    migration_rubrics = [
+        rubric for rubric in rubrics
+        if rubric["id"] == "publication-checkpoint-migration"
+    ]
+    if migration_rubrics:
+        foundation = "7552af5968b4a2c10aefd01fbfa6c351817e1b8b"
+        bindings = [
+            item for item in evidence_items
+            if item["command"].startswith("full publication diff sha256 ")
+        ]
+        if (
+            len(migration_rubrics) != 1
+            or request["mode"] != "publication"
+            or request["parent_revision"] != foundation
+            or relevant_docs
+            or len(bindings) != 1
+        ):
+            reject("migration projection scope or complete-range binding is invalid")
+        binding = bindings[0]
+        fields = dict(
+            token.split("=", 1)
+            for token in binding["stdout"].split()
+            if "=" in token
+        )
+        digest = fields.get("sha256", "")
+        if (
+            binding["exit_code"] != 0
+            or len(digest) != 64
+            or any(char not in "0123456789abcdef" for char in digest)
+            or not fields.get("bytes", "").isdigit()
+            or not fields.get("changed_paths", "").isdigit()
+            or fields.get("semantic_projection_base")
+            != "30f210d2a064c679c44f7880b67958fc23efe21e"
+        ):
+            reject("migration complete-range binding payload is invalid")
+
 
 def validate_response(payload: dict[str, Any]) -> str | None:
     response_fields = {
@@ -349,19 +385,36 @@ def build_prompt(request: dict[str, Any]) -> str:
         content = doc.get("content", "")
         docs_blocks.append(f"#### {path}\n\n{content}")
 
+    migration_projection = any(
+        rubric.get("id") == "publication-checkpoint-migration"
+        for rubric in request["rubrics"]
+    )
+    semantic_scope = (
+        "the exact owner-authorized governance-repair delta supplied below; "
+        "use full foundation-range digest evidence only as boundary binding"
+        if migration_projection
+        else "the exact parent-to-candidate diff and resulting relevant docs"
+    )
+    diff_heading = (
+        "Owner-authorized exact governance-repair delta"
+        if migration_projection
+        else "Exact diff"
+    )
+    citation_example = "path" if migration_projection else "path:line"
+
     return f"""You are a documentation semantic judge for loop-engine.
 
 Evaluate whether the candidate revision is documentation-coherent under the parent revision's rubric.
 
 Rules:
 - Use ONLY the parent rubric text provided below.
-- Judge ONLY the exact parent-to-candidate diff and resulting relevant docs.
+- Judge ONLY {semantic_scope}.
 - Use deterministic evidence for build/test/check claims; never invent CI or test results.
 - Emit exactly one JSON object and no other text.
 - verdict must be one of: pass, fail, indeterminate.
 - pass/fail/indeterminate require at least one citation with rubric_id, rule, and non-empty lines array.
 - rubric_id must exactly equal an ID supplied below; rule must be an exact identifier or heading present in that rubric.
-- lines entries must cite changed/resulting repository paths from the exact diff or resulting-doc snapshots, with optional :line.
+- lines entries must cite changed/resulting repository paths from the supplied semantic diff or resulting-doc snapshots, with optional :line; use unnumbered paths when no resulting-doc snapshot is supplied.
 - If evidence is insufficient, use indeterminate.
 
 Request mode: {request['mode']}
@@ -380,14 +433,14 @@ Candidate revision: {request['candidate_revision']}
 
 {chr(10).join(docs_blocks) if docs_blocks else '(none)'}
 
-## Exact diff
+## {diff_heading}
 
 ```diff
 {request['diff']}
 ```
 
 Respond with JSON only using this shape:
-{{"schema_version":1,"parent_revision":"{request['parent_revision']}","candidate_revision":"{request['candidate_revision']}","verdict":"pass|fail|indeterminate","citations":[{{"rubric_id":"...","rule":"...","lines":["path:line"]}}],"message":"..."}}
+{{"schema_version":1,"parent_revision":"{request['parent_revision']}","candidate_revision":"{request['candidate_revision']}","verdict":"pass|fail|indeterminate","citations":[{{"rubric_id":"...","rule":"...","lines":["{citation_example}"]}}],"message":"..."}}
 
 parent_revision and candidate_revision in the response must exactly match the request values above.
 """

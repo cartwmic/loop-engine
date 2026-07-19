@@ -1,24 +1,24 @@
 # Documentation impact rubric v1
 
-Parent-versioned focused rubric. Loaded only from the parent revision's committed `quality/rubrics/manifest.json`. Applies to the following commit only; never read from the candidate working tree for self-judgment.
+Base-versioned focused rubric. Loaded only from the remote base revision's committed `quality/rubrics/manifest.json`. Applies to the following push only; never read from the candidate working tree for self-judgment.
 
 ## Criteria
 
-### DOC-1. Per-commit documentation coherence
+### DOC-1. Publication-checkpoint documentation coherence
 
-Every commit **MUST** independently leave relevant documentation coherent with behavior, architecture, contracts, testing policy, and development policy it introduces.
+Every accepted push **MUST** leave its candidate destination tip coherent with behavior, architecture, contracts, testing policy, and development policy introduced by the aggregate remote-base-to-candidate-head change.
 
 Cite: `docs/invariants.md` § I47; `docs/tenets.md` § 27.
 
-### DOC-2. Exact parent-to-commit scope
+### DOC-2. Exact base-to-head scope
 
-Judgment **MUST** use the exact parent-to-commit diff and resulting documentation. When documentation is unnecessary, the judge **MUST** affirm that conclusion from that exact change.
+Judgment **MUST** use the exact remote-base-to-candidate-head diff and resulting tree. When documentation is unnecessary, judge **MUST** affirm that conclusion from the aggregate change.
 
 Cite: `docs/tenets.md` § 27; `docs/invariants.md` § I47.
 
-### DOC-3. No deferred repair for publication
+### DOC-3. Internal repair allowed; later push repair forbidden
 
-A later commit **MUST NOT** substitute for required same-commit documentation or repair an earlier commit for publication-gate purposes.
+Commits inside one unpublished range **MAY** repair one another. A later push **MUST NOT** substitute for coherence required at an earlier accepted publication checkpoint.
 
 Cite: `docs/invariants.md` § I47; `docs/tenets.md` § 27.
 

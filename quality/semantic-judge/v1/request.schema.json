@@ -37,7 +37,7 @@
     },
     "diff": {
       "type": "string",
-      "description": "Exact parent-to-candidate diff text."
+      "description": "Exact parent-to-candidate diff text, except the pinned one-time foundation migration uses the exact reviewed-C1-to-candidate governance-repair delta plus complete-range digest evidence."
     },
     "relevant_docs": {
       "type": "array",

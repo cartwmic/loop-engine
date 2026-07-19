@@ -193,6 +193,29 @@ assert "request" in payload["message"], payload
 print("OK schema-invalid request rejected before judge invocation")
 PY
 
+echo "== migration projection scope validation => unavailable =="
+python3 - <<'PY' "$ROOT"
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+request = json.loads((root / "examples" / "request.v1.json").read_text(encoding="utf-8"))
+request["rubrics"] = [{"id": "publication-checkpoint-migration", "content": "## MIG-1"}]
+completed = subprocess.run(
+    [str(root / "judge")],
+    input=json.dumps(request),
+    capture_output=True,
+    text=True,
+    check=False,
+)
+payload = json.loads(completed.stdout)
+assert payload["verdict"] == "unavailable", payload
+assert "migration projection scope" in payload["message"], payload
+print("OK migration projection requires exact foundation publication scope and binding")
+PY
+
 echo "== revision binding: partial malformed request => both null =="
 RESPONSE="$(printf '%s' '{"schema_version":1,"parent_revision":"abc"}' | "$ROOT/judge")"
 python3 - <<'PY' "$RESPONSE"

@@ -141,8 +141,8 @@ Engine work must not happen silently. Every CLI invocation creates an always-on 
 
 Instrumentation belongs at stable operation-dispatch, provider-execution, and persistence boundaries, with targeted events for consequential internal decisions. Do not require logging in every helper or add compiler/lint machinery that proves only presence of logging syntax.
 
-## 27. Documentation evolves with every commit
+## 27. Documentation converges at every publication checkpoint
 
-Every commit must leave relevant documentation coherent with behavior, architecture, contracts, testing policy, and development policy introduced by that commit. When documentation is unnecessary, semantic judge must affirm that conclusion from exact parent-to-commit change. Later commit cannot repair earlier commit for publication-gate purposes.
+Every accepted push must leave its destination tip coherent with behavior, architecture, contracts, testing policy, and development policy introduced by the aggregate remote-base-to-local-head change. Commits inside one unpublished push range may be incomplete and may repair one another; they are working history, not separate publication authorities. A later push cannot repair an incoherent checkpoint that should have been rejected.
 
-Deterministic documentation checks and semantic judgment are complementary. Judge remains replaceable development tooling and must not create engine runtime or harness dependency.
+The semantic judge evaluates the exact destination-tip-to-candidate-tip diff and resulting tree once. Deterministic documentation checks and semantic judgment are complementary. Judge remains replaceable development tooling and must not create engine runtime or harness dependency.

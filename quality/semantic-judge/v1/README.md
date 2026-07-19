@@ -24,15 +24,17 @@ Development tooling invokes replaceable semantic judges through one versioned ge
 |---|---|---:|---|
 | `schema_version` | integer | yes | Must be `1` |
 | `mode` | string | yes | `local` or `publication` |
-| `parent_revision` | string | yes | Parent git object name |
-| `candidate_revision` | string | yes | Candidate git object name |
-| `diff` | string | yes | Exact parent-to-candidate diff text |
+| `parent_revision` | string | yes | Base git object name; publication uses exact remote destination tip |
+| `candidate_revision` | string | yes | Candidate git object name; publication uses local pushed head |
+| `diff` | string | yes | Exact base-to-candidate diff text; only pinned foundation migration uses exact reviewed-C1-to-candidate repair delta with complete foundation-range digest evidence |
 | `relevant_docs` | array | no | `{path, content}` resulting-doc snapshots |
 | `rubrics` | array | yes | Non-empty `{id, content}` parent rubric payloads |
 | `deterministic_evidence` | array | yes | `{command, exit_code, stdout, stderr}` |
 | `timeout_seconds` | integer | no | Overrides configured default |
 
-Before focused rubric files exist (through T024), callers load the foundation seed rubric from the parent revision's committed `quality/rubrics/manifest.json` when present. When that manifest is absent at the parent revision, callers compose the foundation-seed rubric only from immutable Git blobs at foundation commit `7552af5968b4a2c10aefd01fbfa6c351817e1b8b` via `git show <sha>:<approved source path>` for I47 (`docs/invariants.md`), Git enforcement direction (`docs/testing.md`), tenet 27 (`docs/tenets.md`), and composition/enforcement (`docs/architecture.md`). Source paths and blob digests are frozen in `request_builder.py`; composed rubric content must match digest `3f1bd3489401ca6114ac1ef756ad4e87798a2d1ed3973c16625fd87167c1b3cd`. Request `deterministic_evidence` must expose per-source provenance. The bundled file at `quality/semantic-judge/v1/frozen/foundation-seed.v1.md` is a non-authoritative reference only. Callers must never read rubric authority from the candidate working tree. T025 focused rubrics apply only to the commit following T025.
+Before focused rubric files exist (through T024), callers load the foundation seed rubric from the base revision's committed `quality/rubrics/manifest.json` when present. When that manifest is absent at the base revision, callers compose the foundation-seed rubric only from immutable Git blobs at foundation commit `7552af5968b4a2c10aefd01fbfa6c351817e1b8b` via `git show <sha>:<approved source path>` for I47 (`docs/invariants.md`), Git enforcement direction (`docs/testing.md`), tenet 27 (`docs/tenets.md`), and composition/enforcement (`docs/architecture.md`). Source paths and blob digests are frozen in `request_builder.py`; composed rubric content must match digest `3f1bd3489401ca6114ac1ef756ad4e87798a2d1ed3973c16625fd87167c1b3cd`. Request `deterministic_evidence` must expose per-source provenance. The bundled file at `quality/semantic-judge/v1/frozen/foundation-seed.v1.md` is a non-authoritative reference only. Callers must never read rubric authority from the candidate working tree. T025 focused rubrics and later rubric changes apply only to the push following their publication.
+
+R001 has one explicit owner-selected migration case because frozen seed text itself mandates superseded per-commit scheduling. When exact publication base is foundation revision, owner may set `LOOP_ENGINE_OWNER_MIGRATION_RUBRIC` to `migrations/publication-checkpoint-v1.md`. Tooling requires regular-file SHA-256 `5c06777499f87a46923ac9423f274b70d152d5e356d8378d939e76f6dc2a5d9a` and rejects override in local mode or for every other base. It still requires deterministic quality and a determinate semantic pass, so it is not a second bootstrap exception.
 
 ## Response v1
 
@@ -64,7 +66,7 @@ Citation object:
 | `local` | allow commit | block commit | warn; allow commit | warn; allow commit |
 | `publication` | allow publication | block publication | block publication | block publication |
 
-Bootstrap publication exception was consumed by foundation commit `7552af5968b4a2c10aefd01fbfa6c351817e1b8b`. No later commit receives a bootstrap exception.
+Foundation commit `7552af5968b4a2c10aefd01fbfa6c351817e1b8b` remains the initial base rubric. Publication mode invokes this protocol once for the exact remote-base-to-candidate-head checkpoint; internal commits are not separate requests.
 
 ## Provisioned local adapter (T012)
 

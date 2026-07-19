@@ -1,6 +1,6 @@
 # Behavioral evidence rubric v1
 
-Parent-versioned focused rubric. Loaded only from the parent revision's committed `quality/rubrics/manifest.json`. Applies to the following commit only; never read from the candidate working tree for self-judgment.
+Base-versioned focused rubric. Loaded only from the remote base revision's committed `quality/rubrics/manifest.json`. Applies to the following push only; never read from the candidate working tree for self-judgment.
 
 ## Criteria
 

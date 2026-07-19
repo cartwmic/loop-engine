@@ -121,7 +121,7 @@ Before candidate commit, final evidence replaces `Planned` with stable report ke
 | I44 No retry keys/automatic retry | T005, T079, T087–T095, T121 | T163, T170, T178, T184 | Planned |
 | I45 No individual deletion | T004, T045–T046, T083, T105, T121 | T166, T174, T181, T184 | Planned |
 | I46 Every invocation traceable | T010, T054, T099–T102, T118, T120, T124 | every exposure; T167, T182, T189 | Planned |
-| I47 Every commit documentation-coherent | T012, T023–T029, T195, T198–T200 | judge/hook/CI tests and publication reports | Planned |
+| I47 Every publication checkpoint documentation-coherent | T012, T023–T029, R001–R005, T195, T198–T200 | aggregate judge/hook/CI tests and base-to-head publication reports | Planned |
 
 ## Reference workflow behavior traceability
 
@@ -165,7 +165,7 @@ T190 mechanically verifies exactly 21 evidence-backed rows.
 | CLI/outcomes | T004, T006, T047, T120–T134, T146–T169 |
 | Operational trace | T010, T054, T099–T102, T118, T120, T124, T145–T182 |
 | Testing authority | T013, T135–T145, T146–T191 |
-| Documentation/judgment | T012, T023–T029, T192–T200 |
+| Documentation/judgment | T012, T023–T029, R001–R005, T192–T200 |
 | Reference workflow | T140–T142, T185–T190 |
 
 ## Explicit exclusion audit

@@ -293,7 +293,7 @@ These behaviors apply on all supported platforms without alternate implementatio
 
 ### Authoritative CI matrix
 
-T029 and all publication gates **MUST** run the full canonical quality gate on each row:
+R004 supersedes T029 scheduling. Protected-`main` `pull_request_target` workflow with credential-free trusted-base quality evidence, unprivileged candidate-influenced subprocesses against privileged source/evidence, inert hash-bound Git-bundle transfer, and fresh-runner `publication / aggregate` semantic phase **MUST** perform exact base/head checkpoint once without exposing judge credentials to candidate code. Deterministic candidate-head quality **MUST** run on each row below without semantic-judge credentials:
 
 | CI job | Host image | Host CPU | Target triple |
 |---|---|---|---|
@@ -302,7 +302,7 @@ T029 and all publication gates **MUST** run the full canonical quality gate on e
 | `macos-aarch64` | `macos-15` | arm64 | `aarch64-apple-darwin` |
 | `macos-x86_64` | `macos-15-intel` | Intel | `x86_64-apple-darwin` |
 
-GitHub-hosted macOS workflow labels select host CPU architecture: `macos-15` runs on arm64 (Apple Silicon); `macos-15-intel` runs on Intel x86_64. Pin these labels rather than `macos-latest` so T029 matrix rows stay stable across GitHub image promotions.
+GitHub-hosted macOS workflow labels select host CPU architecture: `macos-15` runs on arm64 (Apple Silicon); `macos-15-intel` runs on Intel x86_64. Pin these labels rather than `macos-latest` so quality matrix rows stay stable across GitHub image promotions.
 
 Local development may use any supported triple; CI coverage is authoritative for release confidence.
 

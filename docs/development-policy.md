@@ -1,6 +1,6 @@
 # Development policy
 
-**Status:** Dependency policy and C1 empty-runtime closure prepared by T030 (2026-07-18). Authoritative CI adapter landed by T029 (2026-07-18). Semantic judge contract and provisioning names frozen by T012 (2026-07-17).
+**Status:** Publication-checkpoint coherence superseded per-commit scheduling by owner decision R001 (2026-07-18). Aggregate hook/publication/CI repair R002–R004 and local R005 validation are complete; T031 remains blocked until the remote accepts the authorized governance-repair checkpoint. Dependency policy and C1 empty-runtime closure landed by T030 (2026-07-18).
 
 Related documents:
 
@@ -12,21 +12,19 @@ Related documents:
 - [Dependency policy (`deny.toml`)](../deny.toml)
 - [Checkpoint evidence schema](../quality/evidence/v1/checkpoint.schema.json)
 
-## Documentation coherence
+## Publication-checkpoint coherence
 
-Every commit must independently leave relevant documentation coherent with behavior, architecture, contracts, testing policy, and development policy it introduces ([I47](invariants.md#i47-every-commit-is-documentation-coherent)).
+Every accepted push must leave the candidate destination tip coherent with behavior, architecture, contracts, testing policy, and development policy introduced by the aggregate change from the exact remote destination tip ([I47](invariants.md#i47-every-publication-checkpoint-is-documentation-coherent)). Commits inside one unpublished range may be incomplete and may repair one another.
 
-Before committing during Phase 0 contract freeze (through T016), run the configured semantic judge against the exact parent-to-candidate diff using the parent revision's rubric.
+Default pre-commit runs bounded fast deterministic checks against the exact staged tree. Explicit staged semantic judgment remains available for early feedback but is not a commit requirement.
 
-Before pushing, every unpublished commit must receive a determinate semantic-judge `pass`. `fail`, `unavailable`, and `indeterminate` block publication.
+Before pushing, the exact remote-base-to-local-head range must receive one determinate semantic-judge `pass`. `fail`, `unavailable`, and `indeterminate` block publication.
 
-## Bootstrap and parent rubric
+## Base rubric
 
-Foundation commit `7552af5968b4a2c10aefd01fbfa6c351817e1b8b` consumed the one-time bootstrap publication exception. No second bootstrap exception is permitted.
+Foundation commit `7552af5968b4a2c10aefd01fbfa6c351817e1b8b` remains the initial rubric seed. Its frozen rubric encodes superseded per-commit scheduling, so it cannot judge the owner-directed scheduling migration faithfully. R001 therefore authorizes exactly one policy-migration rubric for an aggregate publication whose exact base is that foundation revision. This is not a second bootstrap: deterministic quality and one fail-closed semantic judgment remain mandatory.
 
-Until focused rubric files land in T025, the parent rubric for every post-foundation commit is the foundation seed manifest at [quality/rubrics/manifest.json](../quality/rubrics/manifest.json) anchored to that parent revision. Changed rubric content applies only to the following commit.
-
-No implementation commit may be pushed before T029. The first post-foundation push must show determinate judgment for every C0/C1 commit in the unpublished range.
+Owner must explicitly set `LOOP_ENGINE_OWNER_MIGRATION_RUBRIC` to [`quality/semantic-judge/v1/migrations/publication-checkpoint-v1.md`](../quality/semantic-judge/v1/migrations/publication-checkpoint-v1.md) for that one publication. Tooling requires regular-file SHA-256 `5c06777499f87a46923ac9423f274b70d152d5e356d8378d939e76f6dc2a5d9a`, rejects this override for every other base, and never selects candidate content implicitly. After migration, exact remote destination tip supplies the rubric. A changed rubric applies only to the following push, so a candidate range cannot weaken its own review.
 
 ## Semantic judge executable
 
@@ -62,13 +60,13 @@ quality/semantic-judge/v1/build-smoke-request \
   | quality/semantic-judge/v1/judge
 ```
 
-After T024, the canonical wrapper becomes:
+After T024, explicit staged semantic feedback uses:
 
 ```bash
 cargo run -p xtask -- judge --staged
 ```
 
-The versioned hook adapters clear Git's repository-local environment variables before tests spawn nested fixture repositories, then clear any caller-provided `RUSTUP_TOOLCHAIN` override before invoking Cargo so the tracked `rust-toolchain.toml` pin is authoritative. The pre-commit adapter refuses to run when hook, `xtask`, quality-manifest, dependency-policy, toolchain, or semantic-judge implementation paths contain unstaged changes. This prevents working-tree gate code from differing from its staged candidate while unrelated unstaged product/document edits remain excluded by exact-index materialization.
+R002 removes this command from default pre-commit execution. The versioned hook adapters clear Git's repository-local environment variables before tests spawn nested fixture repositories, then clear any caller-provided `RUSTUP_TOOLCHAIN` override before invoking Cargo so the tracked `rust-toolchain.toml` pin is authoritative. The pre-commit adapter refuses to run when hook, `xtask`, quality-manifest, dependency-policy, toolchain, or semantic-judge implementation paths contain unstaged changes. This prevents working-tree gate code from differing from its staged candidate while unrelated unstaged product/document edits remain excluded by exact-index materialization.
 
 After T028, the canonical publication / pre-push command is:
 
@@ -82,20 +80,22 @@ Optional inclusive end defaults to `HEAD`:
 cargo run --locked -p xtask -- publication --from <exclusive-start-rev> --to <inclusive-end-rev>
 ```
 
-The command enumerates every commit in `<exclusive-start-rev>..<inclusive-end-rev>` (oldest-first, actual Git parent per commit, merge commits rejected). For a new branch, the pre-push adapter passes Git's exact destination remote name and URL, queries that destination's currently advertised refs, fetches its commit graph into an isolated temporary bare repository backed by read-only local object alternates, and excludes commits reachable from those advertised tips; stale or forged local remote-tracking refs and another remote can never suppress judgment. It loads **`quality/manifest.toml` from each candidate revision's detached worktree** (never the tip manifest for historical commits), enforces monotonic manifest evolution once a parent manifest exists, runs the candidate's currently-implemented quality checks, injects exact command evidence into the semantic-judge request, emits each per-commit judge JSON response before applying blocking disposition, and requires a determinate parent-rubric semantic-judge `pass` in publication mode. Pre-manifest historical commits run the immutable built-in baseline (`git diff --check` plus semantic judge only). A manifest override exists only in the in-process Rust test API; publication and pre-push CLIs expose no override, so normal history always uses each candidate's committed manifest. Gate logic stays in `xtask`; hooks and CI must not reimplement it.
+R003 changes this command to evaluate exactly one range: `<exclusive-start-rev>..<inclusive-end-rev>`. The exclusive start is the remote destination tip and the inclusive end is the candidate local head. Existing-branch publication requires the base to be an ancestor of the head and rejects unsupported nonlinear replacement. Pre-push uses Git's exact advertised destination SHA rather than a mutable remote-tracking ref. For a new branch, Git's hook input has no integration-ref SHA, so adapter performs fresh exact `ls-remote` query for destination `refs/heads/main` and requires candidate head to descend from that snapshot. Server branch-current protection remains authority if integration branch advances after query.
 
-T029 wires that same publication command in GitHub Actions (`.github/workflows/quality.yml`). Pull-request jobs explicitly check out `pull_request.head.sha`; GitHub's synthetic merge ref is never passed to the linear exact-parent gate.
+The command creates one detached worktree at candidate head, runs `git diff --check` across the aggregate range, loads candidate-head `quality/manifest.toml`, proves it did not remove or weaken checks present at the base, runs candidate quality once, injects that evidence into one base-rubric semantic request, emits one response, and requires determinate `pass`. The one-time foundation migration replaces the failed 2.2 MB duplicated request while still binding the complete foundation range by SHA-256/size/path-count evidence and semantically projecting the exact reviewed-C1-to-candidate governance repair delta; ordinary checkpoints continue to send the exact destination-base-to-candidate diff and resulting changed documents. Intermediate commits and their manifests are not separate authorities. Pre-push accepts at most one non-delete ref update and requires its local SHA to equal checked-out `HEAD`; ambiguous or differently checked-out pushes must be split. Gate logic stays in `xtask`; hooks and CI must not reimplement it.
+
+R004 wires two canonical phases into protected-`main` `pull_request_target` GitHub Actions (`.github/workflows/quality.yml`); candidate workflow edits cannot authorize themselves. A credential-free runner executes trusted base `xtask` against exact candidate objects; trusted gate process owns source and evidence while candidate-influenced subprocesses run as unprivileged UID 65534 with writes confined to dedicated cargo/target directories. Gate rejects tracked, untracked, or ignored non-target source changes before and after each check, then uploads revision-bound deterministic evidence plus an inert Git bundle. A fresh runner imports only the exact hash-bound bundle, deletes it before credentials exist, builds trusted base gate code, then provisions judge credentials and performs semantic-only publication. Candidate-controlled code and candidate checkout paths never exist on credential-bearing runners. Pull-request jobs explicitly bind `pull_request.base.sha` and `pull_request.head.sha`; GitHub's synthetic merge ref is never passed to the gate. Push CI remains credential-free because protected pull-request checks are remote semantic authority. Foundation-to-R001 migration predates this remote workflow and therefore relies on owner-authorized local aggregate pre-push; installed protected-default-branch workflow governs subsequent pull requests.
 
 ## Local vs publication disposition
 
-| Verdict | Local pre-commit (T027+) | Publication / pre-push / CI |
+| Verdict | Explicit staged judge | Publication / pre-push / CI |
 |---|---|---|
-| `pass` | allow | allow |
-| `fail` | block | block |
-| `indeterminate` | warn; allow | block |
-| `unavailable` | warn; allow | block |
+| `pass` | advisory pass | allow |
+| `fail` | advisory fail | block |
+| `indeterminate` | advisory warning | block |
+| `unavailable` | advisory warning | block |
 
-Deterministic documentation, architecture, schema, and quality checks remain separate from semantic judgment.
+Default pre-commit has no semantic disposition; any fast deterministic failure blocks commit. Deterministic documentation, architecture, schema, and quality checks remain separate from semantic judgment.
 
 ## Formatting and Clippy policy (T020)
 
@@ -148,37 +148,33 @@ Checkpoint C1 closes the workspace/governance skeleton only. The currently imple
 
 C1 candidate evidence uses [`quality/evidence/v1/checkpoint.schema.json`](../quality/evidence/v1/checkpoint.schema.json) with `checkpoint_id = "C1"` and `application_operations = []`. Orchestrator commit message for this boundary: `build: establish workspace governance`.
 
-## T029 GitHub Actions provisioning owner
+## R004 GitHub Actions provisioning owner
 
-T029 provisions the same adapter without duplicating gate logic in workflow YAML. Workflow authority is `.github/workflows/quality.yml`.
+T029 originally provisioned per-commit publication on every platform leg. R004 replaces that schedule: one credential-free `publication quality evidence` job, one fresh-runner `publication / aggregate` semantic job, and four credential-free `quality / ...` jobs for supported platforms. Workflow authority is `.github/workflows/quality.yml`.
 
 | Name | Kind | Owner | Purpose |
 |---|---|---|---|
-| `LOOP_ENGINE_SEMANTIC_JUDGE_EXECUTABLE` | repository variable | T029 | Path to generic judge executable (`quality/semantic-judge/v1/judge`) |
 | `LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON` | repository secret | T029 | Redacted `pi` auth JSON for `openai-codex` only; written to a temp file at runtime, never logged |
 
-Owner setup (values never committed):
-
-1. Set repository variable `LOOP_ENGINE_SEMANTIC_JUDGE_EXECUTABLE` to `quality/semantic-judge/v1/judge`.
-2. Set repository secret `LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON` to the operator's redacted `pi` `auth.json` contents for `openai-codex` only.
-3. Do not store secret values in tracked files, workflow logs, or artifacts.
+Owner setup: set `LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON` to operator's redacted `pi` `auth.json` contents for `openai-codex` only. Never store secret value in tracked files, workflow logs, or artifacts. Judge executable is pinned to trusted base path `quality/semantic-judge/v1/judge`, not a candidate-controlled setting.
 
 Workflow steps must:
 
-1. fail closed when the variable or secret is missing;
-2. materialize `LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON` into an ephemeral `auth.json` under `PI_CODING_AGENT_DIR` for the job only (never echo contents);
-3. invoke the canonical publication command once for the exact unpublished range (`--from <exclusive-start-rev>`); the command itself gates every commit;
-4. store per-commit judge responses under `target/quality-artifacts/ci/<job>/<candidate_revision>/response.json` and upload them as CI artifacts;
-5. rely on the publication command exit status to fail closed on `fail`, `indeterminate`, or `unavailable` (no YAML verdict branching).
+1. run trusted base publication quality phase on a credential-free runner with root-owned source/evidence and unprivileged candidate-influenced subprocesses, then upload exact base/head-bound evidence plus a hash-bound Git bundle;
+2. use a fresh runner for semantic phase, import candidate Git objects only from that inert bundle, remove the bundle, and build trusted base `xtask` before credentials are provisioned;
+3. fail closed when secret is missing, then materialize it into ephemeral `auth.json` under `PI_CODING_AGENT_DIR` for semantic step only;
+4. consume the bound evidence through `publication --quality-report-in`, invoke trusted base judge exactly once, and store the response under `<base_revision>..<candidate_revision>/response.json`;
+5. rely on publication exit status to fail closed on `fail`, `indeterminate`, or `unavailable` (no YAML verdict branching).
 
-Supported CI matrix (authoritative host/target policy from [technology.md](technology.md)):
+Required CI jobs (authoritative host/target policy from [technology.md](technology.md)):
 
-| Required check name | Host image | Target triple |
-|---|---|---|
-| `quality / linux-x86_64` | `ubuntu-24.04` | `x86_64-unknown-linux-gnu` |
-| `quality / linux-aarch64` | `ubuntu-24.04-arm` | `aarch64-unknown-linux-gnu` |
-| `quality / macos-aarch64` | `macos-15` | `aarch64-apple-darwin` |
-| `quality / macos-x86_64` | `macos-15-intel` | `x86_64-apple-darwin` |
+| Required check name | Host image | Target triple | Scope |
+|---|---|---|---|
+| `publication / aggregate` | `ubuntu-24.04` | `x86_64-unknown-linux-gnu` | consume trusted bound evidence plus one base-to-head semantic judgment |
+| `quality / linux-x86_64` | `ubuntu-24.04` | `x86_64-unknown-linux-gnu` | candidate-head deterministic quality |
+| `quality / linux-aarch64` | `ubuntu-24.04-arm` | `aarch64-unknown-linux-gnu` | candidate-head deterministic quality |
+| `quality / macos-aarch64` | `macos-15` | `aarch64-apple-darwin` | candidate-head deterministic quality |
+| `quality / macos-x86_64` | `macos-15-intel` | `x86_64-apple-darwin` | candidate-head deterministic quality |
 
 ### Required branch rule / check
 
@@ -187,7 +183,7 @@ Until T198 applies server-side protection, document the intended rule:
 - protect `main` from direct writes;
 - require branch current with `main` before integration;
 - require linear history and disable merge-commit integration; only fast-forward an already reviewed commit chain so landed commit SHAs are the exact SHAs judged by publication CI (squash/rebase rewriting is not an authoritative substitute);
-- require all four status checks above (`quality / linux-x86_64`, `quality / linux-aarch64`, `quality / macos-aarch64`, `quality / macos-x86_64`) before merge and before release;
+- require `publication / aggregate` plus all four `quality / ...` status checks above before merge and before release;
 - prevent bypass where the hosting platform supports it.
 
 Those exact check names are the T029 → T198 handoff for required CI.
@@ -201,13 +197,17 @@ export LOOP_ENGINE_SEMANTIC_JUDGE_EXECUTABLE="${LOOP_ENGINE_SEMANTIC_JUDGE_EXECU
 cargo run --locked -p xtask -- publication --from origin/main
 ```
 
-To dry-run the first post-foundation unpublished range locally:
+To run the one owner-authorized post-foundation policy migration:
 
 ```bash
-cargo run --locked -p xtask -- publication --from 7552af5968b4a2c10aefd01fbfa6c351817e1b8b
+LOOP_ENGINE_OWNER_MIGRATION_RUBRIC=quality/semantic-judge/v1/migrations/publication-checkpoint-v1.md \
+  cargo run --locked -p xtask -- publication \
+  --from 7552af5968b4a2c10aefd01fbfa6c351817e1b8b
 ```
 
-Capture per-commit stdout JSON locally when useful:
+Tooling rejects this environment override once destination base differs from foundation.
+
+Capture aggregate publication stdout JSON locally when useful:
 
 ```bash
 mkdir -p target/quality-artifacts/local-dry-run

@@ -1,16 +1,17 @@
 use std::fs;
 use std::io::Cursor;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use tempfile::TempDir;
 use xtask::hooks::{HOOK_VERSION, PRE_PUSH_HOOK_PATH};
 use xtask::publication::{
-    self, PublicationOptions, PushUpdate, is_zero_oid, read_push_updates,
-    unpublished_commits_for_update,
+    self, PublicationOptions, PushUpdate, is_zero_oid, publication_base_for_update,
+    read_push_updates,
 };
 use xtask::quality::MANIFEST_PATH;
-use xtask::semantic_judge::{self, Disposition, FOUNDATION_PARENT_REVISION, Verdict};
+use xtask::semantic_judge::{self, Disposition, Verdict};
 
 fn fixture_root(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -31,10 +32,7 @@ fn real_repo_root() -> PathBuf {
 }
 
 fn publication_manifest_text() -> String {
-    fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/publication/manifest.toml"),
-    )
-    .expect("publication fixture manifest")
+    fs::read_to_string(fixture_root("manifest.toml")).expect("publication fixture manifest")
 }
 
 fn git(repo: &Path, args: &[&str]) -> String {
@@ -60,38 +58,33 @@ fn write(repo: &Path, relative: &str, content: &str) {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).expect("mkdir");
     }
-    fs::write(&path, content).expect("write");
+    fs::write(path, content).expect("write");
 }
 
 fn copy_dir(src: &Path, dst: &Path) {
-    fn copy_recursive(src: &Path, dst: &Path) {
-        if src.is_dir() {
-            fs::create_dir_all(dst).expect("mkdir");
-            for entry in fs::read_dir(src).expect("read_dir") {
-                let entry = entry.expect("dir entry");
-                copy_recursive(&entry.path(), &dst.join(entry.file_name()));
-            }
-            return;
+    if src.is_dir() {
+        fs::create_dir_all(dst).expect("mkdir");
+        for entry in fs::read_dir(src).expect("read_dir") {
+            let entry = entry.expect("dir entry");
+            copy_dir(&entry.path(), &dst.join(entry.file_name()));
         }
+    } else {
         if let Some(parent) = dst.parent() {
             fs::create_dir_all(parent).expect("mkdir parent");
         }
         fs::copy(src, dst).expect("copy fixture file");
     }
-    copy_recursive(src, dst);
 }
 
 fn init_seeded_repo() -> TempDir {
     let dir = TempDir::new().expect("tempdir");
-    git(dir.path(), &["init"]);
+    git(dir.path(), &["init", "-b", "main"]);
     git(dir.path(), &["config", "user.email", "publication@test"]);
     git(dir.path(), &["config", "user.name", "Publication Test"]);
     git(dir.path(), &["config", "commit.gpgsign", "false"]);
-
     copy_dir(&architecture_fixture_root(), dir.path());
     copy_dir(&docs_fixture_root(), dir.path());
     write(dir.path(), MANIFEST_PATH, &publication_manifest_text());
-
     git(dir.path(), &["add", "-A"]);
     git(dir.path(), &["commit", "-m", "seed"]);
     dir
@@ -103,12 +96,11 @@ fn commit_all(repo: &Path, message: &str) -> String {
     git(repo, &["rev-parse", "HEAD"])
 }
 
-fn options(repo: &Path, judge: &str) -> PublicationOptions {
+fn options(repo: &Path, judge: impl Into<PathBuf>) -> PublicationOptions {
     let mut options = PublicationOptions::new(repo);
-    options.judge_executable = Some(fixture_root(judge));
+    options.judge_executable = Some(judge.into());
     options.timeout_seconds = Some(5);
     options.foundation_git_root = Some(real_repo_root());
-    options.quality_manifest = Some(repo.join(MANIFEST_PATH));
     options
 }
 
@@ -120,789 +112,552 @@ fn edit_intent(repo: &Path, body: &str) {
     );
 }
 
+fn recording_judge(dir: &Path) -> (PathBuf, PathBuf) {
+    let script = dir.join("judge-record");
+    let ledger = dir.join("requests.jsonl");
+    let ledger_literal = serde_json::to_string(&ledger.to_string_lossy()).expect("path json");
+    write(
+        dir,
+        "judge-record",
+        &format!(
+            r#"#!/usr/bin/env python3
+import json, pathlib, sys
+request = json.load(sys.stdin)
+with pathlib.Path({ledger_literal}).open("a", encoding="utf-8") as out:
+    out.write(json.dumps(request, sort_keys=True) + "\n")
+response = {{
+    "schema_version": 1,
+    "parent_revision": request["parent_revision"],
+    "candidate_revision": request["candidate_revision"],
+    "verdict": "pass",
+    "citations": [{{"rubric_id": request["rubrics"][0]["id"], "rule": "I47", "lines": ["docs/first.md:1"]}}],
+    "message": "recorded aggregate request"
+}}
+json.dump(response, sys.stdout)
+"#,
+        ),
+    );
+    let mut permissions = fs::metadata(&script)
+        .expect("script metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script, permissions).expect("chmod");
+    (script, ledger)
+}
+
 #[test]
-fn remote_update_input_enumerates_unpublished_commits_oldest_first() {
+fn remote_update_input_parses_all_lines() {
+    let a = "a".repeat(40);
+    let b = "b".repeat(40);
+    let c = "c".repeat(40);
+    let d = "d".repeat(40);
+    let input =
+        format!("refs/heads/main {a} refs/heads/main {b}\nrefs/heads/x {c} refs/heads/x {d}\n");
+    let updates = read_push_updates(Cursor::new(input)).expect("parse updates");
+    assert_eq!(updates.len(), 2);
+    assert_eq!(updates[0].remote_sha, b);
+}
+
+#[test]
+fn multi_ref_content_push_is_rejected_before_execution() {
     let repo = init_seeded_repo();
-    let remote = git(repo.path(), &["rev-parse", "HEAD"]);
-    edit_intent(repo.path(), "c1");
-    let c1 = commit_all(repo.path(), "c1");
-    edit_intent(repo.path(), "c2");
-    let c2 = commit_all(repo.path(), "c2");
+    let base = git(repo.path(), &["rev-parse", "HEAD"]);
+    write(repo.path(), "docs/first.md", "# First\n");
+    let head = commit_all(repo.path(), "first");
+    let updates = vec![
+        PushUpdate {
+            local_ref: "refs/heads/main".into(),
+            local_sha: head.clone(),
+            remote_ref: "refs/heads/main".into(),
+            remote_sha: base.clone(),
+        },
+        PushUpdate {
+            local_ref: "refs/tags/checkpoint".into(),
+            local_sha: head,
+            remote_ref: "refs/tags/checkpoint".into(),
+            remote_sha: "0000000000000000000000000000000000000000".into(),
+        },
+    ];
+
+    let error =
+        publication::publish_updates(&options(repo.path(), fixture_root("judge-pass")), &updates)
+            .expect_err("multi-content push must fail");
+    assert!(error.to_string().contains("at most one non-delete"));
+}
+
+#[test]
+fn pushed_candidate_must_equal_checked_out_head() {
+    let repo = init_seeded_repo();
+    let base = git(repo.path(), &["rev-parse", "HEAD"]);
+    git(repo.path(), &["checkout", "-b", "other"]);
+    write(repo.path(), "docs/first.md", "# First\n");
+    let other = commit_all(repo.path(), "other");
+    git(repo.path(), &["checkout", "main"]);
+    let update = PushUpdate {
+        local_ref: "refs/heads/other".into(),
+        local_sha: other,
+        remote_ref: "refs/heads/other".into(),
+        remote_sha: base,
+    };
+
+    let error =
+        publication::publish_updates(&options(repo.path(), fixture_root("judge-pass")), &[update])
+            .expect_err("different checked-out head must fail");
+    assert!(error.to_string().contains("differs from checked-out HEAD"));
+}
+
+#[test]
+fn annotated_tag_object_cannot_alias_checked_out_head() {
+    let repo = init_seeded_repo();
+    git(
+        repo.path(),
+        &["tag", "-a", "checkpoint", "-m", "checkpoint"],
+    );
+    let tag_object = git(repo.path(), &["rev-parse", "refs/tags/checkpoint"]);
+    let head = git(repo.path(), &["rev-parse", "HEAD"]);
+    assert_ne!(tag_object, head);
+    let update = PushUpdate {
+        local_ref: "refs/tags/checkpoint".into(),
+        local_sha: tag_object,
+        remote_ref: "refs/tags/checkpoint".into(),
+        remote_sha: "0000000000000000000000000000000000000000".into(),
+    };
+
+    let error =
+        publication::publish_updates(&options(repo.path(), fixture_root("judge-pass")), &[update])
+            .expect_err("annotated tag object must not alias HEAD commit");
+    assert!(error.to_string().contains("differs from checked-out HEAD"));
+}
+
+#[test]
+fn split_quality_and_semantic_phases_preserve_one_bound_checkpoint() {
+    let repo = init_seeded_repo();
+    let base = git(repo.path(), &["rev-parse", "HEAD"]);
+    write(repo.path(), "docs/first.md", "# First\n");
+    let head = commit_all(repo.path(), "first");
+    let judge_dir = TempDir::new().expect("judge tempdir");
+    let (judge, ledger) = recording_judge(judge_dir.path());
+    let options = options(repo.path(), judge);
+
+    let evidence = publication::produce_quality_evidence(&options, &base, &head)
+        .expect("credential-free quality phase");
+    assert_eq!(evidence.base_revision, base);
+    assert_eq!(evidence.candidate_revision, head);
+    assert_eq!(evidence.quality.checks.len(), 2);
+
+    let outcome = publication::publish_with_quality_evidence(&options, &base, &head, evidence)
+        .expect("semantic-only phase");
+    assert_eq!(outcome.checkpoint.base_revision, base);
+    assert_eq!(outcome.checkpoint.candidate_revision, head);
+    assert_eq!(
+        fs::read_to_string(ledger).expect("ledger").lines().count(),
+        1
+    );
+}
+
+#[test]
+fn split_semantic_phase_rejects_unbound_quality_evidence() {
+    let repo = init_seeded_repo();
+    let base = git(repo.path(), &["rev-parse", "HEAD"]);
+    write(repo.path(), "docs/first.md", "# First\n");
+    let head = commit_all(repo.path(), "first");
+    let options = options(repo.path(), fixture_root("judge-pass"));
+    let mut evidence =
+        publication::produce_quality_evidence(&options, &base, &head).expect("quality evidence");
+    evidence.candidate_revision = base.clone();
+
+    let error = publication::publish_with_quality_evidence(&options, &base, &head, evidence)
+        .expect_err("unbound evidence must fail");
+    assert!(error.to_string().contains("revision binding"));
+}
+
+#[test]
+fn multi_commit_update_runs_one_aggregate_checkpoint() {
+    let repo = init_seeded_repo();
+    let base = git(repo.path(), &["rev-parse", "HEAD"]);
+    write(repo.path(), "docs/first.md", "# First\n");
+    commit_all(repo.path(), "first");
+    write(repo.path(), "docs/second.md", "# Second\n");
+    let head = commit_all(repo.path(), "second");
+    let judge_dir = TempDir::new().expect("judge tempdir");
+    let (judge, ledger) = recording_judge(judge_dir.path());
 
     let update = PushUpdate {
-        local_ref: "refs/heads/topic".into(),
-        local_sha: c2.clone(),
-        remote_ref: "refs/heads/topic".into(),
-        remote_sha: remote.clone(),
+        local_ref: "refs/heads/main".into(),
+        local_sha: head.clone(),
+        remote_ref: "refs/heads/main".into(),
+        remote_sha: base.clone(),
     };
-    let commits =
-        unpublished_commits_for_update(repo.path(), &update, None, None).expect("enumerate");
-    assert_eq!(commits, vec![c1, c2]);
+    let outcomes = publication::publish_updates(&options(repo.path(), judge), &[update])
+        .expect("aggregate publication");
+
+    assert_eq!(outcomes.len(), 1);
+    let checkpoint = &outcomes[0].checkpoint;
+    assert_eq!(checkpoint.base_revision, base);
+    assert_eq!(checkpoint.candidate_revision, head);
+    assert_eq!(checkpoint.quality.checks.len(), 2);
+    assert_eq!(checkpoint.judge.disposition, Disposition::Allow);
+
+    let requests: Vec<serde_json::Value> = fs::read_to_string(ledger)
+        .expect("request ledger")
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("request json"))
+        .collect();
+    assert_eq!(requests.len(), 1, "one push range must invoke judge once");
+    assert!(
+        requests[0]["diff"]
+            .as_str()
+            .unwrap()
+            .contains("docs/first.md")
+    );
+    assert!(
+        requests[0]["diff"]
+            .as_str()
+            .unwrap()
+            .contains("docs/second.md")
+    );
 }
 
 #[test]
-fn read_push_updates_parses_stdin_lines() {
-    let stdin = "refs/heads/main abc refs/heads/main 0000000000000000000000000000000000000000\n";
-    let updates = read_push_updates(Cursor::new(stdin)).expect("parse");
-    assert_eq!(updates.len(), 1);
-    assert!(is_zero_oid(&updates[0].remote_sha));
-    assert_eq!(updates[0].local_sha, "abc");
-}
-
-#[test]
-fn multi_commit_range_passes_with_parent_rubric_and_quality() {
+fn internal_bad_commit_may_be_repaired_before_candidate_head() {
     let repo = init_seeded_repo();
     let base = git(repo.path(), &["rev-parse", "HEAD"]);
-    edit_intent(repo.path(), "c1");
-    let _c1 = commit_all(repo.path(), "c1");
-    edit_intent(repo.path(), "c2");
-    let head = commit_all(repo.path(), "c2");
-
-    let outcome = publication::publish_range(&options(repo.path(), "judge-pass"), &base, &head)
-        .expect("multi-commit pass");
-    assert_eq!(outcome.commits.len(), 2);
-    assert!(
-        outcome
-            .commits
-            .iter()
-            .all(|commit| commit.judge.response.verdict == Verdict::Pass
-                && commit.judge.disposition == Disposition::Allow
-                && commit.quality.passed())
-    );
-}
-
-#[test]
-fn unavailable_judge_fails_closed_for_publication() {
-    let repo = init_seeded_repo();
-    let base = git(repo.path(), &["rev-parse", "HEAD"]);
-    edit_intent(repo.path(), "c1");
-    let head = commit_all(repo.path(), "c1");
-
-    let error =
-        publication::publish_range(&options(repo.path(), "judge-unavailable"), &base, &head)
-            .expect_err("unavailable must block publication");
-    let message = format!("{error:#}");
-    assert!(
-        message.contains("unavailable") || message.contains("blocked"),
-        "unexpected error: {message}"
-    );
-}
-
-#[test]
-fn indeterminate_judge_fails_closed_for_publication() {
-    let repo = init_seeded_repo();
-    let base = git(repo.path(), &["rev-parse", "HEAD"]);
-    edit_intent(repo.path(), "c1");
-    let head = commit_all(repo.path(), "c1");
-
-    let error =
-        publication::publish_range(&options(repo.path(), "judge-indeterminate"), &base, &head)
-            .expect_err("indeterminate must block publication");
-    let message = format!("{error:#}");
-    assert!(
-        message.contains("indeterminate") || message.contains("blocked"),
-        "unexpected error: {message}"
-    );
-}
-
-#[test]
-fn failing_middle_commit_cannot_be_repaired_by_later_good_commit() {
-    let repo = init_seeded_repo();
-    let base = git(repo.path(), &["rev-parse", "HEAD"]);
-
-    edit_intent(repo.path(), "good-1");
-    let _c1 = commit_all(repo.path(), "good-1");
-
-    // Middle commit is semantically bad (marker) and also docs-clean so quality
-    // passes; the judge fixture fails only this middle commit.
-    edit_intent(repo.path(), "FAIL_MIDDLE bad middle");
-    let middle = commit_all(repo.path(), "bad-middle");
-
-    edit_intent(repo.path(), "good-3 repaired tip");
-    let head = commit_all(repo.path(), "good-3");
-
-    let error =
-        publication::publish_range(&options(repo.path(), "judge-fail-on-middle"), &base, &head)
-            .expect_err("failing middle must block whole range");
-    let message = format!("{error:#}");
-    assert!(
-        message.contains(&middle) || message.contains("blocked") || message.contains("fail"),
-        "unexpected error: {message}"
-    );
-
-    // Tip alone would pass; the range gate must still refuse because middle failed.
-    let tip_parent = git(repo.path(), &["rev-parse", &format!("{head}^")]);
-    let tip_only = publication::publish_range(
-        &options(repo.path(), "judge-fail-on-middle"),
-        &tip_parent,
-        &head,
-    )
-    .expect("later good commit alone passes");
-    assert_eq!(tip_only.commits.len(), 1);
-    assert_eq!(tip_only.commits[0].judge.response.verdict, Verdict::Pass);
-}
-
-#[test]
-fn failing_middle_quality_cannot_be_repaired_by_later_docs_fix() {
-    let repo = init_seeded_repo();
-    let base = git(repo.path(), &["rev-parse", "HEAD"]);
-
-    edit_intent(repo.path(), "good-1");
-    let _c1 = commit_all(repo.path(), "good-1");
-
-    // Middle commit introduces trailing whitespace — docs-check fails in that
-    // commit's detached worktree even if a later commit repairs the file.
-    write(
-        repo.path(),
-        "docs/intent.md",
-        "# Valid\n\nValid fixture documentation.   \n\nmiddle broken\n",
-    );
-    let middle = commit_all(repo.path(), "bad-docs-middle");
-
-    edit_intent(repo.path(), "repaired tip");
-    let head = commit_all(repo.path(), "repair-docs");
-
-    let error = publication::publish_range(&options(repo.path(), "judge-pass"), &base, &head)
-        .expect_err("middle docs failure must block");
-    let message = format!("{error:#}");
-    assert!(
-        message.contains("docs-check")
-            || message.contains(&middle)
-            || message.contains("quality check"),
-        "unexpected error: {message}"
-    );
-}
-
-#[test]
-fn changed_rubric_applies_only_to_following_commit_through_publication_gate() {
-    let repo = init_seeded_repo();
-
-    let seed = {
-        // Build foundation-seed content via staged judge path in an empty-manifest sense:
-        // reuse committed workspace foundation seed text.
-        fs::read_to_string(real_repo_root().join("quality/rubrics/foundation-seed.v1.md"))
-            .expect("foundation seed")
-    };
-    let digest = {
-        let output = Command::new("python3")
-            .args([
-                "-c",
-                "import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())",
-            ])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .and_then(|mut child| {
-                use std::io::Write;
-                child.stdin.as_mut().unwrap().write_all(seed.as_bytes())?;
-                Ok(child.wait_with_output()?.stdout)
-            })
-            .expect("digest");
-        String::from_utf8(output).unwrap().trim().to_owned()
-    };
-
-    let manifest_v1 = serde_json::json!({
-        "schema_version": 1,
-        "parent_revision": FOUNDATION_PARENT_REVISION,
-        "bootstrap_publication_consumed": true,
-        "no_second_bootstrap": true,
-        "rubrics": [{
-            "id": "foundation-seed",
-            "content_path": "foundation-seed.v1.md",
-            "content_sha256": digest
-        }]
-    });
-    write(
-        repo.path(),
-        "quality/rubrics/manifest.json",
-        &serde_json::to_string_pretty(&manifest_v1).unwrap(),
-    );
-    write(repo.path(), "quality/rubrics/foundation-seed.v1.md", &seed);
-    let parent_with_v1 = commit_all(repo.path(), "rubric-v1");
-
-    let changed = format!("{seed}\n\n## Changed rubric marker\n\nnext-commit-only\n");
-    let changed_digest = {
-        let output = Command::new("python3")
-            .args([
-                "-c",
-                "import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())",
-            ])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .and_then(|mut child| {
-                use std::io::Write;
-                child
-                    .stdin
-                    .as_mut()
-                    .unwrap()
-                    .write_all(changed.as_bytes())?;
-                Ok(child.wait_with_output()?.stdout)
-            })
-            .expect("digest");
-        String::from_utf8(output).unwrap().trim().to_owned()
-    };
-    let manifest_v2 = serde_json::json!({
-        "schema_version": 1,
-        "parent_revision": FOUNDATION_PARENT_REVISION,
-        "bootstrap_publication_consumed": true,
-        "no_second_bootstrap": true,
-        "rubrics": [{
-            "id": "foundation-seed",
-            "content_path": "foundation-seed.v1.md",
-            "content_sha256": changed_digest
-        }]
-    });
-    write(
-        repo.path(),
-        "quality/rubrics/manifest.json",
-        &serde_json::to_string_pretty(&manifest_v2).unwrap(),
-    );
-    write(
-        repo.path(),
-        "quality/rubrics/foundation-seed.v1.md",
-        &changed,
-    );
-    edit_intent(repo.path(), "rubric-change-commit");
-    let rubric_change_commit = commit_all(repo.path(), "change-rubric");
-
-    edit_intent(repo.path(), "following-commit");
-    let following = commit_all(repo.path(), "following");
+    edit_intent(repo.path(), "FAIL_MIDDLE");
+    commit_all(repo.path(), "incomplete internal commit");
+    edit_intent(repo.path(), "Repaired final checkpoint");
+    let head = commit_all(repo.path(), "repair before publication");
 
     let outcome = publication::publish_range(
-        &options(repo.path(), "judge-pass"),
-        &parent_with_v1,
-        &following,
+        &options(repo.path(), fixture_root("judge-fail-on-middle")),
+        &base,
+        &head,
     )
-    .expect("rubric-change range");
-    assert_eq!(outcome.commits.len(), 2);
-
-    let changing = &outcome.commits[0];
-    assert_eq!(changing.candidate_revision, rubric_change_commit);
-    assert_eq!(
-        changing.judge.request["rubrics"][0]["content"]
-            .as_str()
-            .unwrap_or_default(),
-        seed
-    );
-    assert!(
-        !changing.judge.request["rubrics"][0]["content"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("next-commit-only")
-    );
-
-    let next = &outcome.commits[1];
-    assert_eq!(next.candidate_revision, following);
-    assert!(
-        next.judge.request["rubrics"][0]["content"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("next-commit-only")
-    );
+    .expect("aggregate final state should pass");
+    assert_eq!(outcome.checkpoint.judge.response.verdict, Verdict::Pass);
 }
 
 #[test]
-fn publication_gate_does_not_rewrite_user_tree() {
+fn bad_candidate_head_blocks_whole_range() {
     let repo = init_seeded_repo();
     let base = git(repo.path(), &["rev-parse", "HEAD"]);
-    edit_intent(repo.path(), "c1");
-    let head = commit_all(repo.path(), "c1");
+    edit_intent(repo.path(), "intermediate valid");
+    commit_all(repo.path(), "intermediate");
+    edit_intent(repo.path(), "FAIL_MIDDLE");
+    let head = commit_all(repo.path(), "bad final head");
 
-    // Contaminate the working tree after commit.
-    write(
-        repo.path(),
-        "docs/intent.md",
-        "# Valid\n\nValid fixture documentation.   \n\ncontaminated working tree\n",
-    );
-    let before = fs::read_to_string(repo.path().join("docs/intent.md")).expect("read");
-    assert!(before.contains("documentation.   \n"));
-
-    let _outcome = publication::publish_range(&options(repo.path(), "judge-pass"), &base, &head)
-        .expect("gate against exact commits");
-
-    let after = fs::read_to_string(repo.path().join("docs/intent.md")).expect("read after");
-    assert_eq!(before, after, "user working tree must remain untouched");
-}
-
-#[test]
-fn versioned_pre_push_hook_delegates_to_xtask() {
-    let body = fs::read_to_string(real_repo_root().join(PRE_PUSH_HOOK_PATH))
-        .expect("versioned pre-push hook");
-    let version = xtask::hooks::parse_hook_version(&body).expect("version marker");
-    assert_eq!(version, HOOK_VERSION);
-    assert!(
-        body.contains("cargo run") && body.contains("hooks pre-push"),
-        "thin hook must delegate to xtask hooks pre-push"
-    );
-    assert!(
-        body.contains("env -u RUSTUP_TOOLCHAIN") && body.contains("git rev-parse --local-env-vars"),
-        "hook must honor the toolchain pin and isolate nested fixture Git repositories"
-    );
-    assert!(
-        body.contains("--remote-name")
-            && body.contains("${1:")
-            && body.contains("--remote-url")
-            && body.contains("${2:"),
-        "thin hook must forward Git's exact destination remote name and URL"
-    );
-    assert!(
-        !body.contains("git worktree"),
-        "thin hook must not embed canonical worktree logic"
-    );
-}
-
-#[test]
-fn new_branch_publish_updates_excludes_commits_on_remote_refs() {
-    let repo = init_seeded_repo();
-    let published = git(repo.path(), &["rev-parse", "HEAD"]);
-    let remote = TempDir::new().expect("remote tempdir");
-    git(remote.path(), &["init", "--bare"]);
-    git(
-        repo.path(),
-        &[
-            "remote",
-            "add",
-            "origin",
-            remote.path().to_str().expect("remote path"),
-        ],
-    );
-    let refspec = format!("{published}:refs/heads/main");
-    git(repo.path(), &["push", "origin", &refspec]);
-    edit_intent(repo.path(), "new-branch-c1");
-    let c1 = commit_all(repo.path(), "new-branch-c1");
-    edit_intent(repo.path(), "new-branch-c2");
-    let c2 = commit_all(repo.path(), "new-branch-c2");
-    git(
-        repo.path(),
-        &["update-ref", "refs/remotes/backup/topic", &c2],
-    );
-
-    let updates = [PushUpdate {
-        local_ref: "refs/heads/new-branch".into(),
-        local_sha: c2.clone(),
-        remote_ref: "refs/heads/new-branch".into(),
-        remote_sha: "0000000000000000000000000000000000000000".into(),
-    }];
-    let mut opts = options(repo.path(), "judge-pass");
-    opts.remote_name = Some("origin".into());
-    opts.remote_url = Some(remote.path().to_string_lossy().into_owned());
-    let outcomes = publication::publish_updates(&opts, &updates).expect("publish new branch");
-    assert_eq!(outcomes.len(), 1);
-    assert_eq!(outcomes[0].commits.len(), 2);
-    assert_eq!(outcomes[0].commits[0].candidate_revision, c1);
-    assert_eq!(outcomes[0].commits[1].candidate_revision, c2);
-}
-
-#[test]
-fn quality_command_evidence_is_bound_into_publication_judge_request() {
-    let repo = init_seeded_repo();
-    let base = git(repo.path(), &["rev-parse", "HEAD"]);
-    edit_intent(repo.path(), "quality-evidence");
-    let head = commit_all(repo.path(), "quality-evidence");
-
-    let evidence_manifest = repo.path().join("quality-evidence.toml");
-    fs::write(
-        &evidence_manifest,
-        r#"schema_version = 1
-[[checks]]
-id = "check"
-runner = "cargo-check"
-[[checks]]
-id = "test"
-runner = "cargo-test"
-"#,
+    let error = publication::publish_range(
+        &options(repo.path(), fixture_root("judge-fail-on-middle")),
+        &base,
+        &head,
     )
-    .expect("write evidence manifest");
-
-    let mut opts = options(repo.path(), "judge-pass");
-    opts.quality_manifest = Some(evidence_manifest);
-    let outcome = publication::publish_range(&opts, &base, &head).expect("publish with evidence");
-    let evidence = outcome.commits[0].judge.request["deterministic_evidence"]
-        .as_array()
-        .expect("deterministic evidence array");
-    for command in [
-        "cargo check --workspace --locked",
-        "cargo test --workspace --locked",
-    ] {
-        let item = evidence
-            .iter()
-            .find(|item| item["command"] == command)
-            .unwrap_or_else(|| panic!("missing `{command}` evidence: {evidence:?}"));
-        assert_eq!(item["exit_code"], 0);
-        assert_eq!(item["candidate_revision"], head);
-    }
+    .expect_err("bad final checkpoint must block");
+    assert!(format!("{error:#}").contains("blocked aggregate publication"));
 }
 
 #[test]
-fn every_blocking_judge_verdict_is_emitted_before_exit() {
-    for (fixture, verdict) in [
-        ("judge-fail", "fail"),
-        ("judge-indeterminate", "indeterminate"),
-        ("judge-unavailable", "unavailable"),
-    ] {
+fn unavailable_and_indeterminate_block_publication() {
+    for judge in ["judge-unavailable", "judge-indeterminate"] {
         let repo = init_seeded_repo();
         let base = git(repo.path(), &["rev-parse", "HEAD"]);
-        edit_intent(repo.path(), verdict);
-        let head = commit_all(repo.path(), verdict);
-        let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
-            .args([
-                "publication",
-                "--from",
-                &base,
-                "--to",
-                &head,
-                "--executable",
-                fixture_root(fixture).to_str().unwrap(),
-            ])
-            .current_dir(repo.path())
-            .output()
-            .expect("xtask publication");
-        assert!(!output.status.success(), "{verdict} must block publication");
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let responses: Vec<serde_json::Value> = stdout
-            .lines()
-            .filter_map(|line| serde_json::from_str(line).ok())
-            .collect();
-        assert_eq!(responses.len(), 1, "stdout={stdout}");
-        assert_eq!(responses[0]["verdict"], verdict);
-        assert_eq!(responses[0]["candidate_revision"], head);
+        edit_intent(repo.path(), judge);
+        let head = commit_all(repo.path(), judge);
+        let error =
+            publication::publish_range(&options(repo.path(), fixture_root(judge)), &base, &head)
+                .expect_err("non-pass must block");
+        assert!(format!("{error:#}").contains("blocked aggregate publication"));
     }
 }
 
 #[test]
-fn failing_middle_cli_emits_prior_pass_and_blocking_response() {
+fn divergent_candidate_is_rejected_before_quality_or_judge() {
     let repo = init_seeded_repo();
     let base = git(repo.path(), &["rev-parse", "HEAD"]);
-    edit_intent(repo.path(), "good-first");
-    let first = commit_all(repo.path(), "good-first");
-    edit_intent(repo.path(), "FAIL_MIDDLE bad");
-    let middle = commit_all(repo.path(), "bad-middle");
-    edit_intent(repo.path(), "unreached-later");
-    let head = commit_all(repo.path(), "unreached-later");
+    edit_intent(repo.path(), "local");
+    let head = commit_all(repo.path(), "local");
+    git(repo.path(), &["checkout", "--detach", &base]);
+    edit_intent(repo.path(), "other");
+    let other = commit_all(repo.path(), "other");
+    git(repo.path(), &["checkout", "main"]);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
-        .args([
-            "publication",
-            "--from",
-            &base,
-            "--to",
-            &head,
-            "--executable",
-            fixture_root("judge-fail-on-middle").to_str().unwrap(),
-        ])
-        .current_dir(repo.path())
-        .output()
-        .expect("xtask publication");
-    assert!(!output.status.success());
-    let responses: Vec<serde_json::Value> = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| serde_json::from_str(line).ok())
-        .collect();
-    assert_eq!(responses.len(), 2, "only attempted commits emit responses");
-    assert_eq!(responses[0]["candidate_revision"], first);
-    assert_eq!(responses[0]["verdict"], "pass");
-    assert_eq!(responses[1]["candidate_revision"], middle);
-    assert_eq!(responses[1]["verdict"], "fail");
-}
-
-#[test]
-fn publication_cli_exposes_no_quality_manifest_override() {
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
-        .args(["publication", "--manifest", "reduced.toml"])
-        .output()
-        .expect("xtask publication parse");
-    assert!(!output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("unexpected argument '--manifest'"),
-        "unexpected stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn publish_updates_from_remote_input_gates_range() {
-    let repo = init_seeded_repo();
-    let remote = git(repo.path(), &["rev-parse", "HEAD"]);
-    edit_intent(repo.path(), "c1");
-    let _c1 = commit_all(repo.path(), "c1");
-    edit_intent(repo.path(), "c2");
-    let head = commit_all(repo.path(), "c2");
-
-    let updates = [PushUpdate {
-        local_ref: "refs/heads/topic".into(),
-        local_sha: head,
-        remote_ref: "refs/heads/topic".into(),
-        remote_sha: remote,
-    }];
-    let outcomes = publication::publish_updates(&options(repo.path(), "judge-pass"), &updates)
-        .expect("publish updates");
-    assert_eq!(outcomes.len(), 1);
-    assert_eq!(outcomes[0].commits.len(), 2);
-}
-fn init_repo_without_manifest() -> TempDir {
-    let dir = TempDir::new().expect("tempdir");
-    git(dir.path(), &["init"]);
-    git(dir.path(), &["config", "user.email", "publication@test"]);
-    git(dir.path(), &["config", "user.name", "Publication Test"]);
-    git(dir.path(), &["config", "commit.gpgsign", "false"]);
-
-    copy_dir(&architecture_fixture_root(), dir.path());
-    copy_dir(&docs_fixture_root(), dir.path());
-
-    git(dir.path(), &["add", "-A"]);
-    git(dir.path(), &["commit", "-m", "seed-without-manifest"]);
-    dir
-}
-
-#[test]
-fn pre_manifest_commits_use_baseline_without_tip_manifest() {
-    let repo = init_repo_without_manifest();
-    let base = git(repo.path(), &["rev-parse", "HEAD"]);
-    edit_intent(repo.path(), "pre-manifest-only");
-    let head = commit_all(repo.path(), "pre-manifest");
-
-    let mut opts = options(repo.path(), "judge-pass");
-    opts.quality_manifest = None;
-    let outcome = publication::publish_range(&opts, &base, &head)
-        .expect("pre-manifest baseline should pass with judge only");
-    assert_eq!(outcome.commits.len(), 1);
-    assert!(
-        outcome.commits[0].quality.checks.is_empty(),
-        "pre-manifest commits must not run tip manifest checks"
-    );
-}
-
-#[test]
-fn pre_manifest_baseline_blocks_diff_check_failure() {
-    let repo = init_repo_without_manifest();
-    let base = git(repo.path(), &["rev-parse", "HEAD"]);
-    write(repo.path(), "bad.txt", "trailing whitespace   \n");
-    let head = commit_all(repo.path(), "bad-whitespace");
-
-    let mut opts = options(repo.path(), "judge-pass");
-    opts.quality_manifest = None;
-    let error = publication::publish_range(&opts, &base, &head)
-        .expect_err("pre-manifest diff-check failure must block");
-    assert!(
-        format!("{error:#}").contains("git diff --check"),
-        "unexpected error: {error:#}"
-    );
-}
-
-#[test]
-fn manifest_check_removal_attack_is_rejected() {
-    let repo = init_repo_without_manifest();
-    let full = publication_manifest_text();
-    write(repo.path(), MANIFEST_PATH, &full);
-    let with_manifest = commit_all(repo.path(), "introduce-manifest");
-
-    let reduced = r#"
-schema_version = 1
-
-[[checks]]
-id = "docs-check"
-runner = "docs-check"
-"#;
-    write(repo.path(), MANIFEST_PATH, reduced);
-    edit_intent(repo.path(), "remove-architecture-check");
-    let head = commit_all(repo.path(), "attack-remove-check");
-
-    let mut opts = options(repo.path(), "judge-pass");
-    opts.quality_manifest = None;
-    let error = publication::publish_range(&opts, &with_manifest, &head)
-        .expect_err("removing manifest checks must fail");
-    let message = format!("{error:#}");
-    assert!(
-        message.contains("removed check") || message.contains("regression"),
-        "unexpected error: {message}"
-    );
-}
-
-#[test]
-fn new_branch_enumerates_all_local_commits_oldest_first() {
-    let repo = init_seeded_repo();
-    let published = git(repo.path(), &["rev-parse", "HEAD"]);
-    let remote = TempDir::new().expect("remote tempdir");
-    git(remote.path(), &["init", "--bare"]);
-    git(
-        repo.path(),
-        &[
-            "remote",
-            "add",
-            "origin",
-            remote.path().to_str().expect("remote path"),
-        ],
-    );
-    let refspec = format!("{published}:refs/heads/main");
-    git(repo.path(), &["push", "origin", &refspec]);
-
-    // Destination advances with an object absent locally, and local tracking
-    // state is removed. Enumeration must still discover the shared seed from
-    // the destination's fetched graph rather than attempt to republish root.
-    let remote_work = TempDir::new().expect("remote work tempdir");
-    git(
-        remote_work.path(),
-        &["clone", remote.path().to_str().expect("remote path"), "."],
-    );
-    git(remote_work.path(), &["config", "user.email", "remote@test"]);
-    git(remote_work.path(), &["config", "user.name", "Remote Test"]);
-    write(remote_work.path(), "remote-only.txt", "remote-only\n");
-    commit_all(remote_work.path(), "remote-only");
-    git(remote_work.path(), &["push", "origin", "HEAD:main"]);
-    git(
-        repo.path(),
-        &["update-ref", "-d", "refs/remotes/origin/main"],
-    );
-
-    edit_intent(repo.path(), "c1");
-    let c1 = commit_all(repo.path(), "c1");
-    // Forged/stale tracking refs are not destination publication evidence.
-    git(
-        repo.path(),
-        &["update-ref", "refs/remotes/origin/stale", &c1],
-    );
-    edit_intent(repo.path(), "c2");
-    let c2 = commit_all(repo.path(), "c2");
-
-    let update = PushUpdate {
-        local_ref: "refs/heads/new-branch".into(),
-        local_sha: c2.clone(),
-        remote_ref: "refs/heads/new-branch".into(),
-        remote_sha: "0000000000000000000000000000000000000000".into(),
-    };
-    let commits = unpublished_commits_for_update(
-        repo.path(),
-        &update,
-        Some("origin"),
-        Some(remote.path().to_str().expect("remote path")),
+    let error = publication::publish_range(
+        &options(repo.path(), fixture_root("judge-pass")),
+        &other,
+        &head,
     )
-    .expect("enumerate");
-    assert!(commits.contains(&c1));
-    assert!(commits.contains(&c2));
-    assert_eq!(commits.first().map(String::as_str), Some(c1.as_str()));
-    assert_eq!(commits.last().map(String::as_str), Some(c2.as_str()));
-}
-
-#[test]
-fn new_branch_without_destination_remote_name_fails_closed() {
-    let repo = init_seeded_repo();
-    let local_sha = git(repo.path(), &["rev-parse", "HEAD"]);
-    let update = PushUpdate {
-        local_ref: "refs/heads/new-branch".into(),
-        local_sha,
-        remote_ref: "refs/heads/new-branch".into(),
-        remote_sha: "0000000000000000000000000000000000000000".into(),
-    };
-    let error = unpublished_commits_for_update(repo.path(), &update, None, None)
-        .expect_err("missing destination remote must block");
-    assert!(error.to_string().contains("destination remote name"));
-}
-
-#[test]
-fn divergent_update_enumerates_only_new_commits() {
-    let repo = init_seeded_repo();
-    let seed = git(repo.path(), &["rev-parse", "HEAD"]);
-    edit_intent(repo.path(), "remote-only");
-    let remote = commit_all(repo.path(), "remote-only");
-    git(repo.path(), &["reset", "--hard", &seed]);
-    edit_intent(repo.path(), "c1");
-    let c1 = commit_all(repo.path(), "c1");
-    edit_intent(repo.path(), "c2");
-    let c2 = commit_all(repo.path(), "c2");
-
-    let update = PushUpdate {
-        local_ref: "refs/heads/topic".into(),
-        local_sha: c2.clone(),
-        remote_ref: "refs/heads/topic".into(),
-        remote_sha: remote,
-    };
-    let commits =
-        unpublished_commits_for_update(repo.path(), &update, None, None).expect("enumerate");
-    assert_eq!(commits, vec![c1, c2]);
+    .expect_err("divergent replacement must fail");
+    assert!(format!("{error:#}").contains("not a fast-forward descendant"));
 }
 
 #[test]
 fn merge_commit_in_range_is_rejected() {
     let repo = init_seeded_repo();
     let base = git(repo.path(), &["rev-parse", "HEAD"]);
-
     git(repo.path(), &["checkout", "-b", "side"]);
-    write(repo.path(), "side.txt", "side\n");
-    let side = commit_all(repo.path(), "side");
-    git(repo.path(), &["checkout", "-"]);
-    write(repo.path(), "main.txt", "main\n");
-    let _main = commit_all(repo.path(), "main");
-    git(
-        repo.path(),
-        &["merge", "--no-ff", &side, "-m", "merge side"],
-    );
-
+    write(repo.path(), "docs/side.md", "# Side\n");
+    commit_all(repo.path(), "side");
+    git(repo.path(), &["checkout", "main"]);
+    write(repo.path(), "docs/main.md", "# Main\n");
+    commit_all(repo.path(), "main");
+    git(repo.path(), &["merge", "--no-ff", "side", "-m", "merge"]);
     let head = git(repo.path(), &["rev-parse", "HEAD"]);
-    let error = publication::publish_range(&options(repo.path(), "judge-pass"), &base, &head)
-        .expect_err("merge commits must be rejected");
-    let message = format!("{error:#}");
-    assert!(
-        message.contains("merge") || message.contains("nonlinear"),
-        "unexpected error: {message}"
-    );
+
+    let error = publication::publish_range(
+        &options(repo.path(), fixture_root("judge-pass")),
+        &base,
+        &head,
+    )
+    .expect_err("merge range must fail");
+    assert!(format!("{error:#}").contains("unsupported merge commit"));
 }
 
 #[test]
-fn force_push_divergent_range_gates_only_new_commits() {
-    let repo = init_seeded_repo();
-    let remote = git(repo.path(), &["rev-parse", "HEAD"]);
-    edit_intent(repo.path(), "old-tip");
-    let _old = commit_all(repo.path(), "old");
-
-    // Simulate force-push rewrite: discard an old local tip and build a new
-    // line from the remote commit.
-    git(repo.path(), &["reset", "--hard", &remote]);
-    edit_intent(repo.path(), "rewritten-1");
-    let c1 = commit_all(repo.path(), "rewritten-1");
-    edit_intent(repo.path(), "rewritten-2");
-    let c2 = commit_all(repo.path(), "rewritten-2");
-
-    let update = PushUpdate {
-        local_ref: "refs/heads/main".into(),
-        local_sha: c2.clone(),
-        remote_ref: "refs/heads/main".into(),
-        remote_sha: remote,
-    };
-    let commits =
-        unpublished_commits_for_update(repo.path(), &update, None, None).expect("enumerate");
-    assert_eq!(commits, vec![c1, c2]);
-}
-
-#[test]
-fn judge_response_emitted_before_publication_block() {
+fn candidate_manifest_cannot_weaken_base_manifest() {
     let repo = init_seeded_repo();
     let base = git(repo.path(), &["rev-parse", "HEAD"]);
-    edit_intent(repo.path(), "FAIL_MIDDLE bad");
-    let head = commit_all(repo.path(), "bad");
-
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_xtask"))
-        .args([
-            "publication",
-            "--from",
-            &base,
-            "--to",
-            &head,
-            "--executable",
-            fixture_root("judge-fail-on-middle").to_str().unwrap(),
-        ])
-        .current_dir(repo.path())
-        .env(
-            "LOOP_ENGINE_SEMANTIC_JUDGE_EXECUTABLE",
-            fixture_root("judge-fail"),
-        )
-        .output()
-        .expect("xtask publication");
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains(r#""verdict":"fail""#) || stdout.contains(r#""verdict": "fail""#),
-        "judge response must be emitted before block; stdout={stdout}"
+    write(
+        repo.path(),
+        MANIFEST_PATH,
+        "schema_version = 1\n\n[[checks]]\nid = \"docs-check\"\nrunner = \"docs-check\"\n",
     );
-    assert!(!output.status.success(), "blocked publication must fail");
+    let head = commit_all(repo.path(), "weaken manifest");
+
+    let error = publication::publish_range(
+        &options(repo.path(), fixture_root("judge-pass")),
+        &base,
+        &head,
+    )
+    .expect_err("manifest weakening must block");
+    assert!(format!("{error:#}").contains("manifest"));
+}
+
+#[test]
+fn candidate_manifest_symlink_is_rejected_without_following_it() {
+    let repo = init_seeded_repo();
+    let base = git(repo.path(), &["rev-parse", "HEAD"]);
+    fs::remove_file(repo.path().join(MANIFEST_PATH)).expect("remove manifest");
+    symlink("../../docs/intent.md", repo.path().join(MANIFEST_PATH)).expect("symlink manifest");
+    let head = commit_all(repo.path(), "symlink manifest");
+
+    let error = publication::produce_quality_evidence(
+        &options(repo.path(), fixture_root("judge-pass")),
+        &base,
+        &head,
+    )
+    .expect_err("manifest symlink must fail closed");
+    assert!(format!("{error:#}").contains("regular 100644 Git blob"));
+}
+
+#[test]
+fn candidate_cannot_remove_base_manifest() {
+    let repo = init_seeded_repo();
+    let base = git(repo.path(), &["rev-parse", "HEAD"]);
+    fs::remove_file(repo.path().join(MANIFEST_PATH)).expect("remove manifest");
+    let head = commit_all(repo.path(), "remove manifest");
+
+    let error = publication::publish_range(
+        &options(repo.path(), fixture_root("judge-pass")),
+        &base,
+        &head,
+    )
+    .expect_err("manifest removal must block");
+    assert!(format!("{error:#}").contains("removed quality/manifest.toml"));
+}
+
+#[test]
+fn new_branch_uses_exact_advertised_main_not_tracking_ref() {
+    let repo = init_seeded_repo();
+    let base = git(repo.path(), &["rev-parse", "HEAD"]);
+    let remote = TempDir::new().expect("remote tempdir");
+    git(remote.path(), &["init", "--bare"]);
+    let remote_url = remote.path().to_string_lossy().to_string();
+    git(repo.path(), &["push", &remote_url, "main:main"]);
+
+    edit_intent(repo.path(), "feature one");
+    commit_all(repo.path(), "feature one");
+    edit_intent(repo.path(), "feature two");
+    let head = commit_all(repo.path(), "feature two");
+    git(
+        repo.path(),
+        &["update-ref", "refs/remotes/origin/main", &head],
+    );
+
+    let update = PushUpdate {
+        local_ref: "refs/heads/feature".into(),
+        local_sha: head,
+        remote_ref: "refs/heads/feature".into(),
+        remote_sha: "0000000000000000000000000000000000000000".into(),
+    };
+    let selected =
+        publication_base_for_update(repo.path(), &update, Some("origin"), Some(&remote_url))
+            .expect("resolve advertised base")
+            .expect("non-delete base");
+    assert_eq!(selected, base);
+}
+
+#[test]
+fn new_branch_requires_advertised_main() {
+    let repo = init_seeded_repo();
+    edit_intent(repo.path(), "feature");
+    let head = commit_all(repo.path(), "feature");
+    let remote = TempDir::new().expect("remote tempdir");
+    git(remote.path(), &["init", "--bare"]);
+    let remote_url = remote.path().to_string_lossy().to_string();
+    let update = PushUpdate {
+        local_ref: "refs/heads/feature".into(),
+        local_sha: head,
+        remote_ref: "refs/heads/feature".into(),
+        remote_sha: "0000000000000000000000000000000000000000".into(),
+    };
+
+    let error =
+        publication_base_for_update(repo.path(), &update, Some("origin"), Some(&remote_url))
+            .expect_err("missing integration ref must block");
+    assert!(format!("{error:#}").contains("refs/heads/main"));
+}
+
+#[test]
+fn delete_update_needs_no_gate() {
+    let repo = init_seeded_repo();
+    let update = PushUpdate {
+        local_ref: "(delete)".into(),
+        local_sha: "0000000000000000000000000000000000000000".into(),
+        remote_ref: "refs/heads/old".into(),
+        remote_sha: git(repo.path(), &["rev-parse", "HEAD"]),
+    };
+    assert!(is_zero_oid(&update.local_sha));
+    assert!(
+        publication_base_for_update(repo.path(), &update, None, None)
+            .expect("delete")
+            .is_none()
+    );
+}
+
+#[test]
+fn aggregate_gate_does_not_rewrite_user_tree() {
+    let repo = init_seeded_repo();
+    let base = git(repo.path(), &["rev-parse", "HEAD"]);
+    edit_intent(repo.path(), "candidate");
+    let head = commit_all(repo.path(), "candidate");
+    write(repo.path(), "scratch.txt", "untracked\n");
+    let before = git(repo.path(), &["status", "--porcelain"]);
+
+    publication::publish_range(
+        &options(repo.path(), fixture_root("judge-pass")),
+        &base,
+        &head,
+    )
+    .expect("publication");
+    assert_eq!(git(repo.path(), &["status", "--porcelain"]), before);
+    assert_eq!(git(repo.path(), &["rev-parse", "HEAD"]), head);
+}
+
+#[test]
+fn purity_violation_is_reported_even_when_judge_blocks() {
+    let repo = init_seeded_repo();
+    let base = git(repo.path(), &["rev-parse", "HEAD"]);
+    write(repo.path(), "docs/first.md", "# First\n");
+    let head = commit_all(repo.path(), "candidate");
+    let judge = repo.path().join("mutating-judge");
+    write(
+        repo.path(),
+        "mutating-judge",
+        r#"#!/usr/bin/env python3
+import json, pathlib, sys
+request = json.load(sys.stdin)
+pathlib.Path("judge-mutated.txt").write_text("mutated\n", encoding="utf-8")
+json.dump({
+  "schema_version": 1,
+  "parent_revision": request["parent_revision"],
+  "candidate_revision": request["candidate_revision"],
+  "verdict": "fail",
+  "citations": [{"rubric_id": request["rubrics"][0]["id"], "rule": "I47", "lines": ["docs/first.md:1"]}],
+  "message": "blocked"
+}, sys.stdout)
+"#,
+    );
+    let mut permissions = fs::metadata(&judge).expect("metadata").permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&judge, permissions).expect("chmod");
+
+    let error = publication::publish_range(&options(repo.path(), judge), &base, &head)
+        .expect_err("mutation plus judge failure must block");
+    assert!(format!("{error:#}").contains("must not rewrite user tree"));
+}
+
+#[test]
+fn split_semantic_purity_violation_is_reported_on_failure() {
+    let repo = init_seeded_repo();
+    let base = git(repo.path(), &["rev-parse", "HEAD"]);
+    write(repo.path(), "docs/first.md", "# First\n");
+    let head = commit_all(repo.path(), "candidate");
+    let initial = options(repo.path(), fixture_root("judge-pass"));
+    let evidence =
+        publication::produce_quality_evidence(&initial, &base, &head).expect("quality evidence");
+
+    let judge_dir = TempDir::new().expect("judge tempdir");
+    let judge = judge_dir.path().join("mutating-judge");
+    write(
+        judge_dir.path(),
+        "mutating-judge",
+        r#"#!/usr/bin/env python3
+import json, pathlib, sys
+request = json.load(sys.stdin)
+pathlib.Path("judge-mutated.txt").write_text("mutated\n", encoding="utf-8")
+json.dump({
+  "schema_version": 1,
+  "parent_revision": request["parent_revision"],
+  "candidate_revision": request["candidate_revision"],
+  "verdict": "fail",
+  "citations": [{"rubric_id": request["rubrics"][0]["id"], "rule": "I47", "lines": ["docs/first.md:1"]}],
+  "message": "blocked"
+}, sys.stdout)
+"#,
+    );
+    let mut permissions = fs::metadata(&judge).expect("metadata").permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&judge, permissions).expect("chmod");
+
+    let error = publication::publish_with_quality_evidence(
+        &options(repo.path(), judge),
+        &base,
+        &head,
+        evidence,
+    )
+    .expect_err("split semantic mutation must block");
+    assert!(format!("{error:#}").contains("must not rewrite user tree"));
+}
+
+#[test]
+fn ci_uses_protected_workflow_and_separate_credential_phase() {
+    let workflow = fs::read_to_string(real_repo_root().join(".github/workflows/quality.yml"))
+        .expect("quality workflow");
+    assert!(workflow.contains("pull_request_target:\n    branches: [main]"));
+    assert!(!workflow.contains("\n  pull_request:\n"));
+    assert_eq!(
+        workflow
+            .matches("Checkout candidate objects without execution")
+            .count(),
+        1,
+        "privileged semantic job must consume only inert Git bundle"
+    );
+    assert!(workflow.contains("Import exact candidate objects from inert bundle"));
+    assert!(workflow.contains("needs: publication-quality-evidence"));
+    assert!(workflow.contains("--quality-report-out"));
+    assert!(workflow.contains("--quality-report-in"));
+    assert!(workflow.contains("Build trusted semantic gate before provisioning credentials"));
+    assert!(workflow.contains("trusted/quality/semantic-judge/v1/judge"));
+}
+
+#[test]
+fn versioned_pre_push_hook_declares_current_version_and_remote_inputs() {
+    let body = fs::read_to_string(real_repo_root().join(PRE_PUSH_HOOK_PATH))
+        .expect("versioned pre-push hook");
+    assert_eq!(
+        xtask::hooks::parse_hook_version(&body).expect("version marker"),
+        HOOK_VERSION
+    );
+    assert!(body.contains("hooks pre-push"));
+    assert!(body.contains("--remote-name") && body.contains("--remote-url"));
+    assert!(body.contains("git diff --quiet HEAD") && body.contains("git ls-files --others"));
+    assert!(body.contains("CARGO_TARGET_DIR") && body.contains("target/publication-cargo"));
 }

@@ -132,9 +132,9 @@ The production CLI is the authoritative behavioral test driver. Every applicatio
 
 Black-box end-to-end tests exercise the shipped binary with real persistence and real executable provider fixtures. Every catalog operation must also be observed in passing required E2E trace envelopes. Mock-based behavioral tests are excluded. Pure core property tests remain optional supplemental tools for combinatorial exploration, but they do not count toward operational completeness.
 
-## Commit coherence
+## Publication-checkpoint coherence
 
-Every commit is independently coherent with relevant foundation and future user/developer documentation. Generic versioned semantic judge decides whether documentation is required and whether same-commit updates are adequate from exact parent-to-commit change. Local determinate failure blocks commit; unavailable or indeterminate local judge may warn. Pre-push/authoritative publication gate evaluates every commit and fails closed on failed, unavailable, or indeterminate judgment. Judge uses parent revision's rubric so candidate change cannot weaken its own review.
+Every accepted push leaves its destination tip coherent with relevant foundation and future user/developer documentation. Generic versioned semantic judge evaluates the exact aggregate change from remote destination tip to local candidate head once. Commits within that unpublished range may be incomplete or repair one another. Fast deterministic staged checks protect normal commits; explicit staged judgment remains available for early feedback. Pre-push and authoritative CI fail closed unless the aggregate range receives a determinate semantic pass. Judge uses the remote base revision's rubric so candidate change cannot weaken its own review.
 
 ## Configuration direction
 

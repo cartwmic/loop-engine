@@ -12,5 +12,5 @@
       ]
     }
   ],
-  "message": "Candidate introduces behavior without same-commit documentation updates required by I47."
+  "message": "Candidate checkpoint introduces behavior without coherent resulting documentation required by I47."
 }

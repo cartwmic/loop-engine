@@ -7,9 +7,9 @@ These implementation-stage decision gates are owner-accepted and frozen in found
 A decision is resolved only when:
 
 - owner accepts one option;
-- affected foundation/contract docs are updated in same commit;
-- dependent task contracts are amended if paths or schemas change;
-- parent-rubric semantic judge passes before publication.
+- affected foundation/contract docs are coherent by same publication checkpoint;
+- dependent task contracts are amended within that checkpoint if paths or schemas change;
+- remote-base rubric semantic judge passes once for aggregate checkpoint before publication.
 
 ## Decision index
 
@@ -382,13 +382,13 @@ Response is `pass`, `fail`, or `indeterminate` with cited rubric rules and chang
 
 Policy:
 
-- bootstrap exception was consumed by foundation commit/publication `7552af5968b4a2c10aefd01fbfa6c351817e1b8b`; no later commit receives exception;
-- before focused rubric files exist, real judge treats that committed foundation's I47, testing Git-enforcement section, tenets, and architecture rules as seed parent rubric under T012 manifest; T025 focused rubrics apply only to following commit;
-- no implementation push occurs before T029, then every commit in first post-foundation range must have determinate report;
-- local determinate fail blocks;
-- local unavailable/indeterminate warns;
-- publication fail/unavailable/indeterminate blocks;
-- candidate rubric cannot judge itself;
+- foundation commit `7552af5968b4a2c10aefd01fbfa6c351817e1b8b` remains the initial seed rubric;
+- R001 records owner-vetoed per-commit scheduling and supersedes it with one aggregate publication checkpoint from exact remote destination tip to candidate local head;
+- frozen foundation rubric remains historical seed authority, but its superseded per-commit language cannot judge R001 faithfully; owner explicitly selects the one-time `publication-checkpoint-v1.md` migration rubric for exact foundation-base publication, after which changed focused rubrics apply only to the following push;
+- commits inside one unpublished range may be incomplete and may repair one another;
+- default pre-commit runs fast deterministic staged checks; explicit staged semantic judgment is advisory;
+- one aggregate publication `fail`, `unavailable`, or `indeterminate` blocks;
+- candidate rubric cannot judge its own range;
 - fixture judge may test protocol but must never satisfy real publication.
 
 **Owner must provision:** actual judge executable/configuration for local publication checks during T012, seed-foundation rubric manifest, plus named GitHub Actions secret/config owner for T029. T012 requires real local smoke pass against foundation-parent candidate, not only a plan. Product runtime must not depend on it.
@@ -399,11 +399,11 @@ Policy:
 - executable: `quality/semantic-judge/v1/judge` with `openai-codex/gpt-5.6-sol` via `pi` (`quality/semantic-judge/v1/config.json`);
 - foundation seed rubric: [quality/rubrics/manifest.json](../../../quality/rubrics/manifest.json) and `quality/rubrics/foundation-seed.v1.md`;
 - policy/commands: [development-policy.md](../../development-policy.md);
-- T029 provisioning owner: repository variable `LOOP_ENGINE_SEMANTIC_JUDGE_EXECUTABLE` and secret `LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON`.
+- T029/R004 provisioning owner: secret `LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON`; workflow pins judge executable from trusted base checkout.
 
 **Required documentation updates:** `../../development-policy.md`, `../../testing.md`, `../../architecture.md`.
 
-**Stop condition:** C0 cannot close and no post-bootstrap commit may be pushed until every commit in range gets determinate pass from real configured judge. *(Contract frozen by T012; publication smoke required before C0 close.)*
+**Stop condition:** No post-foundation range may be pushed until its exact remote-base-to-candidate-head aggregate receives one determinate pass from the real configured judge. *(Generic protocol frozen by T012; scheduling superseded by R001.)*
 
 ## D013 — Provider fixtures
 
@@ -510,7 +510,7 @@ Fill this table as owner decisions land.
 | D009 | Accept D009: WAL + FK + `synchronous=FULL` pragmas, `sqlite_busy_timeout_ms` busy wait (T008), forward-only migrations, post-provider and gate-free workflow CAS, registration-config CAS, affected-run digest guard, mandatory evidence journal, guidance/compatibility attempt journaling, unknown-commit verification, expected-constraint mapping, no provider-spanning write lock; frozen in persistence.md | 2026-07-17 | pending orchestrator | — |
 | D010 | JSONL v1 per-invocation trace; `0700`/`0600` permissions; encoded actual+unused-reservation budget; no raw/parsed duplication; cross-process rotation; help/version/parse init; late sink failure preserves true commit outcome; external `RLIMIT_FSIZE` E2E cases; frozen in operational-trace.md | 2026-07-17 | pending orchestrator | — |
 | D011 | One aggregate immutable journal entry per meaningful operation/attempt; eight frozen entry kinds; sequence + correction links; provider/gate/evidence nesting; state_changed/self-loop alignment; D008 bounds; frozen in journal-contract.md | 2026-07-17 | pending orchestrator | — |
-| D012 | Generic JSON executable contract v1; real `openai-codex/gpt-5.6-sol` judge at `quality/semantic-judge/v1/judge`; foundation seed rubric manifest parent `7552af5968b4a2c10aefd01fbfa6c351817e1b8b`; no-second-bootstrap; T029 owns `LOOP_ENGINE_SEMANTIC_JUDGE_EXECUTABLE` + `LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON`; frozen in development-policy.md | 2026-07-17 | pending orchestrator | — |
+| D012 | Generic JSON executable contract v1; real `openai-codex/gpt-5.6-sol` judge at `quality/semantic-judge/v1/judge`; foundation seed parent `7552af5968b4a2c10aefd01fbfa6c351817e1b8b`; no second bootstrap; R001 owner-selected one-time migration rubric; T029/R004 owns credential-isolated `LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON`; frozen in development-policy.md | 2026-07-18 | pending orchestrator | — |
 | D013 | Rust standalone executables at `test-support/providers/{scenario-provider,reference-provider}`; root workspace excluded; scenario-provider invocation ledger + barrier; process-failure modes per provider-protocol-v1; optional `test-support/providers/process-helpers/` Unix helpers for PGID/signal cases; frozen in technology.md + testing.md | 2026-07-17 | pending orchestrator | — |
 | D014 | Canonical integration DTO v1; UTF-8 minified sorted-key JSON; SHA-256 `graph_revision`; golden vectors GV-01–GV-08; frozen in graph-projection.md | 2026-07-17 | pending orchestrator | — |
 | D015 | Accept D015: `run.export` read-only export of `manifest.json`, `state.json`, and `journal.jsonl` to new/empty directory from one consistent snapshot; D006 schema versioning; no import/restore/replay/dereference; frozen in export-contract.md | 2026-07-17 | pending orchestrator | — |

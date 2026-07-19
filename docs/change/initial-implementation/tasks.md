@@ -1,6 +1,6 @@
 # Initial Implementation Task List
 
-**Status:** In progress — Phase 2 (C1 governance complete)
+**Status:** In progress — C1 and R001–R005 governance-repair candidate complete; Phase 2 remains blocked until the remote accepts this checkpoint
 
 Follow [execution protocol](README.md#execution-protocol), resolve [decision gates](decisions.md), and maintain [coverage map](coverage.md). Every task is sized as one narrow orchestrator-owned unit unless its stop condition requires owner escalation.
 
@@ -40,7 +40,7 @@ Task bullet vocabulary: `**Tests:**` names test/fixture content the task must au
 
 ## Junction governance tasks and owner cadence
 
-Two governance ID families sit outside T numbering: junction validation tasks `V001`–`V013` and junction fix tasks `F001`–`F013`. They are net-new added governance tasks; the implementation task count remains exactly T001–T200 and no T-task is renumbered. Four execution modes are distinguished:
+Junction validation tasks `V001`–`V013` and junction fix tasks `F001`–`F013` sit outside T numbering. Owner-directed corrective tasks `R001`–`R005` repair the C1 governance implementation after the publication-checkpoint policy superseded per-commit scheduling. These are net-new governance tasks; implementation task count remains exactly T001–T200 and no T-task is renumbered. Four execution modes are distinguished:
 
 | Mode | Owner | Scope |
 |---|---|---|
@@ -103,7 +103,7 @@ Global rules for every task:
 - no unrelated edits;
 - no mock frameworks or mock-based behavioral tests;
 - external DTO annotations never enter core model;
-- every changed public contract receives same-commit documentation;
+- every changed public contract receives documentation in the same publication checkpoint;
 - run `git diff --check` before handoff;
 - no T/V/F step commits independently; every authorized boundary uses orchestrator README ritual;
 - per-task implementation steps execute no build/test/lint/closure commands; junction V-steps own accumulated validation and F-steps own batched repair;
@@ -313,8 +313,8 @@ Global rules for every task:
 ### T024 [x] Implement semantic-judge runner
 - **Depends:** T019, T023
 - **Files:** `xtask/src/semantic_judge.rs`, `xtask/tests/semantic_judge.rs`.
-- **Deliver:** exact parent/candidate diff collection, parent rubric loading, executable invocation, timeout, schema validation, local/publication disposition.
-- **Tests:** tests for pass, fail, indeterminate, unavailable, timeout, malformed response, consumed foundation bootstrap/seed-rubric fallback, rejection of second bootstrap, first unpublished range, and changed-rubric-next-commit behavior.
+- **Deliver:** exact base/candidate diff collection through generic parent/candidate protocol fields, base rubric loading, executable invocation, timeout, schema validation, local/publication disposition.
+- **Tests:** tests for pass, fail, indeterminate, unavailable, timeout, malformed response, foundation seed-rubric fallback, aggregate unpublished range, and changed-rubric-next-push behavior.
 - **Done when:** publication mode fails closed and product runtime has no judge dependency.
 - **Stop:** runner silently falls back to pass.
 
@@ -334,28 +334,28 @@ Global rules for every task:
 - **Done when:** semantic judge is not asked to replace deterministic checks.
 - **Stop:** checker attempts subjective semantic judgment.
 
-### T027 [x] Implement hook installer and pre-commit adapter
+### T027 [x] Implement hook installer and pre-commit adapter *(historical implementation; scheduling superseded by R002)*
 - **Depends:** T024–T026
 - **Files:** `.githooks/pre-commit`, `xtask/src/hooks.rs`, `xtask/tests/hooks.rs`, `xtask/tests/fixtures/hooks/*`.
-- **Deliver:** versioned thin hook; exact staged-tree deterministic checks and local semantic attempt; install/verify commands.
+- **Deliver:** versioned thin hook, exact staged-tree materialization, install/verify commands, and original local semantic attempt.
 - **Tests:** staged pass, semantic fail, unavailable warning, unstaged contamination, and hook-version mismatch tests.
-- **Done when:** hook delegates to canonical Rust logic and never rewrites user files.
+- **Done when:** historical C1 implementation is present; R002 must remove expensive quality and semantic execution from default pre-commit without weakening exact-index purity.
 - **Stop:** hook judges working tree instead of exact staged tree.
 
-### T028 [x] Implement exact-commit pre-push gate and incremental quality manifest
+### T028 [x] Implement exact-commit pre-push gate and incremental quality manifest *(historical implementation; scheduling superseded by R003)*
 - **Depends:** T024–T027
 - **Files:** `.githooks/pre-push`, `xtask/src/{publication,quality}.rs`, `quality/manifest.toml`, `xtask/tests/{publication,quality}.rs`, `xtask/tests/fixtures/publication/*`.
-- **Deliver:** enumerate unpublished commits, detached worktree per commit, parent-rubric semantic pass, manifest-driven currently implemented canonical checks, fail-closed unavailable behavior; later tasks extend manifest and T195 freezes final set.
-- **Tests:** multi-commit range tests including rubric change and failing middle commit.
-- **Done when:** later good commit cannot repair/judge earlier bad commit.
-- **Stop:** gate checks branch tip only.
+- **Deliver:** original per-commit publication engine and incremental manifest foundation retained as historical C1 work.
+- **Tests:** original exact-commit fixtures remain until R003 replaces their expected behavior.
+- **Done when:** historical implementation is present; R003 must replace enumeration with one exact remote-base-to-candidate-head gate.
+- **Stop:** aggregate gate trusts stale remote-tracking refs or evaluates any internal commit separately.
 
-### T029 [x] Add authoritative CI adapter
+### T029 [x] Add authoritative CI adapter *(historical implementation; scheduling superseded by R004)*
 - **Depends:** T028
 - **Files:** `.github/workflows/quality.yml`, `../../development-policy.md`.
-- **Deliver:** CI invokes same publication command, provisions real judge, records per-commit artifacts, and documents required branch rule.
+- **Deliver:** original CI provisioning and canonical-command adapter retained as historical C1 work.
 - **Criteria:** local dry-run command documentation.
-- **Done when:** no gate logic is duplicated in YAML.
+- **Done when:** historical implementation is present; R004 must run one aggregate semantic job and candidate-head deterministic platform jobs without YAML gate duplication.
 - **Stop:** real judge cannot be provisioned; publication remains blocked.
 
 ### T030 [x] Add dependency policy and close C1
@@ -381,10 +381,46 @@ Global rules for every task:
 - **Range ledger:** [`c1-range-ledger.txt`](c1-range-ledger.txt) is the exact sorted union of T017–T030 implementation and F001 repair paths; V001 evidence remains ignored under `target/`.
 - **Done when:** no-op is recorded, or repairs are complete and targeted V001 rerun reports clean; the T030 boundary commit and T031 stay blocked until junction closure; stop for orchestrator.
 
+## Owner-directed governance repair — aggregate publication checkpoints
+
+### R001 [x] Replace independent-commit coherence contracts
+- **Depends:** owner veto after T030
+- **Files:** `../../{intent,tenets,invariants,architecture,testing,development-policy}.md`, `README.md`, `decisions.md`, `tasks.md`, `coverage.md`, `../../../quality/{rubrics,semantic-judge/v1}/**` as policy wording requires.
+- **Deliver:** publication-checkpoint coherence, exact remote-base-to-candidate-head authority, intermediate-commit repair allowance, base-rubric-next-push semantics, explicit supersession of per-commit scheduling, and one owner-selected aggregate migration rubric for the exact foundation-base transition.
+- **Done when:** governing docs and task graph contain no current per-commit publication requirement; immutable historical seed artifacts remain identified as historical.
+
+### R002 [x] Make default pre-commit bounded and deterministic
+- **Depends:** R001, T027
+- **Files:** `.githooks/pre-commit`, `xtask/src/hooks.rs`, `xtask/tests/hooks.rs`, hook fixtures as needed.
+- **Deliver:** exact staged-tree `git diff --check`, docs, architecture, and formatting only; retain contamination/toolchain/Git isolation; keep staged semantic judge as explicit command.
+- **Tests:** fast staged pass/failure, no semantic invocation, no full manifest/test/Clippy/deny invocation, contamination, and hook-version mismatch.
+- **Done when:** normal commit does not invoke model/network or full quality suite.
+
+### R003 [x] Replace per-commit publication with one aggregate range gate
+- **Depends:** R001–R002, T028
+- **Files:** `.githooks/pre-push`, `xtask/src/{publication,quality,hooks}.rs`, `xtask/tests/{publication,quality,hooks}.rs`, publication fixtures as needed.
+- **Deliver:** one exact advertised remote-base-to-candidate-head diff, one detached head worktree, one candidate-head manifest quality run, one base-rubric semantic request/response, fail-closed disposition, exact new-branch integration-base resolution, rejection of ambiguous multi-ref pushes, and candidate-bound gate execution.
+- **Tests:** multi-commit range emits one result; internal bad-then-repaired history may pass final range; bad final head blocks; base advance/rebase invalidates pair; stale/forged tracking refs cannot select base; manifest weakening from base blocks.
+- **Done when:** no publication path iterates internal commits for quality or semantic judgment.
+
+### R004 [x] Split aggregate semantic CI from candidate-head platform quality
+- **Depends:** R003, T029
+- **Files:** `.github/workflows/quality.yml`, `../../development-policy.md`, workflow-facing publication tests.
+- **Deliver:** protected-default-branch `pull_request_target` workflow with one credential-free trusted-base quality-evidence job, one fresh-runner `publication / aggregate` semantic authority job, four credential-free deterministic `quality / ...` candidate-head jobs, one base/head-bound response artifact, and exact required-check handoff.
+- **Done when:** CI never invokes semantic judge per platform or per internal commit, candidate code never executes with judge credentials, and server authority remains fail-closed.
+
+### R005 [x] Validate and authorize governance repair checkpoint
+- **Depends:** R001–R004
+- **Files:** tracked repairs only when validation finds defects; untracked evidence under `target/junction-evidence/R005/**`.
+- **Deliver:** focused hook/publication/quality/schema tests, full current manifest, semantic contract verification, blind Fable/GPT-Sol correctness reviews, and a finalized foundation-to-HEAD publication candidate.
+- **Done when:** all local checks pass, blind reviews report no P0/P1, and the owner authorizes the finalized candidate for one aggregate push attempt; remote acceptance is an external release gate and intentionally requires no post-push marker commit.
+- **Publication gate:** each push attempt performs exactly one aggregate foundation-to-candidate judgment; T031 remains blocked until the remote branch equals the authorized checkpoint.
+- **Stop:** any path still requires per-internal-commit execution or authoritative aggregate judge is unavailable/indeterminate.
+
 ## Phase 2 — Core model and deterministic semantics
 
 ### T031 [ ] Establish core module boundaries
-- **Depends:** T030, V001, F001
+- **Depends:** T030, V001, F001, R005
 - **Files:** `crates/loop-engine-core/src/{lib.rs,model/mod.rs,capabilities/mod.rs,operations/mod.rs}`.
 - **Deliver:** private-by-default model/capability/operation layout with documented dependency direction.
 - **Done when:** no empty generic service/repository/util abstraction exists.
@@ -554,7 +590,7 @@ Global rules for every task:
 - **Depends:** T031–T051
 - **Files:** `core/src/lib.rs`, `../../architecture.md`, `../../graph-projection.md`, `../../journal-contract.md`.
 - **Deliver:** exact model invariants, deterministic inputs, excluded semantics, and no-replay/no-provider-authority statements.
-- **Done when:** core behavior introduced so far is same-commit coherent.
+- **Done when:** core behavior introduced so far is coherent at the T052 publication checkpoint.
 - **Stop:** docs claim public operations before exposure tasks.
 
 ### V002 [ ] Junction validation — core model (T031–T052)
@@ -1780,7 +1816,7 @@ Each exposure task first registers production route and both runtime catalog IDs
 - **Files:** `target/quality-artifacts/T197/**`.
 - **Deliver:** repeated concurrency/trace/provider tests, orphan-process check, leftover-file/lock check, seed stability, and T197 publication candidate.
 - **Criteria:** 20 consecutive targeted runs plus 5 complete sharded-gate runs on each supported OS; completion report supplies exact commands/evidence and stops. Orchestrator creates T197 commit, runs T028 range gate, and publishes candidate branch before T198.
-- **Done when:** no timing-only ordering/leak remains and remote candidate has determinate per-commit judge/quality results.
+- **Done when:** no timing-only ordering/leak remains and remote candidate has one determinate aggregate checkpoint judgment plus candidate-head quality results.
 - **Stop:** any defect requires new exact corrective-task Files before tracked edit; rerun full audit afterward.
 
 ### T198 [ ] Orchestrator-only: configure repository protection and required CI
@@ -1803,6 +1839,6 @@ Each exposure task first registers production route and both runtime catalog IDs
 - **Depends:** T001–T199
 - **Files:** `README.md`, `tasks.md`, `coverage.md`, `../../../README.md`, `../../../CHANGELOG.md`.
 - **Deliver:** all tasks `[x]`, decisions resolved, generated evidence linked, shipped behavior/version recorded, no stale pending language.
-- **Criteria:** canonical publication gate on exact candidate commit and every commit in push range.
+- **Criteria:** canonical publication gate passes once for exact remote destination tip to candidate head; candidate-head deterministic platform quality passes.
 - **Done when:** owner approves closure and protected remote accepts publication.
 - **Stop:** any task, invariant, operation facet, reference behavior, judge, or authoritative CI result is incomplete.

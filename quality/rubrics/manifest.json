@@ -11,7 +11,7 @@
       "version": 1,
       "parent_revision": "7552af5968b4a2c10aefd01fbfa6c351817e1b8b",
       "content_path": "documentation.md",
-      "content_sha256": "e096a3f98ce68f28d24192fd3c91d4b5eabff6d9e08df0bbd61bf301193c8360",
+      "content_sha256": "e21f7d2b4feb9a1a642dbbf8a8cc04bfe590cdb8e85a6458be0c7c3392c6170e",
       "source_anchors": [
         {
           "path": "docs/invariants.md",
@@ -19,7 +19,7 @@
         },
         {
           "path": "docs/tenets.md",
-          "section": "27. Documentation evolves with every commit"
+          "section": "27. Documentation converges at every publication checkpoint"
         },
         {
           "path": "docs/testing.md",
@@ -32,7 +32,7 @@
       "version": 1,
       "parent_revision": "7552af5968b4a2c10aefd01fbfa6c351817e1b8b",
       "content_path": "observability.md",
-      "content_sha256": "b70978f0858724ba3785fe8f07bb3a793230312c9414c1a299ea698889ee84fe",
+      "content_sha256": "4c0f4b1de7651a8c07442abcecce1cfa74f6d3bb7cd129144b0eed270821793a",
       "source_anchors": [
         {
           "path": "docs/operational-trace.md",
@@ -65,7 +65,7 @@
       "version": 1,
       "parent_revision": "7552af5968b4a2c10aefd01fbfa6c351817e1b8b",
       "content_path": "architecture.md",
-      "content_sha256": "1e452f69057f9129506f71d7ea1061b0e33b42af427183173b35d9729f13e452",
+      "content_sha256": "81f84fa47eafab804ce0cb057237499c72d4ed92f20fb92605f908c0a286b6e5",
       "source_anchors": [
         {
           "path": "docs/architecture.md",
@@ -94,7 +94,7 @@
       "version": 1,
       "parent_revision": "7552af5968b4a2c10aefd01fbfa6c351817e1b8b",
       "content_path": "behavioral-evidence.md",
-      "content_sha256": "f224c060b1b73aa472a3062e8cd75a4c6a7d6d3458e2d109b918465973905cdd",
+      "content_sha256": "c8d6434cfe51899ca468397530fc4dd0f113d54568bc3bb99fe987787cb17fdd",
       "source_anchors": [
         {
           "path": "docs/invariants.md",

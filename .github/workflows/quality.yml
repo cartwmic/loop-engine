@@ -1,10 +1,12 @@
-# Authoritative publication CI adapter (T029).
-# Gate logic lives only in `cargo run -p xtask -- publication` (T028).
-# This workflow provisions the real semantic judge and records artifacts.
+# Authoritative aggregate publication CI adapter (R004; supersedes T029 scheduling).
+# Pull-request semantic authority executes trusted base gate code. Candidate code
+# runs only on credential-free runners.
 name: quality
 
 on:
-  pull_request:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened]
   push:
     branches: [main]
 
@@ -16,10 +18,262 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  publication-quality-evidence:
+    name: publication quality evidence
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      REPORT_PATH: ${{ runner.temp }}/publication-quality-evidence.json
+
+    steps:
+      - name: Checkout trusted base gate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
+          persist-credentials: false
+
+      - name: Checkout candidate objects without execution
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          persist-credentials: false
+
+      - name: Import exact candidate objects into trusted repository
+        run: |
+          set -euo pipefail
+          git -C trusted fetch --no-tags "$GITHUB_WORKSPACE/candidate/.git" "${HEAD_SHA}"
+          test "$(git -C trusted rev-parse "${BASE_SHA}^{commit}")" = "${BASE_SHA}"
+          test "$(git -C trusted rev-parse "${HEAD_SHA}^{commit}")" = "${HEAD_SHA}"
+          git -C trusted update-ref refs/quality/candidate "${HEAD_SHA}"
+          git -C trusted bundle create "${RUNNER_TEMP}/candidate.bundle" refs/quality/candidate
+          git -C trusted update-ref -d refs/quality/candidate
+
+      - name: Install trusted base toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.95.0"
+          components: rustfmt, clippy
+
+      - name: Install pinned cargo-deny
+        run: cargo install cargo-deny --locked --version 0.20.2
+
+      - name: Build trusted deterministic gate without credentials
+        working-directory: trusted
+        run: cargo build --locked -p xtask
+
+      - name: Run candidate commands unprivileged against root-owned source
+        run: |
+          set -euo pipefail
+          QUALITY_HOME="${RUNNER_TEMP}/quality-home"
+          QUALITY_CARGO_HOME="${RUNNER_TEMP}/quality-cargo"
+          QUALITY_TARGET="${RUNNER_TEMP}/quality-target"
+          mkdir -p "${QUALITY_HOME}" "${QUALITY_CARGO_HOME}" "${QUALITY_TARGET}"
+          chmod 0777 "${QUALITY_HOME}" "${QUALITY_CARGO_HOME}" "${QUALITY_TARGET}"
+          sudo env \
+            PATH="${PATH}" \
+            HOME="${QUALITY_HOME}" \
+            RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" \
+            CARGO_HOME="${QUALITY_CARGO_HOME}" \
+            CARGO_TARGET_DIR="${QUALITY_TARGET}" \
+            LOOP_ENGINE_QUALITY_COMMAND_UID=65534 \
+            "$GITHUB_WORKSPACE/trusted/target/debug/xtask" publication \
+              --root "$GITHUB_WORKSPACE/trusted" \
+              --from "${BASE_SHA}" \
+              --to "${HEAD_SHA}" \
+              --quality-report-out "${REPORT_PATH}"
+
+      - name: Upload bound publication quality evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: publication-quality-evidence-${{ github.event.pull_request.head.sha }}
+          path: |
+            ${{ runner.temp }}/publication-quality-evidence.json
+            ${{ runner.temp }}/candidate.bundle
+          if-no-files-found: error
+          retention-days: 1
+
   publication:
-    name: ${{ matrix.job }}
+    name: publication / aggregate
+    if: github.event_name == 'pull_request_target'
+    needs: publication-quality-evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      REPORT_PATH: ${{ runner.temp }}/publication-quality-evidence.json
+      ARTIFACT_ROOT: ${{ runner.temp }}/publication-aggregate
+      JUDGE_HOME: ${{ runner.temp }}/loop-engine-pi-agent
+
+    steps:
+      - name: Checkout trusted base gate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
+          persist-credentials: false
+
+      - name: Download bound quality evidence and candidate object bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: publication-quality-evidence-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}
+
+      - name: Import exact candidate objects from inert bundle
+        run: |
+          set -euo pipefail
+          git -C trusted fetch --no-tags "${RUNNER_TEMP}/candidate.bundle" refs/quality/candidate
+          test "$(git -C trusted rev-parse 'FETCH_HEAD^{commit}')" = "${HEAD_SHA}"
+          test "$(git -C trusted rev-parse "${BASE_SHA}^{commit}")" = "${BASE_SHA}"
+          test "$(git -C trusted rev-parse "${HEAD_SHA}^{commit}")" = "${HEAD_SHA}"
+          rm -f -- "${RUNNER_TEMP}/candidate.bundle"
+          test ! -e "${RUNNER_TEMP}/candidate.bundle"
+
+      - name: Install trusted base toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.95.0"
+
+      - name: Build trusted semantic gate before provisioning credentials
+        working-directory: trusted
+        run: cargo build --locked -p xtask
+
+      - name: Install Node.js for pi judge host
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+
+      - name: Install integrity-pinned pi coding agent
+        run: |
+          set -euo pipefail
+          PACKAGE_DIR="${RUNNER_TEMP}/pi-package"
+          mkdir -p "${PACKAGE_DIR}"
+          npm pack @mariozechner/pi-coding-agent@0.73.1 \
+            --pack-destination "${PACKAGE_DIR}" \
+            --json > "${PACKAGE_DIR}/pack.json"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          package_dir = Path(os.environ["RUNNER_TEMP"]) / "pi-package"
+          record = json.loads((package_dir / "pack.json").read_text(encoding="utf-8"))[0]
+          expected = "sha512-gXQh3SaZmWTfVMc4Ao5+LGbVeKvzyO7tolok0nLsZgq9nGjZx/EEU3NM8C+qUnB4Nvs2rswG5qOVgLzQkq0fHQ=="
+          if record.get("integrity") != expected:
+              raise SystemExit(f"pi package integrity mismatch: {record.get('integrity')}")
+          (package_dir / "filename.txt").write_text(record["filename"], encoding="utf-8")
+          PY
+          npm install --global "${PACKAGE_DIR}/$(cat "${PACKAGE_DIR}/filename.txt")"
+
+      - name: Provision semantic credentials after all candidate execution
+        env:
+          LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON: ${{ secrets.LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON:-}" ]; then
+            echo "repository secret LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON is required" >&2
+            exit 1
+          fi
+          mkdir -p "${JUDGE_HOME}"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          auth = Path(os.environ["JUDGE_HOME"]) / "auth.json"
+          auth.write_text(os.environ["LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON"], encoding="utf-8")
+          auth.chmod(0o600)
+          print(f"provisioned ephemeral auth.json bytes={auth.stat().st_size}")
+          PY
+
+      - name: Run one trusted aggregate semantic phase
+        env:
+          PI_CODING_AGENT_DIR: ${{ runner.temp }}/loop-engine-pi-agent
+          LOOP_ENGINE_SEMANTIC_JUDGE_EXECUTABLE: ${{ github.workspace }}/trusted/quality/semantic-judge/v1/judge
+        run: |
+          set -euo pipefail
+          mkdir -p "${ARTIFACT_ROOT}"
+          set +e
+          trusted/target/debug/xtask publication \
+            --root trusted \
+            --from "${BASE_SHA}" \
+            --to "${HEAD_SHA}" \
+            --quality-report-in "${REPORT_PATH}" \
+            >"${ARTIFACT_ROOT}/publication.stdout" \
+            2>"${ARTIFACT_ROOT}/publication.stderr"
+          status=$?
+          set -e
+
+          export PUBLICATION_STATUS="${status}"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["ARTIFACT_ROOT"])
+          responses = []
+          for line in (root / "publication.stdout").read_text(encoding="utf-8", errors="replace").splitlines():
+              line = line.strip()
+              if not line.startswith("{"):
+                  continue
+              try:
+                  payload = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              if "verdict" in payload:
+                  responses.append(payload)
+
+          pair = root / f"{os.environ['BASE_SHA']}..{os.environ['HEAD_SHA']}"
+          pair.mkdir(parents=True, exist_ok=True)
+          if responses:
+              (pair / "response.json").write_text(
+                  json.dumps(responses[-1], indent=2, sort_keys=True) + "\n",
+                  encoding="utf-8",
+              )
+          (root / "index.json").write_text(
+              json.dumps(
+                  {
+                      "base_revision": os.environ["BASE_SHA"],
+                      "candidate_revision": os.environ["HEAD_SHA"],
+                      "response_count": len(responses),
+                      "response_path": str(pair / "response.json"),
+                  },
+                  indent=2,
+                  sort_keys=True,
+              ) + "\n",
+              encoding="utf-8",
+          )
+          if int(os.environ["PUBLICATION_STATUS"]) == 0 and len(responses) != 1:
+              raise SystemExit(
+                  f"successful aggregate publication emitted {len(responses)} responses; expected exactly 1"
+              )
+          print(f"recorded {len(responses)} aggregate judge response artifact(s)")
+          PY
+          exit "${status}"
+
+      - name: Upload aggregate publication artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: publication-aggregate-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/publication-aggregate
+          if-no-files-found: warn
+          retention-days: 30
+
+  quality:
+    name: quality / ${{ matrix.job }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 180
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -39,19 +293,17 @@ jobs:
 
     env:
       CARGO_TERM_COLOR: always
-      LOOP_ENGINE_SEMANTIC_JUDGE_EXECUTABLE: ${{ vars.LOOP_ENGINE_SEMANTIC_JUDGE_EXECUTABLE }}
 
     steps:
       - name: Checkout exact candidate head
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
-          # Default pull_request checkout is a synthetic merge commit, which the
-          # exact linear-history publication gate correctly rejects.
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: "1.95.0"
           targets: ${{ matrix.target }}
@@ -60,142 +312,21 @@ jobs:
       - name: Install pinned cargo-deny
         run: cargo install cargo-deny --locked --version 0.20.2
 
-      - name: Install Node.js for pi judge host
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-
-      - name: Install pi coding agent
-        run: npm install --global @mariozechner/pi-coding-agent
-
-      - name: Require and provision real semantic judge
-        env:
-          LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON: ${{ secrets.LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON }}
-          JUDGE_HOME: ${{ runner.temp }}/loop-engine-pi-agent
-        run: |
-          set -euo pipefail
-
-          if [ -z "${LOOP_ENGINE_SEMANTIC_JUDGE_EXECUTABLE:-}" ]; then
-            echo "repository variable LOOP_ENGINE_SEMANTIC_JUDGE_EXECUTABLE is required" >&2
-            exit 1
-          fi
-          if [ ! -f "${LOOP_ENGINE_SEMANTIC_JUDGE_EXECUTABLE}" ]; then
-            echo "judge executable not found at ${LOOP_ENGINE_SEMANTIC_JUDGE_EXECUTABLE}" >&2
-            exit 1
-          fi
-          if [ -z "${LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON:-}" ]; then
-            echo "repository secret LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON is required" >&2
-            exit 1
-          fi
-
-          mkdir -p "${JUDGE_HOME}"
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-
-          home = Path(os.environ["JUDGE_HOME"])
-          auth = home / "auth.json"
-          payload = os.environ["LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON"]
-          auth.write_text(payload, encoding="utf-8")
-          auth.chmod(0o600)
-          # Log size only — never secret contents.
-          print(f"provisioned ephemeral auth.json bytes={auth.stat().st_size}")
-          PY
-
-          echo "PI_CODING_AGENT_DIR=${JUDGE_HOME}" >> "${GITHUB_ENV}"
-
-      - name: Resolve exclusive publication range start
-        id: range
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            FROM_EXCLUSIVE='${{ github.event.pull_request.base.sha }}'
-          else
-            BEFORE='${{ github.event.before }}'
-            ZERO='0000000000000000000000000000000000000000'
-            if [ -z "${BEFORE}" ] || [ "${BEFORE}" = "${ZERO}" ]; then
-              FROM_EXCLUSIVE='7552af5968b4a2c10aefd01fbfa6c351817e1b8b'
-            else
-              FROM_EXCLUSIVE="${BEFORE}"
-            fi
-          fi
-          echo "from=${FROM_EXCLUSIVE}" >> "${GITHUB_OUTPUT}"
-          echo "publication range ${FROM_EXCLUSIVE}..HEAD"
-
-      - name: Run canonical publication command
-        id: publication
+      - name: Run credential-free candidate-head deterministic quality
         env:
           ARTIFACT_ROOT: target/quality-artifacts/ci/${{ matrix.job }}
         run: |
           set -euo pipefail
           mkdir -p "${ARTIFACT_ROOT}"
-          FROM_EXCLUSIVE='${{ steps.range.outputs.from }}'
+          cargo run --locked -p xtask -- quality --root . \
+            >"${ARTIFACT_ROOT}/quality.stdout" \
+            2>"${ARTIFACT_ROOT}/quality.stderr"
 
-          set +e
-          cargo run --locked -p xtask -- publication --from "${FROM_EXCLUSIVE}" \
-            >"${ARTIFACT_ROOT}/publication.stdout" \
-            2>"${ARTIFACT_ROOT}/publication.stderr"
-          status=$?
-          set -e
-
-          # Record per-commit judge JSON responses emitted by xtask (no verdict logic here).
-          EXPECTED_COUNT="$(git rev-list --count "${FROM_EXCLUSIVE}..HEAD")"
-          export EXPECTED_COUNT
-          export PUBLICATION_STATUS="${status}"
-          python3 - <<'PY'
-          import json
-          import os
-          import pathlib
-          import re
-
-          root = pathlib.Path(os.environ["ARTIFACT_ROOT"])
-          stdout = (root / "publication.stdout").read_text(encoding="utf-8", errors="replace")
-          sha_re = re.compile(r"^[0-9a-f]{7,64}$")
-          index = []
-          for line in stdout.splitlines():
-              line = line.strip()
-              if not line.startswith("{"):
-                  continue
-              try:
-                  payload = json.loads(line)
-              except json.JSONDecodeError:
-                  continue
-              candidate = str(payload.get("candidate_revision", "")).strip()
-              if not sha_re.fullmatch(candidate):
-                  candidate = f"line-{len(index) + 1}"
-              commit_dir = root / candidate
-              commit_dir.mkdir(parents=True, exist_ok=True)
-              (commit_dir / "response.json").write_text(
-                  json.dumps(payload, indent=2, sort_keys=True) + "\n",
-                  encoding="utf-8",
-              )
-              index.append(
-                  {
-                      "candidate_revision": payload.get("candidate_revision"),
-                      "parent_revision": payload.get("parent_revision"),
-                      "path": str(commit_dir / "response.json"),
-                  }
-              )
-          (root / "index.json").write_text(
-              json.dumps({"commits": index}, indent=2, sort_keys=True) + "\n",
-              encoding="utf-8",
-          )
-          expected = int(os.environ["EXPECTED_COUNT"])
-          status = int(os.environ["PUBLICATION_STATUS"])
-          if status == 0 and len(index) != expected:
-              raise SystemExit(
-                  f"successful publication emitted {len(index)} responses; expected {expected}"
-              )
-          print(f"recorded {len(index)} per-commit judge response artifact(s)")
-          PY
-
-          exit "${status}"
-
-      - name: Upload per-commit publication artifacts
+      - name: Upload candidate-head quality artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: publication-${{ matrix.job }}-${{ github.sha }}
+          name: quality-${{ matrix.job }}-${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
           path: target/quality-artifacts/ci/${{ matrix.job }}
           if-no-files-found: warn
           retention-days: 30

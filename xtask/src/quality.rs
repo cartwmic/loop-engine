@@ -11,6 +11,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::architecture;
@@ -20,6 +21,7 @@ use crate::semantic_judge;
 
 /// Repository-relative path to the incremental quality manifest.
 pub const MANIFEST_PATH: &str = "quality/manifest.toml";
+const QUALITY_COMMAND_UID_ENV: &str = "LOOP_ENGINE_QUALITY_COMMAND_UID";
 
 /// Supported runners for currently-implemented checks.
 pub const RUNNER_DOCS_CHECK: &str = "docs-check";
@@ -32,7 +34,7 @@ pub const RUNNER_DEPENDENCIES: &str = "dependencies";
 pub const RUNNER_CARGO_DENY: &str = "cargo-deny";
 
 /// Exact command output captured for semantic-judge deterministic evidence.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandEvidence {
     pub command: String,
     pub exit_code: i32,
@@ -55,21 +57,21 @@ impl CommandEvidence {
 }
 
 /// One currently-implemented quality check from the manifest.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QualityCheck {
     pub id: String,
     pub runner: String,
 }
 
 /// Parsed incremental quality manifest.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QualityManifest {
     pub schema_version: u32,
     pub checks: Vec<QualityCheck>,
 }
 
 /// Per-check execution result.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckOutcome {
     pub id: String,
     pub runner: String,
@@ -79,7 +81,7 @@ pub struct CheckOutcome {
 }
 
 /// Aggregate report for a manifest run.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QualityReport {
     pub manifest_path: PathBuf,
     pub candidate_revision: String,
@@ -257,7 +259,18 @@ pub fn run_manifest(
 
     let mut outcomes = Vec::with_capacity(manifest.checks.len());
     for check in &manifest.checks {
-        match run_check(check_root, check, candidate_revision) {
+        enforce_detached_source_clean(check_root, &format!("before `{}`", check.id))?;
+        let check_result = run_check(check_root, check, candidate_revision);
+        let source_result =
+            enforce_detached_source_clean(check_root, &format!("after `{}`", check.id));
+        if let Err(source_error) = source_result {
+            let check_detail = check_result
+                .err()
+                .map(|error| format!("; check also failed: {error:#}"))
+                .unwrap_or_default();
+            bail!("{source_error:#}{check_detail}");
+        }
+        match check_result {
             Ok((message, evidence)) => outcomes.push(CheckOutcome {
                 id: check.id.clone(),
                 runner: check.runner.clone(),
@@ -303,10 +316,52 @@ pub fn run_manifest(
     })
 }
 
+fn enforce_detached_source_clean(check_root: &Path, phase: &str) -> Result<()> {
+    // Revision quality uses a linked-worktree `.git` file. Ordinary `--root .`
+    // quality may intentionally run with owner changes and is not publication evidence.
+    if !check_root.join(".git").is_file() {
+        return Ok(());
+    }
+    let output = Command::new("git")
+        .args([
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--ignored=matching",
+        ])
+        .current_dir(check_root)
+        .output()
+        .with_context(|| format!("failed checking detached source purity {phase}"))?;
+    if !output.status.success() {
+        bail!(
+            "failed checking detached source purity {phase}: {}",
+            String::from_utf8_lossy(&output.stderr).trim_end()
+        );
+    }
+    let status =
+        String::from_utf8(output.stdout).context("detached source purity status was not UTF-8")?;
+    let violations: Vec<&str> = status
+        .lines()
+        .filter(|line| {
+            let path = line.strip_prefix("!! ").unwrap_or_default();
+            let cargo_target =
+                path == "target/" || path.starts_with("target/") || path.contains("/target/");
+            !(line.starts_with("!! ") && cargo_target)
+        })
+        .collect();
+    if !violations.is_empty() {
+        bail!(
+            "detached candidate source changed {phase}; quality evidence is not revision-bound:\n{}",
+            violations.join("\n")
+        );
+    }
+    Ok(())
+}
+
 /// Load the manifest from `repo_root` (or override) and run it against `check_root`.
 ///
 /// When `revision` is set, checks run against a temporary detached worktree of that
-/// revision (same exact-commit model as publication). `--root` / `check_root` cannot
+/// revision (same detached candidate-head model as publication). `--root` / `check_root` cannot
 /// be combined with `revision`.
 pub fn run(
     check_root: Option<&Path>,
@@ -401,6 +456,15 @@ fn run_check(
 ) -> Result<(String, CommandEvidence)> {
     match check.runner.as_str() {
         RUNNER_DOCS_CHECK => {
+            if quality_command_uid().is_some() {
+                let root = check_root.to_string_lossy().to_string();
+                let evidence = run_xtask_with_evidence(
+                    check_root,
+                    &["docs-check", "--root", &root],
+                    candidate_revision,
+                )?;
+                return Ok(("docs-check passed".to_owned(), evidence));
+            }
             let command = format!("docs-check under {}", check_root.display());
             docs_check::run(Some(check_root))
                 .with_context(|| format!("docs-check failed under {}", check_root.display()))?;
@@ -411,6 +475,12 @@ fn run_check(
         }
         RUNNER_ARCHITECTURE => {
             let manifest = check_root.join("Cargo.toml");
+            if quality_command_uid().is_some() {
+                let manifest = manifest.to_string_lossy().to_string();
+                let args = architecture_xtask_args(&manifest);
+                let evidence = run_xtask_with_evidence(check_root, &args, candidate_revision)?;
+                return Ok(("architecture passed".to_owned(), evidence));
+            }
             let command = format!("architecture {}", manifest.display());
             architecture::run(Some(&manifest))
                 .with_context(|| format!("architecture check failed for {}", manifest.display()))?;
@@ -481,6 +551,15 @@ fn run_check(
             Ok(("cargo clippy passed".to_owned(), evidence))
         }
         RUNNER_DEPENDENCIES => {
+            if quality_command_uid().is_some() {
+                let root = check_root.to_string_lossy().to_string();
+                let evidence = run_xtask_with_evidence(
+                    check_root,
+                    &["dependencies", "--root", &root],
+                    candidate_revision,
+                )?;
+                return Ok(("dependencies policy passed".to_owned(), evidence));
+            }
             let command = format!(
                 "cargo run --locked -p xtask -- dependencies --root {}",
                 check_root.display()
@@ -531,17 +610,22 @@ fn run_cargo_with_evidence(
     candidate_revision: &str,
 ) -> Result<CommandEvidence, CommandEvidence> {
     let command = format!("cargo {}", args.join(" "));
-    let output = Command::new("cargo")
-        .args(args)
-        .current_dir(check_root)
-        .output()
-        .map_err(|error| CommandEvidence {
-            command: command.clone(),
-            exit_code: 127,
-            stdout: String::new(),
-            stderr: format!("failed to spawn cargo: {error}"),
-            candidate_revision: candidate_revision.to_owned(),
-        })?;
+    let mut process = Command::new("cargo");
+    process.args(args).current_dir(check_root);
+    apply_quality_command_uid(&mut process).map_err(|error| CommandEvidence {
+        command: command.clone(),
+        exit_code: 127,
+        stdout: String::new(),
+        stderr: error,
+        candidate_revision: candidate_revision.to_owned(),
+    })?;
+    let output = process.output().map_err(|error| CommandEvidence {
+        command: command.clone(),
+        exit_code: 127,
+        stdout: String::new(),
+        stderr: format!("failed to spawn cargo: {error}"),
+        candidate_revision: candidate_revision.to_owned(),
+    })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -558,6 +642,66 @@ fn run_cargo_with_evidence(
         Ok(evidence)
     } else {
         Err(evidence)
+    }
+}
+
+fn architecture_xtask_args(manifest: &str) -> [&str; 3] {
+    ["architecture", "--manifest-path", manifest]
+}
+
+fn run_xtask_with_evidence(
+    check_root: &Path,
+    args: &[&str],
+    candidate_revision: &str,
+) -> Result<CommandEvidence> {
+    let executable = std::env::current_exe().context("resolve trusted xtask executable")?;
+    let command = format!("{} {}", executable.display(), args.join(" "));
+    let mut process = Command::new(&executable);
+    process.args(args).current_dir(check_root);
+    apply_quality_command_uid(&mut process).map_err(anyhow::Error::msg)?;
+    let output = process
+        .output()
+        .with_context(|| format!("failed spawning unprivileged `{command}`"))?;
+    let evidence = CommandEvidence {
+        command,
+        exit_code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        candidate_revision: candidate_revision.to_owned(),
+    };
+    if !output.status.success() {
+        return Err(anyhow::Error::new(CheckFailure::new(
+            evidence,
+            "unprivileged quality command failed",
+        )));
+    }
+    Ok(evidence)
+}
+
+fn quality_command_uid() -> Option<std::ffi::OsString> {
+    std::env::var_os(QUALITY_COMMAND_UID_ENV)
+}
+
+fn apply_quality_command_uid(process: &mut Command) -> std::result::Result<(), String> {
+    let Some(uid) = quality_command_uid() else {
+        return Ok(());
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let uid = uid
+            .to_string_lossy()
+            .parse::<u32>()
+            .map_err(|error| format!("invalid {QUALITY_COMMAND_UID_ENV}: {error}"))?;
+        process.uid(uid).gid(uid);
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = process;
+        Err(format!(
+            "{QUALITY_COMMAND_UID_ENV} is unsupported on this platform"
+        ))
     }
 }
 
@@ -769,6 +913,14 @@ runner = "architecture"
         assert_eq!(manifest.checks.len(), 2);
         assert_eq!(manifest.checks[0].id, "docs-check");
         assert_eq!(manifest.checks[1].runner, "architecture");
+    }
+
+    #[test]
+    fn privileged_architecture_reexec_uses_registered_cli_flag() {
+        assert_eq!(
+            architecture_xtask_args("/candidate/Cargo.toml"),
+            ["architecture", "--manifest-path", "/candidate/Cargo.toml"]
+        );
     }
 
     #[test]

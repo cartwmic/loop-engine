@@ -27,6 +27,10 @@ const RUBRICS_DIR: &str = "quality/rubrics";
 const DEFAULT_EXECUTABLE_RELATIVE: &str = "quality/semantic-judge/v1/judge";
 const DEFAULT_TIMEOUT_SECONDS: u64 = 900;
 const EXECUTABLE_ENV: &str = "LOOP_ENGINE_SEMANTIC_JUDGE_EXECUTABLE";
+const MIGRATION_RUBRIC_ID: &str = "publication-checkpoint-migration";
+const MIGRATION_REPAIR_BASE_REVISION: &str = "30f210d2a064c679c44f7880b67958fc23efe21e";
+const MIGRATION_RUBRIC_SHA256: &str =
+    "5c06777499f87a46923ac9423f274b70d152d5e356d8378d939e76f6dc2a5d9a";
 
 const FOUNDATION_SEED_SOURCES: &[FoundationSeedSource] = &[
     FoundationSeedSource {
@@ -133,6 +137,9 @@ pub struct JudgeOptions {
     /// Defaults to `repo_root` when unset; tests may point at the real loop-engine
     /// repository while judging a hermetic temporary repository.
     pub foundation_git_root: Option<PathBuf>,
+    /// Owner-selected one-time migration rubric. Valid only when exact remote
+    /// base is the immutable foundation revision.
+    pub publication_migration_rubric: Option<PathBuf>,
     /// Additional deterministic evidence (for example quality command output).
     pub extra_deterministic_evidence: Vec<Value>,
 }
@@ -146,6 +153,7 @@ impl JudgeOptions {
             timeout_seconds: None,
             claim_bootstrap_exception: false,
             foundation_git_root: None,
+            publication_migration_rubric: None,
             extra_deterministic_evidence: Vec::new(),
         }
     }
@@ -178,7 +186,7 @@ pub struct JudgeOutcome {
     pub warning: Option<String>,
 }
 
-/// One commit judgment inside an unpublished range.
+/// One aggregate base-to-head judgment for an unpublished range.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RangeCommitOutcome {
     pub parent_revision: String,
@@ -186,7 +194,7 @@ pub struct RangeCommitOutcome {
     pub outcome: JudgeOutcome,
 }
 
-/// Result of judging every commit in an unpublished range.
+/// Result of judging one aggregate unpublished range.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RangeOutcome {
     pub commits: Vec<RangeCommitOutcome>,
@@ -337,10 +345,10 @@ pub fn judge_revision_pair(
     invoke_and_map(options, request)
 }
 
-/// Enumerate and judge every commit in `from_exclusive..to_inclusive` (publication).
+/// Judge `from_exclusive..to_inclusive` once as one publication checkpoint.
 ///
-/// The first unpublished post-foundation range must receive determinate passes with
-/// no second bootstrap exception.
+/// Protocol field names remain `parent_revision` and `candidate_revision`; in
+/// publication mode they mean exact remote base and candidate pushed head.
 pub fn judge_unpublished_range(
     options: &JudgeOptions,
     from_exclusive: &str,
@@ -351,45 +359,40 @@ pub fn judge_unpublished_range(
         bail!("unpublished range judgment requires publication mode");
     }
 
-    let commits = unpublished_commits(&options.repo_root, from_exclusive, to_inclusive)?;
-    if commits.is_empty() {
-        bail!("unpublished range {from_exclusive}..{to_inclusive} contains no commits to judge");
+    let parent = git_output_trimmed(
+        &options.repo_root,
+        &["rev-parse", &format!("{from_exclusive}^{{commit}}")],
+    )?;
+    let candidate = git_output_trimmed(
+        &options.repo_root,
+        &["rev-parse", &format!("{to_inclusive}^{{commit}}")],
+    )?;
+    if parent == candidate {
+        bail!("unpublished range {parent}..{candidate} contains no change to judge");
+    }
+    let ancestor = git_run(
+        &options.repo_root,
+        &["merge-base", "--is-ancestor", &parent, &candidate],
+    )?;
+    if !ancestor.status.success() {
+        bail!("unpublished range base {parent} is not an ancestor of {candidate}");
+    }
+    let merges = git_output_trimmed(
+        &options.repo_root,
+        &["rev-list", "--merges", &format!("{parent}..{candidate}")],
+    )?;
+    if !merges.is_empty() {
+        bail!("unpublished range {parent}..{candidate} contains merge commits");
     }
 
-    let mut outcomes = Vec::with_capacity(commits.len());
-
-    for candidate in commits {
-        if candidate == FOUNDATION_PARENT_REVISION {
-            bail!(
-                "refusing second bootstrap: foundation commit {FOUNDATION_PARENT_REVISION} is not eligible for unpublished-range bootstrap exception"
-            );
-        }
-        let parent = resolve_first_parent(&options.repo_root, &candidate)?;
-        let outcome = judge_revision_pair(options, &parent, &candidate)?;
-        outcomes.push(RangeCommitOutcome {
-            parent_revision: parent.clone(),
-            candidate_revision: candidate.clone(),
+    let outcome = judge_revision_pair(options, &parent, &candidate)?;
+    Ok(RangeOutcome {
+        commits: vec![RangeCommitOutcome {
+            parent_revision: parent,
+            candidate_revision: candidate,
             outcome,
-        });
-    }
-
-    Ok(RangeOutcome { commits: outcomes })
-}
-
-/// List commit SHAs in `from_exclusive..to_inclusive` oldest-first.
-pub fn unpublished_commits(
-    repo_root: &Path,
-    from_exclusive: &str,
-    to_inclusive: &str,
-) -> Result<Vec<String>> {
-    let range = format!("{from_exclusive}..{to_inclusive}");
-    let text = git_output_trimmed(repo_root, &["rev-list", "--reverse", &range])?;
-    Ok(text
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(str::to_owned)
-        .collect())
+        }],
+    })
 }
 
 fn invoke_and_map(options: &JudgeOptions, request: Value) -> Result<JudgeOutcome> {
@@ -436,6 +439,34 @@ fn invoke_and_map(options: &JudgeOptions, request: Value) -> Result<JudgeOutcome
         disposition,
         warning,
     })
+}
+
+/// Build a fail-closed unavailable outcome when revisions are known but request
+/// construction or rubric loading fails before executable invocation.
+pub fn unavailable_outcome(
+    mode: Mode,
+    parent: &str,
+    candidate: &str,
+    message: String,
+) -> JudgeOutcome {
+    let response = unavailable_response(parent, candidate, message);
+    let disposition = disposition_for(mode, response.verdict);
+    let warning = (disposition == Disposition::WarnAllow).then(|| {
+        format!(
+            "semantic judge unavailable (local warn; commit allowed): {}",
+            response.message
+        )
+    });
+    JudgeOutcome {
+        request: serde_json::json!({
+            "schema_version": 1,
+            "parent_revision": parent,
+            "candidate_revision": candidate,
+        }),
+        response,
+        disposition,
+        warning,
+    }
 }
 
 fn unavailable_response(parent: &str, candidate: &str, message: String) -> JudgeResponse {
@@ -736,10 +767,35 @@ fn build_revision_pair_request(
     candidate_revision: &str,
 ) -> Result<Value> {
     let repo = &options.repo_root;
-    let diff = git_output(repo, &["diff", parent_revision, candidate_revision])?;
+    let owner_migration = options.publication_migration_rubric.is_some()
+        && options.mode == Mode::Publication
+        && parent_revision == FOUNDATION_PARENT_REVISION;
+    let semantic_base = if owner_migration {
+        if candidate_revision == MIGRATION_REPAIR_BASE_REVISION {
+            bail!("owner migration requires a non-empty governance-repair delta");
+        }
+        let ancestor = git_run(
+            repo,
+            &[
+                "merge-base",
+                "--is-ancestor",
+                MIGRATION_REPAIR_BASE_REVISION,
+                candidate_revision,
+            ],
+        )?;
+        if !ancestor.status.success() {
+            bail!(
+                "owner migration candidate must descend from reviewed repair base {MIGRATION_REPAIR_BASE_REVISION}"
+            );
+        }
+        MIGRATION_REPAIR_BASE_REVISION
+    } else {
+        parent_revision
+    };
+    let diff = git_output(repo, &["diff", semantic_base, candidate_revision])?;
     let status_text = git_output(
         repo,
-        &["diff", "--name-status", parent_revision, candidate_revision],
+        &["diff", "--name-status", semantic_base, candidate_revision],
     )?;
     let check = git_run(
         repo,
@@ -753,6 +809,25 @@ fn build_revision_pair_request(
         &check.stdout,
         &check.stderr,
     )];
+    if owner_migration {
+        let full_diff = git_output(repo, &["diff", parent_revision, candidate_revision])?;
+        let full_status = git_output(
+            repo,
+            &["diff", "--name-status", parent_revision, candidate_revision],
+        )?;
+        let binding = format!(
+            "sha256={} bytes={} changed_paths={} semantic_projection_base={MIGRATION_REPAIR_BASE_REVISION}",
+            sha256_hex(full_diff.as_bytes()),
+            full_diff.len(),
+            full_status.lines().count()
+        );
+        evidence.push(json_evidence(
+            format!("full publication diff sha256 {parent_revision} {candidate_revision}"),
+            0,
+            &binding,
+            "",
+        ));
+    }
     evidence.extend(rubric_evidence);
     evidence.extend(options.extra_deterministic_evidence.clone());
 
@@ -762,11 +837,15 @@ fn build_revision_pair_request(
         "parent_revision": parent_revision,
         "candidate_revision": candidate_revision,
         "diff": diff,
-        "relevant_docs": build_relevant_docs_from_revision_diff(
-            repo,
-            candidate_revision,
-            &status_text,
-        )?,
+        "relevant_docs": if owner_migration {
+            Vec::new()
+        } else {
+            build_relevant_docs_from_revision_diff(
+                repo,
+                candidate_revision,
+                &status_text,
+            )?
+        },
         "rubrics": rubrics,
         "deterministic_evidence": evidence,
         "timeout_seconds": options.timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECONDS),
@@ -777,6 +856,43 @@ fn load_parent_rubrics(
     options: &JudgeOptions,
     parent_revision: &str,
 ) -> Result<(Vec<Value>, Vec<Value>)> {
+    if let Some(path) = &options.publication_migration_rubric {
+        if options.mode != Mode::Publication || parent_revision != FOUNDATION_PARENT_REVISION {
+            bail!(
+                "owner migration rubric is valid only for publication from exact foundation base {FOUNDATION_PARENT_REVISION}"
+            );
+        }
+        let metadata = fs::symlink_metadata(path).with_context(|| {
+            format!(
+                "failed reading owner migration rubric metadata {}",
+                path.display()
+            )
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            bail!("owner migration rubric must be a regular file, not a symlink");
+        }
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("failed reading owner migration rubric {}", path.display()))?;
+        let digest = sha256_hex(content.as_bytes());
+        if digest != MIGRATION_RUBRIC_SHA256 {
+            bail!(
+                "owner migration rubric digest mismatch: expected {MIGRATION_RUBRIC_SHA256}, got {digest}"
+            );
+        }
+        return Ok((
+            vec![serde_json::json!({
+                "id": MIGRATION_RUBRIC_ID,
+                "content": content,
+            })],
+            vec![serde_json::json!({
+                "command": "owner-authorized publication-checkpoint migration rubric",
+                "exit_code": 0,
+                "stdout": format!("path={} sha256={digest}", path.display()),
+                "stderr": "",
+            })],
+        ));
+    }
+
     let foundation_root = resolve_foundation_git_root(options)?;
 
     match git_show_revision(&options.repo_root, parent_revision, MANIFEST_PATH)? {
@@ -1081,21 +1197,6 @@ fn parse_name_status_line(line: &str) -> Result<(String, String)> {
     Ok((status, parts[1].to_owned()))
 }
 
-fn resolve_first_parent(repo_root: &Path, commit: &str) -> Result<String> {
-    let parents = git_output_trimmed(repo_root, &["rev-list", "--parents", "-n", "1", commit])?;
-    let mut parts = parents.split_whitespace();
-    let _commit = parts
-        .next()
-        .context("missing commit oid in rev-list output")?;
-    let first = parts
-        .next()
-        .with_context(|| format!("commit {commit} has no parent"))?
-        .to_owned();
-    if parts.next().is_some() {
-        bail!("unsupported merge commit {commit} in unpublished range (nonlinear history)");
-    }
-    Ok(first)
-}
 fn json_evidence(command: String, exit_code: i32, stdout: &str, stderr: &str) -> Value {
     serde_json::json!({
         "command": command,

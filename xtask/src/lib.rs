@@ -59,7 +59,7 @@ enum Commands {
         /// Candidate revision for an exact revision-pair judgment.
         #[arg(long, value_name = "REV")]
         candidate: Option<String>,
-        /// Exclusive start of an unpublished publication range (`from..HEAD`).
+        /// Base of one aggregate unpublished publication range (`from..HEAD`).
         #[arg(long, value_name = "REV")]
         unpublished_from: Option<String>,
         /// Disposition mode for revision-pair judgment (`local` or `publication`).
@@ -93,7 +93,7 @@ enum Commands {
         #[arg(long, value_name = "REV")]
         revision: Option<String>,
     },
-    /// Exact-commit publication / pre-push gate for an unpublished range.
+    /// Aggregate publication / pre-push gate for one base-to-head range.
     Publication {
         /// Optional repository root override.
         #[arg(long, value_name = "PATH")]
@@ -110,6 +110,12 @@ enum Commands {
         /// Override request timeout in seconds.
         #[arg(long, value_name = "SECONDS")]
         timeout_seconds: Option<u64>,
+        /// Run deterministic publication quality only and write bound evidence.
+        #[arg(long, value_name = "PATH", conflicts_with = "quality_report_in")]
+        quality_report_out: Option<PathBuf>,
+        /// Run semantic publication only using previously bound quality evidence.
+        #[arg(long, value_name = "PATH", conflicts_with = "quality_report_out")]
+        quality_report_in: Option<PathBuf>,
     },
     /// Install, verify, or run versioned local git hooks.
     Hooks {
@@ -132,19 +138,13 @@ enum HooksCommand {
         #[arg(long, value_name = "PATH")]
         root: Option<PathBuf>,
     },
-    /// Run the local pre-commit adapter against the exact staged tree.
+    /// Run bounded deterministic checks against the exact staged tree.
     PreCommit {
         /// Optional repository root override.
         #[arg(long, value_name = "PATH")]
         root: Option<PathBuf>,
-        /// Override judge executable path.
-        #[arg(long, value_name = "PATH")]
-        executable: Option<PathBuf>,
-        /// Override request timeout in seconds.
-        #[arg(long, value_name = "SECONDS")]
-        timeout_seconds: Option<u64>,
     },
-    /// Run the exact-commit pre-push adapter (reads remote updates from stdin).
+    /// Run the aggregate pre-push adapter (reads remote updates from stdin).
     PrePush {
         /// Optional repository root override.
         #[arg(long, value_name = "PATH")]
@@ -244,21 +244,21 @@ where
             to,
             executable,
             timeout_seconds,
+            quality_report_out,
+            quality_report_in,
         }) => publication::run_cli(
             root.as_deref(),
             from.as_deref(),
             to.as_deref(),
             executable.as_deref(),
             timeout_seconds,
+            quality_report_out.as_deref(),
+            quality_report_in.as_deref(),
         ),
         Some(Commands::Hooks { command }) => match command {
             HooksCommand::Install { root } => hooks::run_install(root.as_deref()),
             HooksCommand::Verify { root } => hooks::run_verify(root.as_deref()),
-            HooksCommand::PreCommit {
-                root,
-                executable,
-                timeout_seconds,
-            } => hooks::run_pre_commit(root.as_deref(), executable.as_deref(), timeout_seconds),
+            HooksCommand::PreCommit { root } => hooks::run_pre_commit(root.as_deref()),
             HooksCommand::PrePush {
                 root,
                 remote_name,
@@ -293,7 +293,7 @@ fn print_help() {
     println!("  dependencies   Verify dependency license/source/lockfile policy (T030)");
     println!("  judge          Run semantic judge (`judge --staged` after T024)");
     println!("  quality        Run currently-implemented quality manifest checks (T028)");
-    println!("  publication    Exact-commit publication / pre-push gate (T028)");
+    println!("  publication    Aggregate base-to-head publication / pre-push gate (R003)");
     println!("  hooks          Install/verify/run versioned local git hooks (T027/T028)");
 }
 

@@ -125,9 +125,10 @@ pub fn run_cargo_deny_with_evidence(
     ensure_cargo_deny_available()?;
 
     let command = format!("cargo deny check (pinned {CARGO_DENY_VERSION})");
-    let output = Command::new("cargo")
-        .args(["deny", "check"])
-        .current_dir(root)
+    let mut process = Command::new("cargo");
+    process.args(["deny", "check"]).current_dir(root);
+    apply_quality_command_uid(&mut process)?;
+    let output = process
         .output()
         .with_context(|| format!("failed to spawn cargo deny check under {}", root.display()))?;
 
@@ -150,12 +151,12 @@ pub fn run_cargo_deny_with_evidence(
 }
 
 fn ensure_cargo_deny_available() -> Result<()> {
-    let output = Command::new("cargo")
-        .args(["deny", "--version"])
-        .output()
-        .context(
-            "failed to execute `cargo deny --version`; install pinned cargo-deny for publication",
-        )?;
+    let mut process = Command::new("cargo");
+    process.args(["deny", "--version"]);
+    apply_quality_command_uid(&mut process)?;
+    let output = process.output().context(
+        "failed to execute `cargo deny --version`; install pinned cargo-deny for publication",
+    )?;
     if !output.status.success() {
         bail!(
             "cargo deny is unavailable (exit={}); install pinned cargo-deny {CARGO_DENY_VERSION} for advisory scanning",
@@ -170,6 +171,27 @@ fn ensure_cargo_deny_available() -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn apply_quality_command_uid(process: &mut Command) -> Result<()> {
+    let Some(uid) = std::env::var_os("LOOP_ENGINE_QUALITY_COMMAND_UID") else {
+        return Ok(());
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let uid = uid
+            .to_string_lossy()
+            .parse::<u32>()
+            .context("invalid LOOP_ENGINE_QUALITY_COMMAND_UID")?;
+        process.uid(uid).gid(uid);
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = process;
+        bail!("LOOP_ENGINE_QUALITY_COMMAND_UID is unsupported on this platform")
+    }
 }
 
 fn resolve_root(root: Option<&Path>) -> Result<PathBuf> {

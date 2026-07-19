@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# loop-engine-hook-version: 1
-# Thin adapter only. Canonical pre-commit logic lives in `xtask` (T027).
+# loop-engine-hook-version: 2
+# Thin adapter only. Bounded exact-staged pre-commit logic lives in `xtask` (R002).
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -12,6 +12,7 @@ cd "$ROOT"
 GATE_PATHS=(
   .githooks/pre-commit .cargo
   Cargo.toml Cargo.lock rust-toolchain.toml rustfmt.toml deny.toml
+  crates/*/Cargo.toml
   xtask
   quality/manifest.toml
   quality/semantic-judge

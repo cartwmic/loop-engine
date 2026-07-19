@@ -2,7 +2,7 @@
   "schema_version": 1,
   "example_id": "documentation-pass",
   "parent_revision": "PARENT_WITH_FOCUSED_RUBRICS",
-  "candidate_revision": "FOLLOWING_COMMIT",
+  "candidate_revision": "CANDIDATE_HEAD",
   "verdict": "pass",
   "citations": [
     {
@@ -14,5 +14,5 @@
       ]
     }
   ],
-  "message": "Example pass: parent-loaded documentation rubric finds same-commit docs coherent with the exact parent-to-candidate diff."
+  "message": "Example pass: base-loaded documentation rubric finds resulting docs coherent with the exact base-to-candidate-head diff."
 }

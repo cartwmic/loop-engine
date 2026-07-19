@@ -1,6 +1,6 @@
 # Loop Engine Testing Doctrine
 
-**Status:** E2E authority, facet coverage, runtime operation/trace proof, executable-provider coverage, no-mock policy, provider-fixture implementation strategy (T013), per-commit semantic judgment, exact-revision local gate, non-shipping `xtask`, and macOS/Linux platform test scope (T002) are settled. Protected-remote enforcement remains open until hosting exists.
+**Status:** E2E authority, facet coverage, runtime operation/trace proof, executable-provider coverage, no-mock policy, provider-fixture implementation strategy (T013), aggregate publication-checkpoint semantic judgment, exact-range local gate, non-shipping `xtask`, and macOS/Linux platform test scope (T002) are settled. Protected-remote enforcement remains open until hosting exists.
 
 Related documents:
 
@@ -416,24 +416,28 @@ Git hooks can enforce cooperative local workflow but cannot be unbypassable on u
 Settled semantic policy:
 
 - one generic versioned judge-executable contract supports focused rubrics for documentation impact, observability, architecture/tenet adherence including KISS, and behavioral evidence;
-- each commit is judged independently from exact parent-to-commit diff and resulting tree;
-- parent revision's rubric judges candidate revision, so changed rubric applies only to following commit; initial foundation commit and first publication use explicit owner-approved bootstrap exception and become parent rubric thereafter;
-- determinate local failure blocks commit; unavailable/indeterminate local result warns and permits commit;
-- pre-push and authoritative remote gate fail closed on failed, unavailable, or indeterminate judgment for any commit;
-- semantic judges receive deterministic build/test/check evidence and must cite changed lines/rubric rules rather than invent compilation or test claims;
+- one accepted push is one publication checkpoint, judged from exact remote destination tip to candidate local head and resulting tree;
+- commits inside the unpublished range may be incomplete and may repair one another; only the accepted range endpoint is authoritative;
+- remote base revision's rubric judges candidate head, so changed rubric applies only to the following push; exact foundation-base R001 migration alone uses an explicitly owner-selected aggregate migration rubric because frozen seed text encodes superseded scheduling;
+- pre-commit runs bounded fast deterministic staged checks by default; staged semantic judgment is explicit advisory tooling;
+- pre-push and authoritative remote gate fail closed on failed, unavailable, or indeterminate aggregate judgment;
+- semantic judges receive deterministic build/test/check evidence for the candidate head and must cite changed/resulting lines and base-rubric rules rather than invent compilation or test claims;
 - deterministic documentation, architecture, and quality checks remain separate from semantic judgment.
 
-Frozen contract (T012): generic executable request/result v1 at [quality/semantic-judge/v1/README.md](../quality/semantic-judge/v1/README.md); foundation seed rubric manifest at [quality/rubrics/manifest.json](../quality/rubrics/manifest.json) for parent `7552af5968b4a2c10aefd01fbfa6c351817e1b8b`; bootstrap exception consumed with no second bootstrap permitted; commands and CI provisioning owner in [development-policy.md](development-policy.md).
+Frozen contract (T012): generic executable request/result v1 at [quality/semantic-judge/v1/README.md](../quality/semantic-judge/v1/README.md); foundation seed rubric manifest at [quality/rubrics/manifest.json](../quality/rubrics/manifest.json) for base `7552af5968b4a2c10aefd01fbfa6c351817e1b8b`; commands and CI provisioning owner in [development-policy.md](development-policy.md). R001 supersedes the old per-commit scheduling policy without changing protocol field names.
 
 Settled local mechanism:
 
 - version hooks under `.githooks/`;
-- fast deterministic checks plus semantic-judge attempt against exact staged content and parent rubric at pre-commit;
-- full pre-push gate judges every unpublished commit against its parent in temporary detached worktree;
-- each candidate loads its own committed `quality/manifest.toml`; pre-manifest commits use `git diff --check` plus semantic judge only;
-- manifest checks cannot regress once introduced (removal/rename/weakening blocked; additions apply from that candidate onward);
-- exact quality command evidence (command, exit, stdout, stderr, candidate revision) is injected into semantic-judge requests;
-- per-commit judge JSON responses are emitted before blocking disposition, including fail/indeterminate/unavailable;
+- pre-commit materializes the exact staged tree and runs only `git diff --cached --check`, deterministic documentation, architecture, and formatting checks;
+- explicit `cargo run -p xtask -- judge --staged` remains available for early semantic feedback but is not part of default commit latency;
+- pre-push resolves the exact remote destination tip and evaluates one aggregate base-to-head range in one detached candidate-head worktree;
+- existing branches require the advertised remote tip to be an ancestor of local head; new branches use the exact advertised integration-branch tip as base;
+- candidate-head `quality/manifest.toml` must not remove or weaken checks present at the base and runs once; pre-manifest bases use the immutable built-in baseline plus candidate-head checks when introduced;
+- exact quality command evidence (command, exit, stdout, stderr, candidate revision) is injected into the one semantic-judge request;
+- one aggregate judge JSON response is emitted before blocking disposition, including fail/indeterminate/unavailable;
+- pre-push rejects multiple non-delete updates and candidates different from checked-out `HEAD`, keeping one push bound to one checkpoint;
+- protected-`main` `pull_request_target` CI runs trusted-base deterministic publication and semantic phases on separate runners; deterministic source/evidence is privileged over unprivileged candidate subprocesses, and semantic runner imports only a hash-bound Git bundle, so candidate workflow/code receives no semantic credentials;
 - no duplicated gate logic between hooks and CI;
 - non-shipping Rust `xtask` installs hooks and runs canonical gate.
 

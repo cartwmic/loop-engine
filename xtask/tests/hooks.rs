@@ -4,7 +4,6 @@ use std::process::Command;
 
 use tempfile::TempDir;
 use xtask::hooks::{self, HOOK_VERSION, PRE_COMMIT_HOOK_PATH, PreCommitOptions};
-use xtask::semantic_judge::{self, Disposition, Verdict};
 
 fn fixture_root(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -21,7 +20,7 @@ fn architecture_fixture_root() -> PathBuf {
 }
 
 fn real_repo_root() -> PathBuf {
-    semantic_judge::default_repository_root()
+    hooks::default_repository_root()
 }
 
 fn canonical_pre_commit_body() -> String {
@@ -98,36 +97,33 @@ fn stage_docs_edit(repo: &Path, content: &str) {
     git(repo, &["add", "docs/intent.md"]);
 }
 
-fn options(repo: &Path, judge: &str) -> PreCommitOptions {
-    let mut options = PreCommitOptions::new(repo);
-    options.judge_executable = Some(fixture_root(judge));
-    options.timeout_seconds = Some(5);
-    options.foundation_git_root = Some(real_repo_root());
-    options
+fn options(repo: &Path) -> PreCommitOptions {
+    PreCommitOptions::new(repo)
 }
 
 #[test]
-fn staged_pass_allows_commit() {
+fn staged_pass_runs_only_bounded_checks() {
     let repo = init_seeded_repo();
     stage_docs_edit(
         repo.path(),
         "# Valid\n\nValid fixture documentation.\n\nStaged pass edit.\n",
     );
 
-    let outcome = hooks::pre_commit(&options(repo.path(), "judge-pass")).expect("staged pass");
-    assert_eq!(outcome.judge.response.verdict, Verdict::Pass);
-    assert_eq!(outcome.judge.disposition, Disposition::Allow);
-    assert!(outcome.warnings.is_empty());
+    let outcome = hooks::pre_commit(&options(repo.path())).expect("staged pass");
+    assert_eq!(
+        outcome.checks,
+        ["diff-check", "docs-check", "architecture", "fmt"]
+    );
 }
 
 #[test]
-fn staged_diff_check_failure_blocks_before_semantic_judgment() {
+fn staged_diff_check_failure_blocks_before_materialization() {
     let repo = init_seeded_repo();
     write(repo.path(), "bad.txt", "trailing whitespace   \n");
     git(repo.path(), &["add", "bad.txt"]);
 
-    let error = hooks::pre_commit(&options(repo.path(), "judge-pass"))
-        .expect_err("staged diff-check failure must block");
+    let error =
+        hooks::pre_commit(&options(repo.path())).expect_err("staged diff-check failure must block");
     assert!(
         format!("{error:#}").contains("diff --cached --check"),
         "unexpected error: {error:#}"
@@ -135,77 +131,34 @@ fn staged_diff_check_failure_blocks_before_semantic_judgment() {
 }
 
 #[test]
-fn staged_quality_manifest_runs_checks_beyond_legacy_baseline() {
+fn staged_quality_manifest_and_tests_are_not_run() {
     let repo = init_seeded_repo();
     write(
         repo.path(),
         "quality/manifest.toml",
         r#"schema_version = 1
 [[checks]]
-id = "fmt"
-runner = "cargo-fmt"
+id = "test"
+runner = "cargo-test"
 "#,
     );
     write(
         repo.path(),
-        "crates/loop-engine-cli/src/main.rs",
-        "fn main(){println!(\"not formatted\");}\n",
+        "crates/loop-engine-core/tests/would_fail.rs",
+        "#[test]\nfn would_fail() {\n    panic!(\"full tests must not run in pre-commit\");\n}\n",
     );
     git(
         repo.path(),
         &[
             "add",
             "quality/manifest.toml",
-            "crates/loop-engine-cli/src/main.rs",
+            "crates/loop-engine-core/tests/would_fail.rs",
         ],
     );
 
-    let error = hooks::pre_commit(&options(repo.path(), "judge-pass"))
-        .expect_err("staged cargo-fmt failure must block before semantic judgment");
-    let message = format!("{error:#}");
-    assert!(
-        message.contains("cargo fmt") || message.contains("quality check `fmt`"),
-        "unexpected error: {message}"
-    );
-}
-
-#[test]
-fn semantic_fail_blocks_commit() {
-    let repo = init_seeded_repo();
-    stage_docs_edit(
-        repo.path(),
-        "# Valid\n\nValid fixture documentation.\n\nStaged fail edit.\n",
-    );
-
-    let error = hooks::pre_commit(&options(repo.path(), "judge-fail"))
-        .expect_err("semantic fail must block");
-    let message = format!("{error:#}");
-    assert!(
-        message.contains("blocked") || message.contains("Fail") || message.contains("fail"),
-        "unexpected error: {message}"
-    );
-}
-
-#[test]
-fn unavailable_warns_and_allows_commit() {
-    let repo = init_seeded_repo();
-    stage_docs_edit(
-        repo.path(),
-        "# Valid\n\nValid fixture documentation.\n\nUnavailable edit.\n",
-    );
-
-    let outcome =
-        hooks::pre_commit(&options(repo.path(), "judge-unavailable")).expect("unavailable local");
-    assert_eq!(outcome.judge.response.verdict, Verdict::Unavailable);
-    assert_eq!(outcome.judge.disposition, Disposition::WarnAllow);
-    assert!(
-        outcome
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("unavailable")),
-        "expected unavailable warning, got {:?}",
-        outcome.warnings
-    );
+    let outcome = hooks::pre_commit(&options(repo.path()))
+        .expect("bounded pre-commit must ignore full quality manifest and tests");
+    assert_eq!(outcome.checks.len(), 4);
 }
 
 #[test]
@@ -229,9 +182,9 @@ fn unstaged_contamination_is_ignored() {
         "working tree should remain contaminated before pre-commit"
     );
 
-    let outcome = hooks::pre_commit(&options(repo.path(), "judge-pass"))
+    let outcome = hooks::pre_commit(&options(repo.path()))
         .expect("unstaged contamination must not fail exact staged pre-commit");
-    assert_eq!(outcome.judge.disposition, Disposition::Allow);
+    assert_eq!(outcome.checks.len(), 4);
 
     let after = fs::read_to_string(repo.path().join("docs/intent.md")).expect("read after");
     assert_eq!(
@@ -272,6 +225,31 @@ fn install_and_verify_accept_matching_versioned_hook() {
 }
 
 #[test]
+fn shell_hook_blocks_unstaged_member_manifest_before_cargo_bootstrap() {
+    let repo = init_seeded_repo();
+    stage_docs_edit(
+        repo.path(),
+        "# Valid\n\nValid fixture documentation.\n\nStaged edit.\n",
+    );
+    write(
+        repo.path(),
+        "crates/loop-engine-core/Cargo.toml",
+        "this is not valid toml [",
+    );
+
+    let output = Command::new("bash")
+        .arg(PRE_COMMIT_HOOK_PATH)
+        .current_dir(repo.path())
+        .output()
+        .expect("run hook shell");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("gate implementation has unstaged changes")
+    );
+}
+
+#[test]
 fn versioned_pre_commit_hook_declares_current_version() {
     let body = canonical_pre_commit_body();
     let version = hooks::parse_hook_version(&body).expect("version marker");
@@ -288,6 +266,7 @@ fn versioned_pre_commit_hook_declares_current_version() {
         body.contains("git diff --quiet")
             && body.contains("git ls-files --others --exclude-standard")
             && body.contains("quality/semantic-judge")
+            && body.contains("crates/*/Cargo.toml")
             && body.contains("xtask"),
         "hook must reject unstaged gate-implementation contamination"
     );
