@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "example_id": "focused-set-following-commit-only",
+  "parent_revision": "COMMIT_THAT_INTRODUCED_FOCUSED_RUBRICS",
+  "candidate_revision": "FOLLOWING_COMMIT",
+  "verdict": "pass",
+  "citations": [
+    {
+      "rubric_id": "documentation",
+      "rule": "DOC-2",
+      "lines": [
+        "quality/rubrics/manifest.json:7",
+        "quality/rubrics/documentation.md:3"
+      ]
+    },
+    {
+      "rubric_id": "behavioral-evidence",
+      "rule": "BEH-3",
+      "lines": [
+        "quality/rubrics/behavioral-evidence.md:21"
+      ]
+    }
+  ],
+  "message": "Example decision semantics: focused rubrics loaded from the parent revision apply only to the following commit; the introducing commit itself remains judged by the prior parent rubric and never by candidate self-judgment."
+}

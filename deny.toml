@@ -1,0 +1,68 @@
+# Dependency policy for loop-engine (T030 / D003).
+# Authoritative allowlists for licenses, sources, advisories, and bans.
+# Canonical command: `cargo run --locked -p xtask -- dependencies`
+# Complementary tooling: `cargo deny check` (same deny.toml).
+
+[graph]
+# Supported MVP targets only (technology.md / T002). Windows is deferred.
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+]
+all-features = false
+no-default-features = false
+
+[advisories]
+# Vulnerabilities always fail closed (cargo-deny default).
+# Yanked crates fail closed. Unmaintained advisories are limited to
+# workspace-direct edges so transitive ecosystem noise does not block C1.
+# Unsound advisories always fail closed in cargo-deny 0.20.2.
+yanked = "deny"
+unmaintained = "workspace"
+ignore = []
+
+[licenses]
+# Deny-by-default allowlist compatible with dual MIT/Apache-2.0 (D003).
+# Copyleft-only expressions are rejected. SPDX OR alternatives that include an
+# allowed license remain acceptable (for example MIT OR LGPL-2.1-or-later).
+confidence-threshold = 0.8
+unused-allowed-license = "allow"
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "0BSD",
+    "Zlib",
+    "Unlicense",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+]
+exceptions = []
+
+[licenses.private]
+# Workspace members declare `license = "MIT OR Apache-2.0"`; still check them.
+ignore = false
+registries = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

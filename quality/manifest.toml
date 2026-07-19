@@ -1,0 +1,37 @@
+# Incremental currently-implemented quality checks (T028).
+# Later tasks extend this set; T195 freezes the final canonical gate.
+# Deterministic checks here remain separate from semantic judgment.
+
+schema_version = 1
+
+[[checks]]
+id = "docs-check"
+runner = "docs-check"
+
+[[checks]]
+id = "architecture"
+runner = "architecture"
+
+[[checks]]
+id = "check"
+runner = "cargo-check"
+
+[[checks]]
+id = "test"
+runner = "cargo-test"
+
+[[checks]]
+id = "fmt"
+runner = "cargo-fmt"
+
+[[checks]]
+id = "clippy"
+runner = "cargo-clippy"
+
+[[checks]]
+id = "dependencies"
+runner = "dependencies"
+
+[[checks]]
+id = "advisories"
+runner = "cargo-deny"

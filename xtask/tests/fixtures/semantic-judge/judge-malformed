@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""Fixture judge that emits malformed non-JSON output."""
+
+from __future__ import annotations
+
+import sys
+
+
+def main() -> int:
+    sys.stdin.read()
+    sys.stdout.write("not-json")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

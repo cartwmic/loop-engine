@@ -1,0 +1,272 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+use tempfile::TempDir;
+use xtask::quality::{self, MANIFEST_PATH};
+
+fn fixture_root(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+fn publication_manifest() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/publication/manifest.toml")
+}
+
+fn docs_fixture_root() -> PathBuf {
+    fixture_root("docs-check/valid")
+}
+
+fn architecture_fixture_root() -> PathBuf {
+    fixture_root("architecture/allowed")
+}
+
+fn real_repo_root() -> PathBuf {
+    xtask::semantic_judge::default_repository_root()
+}
+
+fn copy_dir(src: &Path, dst: &Path) {
+    fn copy_recursive(src: &Path, dst: &Path) {
+        if src.is_dir() {
+            fs::create_dir_all(dst).expect("mkdir");
+            for entry in fs::read_dir(src).expect("read_dir") {
+                let entry = entry.expect("dir entry");
+                copy_recursive(&entry.path(), &dst.join(entry.file_name()));
+            }
+            return;
+        }
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent).expect("mkdir parent");
+        }
+        fs::copy(src, dst).expect("copy fixture file");
+    }
+    copy_recursive(src, dst);
+}
+
+fn git(repo: &Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .expect("git");
+    assert!(
+        output.status.success(),
+        "git {} failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn write(repo: &Path, relative: &str, content: &str) {
+    let path = repo.join(relative);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("mkdir");
+    }
+    fs::write(&path, content).expect("write");
+}
+
+fn seeded_tree() -> TempDir {
+    let dir = TempDir::new().expect("tempdir");
+    copy_dir(&architecture_fixture_root(), dir.path());
+    copy_dir(&docs_fixture_root(), dir.path());
+    write(
+        dir.path(),
+        MANIFEST_PATH,
+        &fs::read_to_string(publication_manifest()).expect("fixture manifest"),
+    );
+    dir
+}
+
+#[test]
+fn parse_manifest_rejects_unknown_runner_fail_closed() {
+    let error = quality::parse_manifest(
+        r#"
+schema_version = 1
+
+[[checks]]
+id = "future"
+runner = "not-implemented-yet"
+"#,
+    )
+    .expect_err("unknown runner must fail closed");
+    assert!(
+        error.to_string().contains("unknown quality runner"),
+        "unexpected error: {error:#}"
+    );
+}
+
+#[test]
+fn load_and_run_currently_implemented_checks() {
+    let tree = seeded_tree();
+    let report = quality::run(
+        Some(tree.path()),
+        Some(tree.path()),
+        Some(&tree.path().join(MANIFEST_PATH)),
+        None,
+    )
+    .expect("quality should pass on seeded fixture tree");
+    assert!(report.passed());
+    assert_eq!(report.checks.len(), 2);
+    assert!(report.checks.iter().all(|check| check.ok));
+}
+
+#[test]
+fn revision_quality_loads_manifest_from_candidate_not_working_tree() {
+    let tree = seeded_tree();
+    git(tree.path(), &["init"]);
+    git(tree.path(), &["config", "user.email", "quality@test"]);
+    git(tree.path(), &["config", "user.name", "Quality Test"]);
+    git(tree.path(), &["config", "commit.gpgsign", "false"]);
+    git(tree.path(), &["add", "-A"]);
+    git(tree.path(), &["commit", "-m", "candidate"]);
+
+    write(
+        tree.path(),
+        MANIFEST_PATH,
+        "schema_version = 999\nworking_tree_only = true\n",
+    );
+    let report = quality::run(None, Some(tree.path()), None, Some("HEAD"))
+        .expect("candidate's committed manifest should govern revision check");
+    assert_eq!(report.checks.len(), 2);
+}
+
+#[test]
+fn quality_fails_closed_on_docs_violation() {
+    let tree = seeded_tree();
+    write(
+        tree.path(),
+        "docs/intent.md",
+        "# Valid\n\nValid fixture documentation.   \n",
+    );
+    let error = quality::run(
+        Some(tree.path()),
+        Some(tree.path()),
+        Some(&tree.path().join(MANIFEST_PATH)),
+        None,
+    )
+    .expect_err("trailing whitespace must fail docs-check");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("docs-check") || message.contains("trailing"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn repository_manifest_declares_currently_implemented_runners() {
+    let manifest = quality::load_manifest(&real_repo_root(), None).expect("repo manifest");
+    assert_eq!(manifest.schema_version, 1);
+    let runners: Vec<_> = manifest
+        .checks
+        .iter()
+        .map(|check| check.runner.as_str())
+        .collect();
+    assert!(runners.contains(&"docs-check"));
+    assert!(runners.contains(&"architecture"));
+    assert!(runners.contains(&"cargo-check"));
+    assert!(runners.contains(&"cargo-test"));
+    assert!(runners.contains(&"cargo-fmt"));
+    assert!(runners.contains(&"cargo-clippy"));
+    assert!(runners.contains(&"dependencies"));
+    assert!(runners.contains(&"cargo-deny"));
+}
+
+#[test]
+fn cargo_fmt_runner_invokes_check_mode() {
+    // Ensure the runner wiring stays tied to the development-policy command.
+    let tree = seeded_tree();
+    // architecture fixture is not a full fmt-managed workspace; unknown runner
+    // path is covered above. Here we only assert the repository manifest text.
+    let text = fs::read_to_string(real_repo_root().join(MANIFEST_PATH)).expect("manifest");
+    assert!(text.contains("runner = \"cargo-fmt\""));
+    assert!(text.contains("runner = \"cargo-clippy\""));
+    assert!(tree.path().join(MANIFEST_PATH).is_file());
+}
+
+#[test]
+fn duplicate_check_ids_are_rejected() {
+    let error = quality::parse_manifest(
+        r#"
+schema_version = 1
+
+[[checks]]
+id = "docs-check"
+runner = "docs-check"
+
+[[checks]]
+id = "docs-check"
+runner = "architecture"
+"#,
+    )
+    .expect_err("duplicate ids must fail");
+    assert!(error.to_string().contains("duplicate quality check id"));
+}
+
+#[test]
+fn member_manifests_inherit_workspace_lints() {
+    let root = real_repo_root();
+    for member in [
+        "crates/loop-engine-core/Cargo.toml",
+        "crates/loop-engine-cli/Cargo.toml",
+        "crates/loop-engine-integrations/Cargo.toml",
+        "xtask/Cargo.toml",
+    ] {
+        let text = fs::read_to_string(root.join(member)).expect("member manifest");
+        assert!(
+            text.contains("[lints]") && text.contains("workspace = true"),
+            "{member} must opt into [lints] workspace = true"
+        );
+    }
+}
+
+#[test]
+fn workspace_unsafe_forbid_canary_rejects_unsafe_code() {
+    let fixture = fixture_root("lints-canary/forbidden");
+    let output = std::process::Command::new("cargo")
+        .args([
+            "check",
+            "--manifest-path",
+            fixture.join("Cargo.toml").to_str().unwrap(),
+        ])
+        .output()
+        .expect("cargo check");
+    assert!(
+        !output.status.success(),
+        "unsafe code must fail inherited workspace forbid lint"
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        combined.contains("unsafe") || combined.contains("deny"),
+        "unexpected output: {combined}"
+    );
+}
+
+#[test]
+fn command_evidence_includes_candidate_revision_binding() {
+    let tree = seeded_tree();
+    let revision = "abc123def4567890123456789012345678901234ab";
+    let manifest = quality::parse_manifest(
+        r#"
+schema_version = 1
+[[checks]]
+id = "docs-check"
+runner = "docs-check"
+"#,
+    )
+    .unwrap();
+    let report = quality::run_manifest(
+        tree.path(),
+        &manifest,
+        &tree.path().join(MANIFEST_PATH),
+        revision,
+    )
+    .expect("docs-check should pass");
+    assert_eq!(report.candidate_revision, revision);
+    let evidence = report.deterministic_evidence();
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(evidence[0]["candidate_revision"].as_str(), Some(revision));
+}

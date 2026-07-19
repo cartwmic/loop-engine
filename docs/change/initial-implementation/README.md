@@ -1,6 +1,6 @@
 # Initial Implementation Change
 
-**Status:** Planned
+**Status:** In progress
 
 This change implements the complete `loop-engine` MVP defined by the foundation documents. The foundation is the sole requirements authority; this change introduces no OpenSpec process or artifacts.
 
@@ -22,7 +22,7 @@ When this change conflicts with a settled foundation invariant, the foundation w
 ## Artifacts
 
 - [Decision gates](decisions.md) — implementation-stage choices, recommended defaults, and blockers.
-- [Task list](tasks.md) — dependency-ordered task contracts for fresh subagents.
+- [Task list](tasks.md) — dependency-ordered task contracts for direct orchestrator execution.
 - [Coverage map](coverage.md) — operation, invariant, facet, reference-workflow, and exclusion traceability.
 
 ## Intended result
@@ -53,37 +53,23 @@ Use these markers in `tasks.md`:
 
 - `[ ]` not started
 - `[~]` active; exactly one owner
-- `[x]` complete and verified
+- `[x]` task contract complete; for a T-task this means implementation deliverables are complete, while range validation remains pending until paired V/F junction closes
 - `[!]` blocked; record blocker below the task
 
-Do not mark a task complete because code exists. Mark it complete only after every acceptance item, command, evidence requirement, and documentation obligation passes.
+Do not mark a T-task complete because placeholder code exists. Mark it complete when its implementation, authored tests/fixtures, task-local acceptance criteria, and documentation obligations are complete. Commands explicitly deferred by the plan do not gate that T marker; paired V-task executes them and independently gates range acceptance, boundary commit, and later work.
 
-### Fresh-subagent handoff
+### Direct execution and review handoff
 
-Default one task per fresh subagent, except same-owner atomic exposure groups named below. T163 is one multi-turn same-owner operation package: owner advances its facet manifest slice-by-slice, may compact/continue same agent session, and may not split or hand off an uncommitted candidate. Group receives one fresh owner for entire ID range; orchestrator sets intermediate IDs `[~]`; owner reports whole group ready only when final task passes; orchestrator alone marks range `[x]`. Subagents never commit or push. Every handoff must include:
+Orchestrator executes T, V, and F tasks directly. T163 remains one uninterrupted multi-turn operation package, and same-owner atomic exposure groups remain indivisible; intermediate IDs stay `[~]` until final task closes group. Orchestrator stops rather than guesses when a stop condition fires, planned file contract no longer matches repository structure, or settled invariant appears contradictory.
 
-1. task ID and title;
-2. exact dependency task IDs and confirmation they are complete;
-3. files listed by the task plus foundation links it names;
-4. instruction to avoid unrelated edits and OpenSpec artifacts;
-5. required verification commands;
-6. expected completion report format below;
-7. commit disposition: always `stop for orchestrator`, with suggested authorized message when task is a boundary.
+Execution modes:
 
-Subagent completion report:
+1. **T-task implementation:** author required code, tests, fixtures, and documentation; defer accumulated build/test/lint/closure commands to next V-task.
+2. **V-task validation:** make no tracked edits; execute accumulated deterministic inventory and range-targeted suites; record clean result or exact findings.
+3. **F-task repair:** batch all valid V findings into one coherent pass; rerun paired V-task before closure when repairs were non-empty.
+4. **Blind review:** use fresh Fable and GPT-Sol subagents only for independent correctness/completeness judgment. Orchestrator validates accepted findings, applies repairs directly, and reruns V validation before another review round.
 
-```text
-Task: <task-id>
-Result: complete | blocked
-Files changed:
-Commands run:
-Acceptance evidence:
-Documentation impact:
-Commit disposition: stop for orchestrator
-Risks or follow-up:
-```
-
-Subagent must stop rather than guess when a stop condition fires, a planned file contract no longer matches repository structure, or a settled invariant appears contradictory.
+No T/V/F step commits independently. Orchestrator alone updates markers and range ledger, stages exact boundary union, invokes semantic/publication gates, commits, and pushes under boundary ritual. Review subagents never edit, commit, or push.
 
 ### Parallelism
 
@@ -106,7 +92,7 @@ For public behavior:
 4. verify structured outcome and correlated trace;
 5. add operation to runtime catalog only in the same checkpoint that closes its driver/E2E/trace proof.
 
-Lower-level tests may guide implementation but never replace required CLI acceptance. No mock framework or mock-based behavioral test is permitted.
+Lower-level tests may guide implementation but never replace required CLI acceptance. No mock framework or mock-based behavioral test is permitted. T-task implementation authors scenarios as deliverables; execution and red/green confirmation occur in junction V-mode and boundary ritual, not after each individual T-task.
 
 ### Documentation coherence
 
@@ -145,15 +131,15 @@ Assign each full range to one fresh owner. Within group, `Depends` on prior grou
 
 ### Commit ownership
 
-Commit and push agency belongs only to orchestrator and is never delegated to task subagents, including atomic-group owners. Every authorized boundary implicitly ends with `stop for orchestrator commit` under message/scope listed here; task prose saying candidate or authorized commit describes readiness, never permission. Foundation commit `7552af5968b4a2c10aefd01fbfa6c351817e1b8b` already consumed bootstrap publication exception and is parent seed rubric. T012 freezes how real judge reads that committed foundation rubric before focused files exist; T025 rubrics apply only to following commit. No implementation commit may push before T029, and first post-foundation push must show determinate judgment for every C0/C1 commit—no second bootstrap exception.
+Commit and push agency belongs only to orchestrator and is never delegated to blind review subagents. Every authorized boundary implicitly ends with `stop for orchestrator commit` under message/scope listed here; task prose saying candidate or authorized commit describes readiness, never permission. Foundation commit `7552af5968b4a2c10aefd01fbfa6c351817e1b8b` already consumed bootstrap publication exception and is parent seed rubric. T012 freezes how real judge reads that committed foundation rubric before focused files exist; T025 rubrics apply only to following commit. No implementation commit may push before T029, and first post-foundation push must show determinate judgment for every C0/C1 commit—no second bootstrap exception.
 
 Candidate-commit ritual for every authorized boundary:
 
 1. confirm working tree contains only completion-reported files from current boundary range; compare against range ledger, then stage exact union of those paths plus same-commit docs—never blind `git add -A`; boundary task's own Files field is not limit on accumulated range;
-2. run task Verify commands, canonical currently-implemented quality manifest, and `git diff --cached --check` against staged candidate;
+2. where a junction (V/F) gates this boundary, confirm its validation/fix cycle closed clean; run the canonical currently-implemented quality manifest and `git diff --cached --check` against staged candidate;
 3. invoke real local judge on exact staged tree and parent rubric (`quality/semantic-judge/v1/build-exact-staged-request | quality/semantic-judge/v1/judge` for C0; `cargo run -p xtask -- judge --staged` after T024); determinate fail blocks, unavailable/indeterminate records warning locally;
 4. inspect staged name/status and diff; orchestrator commits with `type(scope): checkpoint description`; record task IDs, commands, judge disposition, and documentation impact in commit body;
-5. subagent stops; only orchestrator may invoke publication gate or push. Publication uses T028/T029 exact-commit range gate and requires determinate pass for every unpublished commit.
+5. stop boundary work; orchestrator alone may invoke publication gate or push. Publication uses T028/T029 exact-commit range gate and requires determinate pass for every unpublished commit.
 
 Authorized internal no-public-behavior boundaries: T052 `feat(core): establish domain model`; T083 `feat(core): add private operations`; T103 `feat(integrations): add provider config and trace substrate`; T119 `feat(persistence): add transactional state and journal`; T134 `feat(cli): add private driver and contracts`; T145 `test(e2e): establish black-box harness`; T167 `test(e2e): close operation catalogs`; T184 `test(e2e): close cross-operation acceptance`; T189 `test(reference): prove reference behaviors`; T191 `test(report): add immutable acceptance evidence`; T194 `docs: finalize operations and recovery`; T197 `chore(quality): finalize gate and flake audit`; T198 `chore(repo): enforce protected quality gate`.
 
@@ -196,9 +182,9 @@ Boundary staging ranges are exhaustive and non-overlapping; they define commit s
 | T198 | T198 | `chore(repo): enforce protected quality gate` |
 | T200 | T199–T200 | `chore(release): close initial implementation` |
 
-Every endpoint has implicit task-local completion clause: `stop for orchestrator commit` using table message. A dirty path absent from ledger blocks commit; no later range absorbs it.
+Every endpoint has implicit task-local completion clause: `stop for orchestrator commit` using table message. A dirty path absent from ledger blocks commit; no later range absorbs it. Junction V/F governance tasks attach to the boundary rows named in `tasks.md`: the gated boundary commit waits for junction closure, F-task repair paths append to that boundary's ledger, and V-task evidence stays untracked and outside every ledger.
 
-Revision-bound acceptance is two-stage: candidate commit contains implementation, task markers, stable evidence keys, generator/schema, and no self-SHA. After commit, local/CI runs generator against immutable SHA and stores untracked artifact/status under `<sha>/<report-key>`. Pass makes checkpoint accepted without tracked mutation. Failure explicitly authorizes a corrective commit limited to failed task/report scope; reopen affected marker, apply coherent fix/docs, rerun ritual, and generate new report. Tracked coverage never embeds own SHA or mutable artifact URL. T191 must commit generator before its post-commit report. After T197 subagent stops, orchestrator commits T197, runs T028 publication range gate, and publishes candidate branch before assigning orchestrator-only T198 to configure/verify required GitHub check. T198 then commits repository-settings evidence. T200 follows same external-status rule.
+Revision-bound acceptance is two-stage: candidate commit contains implementation, task markers, stable evidence keys, generator/schema, and no self-SHA. After commit, local/CI runs generator against immutable SHA and stores untracked artifact/status under `<sha>/<report-key>`. Pass makes checkpoint accepted without tracked mutation. Failure explicitly authorizes a corrective commit limited to failed task/report scope; reopen affected marker, apply coherent fix/docs, rerun ritual, and generate new report. Tracked coverage never embeds own SHA or mutable artifact URL. T191 must commit generator before its post-commit report. After T197 closes, orchestrator commits T197, runs T028 publication range gate, and publishes candidate branch before executing T198 to configure/verify required GitHub check. T198 then commits repository-settings evidence. T200 follows same external-status rule.
 
 ## Review convergence severity contract
 

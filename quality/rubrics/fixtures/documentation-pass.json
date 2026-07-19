@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "example_id": "documentation-pass",
+  "parent_revision": "PARENT_WITH_FOCUSED_RUBRICS",
+  "candidate_revision": "FOLLOWING_COMMIT",
+  "verdict": "pass",
+  "citations": [
+    {
+      "rubric_id": "documentation",
+      "rule": "DOC-1",
+      "lines": [
+        "docs/invariants.md:308",
+        "quality/rubrics/documentation.md:9"
+      ]
+    }
+  ],
+  "message": "Example pass: parent-loaded documentation rubric finds same-commit docs coherent with the exact parent-to-candidate diff."
+}

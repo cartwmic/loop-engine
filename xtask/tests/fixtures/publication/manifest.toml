@@ -1,0 +1,10 @@
+# Test-only currently-implemented quality checks (no fmt/clippy).
+schema_version = 1
+
+[[checks]]
+id = "docs-check"
+runner = "docs-check"
+
+[[checks]]
+id = "architecture"
+runner = "architecture"

@@ -4,30 +4,121 @@
   "bootstrap_publication_consumed": true,
   "no_second_bootstrap": true,
   "focused_rubrics_effective_after_task": "T025",
-  "active_rubric_set": "foundation-seed",
+  "active_rubric_set": "focused",
   "rubrics": [
     {
-      "id": "foundation-seed",
+      "id": "documentation",
       "version": 1,
       "parent_revision": "7552af5968b4a2c10aefd01fbfa6c351817e1b8b",
-      "content_path": "foundation-seed.v1.md",
-      "content_sha256": "3f1bd3489401ca6114ac1ef756ad4e87798a2d1ed3973c16625fd87167c1b3cd",
+      "content_path": "documentation.md",
+      "content_sha256": "e096a3f98ce68f28d24192fd3c91d4b5eabff6d9e08df0bbd61bf301193c8360",
       "source_anchors": [
         {
           "path": "docs/invariants.md",
           "section": "I47"
         },
         {
-          "path": "docs/testing.md",
-          "section": "Git enforcement direction"
-        },
-        {
           "path": "docs/tenets.md",
           "section": "27. Documentation evolves with every commit"
         },
         {
+          "path": "docs/testing.md",
+          "section": "Git enforcement direction"
+        }
+      ]
+    },
+    {
+      "id": "observability",
+      "version": 1,
+      "parent_revision": "7552af5968b4a2c10aefd01fbfa6c351817e1b8b",
+      "content_path": "observability.md",
+      "content_sha256": "b70978f0858724ba3785fe8f07bb3a793230312c9414c1a299ea698889ee84fe",
+      "source_anchors": [
+        {
+          "path": "docs/operational-trace.md",
+          "section": "Scope and authority"
+        },
+        {
+          "path": "docs/invariants.md",
+          "section": "I12"
+        },
+        {
+          "path": "docs/invariants.md",
+          "section": "I42"
+        },
+        {
+          "path": "docs/invariants.md",
+          "section": "I46"
+        },
+        {
+          "path": "docs/tenets.md",
+          "section": "8. Current state is authoritative"
+        },
+        {
+          "path": "docs/tenets.md",
+          "section": "26. Visibility is paramount for debugging"
+        }
+      ]
+    },
+    {
+      "id": "architecture",
+      "version": 1,
+      "parent_revision": "7552af5968b4a2c10aefd01fbfa6c351817e1b8b",
+      "content_path": "architecture.md",
+      "content_sha256": "1e452f69057f9129506f71d7ea1061b0e33b42af427183173b35d9729f13e452",
+      "source_anchors": [
+        {
           "path": "docs/architecture.md",
           "section": "Composition and enforcement"
+        },
+        {
+          "path": "docs/tenets.md",
+          "section": "14. Focused core over broad platform"
+        },
+        {
+          "path": "docs/tenets.md",
+          "section": "19. Dependencies point inward"
+        },
+        {
+          "path": "docs/invariants.md",
+          "section": "I22"
+        },
+        {
+          "path": "docs/invariants.md",
+          "section": "I23"
+        }
+      ]
+    },
+    {
+      "id": "behavioral-evidence",
+      "version": 1,
+      "parent_revision": "7552af5968b4a2c10aefd01fbfa6c351817e1b8b",
+      "content_path": "behavioral-evidence.md",
+      "content_sha256": "f224c060b1b73aa472a3062e8cd75a4c6a7d6d3458e2d109b918465973905cdd",
+      "source_anchors": [
+        {
+          "path": "docs/invariants.md",
+          "section": "I28"
+        },
+        {
+          "path": "docs/invariants.md",
+          "section": "I29"
+        },
+        {
+          "path": "docs/testing.md",
+          "section": "Behavioral authority"
+        },
+        {
+          "path": "docs/testing.md",
+          "section": "No-mock policy"
+        },
+        {
+          "path": "docs/testing.md",
+          "section": "Git enforcement direction"
+        },
+        {
+          "path": "docs/testing.md",
+          "section": "Isolation requirements"
         }
       ]
     }

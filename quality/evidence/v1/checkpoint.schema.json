@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loop-engine.local/quality/evidence/v1/checkpoint.schema.json",
+  "title": "Checkpoint evidence v1",
+  "description": "Machine-readable evidence envelope for publication checkpoints. T030 freezes the C1 shape for the currently implemented empty runtime surface; later checkpoints reuse the same schema once C2+ exposes routes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "checkpoint_id",
+    "application_operations",
+    "gates",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Checkpoint evidence schema major version."
+    },
+    "checkpoint_id": {
+      "type": "string",
+      "enum": [
+        "C0",
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5",
+        "C6",
+        "C7",
+        "C8",
+        "C9",
+        "C10",
+        "C11",
+        "C12"
+      ],
+      "description": "Publication checkpoint identifier from the initial-implementation plan."
+    },
+    "application_operations": {
+      "type": "array",
+      "description": "Stable D004 operation IDs exposed by the candidate. For C1 this MUST be empty: root help exposes zero application routes and the runtime catalog arrives in C2.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workspace_build",
+        "architecture",
+        "docs_check",
+        "dependency_policy",
+        "staged_pre_commit",
+        "empty_runtime_surface"
+      ],
+      "properties": {
+        "workspace_build": {
+          "$ref": "#/$defs/gate_result",
+          "description": "cargo check --workspace --locked (and format/Clippy as required by development policy)."
+        },
+        "architecture": {
+          "$ref": "#/$defs/gate_result",
+          "description": "cargo run --locked -p xtask -- architecture"
+        },
+        "docs_check": {
+          "$ref": "#/$defs/gate_result",
+          "description": "cargo run --locked -p xtask -- docs-check"
+        },
+        "dependency_policy": {
+          "$ref": "#/$defs/gate_result",
+          "description": "cargo run --locked -p xtask -- dependencies (selected equivalent) and/or cargo deny check"
+        },
+        "staged_pre_commit": {
+          "$ref": "#/$defs/gate_result",
+          "description": "Versioned pre-commit / staged-tree path (xtask hooks pre-commit)."
+        },
+        "empty_runtime_surface": {
+          "$ref": "#/$defs/gate_result",
+          "description": "Root CLI help exposes zero application routes; no runtime operation catalog entries yet."
+        }
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["candidate", "accepted", "rejected"],
+      "description": "Evidence disposition. T030 produces a candidate for orchestrator commit `build: establish workspace governance`."
+    },
+    "notes": {
+      "type": "string",
+      "description": "Optional human-readable closure notes."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "checkpoint_id": { "const": "C1" }
+        },
+        "required": ["checkpoint_id"]
+      },
+      "then": {
+        "properties": {
+          "application_operations": {
+            "type": "array",
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "gate_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result"],
+      "properties": {
+        "result": {
+          "type": "string",
+          "enum": ["pass", "fail", "not_run"]
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact command used when recorded."
+        },
+        "detail": {
+          "type": "string",
+          "description": "Optional short diagnostic or evidence pointer."
+        }
+      }
+    }
+  }
+}

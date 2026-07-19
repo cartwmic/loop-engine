@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""Fixture judge that fails only when candidate resulting/added content has FAIL_MIDDLE."""
+
+from __future__ import annotations
+
+import json
+import sys
+
+
+def candidate_resulting_text(diff: str) -> str:
+    """Classify from resulting content: added and context lines, not deletions."""
+    lines: list[str] = []
+    for line in diff.splitlines():
+        if line.startswith("diff ") or line.startswith("index "):
+            continue
+        if line.startswith("---") or line.startswith("+++") or line.startswith("@@"):
+            continue
+        if line.startswith("-"):
+            continue
+        if line.startswith("+"):
+            lines.append(line[1:])
+            continue
+        if line.startswith(" "):
+            lines.append(line[1:])
+            continue
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def main() -> int:
+    request = json.load(sys.stdin)
+    diff = request.get("diff") or ""
+    fail = "FAIL_MIDDLE" in candidate_resulting_text(diff)
+    response = {
+        "schema_version": 1,
+        "parent_revision": request["parent_revision"],
+        "candidate_revision": request["candidate_revision"],
+        "verdict": "fail" if fail else "pass",
+        "citations": [
+            {
+                "rubric_id": request["rubrics"][0]["id"],
+                "rule": "I47",
+                "lines": ["docs/intent.md:1"],
+            }
+        ],
+        "message": "fixture fail-middle" if fail else "fixture pass",
+    }
+    json.dump(response, sys.stdout)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

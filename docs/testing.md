@@ -430,6 +430,10 @@ Settled local mechanism:
 - version hooks under `.githooks/`;
 - fast deterministic checks plus semantic-judge attempt against exact staged content and parent rubric at pre-commit;
 - full pre-push gate judges every unpublished commit against its parent in temporary detached worktree;
+- each candidate loads its own committed `quality/manifest.toml`; pre-manifest commits use `git diff --check` plus semantic judge only;
+- manifest checks cannot regress once introduced (removal/rename/weakening blocked; additions apply from that candidate onward);
+- exact quality command evidence (command, exit, stdout, stderr, candidate revision) is injected into semantic-judge requests;
+- per-commit judge JSON responses are emitted before blocking disposition, including fail/indeterminate/unavailable;
 - no duplicated gate logic between hooks and CI;
 - non-shipping Rust `xtask` installs hooks and runs canonical gate.
 

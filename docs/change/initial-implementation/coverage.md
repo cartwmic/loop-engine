@@ -4,6 +4,8 @@
 
 This map prevents requirements from disappearing between foundation, implementation tasks, and runtime evidence. Task completion alone is not acceptance. Final evidence columns must name passing command, invocation/request ID, trace file/artifact, and exact commit.
 
+The implementation task inventory is exactly T001–T200. Junction validation/fix governance tasks `V001`–`V013`/`F001`–`F013` (defined in `tasks.md`) sit outside T numbering: they execute accumulated deterministic verification at checkpoint junctions and batch resulting repairs, add no operations, own no coverage rows, and supply no first proof for any facet. Every evidence column in this map continues to cite T-task-owned suites and reports; junction evidence directories are untracked and never satisfy a row.
+
 ## Final operation catalog
 
 Decision D004 must confirm this catalog before implementation. `Private task` builds internal operation. `Exposure task` adds production CLI route, catalogs, required E2Es, traces, and documentation atomically.

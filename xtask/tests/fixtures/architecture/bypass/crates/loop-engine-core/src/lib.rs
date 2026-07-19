@@ -1,0 +1,1 @@
+//! Bypass fixture core crate.

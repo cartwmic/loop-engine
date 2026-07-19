@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "example_id": "observability-pass",
+  "parent_revision": "PARENT_WITH_FOCUSED_RUBRICS",
+  "candidate_revision": "FOLLOWING_COMMIT",
+  "verdict": "pass",
+  "citations": [
+    {
+      "rubric_id": "observability",
+      "rule": "OBS-1",
+      "lines": [
+        "docs/operational-trace.md:23",
+        "quality/rubrics/observability.md:9"
+      ]
+    },
+    {
+      "rubric_id": "observability",
+      "rule": "OBS-2",
+      "lines": [
+        "docs/tenets.md:52",
+        "quality/rubrics/observability.md:15"
+      ]
+    }
+  ],
+  "message": "Example pass: candidate preserves trace-as-diagnostic and journal-explains/state-authoritative separation under parent observability rubric."
+}

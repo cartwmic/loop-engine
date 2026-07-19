@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# loop-engine-hook-version: 1
+# Thin adapter only. Canonical pre-push logic lives in `xtask` (T028).
+# Reads git remote-update lines from stdin; does not rewrite the user tree.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+REMOTE_NAME="${1:?git pre-push did not provide destination remote name}"
+REMOTE_URL="${2:?git pre-push did not provide destination remote URL}"
+unset $(git rev-parse --local-env-vars)
+exec env -u RUSTUP_TOOLCHAIN cargo run --quiet --locked -p xtask -- hooks pre-push \
+  --remote-name "$REMOTE_NAME" \
+  --remote-url "$REMOTE_URL"

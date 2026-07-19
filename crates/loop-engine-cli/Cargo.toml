@@ -1,0 +1,30 @@
+[package]
+name = "loop-engine-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+
+[[bin]]
+name = "loop-engine"
+path = "src/main.rs"
+
+[dependencies]
+loop-engine-core = { version = "=0.1.0", path = "../loop-engine-core" }
+loop-engine-integrations = { version = "=0.1.0", path = "../loop-engine-integrations" }
+clap = { version = "=4.6.2", features = ["derive"] }
+miette = { version = "=7.6.0", features = ["fancy"] }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.150"
+thiserror = "=2.0.18"
+jiff = "=0.2.32"
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "json"] }
+tracing-appender = "=0.2.5"
+
+[dev-dependencies]
+assert_cmd = "=2.2.2"
+tempfile = "=3.27.0"
+
+[lints]
+workspace = true

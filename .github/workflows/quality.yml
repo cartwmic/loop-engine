@@ -1,0 +1,201 @@
+# Authoritative publication CI adapter (T029).
+# Gate logic lives only in `cargo run -p xtask -- publication` (T028).
+# This workflow provisions the real semantic judge and records artifacts.
+name: quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publication:
+    name: ${{ matrix.job }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - job: linux-x86_64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - job: linux-aarch64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - job: macos-aarch64
+            runner: macos-15
+            target: aarch64-apple-darwin
+          - job: macos-x86_64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+
+    env:
+      CARGO_TERM_COLOR: always
+      LOOP_ENGINE_SEMANTIC_JUDGE_EXECUTABLE: ${{ vars.LOOP_ENGINE_SEMANTIC_JUDGE_EXECUTABLE }}
+
+    steps:
+      - name: Checkout exact candidate head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Default pull_request checkout is a synthetic merge commit, which the
+          # exact linear-history publication gate correctly rejects.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
+
+      - name: Install pinned cargo-deny
+        run: cargo install cargo-deny --locked --version 0.20.2
+
+      - name: Install Node.js for pi judge host
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install pi coding agent
+        run: npm install --global @mariozechner/pi-coding-agent
+
+      - name: Require and provision real semantic judge
+        env:
+          LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON: ${{ secrets.LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON }}
+          JUDGE_HOME: ${{ runner.temp }}/loop-engine-pi-agent
+        run: |
+          set -euo pipefail
+
+          if [ -z "${LOOP_ENGINE_SEMANTIC_JUDGE_EXECUTABLE:-}" ]; then
+            echo "repository variable LOOP_ENGINE_SEMANTIC_JUDGE_EXECUTABLE is required" >&2
+            exit 1
+          fi
+          if [ ! -f "${LOOP_ENGINE_SEMANTIC_JUDGE_EXECUTABLE}" ]; then
+            echo "judge executable not found at ${LOOP_ENGINE_SEMANTIC_JUDGE_EXECUTABLE}" >&2
+            exit 1
+          fi
+          if [ -z "${LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON:-}" ]; then
+            echo "repository secret LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON is required" >&2
+            exit 1
+          fi
+
+          mkdir -p "${JUDGE_HOME}"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          home = Path(os.environ["JUDGE_HOME"])
+          auth = home / "auth.json"
+          payload = os.environ["LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON"]
+          auth.write_text(payload, encoding="utf-8")
+          auth.chmod(0o600)
+          # Log size only — never secret contents.
+          print(f"provisioned ephemeral auth.json bytes={auth.stat().st_size}")
+          PY
+
+          echo "PI_CODING_AGENT_DIR=${JUDGE_HOME}" >> "${GITHUB_ENV}"
+
+      - name: Resolve exclusive publication range start
+        id: range
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            FROM_EXCLUSIVE='${{ github.event.pull_request.base.sha }}'
+          else
+            BEFORE='${{ github.event.before }}'
+            ZERO='0000000000000000000000000000000000000000'
+            if [ -z "${BEFORE}" ] || [ "${BEFORE}" = "${ZERO}" ]; then
+              FROM_EXCLUSIVE='7552af5968b4a2c10aefd01fbfa6c351817e1b8b'
+            else
+              FROM_EXCLUSIVE="${BEFORE}"
+            fi
+          fi
+          echo "from=${FROM_EXCLUSIVE}" >> "${GITHUB_OUTPUT}"
+          echo "publication range ${FROM_EXCLUSIVE}..HEAD"
+
+      - name: Run canonical publication command
+        id: publication
+        env:
+          ARTIFACT_ROOT: target/quality-artifacts/ci/${{ matrix.job }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${ARTIFACT_ROOT}"
+          FROM_EXCLUSIVE='${{ steps.range.outputs.from }}'
+
+          set +e
+          cargo run --locked -p xtask -- publication --from "${FROM_EXCLUSIVE}" \
+            >"${ARTIFACT_ROOT}/publication.stdout" \
+            2>"${ARTIFACT_ROOT}/publication.stderr"
+          status=$?
+          set -e
+
+          # Record per-commit judge JSON responses emitted by xtask (no verdict logic here).
+          EXPECTED_COUNT="$(git rev-list --count "${FROM_EXCLUSIVE}..HEAD")"
+          export EXPECTED_COUNT
+          export PUBLICATION_STATUS="${status}"
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import re
+
+          root = pathlib.Path(os.environ["ARTIFACT_ROOT"])
+          stdout = (root / "publication.stdout").read_text(encoding="utf-8", errors="replace")
+          sha_re = re.compile(r"^[0-9a-f]{7,64}$")
+          index = []
+          for line in stdout.splitlines():
+              line = line.strip()
+              if not line.startswith("{"):
+                  continue
+              try:
+                  payload = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              candidate = str(payload.get("candidate_revision", "")).strip()
+              if not sha_re.fullmatch(candidate):
+                  candidate = f"line-{len(index) + 1}"
+              commit_dir = root / candidate
+              commit_dir.mkdir(parents=True, exist_ok=True)
+              (commit_dir / "response.json").write_text(
+                  json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                  encoding="utf-8",
+              )
+              index.append(
+                  {
+                      "candidate_revision": payload.get("candidate_revision"),
+                      "parent_revision": payload.get("parent_revision"),
+                      "path": str(commit_dir / "response.json"),
+                  }
+              )
+          (root / "index.json").write_text(
+              json.dumps({"commits": index}, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          expected = int(os.environ["EXPECTED_COUNT"])
+          status = int(os.environ["PUBLICATION_STATUS"])
+          if status == 0 and len(index) != expected:
+              raise SystemExit(
+                  f"successful publication emitted {len(index)} responses; expected {expected}"
+              )
+          print(f"recorded {len(index)} per-commit judge response artifact(s)")
+          PY
+
+          exit "${status}"
+
+      - name: Upload per-commit publication artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: publication-${{ matrix.job }}-${{ github.sha }}
+          path: target/quality-artifacts/ci/${{ matrix.job }}
+          if-no-files-found: warn
+          retention-days: 30

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# loop-engine-hook-version: 0
+# Fixture: deliberately stale hook version for verify mismatch coverage.
+set -euo pipefail
+echo "mismatched hook version fixture" >&2
+exit 1

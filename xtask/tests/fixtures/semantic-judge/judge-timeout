@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+"""Fixture judge that stalls without draining stdin."""
+
+from __future__ import annotations
+
+import sys
+import time
+
+
+def main() -> int:
+    time.sleep(30)
+    sys.stdout.write("{}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

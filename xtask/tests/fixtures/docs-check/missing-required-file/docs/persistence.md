@@ -1,0 +1,3 @@
+# Valid
+
+Valid fixture documentation.

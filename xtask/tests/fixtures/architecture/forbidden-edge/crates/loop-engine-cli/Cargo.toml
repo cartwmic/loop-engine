@@ -1,0 +1,11 @@
+[package]
+name = "loop-engine-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "loop-engine"
+path = "src/main.rs"
+
+[dependencies]
+loop-engine-core = { path = "../loop-engine-core" }

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -79,7 +78,7 @@ def validate_request(request: dict[str, Any], binding: RevisionBinding) -> None:
     def reject(message: str) -> None:
         unavailable(message, binding=binding)
 
-    required = (
+    required = {
         "schema_version",
         "mode",
         "parent_revision",
@@ -87,63 +86,143 @@ def validate_request(request: dict[str, Any], binding: RevisionBinding) -> None:
         "diff",
         "rubrics",
         "deterministic_evidence",
-    )
-    for key in required:
-        if key not in request:
-            reject(f"missing request field: {key}")
-    if request.get("schema_version") != 1:
+    }
+    allowed = required | {"relevant_docs", "timeout_seconds"}
+    missing = sorted(required - set(request))
+    extra = sorted(set(request) - allowed)
+    if missing or extra:
+        reject(f"request fields mismatch: missing={missing} extra={extra}")
+
+    schema_version = request["schema_version"]
+    if isinstance(schema_version, bool) or not isinstance(schema_version, int):
+        reject("request schema_version must be integer")
+    if schema_version != 1:
         reject("unsupported request schema_version")
-    if request.get("mode") not in {"local", "publication"}:
+    if request["mode"] not in {"local", "publication"}:
         reject("mode must be local or publication")
-    if not isinstance(request.get("parent_revision"), str) or not request["parent_revision"]:
-        reject("parent_revision must be a non-empty string")
-    if not isinstance(request.get("candidate_revision"), str) or not request["candidate_revision"]:
-        reject("candidate_revision must be a non-empty string")
-    if not isinstance(request.get("rubrics"), list) or not request["rubrics"]:
+    for key in ("parent_revision", "candidate_revision"):
+        if not isinstance(request[key], str) or not request[key]:
+            reject(f"{key} must be a non-empty string")
+    if not isinstance(request["diff"], str):
+        reject("diff must be a string")
+
+    if "timeout_seconds" in request:
+        timeout = request["timeout_seconds"]
+        if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout < 1:
+            reject("timeout_seconds must be an integer >= 1")
+
+    relevant_docs = request.get("relevant_docs", [])
+    if not isinstance(relevant_docs, list):
+        reject("relevant_docs must be an array")
+    for doc in relevant_docs:
+        if not isinstance(doc, dict) or set(doc) != {"path", "content"}:
+            reject("relevant_doc must contain only path and content")
+        if not isinstance(doc["path"], str) or not doc["path"]:
+            reject("relevant_doc path must be a non-empty string")
+        if not isinstance(doc["content"], str):
+            reject("relevant_doc content must be a string")
+
+    rubrics = request["rubrics"]
+    if not isinstance(rubrics, list) or not rubrics:
         reject("rubrics must be a non-empty array")
-    if not isinstance(request.get("deterministic_evidence"), list):
+    for rubric in rubrics:
+        if not isinstance(rubric, dict) or set(rubric) != {"id", "content"}:
+            reject("rubric must contain only id and content")
+        if not isinstance(rubric["id"], str) or not rubric["id"]:
+            reject("rubric id must be a non-empty string")
+        if not isinstance(rubric["content"], str) or not rubric["content"]:
+            reject("rubric content must be a non-empty string")
+
+    evidence_items = request["deterministic_evidence"]
+    if not isinstance(evidence_items, list):
         reject("deterministic_evidence must be an array")
+    evidence_required = {"command", "exit_code", "stdout", "stderr"}
+    evidence_allowed = evidence_required | {"candidate_revision"}
+    for item in evidence_items:
+        if not isinstance(item, dict):
+            reject("deterministic evidence item must be object")
+        if set(item) - evidence_allowed or evidence_required - set(item):
+            reject("deterministic evidence item has invalid fields")
+        if not isinstance(item["command"], str) or not item["command"]:
+            reject("deterministic evidence command must be a non-empty string")
+        exit_code = item["exit_code"]
+        if isinstance(exit_code, bool) or not isinstance(exit_code, int):
+            reject("deterministic evidence exit_code must be integer")
+        for key in ("stdout", "stderr"):
+            if not isinstance(item[key], str):
+                reject(f"deterministic evidence {key} must be a string")
+        if "candidate_revision" in item and (
+            not isinstance(item["candidate_revision"], str)
+            or not item["candidate_revision"]
+        ):
+            reject("deterministic evidence candidate_revision must be non-empty string")
 
 
 def validate_response(payload: dict[str, Any]) -> str | None:
-    if payload.get("schema_version") != 1:
+    response_fields = {
+        "schema_version",
+        "parent_revision",
+        "candidate_revision",
+        "verdict",
+        "citations",
+        "message",
+    }
+    if set(payload) != response_fields:
+        missing = sorted(response_fields - set(payload))
+        extra = sorted(set(payload) - response_fields)
+        return f"response fields mismatch: missing={missing} extra={extra}"
+
+    schema_version = payload["schema_version"]
+    if isinstance(schema_version, bool) or not isinstance(schema_version, int):
+        return "response schema_version must be integer"
+    if schema_version != 1:
         return "unsupported response schema_version"
-    verdict = payload.get("verdict")
-    if verdict not in VALID_VERDICTS:
+
+    verdict = payload["verdict"]
+    if not isinstance(verdict, str) or verdict not in VALID_VERDICTS:
         return "invalid verdict"
-    parent_revision = payload.get("parent_revision")
-    candidate_revision = payload.get("candidate_revision")
+
+    parent_revision = payload["parent_revision"]
+    candidate_revision = payload["candidate_revision"]
     if parent_revision is None or candidate_revision is None:
         if parent_revision is not None or candidate_revision is not None:
             return "parent_revision and candidate_revision must both be present or both null"
         if verdict != "unavailable":
-            return "missing response field: parent_revision"
+            return "only unavailable may use null revision binding"
     else:
         if not isinstance(parent_revision, str) or not parent_revision:
             return "parent_revision must be a non-empty string"
         if not isinstance(candidate_revision, str) or not candidate_revision:
             return "candidate_revision must be a non-empty string"
-    citations = payload.get("citations")
+
+    message = payload["message"]
+    if not isinstance(message, str) or not message:
+        return "message must be a non-empty string"
+
+    citations = payload["citations"]
     if not isinstance(citations, list):
         return "citations must be an array"
     if verdict == "unavailable":
-        if citations:
-            return "unavailable verdict must have empty citations"
-        if not isinstance(payload.get("message"), str) or not payload["message"]:
-            return "unavailable verdict requires message"
-        return None
-    if not isinstance(payload.get("message"), str) or not payload["message"]:
-        return "determinate verdict requires message"
+        return None if not citations else "unavailable verdict must have empty citations"
     if not citations:
         return "pass/fail/indeterminate require at least one citation"
+
+    citation_fields = {"rubric_id", "rule", "lines"}
     for citation in citations:
         if not isinstance(citation, dict):
             return "citation must be object"
-        for key in ("rubric_id", "rule", "lines"):
-            if key not in citation:
-                return f"citation missing {key}"
-        if not isinstance(citation["lines"], list) or not citation["lines"]:
+        if set(citation) != citation_fields:
+            missing = sorted(citation_fields - set(citation))
+            extra = sorted(set(citation) - citation_fields)
+            return f"citation fields mismatch: missing={missing} extra={extra}"
+        for key in ("rubric_id", "rule"):
+            if not isinstance(citation[key], str) or not citation[key]:
+                return f"citation {key} must be a non-empty string"
+        lines = citation["lines"]
+        if not isinstance(lines, list) or not lines:
             return "citation lines must be non-empty array"
+        if any(not isinstance(line, str) or not line for line in lines):
+            return "citation lines entries must be non-empty strings"
     return None
 
 
@@ -152,16 +231,71 @@ def extract_json_object(text: str) -> dict[str, Any] | None:
     if not text:
         return None
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-    if not match:
-        return None
-    try:
-        return json.loads(match.group(0))
+        payload = json.loads(text)
     except json.JSONDecodeError:
         return None
+    return payload if isinstance(payload, dict) else None
+
+
+def validate_response_against_request(
+    payload: dict[str, Any], request: dict[str, Any]
+) -> str | None:
+    if payload["verdict"] == "unavailable":
+        return None
+
+    rubrics = {rubric["id"]: rubric["content"] for rubric in request["rubrics"]}
+    resulting_docs = {
+        doc["path"]: doc["content"] for doc in request.get("relevant_docs", [])
+    }
+
+    for citation in payload["citations"]:
+        rubric_id = citation["rubric_id"]
+        rubric_content = rubrics.get(rubric_id)
+        if rubric_content is None:
+            return f"citation references unknown parent rubric_id: {rubric_id}"
+        headings = {
+            line.lstrip("#").strip().casefold()
+            for line in rubric_content.splitlines()
+            if line.startswith("#") and line.lstrip("#").strip()
+        }
+        identifiers = {
+            token.casefold()
+            for token in "".join(
+                ch if ch.isalnum() or ch in {"_", "-"} else " "
+                for ch in rubric_content
+            ).split()
+            if token[0].isupper() and any(ch.isdigit() for ch in token)
+        }
+        rule = citation["rule"].strip().casefold()
+        if rule not in headings and rule not in identifiers:
+            return f"citation rule is not an exact parent-rubric heading or identifier: {citation['rule']}"
+        changed_paths: set[str] = set(resulting_docs)
+        for diff_line in request["diff"].splitlines():
+            if diff_line.startswith("diff --git a/") and " b/" in diff_line:
+                left, right = diff_line.split(" b/", 1)
+                changed_paths.add(left.removeprefix("diff --git a/"))
+                changed_paths.add(right)
+        for location in citation["lines"]:
+            path, separator, suffix = location.rpartition(":")
+            line_number: int | None = None
+            if separator and suffix.isdigit() and path:
+                line_number = int(suffix)
+                if line_number == 0:
+                    return f"citation line number must be positive: {location}"
+            else:
+                path = location
+            if path.startswith("/") or any(part == ".." for part in Path(path).parts):
+                return f"citation line is not a repository-relative path: {location}"
+            if path not in changed_paths:
+                return f"citation does not name a changed/resulting path: {location}"
+            content = resulting_docs.get(path)
+            if line_number is not None:
+                if content is None:
+                    return f"numbered citation requires resulting-document content: {location}"
+                line_count = len(content.splitlines())
+                if line_number > line_count:
+                    return f"citation line exceeds resulting document length: {location}"
+    return None
 
 
 def extract_pi_assistant_text(output: str) -> str | None:
@@ -226,7 +360,8 @@ Rules:
 - Emit exactly one JSON object and no other text.
 - verdict must be one of: pass, fail, indeterminate.
 - pass/fail/indeterminate require at least one citation with rubric_id, rule, and non-empty lines array.
-- lines entries must cite repository paths with optional :line, e.g. docs/testing.md:220.
+- rubric_id must exactly equal an ID supplied below; rule must be an exact identifier or heading present in that rubric.
+- lines entries must cite changed/resulting repository paths from the exact diff or resulting-doc snapshots, with optional :line.
 - If evidence is insufficient, use indeterminate.
 
 Request mode: {request['mode']}
@@ -298,10 +433,10 @@ def invoke_pi(
             f"judge timeout after {timeout_seconds}s",
             binding=binding,
         )
-    if completed.returncode != 0 and not completed.stdout.strip():
+    if completed.returncode != 0:
         stderr = (completed.stderr or "").strip()
         unavailable(
-            f"pi exited {completed.returncode}: {stderr or 'no stdout'}",
+            f"pi exited {completed.returncode}: {stderr or 'no stderr'}",
             binding=binding,
         )
     text = extract_pi_assistant_text(completed.stdout)
@@ -336,6 +471,12 @@ def judge(request: dict[str, Any], binding: RevisionBinding) -> dict[str, Any]:
     if error:
         unavailable(
             f"invalid judge response: {error}",
+            binding=binding,
+        )
+    semantic_error = validate_response_against_request(payload, request)
+    if semantic_error:
+        unavailable(
+            f"invalid judge citations: {semantic_error}",
             binding=binding,
         )
     if (
