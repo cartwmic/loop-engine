@@ -24,7 +24,7 @@
       "type": "string"
     },
     "request_id": {
-      "maxLength": 256,
+      "maxLength": 128,
       "type": "string"
     },
     "trace_schema_version": {

@@ -1,3 +1,4 @@
+use loop_engine_core::model::bounded::IDENTIFIER_UTF8_BYTES;
 use schemars::schema_for;
 use serde_json::{Value, json};
 
@@ -15,7 +16,7 @@ pub fn trace_event_schema() -> Value {
     );
     properties
         .entry("request_id")
-        .and_modify(|value| value["maxLength"] = json!(256));
+        .and_modify(|value| value["maxLength"] = json!(IDENTIFIER_UTF8_BYTES));
     properties
         .entry("event")
         .and_modify(|value| value["maxLength"] = json!(256));

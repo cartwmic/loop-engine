@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::{Arc, Barrier};
 
+use loop_engine_core::model::bounded::IDENTIFIER_UTF8_BYTES;
 use loop_engine_integrations::provider_process::base64;
 use loop_engine_integrations::trace::{
     TRACE_DIRECTORY_BUDGET_BYTES, TRACE_INIT_RESERVATION_BYTES,
@@ -172,6 +173,10 @@ fn published_trace_fixtures_are_versioned_and_never_duplicate_parsed_stdout() {
     let schema: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("event.schema.json")).unwrap()).unwrap();
     assert_eq!(schema["properties"]["trace_schema_version"]["const"], 1);
+    assert_eq!(
+        schema["properties"]["request_id"]["maxLength"],
+        IDENTIFIER_UTF8_BYTES
+    );
     assert!(schema.get("x-loop-engine-bound-markers").is_some());
     let mut count = 0;
     for entry in std::fs::read_dir(root.join("fixtures")).unwrap() {
