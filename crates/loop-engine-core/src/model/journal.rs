@@ -768,7 +768,7 @@ mod tests {
                 TransitionFact::new(
                     EventId::parse("missing").unwrap(),
                     StateId::parse("a").unwrap(),
-                    None,
+                    Some(StateId::parse("b").unwrap()),
                     false,
                 )
                 .unwrap(),

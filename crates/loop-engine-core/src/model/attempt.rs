@@ -168,7 +168,7 @@ impl TransitionFact {
         target: Option<StateId>,
         applied: bool,
     ) -> Result<Self, AttemptError> {
-        if applied != target.is_some() {
+        if applied && target.is_none() {
             return Err(AttemptError::TransitionTargetShape);
         }
         Ok(Self {
