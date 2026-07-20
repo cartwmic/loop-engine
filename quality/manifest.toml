@@ -37,5 +37,9 @@ id = "dependencies"
 runner = "dependencies"
 
 [[checks]]
+id = "operation-coverage"
+runner = "operation-coverage"
+
+[[checks]]
 id = "advisories"
 runner = "cargo-deny"

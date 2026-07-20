@@ -46,6 +46,128 @@ pub struct JournalEncodedSizes {
     pub actor: usize,
 }
 
+/// Sequence/state-free journal facts prepared before an atomic persistence transaction.
+/// Persistence assigns sequence, authoritative state facts, and exact encoded sizes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalDraft {
+    run_id: RunId,
+    observed_at: ObservedAt,
+    operation: BoundedText<128>,
+    request_id: RequestId,
+    kind: JournalEntryKind,
+    outcome: OutcomeClass,
+    reason: Option<Reason>,
+    attempt: Option<AttemptFacts>,
+    extension: JournalExtension,
+}
+
+impl JournalDraft {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        run_id: RunId,
+        observed_at: ObservedAt,
+        operation: impl Into<String>,
+        request_id: RequestId,
+        outcome: OutcomeClass,
+        reason: Option<Reason>,
+        attempt: Option<AttemptFacts>,
+        extension: JournalExtension,
+    ) -> Result<Self, JournalError> {
+        match (outcome, &reason) {
+            (OutcomeClass::Completed, Some(_)) => return Err(JournalError::CompletedWithReason),
+            (OutcomeClass::Completed, None) => {}
+            (_, Some(reason)) if reason.code().outcome_class() == outcome => {}
+            _ => return Err(JournalError::MissingOrMismatchedReason),
+        }
+        let operation = BoundedText::opaque_non_empty("journal_operation", operation)?;
+        let kind = kind_for_extension(&extension);
+        if operation_for_kind(kind) != operation.as_str() {
+            return Err(JournalError::OperationKindMismatch);
+        }
+        validate_extension_outcome(&extension, outcome)?;
+        let attempt = attempt.map(AttemptFacts::validate).transpose()?;
+        validate_attempt_shape(kind, outcome, &attempt)?;
+        Ok(Self {
+            run_id,
+            observed_at,
+            operation,
+            request_id,
+            kind,
+            outcome,
+            reason,
+            attempt,
+            extension,
+        })
+    }
+
+    pub fn run_id(&self) -> &RunId {
+        &self.run_id
+    }
+
+    pub fn operation(&self) -> &str {
+        self.operation.as_str()
+    }
+
+    pub fn kind(&self) -> JournalEntryKind {
+        self.kind
+    }
+
+    pub fn outcome(&self) -> OutcomeClass {
+        self.outcome
+    }
+
+    pub fn reason(&self) -> Option<&Reason> {
+        self.reason.as_ref()
+    }
+
+    pub fn attempt(&self) -> Option<&AttemptFacts> {
+        self.attempt.as_ref()
+    }
+
+    pub fn extension(&self) -> &JournalExtension {
+        &self.extension
+    }
+
+    pub(crate) fn replacing_extension(
+        self,
+        extension: JournalExtension,
+    ) -> Result<Self, JournalError> {
+        Self::new(
+            self.run_id,
+            self.observed_at,
+            self.operation.as_str(),
+            self.request_id,
+            self.outcome,
+            self.reason,
+            self.attempt,
+            extension,
+        )
+    }
+
+    pub fn finalize(
+        self,
+        sequence: JournalSequence,
+        state_before: StateFact,
+        state_after: StateFact,
+        encoded_sizes: JournalEncodedSizes,
+    ) -> Result<JournalEntry, JournalError> {
+        JournalEntry::new(
+            sequence,
+            self.run_id,
+            self.observed_at,
+            self.operation.as_str(),
+            self.request_id,
+            self.outcome,
+            self.reason,
+            state_before,
+            state_after,
+            self.attempt,
+            self.extension,
+            encoded_sizes,
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalEntry {
     sequence: JournalSequence,

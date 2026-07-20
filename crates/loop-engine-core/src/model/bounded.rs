@@ -9,16 +9,29 @@ pub const RUN_LABEL_UTF8_BYTES: usize = 256;
 pub const NOTE_TEXT_UTF8_BYTES: usize = 65_536;
 pub const ACTOR_METADATA_ENCODED_BYTES: usize = 16_384;
 pub const EVIDENCE_LOCATOR_UTF8_BYTES: usize = 8_192;
+pub const FILESYSTEM_PATH_UTF8_BYTES: usize = 4_096;
+pub const PROVIDER_ARGV_ELEMENT_COUNT: usize = 128;
+pub const PROVIDER_ARGV_ELEMENT_UTF8_BYTES: usize = 16_384;
+pub const PROVIDER_ARGV_ENCODED_TOTAL_BYTES: usize = 262_144;
+pub const PROVIDER_TIMEOUT_SECONDS_DEFAULT: u64 = 60;
 pub const GUIDANCE_TEXT_BYTES: usize = 262_144;
 pub const DIAGNOSTIC_ENCODED_BYTES: usize = 8_192;
 pub const DIAGNOSTICS_PER_RESULT_COUNT: usize = 100;
 pub const METADATA_NESTING_DEPTH: usize = 16;
 pub const RUN_INPUTS_ENCODED_TOTAL_BYTES: usize = 1_048_576;
+pub const INLINE_EVIDENCE_CONTEXT_TOTAL_BYTES: usize = 1_048_576;
+pub const SELECTED_EVIDENCE_CONTEXT_TOTAL_BYTES: usize = 1_048_576;
+pub const PROVIDER_SNAPSHOT_ENVELOPE_BYTES: usize = 524_288;
 pub const EVIDENCE_RECORD_ENCODED_BYTES: usize = 65_536;
 pub const JOURNAL_EVIDENCE_ASSOCIATIONS_ENCODED_BYTES: usize = 262_144;
 pub const JOURNAL_PROVIDER_FACTS_ENCODED_BYTES: usize = 262_144;
 pub const JOURNAL_GATE_VERDICT_FACTS_ENCODED_BYTES: usize = 524_288;
 pub const JOURNAL_ENTRY_ENCODED_BYTES: usize = 2_621_440;
+pub const COLLECTION_PAGE_DEFAULT_COUNT: u16 = 100;
+pub const COLLECTION_PAGE_MAX_COUNT: u16 = 1_000;
+pub const OPAQUE_INTEGRITY_WIRE_UTF8_BYTES: usize = 768;
+pub const COLLECTION_PAGE_DATA_BUDGET_BYTES: usize = 3_145_728;
+pub const PROVIDER_CALLS_PER_PAGED_INVOCATION_MAX: usize = 10;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum BoundError {
@@ -74,6 +87,14 @@ impl<const MAX: usize> BoundedText<MAX> {
             return Err(BoundError::Empty { field });
         }
         Self::new(field, value)
+    }
+
+    pub fn opaque(field: &'static str, value: impl Into<String>) -> Result<Self, BoundError> {
+        let text = Self::new(field, value)?;
+        if text.0.chars().any(char::is_control) {
+            return Err(BoundError::Control { field });
+        }
+        Ok(text)
     }
 
     pub fn opaque_non_empty(

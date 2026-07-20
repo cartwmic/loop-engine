@@ -1,6 +1,6 @@
 # Loop Engine Code Architecture
 
-**Status:** Three-crate structure, executable-provider boundary, per-run graph snapshots, authoritative-state-plus-journal model, selected SQLite persistence integration (pragmas, migrations, transaction boundaries, and CAS semantics frozen in [persistence.md](persistence.md), T009), journal entry wire shapes (frozen in [journal-contract.md](journal-contract.md), T011), and machine-local configuration layout are settled. T031–T052 implement the framework-free core model and deterministic decision boundary; external-effect capabilities and application operations remain later phases.
+**Status:** Three-crate structure, executable-provider boundary, per-run graph snapshots, authoritative-state-plus-journal model, selected SQLite persistence integration (pragmas, migrations, transaction boundaries, and CAS semantics frozen in [persistence.md](persistence.md), T009), journal entry wire shapes (frozen in [journal-contract.md](journal-contract.md), T011), and machine-local configuration layout are settled. T031–T052 implement the framework-free core model and deterministic decision boundary. T053–T083 add narrow external-effect capabilities and private application operations; production adapters and public exposure remain later phases.
 
 Related documents:
 
@@ -78,7 +78,9 @@ operations ───────────────→ model
 
 Model must not import operations or capabilities. Capability contracts use core model types rather than integration records.
 
-Core does not replay journal entries to derive current state. `model::run::Run` stores current state and lifecycle directly; `model::journal::JournalEntry` is an immutable explanatory fact. T031–T052 expose no replay constructor, provider invocation, persistence operation, or public application operation.
+Core does not replay journal entries to derive current state. `model::run::Run` stores current state and lifecycle directly; `model::journal::JournalEntry` is an immutable explanatory fact. Capability traits accept immutable resolved provider configuration, bounded snapshots, or operation-specific atomic commands; no generic save/update repository exists. Event attempts compare workflow/lifecycle versions and commit state, evidence, associations, and journal facts through one command. Provider invocation has five typed roles, no catalog lookup, and an explicit pre-launch trace-budget-unavailable result. Run reads and exports require no provider.
+
+T053–T083 operations remain private: `operations::catalog::exposed_operations()` is empty. Provider calls accept one immutable resolved configuration and typed, encoded-size-bounded run/evidence snapshots. Run creation commands carry the catalog revision to recheck. Event commands carry both the resolved journal draft and the stale-version error draft so persistence can select one atomically. Journal drafts exclude transaction-owned sequence, authoritative before/after state facts, and exact encoded-size accounting; persistence supplies those only after its write-lock recheck. Journal-bearing mutation commands validate run/operation/kind authority before crossing the persistence boundary. Operations call narrow catalog, reader, writer, event-writer, and exporter capabilities rather than exposing repositories. Private command preparation does not claim durable or public behavior until production integration, CLI, trace, facet, and E2E exposure tasks close together.
 
 ### `loop-engine-integrations`
 
@@ -233,7 +235,9 @@ Normative SQLite pragmas, migration policy, transaction boundaries, workflow/reg
 
 Current run state and lifecycle are authoritative records. Internal workflow-state/lifecycle version guards evaluated transitions and is not caller-managed token; annotation/label versions do not invalidate gate evaluation. Journal is append-only explanatory history.
 
-Every run mutation and required journal fact commit in one transaction. No write transaction spans provider subprocess execution ([persistence.md](persistence.md) § No write lock across provider). Completed transition transaction contains at minimum:
+Every run mutation and required journal fact commit in one transaction. No write transaction spans provider subprocess execution ([persistence.md](persistence.md) § No write lock across provider). Provider capability results and attempted-transport errors carry exact bounded `ProviderFact` values so operation command validation can bind journal observations to the actual invocation; pre-launch trace-budget failure carries none. Event persistence returns whether expected-version or stale-version journal branch committed, and caller outcome follows that authoritative branch. Label persistence materializes `label_before` from its in-transaction authoritative row instead of freezing a pretransaction value in the command.
+
+Completed transition transaction contains at minimum:
 
 - evaluated workflow-state/lifecycle version and prior state;
 - state/lifecycle update;

@@ -1,6 +1,6 @@
 # Initial Implementation Task List
 
-**Status:** In progress — C1 and R001–R005 governance-repair candidate complete; Phase 2 remains blocked until the remote accepts this checkpoint
+**Status:** In progress — Phase 3 private operations complete; T084 is next after the T083 checkpoint
 
 Follow [execution protocol](README.md#execution-protocol), resolve [decision gates](decisions.md), and maintain [coverage map](coverage.md). Every task is sized as one narrow orchestrator-owned unit unless its stop condition requires owner escalation.
 
@@ -611,7 +611,7 @@ Global rules for every task:
 
 No capability mocks, fakes, or in-memory port implementations are permitted. Private-operation focused tests cover pure validation/decision functions, command construction, and compile-time capability contracts only. Durable effects and orchestration claims remain explicitly open until production integrations and black-box exposure tasks; Phase 3 checks never count as behavioral acceptance.
 
-### T053 [ ] Define time, ID, and digest capabilities
+### T053 [x] Define time, ID, and digest capabilities
 - **Depends:** T031–T052, V002, F002
 - **Files:** `core/src/capabilities/{time,id_generator,digest}.rs`.
 - **Deliver:** narrow external-effect contracts using core types only.
@@ -619,7 +619,7 @@ No capability mocks, fakes, or in-memory port implementations are permitted. Pri
 - **Done when:** operations need no system clock/UUID/hash dependency.
 - **Stop:** generic dependency-injection container proposed.
 
-### T054 [ ] Define targeted decision-event capability
+### T054 [x] Define targeted decision-event capability
 - **Depends:** T010, T047–T050
 - **Files:** `core/src/capabilities/decision_events.rs`.
 - **Deliver:** narrow consequential decision events for transition/gate/lifecycle/compatibility/stale facts, not raw JSON logging.
@@ -627,7 +627,7 @@ No capability mocks, fakes, or in-memory port implementations are permitted. Pri
 - **Done when:** pure helpers require no logging parameter.
 - **Stop:** trace context threaded through every model function.
 
-### T055 [ ] Define provider catalog capability
+### T055 [x] Define provider catalog capability
 - **Depends:** T008, T042, T045, T053
 - **Files:** `core/src/capabilities/provider_catalog.rs`.
 - **Deliver:** add/list/resolve/update/rename/disable/restore, immutable `ResolvedProviderConfig` carrying config revision, byte/count-paged active-run impact/snapshot queries, active-set digest, and atomic guarded catalog-mutation commands.
@@ -635,7 +635,7 @@ No capability mocks, fakes, or in-memory port implementations are permitted. Pri
 - **Done when:** run operations resolve by stored registration ID.
 - **Stop:** handle/path/digest becomes identity.
 
-### T056 [ ] Define five-role provider invocation capability
+### T056 [x] Define five-role provider invocation capability
 - **Depends:** T005, T036–T045, T053
 - **Files:** `core/src/capabilities/provider_invoker.rs`.
 - **Deliver:** typed five-role calls accepting immutable resolved config plus bounded snapshots/observations and explicit pre-launch trace-budget-unavailable error.
@@ -643,7 +643,7 @@ No capability mocks, fakes, or in-memory port implementations are permitted. Pri
 - **Done when:** all role results preserve three semantic gate variants.
 - **Stop:** provider DTO/Serde types cross inward.
 
-### T057 [ ] Define provider-free run read capability
+### T057 [x] Define provider-free run read capability
 - **Depends:** T008, T045–T047
 - **Files:** `core/src/capabilities/run_reader.rs`.
 - **Deliver:** get/list/show graph/evidence/history and selected-evidence snapshot reads from authoritative state.
@@ -651,7 +651,7 @@ No capability mocks, fakes, or in-memory port implementations are permitted. Pri
 - **Done when:** active-default and terminal-inclusive filters are representable.
 - **Stop:** labels accepted as unique run lookup.
 
-### T058 [ ] Define atomic run mutation capability
+### T058 [x] Define atomic run mutation capability
 - **Depends:** T045–T047, T053
 - **Files:** `core/src/capabilities/run_writer.rs`, `persistence_commands.rs`.
 - **Deliver:** atomic create, evidence, annotation, label, termination, guidance-attempt, and per-run compatibility-attempt commands with journal facts.
@@ -659,7 +659,7 @@ No capability mocks, fakes, or in-memory port implementations are permitted. Pri
 - **Done when:** state mutation cannot bypass matching journal request.
 - **Stop:** generic save/update method appears.
 
-### T059 [ ] Define atomic event-attempt capability
+### T059 [x] Define atomic event-attempt capability
 - **Depends:** T046–T049, T057–T058
 - **Files:** `core/src/capabilities/event_attempt_writer.rs`.
 - **Deliver:** one command for completed/rejected/error attempts with inline/selected/provider evidence, expected workflow version, state transition, and committed-status result.
@@ -667,7 +667,7 @@ No capability mocks, fakes, or in-memory port implementations are permitted. Pri
 - **Done when:** provider invocation needs no held write lock.
 - **Stop:** label/note/evidence mutation invalidates expected workflow version.
 
-### T060 [ ] Define read-only export capability
+### T060 [x] Define read-only export capability
 - **Depends:** T015, T046, T057
 - **Files:** `core/src/capabilities/audit_export.rs`.
 - **Deliver:** consistent read snapshot contract and explicit output target facts without import/restore API.
@@ -675,7 +675,7 @@ No capability mocks, fakes, or in-memory port implementations are permitted. Pri
 - **Done when:** state/journal/evidence/provider observations are representable.
 - **Stop:** JSON DTO annotations enter core.
 
-### T061 [ ] Add capability architecture contract tests
+### T061 [x] Add capability architecture contract tests
 - **Depends:** T053–T060
 - **Files:** `xtask/tests/architecture.rs`, `xtask/tests/fixtures/architecture/capabilities/*`.
 - **Deliver:** compile/dependency checks for core-only types, no integration construction, and operation→capability→model direction.
@@ -683,7 +683,7 @@ No capability mocks, fakes, or in-memory port implementations are permitted. Pri
 - **Done when:** accidental outer leakage fails before behavior tests.
 - **Stop:** tests depend on source-text logging counts.
 
-### T062 [ ] Implement runtime operation catalog and baseline closure tool
+### T062 [x] Implement runtime operation catalog and baseline closure tool
 - **Depends:** T004, T019, T031, T047
 - **Files:** `core/src/operations/catalog.rs`, `xtask/src/operation_coverage.rs`, tests.
 - **Deliver:** stable `OperationId`, iteration, uniqueness, facet metadata link, initially empty exposed set, and baseline extensible closure command with core collector plus named collector-registration API and empty-set support. Runtime collectors enumerate only currently registered/exposed IDs; D004's 21-ID table remains target documentation until each exposure and final T167 assertion.
@@ -691,119 +691,119 @@ No capability mocks, fakes, or in-memory port implementations are permitted. Pri
 - **Done when:** operation can be added only through one reviewed API and planned/unexposed IDs cannot appear in any runtime collector.
 - **Stop:** planned-but-unimplemented IDs appear in runtime exposed set.
 
-### T063 [ ] Implement private `provider.add` operation
+### T063 [x] Implement private `provider.add` operation
 - **Depends:** T047, T053, T055
 - **Files:** `core/src/operations/provider_add.rs` (inline tests).
 - **Deliver:** validate explicit config/handle, allocate immutable ID, persist through catalog capability.
 - **Tests:** pure handle/config validation and `DuplicateHandle` capability-error mapping; durable duplicate/distinct-ID proof remains T146–T147.
 - **Done when:** operation remains unexposed until T147.
 
-### T064 [ ] Implement private `provider.list` operation
+### T064 [x] Implement private `provider.list` operation
 - **Depends:** T008, T047, T055
 - **Files:** `core/src/operations/provider_list.rs`, tests.
 - **Deliver:** provider-free enabled/tombstoned registration listing plus `--active-runs-for` impact listing under D008 count/byte cursor contract.
 - **Tests:** pure filter/cursor validation, page construction, and query/result mapping cover malformed/version/filter/count/byte/no-truncation branches; durable registration/impact paging remains T147/T157/T175.
 - **Done when:** operation remains unexposed until T147.
 
-### T065 [ ] Implement private `provider.check` operation
+### T065 [x] Implement private `provider.check` operation
 - **Depends:** T040–T044, T047, T055–T057
 - **Files:** `core/src/operations/provider_check.rs`, tests.
 - **Deliver:** explicit protocol/conformance/latest-graph check plus count/byte paging with one `describe` plus at most nine compatibility calls (ten total); resolve config once per page; stable keyset iteration; zero-page completion; pre-launch trace-budget error before first row errors unchanged cursor, after progress returns cursor; other failures error whole page; no truncated finding, journal fan-out, or latch.
 - **Tests:** pure zero/mixed/incompatible/result-error aggregation and command construction; production catalog-resolution count and no-journal proof remain T152 provider-ledger E2Es.
 - **Done when:** no run is created and operation remains unexposed until atomic T152 closure.
 
-### T066 [ ] Implement private `provider.update` operation
+### T066 [x] Implement private `provider.update` operation
 - **Depends:** T047, T055
 - **Files:** `core/src/operations/provider_update.rs`, tests.
 - **Deliver:** atomically replace executable/argv/CWD/timeout under same ID, increment config revision, and return affected count plus `provider.list --active-runs-for` cursor/link without approval flag or unbounded IDs.
 - **Tests:** pure command/result mapping preserves ID/config revision; durable linearization remains T107–T119/T178 and current-config use remains T163/T175.
 - **Done when:** operation remains unexposed until T155.
 
-### T067 [ ] Implement private `provider.rename` operation
+### T067 [x] Implement private `provider.rename` operation
 - **Depends:** T047, T055
 - **Files:** `core/src/operations/provider_rename.rs`, tests.
 - **Deliver:** active registration handle rename preserving ID.
 - **Tests:** pure handle validation and capability command/error mapping; durable uniqueness and run-binding stability remain T156/T175.
 - **Done when:** operation remains unexposed until T156.
 
-### T068 [ ] Implement private `provider.disable` operation
+### T068 [x] Implement private `provider.disable` operation
 - **Depends:** T045, T047, T055
 - **Files:** `core/src/operations/provider_disable.rs`, tests.
 - **Deliver:** non-mutating warning-page commands where only final page yields opaque full-set/config-bound token, plus atomic `--allow-active-runs <ack-token>` tombstone command preserving ID/revision rules.
 - **Tests:** pure first/intermediate cursor cannot authorize; final token maps to guarded command with no query-then-write API; durable proof remains T107–T119/T157/T178.
 - **Done when:** operation remains unexposed until T157.
 
-### T069 [ ] Implement private `provider.restore` operation
+### T069 [x] Implement private `provider.restore` operation
 - **Depends:** T068
 - **Files:** `core/src/operations/provider_restore.rs`, tests.
 - **Deliver:** restore exact tombstoned ID with explicit config and free handle.
 - **Tests:** pure restore-command/error mapping preserves ID and classifies occupied handle; durable restore/rejection proof remains T158/T175.
 - **Done when:** operation remains unexposed until T158.
 
-### T070 [ ] Implement private `run.create` operation
+### T070 [x] Implement private `run.create` operation
 - **Depends:** T040–T047, T053, T055–T059
 - **Files:** `core/src/operations/run_create.rs`, tests.
 - **Deliver:** resolve once, describe, validate graph, conditionally validate inputs, detect observed digest drift, compute revision, initialize lifecycle, atomically store creation journal.
 - **Tests:** pure zero-input skip, input/graph/drift classification, and initial-lifecycle command construction; durable no-run/journal proof remains T149/T152.
 - **Done when:** operation remains unexposed until T152.
 
-### T071 [ ] Implement private `run.list` operation
+### T071 [x] Implement private `run.list` operation
 - **Depends:** T008, T045, T047, T057
 - **Files:** `core/src/operations/run_list.rs`, tests.
 - **Deliver:** provider-free active-default and explicit terminal/all keyset-paged listing under D008 cursor contract.
 - **Tests:** pure filter/cursor parsing and query-command construction prove no CWD/provider field and no label identity; durable paging remains T150/T152.
 - **Done when:** operation remains unexposed until T152.
 
-### T072 [ ] Implement private `run.show` operation
+### T072 [x] Implement private `run.show` operation
 - **Depends:** T045, T047, T050, T057
 - **Files:** `core/src/operations/run_show.rs`, tests.
 - **Deliver:** lifecycle/state/inputs/static guidance/gates/live capability/empty selection/requestable events.
 - **Tests:** pure lifecycle projection empties terminal events and command shape has no provider capability; durable read/no-invocation proof remains T153.
 - **Done when:** operation remains unexposed until T153.
 
-### T073 [ ] Implement private `run.graph` operation
+### T073 [x] Implement private `run.graph` operation
 - **Depends:** T041, T045, T047, T057
 - **Files:** `core/src/operations/run_graph.rs`, tests.
 - **Deliver:** provider-free complete stored projection and graph revision.
 - **Tests:** pure projection accepts stored snapshot only; durable drift/missing-provider proof remains T154.
 - **Done when:** operation remains unexposed until T154.
 
-### T074 [ ] Implement private `run.history` operation
+### T074 [x] Implement private `run.history` operation
 - **Depends:** T008, T046–T047, T057
 - **Files:** `core/src/operations/run_history.rs`, tests.
 - **Deliver:** ordered provider-free journal query with D008 sequence-keyset pagination/filter contract.
 - **Tests:** pure cursor/filter validation and ordered-row projection contain no state reconstruction/provider call; durable history paging remains T152.
 - **Done when:** operation remains unexposed until T152.
 
-### T075 [ ] Implement private `run.evidence.add` operation
+### T075 [x] Implement private `run.evidence.add` operation
 - **Depends:** T037, T046–T047, T053, T058
 - **Files:** `core/src/operations/evidence_add.rs`, tests.
 - **Deliver:** validate/ID/append evidence and journal atomically on any lifecycle.
 - **Tests:** pure locator validation, ID-bearing append-command construction, and lifecycle classification; durable duplicate-locator/terminal atomic append remains T159–T160.
 - **Done when:** operation remains unexposed until T160.
 
-### T076 [ ] Implement private `run.evidence.list` operation
+### T076 [x] Implement private `run.evidence.list` operation
 - **Depends:** T008, T037, T047, T057
 - **Files:** `core/src/operations/evidence_list.rs`, tests.
 - **Deliver:** provider-free stable keyset-paged inventory with prior event associations under D008 cursor contract.
 - **Tests:** pure cursor/filter validation and evidence-row projection are provider-free; durable terminal/missing-provider paging remains T160.
 - **Done when:** operation remains unexposed until T160.
 
-### T077 [ ] Implement private `run.annotate` operation
+### T077 [x] Implement private `run.annotate` operation
 - **Depends:** T035, T046–T047, T058
 - **Files:** `core/src/operations/run_annotate.rs`, tests.
 - **Deliver:** append note/opaque actor/correction journal fact without authority.
 - **Tests:** pure note/actor/correction validation and append-command construction preserve state/version fields; durable lifecycle/history proof remains T161.
 - **Done when:** operation remains unexposed until T161.
 
-### T078 [ ] Implement private `run.label` operation
+### T078 [x] Implement private `run.label` operation
 - **Depends:** T045–T047, T058
 - **Files:** `core/src/operations/run_label.rs`, tests.
 - **Deliver:** active-only optional non-unique label replacement plus journal.
 - **Tests:** pure lifecycle classification and label-command construction preserve run identity/workflow version; durable terminal rejection and rebinding proof remain T162.
 - **Done when:** operation remains unexposed until T162.
 
-### T079 [ ] Implement private `run.request` orchestration
+### T079 [x] Implement private `run.request` orchestration
 - **Depends:** T048–T050, T054–T059
 - **Files:** `core/src/operations/run_request.rs` (inline tests).
 - **Deliver:** run lookup, selection validation, event resolution, gate-free path, batched gated path, decision, CAS attempt commit, accurate evidence status, no retry.
@@ -811,42 +811,42 @@ No capability mocks, fakes, or in-memory port implementations are permitted. Pri
 - **Done when:** operation remains unexposed until T163 and no write lock contract spans provider.
 - **Stop:** full applicable facets cannot be enumerated in coverage map.
 
-### T080 [ ] Implement private `run.guidance` operation
+### T080 [x] Implement private `run.guidance` operation
 - **Depends:** T044–T047, T054–T059
 - **Files:** `core/src/operations/run_guidance.rs`, tests.
 - **Deliver:** active/stored-capability checks, explicit provider call, advisory/incompatibility/evaluation result mapping, completed/rejected/error journaling, no evidence/state mutation.
 - **Tests:** pure stored-unsupported/incompatibility/terminal/error classification and journal-command construction; no-invocation and post-lookup persistence proof remain T164 production E2Es.
 - **Done when:** operation remains unexposed until T164.
 
-### T081 [ ] Implement private `run.compatibility` operation
+### T081 [x] Implement private `run.compatibility` operation
 - **Depends:** T044–T047, T054–T058
 - **Files:** `core/src/operations/run_compatibility.rs`, tests.
 - **Deliver:** active-run explicit current-provider check with mixed non-latching findings and compatibility-attempt journal command carrying actual provider locator/digest/version and observed drift, without state/latch mutation.
 - **Tests:** pure finding/lifecycle/drift classification and journal-command construction; durable atomic invocation/history proof remains T114/T165.
 - **Done when:** operation remains unexposed until T165.
 
-### T082 [ ] Implement private `run.terminate` operation
+### T082 [x] Implement private `run.terminate` operation
 - **Depends:** T045–T047, T058
 - **Files:** `core/src/operations/run_terminate.rs`, tests.
 - **Deliver:** active→terminated mutation with optional note and journal, no provider.
 - **Tests:** pure lifecycle classification and versioned termination-command construction; durable repeat/final rejection, no-reopen, increment, and journal proof remains T151–T152.
 - **Done when:** operation remains unexposed until T152.
 
-### T083 [ ] Implement private `run.export` operation
+### T083 [x] Implement private `run.export` operation
 - **Depends:** T015, T047, T060
 - **Files:** `core/src/operations/run_export.rs`, tests.
 - **Deliver:** consistent read-only audit snapshot request to explicit target.
 - **Tests:** pure request/command shape exposes no import/mutation/replay/dereference path; durable export safety remains T166/T181.
 - **Done when:** operation remains unexposed until T166.
 
-### V003 [ ] Junction validation — private operations (T053–T083)
+### V003 [x] Junction validation — private operations (T053–T083)
 - **Depends:** T083
 - **Owner:** orchestrator in V-mode; per junction template above; not a Fable/Sol review round.
 - **Files:** none tracked; untracked `target/junction-evidence/V003/**` only.
 - **Deliver:** full accumulated inventory plus `cargo run -p xtask -- operation-coverage --mode baseline` and focused private-operation test modules against the T083 candidate; findings ledger or clean report.
 - **Done when:** every command has a recorded outcome and findings are handed to F003 or a clean report is filed; stop for orchestrator.
 
-### F003 [ ] Junction fix — batch V003 findings
+### F003 [x] Junction fix — batch V003 findings
 - **Depends:** V003
 - **Owner:** orchestrator in F-mode; one batched pass; per junction template above; not a correctness review round.
 - **Files:** files within T053–T083 contracts as valid findings require; changed paths append to the T083 range ledger.

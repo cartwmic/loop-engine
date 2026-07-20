@@ -57,6 +57,16 @@ fn architecture_check_rejects_bypass_fixture() {
 }
 
 #[test]
+fn architecture_check_rejects_outer_capability_fixture() {
+    let error = xtask::architecture::run(Some(&manifest_path("capabilities")))
+        .expect_err("capability fixture should reject outer construction in core");
+    assert!(
+        error.to_string().contains("forbidden product dependency"),
+        "unexpected error message: {error}"
+    );
+}
+
+#[test]
 fn architecture_check_rejects_reversed_core_fixture() {
     let error = xtask::architecture::run(Some(&manifest_path("reversed-core")))
         .expect_err("reversed-core fixture should violate core internal direction");

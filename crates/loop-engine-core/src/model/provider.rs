@@ -1,5 +1,5 @@
 use super::bounded::{BoundError, BoundedText};
-use super::ids::{ProviderHandle, RegistrationId};
+use super::ids::{GraphRevision, ProviderHandle, RegistrationId};
 use super::time::ObservedAt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +18,23 @@ impl ProviderRegistration {
             config_revision: 1,
             enabled: true,
         }
+    }
+
+    pub fn restore(
+        id: RegistrationId,
+        handle: Option<ProviderHandle>,
+        config_revision: u64,
+        enabled: bool,
+    ) -> Option<Self> {
+        if config_revision == 0 || enabled != handle.is_some() {
+            return None;
+        }
+        Some(Self {
+            id,
+            handle,
+            config_revision,
+            enabled,
+        })
     }
 
     pub fn id(&self) -> &RegistrationId {
@@ -57,6 +74,10 @@ pub enum DigestObservation {
 
 impl DigestObservation {
     pub fn observed(value: impl Into<String>) -> Result<Self, BoundError> {
+        let value = value.into();
+        GraphRevision::parse(value.clone()).map_err(|_| BoundError::InvalidType {
+            field: "provider_digest",
+        })?;
         Ok(Self::Observed(BoundedText::opaque_non_empty(
             "provider_digest",
             value,
@@ -138,6 +159,17 @@ mod tests {
         assert_eq!(restored.config_revision(), 3);
         assert_eq!(restored.handle().unwrap().as_str(), "renamed");
         assert!(!disabled.enabled());
-        assert!(DigestObservation::observed("sha256:digest").is_ok());
+        assert!(
+            ProviderRegistration::restore(
+                registration.id().clone(),
+                Some(ProviderHandle::parse("restored").unwrap()),
+                7,
+                true,
+            )
+            .is_some()
+        );
+        assert!(ProviderRegistration::restore(registration.id().clone(), None, 0, false).is_none());
+        assert!(DigestObservation::observed(format!("sha256:{}", "a".repeat(64))).is_ok());
+        assert!(DigestObservation::observed("sha256:digest").is_err());
     }
 }

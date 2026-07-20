@@ -590,8 +590,9 @@ fn changed_rubric_applies_only_to_following_publication_pair() {
 
 #[test]
 fn owner_migration_rubric_is_exact_foundation_base_only() {
+    const ACCEPTED_MIGRATION_CANDIDATE: &str = "b03901386890ae0a48993ee3d1cf0dd0c6883524";
     let repo = real_repo_root();
-    let head = git(&repo, &["rev-parse", "HEAD"]);
+    let head = ACCEPTED_MIGRATION_CANDIDATE.to_owned();
     let mut migration = options(&repo, Mode::Publication, "judge-migration-pass");
     migration.publication_migration_rubric =
         Some(repo.join("quality/semantic-judge/v1/migrations/publication-checkpoint-v1.md"));

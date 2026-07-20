@@ -206,6 +206,7 @@ fn repository_manifest_declares_currently_implemented_runners() {
     assert!(runners.contains(&"cargo-fmt"));
     assert!(runners.contains(&"cargo-clippy"));
     assert!(runners.contains(&"dependencies"));
+    assert!(runners.contains(&"operation-coverage"));
     assert!(runners.contains(&"cargo-deny"));
 }
 

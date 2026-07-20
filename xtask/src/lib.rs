@@ -9,6 +9,7 @@ pub mod architecture;
 pub mod dependencies;
 pub mod docs_check;
 pub mod hooks;
+pub mod operation_coverage;
 pub mod publication;
 pub mod quality;
 pub mod semantic_judge;
@@ -47,6 +48,15 @@ enum Commands {
         /// Repository root to inspect (defaults to the current repository).
         #[arg(long, value_name = "PATH")]
         root: Option<PathBuf>,
+    },
+    /// Verify equality of currently exposed operation catalogs.
+    OperationCoverage {
+        /// Closure stage: baseline, candidate, exposed, or final.
+        #[arg(long, default_value = "exposed")]
+        mode: String,
+        /// Candidate-mode comma-separated operation IDs whose facets remain open.
+        #[arg(long, default_value = "")]
+        allow_open: String,
     },
     /// Run the semantic judge against an exact staged tree or revision range.
     Judge {
@@ -203,6 +213,9 @@ where
             dependencies::run(root.as_deref())?;
             Ok(())
         }
+        Some(Commands::OperationCoverage { mode, allow_open }) => {
+            operation_coverage::run(operation_coverage::CoverageMode::parse(&mode)?, &allow_open)
+        }
         Some(Commands::Judge {
             staged,
             parent,
@@ -291,6 +304,7 @@ fn print_help() {
     println!("  architecture   Verify crate-level product dependency architecture");
     println!("  docs-check     Verify deterministic documentation formatting and link policy");
     println!("  dependencies   Verify dependency license/source/lockfile policy (T030)");
+    println!("  operation-coverage Verify operation catalog closure (T062)");
     println!("  judge          Run semantic judge (`judge --staged` after T024)");
     println!("  quality        Run currently-implemented quality manifest checks (T028)");
     println!("  publication    Aggregate base-to-head publication / pre-push gate (R003)");

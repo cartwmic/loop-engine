@@ -23,6 +23,26 @@ pub struct TransitionDecision {
 }
 
 impl TransitionDecision {
+    pub fn run_id(&self) -> &RunId {
+        &self.run_id
+    }
+
+    pub fn source(&self) -> &StateId {
+        &self.source
+    }
+
+    pub fn event(&self) -> &EventId {
+        &self.event
+    }
+
+    pub fn expected_workflow_version(&self) -> WorkflowStateVersion {
+        self.expected_workflow_version
+    }
+
+    pub fn expected_lifecycle_version(&self) -> LifecycleVersion {
+        self.expected_lifecycle_version
+    }
+
     pub fn target(&self) -> &StateId {
         &self.target
     }
@@ -33,6 +53,10 @@ impl TransitionDecision {
 
     pub fn state_changed(&self) -> bool {
         self.state_changed
+    }
+
+    pub fn required_gates(&self) -> &[GateId] {
+        &self.required_gates
     }
 
     pub fn provider_evidence(&self) -> &[EvidenceRecord] {
