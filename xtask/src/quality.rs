@@ -28,6 +28,7 @@ pub const RUNNER_DOCS_CHECK: &str = "docs-check";
 pub const RUNNER_ARCHITECTURE: &str = "architecture";
 pub const RUNNER_CARGO_CHECK: &str = "cargo-check";
 pub const RUNNER_CARGO_TEST: &str = "cargo-test";
+pub const RUNNER_CARGO_DOC: &str = "cargo-doc";
 pub const RUNNER_CARGO_FMT: &str = "cargo-fmt";
 pub const RUNNER_CARGO_CLIPPY: &str = "cargo-clippy";
 pub const RUNNER_DEPENDENCIES: &str = "dependencies";
@@ -519,6 +520,21 @@ fn run_check(
                 evidence,
             ))
         }
+        RUNNER_CARGO_DOC => {
+            let args = ["doc", "--workspace", "--no-deps", "--locked"];
+            let evidence = run_cargo_with_evidence(check_root, &args, candidate_revision).map_err(
+                |evidence| {
+                    anyhow::Error::new(CheckFailure::new(
+                        evidence,
+                        "cargo doc --workspace --no-deps --locked failed",
+                    ))
+                },
+            )?;
+            Ok((
+                "cargo doc --workspace --no-deps --locked passed".to_owned(),
+                evidence,
+            ))
+        }
         RUNNER_CARGO_FMT => {
             let args = ["fmt", "--all", "--check"];
             let evidence = run_cargo_with_evidence(check_root, &args, candidate_revision).map_err(
@@ -708,11 +724,10 @@ fn apply_quality_command_uid(process: &mut Command) -> std::result::Result<(), S
 fn validate_runner(runner: &str) -> Result<()> {
     match runner {
         RUNNER_DOCS_CHECK | RUNNER_ARCHITECTURE | RUNNER_CARGO_CHECK | RUNNER_CARGO_TEST
-        | RUNNER_CARGO_FMT | RUNNER_CARGO_CLIPPY | RUNNER_DEPENDENCIES | RUNNER_CARGO_DENY => {
-            Ok(())
-        }
+        | RUNNER_CARGO_DOC | RUNNER_CARGO_FMT | RUNNER_CARGO_CLIPPY | RUNNER_DEPENDENCIES
+        | RUNNER_CARGO_DENY => Ok(()),
         other => bail!(
-            "unknown quality runner `{other}`; currently implemented runners: {RUNNER_DOCS_CHECK}, {RUNNER_ARCHITECTURE}, {RUNNER_CARGO_CHECK}, {RUNNER_CARGO_TEST}, {RUNNER_CARGO_FMT}, {RUNNER_CARGO_CLIPPY}, {RUNNER_DEPENDENCIES}, {RUNNER_CARGO_DENY}"
+            "unknown quality runner `{other}`; currently implemented runners: {RUNNER_DOCS_CHECK}, {RUNNER_ARCHITECTURE}, {RUNNER_CARGO_CHECK}, {RUNNER_CARGO_TEST}, {RUNNER_CARGO_DOC}, {RUNNER_CARGO_FMT}, {RUNNER_CARGO_CLIPPY}, {RUNNER_DEPENDENCIES}, {RUNNER_CARGO_DENY}"
         ),
     }
 }

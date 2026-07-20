@@ -202,6 +202,7 @@ fn repository_manifest_declares_currently_implemented_runners() {
     assert!(runners.contains(&"architecture"));
     assert!(runners.contains(&"cargo-check"));
     assert!(runners.contains(&"cargo-test"));
+    assert!(runners.contains(&"cargo-doc"));
     assert!(runners.contains(&"cargo-fmt"));
     assert!(runners.contains(&"cargo-clippy"));
     assert!(runners.contains(&"dependencies"));
@@ -215,6 +216,7 @@ fn cargo_fmt_runner_invokes_check_mode() {
     // architecture fixture is not a full fmt-managed workspace; unknown runner
     // path is covered above. Here we only assert the repository manifest text.
     let text = fs::read_to_string(real_repo_root().join(MANIFEST_PATH)).expect("manifest");
+    assert!(text.contains("runner = \"cargo-doc\""));
     assert!(text.contains("runner = \"cargo-fmt\""));
     assert!(text.contains("runner = \"cargo-clippy\""));
     assert!(tree.path().join(MANIFEST_PATH).is_file());

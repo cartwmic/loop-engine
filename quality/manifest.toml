@@ -21,6 +21,10 @@ id = "test"
 runner = "cargo-test"
 
 [[checks]]
+id = "doc"
+runner = "cargo-doc"
+
+[[checks]]
 id = "fmt"
 runner = "cargo-fmt"
 
