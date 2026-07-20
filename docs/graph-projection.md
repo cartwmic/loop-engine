@@ -1,6 +1,6 @@
 # Loop Engine Graph Projection and Canonical Encoding
 
-**Status:** Frozen by T014 (2026-07-17). Decision [D014](change/initial-implementation/decisions.md#d014--canonical-graph-encoding).
+**Status:** Frozen by T014 (2026-07-17). T041 implements the encoding-neutral core semantic projection; canonical DTO encoding and graph-revision hashing remain integration work. Decision [D014](change/initial-implementation/decisions.md#d014--canonical-graph-encoding).
 
 This document is the canonical contract for provider-emitted workflow graph projection field semantics, semantic validation expectations, canonical integration DTO v1, deterministic byte encoding, `graph_revision` computation, metadata treatment (including RFC 8785 / JCS metadata number encoding), golden vectors, and the field-change matrix governing when graph identity changes. Named numeric bounds are frozen in [cli-contract.md](cli-contract.md#resource-bounds-d008) (D008); this document references bound **names** only. Provider subprocess transport remains in [provider-protocol-v1.md](provider-protocol-v1.md) (T005). JSON Schema files are published in T084; this document is normative for semantics and canonical bytes.
 
@@ -73,7 +73,7 @@ canonical bytes (UTF-8) ──SHA-256──► graph_revision
         └──► immutable stored graph snapshot (persistence)
 ```
 
-Core exposes a semantic projection of all digest-relevant fields (T041). Integrations own wire DTO types, canonical DTO types, byte encoding, and hashing (T086). Core **MUST NOT** import Serde, JSON libraries, or hashing crates for this pipeline.
+Core exposes `model::graph_projection::SemanticGraphProjection` over all digest-relevant state, transition, gate, input-kind, guidance, metadata, and capability fields (T041). Construction sorts unordered semantic collections, so provider ordering does not change projection equality; any meaningful field change does. Frozen protocol v1 has no standalone state title/summary or input-description fields: presentation beyond state ID and static guidance is provider metadata, while input semantics use the required `kind` token and optional metadata. Integrations own wire DTO types, canonical DTO types, byte encoding, and hashing (T086). Core **MUST NOT** import Serde, JSON libraries, or hashing crates for this pipeline.
 
 ## Provider wire graph projection (protocol v1)
 

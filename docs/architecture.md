@@ -1,6 +1,6 @@
 # Loop Engine Code Architecture
 
-**Status:** Three-crate structure, executable-provider boundary, per-run graph snapshots, authoritative-state-plus-journal model, selected SQLite persistence integration (pragmas, migrations, transaction boundaries, and CAS semantics frozen in [persistence.md](persistence.md), T009), journal entry wire shapes (frozen in [journal-contract.md](journal-contract.md), T011), and machine-local configuration layout are settled. Remaining technology choices marked open in [technology.md](technology.md) stay open until their Phase 0 tasks resolve.
+**Status:** Three-crate structure, executable-provider boundary, per-run graph snapshots, authoritative-state-plus-journal model, selected SQLite persistence integration (pragmas, migrations, transaction boundaries, and CAS semantics frozen in [persistence.md](persistence.md), T009), journal entry wire shapes (frozen in [journal-contract.md](journal-contract.md), T011), and machine-local configuration layout are settled. T031–T052 implement the framework-free core model and deterministic decision boundary; external-effect capabilities and application operations remain later phases.
 
 Related documents:
 
@@ -78,7 +78,7 @@ operations ───────────────→ model
 
 Model must not import operations or capabilities. Capability contracts use core model types rather than integration records.
 
-Core does not replay journal entries to derive current state.
+Core does not replay journal entries to derive current state. `model::run::Run` stores current state and lifecycle directly; `model::journal::JournalEntry` is an immutable explanatory fact. T031–T052 expose no replay constructor, provider invocation, persistence operation, or public application operation.
 
 ### `loop-engine-integrations`
 
@@ -178,6 +178,8 @@ Before dispatch, CLI creates current-user-only per-invocation JSONL trace. Trace
 8. CLI renders outcome without adding policy.
 
 External provider behavior may vary. Core decision given observed verdicts does not.
+
+Stored run state is direct read authority; journal never reconstructs it. Core row reconstitution accepts validated stored graph, current state/lifecycle, and checked positive internal versions from persistence mapping; it is not event replay. Transition decisions bind run ID, source state, stored selector/target/gates, and evaluated versions before mutation. Completed self-loops apply the stored transition without changing workflow-state version. SQLite operations still own atomic CAS and durable commit.
 
 ## Run interaction and lifecycle
 

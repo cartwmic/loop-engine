@@ -419,14 +419,14 @@ Global rules for every task:
 
 ## Phase 2 — Core model and deterministic semantics
 
-### T031 [ ] Establish core module boundaries
+### T031 [x] Establish core module boundaries
 - **Depends:** T030, V001, F001, R005
 - **Files:** `crates/loop-engine-core/src/{lib.rs,model/mod.rs,capabilities/mod.rs,operations/mod.rs}`.
 - **Deliver:** private-by-default model/capability/operation layout with documented dependency direction.
 - **Done when:** no empty generic service/repository/util abstraction exists.
 - **Stop:** an outer DTO is needed in core API; redesign boundary first.
 
-### T032 [ ] Implement bounded scalar primitives
+### T032 [x] Implement bounded scalar primitives
 - **Depends:** T008, T031
 - **Files:** `core/src/model/bounded.rs` (inline tests).
 - **Deliver:** bounded text, diagnostic, metadata depth/count, and encoded-size validation without serialization annotations.
@@ -434,7 +434,7 @@ Global rules for every task:
 - **Done when:** all later model types reuse named bounds.
 - **Stop:** truncation is used where foundation requires rejection.
 
-### T033 [ ] Implement validated identifiers
+### T033 [x] Implement validated identifiers
 - **Depends:** T008, T031–T032
 - **Files:** `core/src/model/ids.rs`, tests.
 - **Deliver:** distinct registration/run/request/state/event/gate/evidence/journal/graph-revision IDs and exact D004 lowercase-ASCII/no-normalization provider handle grammar.
@@ -442,7 +442,7 @@ Global rules for every task:
 - **Done when:** IDs are not interchangeable accidentally and carry no external format derives.
 - **Stop:** labels or executable paths become identity.
 
-### T034 [ ] Implement time and internal version facts
+### T034 [x] Implement time and internal version facts
 - **Depends:** T031
 - **Files:** `core/src/model/time.rs`, `version.rs`, tests.
 - **Deliver:** timestamp value, workflow-state/lifecycle version, and journal sequence types.
@@ -450,7 +450,7 @@ Global rules for every task:
 - **Done when:** caller cannot construct or supply workflow revision token through public operations.
 - **Stop:** label/note/evidence versions are coupled to gate CAS version.
 
-### T035 [ ] Implement actor metadata and note model
+### T035 [x] Implement actor metadata and note model
 - **Depends:** T032–T033
 - **Files:** `core/src/model/annotation.rs`, tests.
 - **Deliver:** bounded opaque actor metadata, notes, and correction link without authority methods.
@@ -458,7 +458,7 @@ Global rules for every task:
 - **Done when:** no human/agent enum exists.
 - **Stop:** actor field can satisfy gate or authorize transition.
 
-### T036 [ ] Implement immutable input declarations and values
+### T036 [x] Implement immutable input declarations and values
 - **Depends:** T032–T033, T005, T008
 - **Files:** `core/src/model/run_input.rs`, tests.
 - **Deliver:** provider-declared required/optional names/descriptions and bounded accepted JSON-like values through core-owned value model.
@@ -466,7 +466,7 @@ Global rules for every task:
 - **Done when:** input values cannot influence graph construction in core.
 - **Stop:** generic mutable variable/update operation appears.
 
-### T037 [ ] Implement append-only evidence model
+### T037 [x] Implement append-only evidence model
 - **Depends:** T008, T032–T035
 - **Files:** `core/src/model/evidence.rs`, tests.
 - **Deliver:** stable run-scoped ID, kind, exact bounded opaque locator, digest, media type, metadata, caller/provider source, and immutable record; no URI/path/CWD interpretation.
@@ -474,7 +474,7 @@ Global rules for every task:
 - **Done when:** correction requires new evidence.
 - **Stop:** engine interprets provider-specific artifact/workspace semantics.
 
-### T038 [ ] Implement graph state and guidance model
+### T038 [x] Implement graph state and guidance model
 - **Depends:** T032–T036
 - **Files:** `core/src/model/graph.rs`, `guidance.rs`, tests.
 - **Deliver:** flat states, initial ID, final flag, title/summary/metadata, static text or explicit no-guidance, and stored live-guidance capability.
@@ -482,7 +482,7 @@ Global rules for every task:
 - **Done when:** hierarchy/parallel/timer semantics are unrepresentable.
 - **Stop:** candidate input values are accepted by graph constructor.
 
-### T039 [ ] Implement transition and gate declarations
+### T039 [x] Implement transition and gate declarations
 - **Depends:** T033, T038
 - **Files:** `core/src/model/transition.rs`, tests.
 - **Deliver:** source/event/target and unique required gate IDs supporting cycles/self-loops.
@@ -490,7 +490,7 @@ Global rules for every task:
 - **Done when:** provider cannot attach target-state authority to verdict.
 - **Stop:** transition selection delegated to provider.
 
-### T040 [ ] Implement semantic graph validation
+### T040 [x] Implement semantic graph validation
 - **Depends:** T038–T039
 - **Files:** `core/src/model/graph_validation.rs`, tests.
 - **Deliver:** initial/target checks, uniqueness, one `(state,event)`, final sinks, gate uniqueness, guidance declaration, supported semantics.
@@ -498,7 +498,7 @@ Global rules for every task:
 - **Done when:** cycles, zero-final, multiple-final, initial-final, and non-final sink are valid.
 - **Stop:** reachability/DAG policy rejects allowed graphs.
 
-### T041 [ ] Implement canonical semantic projection model
+### T041 [x] Implement canonical semantic projection model
 - **Depends:** T014, T036, T038–T040
 - **Files:** `core/src/model/graph_projection.rs`, `core/tests/graph_projection_golden.rs`.
 - **Deliver:** core semantic view exposing all digest-relevant fields without Serde/canonical byte technology.
@@ -506,7 +506,7 @@ Global rules for every task:
 - **Done when:** integration can encode canonical bytes without raw provider JSON.
 - **Stop:** hash/canonical serializer leaks into core.
 
-### T042 [ ] Implement provider identity and observation model
+### T042 [x] Implement provider identity and observation model
 - **Depends:** T032–T034
 - **Files:** `core/src/model/provider.rs`, tests.
 - **Deliver:** immutable registration identity, mutable handle/config facts, locator/digest/version observations, and invocation phase facts.
@@ -514,7 +514,7 @@ Global rules for every task:
 - **Done when:** unavailable digest is representable without pretending equality.
 - **Stop:** creation locator pins active run.
 
-### T043 [ ] Implement gate result model
+### T043 [x] Implement gate result model
 - **Depends:** T037, T039, T042
 - **Files:** `core/src/model/gate.rs`, tests.
 - **Deliver:** exact complete verdict set with pass/fail diagnostics/evidence, explicit incompatibility, or evaluation error.
@@ -522,7 +522,7 @@ Global rules for every task:
 - **Done when:** exactly three semantic result variants exist.
 - **Stop:** provider result can choose target state.
 
-### T044 [ ] Implement compatibility and live-guidance model
+### T044 [x] Implement compatibility and live-guidance model
 - **Depends:** T037–T043
 - **Files:** `core/src/model/compatibility.rs`, `live_guidance.rs`, tests.
 - **Deliver:** capability-scoped non-latching findings and `LiveGuidanceResult` variants for bounded advisory guidance, explicit stored-guidance incompatibility, or evaluation error, all without evidence/state authority.
@@ -530,7 +530,7 @@ Global rules for every task:
 - **Done when:** compatibility state cannot be persisted as latch through model API.
 - **Stop:** registration-wide report mutates every run.
 
-### T045 [ ] Implement run aggregate and lifecycle
+### T045 [x] Implement run aggregate and lifecycle
 - **Depends:** T033–T044
 - **Files:** `core/src/model/run.rs`, `lifecycle.rs`, tests.
 - **Deliver:** stable ID, registration ID, graph snapshot/revision, immutable inputs, current state, active/final/terminated lifecycle, workflow version, optional non-unique label.
@@ -538,7 +538,7 @@ Global rules for every task:
 - **Done when:** current state is direct authority and no replay constructor exists.
 - **Stop:** run identity depends on workspace/provider path/label.
 
-### T046 [ ] Implement immutable journal facts
+### T046 [x] Implement immutable journal facts
 - **Depends:** T011, T034–T045
 - **Files:** `core/src/model/journal.rs`, `attempt.rs`, tests.
 - **Deliver:** bounded aggregate entry kinds and required observed facts, bounded association/provider/verdict/diagnostic components, state/version before/after, outcome, correction link; encoded maximum 2.5 MiB.
@@ -546,7 +546,7 @@ Global rules for every task:
 - **Done when:** journal explains but cannot claim replay.
 - **Stop:** current run state is derived from entries.
 
-### T047 [ ] Implement public outcome and reason taxonomy
+### T047 [x] Implement public outcome and reason taxonomy
 - **Depends:** T006, T032–T046
 - **Files:** `core/src/model/outcome.rs`, `reason.rs`, `diagnostic.rs`, tests.
 - **Deliver:** implement D004/D006 frozen completed/rejected/error and reason-code catalog, run snapshot, state-changed flag, requestable events, and evidence-recorded status; no new code may originate here.
@@ -554,7 +554,7 @@ Global rules for every task:
 - **Done when:** no fourth top-level class exists.
 - **Stop:** persistence failure reports evidence/state committed without proof.
 
-### T048 [ ] Implement gate-free deterministic transition resolver
+### T048 [x] Implement gate-free deterministic transition resolver
 - **Depends:** T039–T047
 - **Files:** `core/src/model/decision.rs`, tests.
 - **Deliver:** active lifecycle/event resolution, unknown/ambiguous rejection, target/final lifecycle, self-loop, requestable-event calculation, and no-provider result.
@@ -562,7 +562,7 @@ Global rules for every task:
 - **Done when:** identical inputs yield identical decision regardless of actor metadata.
 - **Stop:** resolver invokes external capability.
 
-### T049 [ ] Implement gated deterministic decision resolver
+### T049 [x] Implement gated deterministic decision resolver
 - **Depends:** T043, T047–T048
 - **Files:** `core/src/model/decision.rs`, tests.
 - **Deliver:** exact verdict enforcement, fail/incompatibility/evaluation classifications, state preservation, provider evidence handling, and target authority from stored graph only.
@@ -570,7 +570,7 @@ Global rules for every task:
 - **Done when:** only complete all-pass result advances.
 - **Stop:** provider-reported target or substituted gate accepted.
 
-### T050 [ ] Implement requestable-event projection
+### T050 [x] Implement requestable-event projection
 - **Depends:** T038–T049
 - **Files:** `core/src/model/requestable.rs`, tests.
 - **Deliver:** current-state event/gate summaries for active run; empty set for terminal; no gate-pass prediction.
@@ -578,7 +578,7 @@ Global rules for every task:
 - **Done when:** show/outcomes can share one provider-free projection.
 - **Stop:** computation executes provider or compatibility check.
 
-### T051 [ ] Add pure core property tests
+### T051 [x] Add pure core property tests
 - **Depends:** T040, T048–T050
 - **Files:** `core/tests/model_properties.rs`.
 - **Deliver:** no-mock generated graphs/decisions for determinism, rejection preservation, final sinks, and actor neutrality.
@@ -586,21 +586,21 @@ Global rules for every task:
 - **Done when:** tests supplement rather than claim behavioral authority.
 - **Stop:** property model imports outer integrations or replaces E2E commitments.
 
-### T052 [ ] Document core model and decision boundaries
+### T052 [x] Document core model and decision boundaries
 - **Depends:** T031–T051
 - **Files:** `core/src/lib.rs`, `../../architecture.md`, `../../graph-projection.md`, `../../journal-contract.md`.
 - **Deliver:** exact model invariants, deterministic inputs, excluded semantics, and no-replay/no-provider-authority statements.
 - **Done when:** core behavior introduced so far is coherent at the T052 publication checkpoint.
 - **Stop:** docs claim public operations before exposure tasks.
 
-### V002 [ ] Junction validation — core model (T031–T052)
+### V002 [x] Junction validation — core model (T031–T052)
 - **Depends:** T052
 - **Owner:** orchestrator in V-mode; per junction template above; not a Fable/Sol review round.
 - **Files:** none tracked; untracked `target/junction-evidence/V002/**` only.
 - **Deliver:** full accumulated inventory plus `cargo doc --workspace --no-deps`, focused core model/property suites, and golden projection tests against the T052 candidate; findings ledger or clean report.
 - **Done when:** every command has a recorded outcome and findings are handed to F002 or a clean report is filed; stop for orchestrator.
 
-### F002 [ ] Junction fix — batch V002 findings
+### F002 [x] Junction fix — batch V002 findings
 - **Depends:** V002
 - **Owner:** orchestrator in F-mode; one batched pass; per junction template above; not a correctness review round.
 - **Files:** files within T031–T052 contracts as valid findings require; changed paths append to the T052 range ledger.

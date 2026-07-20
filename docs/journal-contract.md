@@ -1,6 +1,6 @@
 # Loop Engine Journal Contract
 
-**Status:** Frozen by T011 (2026-07-17). Decision [D011](change/initial-implementation/decisions.md#d011--journal-granularity).
+**Status:** Frozen by T011 (2026-07-17). T046 implements immutable encoding-neutral core journal and attempt facts plus the aggregate size guard; integration-owned persistence and JSON DTOs remain later phases. Decision [D011](change/initial-implementation/decisions.md#d011--journal-granularity).
 
 This document is the canonical contract for immutable per-run activity journal entry schema v1, entry kinds, attempt shape, monotonic sequence allocation, correction links, provider/gate/evidence nesting, `state_changed` alignment with the structured CLI envelope, aggregate and component encoded-size bounds, oversize rejection, and operation journal obligations. Named numeric bounds are frozen in [cli-contract.md](cli-contract.md#resource-bounds-d008) (D008); this document references bound **names** only. Transactional insert semantics and version/sequence allocation are frozen in [persistence.md](persistence.md) (D009); table DDL is owned by T105 (`0001_initial.sql`).
 
@@ -29,7 +29,7 @@ The activity journal is **explanatory storage only** (I12–I15, C2). It is **no
 
 Core **MUST NOT** derive current state by replaying journal entries ([architecture.md](architecture.md)). Export `journal.jsonl` (D015) is a read-only snapshot of stored entries; it never becomes write authority and does not promise replay.
 
-One **aggregate immutable** journal entry is appended per meaningful operation or post-lookup attempt (D011). Entries are never edited or deleted. Corrections and clarifications append new entries linked to prior `sequence` values (I13).
+One **aggregate immutable** journal entry is appended per meaningful operation or post-lookup attempt (D011). Core represents the exact eight entry kinds as `model::journal::JournalEntryKind`; `JournalEntry` exposes observation accessors but no edit, delete, fold, or replay API. Corrections and clarifications append new entries linked to prior `sequence` values (I13). Integration encoding supplies exact measured full-entry and named nested-component byte lengths through `JournalEncodedSizes` before core admits a `JournalEntry`; zero-sized claims must match absent components, component maxima are checked independently, and one byte beyond `journal_entry_encoded_bytes` rejects rather than truncates.
 
 Rejected patterns:
 
