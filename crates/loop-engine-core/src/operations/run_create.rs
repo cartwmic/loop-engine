@@ -5,8 +5,8 @@ use crate::capabilities::id_generator::IdGenerator;
 use crate::capabilities::persistence_commands::{CommitStatus, CreateRunCommand};
 use crate::capabilities::provider_catalog::{ProviderCatalog, ResolvedProviderConfig};
 use crate::capabilities::provider_invoker::{
-    DescribeRequest, DescribeResult, InputValidationInvocationResult, InputValidationResult,
-    InvocationError, ProviderInvoker, ValidateInputsRequest,
+    DescribeRequest, DescribeResult, DescribedGraph, InputValidationInvocationResult,
+    InputValidationResult, InvocationError, ProviderInvoker, ValidateInputsRequest,
 };
 use crate::capabilities::run_writer::RunWriter;
 use crate::model::attempt::{JournalExtension, ProviderRole};
@@ -64,6 +64,13 @@ pub fn classify_input_result(result: &InputValidationResult) -> Result<(), RunCr
     }
 }
 
+fn validate_described_graph(graph: DescribedGraph) -> Result<ValidatedGraph, GraphError> {
+    match graph {
+        DescribedGraph::Declared(graph) => ValidatedGraph::validate(graph),
+        DescribedGraph::Invalid(error) => Err(error),
+    }
+}
+
 pub fn build_run(
     run_id: RunId,
     registration_id: RegistrationId,
@@ -75,7 +82,7 @@ pub fn build_run(
     Ok(Run::create(
         run_id,
         registration_id,
-        ValidatedGraph::validate(described.graph)?,
+        validate_described_graph(described.graph)?,
         graph_revision,
         inputs,
         label,
@@ -112,6 +119,7 @@ where
     C: ProviderCatalog,
     I: ProviderInvoker,
     D: DigestComputer,
+    D::Error: std::fmt::Display,
     G: IdGenerator,
     W: RunWriter,
     F: FnOnce(
@@ -135,7 +143,7 @@ where
             },
         )
         .map_err(RunCreateExecutionError::Invocation)?;
-    let validated = ValidatedGraph::validate(described.graph.clone())
+    let validated = validate_described_graph(described.graph.clone())
         .map_err(|error| RunCreateExecutionError::Operation(error.into()))?;
     let input_result = if needs_input_validation(validated.graph().inputs(), &inputs) {
         let result = invoker
@@ -161,9 +169,9 @@ where
     reject_observed_digest_drift(&digest_before, &digest_after)
         .map_err(RunCreateExecutionError::Operation)?;
     let projection = SemanticGraphProjection::from_validated(&validated);
-    let revision = digests
-        .graph_revision(&projection)
-        .map_err(RunCreateExecutionError::Digest)?;
+    let revision = digests.graph_revision(&projection).map_err(|error| {
+        RunCreateExecutionError::Operation(GraphError::CanonicalEncoding(error.to_string()).into())
+    })?;
     let run = Run::create(
         ids.run_id().map_err(RunCreateExecutionError::Id)?,
         registration_id.clone(),

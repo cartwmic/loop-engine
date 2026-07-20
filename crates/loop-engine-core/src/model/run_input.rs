@@ -64,22 +64,27 @@ pub enum InputError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct InputDeclarations(BTreeMap<InputName, InputDeclaration>);
+pub struct InputDeclarations(Vec<InputDeclaration>);
 
 impl InputDeclarations {
     pub fn new(declarations: Vec<InputDeclaration>) -> Result<Self, InputError> {
-        let mut values = BTreeMap::new();
-        for declaration in declarations {
-            let name = declaration.name.clone();
-            if values.insert(name.clone(), declaration).is_some() {
-                return Err(InputError::DuplicateDeclaration(name.to_string()));
+        let mut names = BTreeSet::new();
+        for declaration in &declarations {
+            if !names.insert(declaration.name.clone()) {
+                return Err(InputError::DuplicateDeclaration(
+                    declaration.name.to_string(),
+                ));
             }
         }
-        Ok(Self(values))
+        Ok(Self::new_unvalidated(declarations))
+    }
+
+    pub fn new_unvalidated(declarations: Vec<InputDeclaration>) -> Self {
+        Self(declarations)
     }
 
     pub fn values(&self) -> impl Iterator<Item = &InputDeclaration> {
-        self.0.values()
+        self.0.iter()
     }
 
     pub fn validate(&self, candidate: Vec<(InputName, Value)>) -> Result<RunInputs, InputError> {
@@ -89,7 +94,7 @@ impl InputDeclarations {
             if !seen.insert(name.clone()) {
                 return Err(InputError::DuplicateValue(name.to_string()));
             }
-            if !self.0.contains_key(&name) {
+            if !self.0.iter().any(|declaration| declaration.name == name) {
                 return Err(InputError::Undeclared(name.to_string()));
             }
             value.validate(
@@ -99,7 +104,7 @@ impl InputDeclarations {
             )?;
             values.insert(name, value);
         }
-        for declaration in self.0.values().filter(|value| value.required) {
+        for declaration in self.0.iter().filter(|value| value.required) {
             if !values.contains_key(&declaration.name) {
                 return Err(InputError::Missing(declaration.name.to_string()));
             }

@@ -1,6 +1,6 @@
 # Initial Implementation Task List
 
-**Status:** In progress — Phase 3 private operations complete; T084 is next after the T083 checkpoint
+**Status:** In progress — Phase 4 provider/configuration/trace integrations implemented; V004 validation is next
 
 Follow [execution protocol](README.md#execution-protocol), resolve [decision gates](decisions.md), and maintain [coverage map](coverage.md). Every task is sized as one narrow orchestrator-owned unit unless its stop condition requires owner escalation.
 
@@ -855,42 +855,42 @@ No capability mocks, fakes, or in-memory port implementations are permitted. Pri
 
 ## Phase 4 — Provider, configuration, trace, and system integrations
 
-### T084 [ ] Define provider protocol and published schemas
+### T084 [x] Define provider protocol and published schemas
 - **Depends:** T005, T008, T014, T017, T031–T050, V003, F003
 - **Files:** `integrations/src/provider_protocol/{mod,dto,version}.rs`, `schemas/provider/v1/*.json`.
 - **Deliver:** request/result envelopes and five operation schemas with bounds and same-major compatibility.
 - **Tests:** schema golden fixtures for every valid result variant and malformed/unsupported cases.
 - **Done when:** schema contains no state-setter and input validation cannot emit topology.
 
-### T085 [ ] Implement common provider DTO mapping
+### T085 [x] Implement common provider DTO mapping
 - **Depends:** T084
 - **Files:** `integrations/src/provider_protocol/mapping.rs`, `validation.rs`, tests.
 - **Deliver:** external DTO↔core conversion with structural bounds and actionable paths.
 - **Tests:** unknown optional fields accepted; unknown required semantics, oversize, wrong tags, and malformed metadata fail.
 - **Done when:** Serde/Schemars types remain outside core.
 
-### T086 [ ] Implement graph mapping, semantic validation, and canonical bytes
+### T086 [x] Implement graph mapping, semantic validation, and canonical bytes
 - **Depends:** T014, T040–T041, T084–T085
 - **Files:** `integrations/src/provider_protocol/{graph,canonical}.rs`, `integrations/tests/graph_canonical.rs`, `integrations/tests/fixtures/graphs/*.json`.
 - **Deliver:** DTO→validated core graph→canonical DTO/bytes→SHA-256 input.
 - **Tests:** reordering equivalence and every digest-relevant field-change vector.
 - **Done when:** raw provider JSON formatting cannot affect graph revision.
 
-### T087 [ ] Implement subprocess spawn and lifecycle
+### T087 [x] Implement subprocess spawn and lifecycle
 - **Depends:** T002, T005, T007–T008, T056, T084
 - **Files:** `integrations/src/provider_process/{mod,spawn,error}.rs`, tests.
 - **Deliver:** literal executable/argv, explicit CWD, inherited caller environment with no registration overrides, stdin request, closed EOF, status/signal classification, no shell.
 - **Tests:** caller-CWD independence, provider sees inherited test sentinel, missing executable, nonzero, signal, and no environment field/value appears in trace payload.
 - **Done when:** arbitrary provider output never reaches CLI streams directly.
 
-### T088 [ ] Implement deadlock-safe bounded stream capture
+### T088 [x] Implement deadlock-safe bounded stream capture
 - **Depends:** T087
 - **Files:** `integrations/src/provider_process/streams.rs`, tests.
 - **Deliver:** concurrent stdout/stderr drain, byte bounds, UTF-8/error policy, exact one-result extraction.
 - **Tests:** simultaneous full streams, oversize stdout/stderr, missing result, extra stdout, invalid UTF-8.
 - **Done when:** provider cannot deadlock on full pipe.
 
-### T089 [ ] Implement provider timeout and process-group termination
+### T089 [x] Implement provider timeout and process-group termination
 - **Depends:** T002, T087–T088
 - **Files:** `integrations/src/provider_process/{timeout,process_group}.rs`, `integrations/tests/provider_timeout.rs`.
 - **Deliver:** configurable deadline, process-group kill, child cleanup, timeout observation, no retry.
@@ -898,112 +898,112 @@ No capability mocks, fakes, or in-memory port implementations are permitted. Pri
 - **Done when:** no orphan survives supported-platform timeout.
 - **Stop:** platform cannot support selected semantics; reopen D002/D005.
 
-### T090 [ ] Implement executable digest observation
+### T090 [x] Implement executable digest observation
 - **Depends:** T053, T087
 - **Files:** `integrations/src/provider_process/digest.rs`, tests.
 - **Deliver:** best-effort pre-invocation SHA-256 and normalized actual locator; unavailable digest is explicit.
 - **Tests:** readable, unreadable, replaced, and interpreted-script cases.
 - **Done when:** digest is audit fact, never identity or environment proof.
 
-### T091 [ ] Implement provider `describe` adapter
+### T091 [x] Implement provider `describe` adapter
 - **Depends:** T085–T090
 - **Files:** `integrations/src/provider_protocol/describe.rs`, tests.
 - **Deliver:** input-free request, graph/declarations/guidance mapping, observation capture.
 - **Tests:** candidate inputs absent; malformed/invalid result classified.
 - **Done when:** complete graph can be validated and canonicalized.
 
-### T092 [ ] Implement provider input-validation adapter
+### T092 [x] Implement provider input-validation adapter
 - **Depends:** T036, T085–T090
 - **Files:** `integrations/src/provider_protocol/validate_inputs.rs`, tests.
 - **Deliver:** value-only request and accepted/rejected/error mapping with topology-output rejection.
 - **Tests:** zero-input caller path can skip adapter; invalid values remain domain rejection.
 - **Done when:** description/validation digest observations can be compared.
 
-### T093 [ ] Implement provider gate-evaluation adapter
+### T093 [x] Implement provider gate-evaluation adapter
 - **Depends:** T037, T043, T085–T090
 - **Files:** `integrations/src/provider_protocol/evaluate_gates.rs`, tests.
 - **Deliver:** bounded snapshot, complete requested gate set, three result variants, provider evidence validation.
 - **Tests:** missing/extra/duplicate/substituted verdict, invalid evidence, incompatibility-with-evidence, evaluation-error-with-evidence.
 - **Done when:** only complete verdict result can carry valid evidence.
 
-### T094 [ ] Implement provider live-guidance adapter
+### T094 [x] Implement provider live-guidance adapter
 - **Depends:** T044, T085–T090
 - **Files:** `integrations/src/provider_protocol/live_guidance.rs`, tests.
 - **Deliver:** bounded active-run context and exactly one result: advisory guidance, explicit stored-guidance incompatibility, or evaluation error.
 - **Tests:** incompatibility maps distinctly; evidence/state fields rejected; guidance bound enforced.
 - **Done when:** adapter cannot authorize transition.
 
-### T095 [ ] Implement provider compatibility adapter
+### T095 [x] Implement provider compatibility adapter
 - **Depends:** T044, T085–T090
 - **Files:** `integrations/src/provider_protocol/compatibility.rs`, tests.
 - **Deliver:** stored graph/declaration capability request and mixed finding mapping.
 - **Tests:** non-latching support/incompatibility/error cases.
 - **Done when:** latest graph is not substituted for stored run graph.
 
-### T096 [ ] Implement machine-local path resolver
+### T096 [x] Implement machine-local path resolver
 - **Depends:** T002, T007, T030
 - **Files:** `integrations/src/configuration/paths.rs`, tests.
 - **Deliver:** OS roots, `LOOP_ENGINE_HOME`, DB/trace/global/project locations, ancestor search.
 - **Tests:** isolated home, root boundary, symlink policy, another CWD, no project file.
 - **Done when:** paths are deterministic and provider discovery never occurs.
 
-### T097 [ ] Implement typed TOML configuration DTOs
+### T097 [x] Implement typed TOML configuration DTOs
 - **Depends:** T007–T008, T096
 - **Files:** `integrations/src/configuration/{dto,load,error}.rs`, tests.
 - **Deliver:** global/project defaults parsing, unknown-key policy, malformed diagnostics, no registration definitions in project file.
 - **Tests:** valid/malformed/unsupported/forbidden-key fixtures.
 - **Done when:** external config DTOs do not leak inward.
 
-### T098 [ ] Implement configuration precedence and registration defaults
+### T098 [x] Implement configuration precedence and registration defaults
 - **Depends:** T097
 - **Files:** `integrations/src/configuration/resolved.rs`, tests.
 - **Deliver:** CLI > project > global > built-in merge for allowed defaults/references.
 - **Tests:** full precedence matrix and existing-run stored-ID bypass of defaults.
 - **Done when:** caller CWD cannot alter active-run provider config.
 
-### T099 [ ] Implement trace event DTO schema
+### T099 [x] Implement trace event DTO schema
 - **Depends:** T010, T023, T047, T054
 - **Files:** `integrations/src/trace/{event,schema}.rs`, `schemas/trace/v1/*.json`, `schemas/trace/v1/fixtures/*.json`.
 - **Deliver:** versioned dispatcher/provider/persistence/decision event DTOs and payload bound markers.
 - **Tests:** schema fixtures for start/result/error/rollback/stale/crash plus exact on-disk maximum encoding for control-heavy JSON and binary/base64 streams; raw/parsed duplication canary fails.
 - **Done when:** events remain diagnostics, not replay/journal records.
 
-### T100 [ ] Implement secure per-invocation trace writer
+### T100 [x] Implement secure per-invocation trace writer
 - **Depends:** T002, T007–T008, T099
 - **Files:** `integrations/src/trace/{mod,writer,error}.rs`, tests.
 - **Deliver:** unique file, current-user-only creation, request ID, buffered/flush policy, init failure.
 - **Tests:** Unix mode tests, collisions, concurrent files, write/flush failures.
 - **Done when:** init failure is distinguishable before dispatch.
 
-### T101 [ ] Implement cross-process trace rotation
+### T101 [x] Implement cross-process trace rotation
 - **Depends:** T100
 - **Files:** `integrations/src/trace/rotation.rs`, tests.
 - **Deliver:** 128 MiB cap over encoded actual plus unused reservation remainder, atomic write conversion from reserved→actual, 16 MiB base/10 MiB call additions, cross-process coordination, deterministic closed victim, 120 MiB active cap.
 - **Tests:** maximum ten-call arithmetic never double-counts; reservation consume/exhaust/release and concurrent writers never exceed 128 MiB; active preservation/stale-lock recovery.
 - **Done when:** hard directory bound and complete launched-call trace coexist under concurrency.
 
-### T102 [ ] Implement traced provider boundary wrapper
+### T102 [x] Implement traced provider boundary wrapper
 - **Depends:** T087–T101
 - **Files:** `integrations/src/provider_process/traced.rs`, tests.
 - **Deliver:** acquire 10 MiB encoded-call reservation before launch; embed request JSON once, base64 each raw stream once, avoid parsed-result duplication, record facts/timing/correlation, consume reservation as writes land, release only unused remainder at trace close.
 - **Tests:** maximum encoded JSON/control/binary fixtures fit reservation; one-byte-over cannot launch; all failures emit last observable event; inherited environment absent.
 - **Done when:** no alternate production provider path bypasses wrapper.
 
-### T103 [ ] Implement system clock, ID, and SHA-256 adapters
+### T103 [x] Implement system clock, ID, and SHA-256 adapters
 - **Depends:** T053, T017
 - **Files:** `integrations/src/{system_clock,uuid_ids,sha256_digest}.rs`, tests.
 - **Deliver:** UTC timestamps, selected IDs, graph/executable digest implementation.
 - **Tests:** format, concurrency uniqueness, known SHA vectors.
 - **Done when:** graph and executable digest types remain distinct.
 
-### V004 [ ] Junction validation — provider/config/trace integrations (T084–T103)
+### V004 [x] Junction validation — provider/config/trace integrations (T084–T103)
 - **Depends:** T103
 - **Owner:** orchestrator in V-mode; per junction template above; not a Fable/Sol review round.
 - **Files:** none tracked; untracked `target/junction-evidence/V004/**` only.
 - **Deliver:** full accumulated inventory plus focused integrations suites (protocol schema fixtures, subprocess/timeout/digest, configuration, trace writer/rotation/traced-boundary) against the T103 candidate; findings ledger or clean report.
 - **Done when:** every command has a recorded outcome and findings are handed to F004 or a clean report is filed; stop for orchestrator.
 
-### F004 [ ] Junction fix — batch V004 findings
+### F004 [x] Junction fix — batch V004 findings
 - **Depends:** V004
 - **Owner:** orchestrator in F-mode; one batched pass; per junction template above; not a correctness review round.
 - **Files:** files within T084–T103 contracts as valid findings require; changed paths append to the T103 range ledger.

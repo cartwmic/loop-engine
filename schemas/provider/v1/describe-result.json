@@ -1,0 +1,249 @@
+{
+  "$defs": {
+    "DescribeResultDto": {
+      "oneOf": [
+        {
+          "properties": {
+            "graph": {
+              "$ref": "#/$defs/GraphDto"
+            },
+            "kind": {
+              "const": "description",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "graph"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "GraphDto": {
+      "properties": {
+        "initial_state": {
+          "type": "string"
+        },
+        "input_declarations": {
+          "items": {
+            "$ref": "#/$defs/InputDeclarationDto"
+          },
+          "type": "array"
+        },
+        "live_guidance_supported": {
+          "type": "boolean"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "states": {
+          "items": {
+            "$ref": "#/$defs/StateDto"
+          },
+          "type": "array"
+        },
+        "transitions": {
+          "items": {
+            "$ref": "#/$defs/TransitionDto"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "initial_state",
+        "states",
+        "transitions",
+        "input_declarations",
+        "live_guidance_supported"
+      ],
+      "type": "object"
+    },
+    "InputDeclarationDto": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "required"
+      ],
+      "type": "object"
+    },
+    "ProviderRole": {
+      "enum": [
+        "describe",
+        "validate_inputs",
+        "evaluate_gates",
+        "live_guidance",
+        "check_compatibility"
+      ],
+      "type": "string"
+    },
+    "StateDto": {
+      "properties": {
+        "final": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "static_guidance": {
+          "$ref": "#/$defs/StaticGuidanceDto"
+        }
+      },
+      "required": [
+        "id",
+        "final",
+        "static_guidance"
+      ],
+      "type": "object"
+    },
+    "StaticGuidanceDeclarationDto": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "text",
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "StaticGuidanceDto": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/StaticGuidanceDeclarationDto"
+        }
+      ]
+    },
+    "TransitionDto": {
+      "properties": {
+        "event": {
+          "type": "string"
+        },
+        "gate_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "source_state": {
+          "type": "string"
+        },
+        "target_state": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_state",
+        "event",
+        "target_state",
+        "gate_ids"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "invocation_id": {
+      "type": "string"
+    },
+    "protocol_major": {
+      "const": 1,
+      "type": "integer"
+    },
+    "provider_version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "result": {
+      "$ref": "#/$defs/DescribeResultDto"
+    },
+    "role": {
+      "const": "describe",
+      "type": "string"
+    }
+  },
+  "required": [
+    "protocol_major",
+    "role",
+    "invocation_id",
+    "result"
+  ],
+  "title": "ResultEnvelope",
+  "type": "object",
+  "x-loop-engine-bounds": {
+    "diagnostic_encoded_bytes": 8192,
+    "diagnostics_per_result_count": 100,
+    "evidence_locator_utf8_bytes": 8192,
+    "evidence_record_encoded_bytes": 65536,
+    "graph_projection_canonical_bytes": 524288,
+    "guidance_text_bytes": 262144,
+    "identifier_utf8_bytes": 128,
+    "metadata_nesting_depth": 16,
+    "provider_request_json_bytes": 4194304,
+    "provider_result_stdout_bytes": 1048576,
+    "provider_snapshot_envelope_bytes": 524288,
+    "run_inputs_encoded_total_bytes": 1048576
+  }
+}

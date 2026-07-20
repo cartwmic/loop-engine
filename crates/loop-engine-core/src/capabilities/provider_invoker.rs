@@ -9,6 +9,7 @@ use crate::model::diagnostic::Diagnostics;
 use crate::model::evidence::EvidenceRecord;
 use crate::model::gate::GateEvaluation;
 use crate::model::graph::WorkflowGraph;
+use crate::model::graph_validation::GraphError;
 use crate::model::ids::{EventId, RequestId, RunId};
 use crate::model::live_guidance::LiveGuidanceResult;
 use crate::model::provider::ProviderObservation;
@@ -20,7 +21,12 @@ pub enum InvocationError<E> {
     /// Trace budget could not reserve a provider boundary; process was not launched.
     TraceBudgetUnavailable,
     /// Provider process was attempted; observation remains durable audit input.
-    Transport { source: E, fact: Box<ProviderFact> },
+    Transport {
+        source: E,
+        fact: Box<ProviderFact>,
+        /// Diagnostic sink failure after provider dispatch; provider outcome remains authoritative.
+        trace_failure: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,14 +35,23 @@ pub struct DescribeRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DescribedGraph {
+    /// Raw mapped declaration. Each operation applies its own conformance validation.
+    Declared(WorkflowGraph),
+    /// Structurally invalid declaration that cannot be represented by core graph types.
+    Invalid(GraphError),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DescribeResult {
-    /// Raw declared graph. Each operation applies its own conformance disposition.
-    pub graph: WorkflowGraph,
+    pub graph: DescribedGraph,
     /// Creation-time locator/digest snapshot retained with the run.
     pub observation: ProviderObservation,
     /// Exact attempted-invocation fact retained in the journal.
     pub fact: ProviderFact,
     pub protocol_major: u32,
+    /// Post-initialization diagnostic sink failure; never changes provider semantics.
+    pub trace_failure: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +73,7 @@ pub enum InputValidationResult {
 pub struct InputValidationInvocationResult {
     pub result: InputValidationResult,
     pub fact: ProviderFact,
+    pub trace_failure: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,12 +178,14 @@ pub struct CompatibilityRequest {
 pub struct GateInvocationResult {
     pub evaluation: GateEvaluation,
     pub fact: ProviderFact,
+    pub trace_failure: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuidanceInvocationResult {
     pub result: LiveGuidanceResult,
     pub fact: ProviderFact,
+    pub trace_failure: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,6 +194,7 @@ pub struct CompatibilityResult {
     pub observation: ProviderObservation,
     pub fact: ProviderFact,
     pub protocol_major: u32,
+    pub trace_failure: Option<String>,
 }
 
 pub trait ProviderInvoker {

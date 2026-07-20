@@ -1,0 +1,10 @@
+{
+  "live_guidance_supported": false,
+  "input_declarations": [],
+  "transitions": [{"gate_ids": ["tests-passed", "review-approved"], "target_state": "done", "event": "submit", "source_state": "draft"}],
+  "states": [
+    {"final": true, "static_guidance": {"kind": "none"}, "id": "done"},
+    {"final": false, "id": "draft", "static_guidance": "Prepare."}
+  ],
+  "initial_state": "draft"
+}

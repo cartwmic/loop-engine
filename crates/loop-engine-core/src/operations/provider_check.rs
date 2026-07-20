@@ -3,7 +3,8 @@ use crate::capabilities::provider_catalog::{
     ActiveRunImpact, ProviderCatalog, ResolvedProviderConfig,
 };
 use crate::capabilities::provider_invoker::{
-    CompatibilityRequest, DescribeRequest, DescribeResult, InvocationError, ProviderInvoker,
+    CompatibilityRequest, DescribeRequest, DescribeResult, DescribedGraph, InvocationError,
+    ProviderInvoker,
 };
 use crate::capabilities::run_reader::RunReader;
 use crate::capabilities::{Page, PageCursor, PageRequest};
@@ -117,6 +118,7 @@ where
     R: RunReader,
     I: ProviderInvoker,
     D: DigestComputer,
+    D::Error: std::fmt::Display,
     G: FnMut(&ResolvedProviderConfig, &crate::model::run::Run) -> Result<CompatibilityRequest, Q>,
     Z: FnMut(
         &ActiveRunImpact,
@@ -145,13 +147,9 @@ where
     if !describe_binding_matches(&config, &described) {
         return Err(ProviderCheckExecutionError::InvalidPlan);
     }
-    let graph_conformance = match ValidatedGraph::validate(described.graph.clone()) {
-        Ok(validated) => GraphConformance::Valid {
-            revision: digests
-                .graph_revision(&SemanticGraphProjection::from_validated(&validated))
-                .map_err(ProviderCheckExecutionError::Digest)?,
-        },
-        Err(error) => GraphConformance::Invalid { error },
+    let graph_conformance = match described.graph.clone() {
+        DescribedGraph::Declared(graph) => classify_graph_with_digest(graph, digests),
+        DescribedGraph::Invalid(error) => GraphConformance::Invalid { error },
     };
     let summary = ProviderCheckSummary {
         config_revision: config.config_revision(),
@@ -294,6 +292,24 @@ fn describe_binding_matches(config: &ResolvedProviderConfig, described: &Describ
         && described.fact.protocol_major == Some(u64::from(described.protocol_major))
 }
 
+fn classify_graph_with_digest<D>(graph: WorkflowGraph, digests: &D) -> GraphConformance
+where
+    D: DigestComputer,
+    D::Error: std::fmt::Display,
+{
+    match ValidatedGraph::validate(graph) {
+        Ok(validated) => {
+            match digests.graph_revision(&SemanticGraphProjection::from_validated(&validated)) {
+                Ok(revision) => GraphConformance::Valid { revision },
+                Err(error) => GraphConformance::Invalid {
+                    error: GraphError::CanonicalEncoding(error.to_string()),
+                },
+            }
+        }
+        Err(error) => GraphConformance::Invalid { error },
+    }
+}
+
 pub fn classify_graph(graph: WorkflowGraph, valid_revision: GraphRevision) -> GraphConformance {
     match ValidatedGraph::validate(graph) {
         Ok(_) => GraphConformance::Valid {
@@ -362,12 +378,14 @@ pub fn trace_budget_failure(
 #[cfg(test)]
 mod tests {
     use crate::capabilities::Page;
-    use crate::capabilities::provider_catalog::ActiveRunImpact;
+    use crate::capabilities::digest::DigestComputer;
+    use crate::capabilities::provider_catalog::{ActiveRunImpact, ResolvedProviderConfig};
     use crate::model::compatibility::{
         CompatibilityFinding, CompatibilityReport, CompatibilityStatus,
     };
-    use crate::model::graph::WorkflowGraph;
-    use crate::model::guidance::LiveGuidanceCapability;
+    use crate::model::graph::{State, WorkflowGraph};
+    use crate::model::graph_projection::SemanticGraphProjection;
+    use crate::model::guidance::{LiveGuidanceCapability, StaticGuidance};
     use crate::model::ids::{GraphRevision, RegistrationId, RunId, StateId};
     use crate::model::provider::{DigestObservation, ProviderObservation};
     use crate::model::run_input::InputDeclarations;
@@ -375,7 +393,7 @@ mod tests {
 
     use super::{
         GraphConformance, ProviderCheckContinuation, ProviderCheckSummary, TraceBudgetDisposition,
-        aggregate_page, classify_graph, trace_budget_failure,
+        aggregate_page, classify_graph, classify_graph_with_digest, trace_budget_failure,
     };
 
     fn summary() -> ProviderCheckSummary {
@@ -408,6 +426,45 @@ mod tests {
             CompatibilityFinding::new("gates", status, vec![]).unwrap(),
         ])
         .unwrap()
+    }
+
+    struct FailingGraphDigest;
+
+    impl DigestComputer for FailingGraphDigest {
+        type Error = &'static str;
+
+        fn graph_revision(
+            &self,
+            _graph: &SemanticGraphProjection,
+        ) -> Result<GraphRevision, Self::Error> {
+            Err("canonical graph exceeds bound")
+        }
+
+        fn executable_digest(
+            &self,
+            _config: &ResolvedProviderConfig,
+        ) -> Result<DigestObservation, Self::Error> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn canonical_encoding_failure_is_completed_conformance_finding() {
+        let state = StateId::parse("a").unwrap();
+        let graph = WorkflowGraph::new_unvalidated(
+            state.clone(),
+            vec![State::new(state, false, StaticGuidance::NoneRequired, None)],
+            vec![],
+            InputDeclarations::default(),
+            LiveGuidanceCapability::Unsupported,
+            None,
+        );
+        assert!(matches!(
+            classify_graph_with_digest(graph, &FailingGraphDigest),
+            GraphConformance::Invalid {
+                error: crate::model::graph_validation::GraphError::CanonicalEncoding(_)
+            }
+        ));
     }
 
     #[test]

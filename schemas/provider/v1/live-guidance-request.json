@@ -1,0 +1,371 @@
+{
+  "$defs": {
+    "CanonicalGraphDto": {
+      "properties": {
+        "canonical_graph_version": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "initial_state_id": {
+          "type": "string"
+        },
+        "input_declarations": {
+          "items": {
+            "$ref": "#/$defs/CanonicalInputDto"
+          },
+          "type": "array"
+        },
+        "live_guidance_supported": {
+          "type": "boolean"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "states": {
+          "items": {
+            "$ref": "#/$defs/CanonicalStateDto"
+          },
+          "type": "array"
+        },
+        "transitions": {
+          "items": {
+            "$ref": "#/$defs/CanonicalTransitionDto"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "canonical_graph_version",
+        "initial_state_id",
+        "input_declarations",
+        "live_guidance_supported",
+        "states",
+        "transitions"
+      ],
+      "type": "object"
+    },
+    "CanonicalGuidanceDto": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "text",
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CanonicalInputDto": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "required"
+      ],
+      "type": "object"
+    },
+    "CanonicalStateDto": {
+      "properties": {
+        "final": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "static_guidance": {
+          "$ref": "#/$defs/CanonicalGuidanceDto"
+        }
+      },
+      "required": [
+        "final",
+        "id",
+        "static_guidance"
+      ],
+      "type": "object"
+    },
+    "CanonicalTransitionDto": {
+      "properties": {
+        "event_id": {
+          "type": "string"
+        },
+        "gate_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "source_state_id": {
+          "type": "string"
+        },
+        "target_state_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event_id",
+        "gate_ids",
+        "source_state_id",
+        "target_state_id"
+      ],
+      "type": "object"
+    },
+    "EvidenceDto": {
+      "properties": {
+        "digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "locator": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "observed_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "locator"
+      ],
+      "type": "object"
+    },
+    "GuidancePayloadDto": {
+      "properties": {
+        "selected_evidence": {
+          "items": {
+            "$ref": "#/$defs/EvidenceDto"
+          },
+          "type": "array"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/RunSnapshotDto"
+        }
+      },
+      "required": [
+        "snapshot",
+        "selected_evidence"
+      ],
+      "type": "object"
+    },
+    "ProviderRole": {
+      "enum": [
+        "describe",
+        "validate_inputs",
+        "evaluate_gates",
+        "live_guidance",
+        "check_compatibility"
+      ],
+      "type": "string"
+    },
+    "RegistrationDto": {
+      "properties": {
+        "argv": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "config_revision": {
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "executable": {
+          "type": "string"
+        },
+        "registration_id": {
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "working_directory": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "registration_id",
+        "config_revision",
+        "executable",
+        "argv",
+        "working_directory",
+        "timeout_seconds"
+      ],
+      "type": "object"
+    },
+    "RunSnapshotDto": {
+      "properties": {
+        "current_state": {
+          "type": "string"
+        },
+        "graph_revision": {
+          "type": "string"
+        },
+        "inputs": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "lifecycle": {
+          "type": "string"
+        },
+        "lifecycle_version": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "registration_id": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "stored_graph": {
+          "$ref": "#/$defs/CanonicalGraphDto"
+        },
+        "workflow_state_version": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "run_id",
+        "registration_id",
+        "graph_revision",
+        "lifecycle",
+        "current_state",
+        "workflow_state_version",
+        "lifecycle_version",
+        "inputs",
+        "stored_graph"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "invocation_id": {
+      "type": "string"
+    },
+    "payload": {
+      "$ref": "#/$defs/GuidancePayloadDto"
+    },
+    "protocol_major": {
+      "const": 1,
+      "type": "integer"
+    },
+    "registration": {
+      "$ref": "#/$defs/RegistrationDto"
+    },
+    "role": {
+      "const": "live_guidance",
+      "type": "string"
+    }
+  },
+  "required": [
+    "protocol_major",
+    "role",
+    "invocation_id",
+    "registration",
+    "payload"
+  ],
+  "title": "RequestEnvelope",
+  "type": "object",
+  "x-loop-engine-bounds": {
+    "diagnostic_encoded_bytes": 8192,
+    "diagnostics_per_result_count": 100,
+    "evidence_locator_utf8_bytes": 8192,
+    "evidence_record_encoded_bytes": 65536,
+    "graph_projection_canonical_bytes": 524288,
+    "guidance_text_bytes": 262144,
+    "identifier_utf8_bytes": 128,
+    "metadata_nesting_depth": 16,
+    "provider_request_json_bytes": 4194304,
+    "provider_result_stdout_bytes": 1048576,
+    "provider_snapshot_envelope_bytes": 524288,
+    "run_inputs_encoded_total_bytes": 1048576
+  }
+}

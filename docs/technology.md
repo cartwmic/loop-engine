@@ -286,7 +286,7 @@ These behaviors apply on all supported platforms without alternate implementatio
 | Concern | MVP behavior |
 |---|---|
 | File permissions | Machine-local state, trace, and other sensitive paths are current-user-only: directories `0700`, files `0600`. Permission failure before dispatch stops the invocation. |
-| Provider timeout | Kill the provider process group: `SIGTERM`, brief grace, then `SIGKILL`. Orphaned provider descendants must not survive timeout. |
+| Provider timeout | Kill the verified provider process group: `SIGTERM`, brief grace, then `SIGKILL`. Conforming descendants must remain in that group and must not survive timeout; providers are not sandboxed against deliberate group escape. |
 | Provider exit/signals | Non-zero exit, signal termination, and crash are interpreted per Unix process semantics and mapped to operation errors per D004. |
 | Paths | Unix path separators; lexical absolute normalization at registration/update; empty `LOOP_ENGINE_HOME` treated as unset; non-empty `LOOP_ENGINE_HOME` overrides machine-local roots for tests and portable use with existing-path symlink resolution or lexical identity for nonexistent roots; caller CWD is never inherited for machine-local roots or provider working directory; normative layout in [configuration.md](configuration.md). |
 | Shell providers | A provider may be a shebang script invoked as the configured executable path. Engine never performs implicit shell interpolation on executable or argument vector. |

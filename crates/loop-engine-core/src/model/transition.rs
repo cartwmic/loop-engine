@@ -32,13 +32,29 @@ impl Transition {
                 return Err(DuplicateGate(gate.clone()));
             }
         }
-        Ok(Self {
+        Ok(Self::new_unvalidated(
             source,
             event,
             target,
             required_gates,
             metadata,
-        })
+        ))
+    }
+
+    pub fn new_unvalidated(
+        source: StateId,
+        event: EventId,
+        target: StateId,
+        required_gates: Vec<GateId>,
+        metadata: Option<Metadata>,
+    ) -> Self {
+        Self {
+            source,
+            event,
+            target,
+            required_gates,
+            metadata,
+        }
     }
 
     pub fn source(&self) -> &StateId {

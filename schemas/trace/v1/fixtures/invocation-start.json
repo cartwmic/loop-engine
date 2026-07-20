@@ -1,0 +1,1 @@
+{"trace_schema_version":1,"ts":"2026-07-18T00:00:00.000Z","request_id":"fixture","category":"invocation","event":"start","format":"json","platform":"x86_64-unknown-linux-gnu","argv_byte_length":1,"argv":["x"],"argv_truncated":false}

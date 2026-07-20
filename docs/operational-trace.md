@@ -337,6 +337,8 @@ Cross-process budget coordination uses Rust `std` file locking only. No leases, 
 | `.reserve/{request_id}.json` | Mode `0600` sidecar recording `unused_reservation_bytes` (unused reservation remainder for the invocation); held under an exclusive lock by the owning process for the invocation lifetime |
 | `{request_id}.jsonl` | Source of truth for **actual encoded bytes** on disk |
 
+Each sidecar contains two fixed-size generation slots. Every slot complements both generation and reservation values. Updates overwrite only older slot, flush, and fsync; readers select highest complete valid generation. Torn newest slot therefore falls back to prior value: reservation additions fail before dispatch, while trace writes and releases can only leave conservative over-accounting.
+
 **Directory accounting invariant** — while holding `.rotation.lock`, directory usage **MUST** equal the sum of all `{request_id}.jsonl` actual encoded byte sizes plus the sum of `unused_reservation_bytes` from every live `.reserve/{request_id}.json` sidecar. Each trace write and sidecar decrement **MUST** occur under the same `.rotation.lock` hold so no observer sees an intermediate double count.
 
 **Normal path**

@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use thiserror::Error;
 
 use super::graph::WorkflowGraph;
-use super::ids::{EventId, StateId};
+use super::ids::{EventId, GateId, InputName, StateId};
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum GraphError {
@@ -21,6 +21,14 @@ pub enum GraphError {
     Ambiguous { state: StateId, event: EventId },
     #[error("final state declares an outgoing transition: {0}")]
     FinalHasOutgoing(StateId),
+    #[error("transition contains duplicate required gate: {0}")]
+    DuplicateGate(GateId),
+    #[error("duplicate input declaration: {0}")]
+    DuplicateInput(InputName),
+    #[error("graph declaration is structurally invalid: {0}")]
+    InvalidDeclaration(String),
+    #[error("canonical graph encoding is invalid: {0}")]
+    CanonicalEncoding(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,8 +48,20 @@ impl ValidatedGraph {
         if !states.contains(graph.initial_state()) {
             return Err(GraphError::MissingInitial(graph.initial_state().clone()));
         }
+        let mut input_names = BTreeSet::new();
+        for input in graph.inputs().values() {
+            if !input_names.insert(input.name().clone()) {
+                return Err(GraphError::DuplicateInput(input.name().clone()));
+            }
+        }
         let mut selectors = BTreeSet::new();
         for transition in graph.transitions() {
+            let mut gates = BTreeSet::new();
+            for gate in transition.required_gates() {
+                if !gates.insert(gate.clone()) {
+                    return Err(GraphError::DuplicateGate(gate.clone()));
+                }
+            }
             if !states.contains(transition.source()) {
                 return Err(GraphError::MissingSource(transition.source().clone()));
             }
@@ -135,6 +155,47 @@ mod tests {
         for graph in cases {
             assert!(ValidatedGraph::validate(graph).is_ok());
         }
+    }
+
+    #[test]
+    fn raw_provider_graph_rejects_duplicate_gates_and_input_declarations() {
+        let duplicate_gate = Transition::new_unvalidated(
+            StateId::parse("a").unwrap(),
+            EventId::parse("go").unwrap(),
+            StateId::parse("b").unwrap(),
+            vec![
+                GateId::parse("gate").unwrap(),
+                GateId::parse("gate").unwrap(),
+            ],
+            None,
+        );
+        assert!(matches!(
+            ValidatedGraph::validate(graph(
+                vec![state("a", false), state("b", false)],
+                vec![duplicate_gate],
+                "a",
+            )),
+            Err(GraphError::DuplicateGate(_))
+        ));
+
+        let duplicate_input = InputDeclaration::new(
+            InputName::parse("input").unwrap(),
+            InputKind::parse("text").unwrap(),
+            false,
+            None,
+        );
+        let raw = WorkflowGraph::new_unvalidated(
+            StateId::parse("a").unwrap(),
+            vec![state("a", false)],
+            vec![],
+            InputDeclarations::new_unvalidated(vec![duplicate_input.clone(), duplicate_input]),
+            LiveGuidanceCapability::Unsupported,
+            None,
+        );
+        assert!(matches!(
+            ValidatedGraph::validate(raw),
+            Err(GraphError::DuplicateInput(_))
+        ));
     }
 
     #[test]

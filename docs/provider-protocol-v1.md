@@ -73,8 +73,9 @@ On supported Unix platforms (D002), before transferring control to the provider 
 2. After spawn, integration **verifies** that the provider process belongs to the expected dedicated process group (PGID).
 3. Timeout termination signals are sent **only** to that verified provider PGID. Integration must never signal the caller's process group for provider timeout handling.
 4. If process-group establishment or PGID verification fails before the provider is considered running, integration aborts the invocation as `provider.spawn.failed` and must not have signaled the caller group for provider timeout purposes.
+5. After the provider leader exits and all protocol streams close, integration terminates any remaining non-zombie members of the still-verified provider process group before reaping the leader and returning. A successful provider result therefore cannot leave conforming background descendants behind.
 
-Provider code runs with the caller's OS permissions. The engine does not sandbox providers (I40).
+Provider code runs with the caller's OS permissions. The engine does not sandbox providers (I40). Provider executables and descendants **must remain in the dedicated provider process group** for their full lifetime; calling `setsid`, moving to another process group, double-fork daemonizing, or otherwise escaping that group is non-conforming provider behavior. Process-group containment is not a security boundary against a malicious local executable.
 
 ## Byte framing
 
@@ -221,7 +222,7 @@ On supported Unix platforms (D002), when `timeout_seconds` elapses:
 
 1. Integration sends **SIGTERM** to the **verified provider process group** only (see [Process group establishment](#process-group-establishment)).
 2. After a **5-second** grace period, integration sends **SIGKILL** to the same verified provider PGID if any member remains.
-3. Orphaned child processes must not survive timeout.
+3. Conforming orphaned child processes that remain in the dedicated provider process group must not survive timeout. Descendants that violate process-group conformance are outside the no-sandbox containment guarantee; bounded post-timeout stream drainage still prevents them from blocking engine return.
 
 Once the wall-clock deadline fires, the invocation outcome is **unconditionally** `provider.timeout`. Partial or complete stdout observed after the deadline does not change this mapping. A successful invocation requires that a complete valid result envelope **and** process exit (per [Exit status](#exit-status)) both complete **before** the deadline.
 
