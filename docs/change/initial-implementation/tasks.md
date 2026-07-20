@@ -461,7 +461,7 @@ Global rules for every task:
 ### T036 [x] Implement immutable input declarations and values
 - **Depends:** T032–T033, T005, T008
 - **Files:** `core/src/model/run_input.rs`, tests.
-- **Deliver:** provider-declared required/optional names/descriptions and bounded accepted JSON-like values through core-owned value model.
+- **Deliver:** provider-declared required/optional names, provider-defined input-kind identifiers, optional metadata, and bounded accepted JSON-like values through the core-owned value model. Frozen protocol v1 has no standalone input-description field; presentation belongs in metadata.
 - **Tests:** undeclared/missing/duplicate/oversize validation and no mutation API.
 - **Done when:** input values cannot influence graph construction in core.
 - **Stop:** generic mutable variable/update operation appears.
@@ -477,7 +477,7 @@ Global rules for every task:
 ### T038 [x] Implement graph state and guidance model
 - **Depends:** T032–T036
 - **Files:** `core/src/model/graph.rs`, `guidance.rs`, tests.
-- **Deliver:** flat states, initial ID, final flag, title/summary/metadata, static text or explicit no-guidance, and stored live-guidance capability.
+- **Deliver:** flat states, initial ID, final flag, metadata, static text or explicit no-guidance, and stored live-guidance capability. Frozen protocol v1 has no standalone state title/summary fields; presentation beyond state ID/static guidance belongs in metadata.
 - **Tests:** zero/one/multiple finals and initial-final representable.
 - **Done when:** hierarchy/parallel/timer semantics are unrepresentable.
 - **Stop:** candidate input values are accepted by graph constructor.
