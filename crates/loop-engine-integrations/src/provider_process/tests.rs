@@ -1,9 +1,16 @@
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use loop_engine_core::capabilities::provider_catalog::{ProviderConfig, ResolvedProviderConfig};
 use loop_engine_core::model::ids::{ProviderHandle, RegistrationId};
 
 use super::{ProcessError, process_failure_code, run};
+
+fn process_test_guard() -> MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 fn config(command: String, timeout_seconds: u64) -> ResolvedProviderConfig {
     ResolvedProviderConfig::new(
@@ -17,6 +24,7 @@ fn config(command: String, timeout_seconds: u64) -> ResolvedProviderConfig {
 
 #[test]
 fn rejects_timeout_outside_platform_instant_range_without_panicking() {
+    let _guard = process_test_guard();
     let provider = config("exit 0".into(), u64::MAX);
     assert!(matches!(
         run(&provider, b"{}"),
@@ -26,6 +34,7 @@ fn rejects_timeout_outside_platform_instant_range_without_panicking() {
 
 #[test]
 fn drains_large_stdout_and_stderr_concurrently_without_deadlock() {
+    let _guard = process_test_guard();
     let provider = config(
         "(head -c 1100000 /dev/zero | tr '\\0' x) & (head -c 1100000 /dev/zero | tr '\\0' y >&2) & wait".into(),
         10,
@@ -41,6 +50,7 @@ fn drains_large_stdout_and_stderr_concurrently_without_deadlock() {
 
 #[test]
 fn timeout_kills_descendant_process_group() {
+    let _guard = process_test_guard();
     let directory = tempfile::tempdir().unwrap();
     let pid_file = directory.path().join("descendant.pid");
     let provider = config(
@@ -73,6 +83,7 @@ fn timeout_kills_descendant_process_group() {
 
 #[test]
 fn successful_parent_exit_cleans_up_conforming_background_descendant() {
+    let _guard = process_test_guard();
     let directory = tempfile::tempdir().unwrap();
     let pid_file = directory.path().join("descendant.pid");
     let provider = config(
@@ -98,6 +109,7 @@ fn successful_parent_exit_cleans_up_conforming_background_descendant() {
 
 #[test]
 fn timeout_remains_authoritative_when_blocked_stdin_fails_during_termination() {
+    let _guard = process_test_guard();
     let provider = config("trap '' TERM; sleep 30".into(), 1);
     let request = vec![b'x'; 4_000_000];
     assert!(matches!(
@@ -108,6 +120,7 @@ fn timeout_remains_authoritative_when_blocked_stdin_fails_during_termination() {
 
 #[test]
 fn timeout_still_applies_after_parent_exits_while_descendant_holds_pipes() {
+    let _guard = process_test_guard();
     let provider = config("(trap '' TERM; sleep 30) & exit 0".into(), 1);
     let started = Instant::now();
     assert!(matches!(run(&provider, b"{}"), Err(ProcessError::Timeout)));
@@ -116,6 +129,7 @@ fn timeout_still_applies_after_parent_exits_while_descendant_holds_pipes() {
 
 #[test]
 fn timeout_does_not_block_on_descendant_that_leaves_provider_group() {
+    let _guard = process_test_guard();
     let provider = config("set -m; sleep 3 & exit 0".into(), 1);
     let started = Instant::now();
     assert!(matches!(run(&provider, b"{}"), Err(ProcessError::Timeout)));
@@ -124,6 +138,7 @@ fn timeout_does_not_block_on_descendant_that_leaves_provider_group() {
 
 #[test]
 fn launch_uses_literal_argv_without_shell_interpretation() {
+    let _guard = process_test_guard();
     let directory = tempfile::tempdir().unwrap();
     let marker = directory.path().join("shell-injection");
     let argument = format!("$HOME;touch {}", marker.display());
@@ -144,6 +159,7 @@ fn launch_uses_literal_argv_without_shell_interpretation() {
 
 #[test]
 fn explicit_cwd_and_inherited_environment_do_not_depend_on_caller_cwd() {
+    let _guard = process_test_guard();
     let directory = tempfile::tempdir().unwrap();
     let cwd = directory.path().to_str().unwrap().to_owned();
     let observed_cwd = directory.path().canonicalize().unwrap();
@@ -170,6 +186,7 @@ fn explicit_cwd_and_inherited_environment_do_not_depend_on_caller_cwd() {
 
 #[test]
 fn missing_nonzero_crash_signal_and_invalid_utf8_are_distinct() {
+    let _guard = process_test_guard();
     let missing = ResolvedProviderConfig::new(
         RegistrationId::parse("provider-1").unwrap(),
         ProviderHandle::parse("provider").unwrap(),
@@ -181,10 +198,11 @@ fn missing_nonzero_crash_signal_and_invalid_utf8_are_distinct() {
         run(&missing, b""),
         Err(ProcessError::ExecutableNotFound(_))
     ));
-    assert!(matches!(
-        run(&config("cat >/dev/null; exit 7".into(), 5), b""),
-        Err(ProcessError::NonZero(Some(7)))
-    ));
+    let nonzero = run(&config("cat >/dev/null; exit 7".into(), 5), b"");
+    assert!(
+        matches!(nonzero, Err(ProcessError::NonZero(Some(7)))),
+        "unexpected nonzero observation: {nonzero:?}"
+    );
     let crash = run(&config("cat >/dev/null; kill -SEGV $$".into(), 5), b"").unwrap_err();
     assert!(matches!(&crash, ProcessError::Crash(_)));
     assert_eq!(process_failure_code(&crash), "provider.crash");
