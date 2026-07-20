@@ -1,6 +1,6 @@
 # Initial Implementation Task List
 
-**Status:** In progress — Phase 4 provider/configuration/trace integrations implemented; V004 validation is next
+**Status:** In progress — Phase 4 provider/configuration/trace integrations validated; Phase 5 persistence authority is next
 
 Follow [execution protocol](README.md#execution-protocol), resolve [decision gates](decisions.md), and maintain [coverage map](coverage.md). Every task is sized as one narrow orchestrator-owned unit unless its stop condition requires owner escalation.
 
