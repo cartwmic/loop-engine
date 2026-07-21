@@ -311,6 +311,138 @@ assert payload["candidate_revision"] == candidate, payload
 print("OK matching revision binding accepted")
 PY
 
+echo "== invalid model citation receives one bounded correction attempt =="
+python3 - <<'PY' "$ROOT"
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+root = Path(sys.argv[1])
+request = json.loads((root / "examples" / "request.v1.json").read_text(encoding="utf-8"))
+parent = request["parent_revision"]
+candidate = request["candidate_revision"]
+
+with tempfile.TemporaryDirectory() as tmp_dir:
+    tmp = Path(tmp_dir)
+    counter = tmp / "calls"
+    stub = tmp / "pi-stub"
+    stub.write_text(
+        f'''#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+counter = Path({str(counter)!r})
+calls = int(counter.read_text() or "0") if counter.exists() else 0
+counter.write_text(str(calls + 1))
+prompt = sys.stdin.read()
+if calls == 0:
+    rubric_id = "SECRET_INVALID_RUBRIC"
+else:
+    assert "previous response failed validation" in prompt
+    assert "SECRET_PREVIOUS_OUTPUT" not in prompt
+    assert "SECRET_INVALID_RUBRIC" not in prompt
+    rubric_id = "foundation-seed"
+print(json.dumps({{
+    "schema_version": 1,
+    "parent_revision": "{parent}",
+    "candidate_revision": "{candidate}",
+    "verdict": "pass",
+    "citations": [{{"rubric_id": rubric_id, "rule": "I47", "lines": ["docs/change/initial-implementation/README.md"]}}],
+    "message": "SECRET_PREVIOUS_OUTPUT" if calls == 0 else "corrected binding",
+}}))
+''',
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    env = os.environ.copy()
+    env["LOOP_ENGINE_SEMANTIC_JUDGE_PI"] = str(stub)
+    completed = subprocess.run(
+        [str(root / "judge")],
+        input=json.dumps(request),
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    calls = counter.read_text(encoding="utf-8")
+
+payload = json.loads(completed.stdout)
+assert payload["verdict"] == "pass", payload
+assert calls == "2", calls
+print("OK invalid citation corrected once within same bound request")
+PY
+
+echo "== correction attempt shares exact original timeout budget =="
+python3 - <<'PY' "$ROOT"
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root))
+import adapter
+
+request = json.loads((root / "examples" / "request.v1.json").read_text(encoding="utf-8"))
+request["timeout_seconds"] = 2
+binding = adapter.RevisionBinding.from_request(request)
+timeouts = []
+responses = iter([
+    json.dumps({
+        "schema_version": 1,
+        "parent_revision": request["parent_revision"],
+        "candidate_revision": request["candidate_revision"],
+        "verdict": "pass",
+        "citations": [{"rubric_id": "invalid", "rule": "I47", "lines": ["docs/change/initial-implementation/README.md"]}],
+        "message": "invalid first response",
+    }),
+    json.dumps({
+        "schema_version": 1,
+        "parent_revision": request["parent_revision"],
+        "candidate_revision": request["candidate_revision"],
+        "verdict": "pass",
+        "citations": [{"rubric_id": "foundation-seed", "rule": "I47", "lines": ["docs/change/initial-implementation/README.md"]}],
+        "message": "corrected response",
+    }),
+])
+
+def fake_invoke(prompt, config, timeout_seconds, *, binding):
+    del prompt, config, binding
+    timeouts.append(timeout_seconds)
+    return next(responses)
+
+clock = iter([100.0, 100.0, 100.25])
+adapter.invoke_pi = fake_invoke
+adapter.time.monotonic = lambda: next(clock)
+payload = adapter.judge(request, binding)
+assert payload["verdict"] == "pass", payload
+assert timeouts == [2, 1.75], timeouts
+
+plain_calls = []
+plain_responses = iter(["MALFORMED_PLAIN_OUTPUT", json.dumps({
+    "schema_version": 1,
+    "parent_revision": request["parent_revision"],
+    "candidate_revision": request["candidate_revision"],
+    "verdict": "pass",
+    "citations": [{"rubric_id": "foundation-seed", "rule": "I47", "lines": ["docs/change/initial-implementation/README.md"]}],
+    "message": "corrected plain response",
+})])
+def fake_plain_invoke(prompt, config, timeout_seconds, *, binding):
+    del config, timeout_seconds, binding
+    plain_calls.append(prompt)
+    return next(plain_responses)
+adapter.invoke_pi = fake_plain_invoke
+clock = iter([200.0, 200.0, 200.5])
+adapter.time.monotonic = lambda: next(clock)
+payload = adapter.judge(request, adapter.RevisionBinding.from_request(request))
+assert payload["verdict"] == "pass", payload
+assert len(plain_calls) == 2, len(plain_calls)
+assert "MALFORMED_PLAIN_OUTPUT" not in plain_calls[1], plain_calls[1]
+print("OK correction uses exact remaining budget and retries plain output without replay")
+PY
+
 echo "== nonzero pi exit with valid-looking stdout => unavailable =="
 python3 - <<'PY' "$ROOT"
 import json

@@ -16,7 +16,7 @@ Development tooling invokes replaceable semantic judges through one versioned ge
 
 1. Caller writes one UTF-8 JSON request document to the judge executable stdin and closes stdin.
 2. Judge reads stdin until EOF, evaluates the request, writes one UTF-8 JSON result document to stdout, and exits.
-3. Malformed request, adapter failure, timeout, or malformed model response map to `verdict: unavailable` on stdout (not a non-zero adapter exit solely for unavailable).
+3. If a model response is malformed or cites outside the supplied parent rubric/resulting paths, the adapter makes one bounded correction attempt within the original request timeout. A still-invalid response, malformed request, adapter failure, or timeout maps to `verdict: unavailable` on stdout (not a non-zero adapter exit solely for unavailable).
 
 ## Request v1
 

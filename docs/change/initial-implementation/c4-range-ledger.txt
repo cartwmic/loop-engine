@@ -64,6 +64,9 @@ docs/change/initial-implementation/tasks.md
 docs/operational-trace.md
 docs/provider-protocol-v1.md
 docs/technology.md
+quality/semantic-judge/v1/README.md
+quality/semantic-judge/v1/adapter.py
+quality/semantic-judge/v1/verify-contract
 schemas/provider/v1/check-compatibility-request.json
 schemas/provider/v1/check-compatibility-result.json
 schemas/provider/v1/describe-request.json

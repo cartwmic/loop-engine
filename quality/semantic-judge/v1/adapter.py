@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -400,7 +401,51 @@ def build_prompt(request: dict[str, Any]) -> str:
         if migration_projection
         else "Exact diff"
     )
-    citation_example = "path" if migration_projection else "path:line"
+    example_rubric_id = request["rubrics"][0]["id"]
+    example_content = request["rubrics"][0]["content"]
+    example_identifiers = [
+        token
+        for token in "".join(
+            ch if ch.isalnum() or ch in {"_", "-"} else " "
+            for ch in example_content
+        ).split()
+        if token[0].isupper() and any(ch.isdigit() for ch in token)
+    ]
+    example_headings = [
+        line.lstrip("#").strip()
+        for line in example_content.splitlines()
+        if line.startswith("#") and line.lstrip("#").strip()
+    ]
+    example_rule = next(iter(example_identifiers or example_headings), "rule")
+    changed_paths = []
+    for diff_line in request["diff"].splitlines():
+        if diff_line.startswith("diff --git a/") and " b/" in diff_line:
+            left, right = diff_line.split(" b/", 1)
+            changed_paths.extend([left.removeprefix("diff --git a/"), right])
+    example_path = (
+        request.get("relevant_docs", [{}])[0].get("path")
+        if request.get("relevant_docs")
+        else None
+    ) or next(iter(dict.fromkeys(changed_paths)), "path")
+    valid_rubric_ids = ", ".join(rubric["id"] for rubric in request["rubrics"])
+    response_example = json.dumps(
+        {
+            "schema_version": 1,
+            "parent_revision": request["parent_revision"],
+            "candidate_revision": request["candidate_revision"],
+            "verdict": "pass|fail|indeterminate",
+            "citations": [
+                {
+                    "rubric_id": example_rubric_id,
+                    "rule": example_rule,
+                    "lines": [example_path],
+                }
+            ],
+            "message": "...",
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
     return f"""You are a documentation semantic judge for loop-engine.
 
@@ -413,8 +458,9 @@ Rules:
 - Emit exactly one JSON object and no other text.
 - verdict must be one of: pass, fail, indeterminate.
 - pass/fail/indeterminate require at least one citation with rubric_id, rule, and non-empty lines array.
-- rubric_id must exactly equal an ID supplied below; rule must be an exact identifier or heading present in that rubric.
-- lines entries must cite changed/resulting repository paths from the supplied semantic diff or resulting-doc snapshots, with optional :line; use unnumbered paths when no resulting-doc snapshot is supplied.
+- Valid rubric_id values are exactly: {valid_rubric_ids}. rubric_id names the rubric container (for example `{example_rubric_id}`), never a rule identifier such as `{example_rule}`.
+- rule must be an exact identifier or heading present in the cited rubric.
+- lines entries must use unnumbered changed/resulting repository paths from the supplied semantic diff or resulting-doc snapshots. Do not append :line numbers.
 - If evidence is insufficient, use indeterminate.
 
 Request mode: {request['mode']}
@@ -440,7 +486,7 @@ Candidate revision: {request['candidate_revision']}
 ```
 
 Respond with JSON only using this shape:
-{{"schema_version":1,"parent_revision":"{request['parent_revision']}","candidate_revision":"{request['candidate_revision']}","verdict":"pass|fail|indeterminate","citations":[{{"rubric_id":"...","rule":"...","lines":["{citation_example}"]}}],"message":"..."}}
+{response_example}
 
 parent_revision and candidate_revision in the response must exactly match the request values above.
 """
@@ -449,7 +495,7 @@ parent_revision and candidate_revision in the response must exactly match the re
 def invoke_pi(
     prompt: str,
     config: dict[str, Any],
-    timeout_seconds: int,
+    timeout_seconds: float,
     *,
     binding: RevisionBinding,
 ) -> str:
@@ -493,12 +539,7 @@ def invoke_pi(
             binding=binding,
         )
     text = extract_pi_assistant_text(completed.stdout)
-    if not text:
-        unavailable(
-            "no assistant response from pi",
-            binding=binding,
-        )
-    return text
+    return text if text is not None else completed.stdout
 
 
 def judge(request: dict[str, Any], binding: RevisionBinding) -> dict[str, Any]:
@@ -507,40 +548,59 @@ def judge(request: dict[str, Any], binding: RevisionBinding) -> dict[str, Any]:
     candidate_revision = request["candidate_revision"]
     config = load_config(binding)
     timeout_seconds = int(request.get("timeout_seconds") or config.get("timeout_seconds") or 300)
+    deadline = time.monotonic() + timeout_seconds
+
+    def remaining_budget() -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            unavailable(
+                f"judge timeout after {timeout_seconds}s",
+                binding=binding,
+            )
+        return remaining
+
     prompt = build_prompt(request)
     raw = invoke_pi(
         prompt,
         config,
-        timeout_seconds,
+        remaining_budget(),
         binding=binding,
     )
-    payload = extract_json_object(raw)
-    if payload is None:
-        unavailable(
-            "judge returned non-json response",
+
+    for attempt in range(2):
+        payload = extract_json_object(raw)
+        failure = "judge returned non-json response" if payload is None else None
+        if payload is not None:
+            error = validate_response(payload)
+            if error:
+                failure = f"invalid judge response: {error}"
+            else:
+                semantic_error = validate_response_against_request(payload, request)
+                if semantic_error:
+                    failure = f"invalid judge citations: {semantic_error}"
+                elif (
+                    payload.get("parent_revision") != parent_revision
+                    or payload.get("candidate_revision") != candidate_revision
+                ):
+                    failure = "response revision binding mismatch"
+                else:
+                    return payload
+
+        assert failure is not None
+        if attempt == 1:
+            unavailable(failure, binding=binding)
+        correction_prompt = f"""{prompt}
+
+Your previous response failed validation and was rejected fail-closed. Return one corrected JSON object. Preserve exact revision bindings. Use one of the explicitly listed rubric_id values, an exact rule from that rubric, and unnumbered changed/resulting paths only. Do not repeat prose or any prior response text.
+"""
+        raw = invoke_pi(
+            correction_prompt,
+            config,
+            remaining_budget(),
             binding=binding,
         )
-    error = validate_response(payload)
-    if error:
-        unavailable(
-            f"invalid judge response: {error}",
-            binding=binding,
-        )
-    semantic_error = validate_response_against_request(payload, request)
-    if semantic_error:
-        unavailable(
-            f"invalid judge citations: {semantic_error}",
-            binding=binding,
-        )
-    if (
-        payload.get("parent_revision") != parent_revision
-        or payload.get("candidate_revision") != candidate_revision
-    ):
-        unavailable(
-            "response revision binding mismatch",
-            binding=binding,
-        )
-    return payload
+
+    raise AssertionError("unreachable")
 
 
 def cmd_validate_fixtures() -> int:
