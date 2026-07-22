@@ -1,0 +1,192 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "evidence": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "kind": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "locator": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "media_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "metadata": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "evidence_id",
+          "kind",
+          "locator",
+          "digest",
+          "media_type",
+          "metadata",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "export_schema_version": {
+      "const": 1,
+      "type": "integer"
+    },
+    "exported_at": {
+      "type": "string"
+    },
+    "graph": {
+      "additionalProperties": true,
+      "properties": {
+        "canonical_graph_version": {
+          "const": 1,
+          "type": "integer"
+        },
+        "graph_revision": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "initial_state_id": {
+          "type": "string"
+        },
+        "input_declarations": {
+          "type": "array"
+        },
+        "live_guidance_supported": {
+          "type": "boolean"
+        },
+        "states": {
+          "type": "array"
+        },
+        "transitions": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "graph_revision",
+        "canonical_graph_version",
+        "initial_state_id",
+        "states",
+        "transitions",
+        "input_declarations",
+        "live_guidance_supported"
+      ],
+      "type": "object"
+    },
+    "inputs": {
+      "type": "object"
+    },
+    "registration_binding": {
+      "additionalProperties": false,
+      "properties": {
+        "config_revision_at_create": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "registration_id": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "registration_id",
+        "config_revision_at_create"
+      ],
+      "type": "object"
+    },
+    "run": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "type": "string"
+        },
+        "id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lifecycle": {
+          "enum": [
+            "active",
+            "final",
+            "terminated"
+          ],
+          "type": "string"
+        },
+        "lifecycle_version": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "label_version": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "state": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workflow_state_version": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "lifecycle",
+        "state",
+        "workflow_state_version",
+        "lifecycle_version",
+        "label_version",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "run_id": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "export_schema_version",
+    "run_id",
+    "exported_at",
+    "run",
+    "registration_binding",
+    "graph",
+    "inputs",
+    "evidence"
+  ],
+  "title": "ExportStateV1",
+  "type": "object"
+}

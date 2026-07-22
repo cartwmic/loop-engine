@@ -104,6 +104,14 @@ impl JournalDraft {
         &self.run_id
     }
 
+    pub fn observed_at(&self) -> ObservedAt {
+        self.observed_at
+    }
+
+    pub fn request_id(&self) -> &RequestId {
+        &self.request_id
+    }
+
     pub fn operation(&self) -> &str {
         self.operation.as_str()
     }

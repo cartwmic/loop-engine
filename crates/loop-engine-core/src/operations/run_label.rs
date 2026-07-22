@@ -38,6 +38,8 @@ pub fn command(
         validate_journal(entry, run.id(), "run.label", JournalEntryKind::LabelChanged)?;
     }
     let completed_matches = completed_entry.outcome() == OutcomeClass::Completed
+        && completed_entry.reason().is_none()
+        && completed_entry.attempt().is_none()
         && matches!(
             completed_entry.extension(),
             JournalExtension::LabelChanged { change: Some(change) }
@@ -48,6 +50,7 @@ pub fn command(
             .reason()
             .map(|reason| reason.code())
             == Some(ReasonCode::RunLifecycleTerminal)
+        && terminal_rejection_entry.attempt().is_none()
         && matches!(
             terminal_rejection_entry.extension(),
             JournalExtension::LabelChanged { change: None }
@@ -65,7 +68,7 @@ pub fn command(
 
 #[cfg(test)]
 mod tests {
-    use crate::model::attempt::{JournalExtension, LabelChangeFact};
+    use crate::model::attempt::{AttemptFacts, JournalExtension, LabelChangeFact};
     use crate::model::bounded::BoundedText;
     use crate::model::outcome::OutcomeClass;
 
@@ -101,5 +104,28 @@ mod tests {
                 if change.label_before.as_ref().map(BoundedText::as_str) == Some("concurrent")
                     && change.label_after.as_ref().map(BoundedText::as_str) == Some("next")
         ));
+    }
+
+    #[test]
+    fn label_cannot_add_unowned_attempt_facts() {
+        let run = crate::operations::test_support::run();
+        let completed = crate::operations::test_support::draft(
+            "run.label",
+            OutcomeClass::Completed,
+            JournalExtension::LabelChanged {
+                change: Some(LabelChangeFact {
+                    label_before: None,
+                    label_after: Some(BoundedText::non_empty("run_label", "next").unwrap()),
+                }),
+            },
+            Some(AttemptFacts::default()),
+        );
+        let rejected = crate::operations::test_support::draft(
+            "run.label",
+            OutcomeClass::Rejected,
+            JournalExtension::LabelChanged { change: None },
+            None,
+        );
+        assert!(super::command(&run, Some("next".into()), completed, rejected).is_err());
     }
 }

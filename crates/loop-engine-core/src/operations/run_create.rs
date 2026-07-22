@@ -9,7 +9,7 @@ use crate::capabilities::provider_invoker::{
     InputValidationResult, InvocationError, ProviderInvoker, ValidateInputsRequest,
 };
 use crate::capabilities::run_writer::RunWriter;
-use crate::model::attempt::{JournalExtension, ProviderRole};
+use crate::model::attempt::{AttemptFacts, JournalExtension, ProviderFact, ProviderRole};
 use crate::model::graph_projection::SemanticGraphProjection;
 use crate::model::graph_validation::{GraphError, ValidatedGraph};
 use crate::model::ids::{GraphRevision, RegistrationId, RunId};
@@ -196,7 +196,7 @@ where
         .map_err(RunCreateExecutionError::Writer)
 }
 
-pub fn command(
+pub(crate) fn command(
     run: Run,
     config: &ResolvedProviderConfig,
     described: &DescribeResult,
@@ -231,42 +231,59 @@ pub fn command(
     }
     let mut expected_facts = vec![described.fact.clone()];
     if let Some(result) = input_result {
-        let expected_outcome = match result.result {
-            InputValidationResult::Accepted => OutcomeClass::Completed,
-            InputValidationResult::Rejected(_) => OutcomeClass::Rejected,
-            InputValidationResult::EvaluationError(_) => OutcomeClass::Error,
-        };
-        if result.fact.role != ProviderRole::ValidateInputs
-            || result.fact.outcome != expected_outcome
+        if !matches!(result.result, InputValidationResult::Accepted)
+            || result.fact.role != ProviderRole::ValidateInputs
+            || result.fact.outcome != OutcomeClass::Completed
         {
             return Err(CommandError::JournalMismatch.into());
         }
         expected_facts.push(result.fact.clone());
     }
-    if !matches!(
-        creation_entry.extension(),
-        JournalExtension::RunCreated { graph_revision } if graph_revision == run.graph_revision()
-    ) || !creation_entry.attempt().is_some_and(|attempt| {
-        attempt.provider_observations == expected_facts
-            && attempt.provider_observations.iter().all(|fact| {
-                fact.config_revision == config.config_revision()
-                    && fact.registration_id == *run.registration_id()
-                    && fact.executable.as_str() == config.config().executable()
-            })
-    }) {
+    if creation_entry.outcome() != OutcomeClass::Completed
+        || creation_entry.reason().is_some()
+        || !matches!(
+            creation_entry.extension(),
+            JournalExtension::RunCreated { graph_revision } if graph_revision == run.graph_revision()
+        )
+        || !creation_entry.attempt().is_some_and(|attempt| {
+            creation_attempt_shape_matches(attempt, &expected_facts)
+                && attempt.provider_observations.iter().all(|fact| {
+                    fact.config_revision == config.config_revision()
+                        && fact.registration_id == *run.registration_id()
+                        && fact.executable.as_str() == config.config().executable()
+                })
+        })
+    {
         return Err(CommandError::JournalMismatch.into());
     }
-    Ok(CreateRunCommand {
+    Ok(CreateRunCommand::from_parts(
         run,
-        expected_config_revision: config.config_revision(),
+        config.config_revision(),
         creation_entry,
-    })
+    ))
+}
+
+fn creation_attempt_shape_matches(attempt: &AttemptFacts, expected_facts: &[ProviderFact]) -> bool {
+    attempt.provider_observations == expected_facts
+        && attempt.transition.is_none()
+        && attempt.gate_verdict_facts.is_none()
+        && attempt.evidence_associations.is_none()
+        && attempt.evidence_recorded.is_none()
+        && attempt.note.is_none()
+        && attempt.actor.is_none()
+        && attempt.corrects_sequence.is_none()
+        && attempt.diagnostics.is_empty()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_input_result, needs_input_validation, reject_observed_digest_drift};
+    use super::{
+        classify_input_result, creation_attempt_shape_matches, needs_input_validation,
+        reject_observed_digest_drift,
+    };
     use crate::capabilities::provider_invoker::InputValidationResult;
+    use crate::model::attempt::AttemptFacts;
+    use crate::model::diagnostic::Diagnostic;
     use crate::model::ids::{InputKind, InputName};
     use crate::model::provider::DigestObservation;
     use crate::model::run_input::{InputDeclaration, InputDeclarations, RunInputs};
@@ -293,5 +310,17 @@ mod tests {
         let second = DigestObservation::observed(format!("sha256:{}", "b".repeat(64))).unwrap();
         assert!(reject_observed_digest_drift(&first, &second).is_err());
         assert!(reject_observed_digest_drift(&first, &first).is_ok());
+    }
+
+    #[test]
+    fn successful_creation_cannot_add_fabricated_diagnostics() {
+        let clean = AttemptFacts::default();
+        assert!(creation_attempt_shape_matches(&clean, &[]));
+
+        let fabricated = AttemptFacts {
+            diagnostics: vec![Diagnostic::new("fabricated", "not observed", None).unwrap()],
+            ..AttemptFacts::default()
+        };
+        assert!(!creation_attempt_shape_matches(&fabricated, &[]));
     }
 }

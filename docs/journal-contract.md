@@ -194,7 +194,7 @@ Encoded size of the `gate_verdict_facts` object **MUST NOT** exceed `journal_gat
 | `verdicts` | array | when result is verdict set | One object per required gate: `{ "gate_id", "status": "pass" \| "fail", "message"?: string }` |
 | `incompatibility` | object | when provider declared incompatibility | Bounded diagnostic; no verdict substitution |
 
-Failed gates produce `outcome: rejected` with `reason.code` such as `gate.failed`; verdict details live in `gate_verdict_facts`.
+Failed gates produce `outcome: rejected` with `reason.code` such as `gate.failed`; verdict details live in `gate_verdict_facts`. Duplicate, missing, or extra verdict identities cannot inhabit this exact-set object: such responses produce `outcome: error`, `reason.code: provider.protocol.malformed`, bounded diagnostics, and the exact provider observation without `gate_verdict_facts` or provider evidence claims.
 
 ## Evidence associations nesting
 
@@ -205,6 +205,10 @@ Encoded size of the `evidence_associations` object **MUST NOT** exceed `journal_
 | `inline` | array | no | Inline evidence records retained on this attempt (bounded ids/kinds/locators) |
 | `selected_ids` | array of strings | no | Caller-selected existing evidence IDs associated with this attempt |
 | `provider_recorded_ids` | array of strings | no | New evidence IDs persisted from valid provider gate evidence on this attempt |
+
+Protocol-v1 provider evidence is result-scoped. Its gate association uses the deterministic canonical storage scope defined by [provider-protocol-v1.md](provider-protocol-v1.md#evaluate_gates): the first requested required gate, independent of provider verdict-array order. This association is engine storage scope, not a provider assertion that evidence originated from one verdict. Inline and caller-selected evidence associate with the event only and **MUST NOT** carry a gate ID; command revalidation rejects caller-authored gate provenance.
+
+Evidence IDs are unique within a run. If an otherwise current event attempt proposes an inline ID already present in authoritative evidence, its durable disposition is `rejected` with `evidence.invalid`; an already-present provider ID produces `error` with `provider.evidence.malformed`. Both collision entries preserve already-observed provider and gate facts, force `transition.applied: false`, and report all evidence-recorded categories as false. They never associate or overwrite the existing row.
 
 `evidence_recorded` on the entry **MUST** mirror which categories actually committed:
 

@@ -75,10 +75,13 @@ Foundation commit `7552af5968b4a2c10aefd01fbfa6c351817e1b8b` remains the initial
 | Executable | `quality/semantic-judge/v1/judge` |
 | Adapter implementation | `quality/semantic-judge/v1/adapter.py` |
 | Adapter config | `quality/semantic-judge/v1/config.json` |
-| Default model | `openai-codex/gpt-5.6-sol` via `pi` with `--no-tools` |
+| Default model | `claude-bridge/claude-fable-5` via `pi` with `--no-tools`; 1M context preserves exact large-checkpoint diffs without truncation |
+| Provider extension | `git/github.com/cartwmic/pi-claude-bridge/index.ts`, resolved beneath `PI_CODING_AGENT_DIR` |
 | Default timeout | 900 seconds |
 
-Credentials are never stored in the repository. Local execution uses the operator's existing `pi` authentication (for example `~/.pi/agent/auth.json`). T029 provisions the same adapter in GitHub Actions using repository secret `LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON`.
+Adapter disables ambient Pi extensions, skills, prompt templates, and context files, then loads only configured provider extensions from beneath `PI_CODING_AGENT_DIR`. Isolation prevents unrelated extension lifecycle handles from delaying process exit and prevents ambient instructions from consuming judge context or changing semantic scope.
+
+Credentials are never stored in the repository. Local execution uses the operator's existing `pi` authentication (for example `~/.pi/agent/auth.json`) and requires the configured provider extension to be installed under `PI_CODING_AGENT_DIR`. T029 provisions the same adapter in GitHub Actions using repository secret `LOOP_ENGINE_SEMANTIC_JUDGE_PI_AUTH_JSON`.
 
 ## Verification
 

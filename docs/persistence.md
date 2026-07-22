@@ -44,21 +44,21 @@ Exactly one SQLite database file per machine-local installation: `{state_root}/s
 Open sequence on every CLI invocation that needs persistence:
 
 1. Open `state.db` with bundled SQLite through `rusqlite` (read/write, create-if-needed only when an owning operation may initialize an empty store).
-2. Apply [connection pragmas](#connection-pragmas) on the connection.
-3. Run [startup migrations](#migration-policy) inside the integration open path before any application operation dispatches.
-4. Reject databases whose applied schema version exceeds the binary's supported version ([schema-version compatibility](#schema-version-compatibility)).
-5. Serve operation requests through short read or write transactions per [transaction boundaries](#transaction-boundaries).
+2. Apply connection-local `busy_timeout` from `sqlite_busy_timeout_ms`.
+3. Run the serialized startup schema pipeline ([migration policy](#migration-policy)): under an immediate writer lock, read `user_version`, reject databases whose applied schema version exceeds the binary's supported version ([schema-version compatibility](#schema-version-compatibility)), apply pending forward-only migrations, and verify bundled v1 schema shape — **before** any write-affecting connection pragma.
+4. Apply persisted [connection pragmas](#connection-pragmas) (`foreign_keys`, `journal_mode=WAL`, `synchronous`, `temp_store`).
+5. Verify integration metadata and serve operation requests through short read or write transactions per [transaction boundaries](#transaction-boundaries).
 
 Startup migration failure is a pre-dispatch persistence error: no application operation runs, no provider subprocess starts, and no partial migration version is recorded.
 
 ## Connection pragmas
 
-Apply on every connection immediately after open, before migrations or application SQL:
+Apply persisted pragmas on every connection only **after** the [startup schema pipeline](#migration-policy) succeeds (future-version rejection and migration/postcheck complete). Connection-local `busy_timeout` is applied immediately after open (step 2 above).
 
 | Pragma | Value | Purpose |
 |---|---|---|
 | `foreign_keys` | `ON` | Enforce referential integrity for catalog/run/journal associations |
-| `journal_mode` | `WAL` | Concurrent readers with one writer; append workload with checkpoint recovery |
+| `journal_mode` | `WAL` | Concurrent readers with one writer; append workload with checkpoint recovery (**write-affecting**; must not run before future-version rejection) |
 | `synchronous` | `FULL` | Acknowledged commits are durable across process crash and power loss |
 | `busy_timeout` | `sqlite_busy_timeout_ms` | Bounded wait on `SQLITE_BUSY` before surfacing persistence failure ([cli-contract.md](cli-contract.md#resource-bounds-d008), T008) |
 | `temp_store` | `MEMORY` | Keep small temp structures off disk for short transactions |
@@ -103,25 +103,29 @@ Migrations are forward-only, ordered, and transactional. Integration uses `rusql
 |---|---|
 | Applied version `<` binary supported version | Apply pending migrations at open |
 | Applied version `=` binary supported version | Open normally |
-| Applied version `>` binary supported version | Fail open with persistence error naming supported and observed versions; no reads or writes |
+| Applied version `>` binary supported version | Fail open with persistence error naming supported and observed versions; no reads or writes; rejection occurs inside the startup schema pipeline before write-affecting pragmas |
 
-MVP ships one supported schema generation (`0001` through T105). Export and CLI envelope schema versions are independent integers ([cli-contract.md](cli-contract.md), D015).
+MVP ships one supported schema generation (`0001`, published by T105). Export and CLI envelope schema versions are independent integers ([cli-contract.md](cli-contract.md), D015).
 
-### Migration `0001` prerequisites
+At the supported version, open **MUST** verify each bundled v1 table and index by comparing live `sqlite_master.sql` to the authoritative shape derived from `0001_initial.sql` (not names alone). Deterministic mismatches classify as missing objects or SQL divergence.
 
-Before T105 authors DDL, this contract requires `0001` to support every semantic branch below without redesign:
+### Migration `0001` schema (T105)
 
-- provider registrations with monotonic `config_revision`, enabled/tombstoned status, and handle uniqueness among enabled rows;
-- runs binding `(registration_id, config_revision_at_create)` plus workflow/lifecycle columns and version guards;
-- immutable graph snapshot and frozen inputs per run;
-- append-only evidence with stable run-scoped IDs and attempt associations;
-- journal with per-run monotonic `sequence` allocated atomically with each insert;
-- workflow-state/lifecycle version columns for transition CAS;
-- stale-evaluation attempt rows that record provider observations without advancing state;
-- catalog-mutation support for affected active-set digest computation over active runs per registration;
-- internal `integration_metadata` row holding exactly one 32-byte `integrity_key` initialized with `randomblob(32)` for cursor and disable-ack HMAC ([Integration integrity key](#integration-integrity-key)).
+**Status:** Published by T105. Canonical DDL: `crates/loop-engine-integrations/migrations/0001_initial.sql`. Frozen table/column/index reference: [persistence-schema.md](persistence-schema.md).
 
-Journal entry payload encoding is T011; this document freezes transactional semantics only.
+Migration `0001` materializes every semantic branch required by this contract:
+
+- `integration_metadata` with one 32-byte `integrity_key` row initialized via `randomblob(32)` ([Integration integrity key](#integration-integrity-key));
+- `provider_registrations` with monotonic `config_revision`, enabled/tombstoned status, partial unique enabled handle index, and executable/argv/CWD/timeout columns;
+- `runs` binding `(registration_id, config_revision_at_create)` plus authoritative workflow/lifecycle/version/label columns, immutable canonical graph projection, graph revision, and frozen inputs;
+- append-only `evidence` with stable run-scoped IDs;
+- append-only `journal_entries` with unique `(run_id, sequence)`, denormalized `outcome`, and full journal-contract wire payload;
+- `run_journal_sequences` for atomic per-run sequence allocation in the same write transaction as journal insert;
+- `evidence_associations` linking journal sequences to evidence rows for attempt commits;
+- indexes for active runs by registration, catalog/history/evidence ordering, and catalog pagination;
+- `ON DELETE RESTRICT` on all run-scoped foreign keys and no run-delete path (I45).
+
+Journal entry payload encoding is T011; this document freezes transactional semantics. Column-level authority and mutability are frozen in [persistence-schema.md](persistence-schema.md).
 
 ## Integration integrity key
 
@@ -352,10 +356,12 @@ After successful run lookup, syntactically valid `run.request`, `run.guidance`, 
 | Terminal label change (`run.label`) | none | none | `label.changed` rejection `run.lifecycle.terminal` appended |
 | Failed gate | `evaluate_gates` | none | Rejection attempt with verdicts |
 | Stale version after gates | `evaluate_gates` | none | Error attempt `state.stale_version` |
+| Inline evidence ID already exists for run | any already completed provider work remains observed | none | Rejection attempt `evidence.invalid`, with no evidence claims |
+| Provider evidence ID already exists for run | `evaluate_gates` | none | Error attempt `provider.evidence.malformed`, preserving provider observation and valid verdict facts but making no evidence claims |
 | Guidance rejected or errored (including terminal denial) | `live_guidance` or none | none | Attempt appended |
 | Compatibility rejected or errored (including terminal denial) | `check_compatibility` or none | none | Attempt appended |
 
-Inline evidence, selected-evidence associations, and valid provider evidence **MUST** commit in the same transaction as the attempt record (I14, I35).
+Inline evidence, selected-evidence associations, and valid provider evidence **MUST** commit in the same transaction as the attempt record (I14, I35). After authoritative version selection and while holding the same SQLite write lock, persistence **MUST** check proposed inline and provider evidence IDs against existing run evidence before insertion. A collision selects the matching no-mutation journal disposition above; it **MUST NOT** escape as an unjournaled primary-key error. Provider collisions take precedence when one attempt contains both provider and inline collisions. Stale-version disposition takes precedence over evidence collision because stale attempts claim no evidence.
 
 ## SQLite constraint mapping
 

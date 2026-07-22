@@ -1,7 +1,7 @@
 use crate::capabilities::persistence_commands::{CommitStatus, TerminateRunCommand};
 use crate::capabilities::run_writer::RunWriter;
 use crate::model::annotation::Note;
-use crate::model::attempt::JournalExtension;
+use crate::model::attempt::{AttemptFacts, JournalExtension};
 use crate::model::journal::{JournalDraft, JournalEntryKind};
 use crate::model::outcome::OutcomeClass;
 use crate::model::reason::ReasonCode;
@@ -29,14 +29,15 @@ pub fn command(
             JournalEntryKind::RunTerminated,
         )?;
     }
-    let note_matches = |entry: &JournalDraft| match (&note, entry.attempt()) {
-        (None, None) => true,
-        (expected, Some(attempt)) => attempt.note.as_ref() == expected.as_ref(),
-        (Some(_), None) => false,
-    };
+    let expected_attempt = note.as_ref().map(|note| AttemptFacts {
+        note: Some(note.clone()),
+        ..AttemptFacts::default()
+    });
+    let attempt_matches = |entry: &JournalDraft| entry.attempt() == expected_attempt.as_ref();
     if completed_entry.outcome() != OutcomeClass::Completed
+        || completed_entry.reason().is_some()
         || !matches!(completed_entry.extension(), JournalExtension::RunTerminated)
-        || !note_matches(&completed_entry)
+        || !attempt_matches(&completed_entry)
         || terminal_or_stale_entry.outcome() != OutcomeClass::Rejected
         || terminal_or_stale_entry.reason().map(|reason| reason.code())
             != Some(ReasonCode::RunLifecycleTerminal)
@@ -44,22 +45,22 @@ pub fn command(
             terminal_or_stale_entry.extension(),
             JournalExtension::RunTerminated
         )
-        || !note_matches(&terminal_or_stale_entry)
+        || !attempt_matches(&terminal_or_stale_entry)
     {
         return Err(CommandError::JournalMismatch);
     }
-    Ok(TerminateRunCommand {
-        run_id: run.id().clone(),
-        expected_lifecycle_version: run.lifecycle_version(),
+    Ok(TerminateRunCommand::from_parts(
+        run.id().clone(),
+        run.lifecycle_version(),
         note,
         completed_entry,
         terminal_or_stale_entry,
-    })
+    ))
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::model::attempt::JournalExtension;
+    use crate::model::attempt::{AttemptFacts, JournalExtension};
     use crate::model::outcome::OutcomeClass;
 
     #[test]
@@ -78,5 +79,23 @@ mod tests {
             None,
         );
         assert!(super::command(&run, None, completed, rejected).is_ok());
+    }
+
+    #[test]
+    fn termination_cannot_add_unowned_attempt_facts() {
+        let run = crate::operations::test_support::run();
+        let completed = crate::operations::test_support::draft(
+            "run.terminate",
+            OutcomeClass::Completed,
+            JournalExtension::RunTerminated,
+            Some(AttemptFacts::default()),
+        );
+        let rejected = crate::operations::test_support::draft(
+            "run.terminate",
+            OutcomeClass::Rejected,
+            JournalExtension::RunTerminated,
+            None,
+        );
+        assert!(super::command(&run, None, completed, rejected).is_err());
     }
 }

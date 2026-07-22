@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use loop_engine_core::capabilities::provider_catalog::ResolvedProviderConfig;
 use loop_engine_core::capabilities::provider_invoker::{
     GateInvocationResult, GateRequest, InvocationError,
@@ -110,13 +112,43 @@ pub fn evaluate_gates(
                     error.to_string(),
                 )
             })?;
-            if let Some(first) = mapped.first_mut() {
-                *first = GateVerdict::new(
-                    first.gate().clone(),
-                    first.passed(),
-                    std::mem::take(&mut evidence),
-                );
-            } else if !evidence.is_empty() {
+            let request_evidence_ids = request
+                .selected_evidence
+                .records()
+                .iter()
+                .chain(request.inline_evidence.records().iter())
+                .map(|record| record.id().clone())
+                .collect::<BTreeSet<_>>();
+            let mut provider_evidence_ids = BTreeSet::new();
+            for record in &evidence {
+                let id = record.id().clone();
+                if !provider_evidence_ids.insert(id.clone()) {
+                    return Err(mapping_failure_with_code(
+                        config,
+                        &request.request_id,
+                        ProviderRole::EvaluateGates,
+                        &wire,
+                        "provider.evidence.malformed",
+                        format!("duplicate provider evidence id {}", id.as_str()),
+                    ));
+                }
+                if request_evidence_ids.contains(&id) {
+                    return Err(mapping_failure_with_code(
+                        config,
+                        &request.request_id,
+                        ProviderRole::EvaluateGates,
+                        &wire,
+                        "provider.evidence.malformed",
+                        format!(
+                            "provider evidence id {} collides with request evidence",
+                            id.as_str()
+                        ),
+                    ));
+                }
+            }
+            if evidence.is_empty() {
+                // Verdicts already carry empty evidence vectors.
+            } else if mapped.is_empty() {
                 return Err(mapping_failure(
                     config,
                     &request.request_id,
@@ -124,6 +156,28 @@ pub fn evaluate_gates(
                     &wire,
                     "provider evidence requires at least one gate verdict",
                 ));
+            } else {
+                let canonical_gate = &required[0];
+                let Some(verdict) = mapped
+                    .iter_mut()
+                    .find(|verdict| verdict.gate() == canonical_gate)
+                else {
+                    return Err(mapping_failure(
+                        config,
+                        &request.request_id,
+                        ProviderRole::EvaluateGates,
+                        &wire,
+                        format!(
+                            "missing verdict for canonical evidence gate {}",
+                            canonical_gate.as_str()
+                        ),
+                    ));
+                };
+                *verdict = GateVerdict::new(
+                    verdict.gate().clone(),
+                    verdict.passed(),
+                    std::mem::take(&mut evidence),
+                );
             }
             GateEvaluation::verdicts(mapped)
         }

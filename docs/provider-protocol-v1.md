@@ -288,6 +288,8 @@ These conditions are **operation errors** for every role. They never produce dom
 
 Full taxonomy: [operation-catalog.md](operation-catalog.md#outcome-and-reason-taxonomy).
 
+A transport failure carries its canonical reason and bounded diagnostics with the provider fact. Operation command validation must bind the durable journal to those exact values; callers cannot collapse `provider.evidence.malformed` or another classified transport failure into a generic protocol reason. Trace emission and durable journal classification therefore use the same adapter-owned failure classification.
+
 ### Catalog operation mapping
 
 | Application operation | Invoked role(s) |
@@ -325,7 +327,8 @@ Detailed wire schemas are implemented in T084 from [graph-projection.md](graph-p
 
 - **Request `payload`:** `snapshot` with bounded run context: graph identity, lifecycle, current state, requested event, required gate IDs, immutable inputs, inline evidence, caller-selected evidence references.
 - **`result.kind`:** `verdicts` | `incompatible` | `evaluation_error`
-- **`verdicts`:** `verdicts` array with exactly one entry per requested gate ID (`gate_id`, `passed` boolean), optional `evidence` array valid only on this kind.
+- **`verdicts`:** `verdicts` array with exactly one entry per requested gate ID (`gate_id`, `passed` boolean). Optional result-scoped `evidence` array valid only on this kind (not per-verdict fields).
+- **Result-scoped evidence canonical storage:** After exact verdict-set validation, integration maps the result-scoped `evidence` array to core storage by attaching all valid provider evidence records to the verdict for the first gate ID in request `required_gate_ids` order. Provider `verdicts` array order does not define this scope; the mapping is deterministic under reordered verdict responses. Duplicate provider evidence IDs or IDs colliding with request selected/inline evidence map to `provider.evidence.malformed`.
 - **`incompatible`:** `diagnostics` explaining stored-graph/capability mismatch.
 - **`evaluation_error`:** `diagnostics` array.
 

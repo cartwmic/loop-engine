@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use super::error::TraceError;
+use super::error::{TraceError, TraceIoPhase};
 
 pub const TRACE_INIT_RESERVATION_BYTES: u64 = 16_777_216;
 pub const TRACE_PROVIDER_CALL_RESERVATION_BYTES: u64 = 10_485_760;
@@ -316,9 +316,11 @@ fn write_sidecar(file: &mut File, path: &Path, value: u64) -> Result<(), TraceEr
     file.set_len(SIDECAR_BYTES as u64)
         .and_then(|()| file.seek(SeekFrom::Start(slot * SIDECAR_SLOT_BYTES as u64)))
         .and_then(|_| file.write_all(&bytes))
-        .and_then(|_| file.flush())
-        .and_then(|_| file.sync_data())
-        .map_err(|error| TraceError::io(path, error))
+        .map_err(|error| TraceError::io_at(path, TraceIoPhase::Write, error))?;
+    file.flush()
+        .map_err(|error| TraceError::io_at(path, TraceIoPhase::Flush, error))?;
+    file.sync_all()
+        .map_err(|error| TraceError::io_at(path, TraceIoPhase::Fsync, error))
 }
 
 fn read_sidecar(path: &Path) -> Result<u64, TraceError> {

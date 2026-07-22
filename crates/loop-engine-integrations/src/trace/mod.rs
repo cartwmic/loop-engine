@@ -4,7 +4,7 @@ mod rotation;
 mod schema;
 mod writer;
 
-pub use error::TraceError;
+pub use error::{TraceError, TraceIoPhase};
 pub use event::{TRACE_SCHEMA_VERSION, TraceCategory, TraceEvent};
 pub use rotation::{
     TRACE_DIRECTORY_BUDGET_BYTES, TRACE_FILE_MAX_BYTES, TRACE_INIT_RESERVATION_BYTES,

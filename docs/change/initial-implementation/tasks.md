@@ -1,6 +1,6 @@
 # Initial Implementation Task List
 
-**Status:** In progress — Phase 4 provider/configuration/trace integrations validated; Phase 5 persistence authority is next
+**Status:** In progress — Phase 5 SQLite authority, journal, export, and V005/F005 closure complete; Phase 6 CLI delivery and composition root is next
 
 Follow [execution protocol](README.md#execution-protocol), resolve [decision gates](decisions.md), and maintain [coverage map](coverage.md). Every task is sized as one narrow orchestrator-owned unit unless its stop condition requires owner escalation.
 
@@ -1012,14 +1012,14 @@ No capability mocks, fakes, or in-memory port implementations are permitted. Pri
 
 ## Phase 5 — SQLite authority, journal, and export
 
-### T104 [ ] Implement SQLite open and migration runner
+### T104 [x] Implement SQLite open and migration runner
 - **Depends:** T001, T007, T009, T030, T096, V004, F004
 - **Files:** `integrations/src/persistence/{mod,sqlite,migrations,error}.rs`.
 - **Deliver:** bundled open, pragmas, busy policy, transactional ordered migrations, future-schema refusal.
 - **Tests:** empty/latest/concurrent open, failed migration rollback, unsupported future version.
 - **Done when:** migration execution is traced-capable but independent of CLI.
 
-### T105 [ ] Design and freeze migration `0001`
+### T105 [x] Design and freeze migration `0001`
 - **Depends:** T009, T011, T014, T036–T046, T055–T060, T104
 - **Files:** `integrations/migrations/0001_initial.sql`, `../../persistence.md`, `../../persistence-schema.md`.
 - **Deliver:** registrations with config revision, runs with resolved registration revision, snapshots/inputs, evidence, associations, journal, sequences, workflow versions, constraints, indexes.
@@ -1027,112 +1027,112 @@ No capability mocks, fakes, or in-memory port implementations are permitted. Pri
 - **Done when:** query authority is direct and no run-delete path exists.
 - **Stop:** stale attempt/evidence association cannot be represented atomically.
 
-### T106 [ ] Implement persistence record DTO mappings
+### T106 [x] Implement persistence record DTO mappings
 - **Depends:** T041–T047, T105
 - **Files:** `integrations/src/persistence/{records,mapping}.rs`, tests.
 - **Deliver:** integration-owned versioned JSON/row DTOs and corruption-validating core mappings.
 - **Tests:** round trips plus unknown version/enum, malformed JSON, graph digest mismatch, invalid state/lifecycle.
 - **Done when:** core has no Rusqlite/Serde annotations.
 
-### T107 [ ] Implement provider catalog persistence
+### T107 [x] Implement provider catalog persistence
 - **Depends:** T055, T104–T106
 - **Files:** `integrations/src/persistence/provider_catalog.rs`, tests.
 - **Deliver:** add/list/resolve plus config revision, count/byte-paged impact, final-page acknowledgement token binding, atomic guarded update/disable/restore, and handle uniqueness.
 - **Tests:** concurrent handle claims; both run-create/catalog-mutation writer orders; tombstone release; exact-ID restore; handle reuse without rebinding.
 - **Done when:** registration ID remains immutable and referenced tombstone retained.
 
-### T108 [ ] Implement atomic run-creation transaction
+### T108 [x] Implement atomic run-creation transaction
 - **Depends:** T058, T103–T107
 - **Files:** `integrations/src/persistence/run_create.rs`, tests.
 - **Deliver:** atomically recheck enabled registration/config revision then commit run/snapshot/inputs/state/version/registration/creation journal.
 - **Tests:** initial-final; update/disable/restore between resolve and commit yields stale-provider-config error/no run; injected failure at each write boundary leaves all-or-nothing state.
 - **Done when:** rejected/error/stale-config creation writes no run journal.
 
-### T109 [ ] Implement provider-free run read queries
+### T109 [x] Implement provider-free run read queries
 - **Depends:** T057, T105–T106
 - **Files:** `integrations/src/persistence/run_reads.rs`, tests.
 - **Deliver:** get/list/show/graph with active/terminal filters and authoritative columns.
 - **Tests:** fresh connection restart, caller CWD irrelevance, no journal replay.
 - **Done when:** missing provider has no effect on reads.
 
-### T110 [ ] Implement evidence inventory and selected-context reads
+### T110 [x] Implement evidence inventory and selected-context reads
 - **Depends:** T037, T057, T105–T106
 - **Files:** `integrations/src/persistence/evidence_reads.rs`, tests.
 - **Deliver:** ordered inventory, associations, exact ID selection, complete context bound check.
 - **Tests:** missing ID, unrelated history exclusion, empty default, no truncation.
 - **Done when:** provider receives only selected existing plus inline evidence.
 
-### T111 [ ] Implement evidence, annotation, label, and termination transactions
+### T111 [x] Implement evidence, annotation, label, and termination transactions
 - **Depends:** T058, T105–T106
 - **Files:** `integrations/src/persistence/run_mutations.rs`, tests.
 - **Deliver:** operation-specific atomic writes with journal, lifecycle rules, stable IDs, version behavior.
 - **Tests:** fault at each boundary; terminal evidence/annotation; terminal label/termination rejection.
 - **Done when:** label/note/evidence do not change workflow CAS version.
 
-### T112 [ ] Implement atomic event-attempt transaction
+### T112 [x] Implement atomic event-attempt transaction
 - **Depends:** T059, T105–T106, T110
 - **Files:** `integrations/src/persistence/event_attempt.rs`, tests.
 - **Deliver:** completed/rejected/error entry, evidence records/associations, provider/gate facts, optional mutation in one transaction; validate component and 2.5 MiB aggregate journal bounds before write.
 - **Tests:** all failure-injection points, aggregate-overflow rejection with no partial write, and accurate evidence-recorded result.
 - **Done when:** partial attempt/state/evidence is impossible.
 
-### T113 [ ] Implement stale-evaluation CAS branch
+### T113 [x] Implement stale-evaluation CAS branch
 - **Depends:** T112
 - **Files:** `integrations/src/persistence/event_attempt.rs`, `integrations/tests/event_attempt_concurrency.rs`.
 - **Deliver:** recheck workflow-state/lifecycle version after provider; apply transition only on match; append stale error attempt without transition when possible.
 - **Tests:** two explicit-barrier requests; transition/termination invalidates; label/note/evidence does not.
 - **Done when:** no write lock is held across provider invocation.
 
-### T114 [ ] Implement guidance and per-run compatibility attempt persistence
+### T114 [x] Implement guidance and per-run compatibility attempt persistence
 - **Depends:** T058–T059, T081, T105–T106
 - **Files:** `integrations/src/persistence/{guidance_attempt,compatibility_attempt}.rs` (inline tests).
 - **Deliver:** completed/unsupported/lifecycle/error guidance facts plus completed/error compatibility findings, actual provider observations, and drift facts; no evidence/state/latch mutation.
 - **Tests:** atomic append, persistence failure, missing provider, unchanged state/version, and drift observation; registration-wide check never uses this writer.
 - **Done when:** every post-lookup guidance/compatibility request is explained when persistence remains available.
 
-### T115 [ ] Implement ordered history query
+### T115 [x] Implement ordered history query
 - **Depends:** T046, T057, T105–T106
 - **Files:** `integrations/src/persistence/history.rs`, tests.
 - **Deliver:** immutable per-run sequence query, count/3 MiB byte pagination, correction links, and one-record progress guarantee.
 - **Tests:** ordering across processes, no gaps after rollback, corruption detection, and maximum 2.5 MiB golden entry fits one history page/4 MiB CLI envelope without truncation.
 - **Done when:** history never derives current state.
 
-### T116 [ ] Implement consistent read-only audit export
+### T116 [x] Implement consistent read-only audit export
 - **Depends:** T015, T060, T105–T106, T109–T115
 - **Files:** `integrations/src/export/{mod,state_json,journal_jsonl}.rs`, `schemas/export/v1/*.json`, `integrations/tests/export.rs`.
 - **Deliver:** new/empty directory write from one consistent read snapshot, versioned state/journal files, no import.
 - **Tests:** ordering, overwrite rejection, rollback/cleanup on partial filesystem failure, external locators not dereferenced.
 - **Done when:** export is not competing authority.
 
-### T117 [ ] Implement persistence corruption diagnostics
+### T117 [x] Implement persistence corruption diagnostics
 - **Depends:** T106–T116
 - **Files:** `integrations/src/persistence/corruption.rs`, `integrations/tests/corruption.rs`, `integrations/tests/fixtures/corruption/*`.
 - **Deliver:** rich errors for malformed DB/header/rows/snapshots/associations/sequences/schema versions.
 - **Tests:** no silent repair/default/delete; fresh CLI/export logical authority, schema version, integrity, and row inventory unchanged after failed reads/writes; physical byte hash used only for immutable copied fixtures, never live WAL database.
 - **Done when:** failure phase and trace correlation can be rendered.
 
-### T118 [ ] Implement traced persistence boundary wrapper
+### T118 [x] Implement traced persistence boundary wrapper
 - **Depends:** T099–T101, T104–T117
 - **Files:** `integrations/src/persistence/traced.rs`, tests.
 - **Deliver:** transaction intent, CAS/version check, commit/rollback/error events and bounded payloads.
 - **Tests:** every production write path passes wrapper; read/migration categories follow trace contract.
 - **Done when:** no direct production transaction bypass exists.
 
-### T119 [ ] Add SQLite overlap and locking integration tests
+### T119 [x] Add SQLite overlap and locking integration tests
 - **Depends:** T107–T118
 - **Files:** `integrations/tests/sqlite_overlap.rs`.
 - **Deliver:** independent-run writes, handle races, run-create versus update/disable/restore in both writer orders, busy behavior, migration races, stale CAS, and post-kill reopen tests with explicit barriers.
 - **Tests:** no query-then-mutate TOCTOU survives; repeated-run execution under selected CI platforms belongs to junction validation.
 - **Done when:** tests use no timing-only sleep ordering.
 
-### V005 [ ] Junction validation — persistence authority (T104–T119)
+### V005 [x] Junction validation — persistence authority (T104–T119)
 - **Depends:** T119
 - **Owner:** orchestrator in V-mode; per junction template above; not a Fable/Sol review round.
 - **Files:** none tracked; untracked `target/junction-evidence/V005/**` only.
 - **Deliver:** full accumulated inventory plus focused persistence suites (migration, catalog, run-create, mutations, event-attempt/CAS concurrency, history, export, corruption, traced boundary, SQLite overlap) against the T119 candidate; findings ledger or clean report.
 - **Done when:** every command has a recorded outcome and findings are handed to F005 or a clean report is filed; stop for orchestrator.
 
-### F005 [ ] Junction fix — batch V005 findings
+### F005 [x] Junction fix — batch V005 findings
 - **Depends:** V005
 - **Owner:** orchestrator in F-mode; one batched pass; per junction template above; not a correctness review round.
 - **Files:** files within T104–T119 contracts as valid findings require; changed paths append to the T119 range ledger.

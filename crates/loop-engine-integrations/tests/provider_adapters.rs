@@ -1,21 +1,25 @@
 use loop_engine_core::capabilities::provider_catalog::{ProviderConfig, ResolvedProviderConfig};
 use loop_engine_core::capabilities::provider_invoker::{
     CompatibilityRequest, DescribeRequest, DescribedGraph, EvidenceContext, GateRequest,
-    GuidanceRequest, InputValidationResult, ProviderInvoker, ProviderRunSnapshot,
+    GuidanceRequest, InputValidationResult, InvocationError, ProviderInvoker, ProviderRunSnapshot,
     ValidateInputsRequest,
 };
 use loop_engine_core::model::compatibility::CompatibilityReport;
-use loop_engine_core::model::gate::GateEvaluation;
+use loop_engine_core::model::evidence::{EvidenceRecord, EvidenceSource};
+use loop_engine_core::model::gate::{GateEvaluation, GateVerdict};
 use loop_engine_core::model::graph::{State, WorkflowGraph};
 use loop_engine_core::model::graph_validation::{GraphError, ValidatedGraph};
 use loop_engine_core::model::guidance::{LiveGuidanceCapability, StaticGuidance};
 use loop_engine_core::model::ids::{
-    EventId, GateId, GraphRevision, ProviderHandle, RegistrationId, RequestId, RunId, StateId,
+    EventId, EvidenceId, EvidenceKind, GateId, GraphRevision, ProviderHandle, RegistrationId,
+    RequestId, RunId, StateId,
 };
 use loop_engine_core::model::live_guidance::LiveGuidanceResult;
 use loop_engine_core::model::outcome::OutcomeClass;
+use loop_engine_core::model::reason::ReasonCode;
 use loop_engine_core::model::run::Run;
 use loop_engine_core::model::run_input::{InputDeclarations, RunInputs};
+use loop_engine_core::model::time::ObservedAt;
 use loop_engine_core::model::transition::Transition;
 use loop_engine_integrations::provider_protocol::SubprocessProviderInvoker;
 use loop_engine_integrations::trace::TraceWriter;
@@ -87,6 +91,74 @@ fn run_snapshot() -> ProviderRunSnapshot {
 
 fn empty_evidence(field: &'static str) -> EvidenceContext {
     EvidenceContext::new(field, vec![], 0).unwrap()
+}
+
+fn inline_evidence(id: &str) -> EvidenceContext {
+    let record = EvidenceRecord::new(
+        EvidenceId::parse(id).unwrap(),
+        EvidenceKind::parse("artifact").unwrap(),
+        "opaque:locator",
+        None,
+        None,
+        None,
+        EvidenceSource::Caller,
+        ObservedAt::parse("2026-07-18T00:00:00Z").unwrap(),
+    )
+    .unwrap();
+    EvidenceContext::new("inline_evidence", vec![record], 64).unwrap()
+}
+
+fn multi_gate_run_snapshot() -> ProviderRunSnapshot {
+    let draft = StateId::parse("draft").unwrap();
+    let graph = WorkflowGraph::new_unvalidated(
+        draft.clone(),
+        vec![
+            State::new(draft.clone(), false, StaticGuidance::NoneRequired, None),
+            State::new(
+                StateId::parse("done").unwrap(),
+                true,
+                StaticGuidance::NoneRequired,
+                None,
+            ),
+        ],
+        vec![
+            Transition::new(
+                draft,
+                EventId::parse("go").unwrap(),
+                StateId::parse("done").unwrap(),
+                vec![GateId::parse("g1").unwrap(), GateId::parse("g2").unwrap()],
+                None,
+            )
+            .unwrap(),
+        ],
+        InputDeclarations::default(),
+        LiveGuidanceCapability::Supported,
+        None,
+    );
+    let run = Run::create(
+        RunId::parse("run-1").unwrap(),
+        RegistrationId::parse("registration").unwrap(),
+        ValidatedGraph::validate(graph).unwrap(),
+        GraphRevision::parse(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .unwrap(),
+        RunInputs::default(),
+        None,
+    )
+    .unwrap();
+    ProviderRunSnapshot::new(run, 1).unwrap()
+}
+
+fn gate_verdict<'a>(evaluation: &'a GateEvaluation, gate_id: &str) -> &'a GateVerdict {
+    let GateEvaluation::Verdicts(verdicts) = evaluation else {
+        panic!("expected gate verdicts");
+    };
+    verdicts
+        .as_slice()
+        .iter()
+        .find(|verdict| verdict.gate().as_str() == gate_id)
+        .unwrap_or_else(|| panic!("missing verdict for gate {gate_id}"))
 }
 
 #[test]
@@ -545,6 +617,91 @@ fn gate_adapter_requires_exact_verdict_set_and_rejects_misplaced_evidence() {
                 .is_err(),
             "accepted invalid gate result {result}"
         );
+    }
+}
+
+#[test]
+fn gate_adapter_attaches_result_scoped_evidence_to_first_required_gate() {
+    let directory = tempfile::tempdir().unwrap();
+    let request = GateRequest {
+        request_id: RequestId::parse("request").unwrap(),
+        run: multi_gate_run_snapshot(),
+        event: EventId::parse("go").unwrap(),
+        selected_evidence: empty_evidence("selected_evidence"),
+        inline_evidence: empty_evidence("inline_evidence"),
+    };
+    let valid = r#"{"protocol_major":1,"role":"evaluate_gates","invocation_id":"request","result":{"kind":"verdicts","verdicts":[{"gate_id":"g2","passed":true},{"gate_id":"g1","passed":true}],"evidence":[{"id":"provider-evidence","kind":"log","locator":"opaque","metadata":{"state":"caller-defined","event":"opaque"}}]}}"#;
+    let provider = config(
+        format!("cat >/dev/null; printf '%s' '{}'", valid),
+        directory.path(),
+    );
+    let result = invoker(directory.path(), "gate-evidence-scope")
+        .evaluate_gates(&provider, request)
+        .unwrap();
+    assert_eq!(result.fact.outcome, OutcomeClass::Completed);
+    assert_eq!(
+        gate_verdict(&result.evaluation, "g1").evidence()[0]
+            .id()
+            .as_str(),
+        "provider-evidence"
+    );
+    assert!(gate_verdict(&result.evaluation, "g2").evidence().is_empty());
+}
+
+#[test]
+fn gate_adapter_rejects_duplicate_or_colliding_provider_evidence() {
+    let directory = tempfile::tempdir().unwrap();
+    let request = |inline| GateRequest {
+        request_id: RequestId::parse("request").unwrap(),
+        run: run_snapshot(),
+        event: EventId::parse("go").unwrap(),
+        selected_evidence: empty_evidence("selected_evidence"),
+        inline_evidence: inline,
+    };
+    for (index, (trace_id, inline, result)) in [
+        (
+            "gate-duplicate-evidence",
+            empty_evidence("inline_evidence"),
+            r#"{"kind":"verdicts","verdicts":[{"gate_id":"g1","passed":true}],"evidence":[{"id":"provider-evidence","kind":"log","locator":"opaque","metadata":{"state":"caller-defined","event":"opaque"}},{"id":"provider-evidence","kind":"log","locator":"opaque-2","metadata":{"state":"caller-defined","event":"opaque"}}]}"#,
+        ),
+        (
+            "gate-colliding-evidence",
+            inline_evidence("caller-evidence"),
+            r#"{"kind":"verdicts","verdicts":[{"gate_id":"g1","passed":true}],"evidence":[{"id":"caller-evidence","kind":"log","locator":"opaque","metadata":{"state":"caller-defined","event":"opaque"}}]}"#,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let envelope = format!(
+            "{{\"protocol_major\":1,\"role\":\"evaluate_gates\",\"invocation_id\":\"request\",\"result\":{result}}}"
+        );
+        let provider = config(format!("printf '%s' '{}'", envelope), directory.path());
+        let error = invoker(directory.path(), trace_id)
+            .evaluate_gates(&provider, request(inline))
+            .unwrap_err();
+        let InvocationError::Transport { fact, failure, .. } = error
+        else {
+            panic!("expected transport error for case {index}");
+        };
+        assert_eq!(fact.outcome, OutcomeClass::Error);
+        assert_eq!(
+            failure.reason.code(),
+            ReasonCode::ProviderEvidenceMalformed
+        );
+        assert_eq!(failure.diagnostics.len(), 1);
+        assert_eq!(
+            failure.diagnostics[0].code(),
+            "provider.evidence.malformed"
+        );
+        let trace = std::fs::read_to_string(
+            directory.path().join("traces").join(format!("{trace_id}.jsonl")),
+        )
+        .unwrap();
+        let last: serde_json::Value =
+            serde_json::from_str(trace.lines().last().unwrap()).unwrap();
+        assert_eq!(last["event"], "failure");
+        assert_eq!(last["failure_code"], "provider.evidence.malformed");
     }
 }
 

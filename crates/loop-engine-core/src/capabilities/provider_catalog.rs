@@ -284,8 +284,30 @@ pub struct CatalogMutationResult {
     pub impact_cursor: Option<PageCursor>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderResolveFailure {
+    Missing,
+    Tombstoned,
+    Stale,
+    Persistence,
+}
+
+impl ProviderResolveFailure {
+    pub fn reason_code(self) -> crate::model::reason::ReasonCode {
+        use crate::model::reason::ReasonCode;
+        match self {
+            Self::Missing => ReasonCode::ProviderRegistrationMissing,
+            Self::Tombstoned => ReasonCode::ProviderTombstoned,
+            Self::Stale => ReasonCode::ProviderRegistrationStale,
+            Self::Persistence => ReasonCode::PersistenceFailed,
+        }
+    }
+}
+
 pub trait ProviderCatalog {
     type Error;
+
+    fn classify_resolve_failure(error: &Self::Error) -> ProviderResolveFailure;
 
     fn resolve_enabled(
         &self,

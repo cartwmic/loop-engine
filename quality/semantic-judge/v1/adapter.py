@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generic semantic judge v1 executable adapter (pi / openai-codex)."""
+"""Generic semantic judge v1 executable adapter using pi."""
 
 from __future__ import annotations
 
@@ -492,6 +492,43 @@ parent_revision and candidate_revision in the response must exactly match the re
 """
 
 
+def isolated_resource_args(
+    config: dict[str, Any], *, binding: RevisionBinding
+) -> list[str]:
+    args = [
+        "--no-extensions",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-context-files",
+    ]
+    configured = config.get("extensions", [])
+    if not isinstance(configured, list):
+        unavailable("config extensions must be an array", binding=binding)
+
+    agent_dir = Path(
+        os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi" / "agent")
+    ).expanduser().resolve()
+    for raw_path in configured:
+        if not isinstance(raw_path, str) or not raw_path:
+            unavailable(
+                "config extension paths must be non-empty strings", binding=binding
+            )
+        relative = Path(raw_path)
+        if relative.is_absolute() or ".." in relative.parts:
+            unavailable(
+                "config extension paths must stay relative to PI_CODING_AGENT_DIR",
+                binding=binding,
+            )
+        extension = (agent_dir / relative).resolve()
+        if not extension.is_relative_to(agent_dir) or not extension.is_file():
+            unavailable(
+                f"configured judge extension is unavailable: {raw_path}",
+                binding=binding,
+            )
+        args.extend(["--extension", str(extension)])
+    return args
+
+
 def invoke_pi(
     prompt: str,
     config: dict[str, Any],
@@ -511,6 +548,7 @@ def invoke_pi(
         "--print",
         "--no-session",
         "--no-tools",
+        *isolated_resource_args(config, binding=binding),
     ]
     try:
         completed = subprocess.run(

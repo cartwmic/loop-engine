@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use loop_engine_core::model::bounded::IDENTIFIER_UTF8_BYTES;
 use serde_json::json;
 
-use super::error::TraceError;
+use super::error::{TraceError, TraceIoPhase};
 use super::event::{TraceCategory, TraceEvent};
 use super::rotation::{
     EvictedTrace, RotationFiles, TRACE_FILE_MAX_BYTES, TRACE_PROVIDER_CALL_RESERVATION_BYTES,
@@ -18,7 +18,7 @@ pub struct TraceWriter {
     directory: PathBuf,
     path: PathBuf,
     request_id: String,
-    trace: File,
+    trace: Option<File>,
     rotation: RotationFiles,
     unused_reservation: u64,
     provider_remainder: Option<u64>,
@@ -61,7 +61,7 @@ impl TraceWriter {
             directory: directory.to_owned(),
             path,
             request_id,
-            trace,
+            trace: Some(trace),
             rotation,
             unused_reservation: super::rotation::TRACE_INIT_RESERVATION_BYTES,
             provider_remainder: None,
@@ -128,35 +128,51 @@ impl TraceWriter {
         let prior_unused = self.unused_reservation;
         let new_unused = prior_unused - length;
         let mut reconciled = None;
-        let result = with_rotation(&directory, &self.rotation.lock, || {
-            let trace_result = self
-                .trace
-                .write_all(&bytes)
-                .and_then(|()| self.trace.flush())
-                .and_then(|()| self.trace.sync_data());
-            if let Err(error) = trace_result {
-                let observed = self
-                    .trace
-                    .metadata()
-                    .map(|metadata| metadata.len())
-                    .unwrap_or(prior_encoded);
-                let observed_delta = observed.saturating_sub(prior_encoded).min(prior_unused);
-                let observed_unused = prior_unused - observed_delta;
-                let _ =
-                    write_reservation(&mut self.rotation.sidecar, &sidecar_path, observed_unused);
-                reconciled = Some((observed, observed_unused, observed_delta));
-                return Err(TraceError::io(&path, error));
+        let trace_file = &mut self.trace;
+        let rotation = &mut self.rotation;
+        let result = with_rotation(&directory, &rotation.lock, || {
+            let trace = trace_file
+                .as_mut()
+                .expect("trace file remains open until close");
+            if let Err(error) = trace.write_all(&bytes) {
+                reconciled = Some(reconcile_partial_write(
+                    trace_file,
+                    &mut rotation.sidecar,
+                    &sidecar_path,
+                    prior_encoded,
+                    prior_unused,
+                ));
+                return Err(TraceError::io_at(&path, TraceIoPhase::Write, error));
             }
-            if let Err(error) =
-                write_reservation(&mut self.rotation.sidecar, &sidecar_path, new_unused)
+            if let Err(error) = trace.flush() {
+                reconciled = Some(reconcile_partial_write(
+                    trace_file,
+                    &mut rotation.sidecar,
+                    &sidecar_path,
+                    prior_encoded,
+                    prior_unused,
+                ));
+                return Err(TraceError::io_at(&path, TraceIoPhase::Flush, error));
+            }
+            if let Err(error) = trace.sync_all() {
+                reconciled = Some(reconcile_partial_write(
+                    trace_file,
+                    &mut rotation.sidecar,
+                    &sidecar_path,
+                    prior_encoded,
+                    prior_unused,
+                ));
+                return Err(TraceError::io_at(&path, TraceIoPhase::Fsync, error));
+            }
+            if let Err(error) = write_reservation(&mut rotation.sidecar, &sidecar_path, new_unused)
             {
-                let observed = self
-                    .trace
-                    .metadata()
-                    .map(|metadata| metadata.len())
-                    .unwrap_or(prior_encoded.saturating_add(length));
-                let observed_delta = observed.saturating_sub(prior_encoded).min(prior_unused);
-                reconciled = Some((observed, prior_unused - observed_delta, observed_delta));
+                reconciled = Some(reconcile_partial_write(
+                    trace_file,
+                    &mut rotation.sidecar,
+                    &sidecar_path,
+                    prior_encoded,
+                    prior_unused,
+                ));
                 return Err(error);
             }
             Ok(())
@@ -251,11 +267,13 @@ impl TraceWriter {
         }
         let directory = self.directory.clone();
         let sidecar_path = self.rotation.sidecar_path.clone();
+        let trace = &mut self.trace;
+        let path = &self.path;
         with_rotation(&directory, &self.rotation.lock, || {
-            self.trace
-                .flush()
-                .and_then(|()| self.trace.sync_data())
-                .map_err(|error| TraceError::io(&self.path, error))?;
+            flush_and_fsync(trace, path)
+        })?;
+        self.trace = None;
+        with_rotation(&directory, &self.rotation.lock, || {
             std::fs::remove_file(&sidecar_path)
                 .map_err(|error| TraceError::io(&sidecar_path, error))
         })?;
@@ -292,10 +310,77 @@ impl TraceWriter {
     }
 }
 
+fn reconcile_partial_write(
+    trace: &Option<File>,
+    sidecar: &mut File,
+    sidecar_path: &Path,
+    prior_encoded: u64,
+    prior_unused: u64,
+) -> (u64, u64, u64) {
+    let observed = trace
+        .as_ref()
+        .and_then(|trace| trace.metadata().ok())
+        .map(|metadata| metadata.len())
+        .unwrap_or(prior_encoded);
+    let observed_delta = observed.saturating_sub(prior_encoded).min(prior_unused);
+    let observed_unused = prior_unused - observed_delta;
+    let _ = write_reservation(sidecar, sidecar_path, observed_unused);
+    (observed, observed_unused, observed_delta)
+}
+
+fn flush_and_fsync(trace: &mut Option<File>, path: &Path) -> Result<(), TraceError> {
+    let trace = trace.as_mut().expect("trace file remains open until close");
+    trace
+        .flush()
+        .map_err(|error| TraceError::io_at(path, TraceIoPhase::Flush, error))?;
+    trace
+        .sync_all()
+        .map_err(|error| TraceError::io_at(path, TraceIoPhase::Fsync, error))
+}
+
 impl Drop for TraceWriter {
     fn drop(&mut self) {
-        if !self.closed {
-            let _ = self.trace.flush();
+        if !self.closed
+            && let Some(trace) = self.trace.as_mut()
+        {
+            let _ = trace.flush();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn test_event(request_id: &str) -> TraceEvent {
+        TraceEvent::new(
+            request_id,
+            TraceCategory::Trace,
+            "test.line",
+            BTreeMap::from([("note".into(), json!("probe"))]),
+        )
+    }
+
+    #[test]
+    fn close_removes_sidecar_after_trace_file_is_dropped() {
+        let root = tempfile::TempDir::new().expect("tempdir");
+        let trace_dir = root.path().join("traces");
+        let request_id = "close-order";
+        let sidecar_path = trace_dir
+            .join(".reserve")
+            .join(format!("{request_id}.json"));
+        let jsonl_path = trace_dir.join(format!("{request_id}.jsonl"));
+
+        let mut writer = TraceWriter::create(&trace_dir, request_id).expect("create writer");
+        writer.write(&test_event(request_id)).expect("write line");
+        assert!(sidecar_path.exists());
+
+        writer.close().expect("close writer");
+
+        assert!(!sidecar_path.exists());
+        assert!(jsonl_path.exists());
+        let content = fs::read_to_string(&jsonl_path).expect("read jsonl");
+        assert!(content.contains("test.line"));
     }
 }

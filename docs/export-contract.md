@@ -60,6 +60,8 @@ No other application operation, driver function, migration hook, or `xtask` comm
 
 `--output <DIR>` names the export root. `<DIR>` is bounded by `filesystem_path_utf8_bytes` ([cli-contract.md](cli-contract.md#resource-bounds-d008)).
 
+Relative `<DIR>` values **MUST** be resolved to one absolute path before target validation and before the SQLite consistent-read snapshot. Export **MUST** reuse that same anchored absolute path for staging, `rename(2)`, parent `fsync`, and structured CLI `export.output`.
+
 ### Acceptance rules
 
 | Condition | Result |
@@ -71,7 +73,9 @@ No other application operation, driver function, migration hook, or `xtask` comm
 | Parent not writable, permission denied, or media read-only | `outcome: rejected`, `reason.code: export.target.invalid` |
 | Run ID not found | `outcome: rejected`, `reason.code: run.not_found` |
 | Snapshot read fails unexpectedly | `outcome: error`, `reason.code: persistence.failed` |
-| Payload write or cleanup fails | `outcome: error`, `reason.code: resource.exhausted` |
+| Payload write fails | `outcome: error`, `reason.code: resource.exhausted` |
+| Private staging cleanup fails (except frozen collision loser below) | `outcome: error`, `reason.code: resource.exhausted` |
+| Parent `fsync` fails after successful `rename(2)` (step 8) | `outcome: error`, `reason.code: resource.exhausted`; durability uncertain until fresh-process manifest verification |
 
 Collision semantics are **reject**, never overwrite. A directory containing only hidden entries (names beginning with `.`) is **not** empty.
 
@@ -115,11 +119,15 @@ Before creating a staging directory, export **MUST** verify:
 
 On any failure before step 7: export **MUST** remove this invocation's staging directory when it exists; `<DIR>` **MUST** remain absent or empty.
 
+On publication failure after staging creation, export **MUST** attempt to remove this invocation's private staging directory. Frozen concurrent/repeat loser semantics take precedence: when the publication error is `export.target.not_empty`, that rejection **MUST** be reported even if private staging cleanup also fails. For all other publication errors, staging cleanup failure **MUST** surface as `resource.exhausted`.
+
 On failure during or after step 7: export **MUST NOT** delete or truncate `<DIR>` based solely on incomplete CLI exit status or abnormal process termination.
 
 #### Post-rename ambiguity resolution
 
-After a crash or I/O fault between steps 7 and 8, a fresh process **MUST** determine export completeness by reading `<DIR>/manifest.json` and verifying every `files[*].sha256` and `bytes` against on-disk payload bytes. A matching manifest is the **only** completion boundary.
+Step 8 (parent `fsync`) failure after a successful step 7 `rename(2)` leaves durability uncertain. The failing invocation **MUST** return `outcome: error`, `reason.code: resource.exhausted`. Same-process manifest/hash verification **MUST NOT** promote that invocation to success even when `<DIR>` already contains a matching manifest.
+
+After a crash or I/O fault between steps 7 and 8, a **fresh later process** **MUST** determine export completeness by reading `<DIR>/manifest.json` and verifying every `files[*].sha256` and `bytes` against on-disk payload bytes. A matching manifest is the **only** completion boundary for that recovery path.
 
 - Valid manifest with matching hashes: treat export as complete; **MUST NOT** roll back or delete `<DIR>` because a prior invocation exited with `resource.exhausted` or abnormal termination.
 - Missing manifest, invalid manifest, or hash mismatch: treat `<DIR>` as not successfully published; cleanup **MAY** remove `<DIR>` only when it contains exclusively export artifacts from the failed attempt and no valid manifest; otherwise report `resource.exhausted` without deleting unrelated user content.
@@ -322,7 +330,7 @@ All examples below are valid, linewise-parseable JSON/JSONL. Paths and IDs are i
 ### `journal.jsonl` (creation entry)
 
 ```json
-{"journal_schema_version":1,"sequence":1,"run_id":"01J9X3K2M4N5P6Q7R8S9T0V2X","ts":"2026-07-17T14:00:00.123Z","operation":"run.create","request_id":"01J9X3K2M4N5P6Q7R8S9T0V1W","entry_kind":"run.created","outcome":"completed","reason":null,"state_before":{"state":"a","lifecycle":"active","workflow_state_version":1,"lifecycle_version":1},"state_after":{"state":"a","lifecycle":"active","workflow_state_version":1,"lifecycle_version":1},"graph_revision":"sha256:501a3c627bb31a7e742d8e3f5466076beeadc778f034c4be6b7c9ddd2704fde6"}
+{"entry_kind":"run.created","graph_revision":"sha256:501a3c627bb31a7e742d8e3f5466076beeadc778f034c4be6b7c9ddd2704fde6","journal_schema_version":1,"operation":"run.create","outcome":"completed","reason":null,"request_id":"01J9X3K2M4N5P6Q7R8S9T0V1W","run_id":"01J9X3K2M4N5P6Q7R8S9T0V2X","sequence":1,"state_after":{"lifecycle":"active","lifecycle_version":1,"state":"a","workflow_state_version":1},"state_before":{"lifecycle":"active","lifecycle_version":1,"state":"a","workflow_state_version":1},"ts":"2026-07-17T14:00:00.123Z"}
 ```
 
 ### `manifest.json` (illustrative digests)
@@ -330,7 +338,7 @@ All examples below are valid, linewise-parseable JSON/JSONL. Paths and IDs are i
 Digest values are computed from the exact example `state.json` and `journal.jsonl` bytes in this section.
 
 ```json
-{"export_manifest_schema_version":1,"export_schema_version":1,"exported_at":"2026-07-17T15:00:00.000Z","files":[{"bytes":528,"path":"journal.jsonl","sha256":"sha256:803f7792bd89e75a2e5986cecad41f8ffaa67517d791bb33d5b1e2bee3c88d96"},{"bytes":873,"path":"state.json","sha256":"sha256:d9c273186721835b47ef7696bdc9188eaaed20fbad92c84d3e544e41d00852b1"}],"run_id":"01J9X3K2M4N5P6Q7R8S9T0V2X"}
+{"export_manifest_schema_version":1,"export_schema_version":1,"exported_at":"2026-07-17T15:00:00.000Z","files":[{"bytes":528,"path":"journal.jsonl","sha256":"sha256:079ba5d73eabc24926e1d22d195bd2528e3acd96153f5745bcc2658f384f2603"},{"bytes":873,"path":"state.json","sha256":"sha256:d9c273186721835b47ef7696bdc9188eaaed20fbad92c84d3e544e41d00852b1"}],"run_id":"01J9X3K2M4N5P6Q7R8S9T0V2X"}
 ```
 
 ### Structured CLI success — `run.export`
@@ -362,8 +370,10 @@ Exit `0`. Structured mode **MUST NOT** emit artifact bytes on stdout.
 - `run.export` is the sole export writer; export never mutates SQLite or invokes providers.
 - Output directory collision rejects with `export.target.not_empty` without overwriting.
 - Permission and invalid path failures reject with `export.target.invalid`.
+- Relative `--output <DIR>` is anchored to one absolute path before validation and SQLite snapshot, then reused through publication.
 - Publication writes only inside a sibling staging directory until `rename(2)`; pre-rename failure removes staging and leaves `<DIR>` absent or empty.
-- Post-rename parent-`fsync` ambiguity is resolved by fresh-process manifest/hash verification without false rollback.
+- Frozen concurrent/repeat loser `export.target.not_empty` takes precedence even when private staging cleanup also fails; all other staging cleanup failures surface as `resource.exhausted`.
+- Post-rename parent-`fsync` failure in the same invocation returns `resource.exhausted` without same-process manifest promotion; fresh later process manifest/hash verification remains the recovery rule without false rollback.
 - `journal.jsonl` lines sort by `sequence`; `evidence` sorts by `(created_at, evidence_id)`; manifest `files` sorts by `path`.
 - Manifest `sha256` values cover exact on-disk payload bytes.
 - External evidence locators appear only as stored strings; export never dereferences them.

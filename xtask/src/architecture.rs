@@ -590,7 +590,9 @@ fn allowed_product_dependency(product: &str, dependency: &str, kind: DependencyK
             "tracing",
             "toml",
         ],
-        ("loop-engine-integrations", DependencyKind::Development) => &["tempfile"],
+        ("loop-engine-integrations", DependencyKind::Development) => {
+            &["loop-engine-core", "tempfile"]
+        }
         ("loop-engine-cli", DependencyKind::Normal) => &[
             "loop-engine-core",
             "loop-engine-integrations",

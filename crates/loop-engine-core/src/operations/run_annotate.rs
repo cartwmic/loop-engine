@@ -1,7 +1,9 @@
 use crate::capabilities::persistence_commands::{AppendAnnotationCommand, CommitStatus};
 use crate::capabilities::run_writer::RunWriter;
 use crate::model::annotation::{ActorMetadata, Note};
+use crate::model::attempt::{AttemptFacts, JournalExtension};
 use crate::model::journal::{JournalDraft, JournalEntryKind};
+use crate::model::outcome::OutcomeClass;
 use crate::model::run::Run;
 use crate::model::version::JournalSequence;
 use crate::operations::{CommandError, validate_journal};
@@ -29,22 +31,26 @@ pub fn command(
         "run.annotate",
         JournalEntryKind::Annotation,
     )?;
-    let attempt = journal_entry
-        .attempt()
-        .ok_or(CommandError::JournalMismatch)?;
-    if attempt.note != note
-        || attempt.actor != actor
-        || attempt.corrects_sequence != corrects_sequence
+    let expected_attempt = AttemptFacts {
+        note: note.clone(),
+        actor: actor.clone(),
+        corrects_sequence,
+        ..AttemptFacts::default()
+    };
+    if journal_entry.outcome() != OutcomeClass::Completed
+        || journal_entry.reason().is_some()
+        || !matches!(journal_entry.extension(), JournalExtension::Annotation)
+        || journal_entry.attempt() != Some(&expected_attempt)
     {
         return Err(CommandError::JournalMismatch);
     }
-    Ok(Some(AppendAnnotationCommand {
-        run_id: run.id().clone(),
+    Ok(Some(AppendAnnotationCommand::from_parts(
+        run.id().clone(),
         note,
         actor,
         corrects_sequence,
         journal_entry,
-    }))
+    )))
 }
 
 #[cfg(test)]
@@ -66,5 +72,21 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn annotation_cannot_fabricate_rejected_disposition() {
+        let run = crate::operations::test_support::run();
+        let note = crate::model::annotation::Note::new("audit note").unwrap();
+        let draft = crate::operations::test_support::draft(
+            "run.annotate",
+            OutcomeClass::Rejected,
+            JournalExtension::Annotation,
+            Some(AttemptFacts {
+                note: Some(note.clone()),
+                ..AttemptFacts::default()
+            }),
+        );
+        assert!(super::command(&run, Some(note), None, None, draft).is_err());
     }
 }

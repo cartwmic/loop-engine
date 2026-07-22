@@ -1,9 +1,11 @@
+use std::collections::BTreeMap;
+
 use thiserror::Error;
 
 use super::diagnostic::Diagnostic;
 use super::evidence::EvidenceRecord;
 use super::gate::{GateEvaluation, GateVerdict, VerdictSetError, validate_verdict_set};
-use super::ids::{EventId, GateId, RunId, StateId};
+use super::ids::{EventId, EvidenceId, GateId, RunId, StateId};
 use super::lifecycle::Lifecycle;
 use super::run::{Run, RunMutationError};
 use super::version::{LifecycleVersion, WorkflowStateVersion};
@@ -20,6 +22,7 @@ pub struct TransitionDecision {
     lifecycle: Lifecycle,
     state_changed: bool,
     provider_evidence: Vec<EvidenceRecord>,
+    provider_evidence_scopes: BTreeMap<EvidenceId, GateId>,
 }
 
 impl TransitionDecision {
@@ -61,6 +64,10 @@ impl TransitionDecision {
 
     pub fn provider_evidence(&self) -> &[EvidenceRecord] {
         &self.provider_evidence
+    }
+
+    pub fn provider_evidence_scopes(&self) -> &BTreeMap<EvidenceId, GateId> {
+        &self.provider_evidence_scopes
     }
 }
 
@@ -119,6 +126,7 @@ fn decision(
     target: StateId,
     required_gates: Vec<GateId>,
     provider_evidence: Vec<EvidenceRecord>,
+    provider_evidence_scopes: BTreeMap<EvidenceId, GateId>,
 ) -> TransitionDecision {
     let lifecycle = if run
         .graph()
@@ -140,6 +148,7 @@ fn decision(
         expected_lifecycle_version: run.lifecycle_version(),
         lifecycle,
         provider_evidence,
+        provider_evidence_scopes,
     }
 }
 
@@ -154,6 +163,7 @@ pub fn resolve_gate_free(run: &Run, event: &EventId) -> Result<TransitionDecisio
         transition.target().clone(),
         vec![],
         vec![],
+        BTreeMap::new(),
     ))
 }
 
@@ -187,6 +197,15 @@ pub fn resolve_gated(
             let evidence = exact
                 .values()
                 .flat_map(|verdict| verdict.evidence().iter().cloned())
+                .collect::<Vec<_>>();
+            let provider_evidence_scopes = exact
+                .values()
+                .flat_map(|verdict| {
+                    verdict
+                        .evidence()
+                        .iter()
+                        .map(|evidence| (evidence.id().clone(), verdict.gate().clone()))
+                })
                 .collect();
             Ok(decision(
                 run,
@@ -194,6 +213,7 @@ pub fn resolve_gated(
                 transition.target().clone(),
                 transition.required_gates().to_vec(),
                 evidence,
+                provider_evidence_scopes,
             ))
         }
     }

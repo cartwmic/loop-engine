@@ -5,7 +5,7 @@ use crate::model::bounded::{
     SELECTED_EVIDENCE_CONTEXT_TOTAL_BYTES,
 };
 use crate::model::compatibility::CompatibilityReport;
-use crate::model::diagnostic::Diagnostics;
+use crate::model::diagnostic::{Diagnostic, Diagnostics};
 use crate::model::evidence::EvidenceRecord;
 use crate::model::gate::GateEvaluation;
 use crate::model::graph::WorkflowGraph;
@@ -13,8 +13,15 @@ use crate::model::graph_validation::GraphError;
 use crate::model::ids::{EventId, RequestId, RunId};
 use crate::model::live_guidance::LiveGuidanceResult;
 use crate::model::provider::ProviderObservation;
+use crate::model::reason::Reason;
 use crate::model::run::Run;
 use crate::model::run_input::{InputDeclarations, RunInputs};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvocationFailure {
+    pub reason: Reason,
+    pub diagnostics: Vec<Diagnostic>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InvocationError<E> {
@@ -24,6 +31,7 @@ pub enum InvocationError<E> {
     Transport {
         source: E,
         fact: Box<ProviderFact>,
+        failure: Box<InvocationFailure>,
         /// Diagnostic sink failure after provider dispatch; provider outcome remains authoritative.
         trace_failure: Option<String>,
     },
