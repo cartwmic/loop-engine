@@ -1,0 +1,5 @@
+{"scenario": "input-required-accepted", "golden": "required-accepted.json", "role": "validate_inputs"}
+{"scenario": "input-optional-accepted", "golden": "optional-accepted.json", "role": "validate_inputs"}
+{"scenario": "input-required-rejected", "golden": "required-rejected.json", "role": "validate_inputs"}
+{"scenario": "input-invalid-rejected", "golden": "invalid-rejected.json", "role": "validate_inputs"}
+{"scenario": "input-evaluation-error", "golden": "evaluation-error.json", "role": "validate_inputs"}

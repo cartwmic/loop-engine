@@ -1,0 +1,4 @@
+{
+  "process_argv": [],
+  "registration_argv": ["--gate-evaluation-error"]
+}

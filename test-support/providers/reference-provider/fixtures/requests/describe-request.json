@@ -1,0 +1,14 @@
+{
+  "protocol_major": 1,
+  "role": "describe",
+  "invocation_id": "019f6e88-b403-73a6-89f9-ebfe668b417d",
+  "registration": {
+    "registration_id": "019f6e88-b403-73a6-89f9-ebfe668b417e",
+    "config_revision": 1,
+    "executable": "/opt/providers/reference-provider",
+    "argv": [],
+    "working_directory": "/opt/providers",
+    "timeout_seconds": 60
+  },
+  "payload": {}
+}

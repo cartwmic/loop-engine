@@ -1,0 +1,26 @@
+{
+  "scenario": "process-invalid-utf8",
+  "role": "describe",
+  "request": {
+    "protocol_major": 1,
+    "role": "describe",
+    "invocation_id": "fixture-process-invalid-utf8",
+    "registration": {
+      "registration_id": "019f0000-0000-7000-8000-000000000001",
+      "config_revision": 1,
+      "executable": "/tmp/scenario-provider",
+      "argv": [
+        "--scenario",
+        "process-invalid-utf8"
+      ],
+      "working_directory": "/tmp",
+      "timeout_seconds": 60
+    },
+    "payload": {}
+  },
+  "expected_process": {
+    "exit_success": true,
+    "stdout_json": false,
+    "transport": "invalid_utf8"
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "scenario": "graph-build-drift",
+  "role": "describe",
+  "request": {
+    "protocol_major": 1,
+    "role": "describe",
+    "invocation_id": "fixture-graph-build-drift",
+    "registration": {
+      "registration_id": "019f0000-0000-7000-8000-000000000001",
+      "config_revision": 1,
+      "executable": "/tmp/scenario-provider",
+      "argv": [
+        "--scenario",
+        "graph-build-drift"
+      ],
+      "working_directory": "/tmp",
+      "timeout_seconds": 60
+    },
+    "payload": {}
+  },
+  "expected": {
+    "protocol_major": 1,
+    "role": "describe",
+    "invocation_id": "fixture-graph-build-drift",
+    "result": {
+      "kind": "description",
+      "graph": {
+        "initial_state": "build-a-v1",
+        "live_guidance_supported": false,
+        "paired_call_ordinal": 1
+      }
+    }
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "scenario": "compatibility-all-compatible",
+  "role": "check_compatibility",
+  "request": {
+    "protocol_major": 1,
+    "role": "check_compatibility",
+    "invocation_id": "fixture-compatibility-all-compatible",
+    "registration": {
+      "registration_id": "019f0000-0000-7000-8000-000000000001",
+      "config_revision": 1,
+      "executable": "/tmp/scenario-provider",
+      "argv": [
+        "--scenario",
+        "compatibility-all-compatible"
+      ],
+      "working_directory": "/tmp",
+      "timeout_seconds": 60
+    },
+    "payload": {
+      "stored_graph": {
+        "canonical_graph_version": 1,
+        "initial_state_id": "draft",
+        "input_declarations": [],
+        "live_guidance_supported": false,
+        "states": [
+          {
+            "id": "draft",
+            "final": false,
+            "static_guidance": {
+              "kind": "none"
+            }
+          }
+        ],
+        "transitions": []
+      },
+      "capabilities": [
+        "gates",
+        "live_guidance"
+      ]
+    }
+  },
+  "request_payload": {
+    "stored_graph": {
+      "canonical_graph_version": 1,
+      "initial_state_id": "draft",
+      "input_declarations": [],
+      "live_guidance_supported": false,
+      "states": [
+        {
+          "id": "draft",
+          "final": false,
+          "static_guidance": {
+            "kind": "none"
+          }
+        }
+      ],
+      "transitions": []
+    },
+    "capabilities": [
+      "gates",
+      "live_guidance"
+    ]
+  },
+  "expected": {
+    "protocol_major": 1,
+    "role": "check_compatibility",
+    "invocation_id": "fixture-compatibility-all-compatible",
+    "result": {
+      "kind": "findings"
+    }
+  },
+  "expected_result": {
+    "kind": "findings"
+  }
+}

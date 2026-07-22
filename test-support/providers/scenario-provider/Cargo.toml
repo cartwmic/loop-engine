@@ -1,0 +1,21 @@
+[package]
+name = "scenario-provider"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "scenario-provider"
+path = "src/main.rs"
+
+[[example]]
+name = "generate_local_schemas"
+path = "examples/generate_local_schemas.rs"
+
+[dependencies]
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.150"
+schemars = { version = "=1.2.1", features = ["derive"] }
+thiserror = "=2.0.18"

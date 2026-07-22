@@ -1,0 +1,51 @@
+{
+  "scenario": "input-optional-accepted",
+  "role": "validate_inputs",
+  "request": {
+    "protocol_major": 1,
+    "role": "validate_inputs",
+    "invocation_id": "fixture-input-optional-accepted",
+    "registration": {
+      "registration_id": "019f0000-0000-7000-8000-000000000001",
+      "config_revision": 1,
+      "executable": "/tmp/scenario-provider",
+      "argv": [
+        "--scenario",
+        "input-optional-accepted"
+      ],
+      "working_directory": "/tmp",
+      "timeout_seconds": 60
+    },
+    "payload": {
+      "declarations": [
+        {
+          "id": "note",
+          "kind": "string",
+          "required": false
+        }
+      ],
+      "candidate_values": {}
+    }
+  },
+  "request_payload": {
+    "declarations": [
+      {
+        "id": "note",
+        "kind": "string",
+        "required": false
+      }
+    ],
+    "candidate_values": {}
+  },
+  "expected": {
+    "protocol_major": 1,
+    "role": "validate_inputs",
+    "invocation_id": "fixture-input-optional-accepted",
+    "result": {
+      "kind": "accepted"
+    }
+  },
+  "expected_result": {
+    "kind": "accepted"
+  }
+}

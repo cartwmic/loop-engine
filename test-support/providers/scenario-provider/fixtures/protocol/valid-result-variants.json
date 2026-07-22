@@ -1,0 +1,131 @@
+[
+  {
+    "protocol_major": 1,
+    "role": "describe",
+    "invocation_id": "schema-result-describe",
+    "result": {
+      "kind": "description",
+      "graph": {
+        "initial_state": "draft",
+        "states": [
+          {
+            "id": "draft",
+            "final": true,
+            "static_guidance": {
+              "kind": "none"
+            }
+          }
+        ],
+        "transitions": [],
+        "input_declarations": [],
+        "live_guidance_supported": false
+      }
+    }
+  },
+  {
+    "protocol_major": 1,
+    "role": "validate_inputs",
+    "invocation_id": "schema-result-validate-inputs-accepted",
+    "result": {
+      "kind": "accepted",
+      "values": {}
+    }
+  },
+  {
+    "protocol_major": 1,
+    "role": "validate_inputs",
+    "invocation_id": "schema-result-validate-inputs-rejected",
+    "result": {
+      "kind": "rejected",
+      "diagnostics": []
+    }
+  },
+  {
+    "protocol_major": 1,
+    "role": "validate_inputs",
+    "invocation_id": "schema-result-validate-inputs-evaluation-error",
+    "result": {
+      "kind": "evaluation_error",
+      "diagnostics": []
+    }
+  },
+  {
+    "protocol_major": 1,
+    "role": "evaluate_gates",
+    "invocation_id": "schema-result-evaluate-gates-verdicts",
+    "result": {
+      "kind": "verdicts",
+      "verdicts": [],
+      "evidence": []
+    }
+  },
+  {
+    "protocol_major": 1,
+    "role": "evaluate_gates",
+    "invocation_id": "schema-result-evaluate-gates-incompatible",
+    "result": {
+      "kind": "incompatible",
+      "diagnostics": []
+    }
+  },
+  {
+    "protocol_major": 1,
+    "role": "evaluate_gates",
+    "invocation_id": "schema-result-evaluate-gates-evaluation-error",
+    "result": {
+      "kind": "evaluation_error",
+      "diagnostics": []
+    }
+  },
+  {
+    "protocol_major": 1,
+    "role": "live_guidance",
+    "invocation_id": "schema-result-live-guidance-guidance",
+    "result": {
+      "kind": "guidance",
+      "text": "continue"
+    }
+  },
+  {
+    "protocol_major": 1,
+    "role": "live_guidance",
+    "invocation_id": "schema-result-live-guidance-incompatible",
+    "result": {
+      "kind": "incompatible",
+      "diagnostics": []
+    }
+  },
+  {
+    "protocol_major": 1,
+    "role": "live_guidance",
+    "invocation_id": "schema-result-live-guidance-evaluation-error",
+    "result": {
+      "kind": "evaluation_error",
+      "diagnostics": []
+    }
+  },
+  {
+    "protocol_major": 1,
+    "role": "check_compatibility",
+    "invocation_id": "schema-result-check-compatibility-findings",
+    "result": {
+      "kind": "findings",
+      "capabilities": [
+        {
+          "capability": "graph",
+          "status": "compatible",
+          "diagnostics": []
+        }
+      ]
+    }
+  },
+  {
+    "protocol_major": 1,
+    "role": "check_compatibility",
+    "invocation_id": "schema-result-check-compatibility-evaluation-error",
+    "result": {
+      "kind": "evaluation_error",
+      "diagnostics": []
+    }
+  }
+]

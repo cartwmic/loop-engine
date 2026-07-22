@@ -1,0 +1,175 @@
+[
+  {
+    "role": "describe",
+    "request": {
+      "protocol_major": 1,
+      "role": "describe",
+      "invocation_id": "schema-fixture-describe",
+      "registration": {
+        "registration_id": "019f0000-0000-7000-8000-000000000001",
+        "config_revision": 1,
+        "executable": "/tmp/scenario-provider",
+        "argv": [],
+        "working_directory": "/tmp",
+        "timeout_seconds": 60
+      },
+      "payload": {}
+    }
+  },
+  {
+    "role": "validate_inputs",
+    "request": {
+      "protocol_major": 1,
+      "role": "validate_inputs",
+      "invocation_id": "schema-fixture-validate-inputs",
+      "registration": {
+        "registration_id": "019f0000-0000-7000-8000-000000000001",
+        "config_revision": 1,
+        "executable": "/tmp/scenario-provider",
+        "argv": [],
+        "working_directory": "/tmp",
+        "timeout_seconds": 60
+      },
+      "payload": {
+        "declarations": [
+          {
+            "id": "ticket",
+            "kind": "string",
+            "required": true
+          }
+        ],
+        "candidate_values": {
+          "ticket": "ABC-1"
+        }
+      }
+    }
+  },
+  {
+    "role": "evaluate_gates",
+    "request": {
+      "protocol_major": 1,
+      "role": "evaluate_gates",
+      "invocation_id": "schema-fixture-evaluate-gates",
+      "registration": {
+        "registration_id": "019f0000-0000-7000-8000-000000000001",
+        "config_revision": 1,
+        "executable": "/tmp/scenario-provider",
+        "argv": [],
+        "working_directory": "/tmp",
+        "timeout_seconds": 60
+      },
+      "payload": {
+        "snapshot": {
+          "run_id": "run-1",
+          "registration_id": "reg-1",
+          "graph_revision": "sha256:abc",
+          "lifecycle": "active",
+          "current_state": "draft",
+          "workflow_state_version": 1,
+          "lifecycle_version": 1,
+          "inputs": {},
+          "stored_graph": {
+            "canonical_graph_version": 1,
+            "initial_state_id": "draft",
+            "input_declarations": [],
+            "live_guidance_supported": false,
+            "states": [
+              {
+                "id": "draft",
+                "final": false,
+                "static_guidance": {
+                  "kind": "none"
+                }
+              }
+            ],
+            "transitions": []
+          }
+        },
+        "event": "advance",
+        "required_gate_ids": ["gate-a"],
+        "selected_evidence": [],
+        "inline_evidence": []
+      }
+    }
+  },
+  {
+    "role": "live_guidance",
+    "request": {
+      "protocol_major": 1,
+      "role": "live_guidance",
+      "invocation_id": "schema-fixture-live-guidance",
+      "registration": {
+        "registration_id": "019f0000-0000-7000-8000-000000000001",
+        "config_revision": 1,
+        "executable": "/tmp/scenario-provider",
+        "argv": [],
+        "working_directory": "/tmp",
+        "timeout_seconds": 60
+      },
+      "payload": {
+        "snapshot": {
+          "run_id": "run-1",
+          "registration_id": "reg-1",
+          "graph_revision": "sha256:abc",
+          "lifecycle": "active",
+          "current_state": "draft",
+          "workflow_state_version": 1,
+          "lifecycle_version": 1,
+          "inputs": {},
+          "stored_graph": {
+            "canonical_graph_version": 1,
+            "initial_state_id": "draft",
+            "input_declarations": [],
+            "live_guidance_supported": true,
+            "states": [
+              {
+                "id": "draft",
+                "final": false,
+                "static_guidance": {
+                  "kind": "none"
+                }
+              }
+            ],
+            "transitions": []
+          }
+        },
+        "selected_evidence": []
+      }
+    }
+  },
+  {
+    "role": "check_compatibility",
+    "request": {
+      "protocol_major": 1,
+      "role": "check_compatibility",
+      "invocation_id": "schema-fixture-check-compatibility",
+      "registration": {
+        "registration_id": "019f0000-0000-7000-8000-000000000001",
+        "config_revision": 1,
+        "executable": "/tmp/scenario-provider",
+        "argv": [],
+        "working_directory": "/tmp",
+        "timeout_seconds": 60
+      },
+      "payload": {
+        "stored_graph": {
+          "canonical_graph_version": 1,
+          "initial_state_id": "draft",
+          "input_declarations": [],
+          "live_guidance_supported": false,
+          "states": [
+            {
+              "id": "draft",
+              "final": false,
+              "static_guidance": {
+                "kind": "none"
+              }
+            }
+          ],
+          "transitions": []
+        },
+        "capabilities": ["gates"]
+      }
+    }
+  }
+]

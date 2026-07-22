@@ -1,0 +1,127 @@
+{
+  "$defs": {
+    "DiagnosticDto": {
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "ProviderRole": {
+      "enum": [
+        "describe",
+        "validate_inputs",
+        "evaluate_gates",
+        "live_guidance",
+        "check_compatibility"
+      ],
+      "type": "string"
+    },
+    "ValidateInputsResultDto": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "accepted",
+              "type": "string"
+            },
+            "values": {
+              "additionalProperties": true,
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "diagnostics": {
+              "items": {
+                "$ref": "#/$defs/DiagnosticDto"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "rejected",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "diagnostics"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "diagnostics": {
+              "items": {
+                "$ref": "#/$defs/DiagnosticDto"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "evaluation_error",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "diagnostics"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "invocation_id": {
+      "type": "string"
+    },
+    "protocol_major": {
+      "const": 1,
+      "type": "integer"
+    },
+    "provider_version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "result": {
+      "$ref": "#/$defs/ValidateInputsResultDto"
+    },
+    "role": {
+      "const": "validate_inputs",
+      "type": "string"
+    }
+  },
+  "required": [
+    "protocol_major",
+    "role",
+    "invocation_id",
+    "result"
+  ],
+  "title": "ResultEnvelope",
+  "type": "object"
+}

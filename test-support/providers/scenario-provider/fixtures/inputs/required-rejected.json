@@ -1,0 +1,61 @@
+{
+  "scenario": "input-required-rejected",
+  "role": "validate_inputs",
+  "request": {
+    "protocol_major": 1,
+    "role": "validate_inputs",
+    "invocation_id": "fixture-input-required-rejected",
+    "registration": {
+      "registration_id": "019f0000-0000-7000-8000-000000000001",
+      "config_revision": 1,
+      "executable": "/tmp/scenario-provider",
+      "argv": [
+        "--scenario",
+        "input-required-rejected"
+      ],
+      "working_directory": "/tmp",
+      "timeout_seconds": 60
+    },
+    "payload": {
+      "declarations": [
+        {
+          "id": "ticket",
+          "kind": "string",
+          "required": true
+        }
+      ],
+      "candidate_values": {}
+    }
+  },
+  "request_payload": {
+    "declarations": [
+      {
+        "id": "ticket",
+        "kind": "string",
+        "required": true
+      }
+    ],
+    "candidate_values": {}
+  },
+  "expected": {
+    "protocol_major": 1,
+    "role": "validate_inputs",
+    "invocation_id": "fixture-input-required-rejected",
+    "result": {
+      "kind": "rejected",
+      "diagnostics": [
+        {
+          "code": "input.missing"
+        }
+      ]
+    }
+  },
+  "expected_result": {
+    "kind": "rejected",
+    "diagnostics": [
+      {
+        "code": "input.missing"
+      }
+    ]
+  }
+}

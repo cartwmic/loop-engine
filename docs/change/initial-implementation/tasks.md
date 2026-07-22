@@ -1198,21 +1198,21 @@ Boundary commit `feat(cli): add private driver and contracts`. The working tree 
 
 Validation (was V006/F006): boundary ritual plus focused startup/args/dispatch/render/exit suites and `baseline` closure with driver/route sets. Final WP1 inventory and post-marker boundary checks passed 19/19 commands and focused CLI suites passed 185/185 tests; evidence is retained under `target/junction-evidence/WP1/`. [`c6-range-ledger.txt`](c6-range-ledger.txt) records the exact boundary union. Owner approved the WP1 boundary on 2026-07-22.
 
-### WP2 — Provider fixtures and E2E harness (was Phase 7, T135–T145)
+### WP2 — Provider fixtures and E2E harness (was Phase 7, T135–T145) — complete
 
 Boundary commit `test(e2e): establish black-box harness`.
 
-- [ ] Generic scenario-provider executable, root-excluded, no product dependency (was T135) — `test-support/providers/scenario-provider/`
-- [ ] Graph/input scenario modes: linear/cycle/self-loop/zero-final/multi-final/initial-final/sink/ambiguous/invalid/guidance/input variants (was T136)
-- [ ] Gate/evidence/guidance/compatibility scenario modes (was T137)
-- [ ] Provider process-failure modes: malformed JSON, extra/missing output, wrong major, nonzero, signal, timeout, oversized streams, invalid UTF-8 (was T138)
-- [ ] Explicit provider barrier and invocation ledger; no timing-only sleeps (was T139)
-- [ ] Reference software-change provider: graph, gate/evidence policy, guidance/drift/compatibility modes (was T140–T142) — `test-support/providers/reference-provider/`
-- [ ] Isolated E2E sandbox: private home/config/DB/trace/provider CWD, preserved failure artifacts (was T143) — `cli/tests/e2e.rs`, `cli/tests/support/`
-- [ ] CLI process runner and structured parser; no in-process handler calls (was T144)
-- [ ] Trace parser, runtime coverage recorder, fixture helpers; close C2 (was T145)
+- [x] Generic scenario-provider executable, root-excluded, no product dependency (was T135) — `test-support/providers/scenario-provider/`
+- [x] Graph/input scenario modes: linear/cycle/self-loop/zero-final/multi-final/initial-final/sink/ambiguous/invalid/guidance/input variants (was T136)
+- [x] Gate/evidence/guidance/compatibility scenario modes (was T137)
+- [x] Provider process-failure modes: malformed JSON, extra/missing output, wrong major, nonzero, signal, timeout, oversized streams, invalid UTF-8 (was T138)
+- [x] Explicit provider barrier and invocation ledger; no timing-only sleeps (was T139)
+- [x] Reference software-change provider: graph, gate/evidence policy, guidance/drift/compatibility modes (was T140–T142) — `test-support/providers/reference-provider/`
+- [x] Isolated E2E sandbox: private home/config/DB/trace/provider CWD, preserved failure artifacts (was T143) — `cli/tests/e2e.rs`, `cli/tests/support/`
+- [x] CLI process runner and structured parser; no in-process handler calls (was T144)
+- [x] Trace parser, runtime coverage recorder, fixture helpers; close C2 (was T145)
 
-Validation (was V007/F007): boundary ritual plus standalone fixture-crate tests and harness self-tests.
+Validation (was V007/F007): boundary ritual plus standalone fixture-crate tests and harness self-tests. Scenario-provider tests passed 38/38, reference-provider tests passed 39/39, and CLI E2E harness self-tests passed 28/28. Workspace check/tests, strict Clippy, docs, architecture, dependency policy, baseline closure, formatting, and canonical 10-check quality manifest passed. Blind Composer reviews cleared scenario schemas, reference semantics, harness behavior, and provider executable resolution after all findings were repaired. Evidence is retained under `target/junction-evidence/WP2/`; [`c7-range-ledger.txt`](c7-range-ledger.txt) records the exact boundary union.
 
 ### WP3 — Alpha operation exposure (was Phase 8, trimmed to alpha catalog)
 

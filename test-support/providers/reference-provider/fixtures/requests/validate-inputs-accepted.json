@@ -1,0 +1,35 @@
+{
+  "protocol_major": 1,
+  "role": "validate_inputs",
+  "invocation_id": "019f6e88-b403-73a6-89f9-ebfe668b4180",
+  "registration": {
+    "registration_id": "019f6e88-b403-73a6-89f9-ebfe668b417e",
+    "config_revision": 1,
+    "executable": "/opt/providers/reference-provider",
+    "argv": [],
+    "working_directory": "/opt/providers",
+    "timeout_seconds": 60
+  },
+  "payload": {
+    "declarations": [
+      {
+        "id": "change_id",
+        "kind": "string",
+        "required": false
+      },
+      {
+        "id": "artifact_root",
+        "kind": "path",
+        "required": true
+      },
+      {
+        "id": "work_root",
+        "kind": "path",
+        "required": false
+      }
+    ],
+    "candidate_values": {
+      "artifact_root": "/tmp/artifacts"
+    }
+  }
+}

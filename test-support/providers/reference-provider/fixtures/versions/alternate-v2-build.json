@@ -1,0 +1,8 @@
+{
+  "process_argv": [
+    "--provider-version=reference-provider/2.0.0-test",
+    "--describe-graph=v2"
+  ],
+  "registration_argv": [],
+  "graph_metadata_version": "2"
+}

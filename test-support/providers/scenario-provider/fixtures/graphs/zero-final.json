@@ -1,0 +1,33 @@
+{
+  "scenario": "graph-zero-final",
+  "role": "describe",
+  "request": {
+    "protocol_major": 1,
+    "role": "describe",
+    "invocation_id": "fixture-graph-zero-final",
+    "registration": {
+      "registration_id": "019f0000-0000-7000-8000-000000000001",
+      "config_revision": 1,
+      "executable": "/tmp/scenario-provider",
+      "argv": [
+        "--scenario",
+        "graph-zero-final"
+      ],
+      "working_directory": "/tmp",
+      "timeout_seconds": 60
+    },
+    "payload": {}
+  },
+  "expected": {
+    "protocol_major": 1,
+    "role": "describe",
+    "invocation_id": "fixture-graph-zero-final",
+    "result": {
+      "kind": "description",
+      "graph": {
+        "initial_state": "ongoing",
+        "live_guidance_supported": false
+      }
+    }
+  }
+}
