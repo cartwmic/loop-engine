@@ -10,6 +10,8 @@ The implementation task inventory is exactly T001–T200. Junction validation/fi
 
 Decision D004 must confirm this catalog before implementation. `Private task` builds internal operation. `Exposure task` adds production CLI route, catalogs, required E2Es, traces, and documentation atomically.
 
+> **Amendment (2026-07-22):** exposure is staged per [tasks.md § Amended execution plan](tasks.md#amended-execution-plan-2026-07-22). Nine alpha operations (`provider.add`, `provider.list`, `provider.check`, `run.create`, `run.list`, `run.show`, `run.terminate`, `run.request`, `run.history`) expose in WP3; the remaining twelve expose in WP6. D004's 21-ID catalog is unchanged and `final` closure still requires all 21 at change close. `Exposure task` and cross-coverage T-number columns below identify contracts of record now executed inside work packages; aggregate rows T170/T182 follow the shared provider-failure family rule in [testing.md § Facet matrix](../../testing.md#facet-matrix), and T183 is owner-optional deferred.
+
 | Operation ID | CLI intent | Characteristics | Private task | Exposure task | Main cross-coverage |
 |---|---|---|---|---|---|
 | `provider.add` | register explicit executable | Provider-catalog mutation; Rejectable provider-catalog mutation | T063 | T147 | T167, T177 |

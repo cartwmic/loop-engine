@@ -25,6 +25,15 @@ fn baseline_rejects_open_operation_allowance() {
 }
 
 #[test]
+fn exposed_command_accepts_empty_runtime_catalogs() {
+    let status = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["operation-coverage", "--mode", "exposed"])
+        .status()
+        .expect("xtask operation-coverage should execute");
+    assert!(status.success());
+}
+
+#[test]
 fn candidate_rejects_unknown_open_operation() {
     let status = Command::new(env!("CARGO_BIN_EXE_xtask"))
         .args([

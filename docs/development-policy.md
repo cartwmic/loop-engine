@@ -225,3 +225,15 @@ quality/semantic-judge/v1/build-smoke-request | quality/semantic-judge/v1/judge
 Real publication-mode smoke against parent `7552af5968b4a2c10aefd01fbfa6c351817e1b8b` and candidate `581c23bb085718d37d994d77d59d3d70b7ea309f` must return determinate `pass` or `fail`. `indeterminate`, `unavailable`, or empty output block T012 completion.
 
 Untracked smoke transcripts may be kept locally under `target/quality-artifacts/` when useful; tracked contract artifacts must remain stable and credential-free.
+
+## Planning and execution lessons (2026-07-22)
+
+Distilled from the initial-implementation over-engineering assessments ([fable](change/initial-implementation/overengineering-assessment.md), [sol](change/initial-implementation/overengineering-assessment-sol.md)) and the plan amendment they produced. These are binding planning policy for future changes in this repository.
+
+1. **Walking skeleton first.** When end-to-end tests are the sole behavioral authority, sequencing must produce a runnable production driver and harness before breadth. A plan that defers the driver to a late phase guarantees days of unaccepted inventory regardless of code quality. See [testing.md § Sequencing doctrine](testing.md#sequencing-doctrine).
+2. **Governance proportional to executors.** Validation/repair ceremony scales with the number of independent, mutually untrusted executors. For one owner orchestrating subagents, validation runs at work-package boundaries, not per microtask. Roughly one third of the original plan's execution units governed work instead of doing work; that ratio is the failure signal to watch for.
+3. **Task granularity has a ceiling.** Plans of hundreds of microtasks with dense dependency edges make plan maintenance its own workload, and the bookkeeping drifts anyway (the amended plan replaced a header/marker contradiction observed in practice). Prefer six to ten vertical work packages with internal checklists; reserve task-level granularity for genuinely independent, delegable units.
+4. **Prove shared machinery once.** Failure modes that flow through one shared adapter (process failures, protocol violations, bounds) are proven exhaustively on one representative operation, plus one representative row per other consumer. Requiring the full cross-product on every operation costs quadratically and yields linearly.
+5. **Separate product invariants from process policy.** Encoding review/validation process into numbered system invariants makes the plan self-justifying — ceremony appears mandatory because documents written alongside the plan mandate it. Runtime guarantees belong in invariants.md; process policy belongs here, where the owner can amend it without invariant ceremony.
+6. **Checkpoint cadence for long-running agents.** Multi-day unattended execution accumulates unexamined direction risk. The orchestrator stops for explicit owner review at every work-package boundary; no plan may authorize unattended multi-package runs.
+7. **Bound uncommitted tranches.** Uncommitted work never spans more than one work package; large uncommitted line counts are a stop-and-commit signal, not a milestone in progress.

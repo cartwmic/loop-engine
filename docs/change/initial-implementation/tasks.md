@@ -1,6 +1,6 @@
 # Initial Implementation Task List
 
-**Status:** In progress — Phase 5 SQLite authority, journal, export, and V005/F005 closure complete; Phase 6 CLI delivery and composition root is next
+**Status:** In progress — Phase 5 SQLite authority, journal, export, and V005/F005 closure complete. Plan amended 2026-07-22: remaining work executes as work packages WP1–WP6 under the [Amended execution plan](#amended-execution-plan-2026-07-22); WP1 CLI delivery substrate is complete and owner-approved for its boundary commit
 
 Follow [execution protocol](README.md#execution-protocol), resolve [decision gates](decisions.md), and maintain [coverage map](coverage.md). Every task is sized as one narrow orchestrator-owned unit unless its stop condition requires owner escalation.
 
@@ -23,7 +23,7 @@ Phase 8 shorthand is also exact:
 - `docs/coverage` = `docs/operation-catalog.md`, `docs/cli-contract.md`, this `coverage.md`, plus task-named affected foundation/protocol docs; `tasks.md` markers remain orchestrator-only;
 - each exposure always stages its exact `quality/facets/v1/<operation-id>.json` path named by task.
 
-Junction validation command conventions — these commands are executed by junction validation tasks (V family) and orchestrator boundary rituals, never by individual T-task owners:
+Validation command conventions — these commands are executed by work-package validation rituals and orchestrator boundary rituals (historically by junction V-tasks through V005), never by individual task owners:
 
 - focused core test: `cargo test -p loop-engine-core <module-filter>`;
 - focused integration test: `cargo test -p loop-engine-integrations <module-filter>`;
@@ -34,11 +34,13 @@ Junction validation command conventions — these commands are executed by junct
 - documentation: `cargo run -p xtask -- docs-check`;
 - uncommitted junction full gate: `cargo run -p xtask -- quality --root .`; post-commit exact-revision confirmation: `cargo run -p xtask -- quality --revision <commit-sha>`.
 
-A task saying “targeted E2E” means exact CLI E2E command above with operation/scenario name as filter. A task saying “targeted reference E2E” means exact reference command above with behavior-group module as filter. `cli/tests/e2e/*.rs` are modules of `cli/tests/e2e.rs`; `cli/tests/reference/*.rs` are modules of `cli/tests/reference.rs`. For focused core/integration tests, module filter is exact basename of task's primary Rust module (for example T043 `gate`, T105 `migrate`). Closure has four explicit stages: `baseline` requires all runtime sets empty; `candidate --allow-open <comma-separated-stable-ids>` requires core/driver/route equality for named uncommitted atomic-group IDs while permitting their declared open facets; default `exposed` requires exact core=driver=route=E2E=trace equality and closed manifest for every currently exposed ID; `final` adds exact D004 21-ID equality. Bare “closure” means `exposed`; only intermediate T146/T148/T149/T150/T151/T159 may use `candidate`; T167 and later use `final`. These conventions define the accumulated deterministic check inventory: `git diff --check`; format/Clippy (T020+); `cargo check --workspace --locked` (T017+); `cargo test --workspace` (first tests+); architecture (T021+); docs check (T026+); dependency policy (T030+); `cargo doc --workspace --no-deps` (T052+); operation closure in the current stage mode (T062+); standalone fixture-crate tests via `cargo test --manifest-path test-support/providers/<crate>/Cargo.toml --locked` (T135/T140+); full CLI E2E suite (T143+); reference suite (T185+); quality manifest gate (T028+). A junction validation task runs every inventory command whose implementing task is complete, plus its range-targeted suites.
+A task saying “targeted E2E” means exact CLI E2E command above with operation/scenario name as filter. A task saying “targeted reference E2E” means exact reference command above with behavior-group module as filter. `cli/tests/e2e/*.rs` are modules of `cli/tests/e2e.rs`; `cli/tests/reference/*.rs` are modules of `cli/tests/reference.rs`. For focused core/integration tests, module filter is exact basename of task's primary Rust module (for example T043 `gate`, T105 `migrate`). Closure has four explicit stages: `baseline` requires all runtime sets empty; `candidate --allow-open <comma-separated-stable-ids>` requires core/driver/route equality for named uncommitted atomic-group IDs while permitting their declared open facets; default `exposed` requires exact core=driver=route=E2E=trace equality and closed manifest for every currently exposed ID; `final` adds exact D004 21-ID equality. Bare “closure” means `exposed`; `candidate` appears only inside WP3 checkpoint staging; `final` applies only at WP6 change close. These conventions define the accumulated deterministic check inventory: `git diff --check`; format/Clippy (T020+); `cargo check --workspace --locked` (T017+); `cargo test --workspace` (first tests+); architecture (T021+); docs check (T026+); dependency policy (T030+); `cargo doc --workspace --no-deps` (T052+); operation closure in the current stage mode (T062+); standalone fixture-crate tests via `cargo test --manifest-path test-support/providers/<crate>/Cargo.toml --locked` (T135/T140+); full CLI E2E suite (T143+); reference suite (T185+); quality manifest gate (T028+). A work-package validation ritual runs every inventory command whose implementing work is complete, plus its package-targeted suites.
 
 Task bullet vocabulary: `**Tests:**` names test/fixture content the task must author as deliverables; `**Criteria:**` names consistency requirements its artifacts must satisfy. Neither bullet asks for per-task verification-command execution. The orchestrator implements T-tasks directly, then executes accumulated validation at junction V-tasks, batches valid repairs under F-tasks, and performs the boundary ritual.
 
 ## Junction governance tasks and owner cadence
+
+> **Amendment (2026-07-22):** junctions `V001`–`V005`/`F001`–`F005` executed and closed; the material below is their historical record and remains authoritative for completed ranges. Junctions `V006`–`V013`/`F006`–`F013` are retired unexecuted; all remaining validation and repair follows [Work-package governance](#work-package-governance) in the amended execution plan.
 
 Junction validation tasks `V001`–`V013` and junction fix tasks `F001`–`F013` sit outside T numbering. Owner-directed corrective tasks `R001`–`R005` repair the C1 governance implementation after the publication-checkpoint policy superseded per-commit scheduling. These are net-new governance tasks; implementation task count remains exactly T001–T200 and no T-task is renumbered. Four execution modes are distinguished:
 
@@ -106,8 +108,8 @@ Global rules for every task:
 - every changed public contract receives documentation in the same publication checkpoint;
 - run `git diff --check` before handoff;
 - no T/V/F step commits independently; every authorized boundary uses orchestrator README ritual;
-- per-task implementation steps execute no build/test/lint/closure commands; junction V-steps own accumulated validation and F-steps own batched repair;
-- WP-C3 T146–T147, WP-C4-C5A T148–T152, and WP-C7A T159–T160 are indivisible same-owner assignments; intermediate IDs remain `[~]`;
+- per-task implementation steps execute no build/test/lint/closure commands; work-package validation rituals own accumulated validation and repair (junction V/F steps owned this through V005);
+- WP3 checkpoint groups are indivisible same-owner assignments;
 - public operation enters runtime catalog only in its exposure task.
 
 ## Phase 0 — Freeze implementation contracts
@@ -1139,706 +1141,116 @@ No capability mocks, fakes, or in-memory port implementations are permitted. Pri
 - **Deliver:** one batched repair pass for all valid V005 findings, or explicit no-op completion.
 - **Done when:** no-op recorded, or repairs complete and targeted V005 rerun reports clean; the T119 boundary commit and T120 stay blocked until junction closure; stop for orchestrator.
 
-## Phase 6 — CLI delivery and composition root
-
-### T120 [ ] Implement trace-first CLI startup
-- **Depends:** T006–T010, T096–T103, V005, F005
-- **Files:** `cli/src/{main,startup}.rs`, `cli/tests/startup.rs`.
-- **Deliver:** request ID and secure trace before help/version/parse/dispatch according to D010; rich init failure stderr.
-- **Tests:** help, version, parse error, config error, and normal command each create expected trace; init failure does no DB/provider work.
-- **Done when:** Clap cannot exit before required trace initialization.
-
-### T121 [ ] Implement shared CLI argument primitives
-- **Depends:** T004, T006–T008, T015–T016, T120
-- **Files:** `cli/src/args.rs`, `cli/tests/args.rs`.
-- **Deliver:** global flags, trace-first help/version/parse shell, and private operation-specific parser modules for planned flags; do not register application subcommands in production root yet.
-- **Tests:** root help exposes zero application operations; private parser tests cover stable IDs/config, inputs/evidence, paged cursors/limits, `--active-runs-for`, disable `--warning-cursor`, and token-valued `--allow-active-runs`.
-- **Done when:** exposure tasks can register one reviewed route without redefining shared grammar.
-
-### T122 [ ] Implement CLI-to-core request DTO mappings
-- **Depends:** T063–T083, T121
-- **Files:** `cli/src/commands/{mod,provider,run,evidence,export}.rs`, `cli/tests/command_mapping.rs`.
-- **Deliver:** delivery DTO validation and plain core operation requests without policy decisions.
-- **Tests:** invalid syntax/pre-dispatch versus domain rejection boundary.
-- **Done when:** CLI never selects transition or reinterprets verdict.
-
-### T123 [ ] Implement sole composition root
-- **Depends:** T096–T119, T120–T122
-- **Files:** `cli/src/composition.rs`, `xtask/tests/architecture.rs`.
-- **Deliver:** construct configuration, SQLite, provider process, clock/ID/digest, trace wrappers, and operations only here.
-- **Tests:** architecture bypass canaries.
-- **Done when:** no other module instantiates concrete integration.
-
-### T124 [ ] Implement traced operation dispatcher
-- **Depends:** T054, T062–T083, T099–T103, T123
-- **Files:** `cli/src/dispatch.rs`, `trace_payload.rs`, tests.
-- **Deliver:** exactly one operation per intent, request/outcome trace envelopes, operation/request correlation, targeted decision-event sink.
-- **Tests:** completed/rejected/error dispatch fixtures and no alternate route.
-- **Done when:** all operations use same choke point.
-
-### T125 [ ] Implement structured outcome schema and renderer
-- **Depends:** T006, T047, T124
-- **Files:** `cli/src/render/{mod,json,dto}.rs`, `schemas/cli/v1/outcome.schema.json`, tests.
-- **Deliver:** versioned one-object envelope for every dispatched result.
-- **Tests:** schema validation for all operation/outcome shapes and no trace/provider stream contamination.
-- **Done when:** operation/request/trace/outcome always present.
-
-### T126 [ ] Implement human renderer
-- **Depends:** T047, T124
-- **Files:** `cli/src/render/human.rs`, tests.
-- **Deliver:** concise operation/run/gate/compatibility/evidence/trace presentation from same outcome.
-- **Tests:** semantic parity table against structured renderer.
-- **Done when:** renderer adds no policy.
-
-### T127 [ ] Implement rich diagnostics and source-chain rendering
-- **Depends:** T006, T047, T117, T120, T124
-- **Files:** `cli/src/diagnostics.rs`, tests.
-- **Deliver:** actionable request ID, phase, trace path, reason, provider/persistence context, and trace-init stderr.
-- **Tests:** representative nested provider/config/persistence/trace failures.
-- **Done when:** payloads need not be repeated because trace location is clear.
-
-### T128 [ ] Implement stable exit and stdout/stderr behavior
-- **Depends:** T006, T120, T125–T127
-- **Files:** `cli/src/exit.rs`, `cli/tests/process_contract.rs`.
-- **Deliver:** selected exit codes, one stdout object after dispatch, pre-dispatch stderr policy.
-- **Tests:** byte-level stdout/stderr tests for every outcome and parse/init failures.
-- **Done when:** provider streams never bypass engine.
-
-### T129 [ ] Wire provider command handlers
-- **Depends:** T063–T069, T122–T128
-- **Files:** `cli/src/commands/provider.rs`.
-- **Deliver:** private add/list/check/update/rename/disable/restore command adapters and renderable data; do not register them in production root.
-- **Tests:** adapter tests only; provider add/list exposure waits T146–T147, provider check waits atomic T148–T152, lifecycle routes wait T155–T158.
-- **Done when:** each adapter calls one core operation and root help still exposes none.
-
-### T130 [ ] Wire run creation and read handlers
-- **Depends:** T070–T074, T122–T128
-- **Files:** `cli/src/commands/run.rs`.
-- **Deliver:** private create/list/show/graph/history command adapters; do not register them in production root.
-- **Tests:** adapter mapping tests; C5A grouped exposure waits T149–T152; show/graph expose T153–T154.
-- **Done when:** safe reads have no provider path and root help still exposes none.
-
-### T131 [ ] Wire evidence, annotation, label, and termination handlers
-- **Depends:** T075–T078, T082, T122–T128
-- **Files:** `cli/src/commands/{run,evidence}.rs`.
-- **Deliver:** private evidence/annotation/label/termination command adapters; do not register them in production root.
-- **Tests:** adapter mapping tests; C5A termination exposure waits T152 and audit-metadata exposures wait T159–T162.
-- **Done when:** terminal allowance/denial stays core-owned and root help still exposes none.
-
-### T132 [ ] Wire request, guidance, compatibility, and export handlers
-- **Depends:** T079–T081, T083, T122–T128
-- **Files:** `cli/src/commands/{run,export}.rs`.
-- **Deliver:** private request/guidance/compatibility/export command adapters; do not register them in production root.
-- **Tests:** adapter mapping tests; exposure waits T163–T166.
-- **Done when:** no retry/revision token/gate bypass flag exists and root help still exposes none.
-
-### T133 [ ] Implement production driver operation catalog
-- **Depends:** T004, T062, T121–T132
-- **Files:** `cli/src/driver_catalog.rs`, tests.
-- **Deliver:** independently enumerable exposed operation IDs, initially empty, updated only by exposure tasks; extend T062 closure tool with driver and reachable-route sets.
-- **Tests:** empty core=driver=reachable-route closure, uniqueness, and missing-route canary.
-- **Done when:** driver metadata itself is not an application operation and no private adapter is reachable.
-
-### T134 [ ] Prepare CLI/provider/trace/export schemas and author docs
-- **Depends:** T084–T133
-- **Files:** `schemas/index.json`, `examples/providers/README.md`, `../../cli-contract.md`, `../../operational-trace.md`, `../../export-contract.md`.
-- **Deliver:** versioned generated/validated provider/trace/export contracts plus planned CLI schema; operation command docs remain marked planned until matching exposure task.
-- **Criteria:** schema generation is reproducible and working provider examples validate.
-- **Done when:** no reader needs Rust source for stable contracts and docs do not claim unexposed commands.
-
-### V006 [ ] Junction validation — CLI delivery substrate (T120–T134)
-- **Depends:** T134
-- **Owner:** orchestrator in V-mode; per junction template above; not a Fable/Sol review round.
-- **Files:** none tracked; untracked `target/junction-evidence/V006/**` only.
-- **Deliver:** full accumulated inventory plus baseline closure with driver/route sets, schema-generation reproducibility, and focused CLI startup/args/dispatch/render/exit suites against the T134 candidate; findings ledger or clean report.
-- **Done when:** every command has a recorded outcome and findings are handed to F006 or a clean report is filed; stop for orchestrator.
-
-### F006 [ ] Junction fix — batch V006 findings
-- **Depends:** V006
-- **Owner:** orchestrator in F-mode; one batched pass; per junction template above; not a correctness review round.
-- **Files:** files within T120–T134 contracts as valid findings require; changed paths append to the T134 range ledger.
-- **Deliver:** one batched repair pass for all valid V006 findings, or explicit no-op completion.
-- **Done when:** no-op recorded, or repairs complete and targeted V006 rerun reports clean; the T134 boundary commit and T135 stay blocked until junction closure; stop for orchestrator.
-
-## Phase 7 — Real provider fixtures and black-box harness
-
-### T135 [ ] Create generic scenario-provider executable
-- **Depends:** T013, T084–T095, T017, V006, F006
-- **Files:** `test-support/providers/scenario-provider/{Cargo.toml,Cargo.lock,src/main.rs}`.
-- **Deliver:** root-excluded standalone package using exact T001 fixture dependencies, reading protocol v1 and selecting explicit scenario config.
-- **Tests:** protocol schema validation; no product dependency.
-- **Done when:** fixture imports no product crate and touches no engine DB.
-
-### T136 [ ] Add generic graph/input scenario modes
-- **Depends:** T135
-- **Files:** `test-support/providers/scenario-provider/src/{graph,inputs}.rs`, `test-support/providers/scenario-provider/fixtures/{graphs,inputs}/*.json`.
-- **Deliver:** linear/cycle/self-loop/zero-final/multi-final/initial-final/sink/ambiguous/invalid/guidance/input variants.
-- **Tests:** provider-owned fixture tests and golden protocol results.
-- **Done when:** every graph/input facet can be selected without changing test code.
-
-### T137 [ ] Add gate/evidence/guidance/compatibility scenario modes
-- **Depends:** T135–T136
-- **Files:** `test-support/providers/scenario-provider/src/{gates,evidence,guidance,compatibility}.rs`, `test-support/providers/scenario-provider/fixtures/roles/*.json`.
-- **Deliver:** pass/fail/mixed/exact-set violations/evidence variants/evaluation error/incompatibility/mixed support/live guidance.
-- **Tests:** standalone role matrix tests.
-- **Done when:** all provider semantic branches are controllable deterministically.
-
-### T138 [ ] Add provider process-failure modes
-- **Depends:** T135
-- **Files:** `test-support/providers/scenario-provider/src/process_failures.rs`, `test-support/providers/scenario-provider/fixtures/process/*.bin`.
-- **Deliver:** malformed JSON, extra/missing output, wrong major, nonzero, signal, timeout, oversized streams, invalid UTF-8 per selected contract.
-- **Tests:** direct process assertions and cleanup.
-- **Done when:** no mode uses mocks.
-
-### T139 [ ] Add explicit provider barrier and invocation ledger
-- **Depends:** T135–T138
-- **Files:** `test-support/providers/scenario-provider/src/{barrier,ledger}.rs`.
-- **Deliver:** filesystem/pipe synchronization, recorded request/role/CWD/argv/digest-mode facts for deterministic overlap and no-invocation proof.
-- **Tests:** barrier start/release/kill and concurrent ledger integrity tests.
-- **Done when:** no concurrency test requires timing-only sleeps.
-
-### T140 [ ] Create reference software-change provider graph
-- **Depends:** T013, T084–T095
-- **Files:** `test-support/providers/reference-provider/{Cargo.toml,Cargo.lock,src/main.rs,src/graph.rs}`.
-- **Deliver:** root-excluded standalone package with exact T001 fixture dependencies and required states/events/transitions/gates/inputs/guidance.
-- **Tests:** graph test against `../../reference-workflow.md`; no product dependency.
-- **Done when:** software concepts exist only in fixture/provider.
-
-### T141 [ ] Implement reference provider gate and evidence policy
-- **Depends:** T140
-- **Files:** `test-support/providers/reference-provider/src/{gates,evidence}.rs`, `test-support/providers/reference-provider/fixtures/*.json`.
-- **Deliver:** missing/invalid artifact checks, revision linkage, verdict consistency, implementation/validation evidence, provider evidence.
-- **Tests:** provider-owned semantic tests for pass/fail/revision/malformed cases.
-- **Done when:** engine sees only generic protocol data.
-
-### T142 [ ] Implement reference guidance, drift, and compatibility modes
-- **Depends:** T140–T141
-- **Files:** `test-support/providers/reference-provider/src/{guidance,compatibility}.rs`, `test-support/providers/reference-provider/fixtures/{config,versions}/*.json`.
-- **Deliver:** advisory evidence recommendations, build/digest drift, stored-gate incompatibility, changed graph for new runs.
-- **Tests:** provider-owned role tests.
-- **Done when:** active graph is never mutated by fixture.
-
-### T143 [ ] Build isolated E2E sandbox
-- **Depends:** T007, T096–T101, T104–T119, T120–T134
-- **Files:** `cli/tests/e2e.rs`, `cli/tests/support/{mod,sandbox}.rs`.
-- **Deliver:** registered E2E integration-test root plus private home/config/DB/trace/provider CWD, no caller config/network/shared fixture, preserved failure artifacts.
-- **Tests:** harness self-test with two independent sandboxes.
-- **Done when:** every command runs as fresh production CLI process.
-
-### T144 [ ] Build CLI process runner and structured parser
-- **Depends:** T006, T125, T128, T143
-- **Files:** `cli/tests/support/{cli,outcome}.rs`.
-- **Deliver:** invoke built binary, capture bytes/exit, parse one envelope, run human mode, record transcript.
-- **Tests:** self-tests for completed/rejected/error/pre-dispatch and malformed extra stdout.
-- **Done when:** no in-process command handler call exists.
-
-### T145 [ ] Build trace parser, runtime coverage recorder, fixture helpers, and close C2
-- **Depends:** T061, T099–T101, T133, T135–T144
-- **Files:** `cli/tests/support/{trace,coverage,provider,sqlite}.rs`.
-- **Deliver:** semantic trace assertions, runtime E2E/trace set collectors extending T062/T133 closure tool, provider registration helpers, migration/corruption helpers, narrowly schema-valid tombstoned-registration prerequisite setup for pre-T157 list/check tests, and Unix `RLIMIT_FSIZE` wrapper. Setup never counts as disable/restore coverage and is repeated via CLI in T175.
-- **Tests:** full substrate smoke; zero application routes; stale-artifact/request-ID checks; tombstone setup validates production schema and cannot register operation evidence; `EFBIG` wrapper self-tests.
-- **Done when:** C2 candidate has production substrate/harness, no public operation, no manual coverage labels, and stops for orchestrator commit `test(e2e): establish black-box harness`.
-
-### V007 [ ] Junction validation — fixtures and harness (T135–T145)
-- **Depends:** T145
-- **Owner:** orchestrator in V-mode; per junction template above; not a Fable/Sol review round.
-- **Files:** none tracked; untracked `target/junction-evidence/V007/**` only.
-- **Deliver:** full accumulated inventory plus standalone fixture-crate tests (`cargo test --manifest-path test-support/providers/<crate>/Cargo.toml --locked` for scenario and reference providers), harness substrate smoke, and baseline closure with E2E/trace collectors against the C2 candidate; findings ledger or clean report.
-- **Done when:** every command has a recorded outcome and findings are handed to F007 or a clean report is filed; stop for orchestrator.
-
-### F007 [ ] Junction fix — batch V007 findings
-- **Depends:** V007
-- **Owner:** orchestrator in F-mode; one batched pass; per junction template above; not a correctness review round.
-- **Files:** files within T135–T145 contracts as valid findings require; changed paths append to the T145 range ledger.
-- **Deliver:** one batched repair pass for all valid V007 findings, or explicit no-op completion.
-- **Done when:** no-op recorded, or repairs complete and targeted V007 rerun reports clean; the T145 boundary commit and T146 stay blocked until junction closure; stop for orchestrator.
-
-## Phase 8 — Expose each application operation through complete vertical slice
-
-Each exposure task first registers production route and both runtime catalog IDs in a deliberately uncommitted candidate tree, then runs production CLI E2Es/closure and updates docs/coverage. After facets pass, task stops for README-authorized orchestrator commit; delegation is forbidden. Failed candidate remains unpublished and must remove/fix registration before handoff. Tasks T168–T183 add aggregate, interaction, stress, and independent-model proof; no exposure task may defer an operation's mandatory facet to them. Same-owner atomic groups follow README protocol: one owner executes full range while orchestrator maintains `[~]`; final owner report proves group-ready and orchestrator alone marks `[x]`. Every exposure owns `quality/facets/v1/<operation-id>.json` validated by T004 schema; manifest starts with all applicable rows open and records exact E2E/trace evidence before commit. Every MVP application operation touches persistence, so every manifest must close `Trace persistence boundary` using that exposure's production CLI trace (attempted read/transaction, applicable version check, and read/commit/rollback outcome). Provider users also close `Trace provider boundary`. T182 only repeats already-closed rows and cannot supply first proof.
-
-### T146 [ ] Prepare `provider.add` production route and required facets
-- **Depends:** T063, T107, T120–T129, T143–T145, V007, F007
-- **Files:** provider command/catalogs; `cli/tests/e2e/provider_add.rs`; `quality/facets/v1/provider.add.json`; docs/coverage.
-- **Deliver:** checkpoint-working-tree production route/catalog ID plus explicit config registration, stable ID, duplicate-handle rejection, human/JSON/trace; this intermediate tree must not be committed.
-- **Tests:** `provider_add` E2E scenarios; candidate closure scoped `--allow-open provider.add`; exposed closure waits T147.
-- **Done when:** add response/trace/rejection facets pass; fresh catalog persistence proof remains explicitly open until T147; T146 stays `[~]`.
-
-### T147 [ ] Expose `provider.add` and `provider.list` checkpoint
-- **Depends:** T064, T107, T129, T143–T146
-- **Files:** provider command/catalogs; `provider_list.rs`; `quality/facets/v1/{provider.add,provider.list}.json`; docs/coverage.
-- **Deliver:** finalize grouped add/list routes and catalog IDs; enabled/tombstoned registration list, zero-row `--active-runs-for`, invalid filter, fresh add persistence, and D008 count ceiling/page-byte stop/cursor/progress/no-truncation behavior; tombstone setup is not disable coverage.
-- **Tests:** production CLI E2Es for add/list and every pagination row; successful/rejected add verified by fresh list; no run journal; closure.
-- **Done when:** C3 closes, no provider ledger invocation occurs for list, and same owner reports T146–T147 ready; orchestrator marks both `[x]`.
-
-### T148 [ ] Prepare `provider.check` route and non-run facets
-- **Depends:** T065, T084–T095, T102, T129, T135–T145, T146–T147
-- **Files:** provider command/catalogs; `provider_check.rs`; `quality/facets/v1/provider.check.json`; docs/coverage.
-- **Deliver:** checkpoint route/catalog ID; machine-readable facet inventory; valid completion; role-valid invalid finding; missing/tombstoned registration; paged `--active-runs` count/byte/cursor semantics; missing executable; timeout; crash/nonzero/signal; malformed/wrong-major/invalid-UTF-8 protocol; oversized output/streams; conformance diagnostics; invocation/trace facts; intermediate tree uncommitted.
-- **Substeps:** add failing inventory-backed E2Es; close valid/finding cases; close process/protocol/bound cases; close render/trace/docs; leave `--active-runs` rows open for T152.
-- **Tests:** targeted E2E covers every non-run provider-check facet; candidate closure scoped `--allow-open provider.check`; no generic rejection.
-- **Done when:** non-run rows pass, active-run rows remain explicitly open, and T148 stays `[~]` until T152.
-
-### T149 [ ] Prepare `run.create` production route and required facets
-- **Depends:** T070, T086, T091–T093, T108, T130, T135–T145, T148
-- **Files:** run command/catalogs; `run_create.rs`; `quality/facets/v1/run.create.json`; docs/coverage.
-- **Deliver:** checkpoint-working-tree route/catalog ID plus machine-readable facet inventory; zero/valid/invalid inputs; provider completion, role-valid input denial, and `validate_inputs` evaluation error with no run/journal; missing registration/executable; timeout; crash/nonzero/signal; malformed/wrong-major/invalid-UTF-8/oversized output; description/validation drift; canonical field matrix; invalid graph; initial-final; rejected/error creation writes no run/journal; trace; intermediate tree uncommitted.
-- **Substeps:** add failing input/provider/graph/atomicity rows; close provider-free rejection semantics; close provider failures; close graph/drift; close render/trace/docs; leave fresh list/history rows open for T152.
-- **Tests:** targeted E2E rows; candidate closure scoped `--allow-open provider.check,run.create`; final fresh-process state/journal and exposed closure wait T152.
-- **Done when:** all creation-owned rows pass, cross-command rows remain explicitly open, and T149 stays `[~]` until T152.
-
-### T150 [ ] Prepare `run.list` and fresh creation-state facets
-- **Depends:** T071, T109, T130, T143–T149
-- **Files:** run command/catalogs; `run_list.rs`; `quality/facets/v1/run.list.json`; docs/coverage.
-- **Deliver:** checkpoint-working-tree route/catalog ID; active default, terminal/all filters, another CWD, labels, invalid filters, D008 default/max limit and empty/malformed/wrong-version/filter-mismatched cursor; fresh-process list verifies creation state; intermediate tree remains uncommitted.
-- **Tests:** production CLI create/list E2Es; candidate closure scoped `--allow-open provider.check,run.create,run.list`; final run-journal/lifecycle exposed closure waits T152.
-- **Done when:** stored snapshot/inputs/registration survive restart and T150 stays `[~]` until T152.
-
-### T151 [ ] Prepare `run.terminate` and terminal lifecycle facets
-- **Depends:** T082, T111, T131, T143–T150
-- **Files:** run command/catalogs; `run_terminate.rs`; `quality/facets/v1/run.terminate.json`; docs/coverage.
-- **Deliver:** checkpoint-working-tree route/catalog ID; active termination/note, repeat and final-run rejection, terminal listing, no reopen surface, exact journal/trace; intermediate tree remains uncommitted.
-- **Tests:** targeted termination/list E2E; candidate closure scoped `--allow-open provider.check,run.create,run.list,run.terminate`; final history proof waits T152 and show proof remains T153.
-- **Done when:** terminate-owned lifecycle facets have production fixtures and T151 stays `[~]` until T152.
-
-### T152 [ ] Expose atomic C4/C5A check/create/list/terminate/history checkpoint
-- **Depends:** T074, T115, T130, T143–T151
-- **Files:** provider/run command catalogs; `provider_check.rs`; `run_create.rs`; `run_list.rs`; `run_terminate.rs`; `run_history.rs`; `quality/facets/v1/{provider.check,run.create,run.list,run.terminate,run.history}.json`; docs/coverage.
-- **Deliver:** finalize grouped provider.check/create/list/terminate/history routes and catalog IDs; zero/mixed registration-wide findings plus first-row/later-row `check_compatibility` evaluation errors that fail whole page without partial report/journal; ordered history with D008 default/max limit and empty/malformed/wrong-version/filter-mismatched cursor; fresh creation/termination state/journal; active/final/terminated listing; invalid/not-found queries; provider-free restart.
-- **Substeps:** close list/history cross-command rows; close terminate/list lifecycle rows; close active-run compatibility rows; prove no journal fan-out/latch; run four-set closure; update docs; report T148–T152 ready for orchestrator to mark `[x]` together.
-- **Tests:** provider-check plus create/list/terminate/history CLI E2Es; history and active-compatibility cover count ceiling, byte stop, cursor progress, maximum journal row, multi-page mixed snapshots, and no record truncation; ledger proves one registration resolution, exactly one describe, at most nine compatibility calls, and at most ten trace reservations per page; universal closure; no journal fan-out/replay/hidden execution.
-- **Done when:** C4/C5A candidate is ready; owner stops for orchestrator commit `feat(run): expose provider check and run foundation`.
-
-### V008 [ ] Junction validation — first exposure wave (T146–T152)
-- **Depends:** T152
-- **Owner:** orchestrator in V-mode; per junction template above; not a Fable/Sol review round.
-- **Files:** none tracked; untracked `target/junction-evidence/V008/**` only.
-- **Deliver:** full accumulated inventory plus complete CLI E2E suite, exposure-owned targeted suites for add/list/check/create/list/terminate/history, and `exposed` closure against the cumulative C3–C5A candidate tree (T147 commit precedes; junction gates the T152 commit); findings ledger or clean report.
-- **Done when:** every command has a recorded outcome and findings are handed to F008 or a clean report is filed; stop for orchestrator.
-
-### F008 [ ] Junction fix — batch V008 findings
-- **Depends:** V008
-- **Owner:** orchestrator in F-mode; one batched pass; per junction template above; not a correctness review round.
-- **Files:** files within T146–T152 contracts as valid findings require; changed paths append to the T152 range ledger.
-- **Deliver:** one batched repair pass for all valid V008 findings, or explicit no-op completion.
-- **Done when:** no-op recorded, or repairs complete and targeted V008 rerun reports clean; the T152 boundary commit and T153 stay blocked until junction closure; stop for orchestrator.
-
-### T153 [ ] Expose `run.show` lifecycle read slice
-- **Depends:** T072, T109, T130, T143–T152, V008, F008
-- **Files:** run command/catalogs; `run_show.rs`; `quality/facets/v1/run.show.json`; docs/coverage.
-- **Deliver:** candidate route/catalog ID; active, neutral final, initial-final, zero-final ongoing, non-final sink, terminated, static guidance/no-guidance, gates, live capability, empty events, missing provider/not-found.
-- **Tests:** targeted production-CLI E2E, provider ledger empty, four-set closure before authorized exposure commit.
-- **Done when:** show satisfies complete lifecycle/read matrix without provider execution.
-
-### T154 [ ] Expose `run.graph` and close C5
-- **Depends:** T073, T109, T130, T143–T153
-- **Files:** run command/catalogs; `run_graph.rs`; `quality/facets/v1/run.graph.json`; docs/coverage.
-- **Deliver:** candidate route/catalog ID; complete stored projection/revision for active/final/terminated runs after provider graph drift and missing provider; invalid/not-found run rejection.
-- **Tests:** targeted production-CLI E2E; graph bytes/meaning stable; four-set closure before authorized exposure commit.
-- **Done when:** active run never consults latest description and C5 closes.
-
-### T155 [ ] Expose `provider.update`
-- **Depends:** T066, T107, T129, T143–T154
-- **Files:** provider command/catalogs; `provider_update.rs`; `quality/facets/v1/provider.update.json`; docs/coverage.
-- **Deliver:** same-ID config replacement, affected count plus paged-impact link without approval flag, config-revision increment, CWD/argv/timeout update, fresh-process verification.
-- **Tests:** valid/rejected targeted E2E and trace; fresh provider list proves changed/unchanged catalog with no run journal; existing runs retain registration ID/stored graph; closure.
-- **Done when:** catalog update and stable binding are proved; active provider invocation through new config remains assigned to T163/T175.
-
-### T156 [ ] Expose `provider.rename`
-- **Depends:** T067, T107, T129, T143–T155
-- **Files:** provider command/catalogs; `provider_rename.rs`; `quality/facets/v1/provider.rename.json`; docs/coverage.
-- **Deliver:** unique-handle rename and stable existing-run binding.
-- **Tests:** valid/rejected targeted E2E; fresh provider list proves changed/unchanged catalog with no run journal; closure.
-- **Done when:** old handle released without ID change.
-
-### T157 [ ] Expose `provider.disable`
-- **Depends:** T068, T107, T129, T143–T156
-- **Files:** provider command/catalogs; `provider_disable.rs`; `quality/facets/v1/provider.disable.json`; docs/coverage.
-- **Deliver:** first/intermediate/final bounded warning pages, final-page-only opaque ack token, early-cursor/digest rejection, changed-set rejection, tombstone, released handle, safe reads/termination.
-- **Tests:** CLI must page all named IDs before token appears; first/intermediate/forged/stale token cannot mutate; final token succeeds; fresh list proves tombstone/unchanged catalog with no run journal; closure.
-- **Done when:** no referenced registration row is deleted.
-
-### T158 [ ] Expose `provider.restore`
-- **Depends:** T069, T107, T129, T143–T157
-- **Files:** provider command/catalogs; `provider_restore.rs`; `quality/facets/v1/provider.restore.json`; docs/coverage.
-- **Deliver:** restore exact ID with free handle/config, occupied-handle rejection, former-handle reuse isolation.
-- **Tests:** valid/rejected targeted E2E; fresh provider list proves restored/unchanged catalog with no run journal; stable run binding remains; closure.
-- **Done when:** C6 catalog lifecycle is fully proved; resumed provider-dependent use remains assigned to T163/T175.
-
-### V009 [ ] Junction validation — read slices and catalog lifecycle (T153–T158)
-- **Depends:** T158
-- **Owner:** orchestrator in V-mode; per junction template above; not a Fable/Sol review round.
-- **Files:** none tracked; untracked `target/junction-evidence/V009/**` only.
-- **Deliver:** full accumulated inventory plus targeted show/graph/update/rename/disable/restore E2Es and `exposed` closure against the cumulative candidate tree (T153–T157 commits precede; junction gates the T158 commit); findings ledger or clean report.
-- **Done when:** every command has a recorded outcome and findings are handed to F009 or a clean report is filed; stop for orchestrator.
-
-### F009 [ ] Junction fix — batch V009 findings
-- **Depends:** V009
-- **Owner:** orchestrator in F-mode; one batched pass; per junction template above; not a correctness review round.
-- **Files:** files within T153–T158 contracts as valid findings require; changed paths append to the T158 range ledger.
-- **Deliver:** one batched repair pass for all valid V009 findings, or explicit no-op completion.
-- **Done when:** no-op recorded, or repairs complete and targeted V009 rerun reports clean; the T158 boundary commit and T159 stay blocked until junction closure; stop for orchestrator.
-
-### T159 [ ] Prepare `run.evidence.add` production route and required facets
-- **Depends:** T075, T110–T111, T131, T143–T158, V009, F009
-- **Files:** evidence command/catalogs; `evidence_add.rs`; `quality/facets/v1/run.evidence.add.json`; docs/coverage.
-- **Deliver:** checkpoint-working-tree production route/catalog ID plus active/final/terminated append, stable ID, same-locator revision, exact D008 empty/control/NUL/oversize locator rejection without URI/path/CWD interpretation, journal atomicity; this intermediate tree must not be committed.
-- **Tests:** targeted E2E and fault injection; candidate closure scoped `--allow-open run.evidence.add`; final fresh-process list and exposed closure wait T160.
-- **Done when:** append response/atomicity/lifecycle facets pass; fresh inventory proof remains explicitly open until T160; T159 stays `[~]`.
-
-### T160 [ ] Expose `run.evidence.add` and `run.evidence.list` checkpoint
-- **Depends:** T076, T110, T131, T143–T159
-- **Files:** evidence command/catalogs; `evidence_list.rs`; `quality/facets/v1/{run.evidence.add,run.evidence.list}.json`; docs/coverage.
-- **Deliver:** finalize grouped evidence add/list routes and catalog IDs; provider-free inventory/associations across active/final/terminated lifecycle and restart; invalid/not-found; D008 default/max limit and empty/malformed/wrong-version/filter-mismatched cursor; fresh list verifies append persistence.
-- **Tests:** production CLI add/list E2Es including every evidence pagination row; missing provider ledger empty; closure.
-- **Done when:** C7 evidence checkpoint begins with stable IDs available for selection and same owner reports T159–T160 ready; orchestrator marks both `[x]`.
-
-### T161 [ ] Expose `run.annotate`
-- **Depends:** T077, T111, T131, T143–T160
-- **Files:** run command/catalogs; `run_annotate.rs`; `quality/facets/v1/run.annotate.json`; docs/coverage.
-- **Deliver:** active/final/terminated note, actor metadata, correction link, no authority/state/version change.
-- **Tests:** targeted E2E and actor-neutral comparison; closure.
-- **Done when:** append-only correction is visible in history for every lifecycle.
-
-### T162 [ ] Expose `run.label`
-- **Depends:** T078, T111, T131, T143–T161
-- **Files:** run command/catalogs; `run_label.rs`; `quality/facets/v1/run.label.json`; docs/coverage.
-- **Deliver:** active change/remove, duplicate labels, final/terminated rejection, journal, no run rebinding.
-- **Tests:** targeted E2E and closure.
-- **Done when:** C7 audit metadata family is fully closed.
-
-### T163 [ ] Expose `run.request`
-- **Depends:** T079, T093, T102, T110–T113, T118–T119, T132, T135–T145, T149–T162
-- **Files:** run command/catalogs; `run_request.rs`; `cli/tests/support/{provider,sqlite,trace}.rs`; `quality/facets/v1/run.request.json`; docs/coverage.
-- **Deliver:** machine-readable facet inventory; gate-free/gated; all verdict variants; inline/selected/provider evidence; unknown/final/terminated; self-loop/cycle/final; selected unsupported plus supported continuity; missing/tombstoned provider where gate-free event completes and gated event errors; current updated/restored config invocation; provider role-valid denial, timeout/crash/nonzero/signal/malformed/wrong-major/invalid-UTF-8/oversized output; stale CAS; exact journal/trace.
-- **Substeps:** register route/catalog IDs in uncommitted candidate; close selection/pre-provider rows; gate-free/lifecycle rows; verdict/evidence rows; provider failure/compatibility rows; stale/atomicity rows; render/trace/docs/catalog closure.
-- **Tests:** inventory-driven request provider/gate/compatibility/lifecycle suite, fault injection, deterministic overlap, fresh history, and four-set closure before exposure commit.
-- **Done when:** C8 candidate is fully closed; owner stops for orchestrator commit `feat(run): expose run.request`.
-- **Stop:** any applicable facet remains untested; keep candidate uncommitted and operation unpublished.
-
-### T164 [ ] Expose `run.guidance`
-- **Depends:** T080, T094, T102, T114, T132, T142–T145, T163
-- **Files:** run command/catalogs; `run_guidance.rs`; `quality/facets/v1/run.guidance.json`; docs/coverage.
-- **Deliver:** machine-readable facet inventory; completed advisory; stored capability unsupported; provider-declared stored-guidance incompatibility; supported continuity; final/terminated rejection; evaluation error; missing/tombstoned registration/executable; timeout/crash/nonzero/signal/malformed/wrong-major/invalid-UTF-8/oversized output; evidence recommendation; no evidence/state mutation; journal/trace.
-- **Substeps:** close advisory/unsupported/incompatibility rows; lifecycle rows; provider process/protocol rows; fresh-history mutation proof; render/trace/docs/catalog closure.
-- **Tests:** complete inventory-driven guidance provider/compatibility/lifecycle E2E, fresh `run.history` for every post-lookup outcome, and closure before exposure commit.
-- **Done when:** passive show remains provider-free and incompatibility is domain rejection.
-
-### T165 [ ] Expose `run.compatibility`
-- **Depends:** T081, T095, T102, T114, T132, T142–T145, T163–T164
-- **Files:** run command/catalogs; `run_compatibility.rs`; `quality/facets/v1/run.compatibility.json`; docs/coverage.
-- **Deliver:** machine-readable facet inventory; mixed non-latching findings; invalid/not-found run and final/terminated rejection; current registration/digest; role-valid incompatible finding and evaluation error with no latch/state mutation; atomic compatibility-attempt journal records actual provider facts/drift for every post-lookup outcome; missing/tombstoned registration/executable; timeout/crash/nonzero/signal/malformed/wrong-major/invalid-UTF-8/oversized output; selected unsupported rejection; supported request/guidance and gate-free continuity; repeated non-latching check.
-- **Substeps:** close report/finding rows; lifecycle rows; provider process/protocol rows; atomic history/drift rows; cross-operation continuity; no-latch/state proof; render/trace/docs/catalog closure.
-- **Tests:** complete compatibility E2E, fresh history for completed/error/drift observations, unchanged state/version, no registration-wide journal fan-out, and closure.
-- **Done when:** C9 advisory compatibility is closed.
-
-### T166 [ ] Expose `run.export`
-- **Depends:** T083, T116, T132, T143–T165
-- **Files:** export command/catalogs; `run_export.rs`; `quality/facets/v1/run.export.json`; `schemas/export/v1/*.json`; `../../export-contract.md`; docs/coverage.
-- **Deliver:** versioned active/final/terminated state/journal export to new/empty directory, invalid/not-found run rejection, overwrite/partial-filesystem error behavior, D006-compatible schema policy, no import/dereference.
-- **Tests:** targeted valid/invalid/not-found/overwrite/partial-failure E2E, schema validation, and closure.
-- **Done when:** C10 export closes.
-
-### V010 [ ] Junction validation — remaining exposures (T159–T166)
-- **Depends:** T166
-- **Owner:** orchestrator in V-mode; per junction template above; not a Fable/Sol review round.
-- **Files:** none tracked; untracked `target/junction-evidence/V010/**` only.
-- **Deliver:** full accumulated inventory plus evidence/annotate/label/request/guidance/compatibility/export targeted E2Es and `exposed` closure against the cumulative candidate tree (T160–T165 commits precede; junction gates the T166 commit); findings ledger or clean report.
-- **Done when:** every command has a recorded outcome and findings are handed to F010 or a clean report is filed; stop for orchestrator.
-
-### F010 [ ] Junction fix — batch V010 findings
-- **Depends:** V010
-- **Owner:** orchestrator in F-mode; one batched pass; per junction template above; not a correctness review round.
-- **Files:** files within T159–T166 contracts as valid findings require; changed paths append to the T166 range ledger.
-- **Deliver:** one batched repair pass for all valid V010 findings, or explicit no-op completion.
-- **Done when:** no-op recorded, or repairs complete and targeted V010 rerun reports clean; the T166 boundary commit and T167 stay blocked until junction closure; stop for orchestrator.
-
-## Phase 9 — Cross-operation black-box acceptance
-
-### T167 [ ] Enforce universal operation/driver/E2E/trace closure
-- **Depends:** T145–T166, V010, F010
-- **Files:** `cli/tests/e2e/coverage_closure.rs`, `xtask/src/operation_coverage.rs`, `quality/coverage/v1/{schema.json,final-catalog.json}`.
-- **Deliver:** finalize T062/T133/T145 closure tool by independently collecting core/driver/E2E/trace sets, validating one closed facet manifest per exposed ID, comparing exact equality, and asserting final set equals D004's 21 IDs.
-- **Tests:** deliberate missing driver/E2E/trace/open-facet/stale-artifact canaries.
-- **Done when:** all 21 IDs have invocation references, not labels.
-
-### T168 [ ] Cover full graph semantic family
-- **Depends:** T149–T163
-- **Files:** `cli/tests/e2e/graph_semantics.rs`.
-- **Deliver:** linear/cycles/self-loops, zero/one/multiple finals, initial-final, final outgoing rejection, non-final sink, unknown/ambiguous defense.
-- **Tests:** production CLI, real provider, persistence, fresh reads/history/traces.
-- **Done when:** graph facet map has no gap.
-
-### T169 [ ] Prove human/structured semantic parity and outcome taxonomy
-- **Depends:** T146–T166
-- **Files:** `cli/tests/e2e/outcomes.rs`.
-- **Deliver:** every top-level outcome/reason family, one-object stdout, exits, same run semantics, provider stream isolation.
-- **Tests:** process-level byte assertions.
-- **Done when:** no fourth outcome or privileged mode exists.
-
-### T170 [ ] Cover complete provider execution failure family
-- **Depends:** T148–T149, T163–T165
-- **Files:** `cli/tests/e2e/provider_failures.rs`.
-- **Deliver:** aggregate repetition across check/create/gated request/guidance/compatibility: role-valid evaluation errors, missing/tombstoned executable, wrong major, timeout, nonzero, signal, malformed/missing/oversize/invalid-UTF-8 outputs, bounded streams.
-- **Tests:** no case is first introduced here; creation error has no run/journal, paged check has no partial report/fan-out, per-run check has no latch/state/journal, attempt journaling is exact, rich error/trace.
-- **Done when:** gate-free/provider-free operations remain usable and exposure-task facet inventory matches aggregate suite.
-
-### T171 [ ] Cover creation inputs and canonical graph drift
-- **Depends:** T148–T149, T154
-- **Files:** `cli/tests/e2e/creation_and_digest.rs`.
-- **Deliver:** zero/required/optional/invalid/undeclared inputs, no topology from values, description-validation executable drift, canonical field matrix.
-- **Tests:** no run/journal on rejected/error creation.
-- **Done when:** alternate topology requires separate registration.
-
-### T172 [ ] Cover evidence selection, associations, and correction
-- **Depends:** T159–T163
-- **Files:** `cli/tests/e2e/evidence_flow.rs`.
-- **Deliver:** empty default, missing ID, oversized context pre-provider, only selected records, inline/provider pass/fail evidence, same-locator revisions, remap convention.
-- **Tests:** fresh inventory/history and provider request ledger.
-- **Done when:** no auto-selection/truncation/dereference occurs.
-
-### T173 [ ] Cover journal/state/evidence atomicity with fault injection
-- **Depends:** T108, T111–T118, T149, T151, T159, T161–T165
-- **Files:** `cli/tests/e2e/atomicity.rs`, `test-support/sqlite/faults/*.sql`.
-- **Deliver:** abort each creation/mutation/attempt write boundary—including post-lookup `run.guidance` and `run.compatibility` attempt journal commits under I14—and inspect via fresh CLI.
-- **Tests:** old-or-new complete state only; response never falsely claims recording; deterministic fault-injection rollback/atomicity proof for every post-lookup `run.guidance` and `run.compatibility` attempt journal boundary.
-- **Done when:** every durable mutation/attempt class, including guidance and per-run compatibility attempts, has rollback evidence under I14.
-
-### T174 [ ] Cover lifecycle family end to end
-- **Depends:** T149–T166
-- **Files:** `cli/tests/e2e/lifecycle.rs`.
-- **Deliver:** active/final/terminated, neutral final meaning, zero-final, sink, termination, repeated denial, terminal empty events, fixed label, annotation/evidence, guidance/compat rejection.
-- **Tests:** fresh process after every state change.
-- **Done when:** no pause/reopen/delete semantics surface.
-
-### T175 [ ] Cover provider drift and stable registration identity
-- **Depends:** T149–T158, T163–T165
-- **Files:** `cli/tests/e2e/provider_drift.rs`.
-- **Deliver:** handle rename/reuse, update executable/argv/CWD/version/digest/graph, nonempty paged impact reads, CLI-created disable/restore tombstones repeating setup cases, fixed stored projection, current config invocation, journal facts.
-- **Tests:** another caller CWD and missing/tombstoned provider paths.
-- **Done when:** locator/digest/handle never rebind identity.
-
-### T176 [ ] Cover capability-scoped compatibility continuity
-- **Depends:** T163–T165, T175
-- **Files:** `cli/tests/e2e/compatibility.rs`.
-- **Deliver:** repeat registration-wide zero/mixed findings with no fan-out; per-run mixed/error/drift findings with ordered attempt journal; unsupported gated request; guidance incompatibility; supported/gate-free continuity; missing-provider errors; non-latching repeat.
-- **Tests:** no case first introduced here; per-run checks append observations without state/version/latch; safe reads/annotation/termination remain available.
-- **Done when:** exposure-task inventory matches aggregate suite and no active graph migration/bypass exists.
-
-### T177 [ ] Cover configuration precedence and caller-CWD independence
-- **Depends:** T096–T098, T146–T166
-- **Files:** `cli/tests/e2e/configuration.rs`.
-- **Deliver:** global/project/CLI precedence, malformed/forbidden config, ancestor boundary, defaults-only distinction, stored registration resolution.
-- **Tests:** isolated homes and multiple CWDs.
-- **Done when:** project config cannot redefine existing run/provider.
-
-### T178 [ ] Cover accidental overlap and stale evaluations
-- **Depends:** T113, T119, T139, T163
-- **Files:** `cli/tests/e2e/concurrency.rs`.
-- **Deliver:** two gated requests, termination/state change during barrier, label/note/evidence during barrier, run creation racing update/disable/restore in both writer orders, independent-run writes, process kill.
-- **Tests:** explicit barriers, timeline artifacts, fresh state/history, CAS trace.
-- **Done when:** one conflicting transition max; metadata writes do not stale valid evaluation.
-
-### T179 [ ] Freeze and test migration v1 fixture discipline
-- **Depends:** T104–T119, T143–T145, T149–T154
-- **Files:** `test-support/sqlite/v0001.*`, `cli/tests/e2e/migrations.rs`.
-- **Deliver:** immutable released-schema fixture, empty/latest/future/concurrent/interrupted migration scenarios and fixture-generation provenance.
-- **Tests:** CLI queries preserve all authority after migration.
-- **Done when:** future migrations must add, never rewrite, fixture.
-
-### T180 [ ] Cover persistence corruption behavior
-- **Depends:** T117, T143–T145, T150–T154
-- **Files:** `test-support/sqlite/corrupt/*`, `cli/tests/e2e/corruption.rs`.
-- **Deliver:** invalid header/truncation/malformed snapshot/association/lifecycle/sequence/future schema cases.
-- **Tests:** rich persistence-phase errors, no provider execution/mutation/silent repair.
-- **Done when:** corruption claims are public-CLI observed.
-
-### T181 [ ] Cover audit export consistency and failure safety
-- **Depends:** T116, T166
-- **Files:** `cli/tests/e2e/export.rs`.
-- **Deliver:** consistent state/journal/evidence/provider observations, ordering, external locators, overwrite and partial-filesystem failure.
-- **Tests:** exported schemas validate; DB unchanged; no import command.
-- **Done when:** export never claims replay/mobility.
-
-### T182 [ ] Cover operational trace contract and resilience
-- **Depends:** T099–T102, T118, T120, T146–T181
-- **Files:** `cli/tests/e2e/{trace_contract,trace_resilience}.rs`.
-- **Deliver:** permissions, one file/request, all payloads, no environment, init failure/no effects, crash markers, base/call reservation exhaustion, provider-read late sink failure, durable-annotation late sink failure, count/byte rotation, concurrent invocations.
-- **Tests:** semantic parsing; provider-check pages at ten calls with cursor; mutation case proves completed envelope plus fresh-process annotation/history after `EFBIG`; concurrent actual+reserved bytes never exceed cap.
-- **Done when:** every outcome matches trace limits, committed mutation stays truthful, and open traces survive within hard bound.
-
-### T183 [ ] Add independent model-based black-box testing
-- **Depends:** T135–T145, T149–T182
-- **Files:** `cli/tests/e2e/model_based.rs`, `cli/tests/support/reference_model.rs`.
-- **Deliver:** independent model and generated graph/action sequences through fresh CLI processes.
-- **Tests:** preserved seed/provider/project/transcript/exports/traces and replay command on failure.
-- **Done when:** reference model imports no product transition code.
-
-### T184 [ ] Audit excluded APIs and architecture behavior
-- **Depends:** T017–T183
-- **Files:** `xtask/src/architecture.rs`, `xtask/tests/architecture.rs`, `cli/tests/e2e/excluded_surface.rs`, `quality/evidence/v1/exclusions.json`.
-- **Deliver:** proof of no DSL/agent/daemon/async/replay/sandbox/discovery/claims/retries/reopen/delete/import/migration/bypass/SDK requirement and no software policy in core.
-- **Tests:** command help/schema/catalog/dependency/source-boundary checks.
-- **Done when:** every explicit non-goal in README and foundation has evidence.
-
-### V011 [ ] Junction validation — cross-operation acceptance (T167–T184)
-- **Depends:** T184
-- **Owner:** orchestrator in V-mode; per junction template above; not a Fable/Sol review round.
-- **Files:** none tracked; untracked `target/junction-evidence/V011/**` only.
-- **Deliver:** full accumulated inventory plus `final` closure and every aggregate E2E suite (graph semantics, outcomes, provider failures, atomicity, lifecycle, drift, compatibility, configuration, concurrency, migrations, corruption, export, trace, model-based, exclusions) against the cumulative candidate tree (T167 commit precedes; junction gates the T184 commit); findings ledger or clean report.
-- **Done when:** every command has a recorded outcome and findings are handed to F011 or a clean report is filed; stop for orchestrator.
-
-### F011 [ ] Junction fix — batch V011 findings
-- **Depends:** V011
-- **Owner:** orchestrator in F-mode; one batched pass; per junction template above; not a correctness review round.
-- **Files:** files within T167–T184 contracts as valid findings require; changed paths append to the T184 range ledger.
-- **Deliver:** one batched repair pass for all valid V011 findings, or explicit no-op completion.
-- **Done when:** no-op recorded, or repairs complete and targeted V011 rerun reports clean; the T184 boundary commit and T185 stay blocked until junction closure; stop for orchestrator.
-
-## Phase 10 — Required reference software-change acceptance
-
-### T185 [ ] Prove reference behaviors 1–4
-- **Depends:** T140–T142, T149–T184, V011, F011
-- **Files:** `cli/tests/reference.rs`, `cli/tests/reference/creation_and_rejection.rs`.
-- **Deliver:** registered reference integration-test root plus creation/safe inspection, forward happy path baseline, missing output rejection, invalid output rejection.
-- **Tests:** targeted reference E2E `creation_and_rejection`; separate processes, stored graph, state/history/trace.
-- **Done when:** coverage rows 1–4 cite invocation IDs.
-
-### T186 [ ] Prove reference behaviors 5–9
-- **Depends:** T185
-- **Files:** `cli/tests/reference/revision_cycles.rs`.
-- **Deliver:** design/plan/implementation/validation revision cycles and event/verdict consistency.
-- **Tests:** targeted reference E2E `revision_cycles`; every cycle preserves prior evidence and returns through explicit graph edge.
-- **Done when:** rows 5–9 cite runtime evidence.
-
-### T187 [ ] Prove reference behaviors 10–13
-- **Depends:** T185–T186
-- **Files:** `cli/tests/reference/evidence_drift_compatibility.rs`.
-- **Deliver:** append-only same-path evidence, restart/handoff, provider drift, explicit incompatibility and safe recovery operations.
-- **Tests:** targeted reference E2E `evidence_drift_compatibility`; fresh processes, changed provider, fixed graph, history/trace.
-- **Done when:** rows 10–13 cite runtime evidence.
-
-### T188 [ ] Prove reference behaviors 14–17
-- **Depends:** T185–T187
-- **Files:** `cli/tests/reference/guidance_actor_interaction.rs`.
-- **Deliver:** cold guidance/evidence selection, actor neutrality, journal/state consistency, cross-CWD interaction/terminal annotation.
-- **Tests:** targeted reference E2E `guidance_actor_interaction`; identical decision under actor metadata change and provider-free reads.
-- **Done when:** rows 14–17 cite runtime evidence.
-
-### T189 [ ] Prove reference behaviors 18–21
-- **Depends:** T185–T188
-- **Files:** `cli/tests/reference/attempt_resolution_visibility.rs`.
-- **Deliver:** attempt evidence categories, stable registration resolution, automation envelope/exits, operational trace and trace-init no-effect.
-- **Tests:** targeted reference E2E `attempt_resolution_visibility`; completed/rejected/unknown/lifecycle/error attempts and exact trace correlation.
-- **Done when:** rows 18–21 cite runtime evidence.
-
-### T190 [ ] Generate exact reference 1–21 and C11 acceptance report
-- **Depends:** T183, T185–T189
-- **Files:** `xtask/src/reference_report.rs`, `xtask/tests/reference_report.rs`, `quality/evidence/v1/reference-report.schema.json`.
-- **Deliver:** generator/schema plus 21 stable tracked evidence keys; after authorized candidate commit, invoke generator against immutable SHA to emit untracked/CI artifact with invocation/trace references; never embed self-SHA in tracked tree.
-- **Tests:** pre-commit missing/duplicate/manual-only canaries fail; T183 model-based suite evidence is green and linked; post-commit report records passing `<sha>/reference-1-21` status.
-- **Done when:** all 21 reference behaviors plus model-based acceptance close C11 in external immutable status.
-
-### V012 [ ] Junction validation — reference acceptance (T185–T190)
-- **Depends:** T190
-- **Owner:** orchestrator in V-mode; per junction template above; not a Fable/Sol review round.
-- **Files:** none tracked; untracked `target/junction-evidence/V012/**` only.
-- **Deliver:** full accumulated inventory plus complete reference suite, reference-report generator canaries, and `final` closure against the cumulative candidate tree (T189 commit precedes; junction gates the T190 commit); findings ledger or clean report.
-- **Done when:** every command has a recorded outcome and findings are handed to F012 or a clean report is filed; stop for orchestrator.
-
-### F012 [ ] Junction fix — batch V012 findings
-- **Depends:** V012
-- **Owner:** orchestrator in F-mode; one batched pass; per junction template above; not a correctness review round.
-- **Files:** files within T185–T190 contracts as valid findings require; changed paths append to the T190 range ledger.
-- **Deliver:** one batched repair pass for all valid V012 findings, or explicit no-op completion.
-- **Done when:** no-op recorded, or repairs complete and targeted V012 rerun reports clean; the T190 boundary commit and T191 stay blocked until junction closure; stop for orchestrator.
-
-## Phase 11 — Final quality, documentation, and publication hardening
-
-### T191 [ ] Generate complete invariant and facet evidence report
-- **Depends:** T167–T190, V012, F012
-- **Files:** `xtask/src/acceptance_report.rs`, `xtask/tests/acceptance_report.rs`, `quality/evidence/v1/acceptance-report.schema.json`, `coverage.md`.
-- **Deliver:** report generator/schema and stable tracked keys for I1–I47, operation facets, reference 1–21, exclusions, commands, toolchain/fixture digests; post-commit artifact supplies actual commit digest.
-- **Tests:** pre-commit stale/missing/duplicate canaries; stop for authorized T191 commit; run immutable-SHA report/status command on committed generator.
-- **Done when:** every stable key resolves in external artifact to passing runtime or justified deterministic evidence; failed report opens authorized corrective commit.
-
-### T192 [ ] Finalize provider-author documentation and examples
-- **Depends:** T134–T190
-- **Files:** `../../provider-protocol-v1.md`, `schemas/provider/v1/*.json`, `examples/providers/**`, `../../configuration.md`, `../../operational-trace.md`.
-- **Deliver:** registration, five roles, bounds, errors, conformance, graph/input/evidence/guidance/compatibility, no sandbox/state authority.
-- **Criteria:** examples execute and pass `provider.check` from clean checkout.
-- **Done when:** author needs no internal source knowledge.
-
-### T193 [ ] Finalize user/operator CLI documentation
-- **Depends:** T146–T190
-- **Files:** `../../../README.md`, `../../cli-contract.md`, `../../configuration.md`, `../../operational-trace.md`, `../../persistence.md`, `../../export-contract.md`.
-- **Deliver:** all commands/outcomes/exits/paths/security/rotation/recovery/no-retry/no-mobility behavior.
-- **Criteria:** documented examples run in isolated sandbox.
-- **Done when:** human and automation contracts match schemas.
-
-### T194 [ ] Finalize migration, recovery, and troubleshooting documentation
-- **Depends:** T173, T178–T182
-- **Files:** `../../migration.md`, `../../recovery.md`, `../../troubleshooting.md`.
-- **Deliver:** schema upgrade/future-version/corruption/overlap/provider failure/trace lookup/uncertain interruption guidance.
-- **Criteria:** every diagnostic reason has recovery path or explicit non-recoverable statement.
-- **Done when:** docs do not promise replay, exact provider history, or absent side effects.
-
-### V013 [ ] Junction validation — evidence reports and final documentation (T191–T194)
-- **Depends:** T194
-- **Owner:** orchestrator in V-mode; per junction template above; not a Fable/Sol review round.
-- **Files:** none tracked; untracked `target/junction-evidence/V013/**` only.
-- **Deliver:** full accumulated inventory plus `final` closure, acceptance-report generator canaries, and docs checks over finalized provider/user/operator/migration documentation against the cumulative candidate tree (T191 commit precedes; junction gates the T194 commit); findings ledger or clean report.
-- **Done when:** every command has a recorded outcome and findings are handed to F013 or a clean report is filed; stop for orchestrator.
-
-### F013 [ ] Junction fix — batch V013 findings
-- **Depends:** V013
-- **Owner:** orchestrator in F-mode; one batched pass; per junction template above; not a correctness review round.
-- **Files:** files within T191–T194 contracts as valid findings require; changed paths append to the T194 range ledger.
-- **Deliver:** one batched repair pass for all valid V013 findings, or explicit no-op completion.
-- **Done when:** no-op recorded, or repairs complete and targeted V013 rerun reports clean; the T194 boundary commit and T195 stay blocked until junction closure; stop for orchestrator.
-
-### T195 [ ] Implement one canonical quality command
-- **Depends:** T019–T030, T167–T194, V013, F013
-- **Files:** `xtask/src/quality.rs`, `quality/manifest.toml`, `quality/evidence/v1/quality-report.schema.json`, `xtask/tests/quality.rs`.
-- **Deliver:** finalize T028 incremental manifest with docs, format, check, Clippy, architecture, schemas, provider conformance, migrations, all E2Es, closure, reference, dependency/advisory/license, semantic judge.
-- **Tests:** clean checkout command and fail-fast/report behavior.
-- **Done when:** hooks and CI invoke this implementation rather than duplicates.
-
-### T196 [ ] Set and enforce suite runtime budget/sharding
-- **Depends:** T195
-- **Files:** `quality/shards.toml`, `../../testing.md`, `.github/workflows/quality.yml`, `xtask/src/quality.rs`, `xtask/tests/quality.rs`.
-- **Deliver:** measured clean/repeat runtime, deterministic shards with isolated artifacts, explicit budget.
-- **Tests:** each shard plus aggregate closure/reference reports.
-- **Done when:** no required scenario is ignored/quarantined to meet budget.
-
-### T197 [ ] Run repeated flake and process-leak audit
-- **Depends:** T178–T196
-- **Files:** `target/quality-artifacts/T197/**`.
-- **Deliver:** repeated concurrency/trace/provider tests, orphan-process check, leftover-file/lock check, seed stability, and T197 publication candidate.
-- **Criteria:** 20 consecutive targeted runs plus 5 complete sharded-gate runs on each supported OS; completion report supplies exact commands/evidence and stops. Orchestrator creates T197 commit, runs T028 range gate, and publishes candidate branch before T198.
-- **Done when:** no timing-only ordering/leak remains and remote candidate has one determinate aggregate checkpoint judgment plus candidate-head quality results.
-- **Stop:** any defect requires new exact corrective-task Files before tracked edit; rerun full audit afterward.
-
-### T198 [ ] Orchestrator-only: configure repository protection and required CI
-- **Depends:** T029, T195–T197
-- **Files:** `../../development-policy.md`, `quality/repository/{before,after,rollback}.json`, `quality/repository/README.md`.
-- **Deliver:** orchestrator exports current branch-protection/ruleset state, verifies exact T197 required-check name, records recovery owner, applies protected `main`/branch-current/release/bypass policy through authenticated `gh`, and provides exact restore commands from `before.json`.
-- **Criteria:** failing/unavailable judge or quality blocks test PR; real judge runs in Actions; rollback dry-run/schema check succeeds; controlled apply/restore/reapply proves recovery without locking owner out; commit redacted settings evidence.
-- **Done when:** server authority matches policy and reversible evidence; any failed apply restores prior state before stop.
-- **Stop:** hosting plan cannot enforce requirement; owner chooses alternative authority before release.
-
-### T199 [ ] Run clean-room final acceptance audit
-- **Depends:** T191–T198
-- **Files:** `target/quality-artifacts/T199/<sha>/**`.
-- **Deliver:** `cargo clean` then full publication gate, operation closure, 21 reference rows, all invariant/facet evidence, dependency and docs reports.
-- **Criteria:** exact command from clean clone with isolated user config; dependency retrieval may use documented Cargo network/cache, while product/provider scenarios remain network-disabled unless explicitly testing network policy; real judge access is provisioned.
-- **Done when:** C12 report is green and no known required failure remains.
-- **Stop:** any tracked fix requires separate exact corrective-task scope and new candidate commit/report.
-
-### T200 [ ] Close initial implementation change
-- **Depends:** T001–T199
-- **Files:** `README.md`, `tasks.md`, `coverage.md`, `../../../README.md`, `../../../CHANGELOG.md`.
-- **Deliver:** all tasks `[x]`, decisions resolved, generated evidence linked, shipped behavior/version recorded, no stale pending language.
-- **Criteria:** canonical publication gate passes once for exact remote destination tip to candidate head; candidate-head deterministic platform quality passes.
-- **Done when:** owner approves closure and protected remote accepts publication.
-- **Stop:** any task, invariant, operation facet, reference behavior, judge, or authoritative CI result is incomplete.
+## Amended execution plan (2026-07-22)
+
+Everything below supersedes the original Phase 6–11 / T120–T200 microtask structure. Two independent blind assessments ([overengineering-assessment.md](overengineering-assessment.md), [overengineering-assessment-sol.md](overengineering-assessment-sol.md)) converged: the substrate through Phase 5 is sound, but the remaining plan spent a large share of effort on per-task governance instead of shipping runnable behavior. Owner accepted the amendment on 2026-07-22. Planning lessons are distilled in [development-policy.md § Planning and execution lessons](../../development-policy.md#planning-and-execution-lessons-2026-07-22).
+
+Original per-task contracts (T120–T200, V006–V013, F006–F013) remain readable at commit `d397d89` and are referenced by ID below. They stay the contracts of record for deliverable detail wherever a checklist line does not amend them.
+
+Amendment summary:
+
+- remaining work executes as six work packages WP1–WP6, not per-task execution units;
+- junctions V006–V013/F006–F013 are retired; each work package ends with one validation ritual and one or few authorized boundary commits;
+- operation exposure is staged: nine alpha operations publish first; twelve operations defer to WP6;
+- provider process-failure facets are proven exhaustively once through one representative operation (shared family), per amended [testing.md § Facet matrix](../../testing.md#facet-matrix) and [I30](../../invariants.md#i30-end-to-end-depth-follows-operation-facets);
+- model-based black-box testing (was T183) defers to the WP6 backlog as an owner-optional item;
+- publication ritual, semantic-judge gate, deterministic quality inventory, and all runtime invariants are unchanged.
+
+### Work-package governance
+
+- The orchestrator implements each work package as one continuous assignment; internal checklist order is advisory, stated dependencies are real.
+- At each work-package boundary: run `git diff --check` plus `cargo run -p xtask -- quality --root .`; repair failures; commit through the README boundary ritual. Publication uses the unchanged judge-gated pre-push gate.
+- The orchestrator stops for explicit owner review at every work-package boundary; unattended multi-package runs are not permitted.
+- Blind Fable/Sol correctness review is owner-invoked at boundaries, no longer scheduled per range.
+- Uncommitted work must not span more than one work package.
+- Closure stages: WP3 checkpoints use `candidate`/`exposed` as marked; `final` (D004 21-ID equality) applies only at WP6 change close.
+
+### Alpha operation scope
+
+Alpha catalog, exposed by WP3 (9 operations):
+
+`provider.add`, `provider.list`, `provider.check`, `run.create`, `run.list`, `run.show`, `run.terminate`, `run.request`, `run.history`.
+
+Deferred to WP6 (12 operations; their private core implementations from Phase 3 remain complete and tested):
+
+`provider.update`, `provider.rename`, `provider.disable`, `provider.restore`, `run.graph`, `run.evidence.add`, `run.evidence.list`, `run.annotate`, `run.label`, `run.guidance`, `run.compatibility`, `run.export`.
+
+`provider.list` and `run.terminate` join the seven-operation assessment slice because list is the fresh-process verification read for every catalog facet and terminate completes the normative lifecycle-family owner set (`run.list`/`run.show`/`run.terminate`).
+
+Alpha facet manifests enumerate alpha-applicable rows only. Facet rows that depend on a deferred operation (selected/provider evidence for `run.request`, updated/restored-config invocation, disable-tombstone interactions) enter the manifest in WP6 together with their operations.
+
+### WP1 — CLI delivery substrate (was Phase 6, T120–T134) — complete
+
+Boundary commit `feat(cli): add private driver and contracts`. The working tree already contains substantial progress on startup, args, diagnostics, and JSON rendering; finish in place, do not restart.
+
+- [x] Trace-first CLI startup: request ID and secure trace before help/version/parse/dispatch per D010; rich init failure stderr (was T120) — `cli/src/{main,startup}.rs`, `cli/tests/startup.rs`
+- [x] Shared argument primitives: global flags, private operation parser modules; production root registers no application subcommand (was T121) — `cli/src/args.rs`, `cli/tests/args.rs`
+- [x] CLI-to-core request DTO mappings; invalid-syntax versus domain-rejection boundary (was T122) — `cli/src/commands/{mod,provider,run,evidence,export}.rs`
+- [x] Sole composition root with architecture bypass canaries (was T123) — `cli/src/composition.rs`
+- [x] Traced operation dispatcher: one operation per intent, request/outcome envelopes, correlation (was T124) — `cli/src/dispatch.rs`
+- [x] Structured outcome schema and renderer; versioned one-object envelope (was T125) — `cli/src/render/`, `schemas/cli/v1/outcome.schema.json`
+- [x] Human renderer with semantic parity against structured renderer (was T126) — `cli/src/render/human.rs`
+- [x] Rich diagnostics and source-chain rendering (was T127) — `cli/src/diagnostics.rs`
+- [x] Stable exit codes and stdout/stderr behavior, byte-level tests (was T128) — `cli/src/exit.rs`, `cli/tests/process_contract.rs`
+- [x] Private command adapters for all 21 operations; none registered in production root (was T129–T132) — `cli/src/commands/*.rs`
+- [x] Production driver operation catalog, initially empty, updated only by exposures; closure tool gains driver/route sets (was T133) — `cli/src/driver_catalog.rs`
+- [x] Generated/validated provider/trace/export schemas plus planned CLI schema and contract docs (was T134) — `schemas/index.json`, `../../cli-contract.md`, `../../operational-trace.md`, `../../export-contract.md`
+
+Validation (was V006/F006): boundary ritual plus focused startup/args/dispatch/render/exit suites and `baseline` closure with driver/route sets. Final WP1 inventory and post-marker boundary checks passed 19/19 commands and focused CLI suites passed 185/185 tests; evidence is retained under `target/junction-evidence/WP1/`. [`c6-range-ledger.txt`](c6-range-ledger.txt) records the exact boundary union. Owner approved the WP1 boundary on 2026-07-22.
+
+### WP2 — Provider fixtures and E2E harness (was Phase 7, T135–T145)
+
+Boundary commit `test(e2e): establish black-box harness`.
+
+- [ ] Generic scenario-provider executable, root-excluded, no product dependency (was T135) — `test-support/providers/scenario-provider/`
+- [ ] Graph/input scenario modes: linear/cycle/self-loop/zero-final/multi-final/initial-final/sink/ambiguous/invalid/guidance/input variants (was T136)
+- [ ] Gate/evidence/guidance/compatibility scenario modes (was T137)
+- [ ] Provider process-failure modes: malformed JSON, extra/missing output, wrong major, nonzero, signal, timeout, oversized streams, invalid UTF-8 (was T138)
+- [ ] Explicit provider barrier and invocation ledger; no timing-only sleeps (was T139)
+- [ ] Reference software-change provider: graph, gate/evidence policy, guidance/drift/compatibility modes (was T140–T142) — `test-support/providers/reference-provider/`
+- [ ] Isolated E2E sandbox: private home/config/DB/trace/provider CWD, preserved failure artifacts (was T143) — `cli/tests/e2e.rs`, `cli/tests/support/`
+- [ ] CLI process runner and structured parser; no in-process handler calls (was T144)
+- [ ] Trace parser, runtime coverage recorder, fixture helpers; close C2 (was T145)
+
+Validation (was V007/F007): boundary ritual plus standalone fixture-crate tests and harness self-tests.
+
+### WP3 — Alpha operation exposure (was Phase 8, trimmed to alpha catalog)
+
+Exposure rules kept from the original phase: each checkpoint registers routes and catalog IDs in a deliberately uncommitted candidate tree, closes its alpha facet manifest (`quality/facets/v1/<operation-id>.json`) with exact E2E/trace evidence, updates docs/coverage, then stops for the authorized commit. Checkpoint groups are indivisible same-owner assignments. `Trace persistence boundary` closes from each exposure's production CLI trace; provider users also close `Trace provider boundary`.
+
+- [ ] Checkpoint A — `provider.add` + `provider.list` (was T146–T147): registration, stable ID, duplicate-handle rejection, enabled/tombstoned listing, D008 pagination rows, fresh-list verification. Commit `feat(provider): expose provider catalog foundation`. Closure: `candidate` then `exposed`.
+- [ ] Checkpoint B — `provider.check`, `run.create`, `run.list`, `run.terminate`, `run.history` (was T148–T152): provider.check closes the complete shared provider process-failure family as the representative operation (missing executable, timeout, crash/nonzero/signal, malformed/wrong-major/invalid-UTF-8 protocol, oversized output/streams); run.create covers zero/valid/invalid inputs, description/validation drift, rejected/error creation writing no run/journal, plus two representative provider-failure rows (timeout, malformed) referencing the shared family for the rest; run.list/run.terminate/run.history cover lifecycle visibility, termination note/repeat denial, ordered history with D008 cursor rows, fresh-process state/journal proofs. Commit `feat(run): expose provider check and run foundation`. Closure: staged `candidate` per operation, `exposed` at commit.
+- [ ] Checkpoint C — `run.show` (was T153): active, neutral final, initial-final, zero-final ongoing, non-final sink, terminated, gates, empty events, missing provider/not-found; provider ledger stays empty. Commit `feat(run): expose run.show`.
+- [ ] Checkpoint D — `run.request` (was T163, alpha facets): gate-free/gated flows, all verdict variants, inline evidence, unknown/final/terminated rejection, self-loop/cycle/final semantics, missing/tombstoned provider policy, stale CAS, exact journal/trace, two representative provider-failure rows referencing the shared family. Selected/provider-evidence and updated/restored-config rows defer to WP6. Commit `feat(run): expose run.request`.
+
+Validation (was V008–V010/F008–F010): boundary ritual after each checkpoint commit; full CLI E2E suite plus `exposed` closure.
+
+### WP4 — Cross-operation acceptance (was Phase 9, 18 tasks → 5)
+
+Boundary commit `test(e2e): close alpha acceptance`.
+
+- [ ] A1 — Universal operation/driver/E2E/trace closure over the alpha catalog with missing driver/E2E/trace/open-facet canaries; excluded-API and architecture audit criteria folded in (was T167 + T184) — `cli/tests/e2e/coverage_closure.rs`, `xtask/src/operation_coverage.rs`
+- [ ] A2 — Shared provider execution failure family: full cross-product through the representative operation plus one representative row per other provider-invoking alpha operation; creation error proves no run/journal; gate-free operations stay usable (was T170, amended) — `cli/tests/e2e/provider_failures.rs`
+- [ ] A3 — Atomicity, migration, corruption: fault-injection rollback at every alpha durable-mutation boundary; frozen migration v1 fixture discipline; corruption cases observed through the public CLI; creation-input and canonical-graph-drift rows folded in (was T173, T179, T180, T171) — `cli/tests/e2e/{atomicity,migrations,corruption}.rs`, `test-support/sqlite/`
+- [ ] A4 — Lifecycle, graph semantics, outcome taxonomy: complete lifecycle family across fresh processes; linear/cycles/self-loops/finals/sink/ambiguity graph family; human/structured parity and exit taxonomy (was T174, T168, T169) — `cli/tests/e2e/{lifecycle,graph_semantics,outcomes}.rs`
+- [ ] A5 — Trace contract, configuration, concurrency: trace permissions/rotation/exhaustion/late-sink cases for alpha operations; config precedence and caller-CWD independence; overlap/stale-CAS scenarios with explicit barriers (was T182, T177, T178, trimmed to alpha ops) — `cli/tests/e2e/{trace_contract,trace_resilience,configuration,concurrency}.rs`
+
+Deferred with their operations to WP6: evidence flow (was T172), provider drift/identity (was T175), compatibility continuity (was T176), audit export (was T181). Deferred as owner-optional: model-based testing (was T183).
+
+### WP5 — Alpha publication and dogfood
+
+- [ ] User/operator documentation for the exposed alpha surface: root README, `../../cli-contract.md`, `../../configuration.md`, `../../operational-trace.md`, `../../persistence.md` (alpha subset of T193); docs claim no unexposed command
+- [ ] Full quality gate green; judge-gated publication of the alpha range through the canonical pre-push ritual
+- [ ] Owner dogfoods the reference software-change workflow manually through the alpha CLI; findings and pain points recorded here and used to order WP6
+
+### WP6 — Post-alpha completion backlog
+
+The change stays open through WP6; ordering is an owner decision after dogfood. Contents, reusing original contracts by ID:
+
+- [ ] Deferred exposures with facet manifests: `run.graph` (T154), `provider.update` (T155), `provider.rename` (T156), `provider.disable` (T157), `provider.restore` (T158), `run.evidence.add`/`run.evidence.list` (T159–T160), `run.annotate` (T161), `run.label` (T162), `run.guidance` (T164), `run.compatibility` (T165), `run.export` (T166); deferred `run.request` facet rows close here
+- [ ] Deferred acceptance families: evidence flow (T172), provider drift and stable registration identity (T175), compatibility continuity (T176), audit export (T181)
+- [ ] Reference acceptance behaviors 1–21 and acceptance report (T185–T190); requires deferred operations
+- [ ] Model-based black-box testing (T183) — owner-optional
+- [ ] Invariant/facet evidence report (T191); provider-author, operator, and migration/recovery documentation finalization (T192–T194)
+- [ ] Hardening at owner-chosen depth: runtime budget/sharding (T196), flake/leak audit (T197), repository protection (T198), clean-room acceptance audit (T199)
+- [ ] Change close (was T200): all work packages complete, `final` closure equals D004's 21 IDs, generated evidence linked, owner approves, protected remote accepts publication

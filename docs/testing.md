@@ -34,6 +34,10 @@ Lower-level unit, integration, adapter, or property tests cannot substitute for 
 
 Pure core property tests are permitted as supplemental combinatorial defense. They must remain free of mocks and do not count toward operation completeness.
 
+## Sequencing doctrine
+
+Because only production-driver tests carry behavioral authority, implementation sequencing must produce a runnable production driver and black-box harness before pursuing breadth. A thin end-to-end slice — driver, one real provider fixture, one operation observed through the CLI with persistence and trace — precedes exhaustive per-operation depth. Depth added before the driver exists is unaccepted inventory under this doctrine, however well tested at lower levels.
+
 ## No-mock policy
 
 Required behavioral tests use:
@@ -213,6 +217,8 @@ Every operation has primary valid-path E2E scenario. Additional required facets 
 | Trace provider boundary | Every provider-invoking path proves configured invocation facts, complete bounded payloads/streams, and finish/failure event |
 | Trace persistence boundary | Every persistence path proves attempted transaction/read, applicable version check, and commit/rollback/read outcome |
 
+Provider process-failure facets (missing executable, timeout, crash, nonzero exit, signal, malformed/wrong-major/invalid-UTF-8 protocol, oversized output) form one shared family proven through common adapter machinery. The full family closes exhaustively on at least one representative provider-invoking operation. Every other provider-invoking operation closes its operation-specific outcome facets — including no-mutation and no-journal proofs — plus at least one representative failure row, and may reference the shared family suite for the remaining rows ([I30](invariants.md#i30-end-to-end-depth-follows-operation-facets)). The cross-product of every failure mode against every operation is explicitly not required.
+
 Lifecycle ownership is distributed, not repeated wholesale by every lifecycle-aware command: list/show/terminate own lifecycle visibility and terminal-state family; evidence/annotation own terminal append allowance; label/request/guidance/compatibility own their terminal rejection. Facet inventory must assign every family member to at least one exposure and each operation must close its applicable slice before exposure. Names in operation facet inventories must match this table exactly. No lower-level test can waive an assigned facet.
 
 ### Lifecycle-family owner table (normative)
@@ -314,7 +320,7 @@ Cover global/project CLI defaults without provider rebinding, malformed configur
 
 ### Model-based black-box testing
 
-Executable provider fixtures may generate small graphs and event sequences. Run them through CLI and compare authoritative current state and journal facts to smaller independent reference model. Preserve seed and reproduction artifacts on failure.
+Owner-optional, deferred past alpha (amendment 2026-07-22): generative model-based testing supplements the deterministic facet-matrix suites and never substitutes for them; its absence does not block operation completeness or publication. When adopted: executable provider fixtures may generate small graphs and event sequences. Run them through CLI and compare authoritative current state and journal facts to smaller independent reference model. Preserve seed and reproduction artifacts on failure.
 
 ## Audit export contracts
 

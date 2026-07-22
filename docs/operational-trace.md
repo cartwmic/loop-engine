@@ -19,6 +19,7 @@ Related documents:
 - [Testing doctrine](testing.md)
 - [Interaction storyboards](ux-storyboards.md)
 - [System invariants](invariants.md) — I18, I42, I46
+- [Published schema index](../schemas/index.json)
 
 ## Scope and authority
 
@@ -81,7 +82,7 @@ Post-initialization trace sink failure **MUST NOT** roll back a committed persis
 
 ## JSONL v1 line envelope
 
-Each line is one UTF-8 JSON object terminated by `\n`. Readers **MUST** parse linewise. Within major version `1`, same-major evolution is additive: new optional fields may appear; readers ignore unknown fields.
+Each line is one UTF-8 JSON object terminated by `\n`. Readers **MUST** parse linewise. Within major version `1`, same-major evolution is additive: new optional fields may appear; readers ignore unknown fields. Embedded protocol and graph payloads follow the strict parse rules in [provider-protocol-v1.md](provider-protocol-v1.md) and [graph-projection.md](graph-projection.md): duplicate object keys and trailing values after the first complete JSON value are rejected.
 
 ### Common fields (every line)
 
@@ -611,6 +612,19 @@ Matching stderr (structured mode) per [cli-contract.md](cli-contract.md#pre-disp
 ### Crash — blocking provider (partial trace)
 
 Last flushed line may be `provider.start` or an incomplete read path after `persistence.intent` without `read_complete`/`read_failure`. **No** `invocation.finish` required. Pre-effect markers must identify last observed phase. No durable mutation when no `persistence.commit` occurred.
+
+## Published trace event schema
+
+The common JSONL line envelope is indexed at [schemas/index.json](../schemas/index.json) as `schemas/trace/v1/event.schema.json` (`trace_schema_version` `1`, title `TraceEvent`). Category-specific fields remain normative in this document; the schema captures required common fields and bound markers only.
+
+| Property | Value |
+|---|---|
+| Exposure | **Published** — generated from integration types (T084/T010) |
+| Generation | `cargo run -p loop-engine-integrations --example generate_trace_schema` (writes JSON Schema to stdout; published artifact path above) |
+| Validation | `cargo test -p loop-engine-integrations published_trace_fixtures_are_versioned_and_never_duplicate_parsed_stdout` |
+| Fixtures | `schemas/trace/v1/fixtures/*.json` (non-normative line-shape examples) |
+
+Trace is diagnostic storage only. It is not authoritative state, does not replay into current workflow state, and never substitutes for SQLite or export artifacts.
 
 ## Verification rules (T010)
 

@@ -12,6 +12,7 @@ Related documents:
 - [System invariants](invariants.md) — I18, I27, I34, I46
 - [Interaction storyboards](ux-storyboards.md)
 - [Testing doctrine](testing.md)
+- [Published schema index](../schemas/index.json)
 
 ## Executable and namespaces
 
@@ -30,6 +31,8 @@ Structured CLI outcome envelope uses integer field `schema_version` with current
 | Support | MVP accepts only `schema_version` `1`. No support-duration promise is made for superseded versions |
 
 The same additive/breaking/support rule applies to audit export schemas (D015).
+
+Within major version `1`, same-major evolution is additive: new optional fields may appear and readers ignore unknown fields. Wire JSON consumed by integrations **MUST** reject duplicate object keys and trailing values after the first complete document ([provider-protocol-v1.md](provider-protocol-v1.md) § Byte framing; [graph-projection.md](graph-projection.md) § Wire JSON parse requirements).
 
 ## Rendering modes
 
@@ -213,6 +216,7 @@ Evidence locators are bounded opaque non-empty UTF-8 strings with no NUL or C0/C
 | SQLite connection pragmas and busy/locking policy | `persistence.md` | T009 (bounds referenced here) |
 | Trace reservation behavior and rotation | `technology.md` (summary); `operational-trace.md` (T010) | T008/T010 |
 | Provider JSON wire schemas | `provider-protocol-v1.md` + `schemas/provider/v1/*` | T084 |
+| Structured CLI outcome JSON Schema | `schemas/cli/v1/outcome.schema.json` + [schema index](../schemas/index.json) | T125/T134 |
 | Journal entry wire shapes | `journal-contract.md` | T011 |
 
 End-to-end proof owners for pagination and trace reservations: T147 (registration list and zero-row `--active-runs-for`), T150/T152 (run list, history, and `--active-runs` compatibility pages), T157/T175 (nonempty impact/disable warning pages), T160 (evidence list), T101/T152/T182 (trace directory budget and per-invocation reservation limits).
@@ -774,6 +778,18 @@ Not written to stdout. Example stderr payload when startup migration fails after
 Exit `64`. No outcome envelope on stdout. Operational trace records `invocation.error` with matching `phase` and `message` when the trace file was created.
 
 Post-dispatch `persistence.failed` (for example snapshot read failure during `run.export`) is **not** this shape: it uses the [structured outcome envelope](#structured-outcome-envelope-v1) on stdout with exit `1`.
+
+## Published structured outcome schema
+
+The machine-readable JSON Schema for the [structured outcome envelope](#structured-outcome-envelope-v1) is indexed at [schemas/index.json](../schemas/index.json) as `schemas/cli/v1/outcome.schema.json` (`schema_version` `1`, title `StructuredCliOutcomeEnvelopeV1`).
+
+| Property | Value |
+|---|---|
+| Exposure | **Planned** — WP1 publishes the schema and private renderer only; no production application operation route is exposed yet |
+| Generation | None — the published file is maintained alongside the private CLI renderer |
+| Validation | `cargo test -p loop-engine-cli published_schema_enums_match_core_catalog_and_taxonomy`; `cargo test -p loop-engine-cli contract_examples_render_with_eight_required_top_level_fields` |
+
+Structured application dispatch emits **exactly one** UTF-8 JSON outcome envelope on stdout after dispatch ([Stdout, stderr, and trace boundaries](#stdout-stderr-and-trace-boundaries)). Operational trace remains a separate JSONL file initialized before dispatch when possible (I46, D010); provider streams never appear on CLI stdout or stderr.
 
 ## Verification rules (T006)
 

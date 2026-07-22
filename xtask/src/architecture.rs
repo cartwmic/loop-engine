@@ -29,11 +29,33 @@ const APPROVED_PERSISTENCE_CONSTRUCTION_PREFIXES: [&str; 1] = ["persistence/"];
 const APPROVED_CLI_COMPOSITION_FILES: [&str; 1] = ["composition.rs"];
 const APPROVED_CLI_DISPATCH_FILES: [&str; 1] = ["dispatch.rs"];
 
-const PROCESS_CONSTRUCTION_MARKERS: [&str; 8] = [
-    "std::process",
-    "std::{process",
+const PROCESS_COMMAND_MARKERS: [&str; 4] = [
+    "std::process::Command",
+    "std::{process::Command",
+    "process::Command::",
+    "process::Command as",
+];
+
+const PROCESS_COMMAND_CALL_MARKERS: [&str; 2] = ["Command::new", "Command::spawn"];
+
+const PROCESS_ALIAS_MARKERS: [&str; 5] = [
     "process::Command",
-    "Command::new",
+    "Command as",
+    "use std as",
+    "std::{self as",
+    "extern crate std as",
+];
+
+const PROCESS_IMPORT_MARKERS: [&str; 2] = ["use std::process::", "std::process::{Command"];
+
+const PROCESS_INTEGRATION_MARKERS: [&str; 11] = [
+    "std::process::Command",
+    "std::{process::Command",
+    "process::Command::",
+    "process::Command as",
+    "use std::process::",
+    "std::process::{Command",
+    "process::Command",
     "Command as",
     "use std as",
     "std::{self as",
@@ -42,10 +64,33 @@ const PROCESS_CONSTRUCTION_MARKERS: [&str; 8] = [
 
 const SQLITE_CONSTRUCTION_MARKERS: [&str; 1] = ["rusqlite"];
 
-const DISPATCH_BYPASS_MARKERS: [&str; 10] = [
-    "loop_engine_core::operations",
+const CLI_PERSISTENCE_COMPOSITION_MARKERS: [&str; 12] = [
+    "SqliteStore::open",
+    "SqliteStore::open_traced",
+    "SqliteAuditExporter::with_trace",
+    "SqliteProviderCatalog::with_trace",
+    "SqliteRunWriter::with_trace",
+    "SqliteRunMutations::with_trace",
+    "SqliteRunReads::with_trace",
+    "SqliteEventAttemptWriter::with_trace",
+    "GuidanceAttemptWriter::with_trace",
+    "CompatibilityAttemptWriter::with_trace",
+    "SqliteEvidenceReads::with_trace",
+    "SqliteHistoryReads::with_trace",
+];
+
+const CLI_PROVIDER_COMPOSITION_MARKERS: [&str; 1] = ["SubprocessProviderInvoker::new"];
+
+const CLI_CONFIG_COMPOSITION_MARKERS: [&str; 2] = ["resolve_defaults(", "build_application("];
+
+const OPERATION_DISPATCH_ROOT_MARKERS: [&str; 4] = [
     "loop_engine_core::{operations",
-    "use loop_engine_core::operations",
+    "use loop_engine_core::{operations",
+    "loop_engine_core::operations;",
+    "use loop_engine_core::operations;",
+];
+
+const DISPATCH_BYPASS_ALIAS_MARKERS: [&str; 7] = [
     "use loop_engine_core as",
     "use ::loop_engine_core as",
     "extern crate loop_engine_core as",
@@ -53,6 +98,48 @@ const DISPATCH_BYPASS_MARKERS: [&str; 10] = [
     "use loop_engine_core::*",
     "loop_engine_core::{*",
     "use ::loop_engine_core::*",
+];
+
+const OPERATIONS_ROOT_EXPORTS: [&str; 1] = ["CommandError"];
+
+const DISPATCH_BYPASS_MULTILINE_MARKERS: [&str; 11] = [
+    "loop_engine_core::{operations",
+    "use loop_engine_core::{operations",
+    "loop_engine_core::operations;",
+    "use loop_engine_core::operations;",
+    "use loop_engine_core as",
+    "use ::loop_engine_core as",
+    "extern crate loop_engine_core as",
+    "loop_engine_core::{self as",
+    "use loop_engine_core::*",
+    "loop_engine_core::{*",
+    "use ::loop_engine_core::*",
+];
+
+const OPERATIONS_SUBMODULES: [&str; 23] = [
+    "catalog",
+    "evidence_add",
+    "evidence_list",
+    "paging",
+    "provider_add",
+    "provider_check",
+    "provider_disable",
+    "provider_list",
+    "provider_rename",
+    "provider_restore",
+    "provider_update",
+    "run_annotate",
+    "run_compatibility",
+    "run_create",
+    "run_export",
+    "run_graph",
+    "run_guidance",
+    "run_history",
+    "run_label",
+    "run_list",
+    "run_request",
+    "run_show",
+    "run_terminate",
 ];
 
 /// Verify product architecture for the workspace rooted at `manifest_path`.
@@ -388,7 +475,7 @@ fn check_construction_and_dispatch_bypass(metadata: &Metadata) -> Result<()> {
             }
             for (line_number, line) in source_lines(&source) {
                 if product != "loop-engine-core"
-                    && (PROCESS_CONSTRUCTION_MARKERS
+                    && (PROCESS_INTEGRATION_MARKERS
                         .iter()
                         .chain(SQLITE_CONSTRUCTION_MARKERS.iter()))
                     .any(|marker| {
@@ -402,78 +489,72 @@ fn check_construction_and_dispatch_bypass(metadata: &Metadata) -> Result<()> {
                 }
 
                 if product == "loop-engine-core" {
-                    for marker in PROCESS_CONSTRUCTION_MARKERS {
-                        if line_contains_marker(line, marker) {
-                            violations.push(format!(
-                                "forbidden provider-process construction in `loop-engine-core/src/{relative_path}` line {line_number}: `{marker}` (core must not instantiate process integrations)"
-                            ));
-                        }
+                    if line_has_process_construction(line) {
+                        violations.push(format!(
+                            "forbidden provider-process construction in `loop-engine-core/src/{relative_path}` line {line_number}: `{}` (core must not instantiate process integrations)",
+                            process_construction_marker(line)
+                        ));
                     }
-                    for marker in SQLITE_CONSTRUCTION_MARKERS {
-                        if line_contains_marker(line, marker) {
-                            violations.push(format!(
-                                "forbidden persistence construction in `loop-engine-core/src/{relative_path}` line {line_number}: `{marker}` (core must not instantiate persistence integrations)"
-                            ));
-                        }
+                    if line_has_sqlite_construction(line) {
+                        violations.push(format!(
+                            "forbidden persistence construction in `loop-engine-core/src/{relative_path}` line {line_number}: `rusqlite` (core must not instantiate persistence integrations)"
+                        ));
                     }
                 }
 
                 if product == "loop-engine-integrations" {
-                    if !is_approved_provider_construction_path(&relative_path) {
-                        for marker in PROCESS_CONSTRUCTION_MARKERS {
-                            if line_contains_marker(line, marker) {
-                                violations.push(format!(
-                                    "forbidden provider-process construction bypass in `loop-engine-integrations/src/{relative_path}` line {line_number}: `{marker}` must stay under `provider_process/`"
-                                ));
-                            }
-                        }
+                    if !is_approved_provider_construction_path(&relative_path)
+                        && line_has_process_construction(line)
+                    {
+                        violations.push(format!(
+                            "forbidden provider-process construction bypass in `loop-engine-integrations/src/{relative_path}` line {line_number}: `{}` must stay under `provider_process/`",
+                            process_construction_marker(line)
+                        ));
                     }
-                    if !is_approved_persistence_construction_path(&relative_path) {
-                        for marker in SQLITE_CONSTRUCTION_MARKERS {
-                            if line_contains_marker(line, marker) {
-                                violations.push(format!(
-                                    "forbidden persistence construction bypass in `loop-engine-integrations/src/{relative_path}` line {line_number}: `{marker}` must stay under `persistence/`"
-                                ));
-                            }
-                        }
+                    if !is_approved_persistence_construction_path(&relative_path)
+                        && line_has_sqlite_construction(line)
+                    {
+                        violations.push(format!(
+                            "forbidden persistence construction bypass in `loop-engine-integrations/src/{relative_path}` line {line_number}: `rusqlite` must stay under `persistence/`"
+                        ));
                     }
                 }
 
                 if product == "loop-engine-cli" {
                     if !is_approved_cli_composition_path(&relative_path) {
-                        for marker in PROCESS_CONSTRUCTION_MARKERS {
-                            if line_contains_marker(line, marker) {
-                                violations.push(format!(
-                                    "forbidden provider-process construction bypass in `loop-engine-cli/src/{relative_path}` line {line_number}: `{marker}` must stay in `composition.rs`"
-                                ));
-                            }
+                        if let Some(marker) = cli_composition_bypass_marker(line) {
+                            violations.push(format!(
+                                "forbidden CLI composition bypass in `loop-engine-cli/src/{relative_path}` line {line_number}: `{marker}` must stay in `composition.rs`"
+                            ));
                         }
-                        for marker in SQLITE_CONSTRUCTION_MARKERS {
-                            if line_contains_marker(line, marker) {
-                                violations.push(format!(
-                                    "forbidden persistence construction bypass in `loop-engine-cli/src/{relative_path}` line {line_number}: `{marker}` must stay in `composition.rs`"
-                                ));
-                            }
+                        if line_has_process_construction(line) {
+                            violations.push(format!(
+                                "forbidden provider-process construction bypass in `loop-engine-cli/src/{relative_path}` line {line_number}: `{}` must stay in `composition.rs`",
+                                process_construction_marker(line)
+                            ));
+                        }
+                        if line_has_sqlite_construction(line) {
+                            violations.push(format!(
+                                "forbidden persistence construction bypass in `loop-engine-cli/src/{relative_path}` line {line_number}: `rusqlite` must stay in `composition.rs`"
+                            ));
                         }
                     }
-                    if !is_approved_cli_dispatch_path(&relative_path) {
-                        for marker in DISPATCH_BYPASS_MARKERS {
-                            if line_contains_marker(line, marker) {
-                                violations.push(format!(
-                                    "forbidden operation-dispatch bypass in `loop-engine-cli/src/{relative_path}` line {line_number}: `{marker}` must stay in `dispatch.rs`"
-                                ));
-                            }
-                        }
+                    if !is_approved_cli_dispatch_path(&relative_path)
+                        && line_has_dispatch_bypass(line)
+                    {
+                        violations.push(format!(
+                            "forbidden operation-dispatch bypass in `loop-engine-cli/src/{relative_path}` line {line_number}: `{}` must stay in `dispatch.rs`",
+                            dispatch_bypass_marker(line)
+                        ));
                     }
                 }
             }
 
             if product == "loop-engine-core" {
-                record_multiline_bypass(
+                record_multiline_process_construction(
                     &mut violations,
                     &source,
                     &relative_path,
-                    &PROCESS_CONSTRUCTION_MARKERS,
                     "provider-process construction",
                 );
                 record_multiline_bypass(
@@ -486,11 +567,10 @@ fn check_construction_and_dispatch_bypass(metadata: &Metadata) -> Result<()> {
             }
             if product == "loop-engine-integrations" {
                 if !is_approved_provider_construction_path(&relative_path) {
-                    record_multiline_bypass(
+                    record_multiline_process_construction(
                         &mut violations,
                         &source,
                         &relative_path,
-                        &PROCESS_CONSTRUCTION_MARKERS,
                         "provider-process construction bypass",
                     );
                 }
@@ -506,11 +586,10 @@ fn check_construction_and_dispatch_bypass(metadata: &Metadata) -> Result<()> {
             }
             if product == "loop-engine-cli" {
                 if !is_approved_cli_composition_path(&relative_path) {
-                    record_multiline_bypass(
+                    record_multiline_process_construction(
                         &mut violations,
                         &source,
                         &relative_path,
-                        &PROCESS_CONSTRUCTION_MARKERS,
                         "provider-process construction bypass",
                     );
                     record_multiline_bypass(
@@ -526,7 +605,7 @@ fn check_construction_and_dispatch_bypass(metadata: &Metadata) -> Result<()> {
                         &mut violations,
                         &source,
                         &relative_path,
-                        &DISPATCH_BYPASS_MARKERS,
+                        &DISPATCH_BYPASS_MULTILINE_MARKERS,
                         "operation-dispatch bypass",
                     );
                 }
@@ -542,6 +621,138 @@ fn check_construction_and_dispatch_bypass(metadata: &Metadata) -> Result<()> {
             violations
         ));
     }
+}
+
+fn line_has_process_provenance(line: &str) -> bool {
+    PROCESS_COMMAND_MARKERS
+        .iter()
+        .chain(PROCESS_IMPORT_MARKERS.iter())
+        .chain(PROCESS_ALIAS_MARKERS.iter())
+        .any(|marker| line_contains_marker(line, marker))
+}
+
+fn line_has_process_call(line: &str) -> bool {
+    PROCESS_COMMAND_CALL_MARKERS
+        .iter()
+        .any(|marker| line_contains_marker(line, marker))
+}
+
+fn line_has_process_construction(line: &str) -> bool {
+    line_has_process_provenance(line)
+}
+
+fn source_has_split_process_construction(source: &str) -> bool {
+    let has_provenance = source_lines(source).any(|(_, line)| line_has_process_provenance(line));
+    let has_call = source_lines(source).any(|(_, line)| line_has_process_call(line));
+    has_provenance
+        && has_call
+        && !source_lines(source).any(|(_, line)| line_has_process_construction(line))
+}
+
+fn process_construction_marker(line: &str) -> &str {
+    for marker in PROCESS_COMMAND_MARKERS {
+        if line_contains_marker(line, marker) {
+            return marker;
+        }
+    }
+    for marker in PROCESS_IMPORT_MARKERS {
+        if line_contains_marker(line, marker) {
+            return marker;
+        }
+    }
+    for marker in PROCESS_ALIAS_MARKERS {
+        if line_contains_marker(line, marker) {
+            return marker;
+        }
+    }
+    "process construction"
+}
+
+fn record_multiline_process_construction(
+    violations: &mut Vec<String>,
+    source: &str,
+    relative_path: &str,
+    label: &str,
+) {
+    record_multiline_bypass(
+        violations,
+        source,
+        relative_path,
+        &PROCESS_INTEGRATION_MARKERS,
+        label,
+    );
+    if source_has_split_process_construction(source) {
+        violations.push(format!(
+            "forbidden multiline {label} in `{relative_path}`: process provenance and `Command::new`/`Command::spawn` cross lines"
+        ));
+    }
+}
+
+fn line_has_sqlite_construction(line: &str) -> bool {
+    SQLITE_CONSTRUCTION_MARKERS
+        .iter()
+        .any(|marker| line_contains_marker(line, marker))
+}
+
+fn cli_composition_bypass_marker(line: &str) -> Option<&'static str> {
+    CLI_PERSISTENCE_COMPOSITION_MARKERS
+        .into_iter()
+        .chain(CLI_PROVIDER_COMPOSITION_MARKERS)
+        .chain(CLI_CONFIG_COMPOSITION_MARKERS)
+        .find(|marker| line_contains_marker(line, marker))
+}
+
+fn is_allowed_operations_path_segment(segment: &str) -> bool {
+    OPERATIONS_ROOT_EXPORTS.contains(&segment) || OPERATIONS_SUBMODULES.contains(&segment)
+}
+
+fn line_has_disallowed_operations_root_item(line: &str) -> bool {
+    const PREFIX: &str = "loop_engine_core::operations::";
+    let Some(code) = line.split("//").next() else {
+        return false;
+    };
+    let compact: String = code.chars().filter(|ch| !ch.is_whitespace()).collect();
+    let mut rest = compact.as_str();
+    while let Some(index) = rest.find(PREFIX) {
+        let suffix = &rest[index + PREFIX.len()..];
+        let segment = suffix
+            .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+            .next()
+            .unwrap_or("");
+        if segment.is_empty() {
+            return true;
+        }
+        if !is_allowed_operations_path_segment(segment) {
+            return true;
+        }
+        rest = suffix;
+    }
+    false
+}
+
+fn line_has_dispatch_bypass(line: &str) -> bool {
+    OPERATION_DISPATCH_ROOT_MARKERS
+        .iter()
+        .chain(DISPATCH_BYPASS_ALIAS_MARKERS.iter())
+        .any(|marker| line_contains_marker(line, marker))
+        || line_has_disallowed_operations_root_item(line)
+}
+
+fn dispatch_bypass_marker(line: &str) -> String {
+    for marker in OPERATION_DISPATCH_ROOT_MARKERS {
+        if line_contains_marker(line, marker) {
+            return marker.to_string();
+        }
+    }
+    for marker in DISPATCH_BYPASS_ALIAS_MARKERS {
+        if line_contains_marker(line, marker) {
+            return marker.to_string();
+        }
+    }
+    if line_has_disallowed_operations_root_item(line) {
+        return "loop_engine_core::operations::<root-item>".to_string();
+    }
+    "operation-dispatch bypass".to_string()
 }
 
 fn record_multiline_bypass(
@@ -918,7 +1129,6 @@ mod tests {
         for source in [
             "use std :: { process :: Command as C };",
             "let constructor = std :: process :: Command :: new;",
-            "let constructor = Command::new;",
             "use rusqlite::{Connection as C};",
             "use rusqlite as db;",
             "use loop_engine_core::{operations as ops};",
@@ -928,13 +1138,22 @@ mod tests {
             "use loop_engine_core::*;",
             "use std as standard_library;",
         ] {
-            let detected = PROCESS_CONSTRUCTION_MARKERS
-                .iter()
-                .chain(SQLITE_CONSTRUCTION_MARKERS.iter())
-                .chain(DISPATCH_BYPASS_MARKERS.iter())
-                .any(|marker| line_contains_marker(source, marker));
+            let detected = line_has_process_construction(source)
+                || line_has_sqlite_construction(source)
+                || line_has_dispatch_bypass(source);
             assert!(detected, "alias bypass was not detected: {source}");
         }
+        assert!(
+            !line_has_process_construction("Command::new(\"cli\")"),
+            "bare clap-style Command::new must not require process provenance"
+        );
+        assert!(line_has_dispatch_bypass(
+            "use loop_engine_core::operations::Catalog;"
+        ));
+        assert!(
+            !line_has_dispatch_bypass("use loop_engine_core::operations::run_create;"),
+            "private command adapters may import one matching operation submodule"
+        );
         assert!(source_contains_marker(
             "use loop_engine_core::{\n    operations as ops,\n};",
             "loop_engine_core::{operations"

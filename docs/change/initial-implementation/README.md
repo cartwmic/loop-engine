@@ -2,6 +2,8 @@
 
 **Status:** In progress
 
+> **Amendment (2026-07-22):** the execution plan was restructured after two independent blind assessments ([overengineering-assessment.md](overengineering-assessment.md), [overengineering-assessment-sol.md](overengineering-assessment-sol.md)). Remaining work follows [tasks.md § Amended execution plan](tasks.md#amended-execution-plan-2026-07-22): six work packages WP1–WP6, a staged nine-operation alpha, and retirement of junctions V006–V013/F006–F013. Junction (V/F) language in this document applies historically through V005/F005. Boundary-commit table rows for T120 and later are superseded by the work-package boundary commits named in the amended plan. The candidate-commit ritual, publication gate, review contract, and no-mock/E2E doctrine are unchanged.
+
 This change implements the complete `loop-engine` MVP defined by the foundation documents. The foundation is the sole requirements authority; this change introduces no OpenSpec process or artifacts.
 
 ## Authority

@@ -15,6 +15,7 @@ Related documents:
 - [Testing doctrine](testing.md)
 - [Technology direction](technology.md)
 - [System invariants](invariants.md) — I24, I41, I45
+- [Published schema index](../schemas/index.json)
 
 ## Scope and authority
 
@@ -190,6 +191,16 @@ Export uses independent integer schema fields per artifact. Rules mirror [cli-co
 
 Journal lines reuse `journal_schema_version` from [journal-contract.md](journal-contract.md); export does not define a parallel journal version.
 
+Published JSON Schema artifacts for export payloads are indexed at [schemas/index.json](../schemas/index.json):
+
+| Artifact | Schema path | Version field | Value |
+|---|---|---|---|
+| one `journal.jsonl` line | `schemas/export/v1/journal-line.schema.json` | `journal_schema_version` | `1` |
+| `manifest.json` | `schemas/export/v1/manifest.schema.json` | `export_manifest_schema_version` | `1` |
+| `state.json` | `schemas/export/v1/state.schema.json` | `export_schema_version` | `1` |
+
+Export artifact bytes are **immutable** after successful atomic publication: a published directory is never updated in place, and `run.export` rejects non-empty targets rather than overwriting prior exports.
+
 ## Canonical file encoding
 
 Integration **MUST** encode JSON artifacts deterministically before hashing and write:
@@ -364,6 +375,18 @@ Digest values are computed from the exact example `state.json` and `journal.json
 ```
 
 Exit `0`. Structured mode **MUST NOT** emit artifact bytes on stdout.
+
+## Published export payload schemas
+
+Machine-readable JSON Schemas for `manifest.json`, `state.json`, and one `journal.jsonl` line are listed in [schemas/index.json](../schemas/index.json). Journal line semantics remain owned by [journal-contract.md](journal-contract.md) (`journal_schema_version` `1`); export applies canonical key ordering and minification at write time without defining a parallel journal version.
+
+| Property | Value |
+|---|---|
+| Exposure | **Published** — normative artifact shapes frozen by T015/T116 |
+| Generation | None in repository tooling |
+| Validation | Export encoder and `verify_published_export` integration checks enforce on-disk shapes; no separate schema-file validation command is defined |
+
+Structured CLI success for `run.export` emits exactly one outcome envelope on stdout with `data.export` metadata only; artifact bytes are written only under `--output <DIR>` ([cli-contract.md](cli-contract.md) § Rendering modes).
 
 ## Verification rules (T015)
 

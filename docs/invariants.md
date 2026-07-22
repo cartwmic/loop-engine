@@ -177,6 +177,8 @@ Controlled executable providers, temporary filesystems, legacy data fixtures, an
 
 Every operation **MUST** have a primary valid-path CLI scenario. State-mutating, rejectable, provider-invoking, lifecycle, read, and compatibility-sensitive operations **MUST** additionally cover applicable facets defined in [testing.md](testing.md).
 
+Cross-cutting provider process-failure facets that flow through shared adapter machinery (missing executable, timeout, crash, nonzero exit, signal, malformed/wrong-major/invalid-UTF-8 protocol, oversized output) **MUST** be proven exhaustively through at least one representative provider-invoking operation. Every other provider-invoking operation **MUST** cover its operation-specific outcome facets (including no-mutation proofs) plus at least one representative failure row, and **MAY** satisfy the remaining shared rows by reference to the shared family suite.
+
 ### I31. Defect fixes carry driver-level regression proof
 
 Every corrected behavioral defect **MUST** add or identify a production-driver scenario that reproduces the defect against faulty behavior and passes after correction.

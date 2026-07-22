@@ -610,7 +610,10 @@ fn gate_adapter_requires_exact_verdict_set_and_rejects_misplaced_evidence() {
         let envelope = format!(
             "{{\"protocol_major\":1,\"role\":\"evaluate_gates\",\"invocation_id\":\"request\",\"result\":{result}}}"
         );
-        let provider = config(format!("printf '%s' '{}'", envelope), directory.path());
+        let provider = config(
+            format!("cat >/dev/null; printf '%s' '{}'", envelope),
+            directory.path(),
+        );
         assert!(
             invoker(directory.path(), &format!("gate-invalid-{index}"))
                 .evaluate_gates(&provider, request())
@@ -676,7 +679,10 @@ fn gate_adapter_rejects_duplicate_or_colliding_provider_evidence() {
         let envelope = format!(
             "{{\"protocol_major\":1,\"role\":\"evaluate_gates\",\"invocation_id\":\"request\",\"result\":{result}}}"
         );
-        let provider = config(format!("printf '%s' '{}'", envelope), directory.path());
+        let provider = config(
+            format!("cat >/dev/null; printf '%s' '{}'", envelope),
+            directory.path(),
+        );
         let error = invoker(directory.path(), trace_id)
             .evaluate_gates(&provider, request(inline))
             .unwrap_err();
@@ -750,7 +756,10 @@ fn guidance_and_compatibility_use_bounded_non_authoritative_results_and_stored_g
     assert_eq!(result.fact.outcome, OutcomeClass::Error);
 
     let authoritative = r#"{"protocol_major":1,"role":"live_guidance","invocation_id":"request","result":{"kind":"guidance","text":"go","state":"done"}}"#;
-    let provider = config(format!("printf '%s' '{}'", authoritative), directory.path());
+    let provider = config(
+        format!("cat >/dev/null; printf '%s' '{}'", authoritative),
+        directory.path(),
+    );
     assert!(
         invoker(directory.path(), "guidance-authority")
             .live_guidance(
