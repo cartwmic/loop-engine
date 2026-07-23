@@ -25,8 +25,8 @@ pub(crate) use sandbox::E2eSandbox;
 pub(crate) use sqlite_fixture::{
     CorruptionKind, TombstonedRegistrationSetup, apply_initial_migration, corrupt_database,
     count_journal_entries, count_runs, harness_fixture_db_path, insert_provider_registrations,
-    insert_tombstoned_registration, require_sqlite3, tombstone_provider_registration,
-    validate_tombstoned_registration,
+    insert_tombstoned_registration, require_sqlite3, set_run_projection_state,
+    tombstone_provider_registration, validate_tombstoned_registration,
 };
 pub(crate) use trace::{
     TraceParseError, install_trace_fixture, parse_correlated_trace, parse_correlated_value,

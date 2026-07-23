@@ -111,6 +111,71 @@ pub fn render_human_envelope(envelope: &Value) -> Result<String, OutcomeRenderEr
         }
     }
 
+    if let Some(revision) = data.get("graph_revision").and_then(Value::as_str) {
+        lines.push(format!("Graph revision: {revision}"));
+    }
+
+    if let Some(inputs) = data.get("inputs").and_then(Value::as_object) {
+        let rendered = serde_json::to_string(inputs)
+            .expect("structured outcome data is always JSON serializable");
+        lines.push(format!("Inputs: {rendered}"));
+    }
+
+    if let Some(guidance) = data.get("static_guidance").and_then(Value::as_object) {
+        match guidance.get("kind").and_then(Value::as_str) {
+            Some("text") => lines.push(format!(
+                "Guidance: {}",
+                guidance.get("text").and_then(Value::as_str).unwrap_or("")
+            )),
+            Some("none_required") => lines.push("Guidance: no additional guidance required".into()),
+            _ => {}
+        }
+    }
+
+    if let Some(capability) = data.get("live_guidance").and_then(Value::as_str) {
+        lines.push(format!("Live guidance: {capability}"));
+    }
+
+    if let Some(selected) = data.get("selected_evidence").and_then(Value::as_array) {
+        if selected.is_empty() {
+            lines.push("Selected evidence: none".into());
+        } else {
+            lines.push(format!(
+                "Selected evidence: {}",
+                selected
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    }
+
+    if let Some(details) = data
+        .get("requestable_event_details")
+        .and_then(Value::as_array)
+        && !details.is_empty()
+    {
+        lines.push("Requestable event details:".into());
+        for detail in details {
+            let event = detail.get("event").and_then(Value::as_str).unwrap_or("");
+            let target = detail.get("target").and_then(Value::as_str).unwrap_or("");
+            let gates = detail
+                .get("required_gates")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>();
+            let gates = if gates.is_empty() {
+                "none".to_owned()
+            } else {
+                gates.join(", ")
+            };
+            lines.push(format!("  {event} -> {target} (required gates: {gates})"));
+        }
+    }
+
     if let Some(status) = data.get("evidence_recorded") {
         lines.extend(render_evidence_recorded(status, outcome));
     }

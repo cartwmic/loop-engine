@@ -176,6 +176,10 @@ fn list_operations_json_reports_exposed_routes_and_trace_lifecycle() {
                 "argv": "run terminate <RUN-ID> [--note <TEXT>]"
             },
             {
+                "id": "run.show",
+                "argv": "run show <RUN-ID>"
+            },
+            {
                 "id": "run.history",
                 "argv": "run history <RUN-ID> [--cursor <CURSOR>] [--limit <COUNT>]"
             }
@@ -207,6 +211,7 @@ fn list_operations_human_reports_exposed_routes_and_trace_lifecycle() {
             "run.create\trun create <TARGET> [--label <LABEL>] [--inputs <PATH>]\n",
             "run.list\trun list [--terminal] [--all] [--cursor <CURSOR>] [--limit <COUNT>]\n",
             "run.terminate\trun terminate <RUN-ID> [--note <TEXT>]\n",
+            "run.show\trun show <RUN-ID>\n",
             "run.history\trun history <RUN-ID> [--cursor <CURSOR>] [--limit <COUNT>]\n",
         )
     );
@@ -227,7 +232,7 @@ fn unexposed_application_argv_is_rejected_before_database_open() {
             "--format",
             "json",
             "run",
-            "show",
+            "graph",
             "019f0000-0000-7000-8000-000000000001",
         ])
         .assert()

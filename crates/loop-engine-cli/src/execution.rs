@@ -2,6 +2,7 @@ use loop_engine_core::capabilities::id_generator::IdGenerator;
 use loop_engine_core::capabilities::provider_invoker::{CompatibilityRequest, InvocationError};
 use loop_engine_core::capabilities::time::TimeSource;
 use loop_engine_core::model::attempt::{AttemptFacts, JournalExtension};
+use loop_engine_core::model::guidance::{LiveGuidanceCapability, StaticGuidance};
 use loop_engine_core::model::journal::JournalDraft;
 use loop_engine_core::model::lifecycle::Lifecycle;
 use loop_engine_core::model::outcome::{OutcomeClass, OutcomeData, PublicOutcome, RunSnapshot};
@@ -23,6 +24,7 @@ use loop_engine_integrations::persistence::{
 };
 use loop_engine_integrations::provider_protocol::AdapterError;
 use loop_engine_integrations::provider_protocol::bounded_run_snapshot;
+use loop_engine_integrations::provider_protocol::canonical::value_from_core;
 use loop_engine_integrations::run_inputs::{RunInputLoadError, load_optional as load_run_inputs};
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -37,7 +39,7 @@ use crate::commands::run::{
     RunCreateDelivery, RunCreateRequest, RunHistoryError, RunHistoryRequest, RunListError,
     RunListRequest, RunMapError, RunTerminateDelivery, build_terminate_command, create, history,
     list, map_create_delivery, map_history_request, map_list_request as map_run_list_request,
-    map_terminate_delivery, terminate,
+    map_show_run_id, map_terminate_delivery, show, terminate,
 };
 use crate::composition::Application;
 use crate::dispatch::{
@@ -81,6 +83,10 @@ pub enum PreparedApplicationCommand {
     RunList {
         request: Value,
         command: RunListRequest,
+    },
+    RunShow {
+        request: Value,
+        run_id: loop_engine_core::model::ids::RunId,
     },
     RunHistory {
         request: Value,
@@ -175,6 +181,13 @@ pub fn prepare_application_command(
             Ok(PreparedApplicationCommand::RunList {
                 request,
                 command: map_run_list_request(&parsed)?,
+            })
+        }
+        PlannedCommand::RunShow(parsed) => {
+            let request = json!({"run_id": parsed.run_id.as_str()});
+            Ok(PreparedApplicationCommand::RunShow {
+                request,
+                run_id: map_show_run_id(&parsed)?,
             })
         }
         PlannedCommand::RunHistory(parsed) => {
@@ -274,6 +287,17 @@ pub fn execute_application_command(
                     operation_data: json!({}),
                 },
                 || Ok(execute_run_list(application, command)),
+            )
+        }
+        PreparedApplicationCommand::RunShow { request, run_id } => {
+            dispatch_traced_operation_with_data(
+                &application.trace,
+                TracedDispatchInput {
+                    operation: operation_id("run.show"),
+                    request,
+                    operation_data: json!({}),
+                },
+                || Ok(execute_show(application, &run_id)),
             )
         }
         PreparedApplicationCommand::RunHistory { request, command } => {
@@ -523,6 +547,73 @@ fn execute_run_list(
         }
         Err(error) => delivered(
             failed(run_list_reason(&error), error.to_string()),
+            json!({}),
+            false,
+        ),
+    }
+}
+
+fn execute_show(
+    application: &Application,
+    run_id: &loop_engine_core::model::ids::RunId,
+) -> (TracedOperationResult, Value) {
+    match show(&application.run_reads, run_id) {
+        Ok(projection) => {
+            let snapshot = RunSnapshot {
+                run_id: projection.run_id.clone(),
+                label: projection.label.clone(),
+                lifecycle: projection.lifecycle,
+                current_state: projection.current_state.clone(),
+                state_changed: false,
+            };
+            let inputs = projection
+                .inputs
+                .values()
+                .iter()
+                .map(|(name, value)| (name.as_str().to_owned(), value_from_core(value)))
+                .collect::<serde_json::Map<_, _>>();
+            let static_guidance = match &projection.static_guidance {
+                StaticGuidance::Text(text) => json!({
+                    "kind": "text",
+                    "text": text.as_str(),
+                }),
+                StaticGuidance::NoneRequired => json!({"kind": "none_required"}),
+            };
+            let live_guidance = match projection.live_guidance {
+                LiveGuidanceCapability::Supported => "supported",
+                LiveGuidanceCapability::Unsupported => "unsupported",
+            };
+            let event_details = projection
+                .requestable_events
+                .iter()
+                .map(|event| {
+                    json!({
+                        "event": event.event.as_str(),
+                        "target": event.target.as_str(),
+                        "required_gates": event.required_gates.iter().map(|gate| gate.as_str()).collect::<Vec<_>>(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            let selected_evidence = projection
+                .selected_evidence
+                .iter()
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>();
+            delivered(
+                completed_with_run_snapshot(snapshot, projection.requestable_events),
+                json!({
+                    "graph_revision": projection.graph_revision.as_str(),
+                    "inputs": inputs,
+                    "static_guidance": static_guidance,
+                    "live_guidance": live_guidance,
+                    "selected_evidence": selected_evidence,
+                    "requestable_event_details": event_details,
+                }),
+                false,
+            )
+        }
+        Err(error) => delivered(
+            failed(run_read_reason(&error), error.to_string()),
             json!({}),
             false,
         ),

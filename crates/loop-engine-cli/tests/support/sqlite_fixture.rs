@@ -142,6 +142,27 @@ fn count_rows(db_path: &Path, table: &str) -> Result<u64, SqliteFixtureError> {
         .map_err(|error| SqliteFixtureError::Io(error.to_string()))
 }
 
+pub fn set_run_projection_state(
+    db_path: &Path,
+    run_id: &str,
+    state: &str,
+    lifecycle: &str,
+) -> Result<(), SqliteFixtureError> {
+    let run_id = sql_string(run_id);
+    let state = sql_string(state);
+    let lifecycle = sql_string(lifecycle);
+    run_sqlite(
+        db_path,
+        &format!(
+            "UPDATE runs
+             SET current_state = {state}, lifecycle = {lifecycle},
+                 workflow_state_version = workflow_state_version + 1,
+                 lifecycle_version = lifecycle_version + 1
+             WHERE run_id = {run_id};"
+        ),
+    )
+}
+
 pub fn tombstone_provider_registration(
     db_path: &Path,
     registration_id: &str,

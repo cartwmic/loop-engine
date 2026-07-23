@@ -18,7 +18,7 @@ Related documents:
 
 Production binary name: `loop-engine`.
 
-MVP's final catalog contains exactly **21** application operations in two namespaces (`provider.*`, `run.*`). During the 2026-07-22 staged implementation, `--list-operations` reports only checkpoint-closed runtime routes; Checkpoints A and B expose `provider.add`, `provider.list`, `provider.check`, `run.create`, `run.list`, `run.terminate`, and `run.history`. Final closure requires all 21 IDs. No additional application operation, alias, or hidden route is permitted without reopening D004. CLI `--help`, `--version`, pre-dispatch usage display, and `--list-operations` are driver functions, not application operations ([operation-catalog.md](operation-catalog.md) § Explicit non-operations).
+MVP's final catalog contains exactly **21** application operations in two namespaces (`provider.*`, `run.*`). During the 2026-07-22 staged implementation, `--list-operations` reports only checkpoint-closed runtime routes; Checkpoints A through C expose `provider.add`, `provider.list`, `provider.check`, `run.create`, `run.list`, `run.terminate`, `run.show`, and `run.history`. Final closure requires all 21 IDs. No additional application operation, alias, or hidden route is permitted without reopening D004. CLI `--help`, `--version`, pre-dispatch usage display, and `--list-operations` are driver functions, not application operations ([operation-catalog.md](operation-catalog.md) § Explicit non-operations).
 
 ## Schema versioning
 
@@ -536,6 +536,21 @@ String array of event names permitted from current stored graph when the run rem
 | Run not resolved (for example `run.not_found`, `run.create` error before run exists) | omitted |
 | Operation is not run-scoped (for example `provider.list`, `provider.add`) | omitted |
 
+### Current-work projection (`run.show`)
+
+Successful `run.show` adds these provider-free fields beside `data.run` and `data.requestable_events`:
+
+| Field | Type | Description |
+|---|---|---|
+| `graph_revision` | string | Immutable stored graph revision digest |
+| `inputs` | object | Immutable accepted non-secret run-input values reconstructed from persistence |
+| `static_guidance` | object | `{ "kind": "text", "text": "..." }` or `{ "kind": "none_required" }` for current state |
+| `live_guidance` | string | `supported` or `unsupported` capability declared by stored graph |
+| `selected_evidence` | array of strings | Caller-owned current selection; `run.show` has no selection input and returns `[]` |
+| `requestable_event_details` | array of objects | Stored event, target state, and `required_gates` array for each requestable event |
+
+`requestable_event_details[*].event` corresponds one-for-one and in same order with `data.requestable_events`. Final, terminated, and active sink projections return both arrays empty. This read never resolves or invokes current provider configuration.
+
 ### Evidence-recorded status (`data.evidence_recorded`)
 
 Present on applicable mutation attempts after run lookup.
@@ -606,6 +621,9 @@ Human rendering presents the same semantic fields as structured `data`, `outcome
 | `Run:` / `Lifecycle:` / `State:` | `data.run.id`, `data.run.lifecycle`, `data.run.state` | run-scoped operations with resolved run | per outcome |
 | `State changed: yes\|no` or `(unchanged)` suffix | `data.run.state_changed` | run-scoped mutations and reads that report change | per outcome |
 | `Requestable events:` list | `data.requestable_events` (required `[]` when lifecycle is `final` or `terminated`) | run-scoped operations with resolved run | per outcome |
+| `Graph revision:` / `Inputs:` | `data.graph_revision`, `data.inputs` | `run.show` | `0` |
+| `Guidance:` / `Live guidance:` | `data.static_guidance`, `data.live_guidance` | `run.show` | `0` |
+| `Selected evidence:` / `Requestable event details:` | `data.selected_evidence`, `data.requestable_event_details` | `run.show` | `0` |
 | `Registration ID:` / `Handle:` | `data.registration.id`, `data.registration.handle` | provider-catalog mutations and reads | per outcome |
 | `Protocol major:` | `data.conformance.protocol_major` | `provider.check` | per outcome |
 | `Graph: valid\|invalid` | `data.conformance.graph_status` | `provider.check` (default conformance) | per outcome |

@@ -1,4 +1,4 @@
-use crate::capabilities::run_reader::RunReader;
+use crate::capabilities::run_reader::RunLookup;
 use crate::model::guidance::{LiveGuidanceCapability, StaticGuidance};
 use crate::model::ids::{EvidenceId, GraphRevision, RunId, StateId};
 use crate::model::lifecycle::Lifecycle;
@@ -9,6 +9,7 @@ use crate::model::run_input::RunInputs;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunShow {
     pub run_id: RunId,
+    pub label: Option<String>,
     pub graph_revision: GraphRevision,
     pub lifecycle: Lifecycle,
     pub current_state: StateId,
@@ -19,8 +20,10 @@ pub struct RunShow {
     pub requestable_events: Vec<RequestableEvent>,
 }
 
-pub fn execute<R: RunReader>(reader: &R, run_id: &RunId) -> Result<RunShow, R::Error> {
-    reader.get(run_id).map(|run| project(&run))
+pub fn execute<R: RunLookup>(reader: &R, run_id: &RunId) -> Result<RunShow, R::Error> {
+    reader
+        .get_for_operation("run.show", run_id)
+        .map(|run| project(&run))
 }
 
 pub fn project(run: &Run) -> RunShow {
@@ -30,6 +33,7 @@ pub fn project(run: &Run) -> RunShow {
         .expect("run current state is validated");
     RunShow {
         run_id: run.id().clone(),
+        label: run.label().map(str::to_owned),
         graph_revision: run.graph_revision().clone(),
         lifecycle: run.lifecycle(),
         current_state: run.current_state().clone(),
@@ -49,6 +53,7 @@ mod tests {
         let show = super::project(&run);
         assert_eq!(show.run_id, *run.id());
         assert_eq!(show.current_state, *run.current_state());
+        assert_eq!(show.label.as_deref(), run.label());
         assert!(show.selected_evidence.is_empty());
     }
 }

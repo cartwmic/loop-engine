@@ -70,6 +70,7 @@ pub const EXPOSED_OPERATION_IDS: &[&str] = &[
     "run.create",
     "run.list",
     "run.terminate",
+    "run.show",
     "run.history",
 ];
 
@@ -88,7 +89,7 @@ mod tests {
     use super::{OperationId, exposed_operations};
 
     #[test]
-    fn planned_ids_are_unique_and_runtime_set_matches_first_exposure() {
+    fn planned_ids_are_unique_and_runtime_set_matches_checkpoint_c() {
         let planned = OperationId::planned().collect::<Vec<_>>();
         assert_eq!(planned.len(), 21);
         assert_eq!(planned.iter().copied().collect::<BTreeSet<_>>().len(), 21);
@@ -104,6 +105,7 @@ mod tests {
                 "run.create",
                 "run.list",
                 "run.terminate",
+                "run.show",
                 "run.history",
             ]
         );

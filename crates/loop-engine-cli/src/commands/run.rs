@@ -14,7 +14,7 @@ use loop_engine_core::capabilities::persistence_commands::{
 use loop_engine_core::capabilities::provider_catalog::ProviderCatalog;
 use loop_engine_core::capabilities::provider_invoker::ProviderInvoker;
 use loop_engine_core::capabilities::run_reader::{
-    RunCatalogReader, RunHistoryReader, RunListFilter, RunListRow, RunReader,
+    RunCatalogReader, RunHistoryReader, RunListFilter, RunListRow, RunLookup, RunReader,
 };
 use loop_engine_core::capabilities::run_writer::RunWriter;
 use loop_engine_core::capabilities::{Page, PageRequest};
@@ -469,7 +469,7 @@ pub fn list<R: RunCatalogReader>(
     Ok(map_list_page(page))
 }
 
-pub fn show<R: RunReader>(reader: &R, run_id: &RunId) -> Result<RunShow, R::Error> {
+pub fn show<R: RunLookup>(reader: &R, run_id: &RunId) -> Result<RunShow, R::Error> {
     run_show::execute(reader, run_id)
 }
 

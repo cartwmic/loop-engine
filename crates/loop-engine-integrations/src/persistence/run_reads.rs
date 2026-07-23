@@ -929,6 +929,7 @@ mod tests {
         let show: RunShow = reader.show(&run_id).unwrap();
         let graph: StoredGraph = reader.graph(&run_id).unwrap();
         assert_eq!(show.run_id, run_id);
+        assert_eq!(show.label.as_deref(), Some("active-run"));
         assert_eq!(
             graph.revision.as_str(),
             graph_revision_for_json(MINIMAL_GRAPH_JSON).as_str()
