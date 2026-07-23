@@ -6,7 +6,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use loop_engine_core::capabilities::run_reader::{RunListFilter, RunListRow};
+use loop_engine_core::capabilities::run_reader::{
+    RunCatalogReader, RunListFilter, RunListRow, RunLookup,
+};
 use loop_engine_core::capabilities::{Page, PageCursor, PageRequest};
 use loop_engine_core::model::bounded::OPAQUE_INTEGRITY_WIRE_UTF8_BYTES;
 use loop_engine_core::model::ids::{IdentifierError, RunId, StateId};
@@ -58,9 +60,17 @@ impl SqliteRunReads {
     }
 
     pub fn get(&self, run_id: &RunId) -> Result<Run, RunReadError> {
+        self.get_for_operation("run.show", run_id)
+    }
+
+    pub fn get_for_operation(
+        &self,
+        operation_id: &'static str,
+        run_id: &RunId,
+    ) -> Result<Run, RunReadError> {
         close_read(
             &self.trace,
-            "run.show",
+            operation_id,
             MutationClass::ReadOnly,
             || self.get_impl(run_id),
             |_| ReadCompleteExtras::default(),
@@ -196,6 +206,26 @@ impl SqliteRunReads {
 
     fn connect(&self) -> Result<Connection, RunReadError> {
         connect_read_only_with_pragmas(&self.path).map_err(RunReadError::from)
+    }
+}
+
+impl RunLookup for SqliteRunReads {
+    type Error = RunReadError;
+
+    fn get_for_operation(
+        &self,
+        operation_id: &'static str,
+        run_id: &RunId,
+    ) -> Result<Run, Self::Error> {
+        SqliteRunReads::get_for_operation(self, operation_id, run_id)
+    }
+}
+
+impl RunCatalogReader for SqliteRunReads {
+    type Error = RunReadError;
+
+    fn list(&self, request: &PageRequest<RunListFilter>) -> Result<Page<RunListRow>, Self::Error> {
+        SqliteRunReads::list(self, request)
     }
 }
 

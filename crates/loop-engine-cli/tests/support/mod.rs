@@ -24,7 +24,7 @@ pub(crate) use provider::{
 pub(crate) use sandbox::E2eSandbox;
 pub(crate) use sqlite_fixture::{
     CorruptionKind, TombstonedRegistrationSetup, apply_initial_migration, corrupt_database,
-    count_journal_entries, harness_fixture_db_path, insert_provider_registrations,
+    count_journal_entries, count_runs, harness_fixture_db_path, insert_provider_registrations,
     insert_tombstoned_registration, require_sqlite3, tombstone_provider_registration,
     validate_tombstoned_registration,
 };

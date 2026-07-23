@@ -122,7 +122,7 @@ where
             &mut command,
         );
     }
-    let config = match catalog.resolve_enabled(run.registration_id()) {
+    let config = match catalog.resolve_enabled("run.guidance", run.registration_id()) {
         Ok(config) => config,
         Err(error) => {
             return persist_resolution(

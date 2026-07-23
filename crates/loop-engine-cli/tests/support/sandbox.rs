@@ -1,8 +1,8 @@
 //! Isolated E2E sandbox with private machine-local roots (T143).
 
-use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tempfile::TempDir;
 
@@ -36,7 +36,7 @@ pub struct E2eSandbox {
     provider_cwd: Option<TempDir>,
     provider_cwd_path: PathBuf,
     transcripts_dir: PathBuf,
-    next_transcript: Cell<u64>,
+    next_transcript: AtomicU64,
 }
 
 impl E2eSandbox {
@@ -58,7 +58,7 @@ impl E2eSandbox {
             provider_cwd: Some(provider_cwd),
             provider_cwd_path,
             transcripts_dir,
-            next_transcript: Cell::new(0),
+            next_transcript: AtomicU64::new(0),
         }
     }
 
@@ -91,8 +91,7 @@ impl E2eSandbox {
     }
 
     pub fn allocate_transcript_path(&self, label: &str) -> PathBuf {
-        let index = self.next_transcript.get();
-        self.next_transcript.set(index + 1);
+        let index = self.next_transcript.fetch_add(1, Ordering::Relaxed);
         self.transcripts_dir
             .join(format!("{index:04}-{label}.json"))
     }

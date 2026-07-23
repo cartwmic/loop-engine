@@ -1,7 +1,7 @@
 use crate::capabilities::persistence_commands::{
     AppendAnnotationCommand, AppendCompatibilityAttemptCommand, AppendEvidenceCommand,
     AppendGuidanceAttemptCommand, CommitStatus, CreateRunCommand, ReplaceLabelCommand,
-    TerminateRunCommand,
+    TerminateCommit, TerminateRunCommand,
 };
 
 /// Atomic run/state/journal writes. No method exposes a partial save.
@@ -15,7 +15,7 @@ pub trait RunWriter {
         command: AppendAnnotationCommand,
     ) -> Result<CommitStatus, Self::Error>;
     fn replace_label(&self, command: ReplaceLabelCommand) -> Result<CommitStatus, Self::Error>;
-    fn terminate(&self, command: TerminateRunCommand) -> Result<CommitStatus, Self::Error>;
+    fn terminate(&self, command: TerminateRunCommand) -> Result<TerminateCommit, Self::Error>;
     fn append_guidance_attempt(
         &self,
         command: AppendGuidanceAttemptCommand,

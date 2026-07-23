@@ -14,7 +14,7 @@ use loop_engine_core::capabilities::provider_catalog::{
 use loop_engine_core::capabilities::provider_invoker::{
     CompatibilityRequest, CompatibilityResult, DescribeRequest, ProviderInvoker,
 };
-use loop_engine_core::capabilities::run_reader::RunReader;
+use loop_engine_core::capabilities::run_reader::RunLookup;
 use loop_engine_core::model::bounded::{BoundError, PROVIDER_TIMEOUT_SECONDS_DEFAULT};
 use loop_engine_core::model::ids::{IdentifierError, ProviderHandle, RegistrationId, RequestId};
 use loop_engine_core::model::provider::ProviderRegistration;
@@ -69,10 +69,11 @@ pub fn map_target(target: &SyntaxProviderTarget) -> Result<ProviderTargetRef, Pr
 /// Resolve a validated target through the authoritative catalog capability.
 pub fn resolve_target<C: ProviderCatalog>(
     catalog: &C,
+    operation_id: &'static str,
     target: &ProviderTargetRef,
 ) -> Result<ProviderCatalogRow, C::Error> {
     match target {
-        ProviderTargetRef::Handle(handle) => match catalog.resolve_handle(handle) {
+        ProviderTargetRef::Handle(handle) => match catalog.resolve_handle(operation_id, handle) {
             Ok(row) => Ok(row),
             Err(error)
                 if C::classify_resolve_failure(&error) == ProviderResolveFailure::Missing =>
@@ -80,13 +81,13 @@ pub fn resolve_target<C: ProviderCatalog>(
                 let registration_id = RegistrationId::parse(handle.as_str())
                     .expect("validated provider handle is a valid opaque registration ID");
                 catalog
-                    .resolve_enabled(&registration_id)
+                    .resolve_enabled(operation_id, &registration_id)
                     .map(catalog_row_from_resolved)
             }
             Err(error) => Err(error),
         },
         ProviderTargetRef::RegistrationId(registration_id) => catalog
-            .resolve_enabled(registration_id)
+            .resolve_enabled(operation_id, registration_id)
             .map(catalog_row_from_resolved),
     }
 }
@@ -590,7 +591,7 @@ pub fn check<C, R, I, D, G, Z, Q, E>(
 >
 where
     C: ProviderCatalog,
-    R: RunReader,
+    R: RunLookup,
     I: ProviderInvoker,
     D: DigestComputer,
     D::Error: std::fmt::Display,
@@ -741,6 +742,7 @@ mod tests {
 
         fn resolve_enabled(
             &self,
+            _operation_id: &'static str,
             registration_id: &RegistrationId,
         ) -> Result<ResolvedProviderConfig, Self::Error> {
             assert_eq!(registration_id, &self.registration_id);
@@ -755,6 +757,7 @@ mod tests {
 
         fn resolve_handle(
             &self,
+            _operation_id: &'static str,
             _handle: &ProviderHandle,
         ) -> Result<ProviderCatalogRow, Self::Error> {
             Err(ResolveError::Missing)
@@ -807,7 +810,7 @@ mod tests {
         let target =
             ProviderTargetRef::Handle(ProviderHandle::parse(registration_id.as_str()).unwrap());
 
-        let row = resolve_target(&catalog, &target).unwrap();
+        let row = resolve_target(&catalog, "provider.check", &target).unwrap();
 
         assert_eq!(row.registration.id(), &registration_id);
     }

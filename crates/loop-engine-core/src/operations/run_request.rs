@@ -194,7 +194,7 @@ where
             &mut command,
         ),
         Err(DecisionError::GatesRequired) => {
-            let config = match catalog.resolve_enabled(run.registration_id()) {
+            let config = match catalog.resolve_enabled("run.request", run.registration_id()) {
                 Ok(config) => config,
                 Err(error) => {
                     return commit_resolution(

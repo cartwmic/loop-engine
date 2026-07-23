@@ -112,6 +112,39 @@ impl SqliteProviderCatalog {
         connect_with_pragmas(&self.path).map_err(CatalogPersistenceError::from)
     }
 
+    /// Mint continuation after last fully checked active run.
+    pub fn provider_check_cursor_after(
+        &self,
+        registration_id: &RegistrationId,
+        run_id: &RunId,
+    ) -> Result<PageCursor, CatalogPersistenceError> {
+        close_read(
+            &self.trace,
+            "provider.check",
+            MutationClass::ReadOnly,
+            || {
+                let conn = self.connect_read()?;
+                let row = load_registration_row(&conn, registration_id.as_str())?
+                    .ok_or(CatalogPersistenceError::NotFound)?;
+                if row.enabled == 0 {
+                    return Err(CatalogPersistenceError::Disabled);
+                }
+                let key = read_integrity_key(&conn)?;
+                let fingerprint = registration_active_runs_filter_fingerprint(registration_id)?;
+                mint_active_runs_cursor(
+                    &key,
+                    COLLECTION_REGISTRATION_ACTIVE_RUNS,
+                    &fingerprint,
+                    run_id.as_str(),
+                    None,
+                )
+            },
+            |_| ReadCompleteExtras::default(),
+            catalog_read_rejected,
+            catalog_read_failure,
+        )
+    }
+
     /// Paginated disable warning traversal with cursor v1 integrity and final-page ack minting.
     pub fn disable_warnings_page(
         &self,
@@ -209,11 +242,12 @@ impl ProviderCatalog for SqliteProviderCatalog {
 
     fn resolve_enabled(
         &self,
+        operation_id: &'static str,
         registration_id: &RegistrationId,
     ) -> Result<ResolvedProviderConfig, Self::Error> {
         close_read(
             &self.trace,
-            "provider.check",
+            operation_id,
             MutationClass::ReadOnly,
             || {
                 let conn = self.connect_read()?;
@@ -230,10 +264,14 @@ impl ProviderCatalog for SqliteProviderCatalog {
         )
     }
 
-    fn resolve_handle(&self, handle: &ProviderHandle) -> Result<ProviderCatalogRow, Self::Error> {
+    fn resolve_handle(
+        &self,
+        operation_id: &'static str,
+        handle: &ProviderHandle,
+    ) -> Result<ProviderCatalogRow, Self::Error> {
         close_read(
             &self.trace,
-            "provider.check",
+            operation_id,
             MutationClass::ReadOnly,
             || {
                 let conn = self.connect_read()?;
@@ -2169,10 +2207,12 @@ mod tests {
                 config: sample_config(),
             })
             .unwrap();
-        let resolved = catalog.resolve_enabled(&registration_id).unwrap();
+        let resolved = catalog
+            .resolve_enabled("provider.check", &registration_id)
+            .unwrap();
         assert_eq!(resolved.config_revision(), 1);
         assert_eq!(resolved.handle().as_str(), "provider-a");
-        let by_handle = catalog.resolve_handle(&handle).unwrap();
+        let by_handle = catalog.resolve_handle("provider.check", &handle).unwrap();
         assert!(by_handle.registration.enabled());
         let updated_config = ProviderConfig::new("/bin/provider2", vec![], "/work2", 120).unwrap();
         catalog
@@ -2184,7 +2224,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             catalog
-                .resolve_enabled(&registration_id)
+                .resolve_enabled("provider.check", &registration_id)
                 .unwrap()
                 .config_revision(),
             2
@@ -2199,14 +2239,14 @@ mod tests {
             .unwrap();
         assert_eq!(
             catalog
-                .resolve_enabled(&registration_id)
+                .resolve_enabled("provider.check", &registration_id)
                 .unwrap()
                 .config_revision(),
             2
         );
         assert_eq!(
             catalog
-                .resolve_enabled(&registration_id)
+                .resolve_enabled("provider.check", &registration_id)
                 .unwrap()
                 .handle()
                 .as_str(),
@@ -2237,7 +2277,11 @@ mod tests {
                 acknowledgement: warning.acknowledgement.unwrap(),
             })
             .unwrap();
-        assert!(catalog.resolve_enabled(&registration_id).is_err());
+        assert!(
+            catalog
+                .resolve_enabled("provider.check", &registration_id)
+                .is_err()
+        );
         let restored_handle = ProviderHandle::parse("provider-restored").unwrap();
         let tombstone = catalog
             .list(
@@ -2262,7 +2306,11 @@ mod tests {
                 config: sample_config(),
             })
             .unwrap();
-        assert!(catalog.resolve_enabled(&registration_id).is_ok());
+        assert!(
+            catalog
+                .resolve_enabled("provider.check", &registration_id)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -2377,7 +2425,14 @@ mod tests {
                 config: sample_config(),
             })
             .unwrap();
-        assert!(catalog.resolve_handle(&handle).unwrap().registration.id() == &second_id);
+        assert!(
+            catalog
+                .resolve_handle("provider.check", &handle)
+                .unwrap()
+                .registration
+                .id()
+                == &second_id
+        );
     }
 
     #[test]

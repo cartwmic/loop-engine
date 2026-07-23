@@ -381,6 +381,17 @@ fn driver_catalog_operations() -> Vec<(&'static str, &'static str)> {
                 "provider.list" => {
                     "provider list [--enabled] [--tombstoned] [--active-runs-for <REGISTRATION-ID>] [--cursor <CURSOR>] [--limit <COUNT>]"
                 }
+                "provider.check" => {
+                    "provider check <TARGET> [--active-runs] [--cursor <CURSOR>] [--limit <COUNT>]"
+                }
+                "run.create" => "run create <TARGET> [--label <LABEL>] [--inputs <PATH>]",
+                "run.list" => {
+                    "run list [--terminal] [--all] [--cursor <CURSOR>] [--limit <COUNT>]"
+                }
+                "run.terminate" => "run terminate <RUN-ID> [--note <TEXT>]",
+                "run.history" => {
+                    "run history <RUN-ID> [--cursor <CURSOR>] [--limit <COUNT>]"
+                }
                 _ => unreachable!("driver catalog entry must own an argv template"),
             };
             (id, argv)

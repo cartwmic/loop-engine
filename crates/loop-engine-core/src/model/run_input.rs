@@ -109,20 +109,7 @@ impl InputDeclarations {
                 return Err(InputError::Missing(declaration.name.to_string()));
             }
         }
-        let total = values
-            .iter()
-            .map(|(name, value)| name.as_str().len() + 3 + value.json_encoded_size())
-            .sum::<usize>()
-            .saturating_add(values.len().saturating_sub(1))
-            .saturating_add(2);
-        if total > RUN_INPUTS_ENCODED_TOTAL_BYTES {
-            return Err(BoundError::EncodedTooLarge {
-                field: "run_inputs",
-                max: RUN_INPUTS_ENCODED_TOTAL_BYTES,
-                actual: total,
-            }
-            .into());
-        }
+        validate_run_inputs_total(&values)?;
         Ok(RunInputs(values))
     }
 }
@@ -134,11 +121,50 @@ impl RunInputs {
     pub fn values(&self) -> &BTreeMap<InputName, Value> {
         &self.0
     }
+
+    /// Accept wire-level candidate values before provider declaration checks.
+    pub fn from_wire_candidate(candidate: Vec<(InputName, Value)>) -> Result<Self, InputError> {
+        let mut seen = BTreeSet::new();
+        let mut values = BTreeMap::new();
+        for (name, value) in candidate {
+            if !seen.insert(name.clone()) {
+                return Err(InputError::DuplicateValue(name.to_string()));
+            }
+            value.validate(
+                "run_inputs",
+                METADATA_NESTING_DEPTH,
+                RUN_INPUTS_ENCODED_TOTAL_BYTES,
+            )?;
+            values.insert(name, value);
+        }
+        validate_run_inputs_total(&values)?;
+        Ok(Self(values))
+    }
+}
+
+fn validate_run_inputs_total(values: &BTreeMap<InputName, Value>) -> Result<(), InputError> {
+    let total = values
+        .iter()
+        .map(|(name, value)| name.as_str().len() + 3 + value.json_encoded_size())
+        .sum::<usize>()
+        .saturating_add(values.len().saturating_sub(1))
+        .saturating_add(2);
+    if total > RUN_INPUTS_ENCODED_TOTAL_BYTES {
+        return Err(BoundError::EncodedTooLarge {
+            field: "run_inputs",
+            max: RUN_INPUTS_ENCODED_TOTAL_BYTES,
+            actual: total,
+        }
+        .into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{InputDeclaration, InputDeclarations, InputError, InputKind, InputName, Value};
+    use super::{
+        InputDeclaration, InputDeclarations, InputError, InputKind, InputName, RunInputs, Value,
+    };
 
     fn declaration(name: &str, required: bool) -> InputDeclaration {
         InputDeclaration::new(
@@ -147,6 +173,24 @@ mod tests {
             required,
             None,
         )
+    }
+
+    #[test]
+    fn wire_candidate_accepts_values_and_enforces_total_bounds() {
+        let name = InputName::parse("artifact-root").unwrap();
+        let inputs =
+            RunInputs::from_wire_candidate(vec![(name.clone(), Value::String("/tmp/work".into()))])
+                .expect("wire candidate accepts bounded values");
+        assert_eq!(
+            inputs.values().get(&name).unwrap(),
+            &Value::String("/tmp/work".into())
+        );
+        assert!(
+            RunInputs::from_wire_candidate(vec![])
+                .unwrap()
+                .values()
+                .is_empty()
+        );
     }
 
     #[test]

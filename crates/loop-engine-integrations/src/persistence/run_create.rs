@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use loop_engine_core::capabilities::persistence_commands::{
     AppendAnnotationCommand, AppendCompatibilityAttemptCommand, AppendEvidenceCommand,
     AppendGuidanceAttemptCommand, CommitStatus, CreateRunCommand, ReplaceLabelCommand,
-    TerminateRunCommand,
+    TerminateCommit, TerminateRunCommand,
 };
 use loop_engine_core::capabilities::run_writer::RunWriter;
 use loop_engine_core::model::attempt::{
@@ -176,7 +176,7 @@ impl RunWriter for SqliteRunWriter {
         Err(RunCreateError::UnsupportedOperation("replace_label"))
     }
 
-    fn terminate(&self, _command: TerminateRunCommand) -> Result<CommitStatus, Self::Error> {
+    fn terminate(&self, _command: TerminateRunCommand) -> Result<TerminateCommit, Self::Error> {
         Err(RunCreateError::UnsupportedOperation("terminate"))
     }
 

@@ -58,6 +58,14 @@ impl SemanticOutcome {
         }
     }
 
+    pub fn outcome_class(self) -> OutcomeClass {
+        match self {
+            Self::Completed => OutcomeClass::Completed,
+            Self::Rejected => OutcomeClass::Rejected,
+            Self::Error => OutcomeClass::Error,
+        }
+    }
+
     pub fn from_outcome_class(outcome: OutcomeClass) -> Self {
         match outcome {
             OutcomeClass::Completed => Self::Completed,

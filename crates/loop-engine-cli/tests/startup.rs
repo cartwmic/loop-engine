@@ -158,6 +158,26 @@ fn list_operations_json_reports_exposed_routes_and_trace_lifecycle() {
             {
                 "id": "provider.list",
                 "argv": "provider list [--enabled] [--tombstoned] [--active-runs-for <REGISTRATION-ID>] [--cursor <CURSOR>] [--limit <COUNT>]"
+            },
+            {
+                "id": "provider.check",
+                "argv": "provider check <TARGET> [--active-runs] [--cursor <CURSOR>] [--limit <COUNT>]"
+            },
+            {
+                "id": "run.create",
+                "argv": "run create <TARGET> [--label <LABEL>] [--inputs <PATH>]"
+            },
+            {
+                "id": "run.list",
+                "argv": "run list [--terminal] [--all] [--cursor <CURSOR>] [--limit <COUNT>]"
+            },
+            {
+                "id": "run.terminate",
+                "argv": "run terminate <RUN-ID> [--note <TEXT>]"
+            },
+            {
+                "id": "run.history",
+                "argv": "run history <RUN-ID> [--cursor <CURSOR>] [--limit <COUNT>]"
             }
         ])
     );
@@ -183,6 +203,11 @@ fn list_operations_human_reports_exposed_routes_and_trace_lifecycle() {
         concat!(
             "provider.add\tprovider add <HANDLE> --exec <PATH> --working-directory <PATH> [--arg <VALUE> ...] [--timeout <SECONDS>]\n",
             "provider.list\tprovider list [--enabled] [--tombstoned] [--active-runs-for <REGISTRATION-ID>] [--cursor <CURSOR>] [--limit <COUNT>]\n",
+            "provider.check\tprovider check <TARGET> [--active-runs] [--cursor <CURSOR>] [--limit <COUNT>]\n",
+            "run.create\trun create <TARGET> [--label <LABEL>] [--inputs <PATH>]\n",
+            "run.list\trun list [--terminal] [--all] [--cursor <CURSOR>] [--limit <COUNT>]\n",
+            "run.terminate\trun terminate <RUN-ID> [--note <TEXT>]\n",
+            "run.history\trun history <RUN-ID> [--cursor <CURSOR>] [--limit <COUNT>]\n",
         )
     );
 
@@ -195,10 +220,16 @@ fn list_operations_human_reports_exposed_routes_and_trace_lifecycle() {
 }
 
 #[test]
-fn application_argv_is_rejected_before_database_open() {
+fn unexposed_application_argv_is_rejected_before_database_open() {
     let home = isolated_home();
     command_with_home(home.path())
-        .args(["--format", "json", "run", "list"])
+        .args([
+            "--format",
+            "json",
+            "run",
+            "show",
+            "019f0000-0000-7000-8000-000000000001",
+        ])
         .assert()
         .code(64)
         .stdout("");

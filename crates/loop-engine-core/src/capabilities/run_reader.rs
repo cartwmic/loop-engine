@@ -36,6 +36,36 @@ pub struct EvidenceInventoryRow {
     pub associations: Vec<EvidenceAssociation>,
 }
 
+/// Operation-specific run lookup boundary. Caller supplies operation ID so persistence traces
+/// identify the actual read owner rather than a generic or unrelated operation.
+pub trait RunLookup {
+    type Error;
+
+    fn get_for_operation(
+        &self,
+        operation_id: &'static str,
+        run_id: &RunId,
+    ) -> Result<Run, Self::Error>;
+}
+
+/// Narrow catalog paging boundary used by `run.list`.
+pub trait RunCatalogReader {
+    type Error;
+
+    fn list(&self, request: &PageRequest<RunListFilter>) -> Result<Page<RunListRow>, Self::Error>;
+}
+
+/// Narrow immutable-journal paging boundary used by `run.history`.
+pub trait RunHistoryReader {
+    type Error;
+
+    fn history(
+        &self,
+        run_id: &RunId,
+        request: &PageRequest<()>,
+    ) -> Result<Page<JournalEntry>, Self::Error>;
+}
+
 pub trait RunReader {
     type Error;
 

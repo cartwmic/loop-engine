@@ -5,6 +5,8 @@
 
 mod support;
 
+#[path = "e2e/checkpoint_b.rs"]
+mod checkpoint_b;
 #[path = "e2e/provider_add.rs"]
 mod provider_add;
 #[path = "e2e/provider_list.rs"]

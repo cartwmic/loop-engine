@@ -1,19 +1,43 @@
-use loop_engine_core::model::outcome::{OutcomeClass, OutcomeData, PublicOutcome};
+use loop_engine_core::capabilities::id_generator::IdGenerator;
+use loop_engine_core::capabilities::provider_invoker::{CompatibilityRequest, InvocationError};
+use loop_engine_core::capabilities::time::TimeSource;
+use loop_engine_core::model::attempt::{AttemptFacts, JournalExtension};
+use loop_engine_core::model::journal::JournalDraft;
+use loop_engine_core::model::lifecycle::Lifecycle;
+use loop_engine_core::model::outcome::{OutcomeClass, OutcomeData, PublicOutcome, RunSnapshot};
 use loop_engine_core::model::reason::{Reason, ReasonCode};
 use loop_engine_core::operations::provider_add::ProviderAddExecutionError;
+use loop_engine_core::operations::provider_check::{
+    GraphConformance, ProviderCheckContinuation, ProviderCheckExecution,
+    ProviderCheckExecutionError, TraceBudgetDisposition,
+};
+use loop_engine_core::operations::run_create::{RunCreateError, RunCreateExecutionError};
+use std::convert::Infallible;
 use std::ffi::OsStr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use loop_engine_integrations::configuration::{ConfigurationError, normalize_registration_path};
-use loop_engine_integrations::persistence::CatalogPersistenceError;
+use loop_engine_integrations::persistence::{
+    CatalogPersistenceError, HistoryReadError, RunMutationError, RunReadError,
+    journal_entry_value as render_journal_entry,
+};
+use loop_engine_integrations::provider_protocol::AdapterError;
+use loop_engine_integrations::provider_protocol::bounded_run_snapshot;
+use loop_engine_integrations::run_inputs::{RunInputLoadError, load_optional as load_run_inputs};
 use serde_json::{Value, json};
 use thiserror::Error;
 
 use crate::args::PlannedCommand;
 use crate::commands::provider::{
     ProviderAddRequest, ProviderCatalogMutationOutcome, ProviderListError, ProviderListRequest,
-    ProviderMapError, add, list_active_run_impact, list_registrations, map_add_request,
-    map_list_request,
+    ProviderMapError, ProviderTargetRef, add, check, list_active_run_impact, list_registrations,
+    map_add_request, map_check_request, map_list_request, map_target, resolve_target,
+};
+use crate::commands::run::{
+    RunCreateDelivery, RunCreateRequest, RunHistoryError, RunHistoryRequest, RunListError,
+    RunListRequest, RunMapError, RunTerminateDelivery, build_terminate_command, create, history,
+    list, map_create_delivery, map_history_request, map_list_request as map_run_list_request,
+    map_terminate_delivery, terminate,
 };
 use crate::composition::Application;
 use crate::dispatch::{
@@ -27,6 +51,10 @@ pub enum PrepareApplicationError {
     Configuration(#[from] ConfigurationError),
     #[error(transparent)]
     ProviderMap(#[from] ProviderMapError),
+    #[error(transparent)]
+    RunMap(#[from] RunMapError),
+    #[error(transparent)]
+    RunInputs(#[from] RunInputLoadError),
 }
 
 pub enum PreparedApplicationCommand {
@@ -37,6 +65,30 @@ pub enum PreparedApplicationCommand {
     ProviderList {
         request: Value,
         command: ProviderListRequest,
+    },
+    ProviderCheck {
+        request: Value,
+        target: ProviderTargetRef,
+        active_runs: bool,
+        cursor: Option<crate::args::SyntaxOpaqueWire>,
+        limit: crate::args::SyntaxPageLimit,
+    },
+    RunCreate {
+        request: Value,
+        delivery: RunCreateDelivery,
+        inputs: loop_engine_core::model::run_input::RunInputs,
+    },
+    RunList {
+        request: Value,
+        command: RunListRequest,
+    },
+    RunHistory {
+        request: Value,
+        command: RunHistoryRequest,
+    },
+    RunTerminate {
+        request: Value,
+        delivery: RunTerminateDelivery,
     },
 }
 
@@ -83,6 +135,69 @@ pub fn prepare_application_command(
             )?;
             Ok(PreparedApplicationCommand::ProviderList { request, command })
         }
+        PlannedCommand::ProviderCheck(parsed) => {
+            let request = json!({
+                "target": parsed.target.as_str(),
+                "active_runs": parsed.active_runs,
+                "cursor": parsed.cursor.as_ref().map(|value| value.as_str()),
+                "limit": parsed.limit.get(),
+            });
+            Ok(PreparedApplicationCommand::ProviderCheck {
+                request,
+                target: map_target(&parsed.target)?,
+                active_runs: parsed.active_runs,
+                cursor: parsed.cursor,
+                limit: parsed.limit,
+            })
+        }
+        PlannedCommand::RunCreate(parsed) => {
+            let delivery = map_create_delivery(&parsed)?;
+            let input_path = delivery.inputs_path.as_ref().map(PathBuf::from);
+            let inputs = load_run_inputs(input_path.as_deref())?;
+            let request = json!({
+                "target": parsed.target.as_str(),
+                "label": parsed.label.as_ref().map(|value| value.as_str()),
+                "inputs": parsed.inputs.as_ref().map(|value| value.as_str()),
+            });
+            Ok(PreparedApplicationCommand::RunCreate {
+                request,
+                delivery,
+                inputs,
+            })
+        }
+        PlannedCommand::RunList(parsed) => {
+            let request = json!({
+                "terminal": parsed.terminal,
+                "all": parsed.all,
+                "cursor": parsed.cursor.as_ref().map(|value| value.as_str()),
+                "limit": parsed.limit.get(),
+            });
+            Ok(PreparedApplicationCommand::RunList {
+                request,
+                command: map_run_list_request(&parsed)?,
+            })
+        }
+        PlannedCommand::RunHistory(parsed) => {
+            let request = json!({
+                "run_id": parsed.run_id.as_str(),
+                "cursor": parsed.cursor.as_ref().map(|value| value.as_str()),
+                "limit": parsed.limit.get(),
+            });
+            Ok(PreparedApplicationCommand::RunHistory {
+                request,
+                command: map_history_request(&parsed)?,
+            })
+        }
+        PlannedCommand::RunTerminate(parsed) => {
+            let request = json!({
+                "run_id": parsed.run_id.as_str(),
+                "note": parsed.note.as_ref().map(|value| value.as_str()),
+            });
+            Ok(PreparedApplicationCommand::RunTerminate {
+                request,
+                delivery: map_terminate_delivery(&parsed)?,
+            })
+        }
         _ => unreachable!("startup prepares only exposed application routes"),
     }
 }
@@ -112,6 +227,75 @@ pub fn execute_application_command(
                     operation_data: json!({}),
                 },
                 || Ok(execute_list(application, command)),
+            )
+        }
+        PreparedApplicationCommand::ProviderCheck {
+            request,
+            target,
+            active_runs,
+            cursor,
+            limit,
+        } => dispatch_traced_operation_with_data(
+            &application.trace,
+            TracedDispatchInput {
+                operation: operation_id("provider.check"),
+                request,
+                operation_data: json!({}),
+            },
+            || {
+                Ok(execute_check(
+                    application,
+                    target,
+                    active_runs,
+                    cursor.as_ref(),
+                    limit,
+                ))
+            },
+        ),
+        PreparedApplicationCommand::RunCreate {
+            request,
+            delivery,
+            inputs,
+        } => dispatch_traced_operation_with_data(
+            &application.trace,
+            TracedDispatchInput {
+                operation: operation_id("run.create"),
+                request,
+                operation_data: json!({}),
+            },
+            || Ok(execute_create(application, delivery, inputs)),
+        ),
+        PreparedApplicationCommand::RunList { request, command } => {
+            dispatch_traced_operation_with_data(
+                &application.trace,
+                TracedDispatchInput {
+                    operation: operation_id("run.list"),
+                    request,
+                    operation_data: json!({}),
+                },
+                || Ok(execute_run_list(application, command)),
+            )
+        }
+        PreparedApplicationCommand::RunHistory { request, command } => {
+            dispatch_traced_operation_with_data(
+                &application.trace,
+                TracedDispatchInput {
+                    operation: operation_id("run.history"),
+                    request,
+                    operation_data: json!({}),
+                },
+                || Ok(execute_history(application, command)),
+            )
+        }
+        PreparedApplicationCommand::RunTerminate { request, delivery } => {
+            dispatch_traced_operation_with_data(
+                &application.trace,
+                TracedDispatchInput {
+                    operation: operation_id("run.terminate"),
+                    request,
+                    operation_data: json!({}),
+                },
+                || Ok(execute_terminate(application, delivery)),
             )
         }
     }
@@ -186,6 +370,584 @@ fn execute_list(
             false,
         ),
     }
+}
+
+fn execute_check(
+    application: &Application,
+    target: ProviderTargetRef,
+    active_runs: bool,
+    cursor: Option<&crate::args::SyntaxOpaqueWire>,
+    limit: crate::args::SyntaxPageLimit,
+) -> (TracedOperationResult, Value) {
+    let registration_id = match resolve_target(&application.catalog, "provider.check", &target) {
+        Ok(row) => row.registration.id().clone(),
+        Err(error) => {
+            return delivered(
+                failed(catalog_reason(&error), error.to_string()),
+                json!({}),
+                false,
+            );
+        }
+    };
+    let request = match map_check_request(
+        registration_id.clone(),
+        application
+            .ids
+            .request_id()
+            .expect("UUID allocation is infallible"),
+        active_runs,
+        cursor,
+        limit,
+    ) {
+        Ok(request) => request,
+        Err(error) => {
+            return delivered(
+                failed(ReasonCode::CursorInvalid, error.to_string()),
+                json!({}),
+                false,
+            );
+        }
+    };
+    let result = check(
+        &application.catalog,
+        &application.run_reads,
+        &application.invoker,
+        &application.digests,
+        request,
+        |_, run| {
+            let snapshot = bounded_run_snapshot(run).map_err(|error| error.to_string())?;
+            Ok::<CompatibilityRequest, String>(CompatibilityRequest {
+                request_id: application
+                    .ids
+                    .request_id()
+                    .expect("UUID allocation is infallible"),
+                run_id: run.id().clone(),
+                run: snapshot,
+            })
+        },
+        |impact, result| {
+            Ok::<usize, Infallible>(checked_run_value(impact, &result.report).to_string().len())
+        },
+    );
+    match result {
+        Ok(ProviderCheckExecution::Completed(page)) => {
+            provider_check_delivery(application, &registration_id, *page, false)
+        }
+        Ok(ProviderCheckExecution::TraceBudget(TraceBudgetDisposition::AfterProgress(page))) => {
+            provider_check_delivery(application, &registration_id, *page, true)
+        }
+        Ok(ProviderCheckExecution::TraceBudget(TraceBudgetDisposition::BeforeFirstRow {
+            ..
+        })) => delivered(
+            failed(
+                ReasonCode::ResourceExhausted,
+                "provider trace budget unavailable before first row".into(),
+            ),
+            json!({}),
+            false,
+        ),
+        Err(error) => provider_check_failure(error),
+    }
+}
+
+fn provider_check_delivery(
+    application: &Application,
+    registration_id: &loop_engine_core::model::ids::RegistrationId,
+    page: loop_engine_core::operations::provider_check::ProviderCheckPage,
+    trace_exhausted: bool,
+) -> (TracedOperationResult, Value) {
+    let next_cursor = match page.continuation {
+        ProviderCheckContinuation::SourceCursor(cursor) => {
+            cursor.map(|value| value.as_str().to_owned())
+        }
+        ProviderCheckContinuation::AfterRun(run_id) => match application
+            .catalog
+            .provider_check_cursor_after(registration_id, &run_id)
+        {
+            Ok(cursor) => Some(cursor.as_str().to_owned()),
+            Err(error) => {
+                return delivered(
+                    failed(catalog_reason(&error), error.to_string()),
+                    json!({}),
+                    false,
+                );
+            }
+        },
+    };
+    let (graph_status, graph_revision) = match &page.summary.graph_conformance {
+        GraphConformance::Valid { revision } => ("valid", Some(revision.as_str())),
+        GraphConformance::Invalid { .. } => ("invalid", None),
+    };
+    let items = page
+        .rows
+        .iter()
+        .map(|row| checked_run_value(&row.impact, &row.report))
+        .collect::<Vec<_>>();
+    let mut data = page_value(items, next_cursor);
+    let object = data.as_object_mut().expect("page is object");
+    object.insert(
+        "conformance".into(),
+        json!({
+            "config_revision": page.summary.config_revision,
+            "protocol_major": page.summary.protocol_major,
+            "graph_status": graph_status,
+            "graph_revision": graph_revision,
+        }),
+    );
+    object.insert("provider_calls".into(), json!(page.provider_calls));
+    if trace_exhausted {
+        object.insert("trace_budget_exhausted".into(), json!(true));
+    }
+    delivered(completed(), data, false)
+}
+
+fn execute_run_list(
+    application: &Application,
+    request: RunListRequest,
+) -> (TracedOperationResult, Value) {
+    match list(&application.run_reads, request) {
+        Ok(outcome) => {
+            let items = outcome
+                .items
+                .iter()
+                .map(|row| {
+                    json!({
+                        "run_id": row.run_id,
+                        "label": row.label,
+                        "lifecycle": lifecycle_value(row.lifecycle),
+                        "state": row.current_state,
+                    })
+                })
+                .collect();
+            delivered(completed(), page_value(items, outcome.next_cursor), false)
+        }
+        Err(error) => delivered(
+            failed(run_list_reason(&error), error.to_string()),
+            json!({}),
+            false,
+        ),
+    }
+}
+
+fn execute_history(
+    application: &Application,
+    request: RunHistoryRequest,
+) -> (TracedOperationResult, Value) {
+    match history(&application.history, request) {
+        Ok(outcome) => {
+            let items = match outcome
+                .items
+                .iter()
+                .map(render_journal_entry)
+                .collect::<Result<Vec<_>, _>>()
+            {
+                Ok(items) => items,
+                Err(error) => {
+                    return delivered(
+                        failed(ReasonCode::PersistenceFailed, error.to_string()),
+                        json!({}),
+                        false,
+                    );
+                }
+            };
+            delivered(completed(), page_value(items, outcome.next_cursor), false)
+        }
+        Err(error) => delivered(
+            failed(run_history_reason(&error), error.to_string()),
+            json!({}),
+            false,
+        ),
+    }
+}
+
+fn execute_create(
+    application: &Application,
+    delivery: RunCreateDelivery,
+    inputs: loop_engine_core::model::run_input::RunInputs,
+) -> (TracedOperationResult, Value) {
+    let registration = match resolve_target(&application.catalog, "run.create", &delivery.target) {
+        Ok(row) => row.registration.id().clone(),
+        Err(error) => {
+            return delivered(
+                failed(catalog_reason(&error), error.to_string()),
+                json!({}),
+                false,
+            );
+        }
+    };
+    let request = RunCreateRequest {
+        registration_id: registration,
+        label: delivery.label,
+        inputs,
+    };
+    let result = create(
+        &application.catalog,
+        &application.invoker,
+        &application.digests,
+        &application.ids,
+        &application.run_create,
+        &request,
+        |_, described, validated, run| {
+            let mut observations = vec![described.fact.clone()];
+            if let Some(validated) = validated {
+                observations.push(validated.fact.clone());
+            }
+            JournalDraft::new(
+                run.id().clone(),
+                application.clock.now().expect("system clock is infallible"),
+                "run.create",
+                application
+                    .ids
+                    .request_id()
+                    .expect("UUID allocation is infallible"),
+                OutcomeClass::Completed,
+                None,
+                Some(AttemptFacts {
+                    provider_observations: observations,
+                    ..AttemptFacts::default()
+                }),
+                JournalExtension::RunCreated {
+                    graph_revision: run.graph_revision().clone(),
+                },
+            )
+        },
+    );
+    match result {
+        Ok(execution) => delivered(
+            completed_with_run_snapshot(
+                run_snapshot(&execution.run, false),
+                loop_engine_core::model::requestable::project(&execution.run),
+            ),
+            json!({}),
+            execution.commit.committed,
+        ),
+        Err(error) => run_create_failure(error),
+    }
+}
+
+fn execute_terminate(
+    application: &Application,
+    delivery: RunTerminateDelivery,
+) -> (TracedOperationResult, Value) {
+    let run = match application
+        .run_reads
+        .get_for_operation("run.terminate", &delivery.run_id)
+    {
+        Ok(run) => run,
+        Err(error) => {
+            return delivered(
+                failed(run_read_reason(&error), error.to_string()),
+                json!({}),
+                false,
+            );
+        }
+    };
+    let attempt = delivery.note.as_ref().map(|note| AttemptFacts {
+        note: Some(note.clone()),
+        ..AttemptFacts::default()
+    });
+    let draft = |outcome, reason| {
+        JournalDraft::new(
+            run.id().clone(),
+            application.clock.now().expect("system clock is infallible"),
+            "run.terminate",
+            application
+                .ids
+                .request_id()
+                .expect("UUID allocation is infallible"),
+            outcome,
+            reason,
+            attempt.clone(),
+            JournalExtension::RunTerminated,
+        )
+    };
+    let completed = draft(OutcomeClass::Completed, None);
+    let terminal_reason = Reason::new(
+        ReasonCode::RunLifecycleTerminal,
+        "run lifecycle is already terminal",
+    )
+    .expect("static reason is bounded");
+    let rejected = draft(OutcomeClass::Rejected, Some(terminal_reason));
+    let stale_reason = Reason::new(
+        ReasonCode::StateStaleVersion,
+        "run lifecycle changed before termination committed",
+    )
+    .expect("static reason is bounded");
+    let stale = draft(OutcomeClass::Error, Some(stale_reason));
+    let (completed, rejected, stale) = match completed.and_then(|completed| {
+        rejected.and_then(|rejected| stale.map(|stale| (completed, rejected, stale)))
+    }) {
+        Ok(drafts) => drafts,
+        Err(error) => {
+            return delivered(
+                failed(ReasonCode::PersistenceFailed, error.to_string()),
+                json!({}),
+                false,
+            );
+        }
+    };
+    let command = match build_terminate_command(&run, &delivery, completed, rejected, stale) {
+        Ok(command) => command,
+        Err(error) => {
+            return delivered(
+                failed(ReasonCode::PersistenceFailed, error.to_string()),
+                json!({}),
+                false,
+            );
+        }
+    };
+    match terminate(&application.run_mutations, command) {
+        Ok(execution) => {
+            let snapshot = RunSnapshot {
+                run_id: run.id().clone(),
+                label: execution.run.label,
+                lifecycle: execution.run.lifecycle,
+                current_state: execution.run.current_state,
+                state_changed: false,
+            };
+            let outcome = match execution.outcome {
+                OutcomeClass::Completed => completed_with_run_snapshot(snapshot, Vec::new()),
+                OutcomeClass::Rejected => outcome_with_run(
+                    OutcomeClass::Rejected,
+                    ReasonCode::RunLifecycleTerminal,
+                    "run lifecycle is already terminal",
+                    snapshot,
+                    Vec::new(),
+                ),
+                OutcomeClass::Error => outcome_with_run(
+                    OutcomeClass::Error,
+                    ReasonCode::StateStaleVersion,
+                    "run lifecycle changed before termination committed",
+                    snapshot,
+                    Vec::new(),
+                ),
+            };
+            delivered(outcome, json!({}), execution.commit.committed)
+        }
+        Err(error) => delivered(
+            failed(run_mutation_reason(&error), error.to_string()),
+            json!({}),
+            false,
+        ),
+    }
+}
+
+fn checked_run_value(
+    impact: &loop_engine_core::capabilities::provider_catalog::ActiveRunImpact,
+    report: &loop_engine_core::model::compatibility::CompatibilityReport,
+) -> Value {
+    let report = match report {
+        loop_engine_core::model::compatibility::CompatibilityReport::Findings(findings) => {
+            let values = findings
+                .as_slice()
+                .iter()
+                .map(|finding| {
+                    json!({
+                        "capability": finding.capability(),
+                        "status": match finding.status() {
+                            loop_engine_core::model::compatibility::CompatibilityStatus::Compatible => "compatible",
+                            loop_engine_core::model::compatibility::CompatibilityStatus::Incompatible => "incompatible",
+                            loop_engine_core::model::compatibility::CompatibilityStatus::Unknown => "unknown",
+                        },
+                        "diagnostics": diagnostics_value(finding.diagnostics()),
+                    })
+                })
+                .collect::<Vec<_>>();
+            json!({"findings": values})
+        }
+        loop_engine_core::model::compatibility::CompatibilityReport::EvaluationError(
+            diagnostics,
+        ) => {
+            json!({"evaluation_error": diagnostics_value(diagnostics.as_slice())})
+        }
+    };
+    json!({
+        "run_id": impact.run_id.as_str(),
+        "graph_revision": impact.graph_revision.as_str(),
+        "report": report,
+    })
+}
+
+fn diagnostics_value(values: &[loop_engine_core::model::diagnostic::Diagnostic]) -> Vec<Value> {
+    values
+        .iter()
+        .map(|diagnostic| {
+            json!({
+                "code": diagnostic.code(),
+                "message": diagnostic.message(),
+                "path": diagnostic.path(),
+            })
+        })
+        .collect()
+}
+
+fn run_snapshot(run: &loop_engine_core::model::run::Run, state_changed: bool) -> RunSnapshot {
+    RunSnapshot {
+        run_id: run.id().clone(),
+        label: run.label().map(str::to_owned),
+        lifecycle: run.lifecycle(),
+        current_state: run.current_state().clone(),
+        state_changed,
+    }
+}
+
+fn completed_with_run_snapshot(
+    run: RunSnapshot,
+    requestable_events: Vec<loop_engine_core::model::requestable::RequestableEvent>,
+) -> PublicOutcome {
+    PublicOutcome::new(
+        OutcomeClass::Completed,
+        None,
+        OutcomeData::new(Some(run), Some(requestable_events), None)
+            .expect("run outcome shape is valid"),
+        Vec::new(),
+    )
+    .expect("completed run outcome is valid")
+}
+
+fn outcome_with_run(
+    class: OutcomeClass,
+    reason_code: ReasonCode,
+    message: &str,
+    run: RunSnapshot,
+    requestable_events: Vec<loop_engine_core::model::requestable::RequestableEvent>,
+) -> PublicOutcome {
+    let reason = Reason::new(reason_code, message).expect("static reason is bounded");
+    PublicOutcome::new(
+        class,
+        Some(reason),
+        OutcomeData::new(Some(run), Some(requestable_events), None)
+            .expect("run outcome shape is valid"),
+        Vec::new(),
+    )
+    .expect("run outcome class matches reason")
+}
+
+fn lifecycle_value(value: Lifecycle) -> &'static str {
+    match value {
+        Lifecycle::Active => "active",
+        Lifecycle::Final => "final",
+        Lifecycle::Terminated => "terminated",
+    }
+}
+
+fn run_list_reason(error: &RunListError<RunReadError>) -> ReasonCode {
+    match error {
+        RunListError::Reader(RunReadError::Page(_)) => ReasonCode::CursorInvalid,
+        _ => ReasonCode::PersistenceFailed,
+    }
+}
+
+fn run_history_reason(error: &RunHistoryError<HistoryReadError>) -> ReasonCode {
+    match error {
+        RunHistoryError::Reader(HistoryReadError::NotFound { .. }) => ReasonCode::RunNotFound,
+        RunHistoryError::Reader(HistoryReadError::Page(_)) => ReasonCode::CursorInvalid,
+        _ => ReasonCode::PersistenceFailed,
+    }
+}
+
+fn run_read_reason(error: &RunReadError) -> ReasonCode {
+    match error {
+        RunReadError::NotFound { .. } => ReasonCode::RunNotFound,
+        RunReadError::Page(_) => ReasonCode::CursorInvalid,
+        _ => ReasonCode::PersistenceFailed,
+    }
+}
+
+fn run_mutation_reason(error: &RunMutationError) -> ReasonCode {
+    match error {
+        RunMutationError::NotFound { .. } => ReasonCode::RunNotFound,
+        _ => ReasonCode::PersistenceFailed,
+    }
+}
+
+fn provider_check_failure(
+    error: ProviderCheckExecutionError<
+        CatalogPersistenceError,
+        RunReadError,
+        AdapterError,
+        loop_engine_integrations::sha256_digest::DigestError,
+        String,
+        Infallible,
+    >,
+) -> (TracedOperationResult, Value) {
+    let (reason, message) = match error {
+        ProviderCheckExecutionError::Catalog(error) => (catalog_reason(&error), error.to_string()),
+        ProviderCheckExecutionError::Reader(error) => (run_read_reason(&error), error.to_string()),
+        ProviderCheckExecutionError::Describe(error)
+        | ProviderCheckExecutionError::Compatibility(error) => invocation_error_reason(error),
+        ProviderCheckExecutionError::Digest(error) => {
+            (ReasonCode::ProviderSpawnFailed, error.to_string())
+        }
+        ProviderCheckExecutionError::Request(error) => (ReasonCode::ResourceExhausted, error),
+        ProviderCheckExecutionError::RowSize(error) => match error {},
+        ProviderCheckExecutionError::CompatibilityEvaluation(_) => (
+            ReasonCode::ProviderEvaluationError,
+            "provider compatibility evaluation failed".into(),
+        ),
+        ProviderCheckExecutionError::RowTooLarge => (
+            ReasonCode::ResourceExhausted,
+            "provider check row exceeds page budget".into(),
+        ),
+        ProviderCheckExecutionError::InvalidPlan => (
+            ReasonCode::PersistenceFailed,
+            "provider check traversal plan is invalid".into(),
+        ),
+    };
+    delivered(failed(reason, message), json!({}), false)
+}
+
+fn invocation_error_reason(error: InvocationError<AdapterError>) -> (ReasonCode, String) {
+    match error {
+        InvocationError::TraceBudgetUnavailable => (
+            ReasonCode::ResourceExhausted,
+            "provider trace budget unavailable".into(),
+        ),
+        InvocationError::Transport {
+            source, failure, ..
+        } => (failure.reason.code(), source.to_string()),
+    }
+}
+
+fn run_create_failure(
+    error: RunCreateExecutionError<
+        CatalogPersistenceError,
+        AdapterError,
+        loop_engine_integrations::sha256_digest::DigestError,
+        std::convert::Infallible,
+        loop_engine_integrations::persistence::RunCreateError,
+        loop_engine_core::model::journal::JournalError,
+    >,
+) -> (TracedOperationResult, Value) {
+    let (reason, message) = match error {
+        RunCreateExecutionError::Catalog(error) => (catalog_reason(&error), error.to_string()),
+        RunCreateExecutionError::Invocation(error) => invocation_error_reason(error),
+        RunCreateExecutionError::Digest(error) => {
+            (ReasonCode::ProviderSpawnFailed, error.to_string())
+        }
+        RunCreateExecutionError::Id(error) => match error {},
+        RunCreateExecutionError::Journal(error) => {
+            (ReasonCode::PersistenceFailed, error.to_string())
+        }
+        RunCreateExecutionError::Writer(error) => {
+            (ReasonCode::PersistenceFailed, error.to_string())
+        }
+        RunCreateExecutionError::Operation(error) => match error {
+            RunCreateError::Graph(_) => (ReasonCode::ProviderGraphInvalid, error.to_string()),
+            RunCreateError::Bound(_) | RunCreateError::Command(_) => {
+                (ReasonCode::ResourceExhausted, error.to_string())
+            }
+            RunCreateError::InputsRejected => (ReasonCode::InputRejected, error.to_string()),
+            RunCreateError::InputEvaluationError => {
+                (ReasonCode::ProviderEvaluationError, error.to_string())
+            }
+            RunCreateError::DigestDrift => (ReasonCode::ProviderDriftDetected, error.to_string()),
+            RunCreateError::InvalidProviderConfigRevision => {
+                (ReasonCode::PersistenceFailed, error.to_string())
+            }
+        },
+    };
+    delivered(failed(reason, message), json!({}), false)
 }
 
 fn delivered(

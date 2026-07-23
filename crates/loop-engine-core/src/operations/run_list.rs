@@ -1,8 +1,8 @@
-use crate::capabilities::run_reader::{RunListFilter, RunListRow, RunReader};
+use crate::capabilities::run_reader::{RunCatalogReader, RunListFilter, RunListRow};
 use crate::capabilities::{Page, PageRequest};
 use crate::operations::paging::{PagingError, request};
 
-pub fn execute<R: RunReader>(
+pub fn execute<R: RunCatalogReader>(
     reader: &R,
     request: &PageRequest<RunListFilter>,
 ) -> Result<Page<RunListRow>, R::Error> {

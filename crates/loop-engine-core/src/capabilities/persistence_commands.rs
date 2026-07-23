@@ -229,7 +229,8 @@ pub struct TerminateRunCommand {
     expected_lifecycle_version: LifecycleVersion,
     note: Option<Note>,
     completed_entry: JournalDraft,
-    terminal_or_stale_entry: JournalDraft,
+    terminal_rejection_entry: JournalDraft,
+    stale_error_entry: JournalDraft,
 }
 
 impl TerminateRunCommand {
@@ -238,14 +239,16 @@ impl TerminateRunCommand {
         expected_lifecycle_version: LifecycleVersion,
         note: Option<Note>,
         completed_entry: JournalDraft,
-        terminal_or_stale_entry: JournalDraft,
+        terminal_rejection_entry: JournalDraft,
+        stale_error_entry: JournalDraft,
     ) -> Self {
         Self {
             run_id,
             expected_lifecycle_version,
             note,
             completed_entry,
-            terminal_or_stale_entry,
+            terminal_rejection_entry,
+            stale_error_entry,
         }
     }
 
@@ -257,12 +260,21 @@ impl TerminateRunCommand {
         self.expected_lifecycle_version
     }
 
-    pub fn into_parts(self) -> (RunId, LifecycleVersion, JournalDraft, JournalDraft) {
+    pub fn into_parts(
+        self,
+    ) -> (
+        RunId,
+        LifecycleVersion,
+        JournalDraft,
+        JournalDraft,
+        JournalDraft,
+    ) {
         (
             self.run_id,
             self.expected_lifecycle_version,
             self.completed_entry,
-            self.terminal_or_stale_entry,
+            self.terminal_rejection_entry,
+            self.stale_error_entry,
         )
     }
 
@@ -272,21 +284,17 @@ impl TerminateRunCommand {
         expected_lifecycle_version: LifecycleVersion,
         note: Option<Note>,
         completed_entry: JournalDraft,
-        terminal_or_stale_entry: JournalDraft,
+        terminal_rejection_entry: JournalDraft,
+        stale_error_entry: JournalDraft,
     ) -> Self {
         Self::from_parts(
             run_id,
             expected_lifecycle_version,
             note,
             completed_entry,
-            terminal_or_stale_entry,
+            terminal_rejection_entry,
+            stale_error_entry,
         )
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn with_terminal_or_stale_entry(mut self, terminal_or_stale_entry: JournalDraft) -> Self {
-        self.terminal_or_stale_entry = terminal_or_stale_entry;
-        self
     }
 }
 
@@ -482,6 +490,20 @@ pub struct EventCommitStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommittedRunSnapshot {
+    pub lifecycle: Lifecycle,
+    pub current_state: StateId,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminateCommit {
+    pub commit: CommitStatus,
+    pub outcome: crate::model::outcome::OutcomeClass,
+    pub run: CommittedRunSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitStatus {
     pub committed: bool,
     pub state_changed: bool,
@@ -516,6 +538,7 @@ mod encapsulation_contract {
             RunId,
             LifecycleVersion,
             Option<Note>,
+            JournalDraft,
             JournalDraft,
             JournalDraft,
         ) -> TerminateRunCommand = TerminateRunCommand::from_parts;

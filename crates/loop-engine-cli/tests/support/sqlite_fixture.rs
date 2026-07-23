@@ -127,7 +127,15 @@ pub fn insert_provider_registrations(
 }
 
 pub fn count_journal_entries(db_path: &Path) -> Result<u64, SqliteFixtureError> {
-    let output = run_sqlite_capture(db_path, "SELECT count(*) FROM journal_entries;")?;
+    count_rows(db_path, "journal_entries")
+}
+
+pub fn count_runs(db_path: &Path) -> Result<u64, SqliteFixtureError> {
+    count_rows(db_path, "runs")
+}
+
+fn count_rows(db_path: &Path, table: &str) -> Result<u64, SqliteFixtureError> {
+    let output = run_sqlite_capture(db_path, &format!("SELECT count(*) FROM {table};"))?;
     output
         .trim()
         .parse::<u64>()

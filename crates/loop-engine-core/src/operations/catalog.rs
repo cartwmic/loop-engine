@@ -63,7 +63,15 @@ impl fmt::Debug for OperationId {
 pub struct OperationIdError(String);
 
 /// Runtime-exposed core operation IDs. Exposure tasks edit this reviewed array.
-pub const EXPOSED_OPERATION_IDS: &[&str] = &["provider.add", "provider.list"];
+pub const EXPOSED_OPERATION_IDS: &[&str] = &[
+    "provider.add",
+    "provider.list",
+    "provider.check",
+    "run.create",
+    "run.list",
+    "run.terminate",
+    "run.history",
+];
 
 /// Runtime-exposed core operations. Private Phase 3 operations stay absent.
 pub fn exposed_operations() -> Vec<OperationId> {
@@ -89,7 +97,15 @@ mod tests {
                 .iter()
                 .map(|operation| operation.as_str())
                 .collect::<Vec<_>>(),
-            ["provider.add", "provider.list"]
+            [
+                "provider.add",
+                "provider.list",
+                "provider.check",
+                "run.create",
+                "run.list",
+                "run.terminate",
+                "run.history",
+            ]
         );
         assert_eq!(
             OperationId::parse("run.show")

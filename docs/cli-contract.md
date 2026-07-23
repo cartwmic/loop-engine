@@ -18,7 +18,7 @@ Related documents:
 
 Production binary name: `loop-engine`.
 
-MVP's final catalog contains exactly **21** application operations in two namespaces (`provider.*`, `run.*`). During the 2026-07-22 staged implementation, `--list-operations` reports only checkpoint-closed runtime routes; Checkpoint A exposes `provider.add` and `provider.list`. Final closure requires all 21 IDs. No additional application operation, alias, or hidden route is permitted without reopening D004. CLI `--help`, `--version`, pre-dispatch usage display, and `--list-operations` are driver functions, not application operations ([operation-catalog.md](operation-catalog.md) § Explicit non-operations).
+MVP's final catalog contains exactly **21** application operations in two namespaces (`provider.*`, `run.*`). During the 2026-07-22 staged implementation, `--list-operations` reports only checkpoint-closed runtime routes; Checkpoints A and B expose `provider.add`, `provider.list`, `provider.check`, `run.create`, `run.list`, `run.terminate`, and `run.history`. Final closure requires all 21 IDs. No additional application operation, alias, or hidden route is permitted without reopening D004. CLI `--help`, `--version`, pre-dispatch usage display, and `--list-operations` are driver functions, not application operations ([operation-catalog.md](operation-catalog.md) § Explicit non-operations).
 
 ## Schema versioning
 

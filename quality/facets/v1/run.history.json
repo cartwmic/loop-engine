@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "operation_id": "run.history",
+  "facets": [
+    {
+      "name": "Valid path through production CLI, runtime operation-ID proof, correlated trace file, request/outcome payloads, and start/finish envelope",
+      "status": "closed",
+      "evidence": [
+        "e2e:checkpoint_b::run_terminate_rejects_repeat_and_history_returns_complete_persisted_entries",
+        "catalog:driver_catalog::runtime_catalogs_match_checkpoint_b_exposure"
+      ],
+      "owner_task": "T151"
+    },
+    {
+      "name": "Read",
+      "status": "closed",
+      "evidence": [
+        "e2e:checkpoint_b::run_terminate_rejects_repeat_and_history_returns_complete_persisted_entries"
+      ],
+      "owner_task": "T151"
+    },
+    {
+      "name": "Provider-free under missing provider",
+      "status": "closed",
+      "evidence": [
+        "e2e:checkpoint_b::run_terminate_rejects_repeat_and_history_returns_complete_persisted_entries"
+      ],
+      "owner_task": "T151"
+    },
+    {
+      "name": "Trace persistence boundary",
+      "status": "closed",
+      "evidence": [
+        "trace:e2e:checkpoint_b::run_terminate_rejects_repeat_and_history_returns_complete_persisted_entries"
+      ],
+      "owner_task": "T151"
+    }
+  ]
+}

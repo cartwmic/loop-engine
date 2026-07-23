@@ -6,7 +6,7 @@ use crate::capabilities::provider_invoker::{
     CompatibilityRequest, DescribeRequest, DescribeResult, DescribedGraph, InvocationError,
     ProviderInvoker,
 };
-use crate::capabilities::run_reader::RunReader;
+use crate::capabilities::run_reader::RunLookup;
 use crate::capabilities::{Page, PageCursor, PageRequest};
 use crate::model::attempt::ProviderRole;
 use crate::model::bounded::{
@@ -115,7 +115,7 @@ pub fn execute<C, R, I, D, G, Z, Q, E>(
 ) -> ProviderCheckResult<C::Error, R::Error, I::TransportError, D::Error, Q, E>
 where
     C: ProviderCatalog,
-    R: RunReader,
+    R: RunLookup,
     I: ProviderInvoker,
     D: DigestComputer,
     D::Error: std::fmt::Display,
@@ -131,7 +131,7 @@ where
     };
     let original_cursor = impact_request.and_then(|request| request.cursor().cloned());
     let config = catalog
-        .resolve_enabled(registration_id)
+        .resolve_enabled("provider.check", registration_id)
         .map_err(ProviderCheckExecutionError::Catalog)?;
     let described = match invoker.describe(&config, describe_request) {
         Ok(described) => described,
@@ -185,7 +185,7 @@ where
     let mut compatibility_calls = 0usize;
     for impact in &impacts.rows {
         let run = reader
-            .get(&impact.run_id)
+            .get_for_operation("provider.check", &impact.run_id)
             .map_err(ProviderCheckExecutionError::Reader)?;
         let request =
             compatibility_request(&config, &run).map_err(ProviderCheckExecutionError::Request)?;

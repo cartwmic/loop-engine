@@ -311,10 +311,15 @@ pub trait ProviderCatalog {
 
     fn resolve_enabled(
         &self,
+        operation_id: &'static str,
         registration_id: &RegistrationId,
     ) -> Result<ResolvedProviderConfig, Self::Error>;
 
-    fn resolve_handle(&self, handle: &ProviderHandle) -> Result<ProviderCatalogRow, Self::Error>;
+    fn resolve_handle(
+        &self,
+        operation_id: &'static str,
+        handle: &ProviderHandle,
+    ) -> Result<ProviderCatalogRow, Self::Error>;
 
     /// Stable keyset order; cursor authentication/encoding remains integration-owned.
     fn list(

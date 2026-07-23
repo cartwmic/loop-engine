@@ -82,7 +82,7 @@ where
             );
         }
     };
-    let config = match catalog.resolve_enabled(run.registration_id()) {
+    let config = match catalog.resolve_enabled("run.compatibility", run.registration_id()) {
         Ok(config) => config,
         Err(error) => {
             return persist_resolution(

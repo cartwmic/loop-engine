@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "operation_id": "run.list",
+  "facets": [
+    {
+      "name": "Valid path through production CLI, runtime operation-ID proof, correlated trace file, request/outcome payloads, and start/finish envelope",
+      "status": "closed",
+      "evidence": [
+        "e2e:checkpoint_b::run_create_and_list_persist_across_processes_and_apply_lifecycle_filters",
+        "catalog:driver_catalog::runtime_catalogs_match_checkpoint_b_exposure"
+      ],
+      "owner_task": "T150"
+    },
+    {
+      "name": "Read",
+      "status": "closed",
+      "evidence": [
+        "e2e:checkpoint_b::run_create_and_list_persist_across_processes_and_apply_lifecycle_filters"
+      ],
+      "owner_task": "T150"
+    },
+    {
+      "name": "Lifecycle family",
+      "status": "closed",
+      "evidence": [
+        "e2e:checkpoint_b::run_create_and_list_persist_across_processes_and_apply_lifecycle_filters"
+      ],
+      "owner_task": "T150"
+    },
+    {
+      "name": "Provider-free under missing provider",
+      "status": "closed",
+      "evidence": [
+        "e2e:checkpoint_b::run_create_and_list_persist_across_processes_and_apply_lifecycle_filters"
+      ],
+      "owner_task": "T150"
+    },
+    {
+      "name": "Trace persistence boundary",
+      "status": "closed",
+      "evidence": [
+        "trace:e2e:checkpoint_b::run_create_and_list_persist_across_processes_and_apply_lifecycle_filters"
+      ],
+      "owner_task": "T150"
+    }
+  ]
+}

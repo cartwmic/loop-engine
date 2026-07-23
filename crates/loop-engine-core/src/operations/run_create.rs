@@ -100,8 +100,14 @@ pub enum RunCreateExecutionError<C, I, D, G, W, J> {
     Operation(RunCreateError),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunCreateExecution {
+    pub run: Run,
+    pub commit: CommitStatus,
+}
+
 type RunCreateExecutionResult<C, I, D, G, W, J> =
-    Result<CommitStatus, RunCreateExecutionError<C, I, D, G, W, J>>;
+    Result<RunCreateExecution, RunCreateExecutionError<C, I, D, G, W, J>>;
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn execute<C, I, D, G, W, F, J>(
@@ -130,7 +136,7 @@ where
     ) -> Result<JournalDraft, J>,
 {
     let config = catalog
-        .resolve_enabled(registration_id)
+        .resolve_enabled("run.create", registration_id)
         .map_err(RunCreateExecutionError::Catalog)?;
     let digest_before = digests
         .executable_digest(&config)
@@ -183,6 +189,7 @@ where
     .map_err(|error| RunCreateExecutionError::Operation(error.into()))?;
     let creation_entry = journal(&config, &described, input_result.as_ref(), &run)
         .map_err(RunCreateExecutionError::Journal)?;
+    let created_run = run.clone();
     let command = command(
         run,
         &config,
@@ -191,9 +198,13 @@ where
         creation_entry,
     )
     .map_err(RunCreateExecutionError::Operation)?;
-    writer
+    let commit = writer
         .create(command)
-        .map_err(RunCreateExecutionError::Writer)
+        .map_err(RunCreateExecutionError::Writer)?;
+    Ok(RunCreateExecution {
+        run: created_run,
+        commit,
+    })
 }
 
 pub(crate) fn command(

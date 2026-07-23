@@ -1,7 +1,7 @@
 //! Stable exit codes and stdout/stderr contract finalization (T128).
 //!
 //! Maps authoritative pre-dispatch failures, driver metadata, and dispatched
-//! [`PublicOutcome`] values into frozen exit codes and byte destinations.
+//! [`OutcomeRenderRequest`] values into frozen exit codes and byte destinations.
 //! Presentation only — no policy decision or outcome reclassification.
 
 use loop_engine_core::model::outcome::OutcomeClass;

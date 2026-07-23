@@ -8,11 +8,14 @@ use loop_engine_core::capabilities::digest::DigestComputer;
 use loop_engine_core::capabilities::event_attempt_writer::EventAttemptWriter;
 use loop_engine_core::capabilities::id_generator::IdGenerator;
 use loop_engine_core::capabilities::persistence_commands::{
-    AppendAnnotationCommand, CommitStatus, ReplaceLabelCommand, TerminateRunCommand,
+    AppendAnnotationCommand, CommitStatus, ReplaceLabelCommand, TerminateCommit,
+    TerminateRunCommand,
 };
 use loop_engine_core::capabilities::provider_catalog::ProviderCatalog;
 use loop_engine_core::capabilities::provider_invoker::ProviderInvoker;
-use loop_engine_core::capabilities::run_reader::{RunListFilter, RunListRow, RunReader};
+use loop_engine_core::capabilities::run_reader::{
+    RunCatalogReader, RunHistoryReader, RunListFilter, RunListRow, RunReader,
+};
 use loop_engine_core::capabilities::run_writer::RunWriter;
 use loop_engine_core::capabilities::{Page, PageRequest};
 use loop_engine_core::model::annotation::{ActorMetadata, Note};
@@ -29,7 +32,7 @@ use loop_engine_core::operations::run_annotate;
 use loop_engine_core::operations::run_compatibility::{
     self, CompatibilityExecutionError, CompatibilityResolution,
 };
-use loop_engine_core::operations::run_create::{self, RunCreateExecutionError};
+use loop_engine_core::operations::run_create::{self, RunCreateExecution, RunCreateExecutionError};
 use loop_engine_core::operations::run_graph::{self, StoredGraph};
 use loop_engine_core::operations::run_guidance::{
     self, GuidanceExecutionError, GuidanceResolution,
@@ -398,13 +401,15 @@ pub fn build_terminate_command(
     run: &Run,
     delivery: &RunTerminateDelivery,
     completed_entry: JournalDraft,
-    terminal_or_stale_entry: JournalDraft,
+    terminal_rejection_entry: JournalDraft,
+    stale_error_entry: JournalDraft,
 ) -> Result<TerminateRunCommand, RunMapError> {
     run_terminate::command(
         run,
         delivery.note.clone(),
         completed_entry,
-        terminal_or_stale_entry,
+        terminal_rejection_entry,
+        stale_error_entry,
     )
     .map_err(RunMapError::Command)
 }
@@ -424,7 +429,7 @@ pub fn create<C, I, D, G, W, F, J>(
     request: &RunCreateRequest,
     journal: F,
 ) -> Result<
-    CommitStatus,
+    RunCreateExecution,
     RunCreateExecutionError<C::Error, I::TransportError, D::Error, G::Error, W::Error, J>,
 >
 where
@@ -454,7 +459,7 @@ where
     )
 }
 
-pub fn list<R: RunReader>(
+pub fn list<R: RunCatalogReader>(
     reader: &R,
     request: RunListRequest,
 ) -> Result<RunListOutcome, RunListError<R::Error>> {
@@ -472,7 +477,7 @@ pub fn graph<R: RunReader>(reader: &R, run_id: &RunId) -> Result<StoredGraph, R:
     run_graph::execute(reader, run_id)
 }
 
-pub fn history<R: RunReader>(
+pub fn history<R: RunHistoryReader>(
     reader: &R,
     request: RunHistoryRequest,
 ) -> Result<RunHistoryOutcome, RunHistoryError<R::Error>> {
@@ -620,6 +625,6 @@ where
 pub fn terminate<W: RunWriter>(
     writer: &W,
     command: TerminateRunCommand,
-) -> Result<CommitStatus, W::Error> {
+) -> Result<TerminateCommit, W::Error> {
     run_terminate::execute(writer, command)
 }

@@ -31,7 +31,7 @@ pub use history::{HistoryReadError, SqliteHistoryReads};
 pub use migrations::SUPPORTED_SCHEMA_VERSION;
 pub use provider_catalog::{CatalogPersistenceError, DisableWarningsPage, SqliteProviderCatalog};
 pub use run_create::{RunCreateError, SqliteRunWriter};
-pub use run_mutations::{RunMutationError, SqliteRunMutations};
+pub use run_mutations::{RunMutationError, SqliteRunMutations, journal_entry_value};
 pub use run_reads::{RawRunRow, RunReadError, SqliteRunReads};
 pub use sqlite::{SqliteStore, connect_with_pragmas};
 pub use traced::{

@@ -8,8 +8,8 @@
 use std::path::{Path, PathBuf};
 
 use loop_engine_core::capabilities::persistence_commands::{
-    AppendAnnotationCommand, AppendEvidenceCommand, CommitStatus, ReplaceLabelCommand,
-    TerminateRunCommand,
+    AppendAnnotationCommand, AppendEvidenceCommand, CommitStatus, CommittedRunSnapshot,
+    ReplaceLabelCommand, TerminateCommit, TerminateRunCommand,
 };
 use loop_engine_core::capabilities::run_writer::RunWriter;
 use loop_engine_core::model::attempt::JournalExtension;
@@ -219,21 +219,15 @@ impl SqliteRunMutations {
     pub fn terminate(
         &self,
         command: TerminateRunCommand,
-    ) -> Result<CommitStatus, RunMutationError> {
+    ) -> Result<TerminateCommit, RunMutationError> {
         close_write(
             &self.trace,
             "run.terminate",
             MutationClass::RunMutation,
-            |trace| {
-                self.execute_terminate(command, trace)
-                    .map_ok(|(status, outcome)| {
-                        (status, SemanticOutcome::from_outcome_class(outcome))
-                    })
-            },
-            |(_, semantic)| *semantic,
+            |trace| self.execute_terminate(command, trace),
+            |commit| SemanticOutcome::from_outcome_class(commit.outcome),
             run_mutation_error_semantic,
         )
-        .map(|(status, _)| status)
     }
 
     fn execute_append_evidence(
@@ -440,14 +434,22 @@ impl SqliteRunMutations {
         &self,
         command: TerminateRunCommand,
         trace: Option<&WriteTraceSession<'_>>,
-    ) -> WriteExecution<(CommitStatus, OutcomeClass), RunMutationError> {
-        let (command_run_id, expected_lifecycle_version, completed_entry, terminal_or_stale_entry) =
-            command.into_parts();
-        if let Err(error) = ensure_draft_run_id(&command_run_id, &completed_entry) {
-            return WriteExecution::no_transaction(error);
-        }
-        if let Err(error) = ensure_draft_run_id(&command_run_id, &terminal_or_stale_entry) {
-            return WriteExecution::no_transaction(error);
+    ) -> WriteExecution<TerminateCommit, RunMutationError> {
+        let (
+            command_run_id,
+            expected_lifecycle_version,
+            completed_entry,
+            terminal_rejection_entry,
+            stale_error_entry,
+        ) = command.into_parts();
+        for entry in [
+            &completed_entry,
+            &terminal_rejection_entry,
+            &stale_error_entry,
+        ] {
+            if let Err(error) = ensure_draft_run_id(&command_run_id, entry) {
+                return WriteExecution::no_transaction(error);
+            }
         }
         let expected_lifecycle = expected_lifecycle_version.value();
         let run_id = command_run_id.as_str();
@@ -497,18 +499,16 @@ impl SqliteRunMutations {
                     (completed_entry, after, true)
                 }
                 TerminateBranch::TerminalRejection => {
-                    if !matches_terminal_rejection(&terminal_or_stale_entry) {
+                    if !matches_terminal_rejection(&terminal_rejection_entry) {
                         return Err(RunMutationError::JournalBranchMismatch);
                     }
-                    (terminal_or_stale_entry, state_before.clone(), false)
+                    (terminal_rejection_entry, state_before.clone(), false)
                 }
                 TerminateBranch::StaleRejection => {
-                    if !matches_stale_rejection(&terminal_or_stale_entry)
-                        && !matches_terminal_rejection(&terminal_or_stale_entry)
-                    {
+                    if !matches_stale_rejection(&stale_error_entry) {
                         return Err(RunMutationError::JournalBranchMismatch);
                     }
-                    (terminal_or_stale_entry, state_before.clone(), false)
+                    (stale_error_entry, state_before.clone(), false)
                 }
             };
             let journal_outcome = draft.outcome();
@@ -537,15 +537,20 @@ impl SqliteRunMutations {
                 run_changed,
             );
             Ok((
-                (
-                    CommitStatus {
+                TerminateCommit {
+                    commit: CommitStatus {
                         committed: true,
                         state_changed: false,
                         workflow_state_version: refreshed.workflow_state_version,
                         lifecycle_version: refreshed.lifecycle_version,
                     },
-                    journal_outcome,
-                ),
+                    outcome: journal_outcome,
+                    run: CommittedRunSnapshot {
+                        lifecycle: refreshed.lifecycle,
+                        current_state: refreshed.current_state,
+                        label: refreshed.label,
+                    },
+                },
                 expectation,
             ))
         })();
@@ -584,7 +589,7 @@ impl RunWriter for SqliteRunMutations {
         SqliteRunMutations::replace_label(self, command)
     }
 
-    fn terminate(&self, command: TerminateRunCommand) -> Result<CommitStatus, Self::Error> {
+    fn terminate(&self, command: TerminateRunCommand) -> Result<TerminateCommit, Self::Error> {
         SqliteRunMutations::terminate(self, command)
     }
 
@@ -1140,6 +1145,16 @@ fn diagnostics_len(attempt: Option<&loop_engine_core::model::attempt::AttemptFac
         .unwrap_or(0)
 }
 
+/// Render one authoritative journal entry using persisted wire vocabulary.
+pub fn journal_entry_value(entry: &JournalEntry) -> Result<Value, JournalError> {
+    let encoded = encode_journal_entry(entry)?;
+    serde_json::from_str(&encoded).map_err(|_| {
+        JournalError::Bound(loop_engine_core::model::bounded::BoundError::InvalidType {
+            field: "journal_entry",
+        })
+    })
+}
+
 fn encode_journal_entry(entry: &JournalEntry) -> Result<String, JournalError> {
     encode_journal_entry_from_parts(
         entry.sequence(),
@@ -1564,11 +1579,10 @@ mod tests {
     use loop_engine_core::model::annotation::{ActorMetadata, Note};
     use loop_engine_core::model::attempt::{
         AttemptFacts, EvidenceAddedFact, EvidenceAssociations, JournalExtension, LabelChangeFact,
-        TransitionFact,
     };
     use loop_engine_core::model::bounded::{BoundedText, Value as CoreValue};
     use loop_engine_core::model::evidence::{EvidenceRecord, EvidenceSource};
-    use loop_engine_core::model::ids::{EventId, EvidenceId, EvidenceKind, RequestId, RunId};
+    use loop_engine_core::model::ids::{EvidenceId, EvidenceKind, RequestId, RunId};
     use loop_engine_core::model::journal::JournalDraft;
     use loop_engine_core::model::outcome::{EvidenceRecordedStatus, OutcomeClass};
     use loop_engine_core::model::reason::{Reason, ReasonCode};
@@ -1789,7 +1803,7 @@ mod tests {
         (completed, rejected)
     }
 
-    fn terminate_drafts(run_id: &RunId) -> (JournalDraft, JournalDraft) {
+    fn terminate_drafts(run_id: &RunId) -> (JournalDraft, JournalDraft, JournalDraft) {
         let completed = JournalDraft::new(
             run_id.clone(),
             ObservedAt::parse("2026-07-18T00:00:00.000Z").unwrap(),
@@ -1812,7 +1826,18 @@ mod tests {
             JournalExtension::RunTerminated,
         )
         .unwrap();
-        (completed, rejected)
+        let stale = JournalDraft::new(
+            run_id.clone(),
+            ObservedAt::parse("2026-07-18T00:00:00.000Z").unwrap(),
+            "run.terminate",
+            RequestId::parse("request-terminate").unwrap(),
+            OutcomeClass::Error,
+            Some(Reason::new(ReasonCode::StateStaleVersion, "stale lifecycle").unwrap()),
+            None,
+            JournalExtension::RunTerminated,
+        )
+        .unwrap();
+        (completed, rejected, stale)
     }
 
     fn evidence_duplicate_rejection_draft(run_id: &RunId) -> JournalDraft {
@@ -1833,34 +1858,6 @@ mod tests {
         let completed = evidence_draft(run.id(), &evidence);
         let rejected = evidence_duplicate_rejection_draft(run.id());
         evidence_add::command(run, evidence, completed, rejected).unwrap()
-    }
-
-    fn stale_terminate_disposition(run: &Run) -> JournalDraft {
-        let attempt = AttemptFacts {
-            transition: Some(
-                TransitionFact::new(
-                    EventId::parse("terminate").unwrap(),
-                    run.current_state().clone(),
-                    Some(run.current_state().clone()),
-                    false,
-                )
-                .unwrap(),
-            ),
-            evidence_associations: Some(EvidenceAssociations::default()),
-            evidence_recorded: Some(EvidenceRecordedStatus::default()),
-            ..AttemptFacts::default()
-        };
-        JournalDraft::new(
-            run.id().clone(),
-            ObservedAt::parse("2026-07-18T00:00:00.000Z").unwrap(),
-            "run.request",
-            RequestId::parse("request-stale-terminate").unwrap(),
-            OutcomeClass::Error,
-            Some(Reason::new(ReasonCode::StateStaleVersion, "stale lifecycle").unwrap()),
-            Some(attempt),
-            JournalExtension::TransitionAttempt,
-        )
-        .unwrap()
     }
 
     #[test]
@@ -2015,12 +2012,21 @@ mod tests {
         insert_run(&conn, "run-1", "reg-1", "active");
         let run_id = RunId::parse("run-1").unwrap();
         let run = run_from_reads(&writer, &run_id);
-        let (completed, rejected) = terminate_drafts(&run_id);
-        let command = run_terminate::command(&run, None, completed, rejected).unwrap();
+        let (completed, rejected, stale) = terminate_drafts(&run_id);
+        let command = run_terminate::command(&run, None, completed, rejected, stale).unwrap();
+        conn.execute(
+            "UPDATE runs SET label = 'authoritative', label_version = 2 WHERE run_id = 'run-1'",
+            [],
+        )
+        .unwrap();
         let status = writer.terminate(command).unwrap();
-        assert!(!status.state_changed);
-        assert_eq!(status.workflow_state_version.value(), 1);
-        assert_eq!(status.lifecycle_version.value(), 2);
+        assert_eq!(status.outcome, OutcomeClass::Completed);
+        assert_eq!(status.run.lifecycle, Lifecycle::Terminated);
+        assert_eq!(status.run.current_state.as_str(), "draft");
+        assert_eq!(status.run.label.as_deref(), Some("authoritative"));
+        assert!(!status.commit.state_changed);
+        assert_eq!(status.commit.workflow_state_version.value(), 1);
+        assert_eq!(status.commit.lifecycle_version.value(), 2);
         let lifecycle: String = conn
             .query_row(
                 "SELECT lifecycle FROM runs WHERE run_id = 'run-1'",
@@ -2032,6 +2038,30 @@ mod tests {
     }
 
     #[test]
+    fn terminate_returns_authoritative_final_snapshot_after_concurrent_lifecycle_change() {
+        let (_dir, writer) = test_mutations();
+        let conn = Connection::open(writer.path()).unwrap();
+        insert_registration(&conn, "reg-1");
+        insert_run(&conn, "run-1", "reg-1", "active");
+        let run_id = RunId::parse("run-1").unwrap();
+        let run = run_from_reads(&writer, &run_id);
+        let (completed, rejected, stale) = terminate_drafts(&run_id);
+        let command = run_terminate::command(&run, None, completed, rejected, stale).unwrap();
+        conn.execute(
+            "UPDATE runs SET lifecycle = 'final', lifecycle_version = 2 WHERE run_id = 'run-1'",
+            [],
+        )
+        .unwrap();
+
+        let status = writer.terminate(command).unwrap();
+
+        assert_eq!(status.outcome, OutcomeClass::Rejected);
+        assert_eq!(status.run.lifecycle, Lifecycle::Final);
+        assert_eq!(status.run.current_state.as_str(), "draft");
+        assert_eq!(status.commit.lifecycle_version.value(), 2);
+    }
+
+    #[test]
     fn terminate_on_terminal_run_appends_rejection_without_mutation() {
         let (_dir, writer) = test_mutations();
         let conn = Connection::open(writer.path()).unwrap();
@@ -2039,10 +2069,12 @@ mod tests {
         insert_run(&conn, "run-1", "reg-1", "terminated");
         let run_id = RunId::parse("run-1").unwrap();
         let run = run_from_reads(&writer, &run_id);
-        let (completed, rejected) = terminate_drafts(&run_id);
-        let command = run_terminate::command(&run, None, completed, rejected).unwrap();
+        let (completed, rejected, stale) = terminate_drafts(&run_id);
+        let command = run_terminate::command(&run, None, completed, rejected, stale).unwrap();
         let status = writer.terminate(command).unwrap();
-        assert_eq!(status.lifecycle_version.value(), 1);
+        assert_eq!(status.outcome, OutcomeClass::Rejected);
+        assert_eq!(status.run.lifecycle, Lifecycle::Terminated);
+        assert_eq!(status.commit.lifecycle_version.value(), 1);
         let lifecycle: String = conn
             .query_row(
                 "SELECT lifecycle FROM runs WHERE run_id = 'run-1'",
@@ -2069,16 +2101,17 @@ mod tests {
         insert_run(&conn, "run-1", "reg-1", "active");
         let run_id = RunId::parse("run-1").unwrap();
         let run = run_from_reads(&writer, &run_id);
-        let (completed, rejected) = terminate_drafts(&run_id);
-        let command = run_terminate::command(&run, None, completed, rejected).unwrap();
+        let (completed, rejected, stale) = terminate_drafts(&run_id);
+        let command = run_terminate::command(&run, None, completed, rejected, stale).unwrap();
         conn.execute(
             "UPDATE runs SET lifecycle_version = 2 WHERE run_id = 'run-1'",
             [],
         )
         .unwrap();
-        let command = command.with_terminal_or_stale_entry(stale_terminate_disposition(&run));
         let status = writer.terminate(command).unwrap();
-        assert_eq!(status.lifecycle_version.value(), 2);
+        assert_eq!(status.outcome, OutcomeClass::Error);
+        assert_eq!(status.run.lifecycle, Lifecycle::Active);
+        assert_eq!(status.commit.lifecycle_version.value(), 2);
         let lifecycle: String = conn
             .query_row(
                 "SELECT lifecycle FROM runs WHERE run_id = 'run-1'",
@@ -2565,8 +2598,8 @@ mod tests {
             install_abort_trigger(&conn, trigger_sql);
             let run_id = RunId::parse("run-1").unwrap();
             let run = run_from_reads(&writer, &run_id);
-            let (completed, rejected) = terminate_drafts(&run_id);
-            let command = run_terminate::command(&run, None, completed, rejected).unwrap();
+            let (completed, rejected, stale) = terminate_drafts(&run_id);
+            let command = run_terminate::command(&run, None, completed, rejected, stale).unwrap();
             assert!(writer.terminate(command).is_err(), "{case}");
             assert_terminate_rolled_back(&conn, case);
         }

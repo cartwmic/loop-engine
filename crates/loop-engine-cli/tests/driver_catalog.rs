@@ -17,18 +17,26 @@ fn unique<'a>(values: &[&'a str]) -> BTreeSet<&'a str> {
 }
 
 #[test]
-fn runtime_catalogs_match_provider_foundation_exposure() {
-    let exposed = ["provider.add", "provider.list"];
+fn runtime_catalogs_match_checkpoint_b_exposure() {
+    let exposed = [
+        "provider.add",
+        "provider.list",
+        "provider.check",
+        "run.create",
+        "run.list",
+        "run.terminate",
+        "run.history",
+    ];
     assert_eq!(DRIVER_OPERATION_IDS, exposed);
     assert_eq!(REACHABLE_ROUTE_OPERATION_IDS, exposed);
     assert_eq!(E2E_OPERATION_IDS, exposed);
     assert_eq!(TRACE_OPERATION_IDS, exposed);
     assert_eq!(FACET_OPERATION_IDS, exposed);
-    assert_eq!(driver_operations().len(), 2);
-    assert_eq!(reachable_route_operations().len(), 2);
-    assert_eq!(e2e_operations().len(), 2);
-    assert_eq!(trace_operations().len(), 2);
-    assert_eq!(facet_operations().len(), 2);
+    assert_eq!(driver_operations().len(), 7);
+    assert_eq!(reachable_route_operations().len(), 7);
+    assert_eq!(e2e_operations().len(), 7);
+    assert_eq!(trace_operations().len(), 7);
+    assert_eq!(facet_operations().len(), 7);
 }
 
 #[test]

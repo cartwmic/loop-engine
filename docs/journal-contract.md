@@ -61,7 +61,7 @@ Each stored journal entry is one UTF-8 JSON object. Export writes the same objec
 | `transition.attempt` | `run.request` | `completed`, `rejected`, `error` |
 | `guidance.attempt` | `run.guidance` | `completed`, `rejected`, `error` |
 | `compatibility.attempt` | `run.compatibility` | `completed`, `rejected`, `error` |
-| `run.terminated` | `run.terminate` | `completed`, `rejected` |
+| `run.terminated` | `run.terminate` | `completed`, `rejected`, `error` |
 
 Provider-catalog operations (`provider.add`, `provider.update`, `provider.rename`, `provider.disable`, `provider.restore`, `provider.list`, `provider.check`) **MUST NOT** append per-run journal entries (I40). Rejected or errored `run.create` produces **no** run row and **no** journal entry.
 
@@ -297,7 +297,7 @@ Caller-owned overflow (note, actor, inline/selected evidence associations assemb
 | `run.request` | `transition.attempt` for every post-lookup attempt including unknown event, lifecycle denial, gate pass/fail, incompatibility, stale error, and completed self-loop; `provider_observations` when `evaluate_gates` is invoked |
 | `run.guidance` | `guidance.attempt` for every post-lookup attempt including unsupported, terminal denial, provider error, and completed guidance; `provider_observations` when `live_guidance` is invoked |
 | `run.compatibility` | `compatibility.attempt` for every post-lookup attempt; no state/version mutation; `provider_observations` when `check_compatibility` is invoked |
-| `run.terminate` | `run.terminated` on success; rejection when already terminal |
+| `run.terminate` | `run.terminated` on success, rejection when already terminal, and `state.stale_version` error when the authoritative active lifecycle version changed after lookup |
 | `run.list`, `run.show`, `run.graph`, `run.history`, `run.evidence.list`, `run.export` | **None** (read/export only) |
 
 Post-lookup rejections and errors **MUST** still append when persistence is available ([persistence.md](persistence.md) § Attempt journaling). Failures before run lookup produce no journal entry.

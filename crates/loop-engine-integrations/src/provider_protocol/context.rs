@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use loop_engine_core::capabilities::provider_invoker::ProviderRunSnapshot;
+use loop_engine_core::model::bounded::BoundError;
 use loop_engine_core::model::evidence::{EvidenceRecord, EvidenceSource};
 use loop_engine_core::model::graph_projection::SemanticGraphProjection;
 use loop_engine_core::model::graph_validation::ValidatedGraph;
@@ -12,6 +14,13 @@ use super::canonical::{graph_dto, metadata_value, value_from_core};
 use super::describe::observed_now;
 use super::dto::{EvidenceDto, RunSnapshotDto};
 use super::mapping::{MappingError, metadata};
+
+pub fn bounded_run_snapshot(run: &Run) -> Result<ProviderRunSnapshot, BoundError> {
+    let encoded_bytes = serde_json::to_vec(&run_snapshot(run))
+        .expect("provider run snapshot DTO is serializable")
+        .len();
+    ProviderRunSnapshot::new(run.clone(), encoded_bytes)
+}
 
 pub fn run_snapshot(run: &Run) -> RunSnapshotDto {
     let validated = ValidatedGraph::validate(run.graph().clone())

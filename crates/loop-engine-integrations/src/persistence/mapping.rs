@@ -386,7 +386,7 @@ fn canonical_to_graph_dto(dto: CanonicalGraphDto) -> Result<GraphDto, MappingErr
 
 fn parse_stored_inputs(
     inputs_json: &str,
-    declarations: &InputDeclarations,
+    _declarations: &InputDeclarations,
 ) -> Result<RunInputs, MappingError> {
     let raw: BTreeMap<String, Value> =
         serde_json::from_str(inputs_json).map_err(|error| MappingError::MalformedJson {
@@ -403,12 +403,10 @@ fn parse_stored_inputs(
             Ok((name, core))
         })
         .collect::<Result<Vec<_>, MappingError>>()?;
-    declarations
-        .validate(candidate)
-        .map_err(|error| MappingError::BoundedSemanticValue {
-            field: "inputs_json",
-            message: error.to_string(),
-        })
+    RunInputs::from_wire_candidate(candidate).map_err(|error| MappingError::BoundedSemanticValue {
+        field: "inputs_json",
+        message: error.to_string(),
+    })
 }
 
 fn parse_lifecycle(value: &str) -> Result<Lifecycle, MappingError> {
@@ -532,11 +530,12 @@ mod tests {
     use loop_engine_core::model::graph_validation::ValidatedGraph;
     use loop_engine_core::model::guidance::{LiveGuidanceCapability, StaticGuidance};
     use loop_engine_core::model::ids::{
-        EvidenceId, EvidenceKind, GraphRevision, ProviderHandle, RegistrationId, RunId, StateId,
+        EvidenceId, EvidenceKind, GraphRevision, InputKind, InputName, ProviderHandle,
+        RegistrationId, RunId, StateId,
     };
     use loop_engine_core::model::lifecycle::Lifecycle;
     use loop_engine_core::model::provider::ProviderRegistration;
-    use loop_engine_core::model::run_input::InputDeclarations;
+    use loop_engine_core::model::run_input::{InputDeclaration, InputDeclarations};
     use loop_engine_core::model::time::ObservedAt;
 
     use super::*;
@@ -595,6 +594,27 @@ mod tests {
             None,
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn stored_inputs_restore_provider_accepted_values_without_revalidating_declarations() {
+        let declarations = InputDeclarations::new(vec![InputDeclaration::new(
+            InputName::parse("ticket").unwrap(),
+            InputKind::parse("text").unwrap(),
+            true,
+            None,
+        )])
+        .unwrap();
+        let accepted_missing_required = parse_stored_inputs("{}", &declarations)
+            .expect("provider-accepted missing required value remains readable");
+        assert!(accepted_missing_required.values().is_empty());
+
+        let accepted_undeclared = parse_stored_inputs(
+            r#"{"provider_accepted":"value"}"#,
+            &InputDeclarations::default(),
+        )
+        .expect("stored provider-accepted undeclared value remains readable");
+        assert_eq!(accepted_undeclared.values().len(), 1);
     }
 
     #[test]

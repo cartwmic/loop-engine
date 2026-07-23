@@ -7,19 +7,59 @@
 use loop_engine_core::operations::catalog::OperationId;
 
 /// Operation IDs the production driver can dispatch. Updated only by exposure tasks.
-pub const DRIVER_OPERATION_IDS: &[&str] = &["provider.add", "provider.list"];
+pub const DRIVER_OPERATION_IDS: &[&str] = &[
+    "provider.add",
+    "provider.list",
+    "provider.check",
+    "run.create",
+    "run.list",
+    "run.terminate",
+    "run.history",
+];
 
 /// Operation IDs registered as reachable production routes. Updated only by exposure tasks.
-pub const REACHABLE_ROUTE_OPERATION_IDS: &[&str] = &["provider.add", "provider.list"];
+pub const REACHABLE_ROUTE_OPERATION_IDS: &[&str] = &[
+    "provider.add",
+    "provider.list",
+    "provider.check",
+    "run.create",
+    "run.list",
+    "run.terminate",
+    "run.history",
+];
 
 /// Operation IDs observed in passing required E2E scenarios. Updated by T145+.
-pub const E2E_OPERATION_IDS: &[&str] = &["provider.add", "provider.list"];
+pub const E2E_OPERATION_IDS: &[&str] = &[
+    "provider.add",
+    "provider.list",
+    "provider.check",
+    "run.create",
+    "run.list",
+    "run.terminate",
+    "run.history",
+];
 
 /// Operation IDs observed in correlated passing trace files. Updated by T145+.
-pub const TRACE_OPERATION_IDS: &[&str] = &["provider.add", "provider.list"];
+pub const TRACE_OPERATION_IDS: &[&str] = &[
+    "provider.add",
+    "provider.list",
+    "provider.check",
+    "run.create",
+    "run.list",
+    "run.terminate",
+    "run.history",
+];
 
 /// Operation IDs with closed facet manifests. Updated by exposure tasks.
-pub const FACET_OPERATION_IDS: &[&str] = &["provider.add", "provider.list"];
+pub const FACET_OPERATION_IDS: &[&str] = &[
+    "provider.add",
+    "provider.list",
+    "provider.check",
+    "run.create",
+    "run.list",
+    "run.terminate",
+    "run.history",
+];
 
 fn parse_catalog_ids(values: &[&str]) -> Vec<OperationId> {
     values

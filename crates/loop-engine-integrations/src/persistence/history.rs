@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use loop_engine_core::capabilities::run_reader::RunHistoryReader;
 use loop_engine_core::capabilities::{Page, PageCursor, PageRequest};
 use loop_engine_core::model::annotation::{ActorMetadata, Note};
 use loop_engine_core::model::attempt::{
@@ -226,6 +227,18 @@ impl SqliteHistoryReads {
             verify_journal_allocator_tail(allocator_next, last.sequence().value())?;
         }
         Ok(page)
+    }
+}
+
+impl RunHistoryReader for SqliteHistoryReads {
+    type Error = HistoryReadError;
+
+    fn history(
+        &self,
+        run_id: &RunId,
+        request: &PageRequest<()>,
+    ) -> Result<Page<JournalEntry>, Self::Error> {
+        SqliteHistoryReads::history(self, run_id, request)
     }
 }
 

@@ -344,9 +344,8 @@ fn validate_extension_outcome(
             OutcomeClass::Rejected => added.is_none(),
             OutcomeClass::Error => false,
         },
-        JournalExtension::Annotation | JournalExtension::RunTerminated => {
-            outcome != OutcomeClass::Error
-        }
+        JournalExtension::Annotation => outcome != OutcomeClass::Error,
+        JournalExtension::RunTerminated => true,
         JournalExtension::LabelChanged { change } => match outcome {
             OutcomeClass::Completed => change.is_some(),
             OutcomeClass::Rejected => change.is_none(),
