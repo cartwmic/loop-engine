@@ -16,7 +16,7 @@ use loop_engine_integrations::export::SqliteAuditExporter;
 use loop_engine_integrations::persistence::{
     CompatibilityAttemptWriter, GuidanceAttemptWriter, OptionalTraceSink, PersistenceError,
     SqliteEventAttemptWriter, SqliteEvidenceReads, SqliteHistoryReads, SqliteProviderCatalog,
-    SqliteRunMutations, SqliteRunReads, SqliteRunWriter, SqliteStore,
+    SqliteRunMutations, SqliteRunReads, SqliteRunRequestReader, SqliteRunWriter, SqliteStore,
 };
 use loop_engine_integrations::provider_protocol::SubprocessProviderInvoker;
 use loop_engine_integrations::sha256_digest::Sha256DigestComputer;
@@ -111,6 +111,7 @@ pub struct Application {
     pub guidance: GuidanceAttemptWriter,
     pub compatibility: CompatibilityAttemptWriter,
     pub evidence_reads: SqliteEvidenceReads,
+    pub run_request_reads: SqliteRunRequestReader,
     pub history: SqliteHistoryReads,
     pub exporter: SqliteAuditExporter,
     store: SqliteStore,
@@ -142,6 +143,8 @@ pub fn build_application_from_configuration(
     let store = SqliteStore::open_traced(&database_path, persistence_trace.clone())?;
     let adapters = persistence_adapters(&database_path, persistence_trace.clone());
     let invoker = SubprocessProviderInvoker::new(trace.writer());
+    let run_request_reads =
+        SqliteRunRequestReader::new(adapters.run_reads.clone(), adapters.evidence_reads.clone());
     Ok(Application {
         trace,
         configuration,
@@ -157,6 +160,7 @@ pub fn build_application_from_configuration(
         guidance: adapters.guidance,
         compatibility: adapters.compatibility,
         evidence_reads: adapters.evidence_reads,
+        run_request_reads,
         history: adapters.history,
         exporter: SqliteAuditExporter::with_trace(database_path, persistence_trace),
         store,

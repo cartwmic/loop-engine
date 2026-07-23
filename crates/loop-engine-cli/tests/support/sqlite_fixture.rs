@@ -163,6 +163,26 @@ pub fn set_run_projection_state(
     )
 }
 
+pub fn set_provider_registration_command(
+    db_path: &Path,
+    registration_id: &str,
+    argv: &[&str],
+    timeout_seconds: u64,
+) -> Result<(), SqliteFixtureError> {
+    let registration_id = sql_string(registration_id);
+    let argv_json =
+        serde_json::to_string(argv).map_err(|error| SqliteFixtureError::Io(error.to_string()))?;
+    let argv_json = sql_string(&argv_json);
+    run_sqlite(
+        db_path,
+        &format!(
+            "UPDATE provider_registrations
+             SET argv_json = {argv_json}, timeout_seconds = {timeout_seconds}
+             WHERE registration_id = {registration_id};"
+        ),
+    )
+}
+
 pub fn tombstone_provider_registration(
     db_path: &Path,
     registration_id: &str,

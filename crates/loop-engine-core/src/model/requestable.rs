@@ -1,3 +1,4 @@
+use super::graph::WorkflowGraph;
 use super::ids::{EventId, GateId, StateId};
 use super::lifecycle::Lifecycle;
 use super::run::Run;
@@ -10,14 +11,21 @@ pub struct RequestableEvent {
 }
 
 pub fn project(run: &Run) -> Vec<RequestableEvent> {
-    if run.lifecycle() != Lifecycle::Active {
+    project_state(run.graph(), run.lifecycle(), run.current_state())
+}
+
+pub fn project_state(
+    graph: &WorkflowGraph,
+    lifecycle: Lifecycle,
+    current_state: &StateId,
+) -> Vec<RequestableEvent> {
+    if lifecycle != Lifecycle::Active {
         return vec![];
     }
-    let mut events = run
-        .graph()
+    let mut events = graph
         .transitions()
         .iter()
-        .filter(|transition| transition.source() == run.current_state())
+        .filter(|transition| transition.source() == current_state)
         .map(|transition| RequestableEvent {
             event: transition.event().clone(),
             target: transition.target().clone(),

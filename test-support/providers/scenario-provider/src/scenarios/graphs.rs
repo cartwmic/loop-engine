@@ -173,6 +173,28 @@ pub fn describe(scenario: Scenario, invocation_ordinal: Option<u64>) -> Describe
             live_guidance_supported: false,
             metadata: None,
         },
+        Scenario::GatePass
+        | Scenario::GateFail
+        | Scenario::GateMixed
+        | Scenario::GateExactSetViolation
+        | Scenario::GateCallerEvidence
+        | Scenario::GateProviderEvidence
+        | Scenario::GateProviderEvidenceDuplicate
+        | Scenario::GateProviderEvidenceCollision
+        | Scenario::GateIncompatible
+        | Scenario::GateEvaluationError => GraphDto {
+            initial_state: "draft".into(),
+            states: vec![state("draft", false), state("approved", true)],
+            transitions: vec![transition(
+                "draft",
+                "approve",
+                "approved",
+                &["quality", "policy"],
+            )],
+            input_declarations: sample_inputs(),
+            live_guidance_supported: false,
+            metadata: None,
+        },
         _ => GraphDto {
             initial_state: "draft".into(),
             states: vec![state("draft", false)],

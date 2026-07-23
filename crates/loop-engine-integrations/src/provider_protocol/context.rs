@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use loop_engine_core::capabilities::provider_invoker::ProviderRunSnapshot;
+use loop_engine_core::capabilities::provider_invoker::{EvidenceContext, ProviderRunSnapshot};
 use loop_engine_core::model::bounded::BoundError;
 use loop_engine_core::model::evidence::{EvidenceRecord, EvidenceSource};
 use loop_engine_core::model::graph_projection::SemanticGraphProjection;
@@ -14,6 +14,20 @@ use super::canonical::{graph_dto, metadata_value, value_from_core};
 use super::describe::observed_now;
 use super::dto::{EvidenceDto, RunSnapshotDto};
 use super::mapping::{MappingError, metadata};
+
+pub fn bounded_evidence_context(
+    field: &'static str,
+    records: &[EvidenceRecord],
+) -> Result<EvidenceContext, BoundError> {
+    let encoded_bytes = if records.is_empty() {
+        0
+    } else {
+        serde_json::to_vec(&records.iter().map(evidence_dto).collect::<Vec<_>>())
+            .expect("provider evidence DTO is serializable")
+            .len()
+    };
+    EvidenceContext::new(field, records.to_vec(), encoded_bytes)
+}
 
 pub fn bounded_run_snapshot(run: &Run) -> Result<ProviderRunSnapshot, BoundError> {
     let encoded_bytes = serde_json::to_vec(&run_snapshot(run))

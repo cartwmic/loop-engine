@@ -1,5 +1,7 @@
 use loop_engine_core::capabilities::id_generator::IdGenerator;
-use loop_engine_core::capabilities::provider_invoker::{CompatibilityRequest, InvocationError};
+use loop_engine_core::capabilities::provider_invoker::{
+    CompatibilityRequest, GateRequest, InvocationError,
+};
 use loop_engine_core::capabilities::time::TimeSource;
 use loop_engine_core::model::attempt::{AttemptFacts, JournalExtension};
 use loop_engine_core::model::guidance::{LiveGuidanceCapability, StaticGuidance};
@@ -13,18 +15,20 @@ use loop_engine_core::operations::provider_check::{
     ProviderCheckExecutionError, TraceBudgetDisposition,
 };
 use loop_engine_core::operations::run_create::{RunCreateError, RunCreateExecutionError};
+use loop_engine_core::operations::run_request::{self, RequestExecutionError};
 use std::convert::Infallible;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use loop_engine_integrations::configuration::{ConfigurationError, normalize_registration_path};
+use loop_engine_integrations::evidence_inputs::load_optional as load_inline_evidence;
 use loop_engine_integrations::persistence::{
-    CatalogPersistenceError, HistoryReadError, RunMutationError, RunReadError,
+    CatalogPersistenceError, HistoryReadError, RunMutationError, RunReadError, RunRequestReadError,
     journal_entry_value as render_journal_entry,
 };
 use loop_engine_integrations::provider_protocol::AdapterError;
-use loop_engine_integrations::provider_protocol::bounded_run_snapshot;
 use loop_engine_integrations::provider_protocol::canonical::value_from_core;
+use loop_engine_integrations::provider_protocol::{bounded_evidence_context, bounded_run_snapshot};
 use loop_engine_integrations::run_inputs::{RunInputLoadError, load_optional as load_run_inputs};
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -37,9 +41,10 @@ use crate::commands::provider::{
 };
 use crate::commands::run::{
     RunCreateDelivery, RunCreateRequest, RunHistoryError, RunHistoryRequest, RunListError,
-    RunListRequest, RunMapError, RunTerminateDelivery, build_terminate_command, create, history,
-    list, map_create_delivery, map_history_request, map_list_request as map_run_list_request,
-    map_show_run_id, map_terminate_delivery, show, terminate,
+    RunListRequest, RunMapError, RunRequestDelivery, RunTerminateDelivery, build_terminate_command,
+    create, history, list, map_create_delivery, map_history_request,
+    map_list_request as map_run_list_request, map_request_delivery, map_show_run_id,
+    map_terminate_delivery, show, terminate,
 };
 use crate::composition::Application;
 use crate::dispatch::{
@@ -95,6 +100,10 @@ pub enum PreparedApplicationCommand {
     RunTerminate {
         request: Value,
         delivery: RunTerminateDelivery,
+    },
+    RunRequest {
+        request: Value,
+        delivery: RunRequestDelivery,
     },
 }
 
@@ -211,6 +220,19 @@ pub fn prepare_application_command(
                 delivery: map_terminate_delivery(&parsed)?,
             })
         }
+        PlannedCommand::RunRequest(parsed) => {
+            let request = json!({
+                "run_id": parsed.run_id.as_str(),
+                "event": parsed.event.as_str(),
+                "evidence_ids": parsed.evidence_id.iter().map(|value| value.as_str()).collect::<Vec<_>>(),
+                "evidence": parsed.evidence.as_ref().map(|value| value.as_str()),
+                "note": parsed.note.as_ref().map(|value| value.as_str()),
+            });
+            Ok(PreparedApplicationCommand::RunRequest {
+                request,
+                delivery: map_request_delivery(&parsed)?,
+            })
+        }
         _ => unreachable!("startup prepares only exposed application routes"),
     }
 }
@@ -320,6 +342,17 @@ pub fn execute_application_command(
                     operation_data: json!({}),
                 },
                 || Ok(execute_terminate(application, delivery)),
+            )
+        }
+        PreparedApplicationCommand::RunRequest { request, delivery } => {
+            dispatch_traced_operation_with_data(
+                &application.trace,
+                TracedDispatchInput {
+                    operation: operation_id("run.request"),
+                    request,
+                    operation_data: json!({}),
+                },
+                || Ok(execute_request(application, delivery)),
             )
         }
     }
@@ -716,6 +749,97 @@ fn execute_create(
     }
 }
 
+fn execute_request(
+    application: &Application,
+    delivery: RunRequestDelivery,
+) -> (TracedOperationResult, Value) {
+    let observed_at = application.clock.now().expect("system clock is infallible");
+    let inline_path = delivery.inline_evidence_path.as_deref().map(Path::new);
+    let inline_evidence = load_inline_evidence(inline_path, observed_at);
+    let event = delivery.event.clone();
+    let command_request_id =
+        loop_engine_core::model::ids::RequestId::parse(application.trace.request_id())
+            .expect("startup trace request ID is a bounded identifier");
+    let result = run_request::execute_with_inline_result(
+        &application.run_request_reads,
+        &application.catalog,
+        &application.invoker,
+        &application.event_attempts,
+        &delivery.run_id,
+        &delivery.event,
+        &delivery.selected_evidence_ids,
+        inline_evidence.as_deref(),
+        delivery.note.as_ref(),
+        |_, run, selected| {
+            let inline = inline_evidence.as_deref().unwrap_or(&[]);
+            Ok::<GateRequest, loop_engine_core::model::bounded::BoundError>(GateRequest {
+                request_id: application
+                    .ids
+                    .request_id()
+                    .expect("UUID allocation is infallible"),
+                run: bounded_run_snapshot(run)?,
+                event: event.clone(),
+                selected_evidence: bounded_evidence_context("selected_evidence", selected)?,
+                inline_evidence: bounded_evidence_context("inline_evidence", inline)?,
+            })
+        },
+        |run, selected, note, resolution| {
+            run_request::command(
+                run,
+                &delivery.event,
+                selected,
+                inline_evidence.as_deref().unwrap_or(&[]),
+                note,
+                resolution,
+                observed_at,
+                command_request_id.clone(),
+            )
+        },
+    );
+    match result {
+        Ok(execution) => {
+            let snapshot = RunSnapshot {
+                run_id: delivery.run_id,
+                label: execution.run.label,
+                lifecycle: execution.run.lifecycle,
+                current_state: execution.run.current_state,
+                state_changed: execution.commit.state_changed,
+            };
+            let data = OutcomeData::new(
+                Some(snapshot),
+                Some(execution.requestable_events),
+                Some(execution.evidence_recorded),
+            )
+            .expect("request execution has valid run outcome shape");
+            let outcome = PublicOutcome::new(
+                execution.outcome,
+                execution.reason,
+                data,
+                execution.diagnostics,
+            )
+            .expect("committed request draft is a valid public outcome");
+            delivered(outcome, json!({}), execution.commit.committed)
+        }
+        Err(RequestExecutionError::Lookup(error)) => delivered(
+            failed(run_request_read_reason(&error), error.to_string()),
+            json!({}),
+            false,
+        ),
+        Err(
+            RequestExecutionError::Command(error) | RequestExecutionError::InvalidCommand(error),
+        ) => delivered(
+            failed(ReasonCode::PersistenceFailed, error.to_string()),
+            json!({}),
+            false,
+        ),
+        Err(RequestExecutionError::Writer(error)) => delivered(
+            failed(ReasonCode::PersistenceFailed, error.to_string()),
+            json!({}),
+            false,
+        ),
+    }
+}
+
 fn execute_terminate(
     application: &Application,
     delivery: RunTerminateDelivery,
@@ -942,6 +1066,13 @@ fn run_read_reason(error: &RunReadError) -> ReasonCode {
         RunReadError::NotFound { .. } => ReasonCode::RunNotFound,
         RunReadError::Page(_) => ReasonCode::CursorInvalid,
         _ => ReasonCode::PersistenceFailed,
+    }
+}
+
+fn run_request_read_reason(error: &RunRequestReadError) -> ReasonCode {
+    match error {
+        RunRequestReadError::Run(error) => run_read_reason(error),
+        RunRequestReadError::Evidence(_) => ReasonCode::PersistenceFailed,
     }
 }
 

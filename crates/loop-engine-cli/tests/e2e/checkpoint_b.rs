@@ -1,37 +1,16 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::OnceLock;
+use std::path::Path;
 
 use serde_json::Value;
 
 use super::support::{
     E2eSandbox, count_journal_entries, count_runs, parse_correlated_trace, parse_correlated_value,
-    parse_structured_stdout, resolve_provider_executable_path, scenario_provider_manifest_path,
-    tombstone_provider_registration,
+    parse_structured_stdout, scenario_provider_executable, tombstone_provider_registration,
 };
 
-static SCENARIO_PROVIDER: OnceLock<PathBuf> = OnceLock::new();
-
-fn scenario_provider() -> &'static PathBuf {
-    SCENARIO_PROVIDER.get_or_init(|| {
-        if let Ok(path) = resolve_provider_executable_path("scenario-provider", "scenario-provider")
-        {
-            return path;
-        }
-        let manifest = scenario_provider_manifest_path();
-        let status = Command::new("cargo")
-            .args(["build", "--manifest-path"])
-            .arg(&manifest)
-            .arg("--locked")
-            .env_remove("RUSTUP_TOOLCHAIN")
-            .status()
-            .expect("build scenario provider fixture");
-        assert!(status.success(), "scenario provider fixture build failed");
-        resolve_provider_executable_path("scenario-provider", "scenario-provider")
-            .expect("built scenario provider fixture")
-    })
+fn scenario_provider() -> &'static Path {
+    scenario_provider_executable().as_path()
 }
 
 fn run_json(sandbox: &E2eSandbox, label: &str, args: Vec<String>) -> Value {

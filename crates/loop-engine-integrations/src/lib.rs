@@ -1,6 +1,7 @@
 //! External adapters and capability implementations.
 
 pub mod configuration;
+pub mod evidence_inputs;
 pub mod export;
 pub mod persistence;
 pub mod provider_process;

@@ -8,18 +8,22 @@ use crate::capabilities::provider_catalog::{
     ProviderCatalog, ProviderResolveFailure, ResolvedProviderConfig,
 };
 use crate::capabilities::provider_invoker::{GateRequest, InvocationError, ProviderInvoker};
-use crate::capabilities::run_reader::{RunReader, SelectedEvidenceReadError};
+use crate::capabilities::run_reader::{RunRequestReader, SelectedEvidenceReadError};
 use crate::model::annotation::Note;
-use crate::model::attempt::{GateVerdictResult, ProviderFact, ProviderRole};
+use crate::model::attempt::{
+    AttemptFacts, EvidenceAssociations, GateVerdictFact, GateVerdictFacts, GateVerdictResult,
+    JournalExtension, ProviderFact, ProviderRole, TransitionFact,
+};
 use crate::model::decision::{DecisionError, TransitionDecision, resolve_gate_free, resolve_gated};
 use crate::model::diagnostic::Diagnostic;
 use crate::model::evidence::{EvidenceAssociation, EvidenceRecord};
 use crate::model::gate::GateEvaluation;
-use crate::model::ids::{EventId, EvidenceId, RunId, StateId};
+use crate::model::ids::{EventId, EvidenceId, RequestId, RunId, StateId};
 use crate::model::journal::{JournalDraft, JournalEntryKind};
 use crate::model::outcome::OutcomeClass;
 use crate::model::reason::{Reason, ReasonCode};
 use crate::model::run::Run;
+use crate::model::time::ObservedAt;
 use crate::operations::{CommandError, validate_journal};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +37,12 @@ pub enum RequestExecutionDisposition {
 pub struct RequestExecution {
     pub disposition: RequestExecutionDisposition,
     pub commit: CommitStatus,
+    pub outcome: OutcomeClass,
+    pub reason: Option<Reason>,
+    pub diagnostics: Vec<Diagnostic>,
+    pub evidence_recorded: crate::model::outcome::EvidenceRecordedStatus,
+    pub run: crate::capabilities::persistence_commands::CommittedRunSnapshot,
+    pub requestable_events: Vec<crate::model::requestable::RequestableEvent>,
 }
 
 pub enum RequestResolution<'a, C, R, I, Q> {
@@ -72,6 +82,324 @@ pub enum RequestExecutionError<R, J, W> {
     Writer(W),
 }
 
+/// Builds the complete authoritative attempt command for one resolved request.
+/// Delivery supplies only time/request identity; core owns disposition, journal facts,
+/// evidence associations, and stale-version semantics.
+#[allow(clippy::too_many_arguments)]
+pub fn command<C, R, I, Q>(
+    run: &Run,
+    event: &EventId,
+    selected: &[EvidenceRecord],
+    inline_evidence: &[EvidenceRecord],
+    note: Option<&Note>,
+    resolution: &RequestResolution<'_, C, R, I, Q>,
+    observed_at: ObservedAt,
+    request_id: RequestId,
+) -> Result<CommitEventAttemptCommand, CommandError> {
+    let provider_evidence = authoritative_provider_evidence(resolution);
+    let provider_scopes = authoritative_provider_gate_scopes(resolution);
+    let provider_observations = provider_observations_for_resolution(resolution);
+    let gate_verdict_facts = gate_facts_for_resolution(run, event, resolution)?;
+    let diagnostics = diagnostics_for_resolution(resolution);
+    let (outcome, reason) = outcome_for_resolution(resolution)?;
+    let (target_state, target_lifecycle, applied) = command_transition(run, event, resolution);
+    let retain_input_evidence = !matches!(resolution, RequestResolution::InputEvidenceInvalid);
+    let retained_inline = if retain_input_evidence {
+        inline_evidence.to_vec()
+    } else {
+        Vec::new()
+    };
+    let retained_selected = if retain_input_evidence { selected } else { &[] };
+
+    let evidence = EvidenceAssociations {
+        inline: retained_inline.clone(),
+        selected_ids: retained_selected
+            .iter()
+            .map(EvidenceRecord::id)
+            .cloned()
+            .collect(),
+        provider_recorded_ids: provider_evidence
+            .iter()
+            .map(EvidenceRecord::id)
+            .cloned()
+            .collect(),
+    };
+    let associations = retained_inline
+        .iter()
+        .chain(retained_selected.iter())
+        .map(|record| EvidenceAssociation::new(record.id().clone(), Some(event.clone()), None))
+        .chain(provider_evidence.iter().map(|record| {
+            EvidenceAssociation::new(
+                record.id().clone(),
+                Some(event.clone()),
+                provider_scopes.get(record.id()).cloned(),
+            )
+        }))
+        .collect::<Vec<_>>();
+    let transition = TransitionFact::new(
+        event.clone(),
+        run.current_state().clone(),
+        target_state.clone(),
+        applied,
+    )
+    .map_err(|_| CommandError::JournalMismatch)?;
+    let ordinary_attempt = AttemptFacts {
+        transition: Some(transition.clone()),
+        provider_observations: provider_observations.clone(),
+        gate_verdict_facts: gate_verdict_facts.clone(),
+        evidence_associations: Some(evidence.clone()),
+        evidence_recorded: Some(evidence.recorded_status()),
+        note: note.cloned(),
+        diagnostics: diagnostics.clone(),
+        ..AttemptFacts::default()
+    };
+    let ordinary = JournalDraft::new(
+        run.id().clone(),
+        observed_at,
+        "run.request",
+        request_id.clone(),
+        outcome,
+        reason,
+        Some(ordinary_attempt),
+        JournalExtension::TransitionAttempt,
+    )
+    .map_err(|_| CommandError::JournalMismatch)?;
+    let stale_evidence = EvidenceAssociations::default();
+    let stale_attempt = AttemptFacts {
+        transition: Some(
+            TransitionFact::new(
+                event.clone(),
+                run.current_state().clone(),
+                target_state.clone(),
+                false,
+            )
+            .map_err(|_| CommandError::JournalMismatch)?,
+        ),
+        provider_observations,
+        gate_verdict_facts,
+        evidence_associations: Some(stale_evidence.clone()),
+        evidence_recorded: Some(stale_evidence.recorded_status()),
+        note: note.cloned(),
+        diagnostics,
+        ..AttemptFacts::default()
+    };
+    let stale = JournalDraft::new(
+        run.id().clone(),
+        observed_at,
+        "run.request",
+        request_id,
+        OutcomeClass::Error,
+        Some(
+            Reason::new(
+                ReasonCode::StateStaleVersion,
+                "run changed before event attempt committed",
+            )
+            .map_err(|_| CommandError::JournalMismatch)?,
+        ),
+        Some(stale_attempt),
+        JournalExtension::TransitionAttempt,
+    )
+    .map_err(|_| CommandError::JournalMismatch)?;
+    let candidate = CommitEventAttemptCommand::from_parts(EventAttemptParts {
+        run_id: run.id().clone(),
+        expected_workflow_version: run.workflow_state_version(),
+        expected_lifecycle_version: run.lifecycle_version(),
+        source_state: run.current_state().clone(),
+        target_state,
+        target_lifecycle,
+        inline_evidence: retained_inline,
+        associations,
+        provider_evidence,
+        journal_entry: ordinary,
+        stale_journal_entry: stale,
+    });
+    revalidate_request_command(
+        run,
+        event,
+        selected,
+        inline_evidence,
+        note,
+        resolution,
+        candidate,
+    )
+}
+
+fn provider_observations_for_resolution<C, R, I, Q>(
+    resolution: &RequestResolution<'_, C, R, I, Q>,
+) -> Vec<ProviderFact> {
+    match resolution {
+        RequestResolution::Completed {
+            provider_binding, ..
+        }
+        | RequestResolution::DecisionRejected {
+            provider_binding, ..
+        } => provider_binding
+            .map(|(fact, _, _)| vec![fact.clone()])
+            .unwrap_or_default(),
+        RequestResolution::ProviderFactInvalid { fact, .. }
+        | RequestResolution::ProviderEvidenceInvalid { fact, .. } => vec![(*fact).clone()],
+        RequestResolution::InvocationError {
+            error: InvocationError::Transport { fact, .. },
+            ..
+        } => vec![(**fact).clone()],
+        _ => Vec::new(),
+    }
+}
+
+fn gate_facts_for_resolution<C, R, I, Q>(
+    run: &Run,
+    event: &EventId,
+    resolution: &RequestResolution<'_, C, R, I, Q>,
+) -> Result<Option<GateVerdictFacts>, CommandError> {
+    let required = required_gates_for_resolution(run, event, resolution);
+    let result = match resolution {
+        RequestResolution::Completed { decision, .. } if !decision.required_gates().is_empty() => {
+            Some(GateVerdictResult::Verdicts(
+                decision
+                    .required_gates()
+                    .iter()
+                    .cloned()
+                    .map(|gate_id| GateVerdictFact::new(gate_id, true, None))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|_| CommandError::JournalMismatch)?,
+            ))
+        }
+        RequestResolution::DecisionRejected {
+            error: DecisionError::GateFailed { verdicts },
+            ..
+        } => Some(GateVerdictResult::Verdicts(
+            verdicts
+                .iter()
+                .map(|verdict| GateVerdictFact::new(verdict.gate().clone(), verdict.passed(), None))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| CommandError::JournalMismatch)?,
+        )),
+        RequestResolution::DecisionRejected {
+            error: DecisionError::Incompatible { diagnostics },
+            ..
+        } => Some(GateVerdictResult::Incompatibility(
+            diagnostics
+                .first()
+                .cloned()
+                .ok_or(CommandError::JournalMismatch)?,
+        )),
+        RequestResolution::DecisionRejected {
+            error: DecisionError::EvaluationError { diagnostics },
+            ..
+        } => Some(GateVerdictResult::EvaluationError(
+            crate::model::diagnostic::Diagnostics::new(diagnostics.clone())
+                .map_err(|_| CommandError::JournalMismatch)?,
+        )),
+        _ => None,
+    };
+    result
+        .map(|result| {
+            GateVerdictFacts::new(event.clone(), required, result)
+                .map_err(|_| CommandError::JournalMismatch)
+        })
+        .transpose()
+}
+
+fn diagnostics_for_resolution<C, R, I, Q>(
+    resolution: &RequestResolution<'_, C, R, I, Q>,
+) -> Vec<Diagnostic> {
+    match resolution {
+        RequestResolution::DecisionRejected {
+            error: DecisionError::MalformedVerdicts { source, .. },
+            ..
+        } => malformed_verdict_diagnostics(source),
+        RequestResolution::DecisionRejected {
+            error:
+                DecisionError::Incompatible { diagnostics }
+                | DecisionError::EvaluationError { diagnostics },
+            ..
+        } => diagnostics.clone(),
+        RequestResolution::ProviderFactInvalid { .. } => invalid_provider_fact_diagnostics(),
+        RequestResolution::ProviderEvidenceInvalid { .. } => {
+            invalid_provider_evidence_diagnostics()
+        }
+        RequestResolution::InvocationError {
+            error: InvocationError::Transport { failure, .. },
+            ..
+        } => failure.diagnostics.clone(),
+        _ => Vec::new(),
+    }
+}
+
+fn outcome_for_resolution<C, R, I, Q>(
+    resolution: &RequestResolution<'_, C, R, I, Q>,
+) -> Result<(OutcomeClass, Option<Reason>), CommandError> {
+    let failure = match resolution {
+        RequestResolution::Completed { .. } => return Ok((OutcomeClass::Completed, None)),
+        RequestResolution::DecisionRejected { error, .. } => {
+            (reason_code_for_decision_error(error), error.to_string())
+        }
+        RequestResolution::ProviderFactInvalid { .. } => (
+            ReasonCode::ProviderProtocolMalformed,
+            "provider fact does not match authoritative invocation".into(),
+        ),
+        RequestResolution::ProviderEvidenceInvalid { .. } => (
+            ReasonCode::ProviderEvidenceMalformed,
+            "provider evidence conflicts with request evidence".into(),
+        ),
+        RequestResolution::InputEvidenceInvalid => (
+            ReasonCode::EvidenceInvalid,
+            "inline evidence is invalid".into(),
+        ),
+        RequestResolution::SelectionInvalid | RequestResolution::SelectionUnavailable => (
+            ReasonCode::EvidenceSelectionInvalid,
+            "selected evidence is invalid or unavailable".into(),
+        ),
+        RequestResolution::SelectionReadError(_) => (
+            ReasonCode::PersistenceFailed,
+            "selected evidence could not be read".into(),
+        ),
+        RequestResolution::CatalogError(_, failure) => (
+            failure.reason_code(),
+            "run provider configuration is unavailable".into(),
+        ),
+        RequestResolution::GateRequestError(_) => (
+            ReasonCode::ResourceExhausted,
+            "provider gate request exceeds resource bounds".into(),
+        ),
+        RequestResolution::InvocationError {
+            error: InvocationError::TraceBudgetUnavailable,
+            ..
+        } => (
+            ReasonCode::ResourceExhausted,
+            "provider trace budget unavailable".into(),
+        ),
+        RequestResolution::InvocationError {
+            error: InvocationError::Transport { failure, .. },
+            ..
+        } => return Ok((OutcomeClass::Error, Some(failure.reason.clone()))),
+    };
+    let reason = Reason::new(failure.0, failure.1).map_err(|_| CommandError::JournalMismatch)?;
+    Ok((failure.0.outcome_class(), Some(reason)))
+}
+
+fn command_transition<C, R, I, Q>(
+    run: &Run,
+    event: &EventId,
+    resolution: &RequestResolution<'_, C, R, I, Q>,
+) -> (
+    Option<StateId>,
+    Option<crate::model::lifecycle::Lifecycle>,
+    bool,
+) {
+    match resolution {
+        RequestResolution::Completed { decision, .. } => (
+            Some(decision.target().clone()),
+            Some(decision.lifecycle()),
+            true,
+        ),
+        RequestResolution::DecisionRejected { error, .. } => {
+            (rejected_target(run, event, error), None, false)
+        }
+        _ => (transition_target(run, event), None, false),
+    }
+}
+
 /// Coordinates one lookup, optional one config resolution/provider call, and one CAS commit.
 /// Every post-lookup disposition reaches the command factory and atomic writer exactly once.
 #[allow(clippy::too_many_arguments)]
@@ -85,11 +413,58 @@ pub fn execute<R, C, I, W, G, F, Q, J>(
     selected_ids: &[EvidenceId],
     inline_evidence: &[EvidenceRecord],
     note: Option<&Note>,
+    gate_request: G,
+    command: F,
+) -> Result<RequestExecution, RequestExecutionError<R::Error, J, W::Error>>
+where
+    R: RunRequestReader,
+    C: ProviderCatalog,
+    I: ProviderInvoker,
+    W: EventAttemptWriter,
+    G: FnMut(
+        &crate::capabilities::provider_catalog::ResolvedProviderConfig,
+        &Run,
+        &[EvidenceRecord],
+    ) -> Result<GateRequest, Q>,
+    F: for<'a> FnMut(
+        &Run,
+        &[EvidenceRecord],
+        Option<&Note>,
+        &RequestResolution<'a, C::Error, R::Error, I::TransportError, Q>,
+    ) -> Result<CommitEventAttemptCommand, J>,
+{
+    execute_with_inline_result::<R, C, I, W, G, F, Q, J, std::convert::Infallible>(
+        reader,
+        catalog,
+        invoker,
+        writer,
+        run_id,
+        event,
+        selected_ids,
+        Ok(inline_evidence),
+        note,
+        gate_request,
+        command,
+    )
+}
+
+/// Production variant preserving invalid inline-input disposition after successful run lookup.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_with_inline_result<R, C, I, W, G, F, Q, J, E>(
+    reader: &R,
+    catalog: &C,
+    invoker: &I,
+    writer: &W,
+    run_id: &RunId,
+    event: &EventId,
+    selected_ids: &[EvidenceId],
+    inline_evidence: Result<&[EvidenceRecord], &E>,
+    note: Option<&Note>,
     mut gate_request: G,
     mut command: F,
 ) -> Result<RequestExecution, RequestExecutionError<R::Error, J, W::Error>>
 where
-    R: RunReader,
+    R: RunRequestReader,
     C: ProviderCatalog,
     I: ProviderInvoker,
     W: EventAttemptWriter,
@@ -106,6 +481,22 @@ where
     ) -> Result<CommitEventAttemptCommand, J>,
 {
     let run = reader.get(run_id).map_err(RequestExecutionError::Lookup)?;
+    let inline_evidence = match inline_evidence {
+        Ok(evidence) => evidence,
+        Err(_) => {
+            return commit_resolution(
+                writer,
+                &run,
+                event,
+                &[],
+                &[],
+                note,
+                &RequestResolution::InputEvidenceInvalid,
+                RequestExecutionDisposition::Rejected,
+                &mut command,
+            );
+        }
+    };
     if !evidence_ids_are_unique(inline_evidence) {
         return commit_resolution(
             writer,
@@ -422,9 +813,20 @@ where
         }
         EventCommitBranch::InlineEvidenceConflict => RequestExecutionDisposition::Rejected,
     };
+    let requestable_events = crate::model::requestable::project_state(
+        run.graph(),
+        status.run.lifecycle,
+        &status.run.current_state,
+    );
     Ok(RequestExecution {
         disposition,
         commit: status.commit,
+        outcome: status.outcome,
+        reason: status.reason,
+        diagnostics: status.diagnostics,
+        evidence_recorded: status.evidence_recorded,
+        run: status.run,
+        requestable_events,
     })
 }
 
@@ -1661,6 +2063,40 @@ mod tests {
         .unwrap()
     }
 
+    fn gate_free_run() -> crate::model::run::Run {
+        let ready = StateId::parse("ready").unwrap();
+        let done = StateId::parse("done").unwrap();
+        let graph = WorkflowGraph::new_unvalidated(
+            ready.clone(),
+            vec![
+                State::new(ready.clone(), false, StaticGuidance::NoneRequired, None),
+                State::new(done.clone(), true, StaticGuidance::NoneRequired, None),
+            ],
+            vec![
+                Transition::new(
+                    ready,
+                    EventId::parse("advance").unwrap(),
+                    done,
+                    vec![],
+                    None,
+                )
+                .unwrap(),
+            ],
+            InputDeclarations::default(),
+            LiveGuidanceCapability::Unsupported,
+            None,
+        );
+        crate::model::run::Run::create(
+            RunId::parse("run-1").unwrap(),
+            RegistrationId::parse("registration-1").unwrap(),
+            ValidatedGraph::validate(graph).unwrap(),
+            GraphRevision::parse(format!("sha256:{}", "a".repeat(64))).unwrap(),
+            RunInputs::default(),
+            None,
+        )
+        .unwrap()
+    }
+
     fn provider_config(run: &crate::model::run::Run) -> ResolvedProviderConfig {
         ResolvedProviderConfig::new(
             run.registration_id().clone(),
@@ -1684,6 +2120,32 @@ mod tests {
             Some(1),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn authoritative_builder_accepts_gate_free_completion() {
+        let run = gate_free_run();
+        let event = EventId::parse("advance").unwrap();
+        let decision = crate::model::decision::resolve_gate_free(&run, &event).unwrap();
+        let resolution: super::RequestResolution<'_, (), (), (), ()> =
+            super::RequestResolution::Completed {
+                decision: &decision,
+                provider_binding: None,
+            };
+
+        assert!(
+            super::command(
+                &run,
+                &event,
+                &[],
+                &[],
+                None,
+                &resolution,
+                ObservedAt::parse("2026-07-18T00:00:00Z").unwrap(),
+                RequestId::parse("request-1").unwrap(),
+            )
+            .is_ok()
+        );
     }
 
     #[test]

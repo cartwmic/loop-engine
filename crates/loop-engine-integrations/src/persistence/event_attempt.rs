@@ -248,6 +248,7 @@ impl SqliteEventAttemptWriter {
                 draft,
                 &state_before,
                 &state_after,
+                snapshot.label.clone(),
             );
             let expectation = event_attempt_bundle_expectation(
                 &parts,
@@ -1825,9 +1826,22 @@ fn build_commit_status(
     draft: &JournalDraft,
     state_before: &StateFact,
     state_after: &StateFact,
+    label: Option<String>,
 ) -> EventCommitStatus {
+    let attempt = draft
+        .attempt()
+        .expect("event attempt draft always carries attempt facts");
     EventCommitStatus {
         branch,
+        outcome: draft.outcome(),
+        reason: draft.reason().cloned(),
+        diagnostics: attempt.diagnostics.clone(),
+        evidence_recorded: attempt.evidence_recorded.unwrap_or_default(),
+        run: loop_engine_core::capabilities::persistence_commands::CommittedRunSnapshot {
+            lifecycle: state_after.lifecycle,
+            current_state: state_after.state.clone(),
+            label,
+        },
         commit: CommitStatus {
             committed: true,
             state_changed: draft.outcome() == OutcomeClass::Completed

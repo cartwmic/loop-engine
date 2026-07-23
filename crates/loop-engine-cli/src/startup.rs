@@ -393,6 +393,9 @@ fn driver_catalog_operations() -> Vec<(&'static str, &'static str)> {
                     "run history <RUN-ID> [--cursor <CURSOR>] [--limit <COUNT>]"
                 }
                 "run.show" => "run show <RUN-ID>",
+                "run.request" => {
+                    "run request <RUN-ID> <EVENT> [--evidence-id <ID> ...] [--evidence <PATH>] [--note <TEXT>]"
+                }
                 _ => unreachable!("driver catalog entry must own an argv template"),
             };
             (id, argv)

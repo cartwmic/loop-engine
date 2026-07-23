@@ -186,6 +186,7 @@ fn build_application_wires_real_integration_adapters() {
     let _ = &app.guidance;
     let _ = &app.compatibility;
     let _ = &app.evidence_reads;
+    let _ = &app.run_request_reads;
     let _ = &app.history;
     let _ = &app.exporter;
 }

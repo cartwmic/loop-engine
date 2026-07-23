@@ -66,6 +66,18 @@ pub trait RunHistoryReader {
     ) -> Result<Page<JournalEntry>, Self::Error>;
 }
 
+/// Narrow read boundary used by `run.request`.
+pub trait RunRequestReader {
+    type Error;
+
+    fn get(&self, run_id: &RunId) -> Result<Run, Self::Error>;
+    fn selected_evidence(
+        &self,
+        run_id: &RunId,
+        evidence_ids: &[EvidenceId],
+    ) -> Result<Vec<EvidenceRecord>, SelectedEvidenceReadError<Self::Error>>;
+}
+
 pub trait RunReader {
     type Error;
 
@@ -91,4 +103,20 @@ pub trait RunReader {
         run_id: &RunId,
         evidence_ids: &[EvidenceId],
     ) -> Result<Vec<EvidenceRecord>, SelectedEvidenceReadError<Self::Error>>;
+}
+
+impl<T: RunReader> RunRequestReader for T {
+    type Error = T::Error;
+
+    fn get(&self, run_id: &RunId) -> Result<Run, Self::Error> {
+        RunReader::get(self, run_id)
+    }
+
+    fn selected_evidence(
+        &self,
+        run_id: &RunId,
+        evidence_ids: &[EvidenceId],
+    ) -> Result<Vec<EvidenceRecord>, SelectedEvidenceReadError<Self::Error>> {
+        RunReader::selected_evidence(self, run_id, evidence_ids)
+    }
 }

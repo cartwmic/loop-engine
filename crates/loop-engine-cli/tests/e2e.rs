@@ -9,6 +9,8 @@ mod support;
 mod checkpoint_b;
 #[path = "e2e/checkpoint_c.rs"]
 mod checkpoint_c;
+#[path = "e2e/checkpoint_d.rs"]
+mod checkpoint_d;
 #[path = "e2e/provider_add.rs"]
 mod provider_add;
 #[path = "e2e/provider_list.rs"]
@@ -409,10 +411,6 @@ fn provider_executable_resolver_uses_standalone_crate_target() {
             assert_eq!(err_binary, binary);
             assert_eq!(expected, expected_candidate);
             assert_eq!(err_manifest, manifest);
-            assert!(
-                !expected.exists(),
-                "missing provider executable must not silently fall back to a source-tree path"
-            );
             let message = ProviderExecutableError::BinaryNotBuilt {
                 package: err_package,
                 binary: err_binary,

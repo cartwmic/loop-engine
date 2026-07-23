@@ -487,6 +487,11 @@ pub enum EventCommitBranch {
 pub struct EventCommitStatus {
     pub commit: CommitStatus,
     pub branch: EventCommitBranch,
+    pub outcome: crate::model::outcome::OutcomeClass,
+    pub reason: Option<crate::model::reason::Reason>,
+    pub diagnostics: Vec<crate::model::diagnostic::Diagnostic>,
+    pub evidence_recorded: crate::model::outcome::EvidenceRecordedStatus,
+    pub run: CommittedRunSnapshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

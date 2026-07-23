@@ -18,7 +18,7 @@ Related documents:
 
 Production binary name: `loop-engine`.
 
-MVP's final catalog contains exactly **21** application operations in two namespaces (`provider.*`, `run.*`). During the 2026-07-22 staged implementation, `--list-operations` reports only checkpoint-closed runtime routes; Checkpoints A through C expose `provider.add`, `provider.list`, `provider.check`, `run.create`, `run.list`, `run.terminate`, `run.show`, and `run.history`. Final closure requires all 21 IDs. No additional application operation, alias, or hidden route is permitted without reopening D004. CLI `--help`, `--version`, pre-dispatch usage display, and `--list-operations` are driver functions, not application operations ([operation-catalog.md](operation-catalog.md) § Explicit non-operations).
+MVP's final catalog contains exactly **21** application operations in two namespaces (`provider.*`, `run.*`). During the 2026-07-22 staged implementation, `--list-operations` reports only checkpoint-closed runtime routes; Checkpoints A through D expose `provider.add`, `provider.list`, `provider.check`, `run.create`, `run.list`, `run.terminate`, `run.show`, `run.request`, and `run.history`. Final closure requires all 21 IDs. No additional application operation, alias, or hidden route is permitted without reopening D004. CLI `--help`, `--version`, pre-dispatch usage display, and `--list-operations` are driver functions, not application operations ([operation-catalog.md](operation-catalog.md) § Explicit non-operations).
 
 ## Schema versioning
 
@@ -695,6 +695,8 @@ When lifecycle is `final` or `terminated`, `data.requestable_events` is required
 ```
 
 Exit `0`.
+
+### Rejected — `run.request` (`gate.failed`)
 
 ```json
 {

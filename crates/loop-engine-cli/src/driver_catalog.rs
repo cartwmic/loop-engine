@@ -15,6 +15,7 @@ pub const DRIVER_OPERATION_IDS: &[&str] = &[
     "run.list",
     "run.terminate",
     "run.show",
+    "run.request",
     "run.history",
 ];
 
@@ -27,6 +28,7 @@ pub const REACHABLE_ROUTE_OPERATION_IDS: &[&str] = &[
     "run.list",
     "run.terminate",
     "run.show",
+    "run.request",
     "run.history",
 ];
 
@@ -39,6 +41,7 @@ pub const E2E_OPERATION_IDS: &[&str] = &[
     "run.list",
     "run.terminate",
     "run.show",
+    "run.request",
     "run.history",
 ];
 
@@ -51,6 +54,7 @@ pub const TRACE_OPERATION_IDS: &[&str] = &[
     "run.list",
     "run.terminate",
     "run.show",
+    "run.request",
     "run.history",
 ];
 
@@ -63,6 +67,7 @@ pub const FACET_OPERATION_IDS: &[&str] = &[
     "run.list",
     "run.terminate",
     "run.show",
+    "run.request",
     "run.history",
 ];
 

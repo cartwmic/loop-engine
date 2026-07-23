@@ -98,9 +98,18 @@ impl SqliteEvidenceReads {
         run_id: &RunId,
         evidence_ids: &[EvidenceId],
     ) -> Result<Vec<EvidenceRecord>, SelectedEvidenceReadError<EvidenceReadError>> {
+        self.selected_evidence_for_operation("run.evidence.list", run_id, evidence_ids)
+    }
+
+    pub fn selected_evidence_for_operation(
+        &self,
+        operation_id: &'static str,
+        run_id: &RunId,
+        evidence_ids: &[EvidenceId],
+    ) -> Result<Vec<EvidenceRecord>, SelectedEvidenceReadError<EvidenceReadError>> {
         close_read(
             &self.trace,
-            "run.evidence.list",
+            operation_id,
             MutationClass::ReadOnly,
             || self.selected_evidence_impl(run_id, evidence_ids),
             |records| ReadCompleteExtras {

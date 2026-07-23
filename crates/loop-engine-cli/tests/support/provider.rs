@@ -2,6 +2,8 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::OnceLock;
 
 use serde_json::{Value, json};
 
@@ -117,6 +119,40 @@ pub fn scenario_provider_manifest_path() -> PathBuf {
 
 pub fn reference_provider_manifest_path() -> PathBuf {
     provider_manifest_path("reference-provider")
+}
+
+static SCENARIO_PROVIDER: OnceLock<PathBuf> = OnceLock::new();
+static REFERENCE_PROVIDER: OnceLock<PathBuf> = OnceLock::new();
+
+fn provider_fixture_executable(
+    cache: &'static OnceLock<PathBuf>,
+    package: &str,
+    binary_name: &str,
+) -> &'static PathBuf {
+    cache.get_or_init(|| {
+        let manifest = provider_manifest_path(package);
+        let status = Command::new("cargo")
+            .args(["build", "--manifest-path"])
+            .arg(&manifest)
+            .arg("--locked")
+            .env_remove("RUSTUP_TOOLCHAIN")
+            .status()
+            .expect("build provider fixture");
+        assert!(status.success(), "provider fixture build failed");
+        resolve_provider_executable_path(package, binary_name).expect("built provider fixture")
+    })
+}
+
+pub fn scenario_provider_executable() -> &'static PathBuf {
+    provider_fixture_executable(&SCENARIO_PROVIDER, "scenario-provider", "scenario-provider")
+}
+
+pub fn reference_provider_executable() -> &'static PathBuf {
+    provider_fixture_executable(
+        &REFERENCE_PROVIDER,
+        "reference-provider",
+        "reference-provider",
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

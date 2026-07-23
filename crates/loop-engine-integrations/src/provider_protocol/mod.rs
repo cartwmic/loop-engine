@@ -16,6 +16,6 @@ pub mod validation;
 pub mod version;
 
 pub use adapter::SubprocessProviderInvoker;
-pub use context::bounded_run_snapshot;
+pub use context::{bounded_evidence_context, bounded_run_snapshot};
 pub use dto::PROTOCOL_MAJOR_V1;
 pub use invoke::AdapterError;

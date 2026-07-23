@@ -18,15 +18,16 @@ pub(crate) use cli::{
 pub(crate) use coverage::RuntimeCoverageRecorder;
 pub(crate) use provider::{
     ProviderAddArgs, ProviderConfigFile, ProviderExecutableError, provider_manifest_path,
-    reference_provider_manifest_path, resolve_provider_executable_path,
+    reference_provider_executable, reference_provider_manifest_path,
+    resolve_provider_executable_path, scenario_provider_executable,
     scenario_provider_manifest_path,
 };
 pub(crate) use sandbox::E2eSandbox;
 pub(crate) use sqlite_fixture::{
     CorruptionKind, TombstonedRegistrationSetup, apply_initial_migration, corrupt_database,
     count_journal_entries, count_runs, harness_fixture_db_path, insert_provider_registrations,
-    insert_tombstoned_registration, require_sqlite3, set_run_projection_state,
-    tombstone_provider_registration, validate_tombstoned_registration,
+    insert_tombstoned_registration, require_sqlite3, set_provider_registration_command,
+    set_run_projection_state, tombstone_provider_registration, validate_tombstoned_registration,
 };
 pub(crate) use trace::{
     TraceParseError, install_trace_fixture, parse_correlated_trace, parse_correlated_value,

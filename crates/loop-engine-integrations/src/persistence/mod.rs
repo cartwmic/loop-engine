@@ -13,6 +13,7 @@ pub mod records;
 mod run_create;
 mod run_mutations;
 mod run_reads;
+mod run_request_reads;
 mod sqlite;
 pub(crate) mod traced;
 
@@ -33,6 +34,7 @@ pub use provider_catalog::{CatalogPersistenceError, DisableWarningsPage, SqliteP
 pub use run_create::{RunCreateError, SqliteRunWriter};
 pub use run_mutations::{RunMutationError, SqliteRunMutations, journal_entry_value};
 pub use run_reads::{RawRunRow, RunReadError, SqliteRunReads};
+pub use run_request_reads::{RunRequestReadError, SqliteRunRequestReader};
 pub use sqlite::{SqliteStore, connect_with_pragmas};
 pub use traced::{
     MutationClass, OptionalTraceSink, PersistenceTraceFailure, PersistenceTraceSink,

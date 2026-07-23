@@ -180,6 +180,10 @@ fn list_operations_json_reports_exposed_routes_and_trace_lifecycle() {
                 "argv": "run show <RUN-ID>"
             },
             {
+                "id": "run.request",
+                "argv": "run request <RUN-ID> <EVENT> [--evidence-id <ID> ...] [--evidence <PATH>] [--note <TEXT>]"
+            },
+            {
                 "id": "run.history",
                 "argv": "run history <RUN-ID> [--cursor <CURSOR>] [--limit <COUNT>]"
             }
@@ -212,6 +216,7 @@ fn list_operations_human_reports_exposed_routes_and_trace_lifecycle() {
             "run.list\trun list [--terminal] [--all] [--cursor <CURSOR>] [--limit <COUNT>]\n",
             "run.terminate\trun terminate <RUN-ID> [--note <TEXT>]\n",
             "run.show\trun show <RUN-ID>\n",
+            "run.request\trun request <RUN-ID> <EVENT> [--evidence-id <ID> ...] [--evidence <PATH>] [--note <TEXT>]\n",
             "run.history\trun history <RUN-ID> [--cursor <CURSOR>] [--limit <COUNT>]\n",
         )
     );

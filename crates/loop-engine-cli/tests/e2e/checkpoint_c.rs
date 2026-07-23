@@ -1,57 +1,19 @@
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::OnceLock;
+use std::path::Path;
 
 use serde_json::{Value, json};
 
 use super::support::{
-    E2eSandbox, parse_correlated_value, parse_structured_stdout, reference_provider_manifest_path,
-    resolve_provider_executable_path, scenario_provider_manifest_path, set_run_projection_state,
-    tombstone_provider_registration,
+    E2eSandbox, parse_correlated_value, parse_structured_stdout, reference_provider_executable,
+    scenario_provider_executable, set_run_projection_state, tombstone_provider_registration,
 };
 
-static SCENARIO_PROVIDER: OnceLock<PathBuf> = OnceLock::new();
-static REFERENCE_PROVIDER: OnceLock<PathBuf> = OnceLock::new();
-
-fn provider_executable(
-    cache: &'static OnceLock<PathBuf>,
-    package: &str,
-    binary: &str,
-    manifest: PathBuf,
-) -> &'static PathBuf {
-    cache.get_or_init(|| {
-        if let Ok(path) = resolve_provider_executable_path(package, binary) {
-            return path;
-        }
-        let status = Command::new("cargo")
-            .args(["build", "--manifest-path"])
-            .arg(&manifest)
-            .arg("--locked")
-            .env_remove("RUSTUP_TOOLCHAIN")
-            .status()
-            .expect("build provider fixture");
-        assert!(status.success(), "provider fixture build failed");
-        resolve_provider_executable_path(package, binary).expect("built provider fixture")
-    })
+fn scenario_provider() -> &'static Path {
+    scenario_provider_executable().as_path()
 }
 
-fn scenario_provider() -> &'static PathBuf {
-    provider_executable(
-        &SCENARIO_PROVIDER,
-        "scenario-provider",
-        "scenario-provider",
-        scenario_provider_manifest_path(),
-    )
-}
-
-fn reference_provider() -> &'static PathBuf {
-    provider_executable(
-        &REFERENCE_PROVIDER,
-        "reference-provider",
-        "reference-provider",
-        reference_provider_manifest_path(),
-    )
+fn reference_provider() -> &'static Path {
+    reference_provider_executable().as_path()
 }
 
 fn run_json(sandbox: &E2eSandbox, label: &str, args: Vec<String>) -> Value {
