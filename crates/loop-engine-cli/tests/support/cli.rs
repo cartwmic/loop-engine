@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::path::Path;
 
 use super::sandbox::E2eSandbox;
 use super::strict_json::{StrictJsonError, parse_strict_json_value};
@@ -86,11 +87,22 @@ impl std::error::Error for StructuredParseError {}
 /// Invokes the built `loop-engine` binary in an isolated sandbox; never calls in-process handlers.
 pub struct CliRunner<'a> {
     sandbox: &'a E2eSandbox,
+    caller_cwd: &'a Path,
 }
 
 impl<'a> CliRunner<'a> {
     pub fn new(sandbox: &'a E2eSandbox) -> Self {
-        Self { sandbox }
+        Self {
+            sandbox,
+            caller_cwd: sandbox.caller_cwd(),
+        }
+    }
+
+    pub fn from_cwd(sandbox: &'a E2eSandbox, caller_cwd: &'a Path) -> Self {
+        Self {
+            sandbox,
+            caller_cwd,
+        }
     }
 
     pub fn run_human(&self, label: &str, args: &[&str]) -> CliInvocation {
@@ -116,7 +128,7 @@ impl<'a> CliRunner<'a> {
         );
 
         let mut command = Command::cargo_bin("loop-engine").expect("loop-engine binary");
-        command.current_dir(self.sandbox.caller_cwd());
+        command.current_dir(self.caller_cwd);
         for key in E2eSandbox::isolated_env_removals() {
             command.env_remove(key);
         }

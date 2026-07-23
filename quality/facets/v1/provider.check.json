@@ -7,7 +7,7 @@
       "status": "closed",
       "evidence": [
         "e2e:checkpoint_b::provider_check_invokes_conformance_and_active_run_compatibility_with_correlated_trace",
-        "catalog:driver_catalog::runtime_catalogs_match_checkpoint_b_exposure"
+        "catalog:driver_catalog::runtime_catalogs_match_checkpoint_d_exposure"
       ],
       "owner_task": "T148"
     },
@@ -24,7 +24,8 @@
       "name": "Read",
       "status": "closed",
       "evidence": [
-        "e2e:checkpoint_b::provider_check_invokes_conformance_and_active_run_compatibility_with_correlated_trace"
+        "e2e:checkpoint_b::provider_check_invokes_conformance_and_active_run_compatibility_with_correlated_trace",
+        "e2e:checkpoint_b::provider_check_not_found_is_rejected_with_correlated_persistence_trace"
       ],
       "owner_task": "T148"
     },

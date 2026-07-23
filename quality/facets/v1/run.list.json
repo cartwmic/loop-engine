@@ -7,7 +7,7 @@
       "status": "closed",
       "evidence": [
         "e2e:checkpoint_b::run_create_and_list_persist_across_processes_and_apply_lifecycle_filters",
-        "catalog:driver_catalog::runtime_catalogs_match_checkpoint_b_exposure"
+        "catalog:driver_catalog::runtime_catalogs_match_checkpoint_d_exposure"
       ],
       "owner_task": "T150"
     },

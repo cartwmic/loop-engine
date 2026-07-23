@@ -29,8 +29,8 @@ pub const CLI_ABOUT: &str = "Loop engine control plane";
     disable_version_flag = true
 )]
 pub struct GlobalCli {
-    #[arg(long, default_value = "human")]
-    pub format: String,
+    #[arg(long)]
+    pub format: Option<String>,
     #[arg(long, short = 'h', action = ArgAction::SetTrue)]
     pub help: bool,
     #[arg(long, action = ArgAction::SetTrue)]

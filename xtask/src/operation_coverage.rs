@@ -2,11 +2,30 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 const REQUIRED_COLLECTORS: &[&str] = &["core", "driver", "route", "e2e", "trace", "facet"];
 const CATALOG_COLLECTORS: &[&str] = &["driver", "route"];
 const EVIDENCE_COLLECTORS: &[&str] = &["e2e", "trace"];
+const UNIVERSAL_FACET: &str = "Valid path through production CLI, runtime operation-ID proof, correlated trace file, request/outcome payloads, and start/finish envelope";
+const FACET_NAMES: &[&str] = &[
+    UNIVERSAL_FACET,
+    "Run-state or run-journal mutation",
+    "Successful creation",
+    "Rejected/error creation",
+    "Provider-catalog mutation",
+    "Rejectable provider-catalog mutation",
+    "Rejectable run mutation after run lookup",
+    "Provider invoking",
+    "Gate driven",
+    "Read",
+    "Lifecycle family",
+    "Compatibility sensitive",
+    "Provider-free under missing provider",
+    "Journal required",
+    "Trace provider boundary",
+    "Trace persistence boundary",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoverageMode {
@@ -291,15 +310,402 @@ fn read_collectors(root: &Path) -> Result<CoverageCollectors> {
             "trace operation collector",
         )?,
     )?;
-    collectors.register(
-        "facet",
-        collect_array(
-            &driver_source,
-            "pub const FACET_OPERATION_IDS: &[&str] = &[",
-            "facet operation collector",
-        )?,
+    let declared_facets = collect_array(
+        &driver_source,
+        "pub const FACET_OPERATION_IDS: &[&str] = &[",
+        "facet operation collector",
     )?;
+    let facet_manifests = read_facet_manifests(root, &declared_facets)?;
+    collectors.register("facet", facet_manifests)?;
     Ok(collectors)
+}
+
+fn read_facet_manifests(root: &Path, declared: &[String]) -> Result<Vec<String>> {
+    let directory = root.join("quality/facets/v1");
+    let declared = declared.iter().cloned().collect::<BTreeSet<_>>();
+    let mut observed = BTreeSet::new();
+    for entry in fs::read_dir(&directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json")
+            || path.file_name().and_then(|value| value.to_str()) == Some("schema.json")
+        {
+            continue;
+        }
+        let stem = path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| {
+                anyhow::anyhow!("facet manifest path is not valid UTF-8: {}", path.display())
+            })?;
+        validate_facet_manifest(root, &path, stem)?;
+        if !observed.insert(stem.to_owned()) {
+            bail!("duplicate facet manifest for operation `{stem}`");
+        }
+    }
+    if observed != declared {
+        bail!(
+            "facet manifest inventory differs from declared facet catalog: declared={declared:?}, manifests={observed:?}"
+        );
+    }
+    Ok(observed.into_iter().collect())
+}
+
+fn validate_facet_manifest(root: &Path, path: &Path, expected_operation: &str) -> Result<()> {
+    let raw = fs::read_to_string(path)?;
+    let value: serde_json::Value = serde_json::from_str(&raw)
+        .with_context(|| format!("invalid facet manifest JSON: {}", path.display()))?;
+    let object = value.as_object().ok_or_else(|| {
+        anyhow::anyhow!("facet manifest root must be an object: {}", path.display())
+    })?;
+    if object
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(1)
+    {
+        bail!(
+            "facet manifest schema_version must be 1: {}",
+            path.display()
+        );
+    }
+    if object
+        .get("operation_id")
+        .and_then(serde_json::Value::as_str)
+        != Some(expected_operation)
+    {
+        bail!(
+            "facet manifest operation_id must match filename `{expected_operation}`: {}",
+            path.display()
+        );
+    }
+    let facets = object
+        .get("facets")
+        .and_then(serde_json::Value::as_array)
+        .filter(|facets| !facets.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("facet manifest must contain facets: {}", path.display()))?;
+    let mut names = BTreeSet::new();
+    let mut universal = 0_usize;
+    for facet in facets {
+        let facet = facet
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("facet row must be an object: {}", path.display()))?;
+        let name = facet
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("facet row has no name: {}", path.display()))?;
+        if !FACET_NAMES.contains(&name) {
+            bail!("unknown facet name `{name}`: {}", path.display());
+        }
+        if !names.insert(name) {
+            bail!("duplicate facet name `{name}`: {}", path.display());
+        }
+        universal += usize::from(name == UNIVERSAL_FACET);
+        if facet.get("status").and_then(serde_json::Value::as_str) != Some("closed") {
+            bail!("facet `{name}` is not closed: {}", path.display());
+        }
+        let evidence = facet
+            .get("evidence")
+            .and_then(serde_json::Value::as_array)
+            .filter(|evidence| !evidence.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "closed facet `{name}` has no valid evidence: {}",
+                    path.display()
+                )
+            })?;
+        for item in evidence {
+            let reference = item
+                .as_str()
+                .filter(|reference| !reference.is_empty())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "closed facet `{name}` has no valid evidence: {}",
+                        path.display()
+                    )
+                })?;
+            validate_evidence_reference(root, path, reference)?;
+        }
+    }
+    if universal != 1 {
+        bail!(
+            "facet manifest must contain exactly one universal valid-path row: {}",
+            path.display()
+        );
+    }
+    let required = required_facets(expected_operation)?
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if names != required {
+        bail!(
+            "facet manifest rows differ from required operation facets: operation={expected_operation}, required={required:?}, observed={names:?}"
+        );
+    }
+    Ok(())
+}
+
+fn required_facets(operation: &str) -> Result<&'static [&'static str]> {
+    let facets = match operation {
+        "provider.add" => &[
+            UNIVERSAL_FACET,
+            "Provider-catalog mutation",
+            "Rejectable provider-catalog mutation",
+            "Trace persistence boundary",
+        ][..],
+        "provider.check" => &[
+            UNIVERSAL_FACET,
+            "Provider invoking",
+            "Read",
+            "Compatibility sensitive",
+            "Trace provider boundary",
+            "Trace persistence boundary",
+        ],
+        "provider.list" => &[UNIVERSAL_FACET, "Read", "Trace persistence boundary"],
+        "run.create" => &[
+            UNIVERSAL_FACET,
+            "Successful creation",
+            "Rejected/error creation",
+            "Provider invoking",
+            "Trace provider boundary",
+            "Trace persistence boundary",
+        ],
+        "run.history" => &[
+            UNIVERSAL_FACET,
+            "Read",
+            "Provider-free under missing provider",
+            "Trace persistence boundary",
+        ],
+        "run.list" => &[
+            UNIVERSAL_FACET,
+            "Read",
+            "Lifecycle family",
+            "Provider-free under missing provider",
+            "Trace persistence boundary",
+        ],
+        "run.request" => &[
+            UNIVERSAL_FACET,
+            "Run-state or run-journal mutation",
+            "Rejectable run mutation after run lookup",
+            "Provider invoking",
+            "Gate driven",
+            "Lifecycle family",
+            "Compatibility sensitive",
+            "Provider-free under missing provider",
+            "Journal required",
+            "Trace provider boundary",
+            "Trace persistence boundary",
+        ],
+        "run.show" => &[
+            UNIVERSAL_FACET,
+            "Read",
+            "Lifecycle family",
+            "Provider-free under missing provider",
+            "Trace persistence boundary",
+        ],
+        "run.terminate" => &[
+            UNIVERSAL_FACET,
+            "Run-state or run-journal mutation",
+            "Rejectable run mutation after run lookup",
+            "Lifecycle family",
+            "Journal required",
+            "Provider-free under missing provider",
+            "Trace persistence boundary",
+        ],
+        _ => bail!("no required facet catalog for operation `{operation}`"),
+    };
+    Ok(facets)
+}
+
+fn validate_evidence_reference(root: &Path, manifest: &Path, reference: &str) -> Result<()> {
+    let reference = reference.strip_prefix("trace:").unwrap_or(reference);
+    let (kind, target) = reference.split_once(':').ok_or_else(|| {
+        anyhow::anyhow!(
+            "invalid facet evidence reference `{reference}`: {}",
+            manifest.display()
+        )
+    })?;
+    let (module, test) = target.split_once("::").ok_or_else(|| {
+        anyhow::anyhow!(
+            "invalid facet evidence target `{target}`: {}",
+            manifest.display()
+        )
+    })?;
+    if ![module, test].into_iter().all(|identifier| {
+        !identifier.is_empty()
+            && identifier
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    }) {
+        bail!(
+            "invalid facet evidence identifier `{target}`: {}",
+            manifest.display()
+        );
+    }
+    let source_path = match kind {
+        "e2e" => registered_e2e_source(root, module)?,
+        "catalog" => root
+            .join("crates/loop-engine-cli/tests")
+            .join(format!("{module}.rs")),
+        _ => bail!(
+            "unknown facet evidence kind `{kind}`: {}",
+            manifest.display()
+        ),
+    };
+    let source = fs::read_to_string(&source_path).with_context(|| {
+        format!(
+            "facet evidence source does not exist for `{reference}`: {}",
+            source_path.display()
+        )
+    })?;
+    if !contains_test_function(&source, test) {
+        bail!(
+            "facet evidence test `{reference}` does not exist in {}",
+            source_path.display()
+        );
+    }
+    Ok(())
+}
+
+fn attributes_disabled(attributes: &[syn::Attribute]) -> bool {
+    attributes.iter().any(|attribute| {
+        let path = attribute.path();
+        path.is_ident("cfg") || path.is_ident("cfg_attr") || path.is_ident("ignore")
+    })
+}
+
+fn registered_e2e_source(root: &Path, module: &str) -> Result<PathBuf> {
+    #[derive(Default)]
+    struct Registrations {
+        named: usize,
+        enabled: usize,
+        valid: usize,
+    }
+
+    fn path_value(attributes: &[syn::Attribute]) -> Option<String> {
+        attributes.iter().find_map(|attribute| {
+            let syn::Meta::NameValue(name_value) = &attribute.meta else {
+                return None;
+            };
+            if !name_value.path.is_ident("path") {
+                return None;
+            }
+            let syn::Expr::Lit(expression) = &name_value.value else {
+                return None;
+            };
+            let syn::Lit::Str(value) = &expression.lit else {
+                return None;
+            };
+            Some(value.value()).filter(|value| !value.is_empty())
+        })
+    }
+
+    fn scan(
+        items: &[syn::Item],
+        module_name: &str,
+        expected_path: &str,
+        parent_disabled: bool,
+        top_level: bool,
+        registrations: &mut Registrations,
+    ) {
+        for item in items {
+            let syn::Item::Mod(item_module) = item else {
+                continue;
+            };
+            let disabled = parent_disabled || attributes_disabled(&item_module.attrs);
+            if item_module.ident == module_name {
+                registrations.named += 1;
+                if !disabled {
+                    registrations.enabled += 1;
+                    if top_level
+                        && item_module.content.is_none()
+                        && path_value(&item_module.attrs).as_deref() == Some(expected_path)
+                    {
+                        registrations.valid += 1;
+                    }
+                }
+            }
+            if let Some((_, nested)) = &item_module.content {
+                scan(
+                    nested,
+                    module_name,
+                    expected_path,
+                    disabled,
+                    false,
+                    registrations,
+                );
+            }
+        }
+    }
+
+    let test_directory = root.join("crates/loop-engine-cli/tests");
+    let harness_path = test_directory.join("e2e.rs");
+    let harness = fs::read_to_string(&harness_path).with_context(|| {
+        format!(
+            "E2E test harness does not exist: {}",
+            harness_path.display()
+        )
+    })?;
+    let file = syn::parse_file(&harness).with_context(|| {
+        format!(
+            "E2E test harness is not valid Rust: {}",
+            harness_path.display()
+        )
+    })?;
+    let expected_path = format!("e2e/{module}.rs");
+    let mut registrations = Registrations::default();
+    scan(
+        &file.items,
+        module,
+        &expected_path,
+        attributes_disabled(&file.attrs),
+        true,
+        &mut registrations,
+    );
+    if registrations.enabled == 0 {
+        let reason = if registrations.named == 0 {
+            "is not registered"
+        } else {
+            "is conditionally disabled"
+        };
+        bail!(
+            "facet evidence module `{module}` {reason} in {}",
+            harness_path.display()
+        );
+    }
+    if registrations.enabled != 1 || registrations.valid != 1 {
+        bail!(
+            "facet evidence module `{module}` must have exactly one enabled top-level out-of-line registration using #[path = \"{expected_path}\"] in {}",
+            harness_path.display()
+        );
+    }
+    Ok(test_directory.join("e2e").join(format!("{module}.rs")))
+}
+
+fn contains_test_function(source: &str, test: &str) -> bool {
+    fn find(items: &[syn::Item], test: &str, parent_disabled: bool) -> bool {
+        items.iter().any(|item| match item {
+            syn::Item::Fn(function) => {
+                function.sig.ident == test
+                    && !parent_disabled
+                    && !attributes_disabled(&function.attrs)
+                    && function
+                        .attrs
+                        .iter()
+                        .any(|attribute| attribute.path().is_ident("test"))
+            }
+            syn::Item::Mod(module) => module.content.as_ref().is_some_and(|(_, items)| {
+                find(
+                    items,
+                    test,
+                    parent_disabled || attributes_disabled(&module.attrs),
+                )
+            }),
+            _ => false,
+        })
+    }
+
+    syn::parse_file(source)
+        .is_ok_and(|file| !attributes_disabled(&file.attrs) && find(&file.items, test, false))
 }
 
 fn collect_array(source: &str, marker: &str, label: &str) -> Result<Vec<String>> {
@@ -327,8 +733,14 @@ fn collect_array(source: &str, marker: &str, label: &str) -> Result<Vec<String>>
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::fs;
 
-    use super::{CoverageCollectors, CoverageMode, REQUIRED_COLLECTORS, verify};
+    use serde_json::json;
+
+    use super::{
+        CoverageCollectors, CoverageMode, REQUIRED_COLLECTORS, UNIVERSAL_FACET,
+        read_facet_manifests, required_facets, verify,
+    };
 
     fn planned() -> BTreeSet<String> {
         std::iter::once("run.show".to_owned())
@@ -543,18 +955,192 @@ mod tests {
     }
 
     #[test]
-    fn exposed_requires_evidence_and_facet_equality() {
-        let mut mismatch = CoverageCollectors::default();
-        register_all(&mut mismatch, ["run.show"]).unwrap();
-        mismatch.sets.get_mut("e2e").unwrap().clear();
-        assert!(
-            verify(
-                CoverageMode::Exposed,
-                &BTreeSet::new(),
-                &planned(),
-                &mismatch
+    fn exposed_rejects_missing_e2e_trace_and_facet_evidence() {
+        for collector in ["e2e", "trace", "facet"] {
+            let mut mismatch = CoverageCollectors::default();
+            register_all(&mut mismatch, ["run.show"]).unwrap();
+            mismatch.sets.get_mut(collector).unwrap().clear();
+            assert!(
+                verify(
+                    CoverageMode::Exposed,
+                    &BTreeSet::new(),
+                    &planned(),
+                    &mismatch
+                )
+                .is_err(),
+                "missing {collector} evidence must fail closed"
+            );
+        }
+    }
+
+    fn write_facet(root: &std::path::Path, name: &str, value: serde_json::Value) {
+        let directory = root.join("quality/facets/v1");
+        fs::create_dir_all(&directory).unwrap();
+        let test_directory = root.join("crates/loop-engine-cli/tests");
+        let evidence_directory = test_directory.join("e2e");
+        fs::create_dir_all(&evidence_directory).unwrap();
+        fs::write(
+            test_directory.join("e2e.rs"),
+            "#[path = \"e2e/proof.rs\"]\nmod proof;\n",
+        )
+        .unwrap();
+        fs::write(
+            evidence_directory.join("proof.rs"),
+            "#[test]\nfn valid_path() {}\n",
+        )
+        .unwrap();
+        fs::write(
+            directory.join(format!("{name}.json")),
+            serde_json::to_vec_pretty(&value).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn valid_facet(operation: &str) -> serde_json::Value {
+        let facets = required_facets(operation)
+            .unwrap()
+            .iter()
+            .map(|name| {
+                json!({
+                    "name": name,
+                    "status": "closed",
+                    "evidence": ["e2e:proof::valid_path"]
+                })
+            })
+            .collect::<Vec<_>>();
+        json!({
+            "schema_version": 1,
+            "operation_id": operation,
+            "facets": facets
+        })
+    }
+
+    #[test]
+    fn facet_manifest_canaries_reject_missing_open_and_stale_artifacts() {
+        let missing = tempfile::tempdir().unwrap();
+        fs::create_dir_all(missing.path().join("quality/facets/v1")).unwrap();
+        assert!(read_facet_manifests(missing.path(), &["run.show".into()]).is_err());
+
+        let open = tempfile::tempdir().unwrap();
+        let mut value = valid_facet("run.show");
+        value["facets"][0]["status"] = json!("open");
+        write_facet(open.path(), "run.show", value);
+        assert!(read_facet_manifests(open.path(), &["run.show".into()]).is_err());
+
+        let stale = tempfile::tempdir().unwrap();
+        write_facet(stale.path(), "run.show", valid_facet("run.show"));
+        let mut stale_value = valid_facet("run.show");
+        stale_value["operation_id"] = json!("run.graph");
+        write_facet(stale.path(), "run.graph", stale_value);
+        assert!(read_facet_manifests(stale.path(), &["run.show".into()]).is_err());
+    }
+
+    #[test]
+    fn facet_manifest_canaries_reject_filename_mismatch_duplicate_names_and_empty_evidence() {
+        let mismatch = tempfile::tempdir().unwrap();
+        write_facet(mismatch.path(), "run.show", valid_facet("run.list"));
+        assert!(read_facet_manifests(mismatch.path(), &["run.show".into()]).is_err());
+
+        let duplicate = tempfile::tempdir().unwrap();
+        let mut value = valid_facet("run.show");
+        value["facets"] = json!([
+            {"name": UNIVERSAL_FACET, "status": "closed", "evidence": ["e2e:a"]},
+            {"name": UNIVERSAL_FACET, "status": "closed", "evidence": ["e2e:b"]}
+        ]);
+        write_facet(duplicate.path(), "run.show", value);
+        assert!(read_facet_manifests(duplicate.path(), &["run.show".into()]).is_err());
+
+        let empty = tempfile::tempdir().unwrap();
+        let mut value = valid_facet("run.show");
+        value["facets"][0]["evidence"] = json!([]);
+        write_facet(empty.path(), "run.show", value);
+        assert!(read_facet_manifests(empty.path(), &["run.show".into()]).is_err());
+
+        let missing_required = tempfile::tempdir().unwrap();
+        let mut value = valid_facet("run.request");
+        value["facets"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|facet| facet["name"].as_str() != Some("Gate driven"));
+        write_facet(missing_required.path(), "run.request", value);
+        assert!(read_facet_manifests(missing_required.path(), &["run.request".into()]).is_err());
+
+        let stale_reference = tempfile::tempdir().unwrap();
+        let mut value = valid_facet("run.show");
+        value["facets"][0]["evidence"] = json!(["e2e:proof::deleted_test"]);
+        write_facet(stale_reference.path(), "run.show", value);
+        assert!(read_facet_manifests(stale_reference.path(), &["run.show".into()]).is_err());
+
+        for source in [
+            "fn valid_path() {}\n",
+            "// #[test]\n// fn valid_path() {}\n",
+            "#[ignore]\n#[test]\nfn valid_path() {}\n",
+            "#[cfg(any())]\n#[test]\nfn valid_path() {}\n",
+            "#[cfg(any())]\nmod disabled { #[test] fn valid_path() {} }\n",
+        ] {
+            let dead_test = tempfile::tempdir().unwrap();
+            write_facet(dead_test.path(), "run.show", valid_facet("run.show"));
+            fs::write(
+                dead_test
+                    .path()
+                    .join("crates/loop-engine-cli/tests/e2e/proof.rs"),
+                source,
             )
-            .is_err()
-        );
+            .unwrap();
+            assert!(read_facet_manifests(dead_test.path(), &["run.show".into()]).is_err());
+        }
+
+        let unregistered = tempfile::tempdir().unwrap();
+        write_facet(unregistered.path(), "run.show", valid_facet("run.show"));
+        fs::write(
+            unregistered
+                .path()
+                .join("crates/loop-engine-cli/tests/e2e.rs"),
+            "",
+        )
+        .unwrap();
+        assert!(read_facet_manifests(unregistered.path(), &["run.show".into()]).is_err());
+
+        let repointed = tempfile::tempdir().unwrap();
+        write_facet(repointed.path(), "run.show", valid_facet("run.show"));
+        fs::write(
+            repointed.path().join("crates/loop-engine-cli/tests/e2e.rs"),
+            "#[path = \"e2e/replacement.rs\"]\nmod proof;\n",
+        )
+        .unwrap();
+        assert!(read_facet_manifests(repointed.path(), &["run.show".into()]).is_err());
+
+        let disabled_module = tempfile::tempdir().unwrap();
+        write_facet(disabled_module.path(), "run.show", valid_facet("run.show"));
+        fs::write(
+            disabled_module
+                .path()
+                .join("crates/loop-engine-cli/tests/e2e.rs"),
+            "#[cfg(any())]\n#[path = \"e2e/proof.rs\"]\nmod proof;\n",
+        )
+        .unwrap();
+        assert!(read_facet_manifests(disabled_module.path(), &["run.show".into()]).is_err());
+
+        let disabled_parent = tempfile::tempdir().unwrap();
+        write_facet(disabled_parent.path(), "run.show", valid_facet("run.show"));
+        fs::write(
+            disabled_parent
+                .path()
+                .join("crates/loop-engine-cli/tests/e2e.rs"),
+            "#[cfg(any())]\nmod disabled {\n    #[path = \"e2e/proof.rs\"]\n    mod proof;\n}\n",
+        )
+        .unwrap();
+        assert!(read_facet_manifests(disabled_parent.path(), &["run.show".into()]).is_err());
+
+        let enabled_parent = tempfile::tempdir().unwrap();
+        write_facet(enabled_parent.path(), "run.show", valid_facet("run.show"));
+        fs::write(
+            enabled_parent
+                .path()
+                .join("crates/loop-engine-cli/tests/e2e.rs"),
+            "mod wrapper {\n    #[path = \"e2e/proof.rs\"]\n    mod proof;\n}\n",
+        )
+        .unwrap();
+        assert!(read_facet_manifests(enabled_parent.path(), &["run.show".into()]).is_err());
     }
 }

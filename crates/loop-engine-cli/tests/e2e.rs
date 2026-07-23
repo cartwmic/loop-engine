@@ -5,16 +5,40 @@
 
 mod support;
 
+#[path = "e2e/atomicity.rs"]
+mod atomicity;
 #[path = "e2e/checkpoint_b.rs"]
 mod checkpoint_b;
 #[path = "e2e/checkpoint_c.rs"]
 mod checkpoint_c;
 #[path = "e2e/checkpoint_d.rs"]
 mod checkpoint_d;
+#[path = "e2e/concurrency.rs"]
+mod concurrency;
+#[path = "e2e/configuration.rs"]
+mod configuration;
+#[path = "e2e/corruption.rs"]
+mod corruption;
+#[path = "e2e/coverage_closure.rs"]
+mod coverage_closure;
+#[path = "e2e/graph_semantics.rs"]
+mod graph_semantics;
+#[path = "e2e/lifecycle.rs"]
+mod lifecycle;
+#[path = "e2e/migrations.rs"]
+mod migrations;
+#[path = "e2e/outcomes.rs"]
+mod outcomes;
 #[path = "e2e/provider_add.rs"]
 mod provider_add;
+#[path = "e2e/provider_failures.rs"]
+mod provider_failures;
 #[path = "e2e/provider_list.rs"]
 mod provider_list;
+#[path = "e2e/trace_contract.rs"]
+mod trace_contract;
+#[path = "e2e/trace_resilience.rs"]
+mod trace_resilience;
 
 use std::fs;
 use std::path::{Path, PathBuf};

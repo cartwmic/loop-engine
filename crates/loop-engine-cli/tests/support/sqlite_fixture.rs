@@ -56,6 +56,10 @@ impl std::fmt::Display for SqliteFixtureError {
 
 impl std::error::Error for SqliteFixtureError {}
 
+pub fn execute_sql(db_path: &Path, sql: &str) -> Result<(), SqliteFixtureError> {
+    run_sqlite(db_path, sql)
+}
+
 pub fn apply_initial_migration(db_path: &Path) -> Result<(), SqliteFixtureError> {
     if db_path.exists() {
         fs::remove_file(db_path).map_err(|error| SqliteFixtureError::Io(error.to_string()))?;
@@ -87,7 +91,8 @@ pub fn corrupt_database(db_path: &Path, kind: CorruptionKind) -> Result<(), Sqli
             apply_initial_migration(db_path)?;
             run_sqlite(
                 db_path,
-                "UPDATE integration_metadata SET value = X'00' WHERE key = 'integrity_key';",
+                "PRAGMA ignore_check_constraints = ON;
+                 UPDATE integration_metadata SET value = X'00' WHERE key = 'integrity_key';",
             )
         }
         CorruptionKind::SqlitePhysicalCorruption => {
@@ -128,6 +133,14 @@ pub fn insert_provider_registrations(
 
 pub fn count_journal_entries(db_path: &Path) -> Result<u64, SqliteFixtureError> {
     count_rows(db_path, "journal_entries")
+}
+
+pub fn count_evidence_records(db_path: &Path) -> Result<u64, SqliteFixtureError> {
+    count_rows(db_path, "evidence")
+}
+
+pub fn count_evidence_associations(db_path: &Path) -> Result<u64, SqliteFixtureError> {
+    count_rows(db_path, "evidence_associations")
 }
 
 pub fn count_runs(db_path: &Path) -> Result<u64, SqliteFixtureError> {

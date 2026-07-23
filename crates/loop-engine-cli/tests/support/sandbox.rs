@@ -100,6 +100,10 @@ impl E2eSandbox {
         CliRunner::new(self)
     }
 
+    pub fn runner_from<'a>(&'a self, caller_cwd: &'a Path) -> CliRunner<'a> {
+        CliRunner::from_cwd(self, caller_cwd)
+    }
+
     pub fn isolated_env_removals() -> &'static [&'static str] {
         ISOLATED_ENV_REMOVALS
     }

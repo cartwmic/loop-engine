@@ -8,7 +8,7 @@
       "evidence": [
         "e2e:provider_list::list_filters_tombstones_and_zero_active_runs_without_provider_execution",
         "e2e:provider_list::list_count_pages_progress_and_tampered_cursor_rejects",
-        "catalog:driver_catalog::runtime_catalogs_match_checkpoint_b_exposure"
+        "catalog:driver_catalog::runtime_catalogs_match_checkpoint_d_exposure"
       ],
       "owner_task": "T147"
     },

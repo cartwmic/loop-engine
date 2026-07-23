@@ -400,7 +400,7 @@ fn global_cli_parses_driver_flags_and_captures_rest() {
         "list",
     ])
     .expect("global parse");
-    assert_eq!(cli.format, "json");
+    assert_eq!(cli.format.as_deref(), Some("json"));
     assert!(cli.list_operations);
     assert_eq!(cli.rest, vec!["run".to_owned(), "list".to_owned()]);
 }

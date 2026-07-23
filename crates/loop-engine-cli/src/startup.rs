@@ -16,7 +16,9 @@ use crate::execution::{
 use crate::exit::exit_code_for_outcome;
 use crate::render::human::render_human_envelope;
 use loop_engine_core::model::bounded::FILESYSTEM_PATH_UTF8_BYTES;
-use loop_engine_integrations::configuration::{CliDefaults, ConfigurationError, MachinePaths};
+use loop_engine_integrations::configuration::{
+    CliDefaults, ConfigurationError, MachinePaths, OutputFormat,
+};
 use loop_engine_integrations::trace::{TraceCategory, TraceError, TraceEvent, TraceWriter};
 use loop_engine_integrations::uuid_ids::UuidV7Generator;
 use serde_json::{Value, json};
@@ -105,14 +107,17 @@ pub fn run() -> i32 {
 }
 
 fn dispatch(session: TraceSession, paths: &MachinePaths, cli: GlobalCli) -> i32 {
-    let format = match parse_render_format(&cli.format) {
+    let explicit_format = match cli.format.as_deref().map(parse_render_format).transpose() {
         Ok(format) => format,
         Err(message) => {
             let owned = message.to_owned();
             return fail_parse_with_message(session, "parse", &owned, vec![owned.clone()]);
         }
     };
-    let session = session.with_format(format);
+    let session = match explicit_format {
+        Some(format) => session.with_format(format),
+        None => session,
+    };
 
     if cli.help {
         return driver_help(session);
@@ -132,11 +137,21 @@ fn dispatch(session: TraceSession, paths: &MachinePaths, cli: GlobalCli) -> i32 
         );
     }
 
-    let configuration = match crate::composition::load_configuration(paths, &CliDefaults::default())
-    {
+    let cli_defaults = CliDefaults {
+        format: explicit_format.map(|format| match format {
+            RenderFormat::Human => OutputFormat::Human,
+            RenderFormat::Json => OutputFormat::Json,
+        }),
+        ..CliDefaults::default()
+    };
+    let configuration = match crate::composition::load_configuration(paths, &cli_defaults) {
         Ok(configuration) => configuration,
         Err(error) => return fail_config(session, &error),
     };
+    let session = session.with_format(match configuration.defaults.format {
+        OutputFormat::Human => RenderFormat::Human,
+        OutputFormat::Json => RenderFormat::Json,
+    });
 
     let command = match parse_planned_application(&cli.rest) {
         Ok(command) => command,
@@ -161,14 +176,18 @@ fn dispatch(session: TraceSession, paths: &MachinePaths, cli: GlobalCli) -> i32 
         return fail_platform(session);
     }
     let home = std::env::var_os("HOME");
-    let command =
-        match prepare_application_command(command, &configuration.caller_cwd, home.as_deref()) {
-            Ok(command) => command,
-            Err(error) => {
-                let message = error.to_string();
-                return fail_parse_with_message(session, "parse", &message, vec![message.clone()]);
-            }
-        };
+    let command = match prepare_application_command(
+        command,
+        &configuration.caller_cwd,
+        home.as_deref(),
+        configuration.defaults.timeout_seconds,
+    ) {
+        Ok(command) => command,
+        Err(error) => {
+            let message = error.to_string();
+            return fail_parse_with_message(session, "parse", &message, vec![message.clone()]);
+        }
+    };
     dispatch_application(session, configuration, command)
 }
 

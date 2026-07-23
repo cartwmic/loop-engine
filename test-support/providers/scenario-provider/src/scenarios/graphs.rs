@@ -128,6 +128,14 @@ pub fn describe(scenario: Scenario, invocation_ordinal: Option<u64>) -> Describe
             live_guidance_supported: false,
             metadata: None,
         },
+        Scenario::GraphFinalOutgoing => GraphDto {
+            initial_state: "done".into(),
+            states: vec![state("done", true), state("later", false)],
+            transitions: vec![transition("done", "continue", "later", &[])],
+            input_declarations: vec![],
+            live_guidance_supported: false,
+            metadata: None,
+        },
         Scenario::GraphGuidanceSupported => GraphDto {
             initial_state: "draft".into(),
             states: vec![state("draft", false)],

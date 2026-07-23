@@ -115,10 +115,11 @@ fn map_provider_config(
     working_directory: &str,
     arg: &SyntaxProviderArgv,
     timeout: Option<&SyntaxPositiveU64>,
+    default_timeout_seconds: u64,
 ) -> Result<ProviderConfig, ProviderMapError> {
     let timeout_seconds = timeout
         .map(SyntaxPositiveU64::get)
-        .unwrap_or(PROVIDER_TIMEOUT_SECONDS_DEFAULT);
+        .unwrap_or(default_timeout_seconds);
     Ok(ProviderConfig::new(
         exec,
         argv_elements(arg),
@@ -226,9 +227,33 @@ pub fn map_add_request(
     arg: &SyntaxProviderArgv,
     timeout: Option<&SyntaxPositiveU64>,
 ) -> Result<ProviderAddRequest, ProviderMapError> {
+    map_add_request_with_default(
+        handle,
+        exec,
+        working_directory,
+        arg,
+        timeout,
+        PROVIDER_TIMEOUT_SECONDS_DEFAULT,
+    )
+}
+
+pub fn map_add_request_with_default(
+    handle: &SyntaxHandle,
+    exec: &str,
+    working_directory: &str,
+    arg: &SyntaxProviderArgv,
+    timeout: Option<&SyntaxPositiveU64>,
+    default_timeout_seconds: u64,
+) -> Result<ProviderAddRequest, ProviderMapError> {
     Ok(ProviderAddRequest {
         handle: ProviderHandle::parse(handle.as_str())?,
-        config: map_provider_config(exec, working_directory, arg, timeout)?,
+        config: map_provider_config(
+            exec,
+            working_directory,
+            arg,
+            timeout,
+            default_timeout_seconds,
+        )?,
     })
 }
 
@@ -358,7 +383,13 @@ pub fn map_restore_request(
         registration_id: RegistrationId::parse(registration_id.as_str())?,
         expected_config_revision,
         handle: ProviderHandle::parse(handle.as_str())?,
-        config: map_provider_config(exec.as_str(), working_directory.as_str(), arg, timeout)?,
+        config: map_provider_config(
+            exec.as_str(),
+            working_directory.as_str(),
+            arg,
+            timeout,
+            PROVIDER_TIMEOUT_SECONDS_DEFAULT,
+        )?,
     })
 }
 

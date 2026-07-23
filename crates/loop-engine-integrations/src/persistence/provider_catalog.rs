@@ -1606,13 +1606,20 @@ enum CatalogMutationKind {
 }
 
 fn map_handle_constraint(error: SqliteError, kind: CatalogMutationKind) -> CatalogPersistenceError {
-    if error.sqlite_error_code() == Some(rusqlite::ErrorCode::ConstraintViolation) {
+    let unique_handle_violation = matches!(
+        &error,
+        SqliteError::SqliteFailure(code, _)
+            if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
+    );
+    if unique_handle_violation {
         match kind {
             CatalogMutationKind::Add | CatalogMutationKind::Rename => {
                 CatalogPersistenceError::Duplicate
             }
             CatalogMutationKind::Restore => CatalogPersistenceError::Occupied,
         }
+    } else if error.sqlite_error_code() == Some(rusqlite::ErrorCode::ConstraintViolation) {
+        CatalogPersistenceError::Constraint
     } else {
         CatalogPersistenceError::Mapping(error.to_string())
     }

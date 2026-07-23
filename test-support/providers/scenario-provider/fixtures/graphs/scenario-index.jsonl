@@ -8,6 +8,7 @@
 {"scenario": "graph-ambiguous-duplicate-state", "golden": "ambiguous-duplicate-state.json", "role": "describe"}
 {"scenario": "graph-ambiguous-duplicate-event", "golden": "ambiguous-duplicate-event.json", "role": "describe"}
 {"scenario": "graph-structurally-invalid", "golden": "structurally-invalid.json", "role": "describe"}
+{"scenario": "graph-final-outgoing", "golden": "final-outgoing.json", "role": "describe"}
 {"scenario": "graph-guidance-supported", "golden": "guidance-supported.json", "role": "describe"}
 {"scenario": "graph-guidance-unsupported", "golden": "guidance-unsupported.json", "role": "describe"}
 {"scenario": "graph-build-drift", "golden": "build-drift.json", "role": "describe"}

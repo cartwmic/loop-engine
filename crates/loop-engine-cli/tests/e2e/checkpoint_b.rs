@@ -184,6 +184,38 @@ fn provider_check_invokes_conformance_and_active_run_compatibility_with_correlat
 }
 
 #[test]
+fn provider_check_not_found_is_rejected_with_correlated_persistence_trace() {
+    let sandbox = E2eSandbox::new();
+    let missing = "019f0000-0000-7000-8000-000000000148";
+    let invocation = sandbox
+        .runner()
+        .run_json("provider-check-not-found", &["provider", "check", missing]);
+    assert_eq!(invocation.exit_code, Some(2));
+    assert!(invocation.stderr.is_empty());
+    let document = parse_structured_stdout(&invocation.stdout).expect("structured rejection");
+    assert_eq!(document.value["operation"], "provider.check");
+    assert_eq!(document.value["outcome"], "rejected");
+    assert_eq!(
+        document.value["reason"]["code"],
+        "catalog.registration.not_found"
+    );
+    let trace = parse_correlated_value(&document.value, &sandbox.traces_dir())
+        .expect("correlated rejection trace");
+    assert!(
+        !trace
+            .events
+            .iter()
+            .any(|event| event["category"] == "provider")
+    );
+    assert!(trace.events.iter().any(|event| {
+        event["category"] == "persistence"
+            && event["operation"] == "provider.check"
+            && event["event"] == "read_complete"
+            && event["outcome"] == "rejected"
+    }));
+}
+
+#[test]
 fn provider_check_closes_shared_process_failure_family_and_bounds_stderr_trace() {
     let sandbox = E2eSandbox::new();
     let missing = add_configured_provider(
@@ -661,6 +693,35 @@ fn run_terminate_rejects_repeat_and_history_returns_complete_persisted_entries()
     assert_eq!(resumed_items[0]["outcome"], "rejected");
     assert_eq!(resumed_items[0]["note"], "again");
     assert_eq!(count_journal_entries(&sandbox.state_db_path()).unwrap(), 3);
+}
+
+#[test]
+fn run_history_not_found_is_rejected_with_correlated_persistence_trace() {
+    let sandbox = E2eSandbox::new();
+    let missing = "019f0000-0000-7000-8000-000000000151";
+    let invocation = sandbox
+        .runner()
+        .run_json("run-history-not-found", &["run", "history", missing]);
+    assert_eq!(invocation.exit_code, Some(2));
+    assert!(invocation.stderr.is_empty());
+    let document = parse_structured_stdout(&invocation.stdout).expect("structured rejection");
+    assert_eq!(document.value["operation"], "run.history");
+    assert_eq!(document.value["outcome"], "rejected");
+    assert_eq!(document.value["reason"]["code"], "run.not_found");
+    let trace = parse_correlated_value(&document.value, &sandbox.traces_dir())
+        .expect("correlated rejection trace");
+    assert!(
+        !trace
+            .events
+            .iter()
+            .any(|event| event["category"] == "provider")
+    );
+    assert!(trace.events.iter().any(|event| {
+        event["category"] == "persistence"
+            && event["operation"] == "run.history"
+            && event["event"] == "read_complete"
+            && event["outcome"] == "rejected"
+    }));
 }
 
 #[test]

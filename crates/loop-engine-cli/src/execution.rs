@@ -37,7 +37,7 @@ use crate::args::PlannedCommand;
 use crate::commands::provider::{
     ProviderAddRequest, ProviderCatalogMutationOutcome, ProviderListError, ProviderListRequest,
     ProviderMapError, ProviderTargetRef, add, check, list_active_run_impact, list_registrations,
-    map_add_request, map_check_request, map_list_request, map_target, resolve_target,
+    map_add_request_with_default, map_check_request, map_list_request, map_target, resolve_target,
 };
 use crate::commands::run::{
     RunCreateDelivery, RunCreateRequest, RunHistoryError, RunHistoryRequest, RunListError,
@@ -111,6 +111,7 @@ pub fn prepare_application_command(
     command: PlannedCommand,
     caller_cwd: &Path,
     home: Option<&OsStr>,
+    default_timeout_seconds: u64,
 ) -> Result<PreparedApplicationCommand, PrepareApplicationError> {
     match command {
         PlannedCommand::ProviderAdd(parsed) => {
@@ -122,14 +123,18 @@ pub fn prepare_application_command(
                 "executable": executable,
                 "argv": parsed.arg.elements.iter().map(|value| value.as_str()).collect::<Vec<_>>(),
                 "working_directory": working_directory,
-                "timeout_seconds": parsed.timeout.as_ref().map(|value| value.get()),
+                "timeout_seconds": parsed
+                    .timeout
+                    .as_ref()
+                    .map_or(default_timeout_seconds, |value| value.get()),
             });
-            let command = map_add_request(
+            let command = map_add_request_with_default(
                 &parsed.handle,
                 &executable,
                 &working_directory,
                 &parsed.arg,
                 parsed.timeout.as_ref(),
+                default_timeout_seconds,
             )?;
             Ok(PreparedApplicationCommand::ProviderAdd { request, command })
         }

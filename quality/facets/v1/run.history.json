@@ -7,7 +7,7 @@
       "status": "closed",
       "evidence": [
         "e2e:checkpoint_b::run_terminate_rejects_repeat_and_history_returns_complete_persisted_entries",
-        "catalog:driver_catalog::runtime_catalogs_match_checkpoint_b_exposure"
+        "catalog:driver_catalog::runtime_catalogs_match_checkpoint_d_exposure"
       ],
       "owner_task": "T151"
     },
@@ -15,7 +15,8 @@
       "name": "Read",
       "status": "closed",
       "evidence": [
-        "e2e:checkpoint_b::run_terminate_rejects_repeat_and_history_returns_complete_persisted_entries"
+        "e2e:checkpoint_b::run_terminate_rejects_repeat_and_history_returns_complete_persisted_entries",
+        "e2e:checkpoint_b::run_history_not_found_is_rejected_with_correlated_persistence_trace"
       ],
       "owner_task": "T151"
     },

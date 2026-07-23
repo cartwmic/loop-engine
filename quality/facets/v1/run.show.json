@@ -7,7 +7,7 @@
       "status": "closed",
       "evidence": [
         "e2e:checkpoint_c::run_show_projects_inputs_guidance_gates_and_provider_free_authoritative_lifecycles",
-        "catalog:driver_catalog::runtime_catalogs_match_checkpoint_c_exposure"
+        "catalog:driver_catalog::runtime_catalogs_match_checkpoint_d_exposure"
       ],
       "owner_task": "T153"
     },
