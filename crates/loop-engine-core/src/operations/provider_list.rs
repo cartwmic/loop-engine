@@ -17,7 +17,7 @@ pub fn execute_impact<C: ProviderCatalog>(
     registration_id: &RegistrationId,
     request: &PageRequest<()>,
 ) -> Result<Page<ActiveRunImpact>, C::Error> {
-    catalog.active_run_impact(registration_id, request)
+    catalog.active_run_impact("provider.list", registration_id, request)
 }
 
 pub fn parse_filter(value: &str) -> Result<ProviderListFilter, PagingError> {

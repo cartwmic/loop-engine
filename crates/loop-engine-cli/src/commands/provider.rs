@@ -110,8 +110,8 @@ pub fn authoritative_config_revision(row: &ProviderCatalogRow) -> u64 {
 }
 
 fn map_provider_config(
-    exec: &SyntaxPath,
-    working_directory: &SyntaxPath,
+    exec: &str,
+    working_directory: &str,
     arg: &SyntaxProviderArgv,
     timeout: Option<&SyntaxPositiveU64>,
 ) -> Result<ProviderConfig, ProviderMapError> {
@@ -119,9 +119,9 @@ fn map_provider_config(
         .map(SyntaxPositiveU64::get)
         .unwrap_or(PROVIDER_TIMEOUT_SECONDS_DEFAULT);
     Ok(ProviderConfig::new(
-        exec.as_str(),
+        exec,
         argv_elements(arg),
-        working_directory.as_str(),
+        working_directory,
         timeout_seconds,
     )?)
 }
@@ -220,8 +220,8 @@ pub struct ProviderRestoreRequest {
 
 pub fn map_add_request(
     handle: &SyntaxHandle,
-    exec: &SyntaxPath,
-    working_directory: &SyntaxPath,
+    exec: &str,
+    working_directory: &str,
     arg: &SyntaxProviderArgv,
     timeout: Option<&SyntaxPositiveU64>,
 ) -> Result<ProviderAddRequest, ProviderMapError> {
@@ -357,7 +357,7 @@ pub fn map_restore_request(
         registration_id: RegistrationId::parse(registration_id.as_str())?,
         expected_config_revision,
         handle: ProviderHandle::parse(handle.as_str())?,
-        config: map_provider_config(exec, working_directory, arg, timeout)?,
+        config: map_provider_config(exec.as_str(), working_directory.as_str(), arg, timeout)?,
     })
 }
 
@@ -769,6 +769,7 @@ mod tests {
 
         fn active_run_impact(
             &self,
+            _operation_id: &'static str,
             _registration_id: &RegistrationId,
             _request: &PageRequest<()>,
         ) -> Result<Page<ActiveRunImpact>, Self::Error> {

@@ -325,6 +325,7 @@ pub trait ProviderCatalog {
     /// Stable run-ID keyset order with no row truncation.
     fn active_run_impact(
         &self,
+        operation_id: &'static str,
         registration_id: &RegistrationId,
         request: &PageRequest<()>,
     ) -> Result<Page<ActiveRunImpact>, Self::Error>;

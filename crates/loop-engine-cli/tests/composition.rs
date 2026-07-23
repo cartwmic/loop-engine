@@ -77,6 +77,17 @@ fn count_trace_files(traces_dir: &Path) -> usize {
 }
 
 #[test]
+fn adopted_trace_can_return_sole_writer() {
+    let (_home, paths) = isolated_paths();
+    let trace = adopt_trace(&paths.traces);
+    let writer = match trace.try_into_writer() {
+        Ok(writer) => writer,
+        Err(_) => panic!("sole trace owner must unwrap"),
+    };
+    assert_eq!(writer.request_id(), REQUEST_ID);
+}
+
+#[test]
 fn build_application_opens_migrated_sqlite_store() {
     let _current_dir = lock_current_dir();
     let (_home, paths) = isolated_paths();
@@ -131,6 +142,10 @@ provider = "project-provider"
     )
     .expect("loaded configuration");
 
+    assert_eq!(
+        loaded.caller_cwd,
+        std::env::current_dir().expect("caller cwd remains available")
+    );
     assert_eq!(loaded.defaults.format, OutputFormat::Human);
     assert_eq!(loaded.defaults.provider.as_deref(), Some("cli-provider"));
     assert_eq!(loaded.defaults.timeout_seconds, 120);

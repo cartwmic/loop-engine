@@ -24,12 +24,13 @@ pub(crate) use provider::{
 pub(crate) use sandbox::E2eSandbox;
 pub(crate) use sqlite_fixture::{
     CorruptionKind, TombstonedRegistrationSetup, apply_initial_migration, corrupt_database,
-    harness_fixture_db_path, insert_tombstoned_registration, require_sqlite3,
+    count_journal_entries, harness_fixture_db_path, insert_provider_registrations,
+    insert_tombstoned_registration, require_sqlite3, tombstone_provider_registration,
     validate_tombstoned_registration,
 };
 pub(crate) use trace::{
-    TraceParseError, install_trace_fixture, parse_correlated_trace, read_trace_events,
-    trace_fixture_path,
+    TraceParseError, install_trace_fixture, parse_correlated_trace, parse_correlated_value,
+    read_trace_events, trace_fixture_path,
 };
 
 #[cfg(unix)]

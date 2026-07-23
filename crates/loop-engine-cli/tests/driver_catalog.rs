@@ -17,17 +17,18 @@ fn unique<'a>(values: &[&'a str]) -> BTreeSet<&'a str> {
 }
 
 #[test]
-fn runtime_catalogs_start_empty() {
-    assert!(DRIVER_OPERATION_IDS.is_empty());
-    assert!(REACHABLE_ROUTE_OPERATION_IDS.is_empty());
-    assert!(E2E_OPERATION_IDS.is_empty());
-    assert!(TRACE_OPERATION_IDS.is_empty());
-    assert!(FACET_OPERATION_IDS.is_empty());
-    assert!(driver_operations().is_empty());
-    assert!(reachable_route_operations().is_empty());
-    assert!(e2e_operations().is_empty());
-    assert!(trace_operations().is_empty());
-    assert!(facet_operations().is_empty());
+fn runtime_catalogs_match_provider_foundation_exposure() {
+    let exposed = ["provider.add", "provider.list"];
+    assert_eq!(DRIVER_OPERATION_IDS, exposed);
+    assert_eq!(REACHABLE_ROUTE_OPERATION_IDS, exposed);
+    assert_eq!(E2E_OPERATION_IDS, exposed);
+    assert_eq!(TRACE_OPERATION_IDS, exposed);
+    assert_eq!(FACET_OPERATION_IDS, exposed);
+    assert_eq!(driver_operations().len(), 2);
+    assert_eq!(reachable_route_operations().len(), 2);
+    assert_eq!(e2e_operations().len(), 2);
+    assert_eq!(trace_operations().len(), 2);
+    assert_eq!(facet_operations().len(), 2);
 }
 
 #[test]

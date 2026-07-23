@@ -125,8 +125,8 @@ fn pre_dispatch_map_errors_are_not_domain_rejections() {
     };
     let err = map_add_request(
         &add.handle,
-        &add.exec,
-        &add.working_directory,
+        add.exec.as_str(),
+        add.working_directory.as_str(),
         &add.arg,
         add.timeout.as_ref(),
     )
@@ -190,8 +190,8 @@ fn provider_add_maps_to_plain_core_request() {
     };
     let request = map_add_request(
         &add.handle,
-        &add.exec,
-        &add.working_directory,
+        add.exec.as_str(),
+        add.working_directory.as_str(),
         &add.arg,
         add.timeout.as_ref(),
     )

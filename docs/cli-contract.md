@@ -18,7 +18,7 @@ Related documents:
 
 Production binary name: `loop-engine`.
 
-MVP exposes exactly **21** application operations in two namespaces (`provider.*`, `run.*`). No additional application operation, alias, or hidden route is permitted without reopening D004. CLI `--help`, `--version`, pre-dispatch usage display, and `--list-operations` are driver functions, not application operations ([operation-catalog.md](operation-catalog.md) § Explicit non-operations).
+MVP's final catalog contains exactly **21** application operations in two namespaces (`provider.*`, `run.*`). During the 2026-07-22 staged implementation, `--list-operations` reports only checkpoint-closed runtime routes; Checkpoint A exposes `provider.add` and `provider.list`. Final closure requires all 21 IDs. No additional application operation, alias, or hidden route is permitted without reopening D004. CLI `--help`, `--version`, pre-dispatch usage display, and `--list-operations` are driver functions, not application operations ([operation-catalog.md](operation-catalog.md) § Explicit non-operations).
 
 ## Schema versioning
 
@@ -455,7 +455,7 @@ All successful driver-metadata invocations initialize trace per I46, leave stder
 
 ### `--list-operations`
 
-**Human (default):** one line per application operation: `<OPERATION-ID><TAB><argv template>`, sorted by operation ID, covering exactly the 21 IDs in [Application argv surface](#application-argv-surface).
+**Human (default):** one line per currently exposed application operation: `<OPERATION-ID><TAB><argv template>`, sorted by operation ID. During staged implementation this is the checkpoint-closed subset of [Application argv surface](#application-argv-surface); final closure covers exactly all 21 IDs.
 
 **Structured (`--format json`):** one JSON object on stdout:
 
@@ -463,7 +463,7 @@ All successful driver-metadata invocations initialize trace per I46, leave stder
 |---|---|---|---|
 | `schema_version` | integer | yes | Always `1` for this contract |
 | `kind` | string | yes | Always `operation_list` |
-| `operations` | array | yes | Exactly 21 objects, sorted by `id` |
+| `operations` | array | yes | Currently exposed checkpoint-closed objects sorted by `id`; exactly 21 at final closure |
 | `operations[].id` | string | yes | Stable operation ID |
 | `operations[].argv` | string | yes | argv template copied from this document |
 | `request_id` | string | yes | Correlates invocation and trace |

@@ -1,12 +1,35 @@
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
+use std::path::Path;
 
 use loop_engine_core::model::ids::RegistrationId;
 use loop_engine_integrations::configuration::{
     CliDefaults, EnvironmentPaths, MachinePaths, OutputFormat, TargetProviderRequirement,
-    discover_project_config, load_optional, provider_for_existing_run, provider_for_new_target,
-    resolve_defaults,
+    discover_project_config, load_optional, normalize_registration_path, provider_for_existing_run,
+    provider_for_new_target, resolve_defaults,
 };
+
+#[test]
+fn registration_paths_resolve_lexically_against_caller_cwd() {
+    assert_eq!(
+        normalize_registration_path(
+            "./vendor/../bin/provider",
+            Path::new("/workspace/app"),
+            Some(Path::new("/home/test").as_os_str()),
+        )
+        .unwrap(),
+        "/workspace/app/bin/provider"
+    );
+    assert_eq!(
+        normalize_registration_path(
+            "~/providers/workflow",
+            Path::new("/workspace/app"),
+            Some(Path::new("/home/test").as_os_str()),
+        )
+        .unwrap(),
+        "/home/test/providers/workflow"
+    );
+}
 
 #[test]
 fn home_override_resolves_only_final_symlink_component() {

@@ -5,12 +5,18 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 use loop_engine_core::capabilities::id_generator::IdGenerator;
 
-use crate::args::GlobalCli;
-use crate::driver_catalog::DRIVER_OPERATION_IDS;
-use loop_engine_core::model::bounded::FILESYSTEM_PATH_UTF8_BYTES;
-use loop_engine_integrations::configuration::{
-    ConfigurationError, MachinePaths, discover_project_config, load_optional,
+use crate::args::{GlobalCli, parse_planned_application};
+use crate::composition::{
+    LoadedConfiguration, TraceCorrelation, build_application_from_configuration,
 };
+use crate::driver_catalog::DRIVER_OPERATION_IDS;
+use crate::execution::{
+    PreparedApplicationCommand, execute_application_command, prepare_application_command,
+};
+use crate::exit::exit_code_for_outcome;
+use crate::render::human::render_human_envelope;
+use loop_engine_core::model::bounded::FILESYSTEM_PATH_UTF8_BYTES;
+use loop_engine_integrations::configuration::{CliDefaults, ConfigurationError, MachinePaths};
 use loop_engine_integrations::trace::{TraceCategory, TraceError, TraceEvent, TraceWriter};
 use loop_engine_integrations::uuid_ids::UuidV7Generator;
 use serde_json::{Value, json};
@@ -35,6 +41,8 @@ struct TraceSession {
     trace_path: PathBuf,
     request_id: String,
     format: RenderFormat,
+    argv: Vec<String>,
+    start_written: bool,
 }
 
 struct TraceInitFailure {
@@ -81,25 +89,14 @@ pub fn run() -> i32 {
     };
 
     let trace_path = writer.path().to_owned();
-    let mut session = TraceSession {
+    let session = TraceSession {
         writer: Some(writer),
         trace_path,
         request_id,
         format,
+        argv,
+        start_written: false,
     };
-
-    if let Err(error) = session.write_start(&argv) {
-        let _ = session.close();
-        return emit_trace_init_failure(
-            format,
-            TraceInitFailure {
-                message: trace_init_message(&error),
-                request_id: Some(session.request_id.clone()),
-                trace: Some(session.trace_path.clone()),
-                source_chain: vec![error.to_string()],
-            },
-        );
-    }
 
     match GlobalCli::try_parse() {
         Ok(cli) => dispatch(session, &paths, cli),
@@ -126,30 +123,172 @@ fn dispatch(session: TraceSession, paths: &MachinePaths, cli: GlobalCli) -> i32 
     if cli.list_operations {
         return driver_list_operations(session);
     }
-    if !cli.rest.is_empty() {
-        if let Err(error) = load_configuration(paths) {
-            return fail_config(session, &error);
-        }
-        if !is_supported_platform() {
-            return fail_platform(session);
-        }
+    if cli.rest.is_empty() {
         return fail_parse_with_message(
             session,
             "usage",
-            "application commands are not exposed yet",
-            vec![
-                "no application subcommands are registered in this build".to_owned(),
-                format!("unexpected arguments: {}", cli.rest.join(" ")),
-            ],
+            "missing application command",
+            vec!["expected an application subcommand after global flags".to_owned()],
         );
     }
 
-    fail_parse_with_message(
-        session,
-        "usage",
-        "missing application command",
-        vec!["expected an application subcommand after global flags".to_owned()],
-    )
+    let configuration = match crate::composition::load_configuration(paths, &CliDefaults::default())
+    {
+        Ok(configuration) => configuration,
+        Err(error) => return fail_config(session, &error),
+    };
+
+    let command = match parse_planned_application(&cli.rest) {
+        Ok(command) => command,
+        Err(error) => {
+            let message = error.to_string();
+            return fail_parse_with_message(session, "parse", &message, vec![message.clone()]);
+        }
+    };
+    let operation = command.operation_id();
+    if !DRIVER_OPERATION_IDS.contains(&operation.as_str()) {
+        return fail_parse_with_message(
+            session,
+            "usage",
+            "application command is not exposed",
+            vec![format!(
+                "operation {} is not registered in this build",
+                operation.as_str()
+            )],
+        );
+    }
+    if !is_supported_platform() {
+        return fail_platform(session);
+    }
+    let home = std::env::var_os("HOME");
+    let command =
+        match prepare_application_command(command, &configuration.caller_cwd, home.as_deref()) {
+            Ok(command) => command,
+            Err(error) => {
+                let message = error.to_string();
+                return fail_parse_with_message(session, "parse", &message, vec![message.clone()]);
+            }
+        };
+    dispatch_application(session, configuration, command)
+}
+
+fn dispatch_application(
+    mut session: TraceSession,
+    configuration: LoadedConfiguration,
+    command: PreparedApplicationCommand,
+) -> i32 {
+    if let Err(error) = session.write_start_digest() {
+        return fail_sink(&mut session, error);
+    }
+    let writer = session
+        .writer
+        .take()
+        .expect("startup trace remains owned until application composition");
+    let trace = TraceCorrelation::adopt(writer);
+    let finish_trace = trace.clone();
+    let application = match build_application_from_configuration(configuration, trace) {
+        Ok(application) => application,
+        Err(error) => {
+            return fail_adopted_application(
+                session,
+                finish_trace,
+                "persistence",
+                &error.to_string(),
+            );
+        }
+    };
+
+    let delivery = match execute_application_command(&application, command) {
+        Ok(delivery) => delivery,
+        Err(error) => {
+            drop(application);
+            let _ = finish_adopted_trace(finish_trace, 1);
+            eprintln!("application dispatch failed: {error}");
+            return 1;
+        }
+    };
+    let outcome_exit_code = exit_code_for_outcome(delivery.outcome_class());
+    drop(application);
+
+    let rendered =
+        match session.format {
+            RenderFormat::Json => serde_json::to_string(delivery.structured_envelope())
+                .map_err(|error| error.to_string()),
+            RenderFormat::Human => render_human_envelope(delivery.structured_envelope())
+                .map_err(|error| error.to_string()),
+        };
+    let output = rendered
+        .and_then(|rendered| write_stdout_text(&rendered).map_err(|error| error.to_string()));
+    let process_exit_code = if output.is_ok() { outcome_exit_code } else { 1 };
+    if let Err(error) = finish_adopted_trace(finish_trace, process_exit_code) {
+        eprintln!("trace sink failure after dispatch: {error}");
+    }
+
+    match output {
+        Ok(()) => outcome_exit_code,
+        Err(error) => {
+            eprintln!("failed to render dispatched outcome: {error}");
+            1
+        }
+    }
+}
+
+fn fail_adopted_application(
+    session: TraceSession,
+    trace: TraceCorrelation,
+    phase: &str,
+    message: &str,
+) -> i32 {
+    if let Ok(mut writer) = trace.try_into_writer() {
+        let mut payload = BTreeMap::new();
+        payload.insert("phase".into(), json!(phase));
+        payload.insert("message".into(), json!(message));
+        let event = TraceEvent::new(
+            session.request_id.clone(),
+            TraceCategory::Invocation,
+            "error",
+            payload,
+        );
+        let _ = writer.write(&event);
+        let mut finish_payload = BTreeMap::new();
+        finish_payload.insert("exit_code".into(), json!(EXIT_PRE_DISPATCH));
+        let finish = TraceEvent::new(
+            session.request_id.clone(),
+            TraceCategory::Invocation,
+            "finish",
+            finish_payload,
+        );
+        let _ = writer.write(&finish);
+        let _ = writer.close();
+    }
+    emit_pre_dispatch_failure(
+        session.format,
+        json!({
+            "schema_version": 1,
+            "phase": phase,
+            "message": message,
+            "request_id": session.request_id,
+            "trace": trace_path_string(&session.trace_path),
+            "source_chain": [message],
+        }),
+    );
+    EXIT_PRE_DISPATCH
+}
+
+fn finish_adopted_trace(trace: TraceCorrelation, exit_code: i32) -> Result<(), TraceError> {
+    let mut writer = trace
+        .try_into_writer()
+        .map_err(|_| TraceError::SinkFailed)?;
+    let mut payload = BTreeMap::new();
+    payload.insert("exit_code".into(), json!(exit_code));
+    let event = TraceEvent::new(
+        writer.request_id(),
+        TraceCategory::Invocation,
+        "finish",
+        payload,
+    );
+    writer.write(&event)?;
+    writer.close()
 }
 
 fn driver_help(mut session: TraceSession) -> i32 {
@@ -234,7 +373,18 @@ fn driver_catalog_operations() -> Vec<(&'static str, &'static str)> {
     DRIVER_OPERATION_IDS
         .iter()
         .copied()
-        .map(|id| (id, ""))
+        .map(|id| {
+            let argv = match id {
+                "provider.add" => {
+                    "provider add <HANDLE> --exec <PATH> --working-directory <PATH> [--arg <VALUE> ...] [--timeout <SECONDS>]"
+                }
+                "provider.list" => {
+                    "provider list [--enabled] [--tombstoned] [--active-runs-for <REGISTRATION-ID>] [--cursor <CURSOR>] [--limit <COUNT>]"
+                }
+                _ => unreachable!("driver catalog entry must own an argv template"),
+            };
+            (id, argv)
+        })
         .collect()
 }
 
@@ -243,6 +393,9 @@ fn write_driver_metadata(
     kind: &str,
     render: impl FnOnce() -> io::Result<()>,
 ) -> Result<(), i32> {
+    session
+        .write_start_raw()
+        .map_err(|error| fail_sink(session, error))?;
     let mut payload = BTreeMap::new();
     payload.insert("kind".into(), json!(kind));
     let event = TraceEvent::new(
@@ -285,6 +438,9 @@ fn fail_parse_with_message(
     source_chain: Vec<String>,
 ) -> i32 {
     let mut session = session;
+    if let Err(error) = session.write_start_raw() {
+        return fail_sink(&mut session, error);
+    }
     let mut payload = BTreeMap::new();
     payload.insert("phase".into(), json!(phase));
     payload.insert("message".into(), json!(message));
@@ -341,6 +497,9 @@ fn fail_invocation_error(
     source_chain: Vec<String>,
 ) -> i32 {
     let mut session = session;
+    if let Err(error) = session.write_start_raw() {
+        return fail_sink(&mut session, error);
+    }
     let mut payload = BTreeMap::new();
     payload.insert("phase".into(), json!(phase));
     payload.insert("message".into(), json!(message));
@@ -429,21 +588,51 @@ impl TraceSession {
         Self { format, ..self }
     }
 
-    fn write_start(&mut self, argv: &[String]) -> Result<(), TraceError> {
-        let (argv_values, argv_truncated, argv_byte_length) = capture_argv(argv);
+    fn write_start_raw(&mut self) -> Result<(), TraceError> {
+        if self.start_written {
+            return Ok(());
+        }
+        let (argv_values, argv_truncated, argv_byte_length) = capture_argv(&self.argv);
+        let mut payload = self.start_payload(argv_byte_length);
+        payload.insert("argv".into(), json!(argv_values));
+        payload.insert("argv_truncated".into(), json!(argv_truncated));
+        self.write_start_payload(payload)
+    }
+
+    fn write_start_digest(&mut self) -> Result<(), TraceError> {
+        if self.start_written {
+            return Ok(());
+        }
+        let argv_byte_length = self.argv.iter().map(String::len).sum();
+        let joined = self.argv.join("\0");
+        let mut payload = self.start_payload(argv_byte_length);
+        payload.insert(
+            "argv_digest".into(),
+            json!(loop_engine_integrations::sha256_digest::sha256_hex(
+                joined.as_bytes()
+            )),
+        );
+        self.write_start_payload(payload)
+    }
+
+    fn start_payload(&self, argv_byte_length: usize) -> BTreeMap<String, Value> {
         let mut payload = BTreeMap::new();
         payload.insert("format".into(), json!(render_format_label(self.format)));
         payload.insert("platform".into(), json!(platform()));
-        payload.insert("argv".into(), json!(argv_values));
-        payload.insert("argv_truncated".into(), json!(argv_truncated));
         payload.insert("argv_byte_length".into(), json!(argv_byte_length));
+        payload
+    }
+
+    fn write_start_payload(&mut self, payload: BTreeMap<String, Value>) -> Result<(), TraceError> {
         let event = TraceEvent::new(
             self.request_id.clone(),
             TraceCategory::Invocation,
             "start",
             payload,
         );
-        self.write_event(&event)
+        self.write_event(&event)?;
+        self.start_written = true;
+        Ok(())
     }
 
     fn write_event(&mut self, event: &TraceEvent) -> Result<(), TraceError> {
@@ -460,15 +649,6 @@ impl TraceSession {
             None => Ok(()),
         }
     }
-}
-
-fn load_configuration(paths: &MachinePaths) -> Result<(), ConfigurationError> {
-    load_optional(&paths.global_config)?;
-    let cwd = std::env::current_dir().map_err(ConfigurationError::CurrentDirectory)?;
-    if let Some(project_path) = discover_project_config(&cwd)? {
-        load_optional(&project_path)?;
-    }
-    Ok(())
 }
 
 fn capture_argv(argv: &[String]) -> (Vec<Value>, bool, usize) {
@@ -562,7 +742,7 @@ fn help_usage() -> String {
         "      --list-operations    List currently exposed application operations",
         "      --format <human|json>  Output rendering mode (default: human)",
         "",
-        "Application subcommands are not registered in this build.",
+        "Provider catalog foundation commands are available in this build.",
         "Use --list-operations to see currently exposed application operations.",
         "",
     ]
@@ -571,6 +751,12 @@ fn help_usage() -> String {
 
 fn trace_path_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+fn write_stdout_text(value: &str) -> io::Result<()> {
+    let mut stdout = io::stdout().lock();
+    stdout.write_all(value.as_bytes())?;
+    stdout.write_all(b"\n")
 }
 
 fn write_stdout_json(value: &Value) -> io::Result<()> {

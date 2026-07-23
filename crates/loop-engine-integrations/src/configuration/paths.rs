@@ -118,6 +118,41 @@ pub struct EnvironmentPaths {
     pub xdg_state_home: Option<OsString>,
 }
 
+pub fn normalize_registration_path(
+    value: &str,
+    caller_cwd: &Path,
+    home: Option<&OsStr>,
+) -> Result<String, ConfigurationError> {
+    if value.len() > FILESYSTEM_PATH_UTF8_BYTES {
+        return Err(ConfigurationError::PathTooLong {
+            max: FILESYSTEM_PATH_UTF8_BYTES,
+            actual: value.len(),
+        });
+    }
+    if !caller_cwd.is_absolute() {
+        return Err(ConfigurationError::RelativePath(
+            caller_cwd.to_string_lossy().into_owned(),
+        ));
+    }
+    let expanded = if value == "~" {
+        PathBuf::from(home.ok_or(ConfigurationError::HomeUnavailable)?)
+    } else if let Some(remainder) = value.strip_prefix("~/") {
+        Path::new(home.ok_or(ConfigurationError::HomeUnavailable)?).join(remainder)
+    } else {
+        PathBuf::from(value)
+    };
+    let anchored = if expanded.is_absolute() {
+        expanded
+    } else {
+        caller_cwd.join(expanded)
+    };
+    let normalized = lexical_absolute(anchored.as_os_str(), None)?;
+    normalized
+        .into_os_string()
+        .into_string()
+        .map_err(|_| ConfigurationError::PathNotUtf8)
+}
+
 pub fn discover_project_config(cwd: &Path) -> Result<Option<PathBuf>, ConfigurationError> {
     if !cwd.is_absolute() {
         return Err(ConfigurationError::RelativePath(

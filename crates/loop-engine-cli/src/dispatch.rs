@@ -128,6 +128,21 @@ pub fn dispatch_traced_operation<F>(
 where
     F: FnOnce() -> Result<TracedOperationResult, OutcomeError>,
 {
+    let operation_data = input.operation_data.clone();
+    dispatch_traced_operation_with_data(trace, input, || {
+        execute().map(|result| (result, operation_data))
+    })
+}
+
+/// Dynamic-data variant used by production routes whose response data is produced by execution.
+pub fn dispatch_traced_operation_with_data<F>(
+    trace: &TraceCorrelation,
+    input: TracedDispatchInput,
+    execute: F,
+) -> Result<DispatchDelivery, DispatchError>
+where
+    F: FnOnce() -> Result<(TracedOperationResult, Value), OutcomeError>,
+{
     validate_dispatch_input(&input)?;
 
     let request_id = trace.request_id().to_owned();
@@ -143,17 +158,20 @@ where
         write_invocation_request(&writer, &request_id, input.operation, &input.request),
     );
 
-    let TracedOperationResult {
-        outcome,
-        after_commit,
-    } = execute()?;
+    let (
+        TracedOperationResult {
+            outcome,
+            after_commit,
+        },
+        operation_data,
+    ) = execute()?;
 
     let mut structured_envelope = build_outcome_envelope(&OutcomeRenderRequest {
         operation: input.operation,
         request_id: &request_id,
         trace_path: &trace_path,
         outcome: &outcome,
-        operation_data: input.operation_data.clone(),
+        operation_data: operation_data.clone(),
     })?;
     append_trace_failure_diagnostics(&mut structured_envelope, &trace_failures);
     ensure_envelope_bound(&structured_envelope)?;
@@ -179,7 +197,7 @@ where
         request_id,
         trace_path,
         outcome,
-        operation_data: input.operation_data,
+        operation_data,
         structured_envelope,
         trace_failures,
     })

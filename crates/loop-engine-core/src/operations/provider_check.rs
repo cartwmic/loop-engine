@@ -170,7 +170,7 @@ where
     let bounded_impact_request = compatibility_page_request(impact_request)
         .map_err(|_| ProviderCheckExecutionError::InvalidPlan)?;
     let impacts = catalog
-        .active_run_impact(registration_id, &bounded_impact_request)
+        .active_run_impact("provider.check", registration_id, &bounded_impact_request)
         .map_err(ProviderCheckExecutionError::Catalog)?;
     if impacts.rows.len() > COMPATIBILITY_CALLS_PER_PAGE_MAX {
         return Err(ProviderCheckExecutionError::InvalidPlan);

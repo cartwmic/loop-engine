@@ -594,10 +594,10 @@ fn run_check(
             ))
         }
         RUNNER_OPERATION_COVERAGE => {
-            let command = "cargo run --locked -p xtask -- operation-coverage --mode baseline";
-            operation_coverage::run_at(check_root, CoverageMode::Baseline, "")?;
+            let command = "cargo run --locked -p xtask -- operation-coverage --mode exposed";
+            operation_coverage::run_at(check_root, CoverageMode::Exposed, "")?;
             Ok((
-                "baseline operation coverage passed".to_owned(),
+                "exposed operation coverage passed".to_owned(),
                 success_evidence(command.to_owned(), candidate_revision),
             ))
         }

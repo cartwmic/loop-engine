@@ -41,11 +41,26 @@ impl DigestComputer for Sha256DigestComputer {
     }
 }
 
-pub fn sha256_label(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let encoded = digest
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
         .iter()
         .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    format!("sha256:{encoded}")
+        .collect()
+}
+
+pub fn sha256_label(bytes: &[u8]) -> String {
+    format!("sha256:{}", sha256_hex(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sha256_hex;
+
+    #[test]
+    fn raw_argv_digest_uses_plain_sha256_hex() {
+        assert_eq!(
+            sha256_hex(b"loop-engine\0provider\0list"),
+            "10718841a5e20e85aad8f29cc38168cf2c6baccf84193453280044305c2ffb5f"
+        );
+    }
 }

@@ -64,6 +64,8 @@ fn help_creates_expected_trace_before_dispatch() {
             .iter()
             .any(|event| { event_key(event) == ("driver", "metadata") && event["kind"] == "help" })
     );
+    assert!(events[0]["argv"].is_array());
+    assert!(events[0].get("argv_digest").is_none());
     assert_eq!(
         fs::read_dir(home.path().join("traces"))
             .expect("trace dir")
@@ -137,7 +139,7 @@ fn config_error_creates_expected_trace_and_no_database() {
 }
 
 #[test]
-fn list_operations_json_is_empty_and_trace_lifecycle_is_correct() {
+fn list_operations_json_reports_exposed_routes_and_trace_lifecycle() {
     let home = isolated_home();
     let output = command_with_home(home.path())
         .args(["--format", "json", "--list-operations"])
@@ -146,7 +148,19 @@ fn list_operations_json_is_empty_and_trace_lifecycle_is_correct() {
     let stdout = String::from_utf8(output.get_output().stdout.clone()).expect("stdout utf8");
     let payload: Value = serde_json::from_str(stdout.trim()).expect("driver json");
     assert_eq!(payload["kind"], "operation_list");
-    assert_eq!(payload["operations"], json!([]));
+    assert_eq!(
+        payload["operations"],
+        json!([
+            {
+                "id": "provider.add",
+                "argv": "provider add <HANDLE> --exec <PATH> --working-directory <PATH> [--arg <VALUE> ...] [--timeout <SECONDS>]"
+            },
+            {
+                "id": "provider.list",
+                "argv": "provider list [--enabled] [--tombstoned] [--active-runs-for <REGISTRATION-ID>] [--cursor <CURSOR>] [--limit <COUNT>]"
+            }
+        ])
+    );
 
     let events = read_trace_events(&home.path().join("traces"));
     assert_trace_lifecycle(&events, 0);
@@ -157,14 +171,20 @@ fn list_operations_json_is_empty_and_trace_lifecycle_is_correct() {
 }
 
 #[test]
-fn list_operations_human_is_empty_and_trace_lifecycle_is_correct() {
+fn list_operations_human_reports_exposed_routes_and_trace_lifecycle() {
     let home = isolated_home();
     let output = command_with_home(home.path())
         .arg("--list-operations")
         .assert()
         .success();
     let stdout = String::from_utf8(output.get_output().stdout.clone()).expect("stdout utf8");
-    assert!(stdout.is_empty());
+    assert_eq!(
+        stdout,
+        concat!(
+            "provider.add\tprovider add <HANDLE> --exec <PATH> --working-directory <PATH> [--arg <VALUE> ...] [--timeout <SECONDS>]\n",
+            "provider.list\tprovider list [--enabled] [--tombstoned] [--active-runs-for <REGISTRATION-ID>] [--cursor <CURSOR>] [--limit <COUNT>]\n",
+        )
+    );
 
     let events = read_trace_events(&home.path().join("traces"));
     assert_trace_lifecycle(&events, 0);

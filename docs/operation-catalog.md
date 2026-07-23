@@ -40,6 +40,10 @@ Related documents:
 
 No operation split, merge, or rename is permitted without reopening D004.
 
+### Staged runtime exposure
+
+Per the 2026-07-22 execution-plan amendment, runtime exposure advances atomically by checkpoint while this change remains open. Checkpoint A exposes `provider.add` and `provider.list`; all other catalog IDs remain private until their named WP3 or WP6 checkpoint closes. `--list-operations` reports only currently exposed IDs during this staged implementation. Final closure still requires exact equality with all 21 IDs above.
+
 ## Provider handle grammar
 
 Provider handles are lowercase ASCII conveniences, never identity. Case-sensitive. No normalization.

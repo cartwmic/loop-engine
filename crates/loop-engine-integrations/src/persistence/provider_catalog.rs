@@ -281,12 +281,13 @@ impl ProviderCatalog for SqliteProviderCatalog {
 
     fn active_run_impact(
         &self,
+        operation_id: &'static str,
         registration_id: &RegistrationId,
         request: &PageRequest<()>,
     ) -> Result<Page<ActiveRunImpact>, Self::Error> {
         close_read(
             &self.trace,
-            "provider.check",
+            operation_id,
             MutationClass::ReadOnly,
             || self.active_run_impact_impl(registration_id, request),
             |page| {
@@ -1901,6 +1902,7 @@ mod tests {
         loop {
             let page = catalog
                 .active_run_impact(
+                    "provider.list",
                     registration_id,
                     &PageRequest::new(count_limit, byte_limit, cursor, ()).unwrap(),
                 )
@@ -2479,6 +2481,20 @@ mod tests {
             }
         }
         assert!(listed.contains(&registration_id));
+
+        let one_byte_under = catalog.list(
+            &PageRequest::new(
+                10,
+                row_bytes.saturating_sub(1),
+                None,
+                ProviderListFilter::Enabled,
+            )
+            .unwrap(),
+        );
+        assert!(matches!(
+            one_byte_under,
+            Err(CatalogPersistenceError::InvalidCursor)
+        ));
     }
 
     #[test]
@@ -2526,6 +2542,7 @@ mod tests {
         let row_bytes = encoded_active_run_bytes(&sample);
         let exact_fit = catalog
             .active_run_impact(
+                "provider.list",
                 &registration_id,
                 &PageRequest::new(10, row_bytes, None, ()).unwrap(),
             )
@@ -2535,6 +2552,7 @@ mod tests {
         assert!(exact_fit.next_cursor.is_some());
 
         let one_byte_under = catalog.active_run_impact(
+            "provider.list",
             &registration_id,
             &PageRequest::new(10, row_bytes.saturating_sub(1), None, ()).unwrap(),
         );
@@ -2548,6 +2566,7 @@ mod tests {
         loop {
             let page = catalog
                 .active_run_impact(
+                    "provider.list",
                     &registration_id,
                     &PageRequest::new(1, row_bytes, cursor, ()).unwrap(),
                 )

@@ -5,7 +5,7 @@
 //! boundaries for private operations. Accepts the operational trace initialized in startup;
 //! it must not create a second trace file for the same invocation.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use loop_engine_integrations::configuration::{
@@ -26,6 +26,7 @@ use loop_engine_integrations::uuid_ids::UuidV7Generator;
 use thiserror::Error;
 
 /// Correlation for one invocation trace file already opened by startup.
+#[derive(Clone)]
 pub struct TraceCorrelation {
     request_id: String,
     writer: Arc<Mutex<TraceWriter>>,
@@ -49,6 +50,16 @@ impl TraceCorrelation {
         Arc::clone(&self.writer)
     }
 
+    pub fn try_into_writer(self) -> Result<TraceWriter, Self> {
+        let Self { request_id, writer } = self;
+        match Arc::try_unwrap(writer) {
+            Ok(mutex) => Ok(mutex
+                .into_inner()
+                .unwrap_or_else(|poison| poison.into_inner())),
+            Err(writer) => Err(Self { request_id, writer }),
+        }
+    }
+
     pub fn persistence_trace(&self) -> OptionalTraceSink {
         OptionalTraceSink::from_arc(Arc::clone(&self.writer))
     }
@@ -58,6 +69,7 @@ impl TraceCorrelation {
 #[derive(Debug, Clone)]
 pub struct LoadedConfiguration {
     pub paths: MachinePaths,
+    pub caller_cwd: PathBuf,
     pub global: Option<ConfigurationDto>,
     pub project: Option<ConfigurationDto>,
     pub defaults: ResolvedDefaults,
@@ -68,16 +80,15 @@ pub fn load_configuration(
     cli_defaults: &CliDefaults,
 ) -> Result<LoadedConfiguration, ConfigurationError> {
     let global = load_optional(&paths.global_config)?;
-    let project = match std::env::current_dir() {
-        Ok(cwd) => match discover_project_config(&cwd)? {
-            Some(project_path) => load_optional(&project_path)?,
-            None => None,
-        },
-        Err(source) => return Err(ConfigurationError::CurrentDirectory(source)),
+    let caller_cwd = std::env::current_dir().map_err(ConfigurationError::CurrentDirectory)?;
+    let project = match discover_project_config(&caller_cwd)? {
+        Some(project_path) => load_optional(&project_path)?,
+        None => None,
     };
     let defaults = resolve_defaults(cli_defaults, project.as_ref(), global.as_ref());
     Ok(LoadedConfiguration {
         paths: paths.clone(),
+        caller_cwd,
         global,
         project,
         defaults,
@@ -119,6 +130,13 @@ pub fn build_application(
     cli_defaults: CliDefaults,
 ) -> Result<Application, ApplicationBuildError> {
     let configuration = load_configuration(&paths, &cli_defaults)?;
+    build_application_from_configuration(configuration, trace)
+}
+
+pub fn build_application_from_configuration(
+    configuration: LoadedConfiguration,
+    trace: TraceCorrelation,
+) -> Result<Application, ApplicationBuildError> {
     let persistence_trace = trace.persistence_trace();
     let database_path = configuration.paths.database.clone();
     let store = SqliteStore::open_traced(&database_path, persistence_trace.clone())?;

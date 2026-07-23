@@ -102,6 +102,53 @@ pub fn corrupt_database(db_path: &Path, kind: CorruptionKind) -> Result<(), Sqli
     }
 }
 
+pub fn insert_provider_registrations(
+    db_path: &Path,
+    prefix: &str,
+    count: usize,
+    argv_json: &str,
+) -> Result<(), SqliteFixtureError> {
+    let mut sql = String::from("BEGIN IMMEDIATE;\n");
+    let argv_json = sql_string(argv_json);
+    for index in 0..count {
+        let id = sql_string(&format!("{prefix}-{index:04}"));
+        sql.push_str(&format!(
+            "INSERT INTO provider_registrations (
+                registration_id, handle, enabled, config_revision, executable, argv_json,
+                working_directory, timeout_seconds, created_at, updated_at
+            ) VALUES (
+                {id}, {id}, 1, 1, '/bin/false', {argv_json}, '/tmp', 60,
+                '2026-07-22T00:00:00.000Z', '2026-07-22T00:00:00.000Z'
+            );\n"
+        ));
+    }
+    sql.push_str("COMMIT;\n");
+    run_sqlite(db_path, &sql)
+}
+
+pub fn count_journal_entries(db_path: &Path) -> Result<u64, SqliteFixtureError> {
+    let output = run_sqlite_capture(db_path, "SELECT count(*) FROM journal_entries;")?;
+    output
+        .trim()
+        .parse::<u64>()
+        .map_err(|error| SqliteFixtureError::Io(error.to_string()))
+}
+
+pub fn tombstone_provider_registration(
+    db_path: &Path,
+    registration_id: &str,
+) -> Result<(), SqliteFixtureError> {
+    let registration_id = sql_string(registration_id);
+    run_sqlite(
+        db_path,
+        &format!(
+            "UPDATE provider_registrations
+             SET handle = NULL, enabled = 0, config_revision = config_revision + 1
+             WHERE registration_id = {registration_id};"
+        ),
+    )
+}
+
 pub fn insert_tombstoned_registration(
     db_path: &Path,
     setup: &TombstonedRegistrationSetup,
@@ -171,6 +218,10 @@ pub fn require_sqlite3() -> Result<(), SqliteFixtureError> {
     } else {
         Err(SqliteFixtureError::Sqlite3Unavailable)
     }
+}
+
+fn sql_string(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 fn sqlite3_available() -> bool {

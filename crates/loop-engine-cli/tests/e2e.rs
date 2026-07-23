@@ -5,6 +5,11 @@
 
 mod support;
 
+#[path = "e2e/provider_add.rs"]
+mod provider_add;
+#[path = "e2e/provider_list.rs"]
+mod provider_list;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -109,7 +114,7 @@ fn cli_runner_invalid_argv_emits_pre_dispatch_json() {
     assert!(invocation.stdout.is_empty());
 
     let failure = parse_pre_dispatch_stderr(&invocation.stderr).expect("pre-dispatch json");
-    assert_eq!(failure.value["phase"], "usage");
+    assert_eq!(failure.value["phase"], "parse");
     assert!(failure.value.get("schema_version").is_some());
 }
 
