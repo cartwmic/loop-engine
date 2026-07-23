@@ -776,8 +776,8 @@ fn help_usage() -> String {
         "      --list-operations    List currently exposed application operations",
         "      --format <human|json>  Output rendering mode (default: human)",
         "",
-        "Provider catalog foundation commands are available in this build.",
-        "Use --list-operations to see currently exposed application operations.",
+        "Nine checkpoint-closed alpha application operations are available.",
+        "Use --list-operations for their authoritative argv templates.",
         "",
     ]
     .join("\n")

@@ -1,8 +1,9 @@
 //! Shared CLI argument primitives (T121).
 //!
-//! Production root parsing exposes global flags only. Application argv grammar for all
-//! 21 planned operations lives in private modules and is reachable through
-//! [`parse_planned_application`] and [`register_exposed_route`] without redefining flags.
+//! Production root parsing exposes global flags before startup registers the currently
+//! exposed application routes. Grammar for all 21 planned operations lives in private
+//! modules and is reachable through [`parse_planned_application`] and
+//! [`register_exposed_route`] without redefining flags.
 
 use std::ffi::OsString;
 
@@ -20,7 +21,7 @@ use thiserror::Error;
 pub const CLI_NAME: &str = "loop-engine";
 pub const CLI_ABOUT: &str = "Loop engine control plane";
 
-/// Global-only production root. No application subcommands are registered.
+/// Global parsing root. Startup registers only checkpoint-closed application routes.
 #[derive(Debug, Clone, Parser)]
 #[command(
     name = CLI_NAME,
@@ -56,11 +57,11 @@ impl GlobalCli {
             "Global options:",
             "  -h, --help               Print usage help",
             "      --version            Print version information",
-            "      --list-operations    List the closed 21-operation argv surface",
+            "      --list-operations    List currently exposed application operations",
             "      --format <human|json>  Output rendering mode (default: human)",
             "",
-            "Application subcommands are not registered in this build.",
-            "Use --list-operations for the closed 21-operation argv surface.",
+            "Nine checkpoint-closed alpha application operations are available.",
+            "Use --list-operations for their authoritative argv templates.",
             "",
         ]
         .join("\n")

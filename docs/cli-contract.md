@@ -2,7 +2,7 @@
 
 **Status:** Frozen by T006 (2026-07-17); resource bounds, collection pagination, and cursor v1 frozen by T008 (2026-07-17). Decisions [D006](change/initial-implementation/decisions.md#d006--structured-cli-contract) and [D008](change/initial-implementation/decisions.md#d008--resource-bounds-and-timeout-defaults).
 
-This document is the canonical contract for production `loop-engine` CLI rendering, global flags, structured outcome envelope schema v1, human/structured parity, stdout/stderr/trace boundaries, process exit codes, **resource bounds**, **collection pagination**, and **cursor v1**. Application subcommand argv for the closed 21-operation catalog is defined in [operation-catalog.md](operation-catalog.md) (D004); this document owns global flags, outcome rendering, bounds, and pagination only.
+This document is the canonical contract for production `loop-engine` CLI rendering, global flags, structured outcome envelope schema v1, human/structured parity, stdout/stderr/trace boundaries, process exit codes, **resource bounds**, **collection pagination**, and **cursor v1**. Application subcommand argv for the frozen 21-operation target catalog is defined in [operation-catalog.md](operation-catalog.md) (D004); current alpha runtime exposure is the nine-operation subset named below. This document owns global flags, outcome rendering, bounds, and pagination only.
 
 Related documents:
 
@@ -52,7 +52,7 @@ Global flags apply before application subcommands. Configuration path and TOML p
 | `--format <human\|json>` | Output rendering mode. Default: `human`. |
 | `--help`, `-h` | Emit usage help on stdout. Initializes trace per I46/D010. See [Driver metadata outputs](#driver-metadata-outputs). |
 | `--version` | Emit build/version metadata on stdout. Initializes trace per I46/D010. See [Driver metadata outputs](#driver-metadata-outputs). |
-| `--list-operations` | Emit closed 21-ID application operation list and argv templates on stdout. Driver metadata, not an application operation. See [Driver metadata outputs](#driver-metadata-outputs). |
+| `--list-operations` | Emit currently exposed application operation IDs and argv templates on stdout (nine in the alpha). Driver metadata, not an application operation. See [Driver metadata outputs](#driver-metadata-outputs). |
 
 Environment variable `LOOP_ENGINE_HOME` overrides machine-local roots for tests and portable use (D007). It is not a CLI flag.
 
@@ -61,6 +61,8 @@ Unsupported host targets fail pre-dispatch with exit `64` and rich stderr naming
 ## Application argv surface
 
 Application subcommand argv is frozen in [operation-catalog.md](operation-catalog.md) § Production CLI surface. The tables below are an exact copy for contract closure; if text diverges, `operation-catalog.md` is authoritative until D004 is reopened.
+
+**Alpha availability:** only `provider.add`, `provider.check`, `provider.list`, `run.create`, `run.history`, `run.list`, `run.request`, `run.show`, and `run.terminate` are callable. Remaining rows document deferred WP6 target syntax and are not hidden routes. `--list-operations` is authoritative for installed-binary availability.
 
 ### Provider commands
 
@@ -426,7 +428,7 @@ All successful driver-metadata invocations initialize trace per I46, leave stder
 
 ### `--help` / `-h`
 
-**Human (default):** UTF-8 usage text on stdout. Includes global flags, namespace summary, and pointer to `--list-operations` for the closed 21-ID argv surface.
+**Human (default):** UTF-8 usage text on stdout. Includes global flags, alpha availability summary, and pointer to `--list-operations` for currently exposed argv templates.
 
 **Structured (`--format json`):** one JSON object on stdout:
 
@@ -455,7 +457,7 @@ All successful driver-metadata invocations initialize trace per I46, leave stder
 
 ### `--list-operations`
 
-**Human (default):** one line per currently exposed application operation: `<OPERATION-ID><TAB><argv template>`, sorted by operation ID. During staged implementation this is the checkpoint-closed subset of [Application argv surface](#application-argv-surface); final closure covers exactly all 21 IDs.
+**Human (default):** one line per currently exposed application operation: `<OPERATION-ID><TAB><argv template>`, in stable frozen-catalog order. Alpha output contains exactly nine IDs. Final closure covers exactly all 21 IDs.
 
 **Structured (`--format json`):** one JSON object on stdout:
 
@@ -463,7 +465,7 @@ All successful driver-metadata invocations initialize trace per I46, leave stder
 |---|---|---|---|
 | `schema_version` | integer | yes | Always `1` for this contract |
 | `kind` | string | yes | Always `operation_list` |
-| `operations` | array | yes | Currently exposed checkpoint-closed objects sorted by `id`; exactly 21 at final closure |
+| `operations` | array | yes | Currently exposed checkpoint-closed objects in stable frozen-catalog order; nine in the alpha and exactly 21 at final closure |
 | `operations[].id` | string | yes | Stable operation ID |
 | `operations[].argv` | string | yes | argv template copied from this document |
 | `request_id` | string | yes | Correlates invocation and trace |

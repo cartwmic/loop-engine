@@ -38,9 +38,9 @@ fn parse_grammar(rest: &[&str]) -> clap::Error {
 }
 
 #[test]
-fn root_help_exposes_zero_application_operations() {
+fn root_parser_registers_zero_application_operations_before_startup() {
     let help = GlobalCli::usage_help();
-    assert!(help.contains("Application subcommands are not registered"));
+    assert!(help.contains("Nine checkpoint-closed alpha application operations are available"));
     assert!(GlobalCli::command().get_subcommands().next().is_none());
     assert!(!help.contains("  provider "));
     assert!(!help.contains("  run "));

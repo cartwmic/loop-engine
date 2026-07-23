@@ -49,6 +49,19 @@ Rejected patterns:
 - custom compiler plugins for log counting;
 - treating trace as competing authority over SQLite or export files.
 
+## Alpha trace inspection
+
+Every alpha invocation returns or prints a trace path except when trace initialization itself fails. Treat each file as JSON Lines: parse one line at a time, verify every `request_id` matches the filename and CLI envelope, then follow `invocation.start` → optional boundary events → `invocation.outcome` → `invocation.finish`. Provider stdout/stderr appears only inside bounded `provider.finish`/`provider.failure` detail; it is never terminal output.
+
+For diagnosis:
+
+```bash
+trace=/path/from/the/cli/envelope.jsonl
+while IFS= read -r line; do printf '%s\n' "$line" | python3 -m json.tool; done < "$trace"
+```
+
+Missing terminal lines do not prove rollback: inspect authoritative state with `run.show`, `run.history`, `run.list`, or `provider.list`. A `trace.sink_failure` after commit is diagnostic only. Closed traces may be rotated, so copy a relevant closed file before reproducing high-volume failures. Do not change trace/reservation files or permissions while an invocation is active.
+
 ## File layout and permissions
 
 | Artifact | Path | Mode |
@@ -439,9 +452,9 @@ Cases run only on supported macOS and Linux hosts ([testing.md](testing.md) § S
 - `trace.sink_failure` with `after_commit: true` when observable;
 - no production code branch keyed on test environment.
 
-## Operation event closure (21 application operations)
+## Operation event closure (21-operation target catalog)
 
-Every dispatched application operation **MUST** emit at minimum: `invocation.start`, `invocation.request`, `invocation.outcome`, and `invocation.finish` unless crash or late sink failure prevents terminal lines.
+Alpha currently dispatches only the nine operations reported by `--list-operations`; their rows below are enforced now. Remaining rows define deferred WP6 closure and are not callable yet. Every dispatched application operation **MUST** emit at minimum: `invocation.start`, `invocation.request`, `invocation.outcome`, and `invocation.finish` unless crash or late sink failure prevents terminal lines.
 
 | Operation ID | `persistence.*` | `provider.*` | `decision.*` |
 |---|---|---|---|

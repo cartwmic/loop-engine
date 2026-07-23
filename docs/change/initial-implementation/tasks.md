@@ -1249,13 +1249,15 @@ Deferred with their operations to WP6: evidence flow (was T172), provider drift/
 
 ### WP5 — Alpha publication and dogfood
 
-- [ ] User/operator documentation for the exposed alpha surface: root README, `../../cli-contract.md`, `../../configuration.md`, `../../operational-trace.md`, `../../persistence.md` (alpha subset of T193); docs claim no unexposed command
+- [x] User/operator documentation for the exposed alpha surface: root README, `../../cli-contract.md`, `../../configuration.md`, `../../operational-trace.md`, `../../persistence.md` (alpha subset of T193); docs claim no unexposed command
 - [ ] Full quality gate green; judge-gated publication of the alpha range through the canonical pre-push ritual
-- [ ] Owner dogfoods the reference software-change workflow manually through the alpha CLI; findings and pain points recorded here and used to order WP6
+- [x] Owner dogfoods the reference software-change workflow manually through the alpha CLI; findings and pain points recorded here and used to order WP6
+
+Dogfood completed the reference provider's full explore-to-final happy path through fresh production CLI processes and exercised all nine alpha operations, including a separate active-run termination. Durable state, generated provider evidence, history, traces, and final/terminated readback agreed. Main pain points were absence of graph inspection, evidence inventory, notes/labels, live guidance, compatibility checks, provider lifecycle management, and export; large structured history output was difficult to inspect manually. WP6 order selected from that evidence: `run.graph`; provider update/rename/disable/restore; atomic evidence add/list; annotate and label; guidance then compatibility; export last. Deferred cross-operation and report work follows exposure closure. Dogfood evidence is retained under `target/junction-evidence/WP5/`.
 
 ### WP6 — Post-alpha completion backlog
 
-The change stays open through WP6; ordering is an owner decision after dogfood. Contents, reusing original contracts by ID:
+The change stays open through WP6. Owner-selected ordering from alpha dogfood is recorded above. Contents, reusing original contracts by ID:
 
 - [ ] Deferred exposures with facet manifests: `run.graph` (T154), `provider.update` (T155), `provider.rename` (T156), `provider.disable` (T157), `provider.restore` (T158), `run.evidence.add`/`run.evidence.list` (T159–T160), `run.annotate` (T161), `run.label` (T162), `run.guidance` (T164), `run.compatibility` (T165), `run.export` (T166); deferred `run.request` facet rows close here
 - [ ] Deferred acceptance families: evidence flow (T172), provider drift and stable registration identity (T175), compatibility continuity (T176), audit export (T181)
