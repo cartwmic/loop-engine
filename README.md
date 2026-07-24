@@ -64,6 +64,10 @@ Additional inspection, metadata, and audit operations:
 
 Evidence metadata and annotation actor files must contain one strict JSON object; duplicate keys, trailing values, and non-object roots are rejected. Evidence locators stay opaque and are never opened by engine. Export publishes `manifest.json`, `state.json`, and `journal.jsonl` atomically into a new target directory.
 
+### Complete workflow walkthrough
+
+See the [Go reference-provider walkthrough](examples/providers/reference-go/README.md) for a start-to-finish tutorial: author and build a provider, register it, create a run, drive every workflow transition, inspect guidance and compatibility, and check the authoritative journal and evidence before reaching `end/final`.
+
 Provider lifecycle operations preserve stable registration identity:
 
 ```bash
