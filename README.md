@@ -84,6 +84,7 @@ Every invocation creates a private JSONL trace. Structured mode (`--format json`
 
 ## Operator paths
 
+- [Harness-neutral agent skill seed](examples/skills/using-loop-engine/SKILL.md)
 - [Install, operation, backup, migration, and troubleshooting guide](docs/operator-guide.md)
 - [CLI and exit contract](docs/cli-contract.md)
 - [Configuration and machine-local paths](docs/configuration.md)
