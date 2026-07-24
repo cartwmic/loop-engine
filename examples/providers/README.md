@@ -68,7 +68,9 @@ Graph payloads additionally require [graph-projection.md](../../docs/graph-proje
 5. Build executable, register exact path with `loop-engine provider add`, then run `provider check`.
 6. Exercise creation, gated requests, guidance, compatibility, drift/update, malformed input, and process-failure behavior through production CLI.
 
-Root-excluded reference fixture demonstrates complete graph, gate, evidence, guidance, and compatibility roles:
+[`reference-go/`](reference-go/) provides a standalone, standard-library-only Go authoring walkthrough with graph, gates, evidence, guidance, compatibility, fixtures, tests, and exact end-to-end commands.
+
+Root-excluded Rust reference fixture demonstrates complete graph, gate, evidence, guidance, and compatibility roles:
 
 ```bash
 env -u RUSTUP_TOOLCHAIN CARGO_TARGET_DIR="$PWD/target/reference-provider" \
