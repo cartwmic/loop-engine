@@ -1,6 +1,6 @@
 # Initial Implementation Coverage Map
 
-**Status:** Planned
+**Status:** Complete candidate
 
 This map prevents requirements from disappearing between foundation, implementation tasks, and runtime evidence. Task completion alone is not acceptance. Final evidence columns must name passing command, invocation/request ID, trace file/artifact, and exact commit.
 
@@ -85,79 +85,79 @@ Before candidate commit, final evidence replaces `Planned` with stable report ke
 
 | Invariant | Implementation tasks | Behavioral/deterministic proof | Final evidence |
 |---|---|---|---|
-| I1 Actor type cannot affect behavior | T035, T048–T049, T077, T079 | T051, T161, T188 | Planned |
-| I2 Primary work remains external | T005, T043–T044, T056, T079–T081 | T137, T184, T185–T190 | Planned |
-| I3 Core remains harness-agnostic | T017–T022, T031–T061 | architecture gate T021–T022, T184 | Planned |
-| I4 Workflow authoring is code-only | T005, T084–T095 | T135–T142, T148, T152, T184 | Planned |
-| I5 Providers own domain policy | T038–T044, T140–T142 | T184, reference suite | Planned |
-| I6 Providers emit complete graph | T038–T041, T065, T070, T086, T091 | T148–T152, T168, T171 | Planned |
-| I7 Every run snapshots graph | T038–T041, T045, T070, T073, T108–T109 | T149–T150, T152–T154, T168, T175 | Planned |
-| I8 Provider drift allowed/logged | T042–T046, T066, T079–T081, T090–T102 | T155, T163–T165, T175–T176, T187 | Planned |
-| I9 Gates authoritative | T039, T043, T049, T079, T093 | T137, T163, T170, T172–T173 | Planned |
-| I10 One enforcement path | T048–T059, T079, T112–T113, T124 | T163, T173, T184 | Planned |
-| I11 Rejected progress preserves state | T047–T049, T079, T112 | T163, T168–T173, T185–T189 | Planned |
-| I12 Stored state authoritative | T045–T046, T057–T059, T105–T115 | T149–T165, T173, T179–T180 | Planned |
-| I13 Journal immutable/ordered | T011, T046, T058–T059, T105, T114–T115 | T152, T165, T173, T176, T179–T180 | Planned |
-| I14 State/journal atomic | T058–T059, T108, T111–T114 | T149–T152, T159, T161–T165, T173 | Planned |
-| I15 Journal explains, not reproduces | T011, T042–T046, T115 | T152, T170, T175, T184, T194 | Planned |
-| I16 Runs survive boundaries | T045, T057, T105–T115 | all exposure restarts; T149–T154, T177, T187 | Planned |
-| I17 Notes/actor no authority | T035, T046, T077, T079 | T161, T188 | Planned |
-| I18 Human/structured equivalence | T006, T047, T125–T128 | every exposure; T169 | Planned |
-| I19 Ambiguity cannot advance | T040, T048, T079 | T149–T150, T163, T168 | Planned |
-| I20 Provider execution explicit | T056, T065, T070–T081, T091–T095 | T148–T150, T152–T154, T159–T161, T163–T165, T170 | Planned |
-| I21 Clean-room workflow | all tasks; README rules | T184 and source/artifact scan | Planned |
-| I22 Three product crates | T017–T022, T031 | T021–T022, T184 | Planned |
-| I23 Core dependencies inward | T021–T022, T031, T053–T061 | architecture canaries | Planned |
-| I24 DTOs at boundaries | T031, T084–T086, T097, T106, T122, T125 | architecture/schema tests T022, T184 | Planned |
-| I25 Every operation driver-covered | T062, T133, T146–T167 | T167 | Planned |
-| I26 Catalogs mechanically closed | T062, T133, T145, T167 | exact-set report T167 | Planned |
-| I27 Structured outcomes identify op | T047, T124–T125 | every exposure, T167, T169, T182 | Planned |
-| I28 E2E behavioral authority | T143–T145, T146–T190 | acceptance reports T167, T190–T191 | Planned |
-| I29 No mock behavioral tests | T013, T135–T145 | dependency/source audit T184, T191 | Planned |
-| I30 Facet depth | exposure tasks, T168–T183 | facet report T191 | Planned |
-| I31 Defect fixes get driver regression | T195 quality policy/docs | future gate check and contributor docs | Planned |
-| I32 Inputs immutable/evidence append-only | T036–T037, T070, T075–T076, T079, T092 | T149–T150, T159–T160, T163, T171–T172 | Planned |
-| I33 Minimal lifecycle | T045, T048, T072, T077–T082 | T151–T165, T168, T174 | Planned |
-| I34 Three outcomes | T006, T047–T049, all operations | T169 plus every exposure | Planned |
-| I35 Evidence independent/inline | T037, T059, T075–T076, T079, T110–T113 | T159–T160, T163, T172–T173, T189 | Planned |
-| I36 One-current-caller overlap safety | T034, T045, T059, T079, T113, T119, T139 | T178 | Planned |
-| I37 Stable identity/major protocol | T005, T033, T042, T055, T063–T070, T084 | T146–T158, T175 | Planned |
-| I38 Narrow roles/conformance | T005, T043–T044, T055–T056, T084–T095 | T135–T148, T152, T163–T165 | Planned |
-| I39 Compatibility/safe inspection | T044, T055–T057, T072–T081, T095 | T151–T165, T170, T175–T176, T187 | Planned |
-| I40 Provider config authorizes execution | T007, T042, T055, T063–T070, T087–T098 | T146–T158, T170, T175, T177 | Planned |
-| I41 Run identity not workspace identity | T033, T037, T045, T071–T078, T096, T116 | T149–T162, T172, T175, T177, T181 | Planned |
-| I42 Evidence retention/no auto-copy | T008, T037, T099–T102, T110, T116 | T159–T160, T163, T172, T181–T182 | Planned |
-| I43 Active runs current registration | T042, T055–T056, T066, T079–T081, T090 | T155, T163–T165, T175–T176 | Planned |
-| I44 No retry keys/automatic retry | T005, T079, T087–T095, T121 | T163, T170, T178, T184 | Planned |
-| I45 No individual deletion | T004, T045–T046, T083, T105, T121 | T166, T174, T181, T184 | Planned |
-| I46 Every invocation traceable | T010, T054, T099–T102, T118, T120, T124 | every exposure; T167, T182, T189 | Planned |
-| I47 Every publication checkpoint documentation-coherent | T012, T023–T029, R001–R005, T195, T198–T200 | aggregate judge/hook/CI tests and base-to-head publication reports | Planned |
+| I1 Actor type cannot affect behavior | T035, T048–T049, T077, T079 | T051, T161, T188 | acceptance:I1 |
+| I2 Primary work remains external | T005, T043–T044, T056, T079–T081 | T137, T184, T185–T190 | acceptance:I2 |
+| I3 Core remains harness-agnostic | T017–T022, T031–T061 | architecture gate T021–T022, T184 | acceptance:I3 |
+| I4 Workflow authoring is code-only | T005, T084–T095 | T135–T142, T148, T152, T184 | acceptance:I4 |
+| I5 Providers own domain policy | T038–T044, T140–T142 | T184, reference suite | acceptance:I5 |
+| I6 Providers emit complete graph | T038–T041, T065, T070, T086, T091 | T148–T152, T168, T171 | acceptance:I6 |
+| I7 Every run snapshots graph | T038–T041, T045, T070, T073, T108–T109 | T149–T150, T152–T154, T168, T175 | acceptance:I7 |
+| I8 Provider drift allowed/logged | T042–T046, T066, T079–T081, T090–T102 | T155, T163–T165, T175–T176, T187 | acceptance:I8 |
+| I9 Gates authoritative | T039, T043, T049, T079, T093 | T137, T163, T170, T172–T173 | acceptance:I9 |
+| I10 One enforcement path | T048–T059, T079, T112–T113, T124 | T163, T173, T184 | acceptance:I10 |
+| I11 Rejected progress preserves state | T047–T049, T079, T112 | T163, T168–T173, T185–T189 | acceptance:I11 |
+| I12 Stored state authoritative | T045–T046, T057–T059, T105–T115 | T149–T165, T173, T179–T180 | acceptance:I12 |
+| I13 Journal immutable/ordered | T011, T046, T058–T059, T105, T114–T115 | T152, T165, T173, T176, T179–T180 | acceptance:I13 |
+| I14 State/journal atomic | T058–T059, T108, T111–T114 | T149–T152, T159, T161–T165, T173 | acceptance:I14 |
+| I15 Journal explains, not reproduces | T011, T042–T046, T115 | T152, T170, T175, T184, T194 | acceptance:I15 |
+| I16 Runs survive boundaries | T045, T057, T105–T115 | all exposure restarts; T149–T154, T177, T187 | acceptance:I16 |
+| I17 Notes/actor no authority | T035, T046, T077, T079 | T161, T188 | acceptance:I17 |
+| I18 Human/structured equivalence | T006, T047, T125–T128 | every exposure; T169 | acceptance:I18 |
+| I19 Ambiguity cannot advance | T040, T048, T079 | T149–T150, T163, T168 | acceptance:I19 |
+| I20 Provider execution explicit | T056, T065, T070–T081, T091–T095 | T148–T150, T152–T154, T159–T161, T163–T165, T170 | acceptance:I20 |
+| I21 Clean-room workflow | all tasks; README rules | T184 and source/artifact scan | acceptance:I21 |
+| I22 Three product crates | T017–T022, T031 | T021–T022, T184 | acceptance:I22 |
+| I23 Core dependencies inward | T021–T022, T031, T053–T061 | architecture canaries | acceptance:I23 |
+| I24 DTOs at boundaries | T031, T084–T086, T097, T106, T122, T125 | architecture/schema tests T022, T184 | acceptance:I24 |
+| I25 Every operation driver-covered | T062, T133, T146–T167 | T167 | acceptance:I25 |
+| I26 Catalogs mechanically closed | T062, T133, T145, T167 | exact-set report T167 | acceptance:I26 |
+| I27 Structured outcomes identify op | T047, T124–T125 | every exposure, T167, T169, T182 | acceptance:I27 |
+| I28 E2E behavioral authority | T143–T145, T146–T190 | acceptance reports T167, T190–T191 | acceptance:I28 |
+| I29 No mock behavioral tests | T013, T135–T145 | dependency/source audit T184, T191 | acceptance:I29 |
+| I30 Facet depth | exposure tasks, T168–T183 | facet report T191 | acceptance:I30 |
+| I31 Defect fixes get driver regression | T195 quality policy/docs | future gate check and contributor docs | acceptance:I31 |
+| I32 Inputs immutable/evidence append-only | T036–T037, T070, T075–T076, T079, T092 | T149–T150, T159–T160, T163, T171–T172 | acceptance:I32 |
+| I33 Minimal lifecycle | T045, T048, T072, T077–T082 | T151–T165, T168, T174 | acceptance:I33 |
+| I34 Three outcomes | T006, T047–T049, all operations | T169 plus every exposure | acceptance:I34 |
+| I35 Evidence independent/inline | T037, T059, T075–T076, T079, T110–T113 | T159–T160, T163, T172–T173, T189 | acceptance:I35 |
+| I36 One-current-caller overlap safety | T034, T045, T059, T079, T113, T119, T139 | T178 | acceptance:I36 |
+| I37 Stable identity/major protocol | T005, T033, T042, T055, T063–T070, T084 | T146–T158, T175 | acceptance:I37 |
+| I38 Narrow roles/conformance | T005, T043–T044, T055–T056, T084–T095 | T135–T148, T152, T163–T165 | acceptance:I38 |
+| I39 Compatibility/safe inspection | T044, T055–T057, T072–T081, T095 | T151–T165, T170, T175–T176, T187 | acceptance:I39 |
+| I40 Provider config authorizes execution | T007, T042, T055, T063–T070, T087–T098 | T146–T158, T170, T175, T177 | acceptance:I40 |
+| I41 Run identity not workspace identity | T033, T037, T045, T071–T078, T096, T116 | T149–T162, T172, T175, T177, T181 | acceptance:I41 |
+| I42 Evidence retention/no auto-copy | T008, T037, T099–T102, T110, T116 | T159–T160, T163, T172, T181–T182 | acceptance:I42 |
+| I43 Active runs current registration | T042, T055–T056, T066, T079–T081, T090 | T155, T163–T165, T175–T176 | acceptance:I43 |
+| I44 No retry keys/automatic retry | T005, T079, T087–T095, T121 | T163, T170, T178, T184 | acceptance:I44 |
+| I45 No individual deletion | T004, T045–T046, T083, T105, T121 | T166, T174, T181, T184 | acceptance:I45 |
+| I46 Every invocation traceable | T010, T054, T099–T102, T118, T120, T124 | every exposure; T167, T182, T189 | acceptance:I46 |
+| I47 Every publication checkpoint documentation-coherent | T012, T023–T029, R001–R005, T195, T198–T200 | aggregate judge/hook/CI tests and base-to-head publication reports | acceptance:I47 |
 
 ## Reference workflow behavior traceability
 
 | # | Required behavior | Provider tasks | Product/cross tasks | Dedicated proof | Final evidence |
 |---:|---|---|---|---|---|
-| 1 | Creation and safe inspection | T140 | T150, T152–T154 | T185 | Planned |
-| 2 | Happy path to `end` | T140–T141 | T163, T174 | T185 | Planned |
-| 3 | Missing output rejection | T141 | T163, T172 | T185 | Planned |
-| 4 | Invalid output rejection | T141 | T163, T172 | T185 | Planned |
-| 5 | Design revision cycle | T140–T141 | T163, T168 | T186 | Planned |
-| 6 | Plan revision cycle | T140–T141 | T163, T168 | T186 | Planned |
-| 7 | Implementation revision cycle | T140–T141 | T163, T168 | T186 | Planned |
-| 8 | Validation revision cycle | T140–T141 | T163, T168 | T186 | Planned |
-| 9 | Verdict consistency | T141 | T163, T170 | T186 | Planned |
-| 10 | Append-only same-path evidence | T141 | T159–T160, T172 | T187 | Planned |
-| 11 | Restart and handoff | T140–T142 | T149–T163 | T187 | Planned |
-| 12 | Provider drift | T142 | T155, T163, T175 | T187 | Planned |
-| 13 | Provider incompatibility | T142 | T165, T176 | T187 | Planned |
-| 14 | Guidance/cold handoff | T142 | T152–T153, T160, T164, T172 | T188 | Planned |
-| 15 | Actor neutrality | T141 | T161, T163 | T188 | Planned |
-| 16 | Journal/state consistency | T141 | T112–T115, T163, T173 | T188 | Planned |
-| 17 | Interaction contract | T140 | T150–T162, T174, T177 | T188 | Planned |
-| 18 | Attempt evidence | T141 | T112–T113, T163, T172–T173 | T189 | Planned |
-| 19 | Provider resolution | T142 | T150, T155–T158, T175, T177 | T189 | Planned |
-| 20 | Automation envelope | T140–T142 | T125, T128, T169 | T189 | Planned |
-| 21 | Operational visibility | T140–T142 | T099–T102, T118, T120, T124, T182 | T189 | Planned |
+| 1 | Creation and safe inspection | T140 | T150, T152–T154 | T185 | reference:01 |
+| 2 | Happy path to `end` | T140–T141 | T163, T174 | T185 | reference:02 |
+| 3 | Missing output rejection | T141 | T163, T172 | T185 | reference:03 |
+| 4 | Invalid output rejection | T141 | T163, T172 | T185 | reference:04 |
+| 5 | Design revision cycle | T140–T141 | T163, T168 | T186 | reference:05 |
+| 6 | Plan revision cycle | T140–T141 | T163, T168 | T186 | reference:06 |
+| 7 | Implementation revision cycle | T140–T141 | T163, T168 | T186 | reference:07 |
+| 8 | Validation revision cycle | T140–T141 | T163, T168 | T186 | reference:08 |
+| 9 | Verdict consistency | T141 | T163, T170 | T186 | reference:09 |
+| 10 | Append-only same-path evidence | T141 | T159–T160, T172 | T187 | reference:10 |
+| 11 | Restart and handoff | T140–T142 | T149–T163 | T187 | reference:11 |
+| 12 | Provider drift | T142 | T155, T163, T175 | T187 | reference:12 |
+| 13 | Provider incompatibility | T142 | T165, T176 | T187 | reference:13 |
+| 14 | Guidance/cold handoff | T142 | T152–T153, T160, T164, T172 | T188 | reference:14 |
+| 15 | Actor neutrality | T141 | T161, T163 | T188 | reference:15 |
+| 16 | Journal/state consistency | T141 | T112–T115, T163, T173 | T188 | reference:16 |
+| 17 | Interaction contract | T140 | T150–T162, T174, T177 | T188 | reference:17 |
+| 18 | Attempt evidence | T141 | T112–T113, T163, T172–T173 | T189 | reference:18 |
+| 19 | Provider resolution | T142 | T150, T155–T158, T175, T177 | T189 | reference:19 |
+| 20 | Automation envelope | T140–T142 | T125, T128, T169 | T189 | reference:20 |
+| 21 | Operational visibility | T140–T142 | T099–T102, T118, T120, T124, T182 | T189 | reference:21 |
 
 T190 mechanically verifies exactly 21 evidence-backed rows.
 

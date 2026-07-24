@@ -6,8 +6,9 @@
 use std::path::{Path, PathBuf};
 
 use loop_engine_core::capabilities::persistence_commands::{
-    AppendCompatibilityAttemptCommand, CommitStatus,
+    AppendCompatibilityAttemptCommand, AttemptCommit, CommittedRunSnapshot,
 };
+use loop_engine_core::capabilities::run_writer::CompatibilityAttemptWriter as CompatibilityAttemptWriterPort;
 use loop_engine_core::model::ids::RunId;
 use thiserror::Error;
 
@@ -29,6 +30,17 @@ use loop_engine_core::model::outcome::OutcomeClass;
 pub struct CompatibilityAttemptWriter {
     path: PathBuf,
     trace: OptionalTraceSink,
+}
+
+impl CompatibilityAttemptWriterPort for CompatibilityAttemptWriter {
+    type Error = CompatibilityAttemptError;
+
+    fn append_compatibility_attempt(
+        &self,
+        command: AppendCompatibilityAttemptCommand,
+    ) -> Result<AttemptCommit, Self::Error> {
+        CompatibilityAttemptWriter::append_compatibility_attempt(self, command)
+    }
 }
 
 impl std::fmt::Debug for CompatibilityAttemptWriter {
@@ -108,15 +120,15 @@ impl CompatibilityAttemptWriter {
     pub fn append_compatibility_attempt(
         &self,
         command: AppendCompatibilityAttemptCommand,
-    ) -> Result<CommitStatus, CompatibilityAttemptError> {
+    ) -> Result<AttemptCommit, CompatibilityAttemptError> {
         close_write(
             &self.trace,
             "run.compatibility",
             MutationClass::RunMutation,
             |trace| {
                 self.append_compatibility_attempt_impl(command, trace)
-                    .map_ok(|(status, outcome)| {
-                        (status, SemanticOutcome::from_outcome_class(outcome))
+                    .map_ok(|(commit, outcome)| {
+                        (commit, SemanticOutcome::from_outcome_class(outcome))
                     })
             },
             |(_, semantic)| *semantic,
@@ -129,11 +141,12 @@ impl CompatibilityAttemptWriter {
         &self,
         command: AppendCompatibilityAttemptCommand,
         trace: Option<&WriteTraceSession<'_>>,
-    ) -> WriteExecution<(CommitStatus, OutcomeClass), CompatibilityAttemptError> {
+    ) -> WriteExecution<(AttemptCommit, OutcomeClass), CompatibilityAttemptError> {
         if let Err(error) = validate_compatibility_command(&command) {
             return WriteExecution::no_transaction(error);
         }
-        let expected_lifecycle = command.expected_lifecycle_version().value();
+        let expected_workflow = command.expected_workflow_version();
+        let expected_lifecycle = command.expected_lifecycle_version();
         let run_id = command.run_id().as_str();
         let conn = match connect_with_pragmas(self.path()).map_err(map_persistence) {
             Ok(conn) => conn,
@@ -151,20 +164,38 @@ impl CompatibilityAttemptWriter {
         let result = (|| {
             let row = load_authoritative_run(&conn, command.run_id())?;
             if let Some(session) = trace {
-                session.version_check_run_cas(run_id, None, Some(expected_lifecycle));
+                session.version_check_run_cas(
+                    run_id,
+                    Some(expected_workflow.value()),
+                    Some(expected_lifecycle.value()),
+                );
             }
             let draft = select_attempt_draft(
-                row.lifecycle,
+                &row,
+                expected_workflow,
+                expected_lifecycle,
                 command.journal_entry(),
                 command.terminal_rejection_entry(),
+                command.stale_error_entry(),
             )
             .clone();
             let outcome = draft.outcome();
+            let reason = draft.reason().cloned();
             let (status, journal, associations) =
                 append_journal_attempt(&conn, command.run_id(), draft, extras, &row)?;
             let expectation =
                 attempt_commit_expectation(command.run_id(), &row, &journal, associations);
-            Ok(((status, outcome), expectation))
+            let commit = AttemptCommit {
+                commit: status,
+                outcome,
+                reason,
+                run: CommittedRunSnapshot {
+                    lifecycle: row.lifecycle,
+                    current_state: row.current_state.clone(),
+                    label: row.label.clone(),
+                },
+            };
+            Ok(((commit, outcome), expectation))
         })();
         commit_attempt_transaction(self.path(), conn, result)
             .map_err(CompatibilityAttemptError::from)
@@ -177,6 +208,8 @@ fn validate_compatibility_command(
     validate_draft_run_id(command.run_id(), command.journal_entry())
         .map_err(CompatibilityAttemptError::from)?;
     validate_draft_run_id(command.run_id(), command.terminal_rejection_entry())
+        .map_err(CompatibilityAttemptError::from)?;
+    validate_draft_run_id(command.run_id(), command.stale_error_entry())
         .map_err(CompatibilityAttemptError::from)?;
     Ok(())
 }
@@ -204,11 +237,12 @@ mod tests {
     };
     use loop_engine_core::model::ids::{RegistrationId, RequestId, RunId};
     use loop_engine_core::model::journal::JournalDraft;
+    use loop_engine_core::model::lifecycle::Lifecycle;
     use loop_engine_core::model::outcome::OutcomeClass;
     use loop_engine_core::model::provider::DigestObservation;
     use loop_engine_core::model::reason::{Reason, ReasonCode};
     use loop_engine_core::model::time::ObservedAt;
-    use loop_engine_core::model::version::LifecycleVersion;
+    use loop_engine_core::model::version::{LifecycleVersion, WorkflowStateVersion};
     use rusqlite::{Connection, params};
     use tempfile::TempDir;
 
@@ -340,6 +374,22 @@ mod tests {
         digest_hex: &str,
         observed_drift: Option<bool>,
     ) -> AppendCompatibilityAttemptCommand {
+        completed_compatibility_command_with_versions(
+            run_id,
+            digest_hex,
+            observed_drift,
+            WorkflowStateVersion::initial(),
+            LifecycleVersion::initial(),
+        )
+    }
+
+    fn completed_compatibility_command_with_versions(
+        run_id: &str,
+        digest_hex: &str,
+        observed_drift: Option<bool>,
+        expected_workflow: WorkflowStateVersion,
+        expected_lifecycle: LifecycleVersion,
+    ) -> AppendCompatibilityAttemptCommand {
         let findings = CompatibilityFindings::new(vec![
             CompatibilityFinding::new("live_guidance", CompatibilityStatus::Incompatible, vec![])
                 .unwrap(),
@@ -363,14 +413,23 @@ mod tests {
             OutcomeClass::Rejected,
             Some(Reason::new(ReasonCode::RunLifecycleTerminal, "terminal lifecycle").unwrap()),
             JournalExtension::CompatibilityAttempt { findings: None },
+            Some(attempt.clone()),
+        );
+        let stale_error_entry = compatibility_draft(
+            run_id,
+            OutcomeClass::Error,
+            Some(Reason::new(ReasonCode::StateStaleVersion, "stale workflow state").unwrap()),
+            JournalExtension::CompatibilityAttempt { findings: None },
             Some(attempt),
         );
         AppendCompatibilityAttemptCommand::for_test(
             RunId::parse(run_id).unwrap(),
-            LifecycleVersion::initial(),
+            expected_workflow,
+            expected_lifecycle,
             observed_drift,
             journal_entry,
             terminal_rejection_entry,
+            stale_error_entry,
         )
     }
 
@@ -391,15 +450,18 @@ mod tests {
         let before = read_run_versions(&conn, run_id);
         let writer = CompatibilityAttemptWriter::new(_dir.path().join("state.db"));
         let status = writer
-            .append_compatibility_attempt(completed_compatibility_command(
+            .append_compatibility_attempt(completed_compatibility_command_with_versions(
                 run_id,
                 &"c".repeat(64),
                 Some(false),
+                WorkflowStateVersion::try_from(5).unwrap(),
+                LifecycleVersion::try_from(2).unwrap(),
             ))
             .unwrap();
-        assert!(!status.state_changed);
-        assert_eq!(status.workflow_state_version.value(), 5);
-        assert_eq!(status.lifecycle_version.value(), 2);
+        assert!(!status.commit.state_changed);
+        assert_eq!(status.commit.workflow_state_version.value(), 5);
+        assert_eq!(status.commit.lifecycle_version.value(), 2);
+        assert_eq!(status.outcome, OutcomeClass::Completed);
         assert_eq!(read_run_versions(&conn, run_id), before);
         let payload: String = conn
             .query_row(
@@ -475,9 +537,11 @@ mod tests {
         );
         let command = AppendCompatibilityAttemptCommand::for_test(
             RunId::parse(run_id).unwrap(),
+            WorkflowStateVersion::initial(),
             LifecycleVersion::initial(),
             None,
             journal_entry,
+            terminal_rejection_entry.clone(),
             terminal_rejection_entry,
         );
         CompatibilityAttemptWriter::new(_dir.path().join("state.db"))
@@ -499,13 +563,19 @@ mod tests {
         let (_dir, conn, registration_id) = open_store();
         let run_id = "019f0000-0000-7000-8000-000000000204";
         seed_run(&conn, run_id, &registration_id, "terminated", 1, 2);
-        CompatibilityAttemptWriter::new(_dir.path().join("state.db"))
+        let commit = CompatibilityAttemptWriter::new(_dir.path().join("state.db"))
             .append_compatibility_attempt(completed_compatibility_command(
                 run_id,
                 &"e".repeat(64),
                 None,
             ))
             .unwrap();
+        assert_eq!(commit.outcome, OutcomeClass::Rejected);
+        assert_eq!(
+            commit.reason.as_ref().map(|reason| reason.code()),
+            Some(ReasonCode::RunLifecycleTerminal)
+        );
+        assert_eq!(commit.run.lifecycle, Lifecycle::Terminated);
         let (outcome, payload): (String, String) = conn
             .query_row(
                 "SELECT outcome, encoded_payload_json FROM journal_entries WHERE run_id = ?1",
@@ -516,6 +586,102 @@ mod tests {
         assert_eq!(outcome, "rejected");
         assert!(payload.contains("run.lifecycle.terminal"));
         assert!(!payload.contains("\"findings\""));
+    }
+
+    #[test]
+    fn workflow_state_version_race_selects_stale_error_entry() {
+        let (_dir, conn, registration_id) = open_store();
+        let run_id = "019f0000-0000-7000-8000-000000000205";
+        seed_run(&conn, run_id, &registration_id, "active", 2, 1);
+        let commit = CompatibilityAttemptWriter::new(_dir.path().join("state.db"))
+            .append_compatibility_attempt(completed_compatibility_command(
+                run_id,
+                &"f".repeat(64),
+                None,
+            ))
+            .unwrap();
+        assert_eq!(commit.outcome, OutcomeClass::Error);
+        assert_eq!(
+            commit.reason.as_ref().map(|reason| reason.code()),
+            Some(ReasonCode::StateStaleVersion)
+        );
+        assert_eq!(commit.run.lifecycle, Lifecycle::Active);
+        assert_eq!(commit.run.current_state.as_str(), "draft");
+        let payload: String = conn
+            .query_row(
+                "SELECT encoded_payload_json FROM journal_entries WHERE run_id = ?1",
+                params![run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(payload.contains("state.stale_version"));
+        assert!(!payload.contains("\"findings\""));
+    }
+
+    #[test]
+    fn initially_terminal_attempt_keeps_ordinary_terminal_reason() {
+        let (_dir, conn, registration_id) = open_store();
+        let run_id = "019f0000-0000-7000-8000-000000000206";
+        seed_run(&conn, run_id, &registration_id, "terminated", 1, 1);
+        let attempt = AttemptFacts::default();
+        let ordinary = compatibility_draft(
+            run_id,
+            OutcomeClass::Rejected,
+            Some(
+                Reason::new(
+                    ReasonCode::RunLifecycleTerminal,
+                    "run lifecycle is terminal",
+                )
+                .unwrap(),
+            ),
+            JournalExtension::CompatibilityAttempt { findings: None },
+            Some(attempt.clone()),
+        );
+        let raced = compatibility_draft(
+            run_id,
+            OutcomeClass::Rejected,
+            Some(
+                Reason::new(
+                    ReasonCode::RunLifecycleTerminal,
+                    "run lifecycle changed before compatibility committed",
+                )
+                .unwrap(),
+            ),
+            JournalExtension::CompatibilityAttempt { findings: None },
+            Some(attempt.clone()),
+        );
+        let stale = compatibility_draft(
+            run_id,
+            OutcomeClass::Error,
+            Some(Reason::new(ReasonCode::StateStaleVersion, "stale workflow state").unwrap()),
+            JournalExtension::CompatibilityAttempt { findings: None },
+            Some(attempt),
+        );
+        let command = AppendCompatibilityAttemptCommand::for_test(
+            RunId::parse(run_id).unwrap(),
+            WorkflowStateVersion::initial(),
+            LifecycleVersion::initial(),
+            None,
+            ordinary,
+            raced,
+            stale,
+        );
+        let commit = CompatibilityAttemptWriter::new(_dir.path().join("state.db"))
+            .append_compatibility_attempt(command)
+            .unwrap();
+        assert_eq!(
+            commit.reason.as_ref().map(|reason| reason.message()),
+            Some("run lifecycle is terminal")
+        );
+        let payload: String = conn
+            .query_row(
+                "SELECT encoded_payload_json FROM journal_entries WHERE run_id = ?1",
+                params![run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(payload.contains("run lifecycle is terminal"));
+        assert!(!payload.contains("run lifecycle changed before compatibility committed"));
     }
 
     #[test]

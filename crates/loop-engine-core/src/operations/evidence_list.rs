@@ -1,9 +1,9 @@
-use crate::capabilities::run_reader::{EvidenceInventoryRow, RunReader};
+use crate::capabilities::run_reader::{EvidenceInventoryReader, EvidenceInventoryRow};
 use crate::capabilities::{Page, PageRequest};
 use crate::model::ids::RunId;
 use crate::operations::paging::{PagingError, request};
 
-pub fn execute<R: RunReader>(
+pub fn execute<R: EvidenceInventoryReader>(
     reader: &R,
     run_id: &RunId,
     request: &PageRequest<()>,

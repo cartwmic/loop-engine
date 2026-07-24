@@ -35,6 +35,8 @@ mod provider_add;
 mod provider_failures;
 #[path = "e2e/provider_list.rs"]
 mod provider_list;
+#[path = "e2e/reference_acceptance.rs"]
+mod reference_acceptance;
 #[path = "e2e/trace_contract.rs"]
 mod trace_contract;
 #[path = "e2e/trace_resilience.rs"]

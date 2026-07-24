@@ -1,4 +1,4 @@
-use crate::capabilities::run_reader::RunReader;
+use crate::capabilities::run_reader::RunLookup;
 use crate::model::graph_projection::SemanticGraphProjection;
 use crate::model::graph_validation::ValidatedGraph;
 use crate::model::ids::{GraphRevision, RunId};
@@ -10,8 +10,10 @@ pub struct StoredGraph {
     pub graph: SemanticGraphProjection,
 }
 
-pub fn execute<R: RunReader>(reader: &R, run_id: &RunId) -> Result<StoredGraph, R::Error> {
-    reader.get(run_id).map(|run| project(&run))
+pub fn execute<R: RunLookup>(reader: &R, run_id: &RunId) -> Result<StoredGraph, R::Error> {
+    reader
+        .get_for_operation("run.graph", run_id)
+        .map(|run| project(&run))
 }
 
 pub fn project(run: &Run) -> StoredGraph {

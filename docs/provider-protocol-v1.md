@@ -2,7 +2,7 @@
 
 **Status:** Frozen by T005 (2026-07-17). Decision [D005](change/initial-implementation/decisions.md#d005--provider-protocol-v1).
 
-This document is the language-neutral normative contract for provider subprocess transport. An independent provider author can implement protocol v1 from this document without reading engine source. JSON Schema files are published under `schemas/provider/v1/` by T084; provider SDK documentation and examples remain planned for T192. This document defines envelopes, process behavior, role semantics, and outcome mapping.
+This document is the language-neutral normative contract for provider subprocess transport. An independent provider author can implement protocol v1 from this document without reading engine source. JSON Schema files are published under `schemas/provider/v1/`; author workflow, conformance commands, and fixture examples are in [`examples/providers/README.md`](../examples/providers/README.md). This document defines envelopes, process behavior, role semantics, and outcome mapping.
 
 Related documents:
 

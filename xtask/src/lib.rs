@@ -5,6 +5,7 @@ use std::process::ExitCode;
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 
+pub mod acceptance_report;
 pub mod architecture;
 pub mod dependencies;
 pub mod docs_check;
@@ -31,6 +32,18 @@ struct Cli {
 enum Commands {
     /// Show available commands.
     Help,
+    /// Generate and validate final reference/invariant/facet acceptance evidence.
+    AcceptanceReport {
+        /// Repository root to inspect (defaults to the current repository).
+        #[arg(long, value_name = "PATH")]
+        root: Option<PathBuf>,
+        /// Exact candidate revision represented by the report.
+        #[arg(long, value_name = "REVISION")]
+        revision: String,
+        /// Optional JSON report output path.
+        #[arg(long, value_name = "PATH")]
+        output: Option<PathBuf>,
+    },
     /// Verify crate-level product dependency architecture (I22).
     Architecture {
         /// Workspace manifest to inspect (defaults to the current repository).
@@ -201,6 +214,11 @@ where
             print_help();
             Ok(())
         }
+        Some(Commands::AcceptanceReport {
+            root,
+            revision,
+            output,
+        }) => acceptance_report::run(root.as_deref(), &revision, output.as_deref()),
         Some(Commands::Architecture { manifest_path }) => {
             architecture::run(manifest_path.as_deref())?;
             Ok(())
@@ -301,6 +319,7 @@ fn print_help() {
     println!();
     println!("Commands:");
     println!("  help           Show available commands");
+    println!("  acceptance-report Generate final acceptance evidence (T190–T191)");
     println!("  architecture   Verify crate-level product dependency architecture");
     println!("  docs-check     Verify deterministic documentation formatting and link policy");
     println!("  dependencies   Verify dependency license/source/lockfile policy (T030)");

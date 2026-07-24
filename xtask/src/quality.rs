@@ -14,6 +14,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::acceptance_report;
 use crate::architecture;
 use crate::dependencies;
 use crate::docs_check;
@@ -34,6 +35,7 @@ pub const RUNNER_CARGO_FMT: &str = "cargo-fmt";
 pub const RUNNER_CARGO_CLIPPY: &str = "cargo-clippy";
 pub const RUNNER_DEPENDENCIES: &str = "dependencies";
 pub const RUNNER_OPERATION_COVERAGE: &str = "operation-coverage";
+pub const RUNNER_ACCEPTANCE_REPORT: &str = "acceptance-report";
 pub const RUNNER_CARGO_DENY: &str = "cargo-deny";
 
 /// Exact command output captured for semantic-judge deterministic evidence.
@@ -601,6 +603,17 @@ fn run_check(
                 success_evidence(command.to_owned(), candidate_revision),
             ))
         }
+        RUNNER_ACCEPTANCE_REPORT => {
+            let command = format!(
+                "cargo run --locked -p xtask -- acceptance-report --root {} --revision {candidate_revision}",
+                check_root.display()
+            );
+            acceptance_report::run(Some(check_root), candidate_revision, None)?;
+            Ok((
+                "final acceptance report passed".to_owned(),
+                success_evidence(command, candidate_revision),
+            ))
+        }
         RUNNER_CARGO_DENY => {
             match dependencies::run_cargo_deny_with_evidence(check_root, candidate_revision) {
                 Ok(evidence) => Ok(("cargo deny check passed".to_owned(), evidence)),
@@ -742,9 +755,10 @@ fn validate_runner(runner: &str) -> Result<()> {
         | RUNNER_CARGO_CLIPPY
         | RUNNER_DEPENDENCIES
         | RUNNER_OPERATION_COVERAGE
+        | RUNNER_ACCEPTANCE_REPORT
         | RUNNER_CARGO_DENY => Ok(()),
         other => bail!(
-            "unknown quality runner `{other}`; currently implemented runners: {RUNNER_DOCS_CHECK}, {RUNNER_ARCHITECTURE}, {RUNNER_CARGO_CHECK}, {RUNNER_CARGO_TEST}, {RUNNER_CARGO_DOC}, {RUNNER_CARGO_FMT}, {RUNNER_CARGO_CLIPPY}, {RUNNER_DEPENDENCIES}, {RUNNER_OPERATION_COVERAGE}, {RUNNER_CARGO_DENY}"
+            "unknown quality runner `{other}`; currently implemented runners: {RUNNER_DOCS_CHECK}, {RUNNER_ARCHITECTURE}, {RUNNER_CARGO_CHECK}, {RUNNER_CARGO_TEST}, {RUNNER_CARGO_DOC}, {RUNNER_CARGO_FMT}, {RUNNER_CARGO_CLIPPY}, {RUNNER_DEPENDENCIES}, {RUNNER_OPERATION_COVERAGE}, {RUNNER_ACCEPTANCE_REPORT}, {RUNNER_CARGO_DENY}"
         ),
     }
 }

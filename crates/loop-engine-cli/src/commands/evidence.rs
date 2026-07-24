@@ -3,14 +3,16 @@
 //! Delivery-layer syntax-to-core mapping and one-operation-per-intent adapters.
 //! Rendering, route registration, and concrete integration construction live elsewhere.
 
-use loop_engine_core::capabilities::persistence_commands::CommitStatus;
-use loop_engine_core::capabilities::run_reader::{EvidenceInventoryRow, RunReader};
+use loop_engine_core::capabilities::persistence_commands::{AttemptCommit, CommittedRunSnapshot};
+use loop_engine_core::capabilities::run_reader::{EvidenceInventoryReader, EvidenceInventoryRow};
 use loop_engine_core::capabilities::run_writer::RunWriter;
 use loop_engine_core::capabilities::{Page, PageRequest};
 use loop_engine_core::model::bounded::{BoundError, Metadata};
 use loop_engine_core::model::evidence::{EvidenceRecord, EvidenceSource};
 use loop_engine_core::model::ids::{EvidenceId, EvidenceKind, IdentifierError, RunId};
 use loop_engine_core::model::journal::JournalDraft;
+use loop_engine_core::model::outcome::OutcomeClass;
+use loop_engine_core::model::reason::Reason;
 use loop_engine_core::model::run::Run;
 use loop_engine_core::model::time::ObservedAt;
 use loop_engine_core::model::version::{LifecycleVersion, WorkflowStateVersion};
@@ -161,15 +163,21 @@ pub struct EvidenceAddOutcome {
     pub state_changed: bool,
     pub workflow_state_version: WorkflowStateVersion,
     pub lifecycle_version: LifecycleVersion,
+    pub outcome: OutcomeClass,
+    pub reason: Option<Reason>,
+    pub run: CommittedRunSnapshot,
 }
 
-impl From<CommitStatus> for EvidenceAddOutcome {
-    fn from(status: CommitStatus) -> Self {
+impl From<AttemptCommit> for EvidenceAddOutcome {
+    fn from(attempt: AttemptCommit) -> Self {
         Self {
-            committed: status.committed,
-            state_changed: status.state_changed,
-            workflow_state_version: status.workflow_state_version,
-            lifecycle_version: status.lifecycle_version,
+            committed: attempt.commit.committed,
+            state_changed: attempt.commit.state_changed,
+            workflow_state_version: attempt.commit.workflow_state_version,
+            lifecycle_version: attempt.commit.lifecycle_version,
+            outcome: attempt.outcome,
+            reason: attempt.reason,
+            run: attempt.run,
         }
     }
 }
@@ -246,7 +254,7 @@ pub fn add<W: RunWriter>(
         .map_err(EvidenceAddError::Writer)
 }
 
-pub fn list<R: RunReader>(
+pub fn list<R: EvidenceInventoryReader>(
     reader: &R,
     request: &EvidenceListRequest,
 ) -> Result<EvidenceListOutcome, R::Error> {

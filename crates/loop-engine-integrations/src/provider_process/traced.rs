@@ -161,7 +161,8 @@ pub fn process_failure_code(error: &ProcessError) -> &'static str {
     match error {
         ProcessError::RequestOversized { .. } => "resource.exhausted",
         ProcessError::ExecutableNotFound(_) => "provider.executable.not_found",
-        ProcessError::Spawn(_)
+        ProcessError::PreLaunchSpawn(_)
+        | ProcessError::Spawn(_)
         | ProcessError::TimeoutOutOfRange(_)
         | ProcessError::Stdin(_)
         | ProcessError::Stream(_)

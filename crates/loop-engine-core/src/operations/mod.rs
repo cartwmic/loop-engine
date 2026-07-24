@@ -14,6 +14,18 @@ pub enum CommandError {
     JournalMismatch,
 }
 
+impl From<crate::model::bounded::BoundError> for CommandError {
+    fn from(_: crate::model::bounded::BoundError) -> Self {
+        Self::JournalMismatch
+    }
+}
+
+impl From<crate::model::journal::JournalError> for CommandError {
+    fn from(_: crate::model::journal::JournalError) -> Self {
+        Self::JournalMismatch
+    }
+}
+
 pub(crate) fn validate_journal(
     entry: &JournalDraft,
     run_id: &RunId,

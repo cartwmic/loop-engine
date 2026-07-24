@@ -4,9 +4,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use loop_engine_core::model::annotation::ActorMetadata;
 use loop_engine_core::model::bounded::{
-    EVIDENCE_RECORD_ENCODED_BYTES, FiniteNumber, INLINE_EVIDENCE_CONTEXT_TOTAL_BYTES, Metadata,
-    Value as CoreValue,
+    ACTOR_METADATA_ENCODED_BYTES, EVIDENCE_RECORD_ENCODED_BYTES, FiniteNumber,
+    INLINE_EVIDENCE_CONTEXT_TOTAL_BYTES, Metadata, Value as CoreValue,
 };
 use loop_engine_core::model::evidence::{EvidenceRecord, EvidenceSource};
 use loop_engine_core::model::ids::{EvidenceId, EvidenceKind};
@@ -29,6 +30,8 @@ pub enum InlineEvidenceLoadError {
     Json(#[from] ProtocolValidationError),
     #[error("inline evidence document root must be an array")]
     RootNotArray,
+    #[error("metadata document root must be an object")]
+    RootNotObject,
     #[error("invalid inline evidence document: {0}")]
     Shape(String),
     #[error("invalid inline evidence field {path}: {message}")]
@@ -85,6 +88,44 @@ pub fn load_optional(
         ));
     }
     Ok(records)
+}
+
+/// Loads one optional strict JSON object as bounded evidence metadata.
+pub fn load_metadata_optional(
+    path: Option<&Path>,
+) -> Result<Option<Metadata>, InlineEvidenceLoadError> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let bytes = fs::read(path).map_err(|source| InlineEvidenceLoadError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let value = parse_strict_value(&bytes, EVIDENCE_RECORD_ENCODED_BYTES)?;
+    let Value::Object(values) = value else {
+        return Err(InlineEvidenceLoadError::RootNotObject);
+    };
+    map_metadata(Some(values.into_iter().collect()), "/")
+}
+
+/// Loads one optional strict JSON object as bounded, authority-free actor metadata.
+pub fn load_actor_optional(
+    path: Option<&Path>,
+) -> Result<Option<ActorMetadata>, InlineEvidenceLoadError> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let bytes = fs::read(path).map_err(|source| InlineEvidenceLoadError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let value = parse_strict_value(&bytes, ACTOR_METADATA_ENCODED_BYTES)?;
+    if !value.is_object() {
+        return Err(InlineEvidenceLoadError::RootNotObject);
+    }
+    ActorMetadata::new(map_value(value, "/")?)
+        .map(Some)
+        .map_err(|error| field("/", error))
 }
 
 fn map_record(

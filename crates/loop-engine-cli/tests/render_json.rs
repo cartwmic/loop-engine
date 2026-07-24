@@ -5,6 +5,7 @@ mod dto;
 #[path = "../src/render/json.rs"]
 mod json;
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use dto::{OutcomeRenderRequest, SCHEMA_VERSION, STRUCTURED_CLI_ENVELOPE_BYTES};
@@ -48,6 +49,38 @@ fn published_schema_enums_match_core_catalog_and_taxonomy() {
     let mut sorted_schema_codes = schema_codes.clone();
     sorted_schema_codes.sort_unstable();
     assert_eq!(sorted_schema_codes, core_codes);
+}
+
+#[test]
+fn published_schema_reason_classes_partition_taxonomy() {
+    let schema = load_schema();
+    let all_codes = schema["$defs"]["ReasonCode"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .collect::<BTreeSet<_>>();
+    let class_codes = |index: usize| {
+        schema["allOf"][index]["then"]["properties"]["reason"]["allOf"][1]["properties"]
+            ["code"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<BTreeSet<_>>()
+    };
+    let rejected = class_codes(1);
+    let error = class_codes(2);
+
+    assert!(rejected.is_disjoint(&error));
+    assert_eq!(
+        rejected.union(&error).copied().collect::<BTreeSet<_>>(),
+        all_codes
+    );
+    assert!(rejected.contains("gate.failed"));
+    assert!(!error.contains("gate.failed"));
+    assert!(error.contains("provider.evaluation_error"));
+    assert!(!rejected.contains("provider.evaluation_error"));
 }
 
 #[test]

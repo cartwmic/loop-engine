@@ -6,8 +6,9 @@
 use std::path::{Path, PathBuf};
 
 use loop_engine_core::capabilities::persistence_commands::{
-    AppendGuidanceAttemptCommand, CommitStatus,
+    AppendGuidanceAttemptCommand, AttemptCommit, CommitStatus, CommittedRunSnapshot,
 };
+use loop_engine_core::capabilities::run_writer::GuidanceAttemptWriter as GuidanceAttemptWriterPort;
 use loop_engine_core::model::attempt::{
     AttemptFacts, EvidenceAssociations, JournalExtension, ProviderFact, ProviderRole,
 };
@@ -50,6 +51,17 @@ use super::traced::{
 pub struct GuidanceAttemptWriter {
     path: PathBuf,
     trace: OptionalTraceSink,
+}
+
+impl GuidanceAttemptWriterPort for GuidanceAttemptWriter {
+    type Error = GuidanceAttemptError;
+
+    fn append_guidance_attempt(
+        &self,
+        command: AppendGuidanceAttemptCommand,
+    ) -> Result<AttemptCommit, Self::Error> {
+        GuidanceAttemptWriter::append_guidance_attempt(self, command)
+    }
 }
 
 impl std::fmt::Debug for GuidanceAttemptWriter {
@@ -175,15 +187,15 @@ impl GuidanceAttemptWriter {
     pub fn append_guidance_attempt(
         &self,
         command: AppendGuidanceAttemptCommand,
-    ) -> Result<CommitStatus, GuidanceAttemptError> {
+    ) -> Result<AttemptCommit, GuidanceAttemptError> {
         close_write(
             &self.trace,
             "run.guidance",
             MutationClass::RunMutation,
             |trace| {
                 self.append_guidance_attempt_impl(command, trace)
-                    .map_ok(|(status, outcome)| {
-                        (status, SemanticOutcome::from_outcome_class(outcome))
+                    .map_ok(|(commit, outcome)| {
+                        (commit, SemanticOutcome::from_outcome_class(outcome))
                     })
             },
             |(_, semantic)| *semantic,
@@ -196,11 +208,12 @@ impl GuidanceAttemptWriter {
         &self,
         command: AppendGuidanceAttemptCommand,
         trace: Option<&WriteTraceSession<'_>>,
-    ) -> WriteExecution<(CommitStatus, OutcomeClass), GuidanceAttemptError> {
+    ) -> WriteExecution<(AttemptCommit, OutcomeClass), GuidanceAttemptError> {
         if let Err(error) = validate_guidance_command(&command) {
             return WriteExecution::no_transaction(error);
         }
-        let expected_lifecycle = command.expected_lifecycle_version().value();
+        let expected_workflow = command.expected_workflow_version();
+        let expected_lifecycle = command.expected_lifecycle_version();
         let run_id = command.run_id().as_str();
         let conn = match connect_with_pragmas(self.path()).map_err(map_persistence) {
             Ok(conn) => conn,
@@ -215,15 +228,23 @@ impl GuidanceAttemptWriter {
         let result = (|| {
             let row = load_authoritative_run(&conn, command.run_id())?;
             if let Some(session) = trace {
-                session.version_check_run_cas(run_id, None, Some(expected_lifecycle));
+                session.version_check_run_cas(
+                    run_id,
+                    Some(expected_workflow.value()),
+                    Some(expected_lifecycle.value()),
+                );
             }
             let draft = select_attempt_draft(
-                row.lifecycle,
+                &row,
+                expected_workflow,
+                expected_lifecycle,
                 command.journal_entry(),
                 command.terminal_rejection_entry(),
+                command.stale_error_entry(),
             )
             .clone();
             let outcome = draft.outcome();
+            let reason = draft.reason().cloned();
             let (status, journal, associations) = append_journal_attempt(
                 &conn,
                 command.run_id(),
@@ -233,19 +254,34 @@ impl GuidanceAttemptWriter {
             )?;
             let expectation =
                 attempt_commit_expectation(command.run_id(), &row, &journal, associations);
-            Ok(((status, outcome), expectation))
+            let commit = AttemptCommit {
+                commit: status,
+                outcome,
+                reason,
+                run: CommittedRunSnapshot {
+                    lifecycle: row.lifecycle,
+                    current_state: row.current_state.clone(),
+                    label: row.label.clone(),
+                },
+            };
+            Ok(((commit, outcome), expectation))
         })();
         commit_attempt_transaction(self.path(), conn, result).map_err(GuidanceAttemptError::from)
     }
 }
 
 pub(crate) fn select_attempt_draft<'a>(
-    lifecycle: Lifecycle,
+    row: &AuthoritativeRunRow,
+    expected_workflow: WorkflowStateVersion,
+    expected_lifecycle: LifecycleVersion,
     journal_entry: &'a JournalDraft,
     terminal_rejection_entry: &'a JournalDraft,
+    stale_error_entry: &'a JournalDraft,
 ) -> &'a JournalDraft {
-    if lifecycle.is_terminal() {
+    if row.lifecycle_version != expected_lifecycle {
         terminal_rejection_entry
+    } else if row.workflow_state_version != expected_workflow {
+        stale_error_entry
     } else {
         journal_entry
     }
@@ -295,6 +331,7 @@ fn validate_guidance_command(
 ) -> Result<(), GuidanceAttemptError> {
     validate_draft_run_id(command.run_id(), command.journal_entry())?;
     validate_draft_run_id(command.run_id(), command.terminal_rejection_entry())?;
+    validate_draft_run_id(command.run_id(), command.stale_error_entry())?;
     Ok(())
 }
 
@@ -949,15 +986,16 @@ mod tests {
     use loop_engine_core::model::bounded::BoundedText;
     use loop_engine_core::model::ids::{RegistrationId, RequestId, RunId};
     use loop_engine_core::model::journal::JournalDraft;
+    use loop_engine_core::model::lifecycle::Lifecycle;
     use loop_engine_core::model::outcome::OutcomeClass;
     use loop_engine_core::model::provider::DigestObservation;
     use loop_engine_core::model::reason::{Reason, ReasonCode};
     use loop_engine_core::model::time::ObservedAt;
-    use loop_engine_core::model::version::LifecycleVersion;
+    use loop_engine_core::model::version::{LifecycleVersion, WorkflowStateVersion};
     use rusqlite::{Connection, params};
     use tempfile::TempDir;
 
-    use super::{GuidanceAttemptWriter, select_attempt_draft};
+    use super::GuidanceAttemptWriter;
     use crate::persistence::migrations::{SUPPORTED_SCHEMA_VERSION, bundled_migrations};
     use crate::persistence::sqlite::open_at;
 
@@ -1081,6 +1119,18 @@ mod tests {
     }
 
     fn completed_guidance_command(run_id: &str) -> AppendGuidanceAttemptCommand {
+        completed_guidance_command_with_versions(
+            run_id,
+            WorkflowStateVersion::initial(),
+            LifecycleVersion::initial(),
+        )
+    }
+
+    fn completed_guidance_command_with_versions(
+        run_id: &str,
+        expected_workflow: WorkflowStateVersion,
+        expected_lifecycle: LifecycleVersion,
+    ) -> AppendGuidanceAttemptCommand {
         let text = BoundedText::non_empty("guidance_text", "Review rollback risks.").unwrap();
         let attempt = AttemptFacts {
             provider_observations: vec![provider_fact(ProviderRole::LiveGuidance)],
@@ -1102,13 +1152,24 @@ mod tests {
             JournalExtension::GuidanceAttempt {
                 guidance_text: None,
             },
+            Some(attempt.clone()),
+        );
+        let stale_error_entry = guidance_draft(
+            run_id,
+            OutcomeClass::Error,
+            Some(Reason::new(ReasonCode::StateStaleVersion, "stale workflow state").unwrap()),
+            JournalExtension::GuidanceAttempt {
+                guidance_text: None,
+            },
             Some(attempt),
         );
         AppendGuidanceAttemptCommand::for_test(
             RunId::parse(run_id).unwrap(),
-            LifecycleVersion::initial(),
+            expected_workflow,
+            expected_lifecycle,
             journal_entry,
             terminal_rejection_entry,
+            stale_error_entry,
         )
     }
 
@@ -1129,11 +1190,16 @@ mod tests {
         let before = read_run_versions(&conn, run_id);
         let writer = GuidanceAttemptWriter::new(_dir.path().join("state.db"));
         let status = writer
-            .append_guidance_attempt(completed_guidance_command(run_id))
+            .append_guidance_attempt(completed_guidance_command_with_versions(
+                run_id,
+                WorkflowStateVersion::try_from(3).unwrap(),
+                LifecycleVersion::try_from(2).unwrap(),
+            ))
             .unwrap();
-        assert!(!status.state_changed);
-        assert_eq!(status.workflow_state_version.value(), 3);
-        assert_eq!(status.lifecycle_version.value(), 2);
+        assert!(!status.commit.state_changed);
+        assert_eq!(status.commit.workflow_state_version.value(), 3);
+        assert_eq!(status.commit.lifecycle_version.value(), 2);
+        assert_eq!(status.outcome, OutcomeClass::Completed);
         let after = read_run_versions(&conn, run_id);
         assert_eq!(before, after);
         let (sequence, outcome, payload): (i64, String, String) = conn
@@ -1229,8 +1295,10 @@ mod tests {
         );
         let command = AppendGuidanceAttemptCommand::for_test(
             RunId::parse(run_id).unwrap(),
+            WorkflowStateVersion::initial(),
             LifecycleVersion::initial(),
             journal_entry,
+            terminal_rejection_entry.clone(),
             terminal_rejection_entry,
         );
         GuidanceAttemptWriter::new(_dir.path().join("state.db"))
@@ -1248,20 +1316,20 @@ mod tests {
     }
 
     #[test]
-    fn terminal_lifecycle_selects_terminal_rejection_entry() {
+    fn lifecycle_version_race_selects_terminal_rejection_entry() {
         let (_dir, conn, registration_id) = open_store();
         let run_id = "019f0000-0000-7000-8000-000000000104";
-        seed_run(&conn, run_id, &registration_id, "final", 1, 1);
+        seed_run(&conn, run_id, &registration_id, "final", 1, 2);
         let command = completed_guidance_command(run_id);
-        let selected = select_attempt_draft(
-            loop_engine_core::model::lifecycle::Lifecycle::Final,
-            command.journal_entry(),
-            command.terminal_rejection_entry(),
-        );
-        assert_eq!(selected.outcome(), OutcomeClass::Rejected);
-        GuidanceAttemptWriter::new(_dir.path().join("state.db"))
+        let commit = GuidanceAttemptWriter::new(_dir.path().join("state.db"))
             .append_guidance_attempt(command)
             .unwrap();
+        assert_eq!(commit.outcome, OutcomeClass::Rejected);
+        assert_eq!(
+            commit.reason.as_ref().map(|reason| reason.code()),
+            Some(ReasonCode::RunLifecycleTerminal)
+        );
+        assert_eq!(commit.run.lifecycle, Lifecycle::Final);
         let (outcome, payload): (String, String) = conn
             .query_row(
                 "SELECT outcome, encoded_payload_json FROM journal_entries WHERE run_id = ?1",
@@ -1272,6 +1340,103 @@ mod tests {
         assert_eq!(outcome, "rejected");
         assert!(payload.contains("run.lifecycle.terminal"));
         assert!(!payload.contains("Review rollback risks."));
+    }
+
+    #[test]
+    fn workflow_state_version_race_selects_stale_error_entry() {
+        let (_dir, conn, registration_id) = open_store();
+        let run_id = "019f0000-0000-7000-8000-000000000106";
+        seed_run(&conn, run_id, &registration_id, "active", 2, 1);
+        let commit = GuidanceAttemptWriter::new(_dir.path().join("state.db"))
+            .append_guidance_attempt(completed_guidance_command(run_id))
+            .unwrap();
+        assert_eq!(commit.outcome, OutcomeClass::Error);
+        assert_eq!(
+            commit.reason.as_ref().map(|reason| reason.code()),
+            Some(ReasonCode::StateStaleVersion)
+        );
+        assert_eq!(commit.run.lifecycle, Lifecycle::Active);
+        assert_eq!(commit.run.current_state.as_str(), "draft");
+        let payload: String = conn
+            .query_row(
+                "SELECT encoded_payload_json FROM journal_entries WHERE run_id = ?1",
+                params![run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(payload.contains("state.stale_version"));
+        assert!(!payload.contains("Review rollback risks."));
+    }
+
+    #[test]
+    fn initially_terminal_attempt_keeps_ordinary_terminal_reason() {
+        let (_dir, conn, registration_id) = open_store();
+        let run_id = "019f0000-0000-7000-8000-000000000107";
+        seed_run(&conn, run_id, &registration_id, "final", 1, 1);
+        let attempt = AttemptFacts::default();
+        let ordinary = guidance_draft(
+            run_id,
+            OutcomeClass::Rejected,
+            Some(
+                Reason::new(
+                    ReasonCode::RunLifecycleTerminal,
+                    "run lifecycle is terminal",
+                )
+                .unwrap(),
+            ),
+            JournalExtension::GuidanceAttempt {
+                guidance_text: None,
+            },
+            Some(attempt.clone()),
+        );
+        let raced = guidance_draft(
+            run_id,
+            OutcomeClass::Rejected,
+            Some(
+                Reason::new(
+                    ReasonCode::RunLifecycleTerminal,
+                    "run lifecycle changed before guidance committed",
+                )
+                .unwrap(),
+            ),
+            JournalExtension::GuidanceAttempt {
+                guidance_text: None,
+            },
+            Some(attempt.clone()),
+        );
+        let stale = guidance_draft(
+            run_id,
+            OutcomeClass::Error,
+            Some(Reason::new(ReasonCode::StateStaleVersion, "stale workflow state").unwrap()),
+            JournalExtension::GuidanceAttempt {
+                guidance_text: None,
+            },
+            Some(attempt),
+        );
+        let command = AppendGuidanceAttemptCommand::for_test(
+            RunId::parse(run_id).unwrap(),
+            WorkflowStateVersion::initial(),
+            LifecycleVersion::initial(),
+            ordinary,
+            raced,
+            stale,
+        );
+        let commit = GuidanceAttemptWriter::new(_dir.path().join("state.db"))
+            .append_guidance_attempt(command)
+            .unwrap();
+        assert_eq!(
+            commit.reason.as_ref().map(|reason| reason.message()),
+            Some("run lifecycle is terminal")
+        );
+        let payload: String = conn
+            .query_row(
+                "SELECT encoded_payload_json FROM journal_entries WHERE run_id = ?1",
+                params![run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(payload.contains("run lifecycle is terminal"));
+        assert!(!payload.contains("run lifecycle changed before guidance committed"));
     }
 
     #[test]
@@ -1291,8 +1456,10 @@ mod tests {
         let terminal_rejection_entry = journal_entry.clone();
         let command = AppendGuidanceAttemptCommand::for_test(
             RunId::parse(run_id).unwrap(),
+            WorkflowStateVersion::initial(),
             LifecycleVersion::initial(),
             journal_entry,
+            terminal_rejection_entry.clone(),
             terminal_rejection_entry,
         );
         GuidanceAttemptWriter::new(_dir.path().join("state.db"))

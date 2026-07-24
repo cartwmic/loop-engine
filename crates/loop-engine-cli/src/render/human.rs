@@ -176,6 +176,10 @@ pub fn render_human_envelope(envelope: &Value) -> Result<String, OutcomeRenderEr
         }
     }
 
+    if data.get("evidence_added").and_then(Value::as_bool) == Some(true) {
+        lines.push("Evidence recorded: yes".into());
+    }
+
     if let Some(status) = data.get("evidence_recorded") {
         lines.extend(render_evidence_recorded(status, outcome));
     }

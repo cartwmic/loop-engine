@@ -55,6 +55,17 @@ pub trait RunCatalogReader {
     fn list(&self, request: &PageRequest<RunListFilter>) -> Result<Page<RunListRow>, Self::Error>;
 }
 
+/// Narrow provider-free evidence inventory boundary used by `run.evidence.list`.
+pub trait EvidenceInventoryReader {
+    type Error;
+
+    fn evidence(
+        &self,
+        run_id: &RunId,
+        request: &PageRequest<()>,
+    ) -> Result<Page<EvidenceInventoryRow>, Self::Error>;
+}
+
 /// Narrow immutable-journal paging boundary used by `run.history`.
 pub trait RunHistoryReader {
     type Error;
@@ -103,6 +114,18 @@ pub trait RunReader {
         run_id: &RunId,
         evidence_ids: &[EvidenceId],
     ) -> Result<Vec<EvidenceRecord>, SelectedEvidenceReadError<Self::Error>>;
+}
+
+impl<T: RunReader> EvidenceInventoryReader for T {
+    type Error = T::Error;
+
+    fn evidence(
+        &self,
+        run_id: &RunId,
+        request: &PageRequest<()>,
+    ) -> Result<Page<EvidenceInventoryRow>, Self::Error> {
+        RunReader::evidence(self, run_id, request)
+    }
 }
 
 impl<T: RunReader> RunRequestReader for T {

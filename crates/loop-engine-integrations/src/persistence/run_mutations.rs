@@ -8,8 +8,8 @@
 use std::path::{Path, PathBuf};
 
 use loop_engine_core::capabilities::persistence_commands::{
-    AppendAnnotationCommand, AppendEvidenceCommand, CommitStatus, CommittedRunSnapshot,
-    ReplaceLabelCommand, TerminateCommit, TerminateRunCommand,
+    AppendAnnotationCommand, AppendEvidenceCommand, AttemptCommit, CommitStatus,
+    CommittedRunSnapshot, LabelCommit, ReplaceLabelCommand, TerminateCommit, TerminateRunCommand,
 };
 use loop_engine_core::capabilities::run_writer::RunWriter;
 use loop_engine_core::model::attempt::JournalExtension;
@@ -159,61 +159,64 @@ impl SqliteRunMutations {
     pub fn append_evidence(
         &self,
         command: AppendEvidenceCommand,
-    ) -> Result<CommitStatus, RunMutationError> {
+    ) -> Result<AttemptCommit, RunMutationError> {
         close_write(
             &self.trace,
             "run.evidence.add",
             MutationClass::RunMutation,
             |trace| {
                 self.execute_append_evidence(command, trace)
-                    .map_ok(|(status, outcome)| {
-                        (status, SemanticOutcome::from_outcome_class(outcome))
+                    .map_ok(|commit| {
+                        let semantic = SemanticOutcome::from_outcome_class(commit.outcome);
+                        (commit, semantic)
                     })
             },
             |(_, semantic)| *semantic,
             run_mutation_error_semantic,
         )
-        .map(|(status, _)| status)
+        .map(|(commit, _)| commit)
     }
 
     pub fn append_annotation(
         &self,
         command: AppendAnnotationCommand,
-    ) -> Result<CommitStatus, RunMutationError> {
+    ) -> Result<AttemptCommit, RunMutationError> {
         close_write(
             &self.trace,
             "run.annotate",
             MutationClass::RunMutation,
             |trace| {
                 self.execute_append_annotation(command, trace)
-                    .map_ok(|(status, outcome)| {
-                        (status, SemanticOutcome::from_outcome_class(outcome))
+                    .map_ok(|commit| {
+                        let semantic = SemanticOutcome::from_outcome_class(commit.outcome);
+                        (commit, semantic)
                     })
             },
             |(_, semantic)| *semantic,
             run_mutation_error_semantic,
         )
-        .map(|(status, _)| status)
+        .map(|(commit, _)| commit)
     }
 
     pub fn replace_label(
         &self,
         command: ReplaceLabelCommand,
-    ) -> Result<CommitStatus, RunMutationError> {
+    ) -> Result<LabelCommit, RunMutationError> {
         close_write(
             &self.trace,
             "run.label",
             MutationClass::RunMutation,
             |trace| {
                 self.execute_replace_label(command, trace)
-                    .map_ok(|(status, outcome)| {
-                        (status, SemanticOutcome::from_outcome_class(outcome))
+                    .map_ok(|execution| {
+                        let semantic = SemanticOutcome::from_outcome_class(execution.outcome);
+                        (execution, semantic)
                     })
             },
             |(_, semantic)| *semantic,
             run_mutation_error_semantic,
         )
-        .map(|(status, _)| status)
+        .map(|(execution, _)| execution)
     }
 
     pub fn terminate(
@@ -234,7 +237,7 @@ impl SqliteRunMutations {
         &self,
         command: AppendEvidenceCommand,
         _trace: Option<&WriteTraceSession<'_>>,
-    ) -> WriteExecution<(CommitStatus, OutcomeClass), RunMutationError> {
+    ) -> WriteExecution<AttemptCommit, RunMutationError> {
         if let Err(error) = ensure_append_evidence_run_ids(&command) {
             return WriteExecution::no_transaction(error);
         }
@@ -259,6 +262,7 @@ impl SqliteRunMutations {
                 EvidenceAppendBranch::DuplicateRejection { draft } => (draft, Vec::new()),
             };
             let journal_outcome = draft.outcome();
+            let journal_reason = draft.reason().cloned();
             let journal = persist_journal(
                 &conn,
                 command.run_id(),
@@ -282,14 +286,16 @@ impl SqliteRunMutations {
                 false,
             );
             Ok((
-                (
-                    commit_status(
+                AttemptCommit {
+                    commit: commit_status(
                         false,
                         snapshot.workflow_state_version,
                         snapshot.lifecycle_version,
                     ),
-                    journal_outcome,
-                ),
+                    outcome: journal_outcome,
+                    reason: journal_reason,
+                    run: committed_run_snapshot(&snapshot),
+                },
                 expectation,
             ))
         })();
@@ -300,11 +306,12 @@ impl SqliteRunMutations {
         &self,
         command: AppendAnnotationCommand,
         _trace: Option<&WriteTraceSession<'_>>,
-    ) -> WriteExecution<(CommitStatus, OutcomeClass), RunMutationError> {
+    ) -> WriteExecution<AttemptCommit, RunMutationError> {
         if let Err(error) = ensure_draft_run_id(command.run_id(), command.journal_entry()) {
             return WriteExecution::no_transaction(error);
         }
         let journal_outcome = command.journal_entry().outcome();
+        let journal_reason = command.journal_entry().reason().cloned();
         let (run_id, corrects_sequence, journal_entry) = command.into_parts();
         let conn = match self.connect() {
             Ok(conn) => conn,
@@ -339,14 +346,16 @@ impl SqliteRunMutations {
                 false,
             );
             Ok((
-                (
-                    commit_status(
+                AttemptCommit {
+                    commit: commit_status(
                         false,
                         snapshot.workflow_state_version,
                         snapshot.lifecycle_version,
                     ),
-                    journal_outcome,
-                ),
+                    outcome: journal_outcome,
+                    reason: journal_reason,
+                    run: committed_run_snapshot(&snapshot),
+                },
                 expectation,
             ))
         })();
@@ -357,7 +366,7 @@ impl SqliteRunMutations {
         &self,
         command: ReplaceLabelCommand,
         _trace: Option<&WriteTraceSession<'_>>,
-    ) -> WriteExecution<(CommitStatus, OutcomeClass), RunMutationError> {
+    ) -> WriteExecution<LabelCommit, RunMutationError> {
         let conn = match self.connect() {
             Ok(conn) => conn,
             Err(error) => return WriteExecution::no_transaction(error),
@@ -416,14 +425,19 @@ impl SqliteRunMutations {
                 label_changed,
             );
             Ok((
-                (
-                    commit_status(
+                LabelCommit {
+                    commit: commit_status(
                         false,
                         refreshed.workflow_state_version,
                         refreshed.lifecycle_version,
                     ),
-                    journal_outcome,
-                ),
+                    outcome: journal_outcome,
+                    run: CommittedRunSnapshot {
+                        lifecycle: refreshed.lifecycle,
+                        current_state: refreshed.current_state,
+                        label: refreshed.label,
+                    },
+                },
                 expectation,
             ))
         })();
@@ -574,18 +588,21 @@ impl RunWriter for SqliteRunMutations {
         })
     }
 
-    fn append_evidence(&self, command: AppendEvidenceCommand) -> Result<CommitStatus, Self::Error> {
+    fn append_evidence(
+        &self,
+        command: AppendEvidenceCommand,
+    ) -> Result<AttemptCommit, Self::Error> {
         SqliteRunMutations::append_evidence(self, command)
     }
 
     fn append_annotation(
         &self,
         command: AppendAnnotationCommand,
-    ) -> Result<CommitStatus, Self::Error> {
+    ) -> Result<AttemptCommit, Self::Error> {
         SqliteRunMutations::append_annotation(self, command)
     }
 
-    fn replace_label(&self, command: ReplaceLabelCommand) -> Result<CommitStatus, Self::Error> {
+    fn replace_label(&self, command: ReplaceLabelCommand) -> Result<LabelCommit, Self::Error> {
         SqliteRunMutations::replace_label(self, command)
     }
 
@@ -596,7 +613,7 @@ impl RunWriter for SqliteRunMutations {
     fn append_guidance_attempt(
         &self,
         _command: loop_engine_core::capabilities::persistence_commands::AppendGuidanceAttemptCommand,
-    ) -> Result<CommitStatus, Self::Error> {
+    ) -> Result<AttemptCommit, Self::Error> {
         Err(RunMutationError::Corrupt {
             message: "guidance persistence is not implemented on SqliteRunMutations".into(),
         })
@@ -605,7 +622,7 @@ impl RunWriter for SqliteRunMutations {
     fn append_compatibility_attempt(
         &self,
         _command: loop_engine_core::capabilities::persistence_commands::AppendCompatibilityAttemptCommand,
-    ) -> Result<CommitStatus, Self::Error> {
+    ) -> Result<AttemptCommit, Self::Error> {
         Err(RunMutationError::Corrupt {
             message: "compatibility persistence is not implemented on SqliteRunMutations".into(),
         })
@@ -890,6 +907,14 @@ fn state_fact(snapshot: &AuthoritativeRunSnapshot) -> StateFact {
         lifecycle: snapshot.lifecycle,
         workflow_state_version: snapshot.workflow_state_version,
         lifecycle_version: snapshot.lifecycle_version,
+    }
+}
+
+fn committed_run_snapshot(snapshot: &AuthoritativeRunSnapshot) -> CommittedRunSnapshot {
+    CommittedRunSnapshot {
+        lifecycle: snapshot.lifecycle,
+        current_state: snapshot.current_state.clone(),
+        label: snapshot.label.clone(),
     }
 }
 
@@ -1870,9 +1895,9 @@ mod tests {
         let evidence = evidence_record("evidence-1");
         let command = append_evidence_command(&run, evidence);
         let status = writer.append_evidence(command).unwrap();
-        assert!(!status.state_changed);
-        assert_eq!(status.workflow_state_version.value(), 1);
-        assert_eq!(status.lifecycle_version.value(), 1);
+        assert!(!status.commit.state_changed);
+        assert_eq!(status.commit.workflow_state_version.value(), 1);
+        assert_eq!(status.commit.lifecycle_version.value(), 1);
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM evidence WHERE run_id = 'run-1'",
@@ -1957,8 +1982,11 @@ mod tests {
         )
         .unwrap();
         let status = writer.replace_label(command).unwrap();
-        assert_eq!(status.workflow_state_version.value(), 1);
-        assert_eq!(status.lifecycle_version.value(), 1);
+        assert_eq!(status.outcome, OutcomeClass::Rejected);
+        assert_eq!(status.commit.workflow_state_version.value(), 1);
+        assert_eq!(status.commit.lifecycle_version.value(), 1);
+        assert_eq!(status.run.lifecycle, Lifecycle::Final);
+        assert_eq!(status.run.label.as_deref(), Some("kept"));
         let label: String = conn
             .query_row("SELECT label FROM runs WHERE run_id = 'run-1'", [], |row| {
                 row.get(0)
@@ -1991,8 +2019,11 @@ mod tests {
         )
         .unwrap();
         let status = writer.replace_label(command).unwrap();
-        assert_eq!(status.workflow_state_version.value(), 1);
-        assert_eq!(status.lifecycle_version.value(), 1);
+        assert_eq!(status.outcome, OutcomeClass::Completed);
+        assert_eq!(status.commit.workflow_state_version.value(), 1);
+        assert_eq!(status.commit.lifecycle_version.value(), 1);
+        assert_eq!(status.run.lifecycle, Lifecycle::Active);
+        assert_eq!(status.run.label.as_deref(), Some("next"));
         let (label, label_version): (String, i64) = conn
             .query_row(
                 "SELECT label, label_version FROM runs WHERE run_id = 'run-1'",
@@ -2213,7 +2244,7 @@ mod tests {
             evidence_add::rejected_command(&run, evidence_duplicate_rejection_draft(&run_id))
                 .unwrap();
         let status = writer.append_evidence(command).unwrap();
-        assert!(!status.state_changed);
+        assert!(!status.commit.state_changed);
         let evidence_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM evidence WHERE run_id = 'run-1'",
@@ -2247,9 +2278,9 @@ mod tests {
         let status = writer
             .append_evidence(append_evidence_command(&run, evidence.clone()))
             .unwrap();
-        assert!(!status.state_changed);
-        assert_eq!(status.workflow_state_version.value(), 1);
-        assert_eq!(status.lifecycle_version.value(), 1);
+        assert!(!status.commit.state_changed);
+        assert_eq!(status.commit.workflow_state_version.value(), 1);
+        assert_eq!(status.commit.lifecycle_version.value(), 1);
         let evidence_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM evidence WHERE run_id = 'run-1'",
@@ -2378,8 +2409,8 @@ mod tests {
         .unwrap()
         .expect("annotation command");
         let status = writer.append_annotation(command).unwrap();
-        assert_eq!(status.workflow_state_version.value(), 1);
-        assert_eq!(status.lifecycle_version.value(), 1);
+        assert_eq!(status.commit.workflow_state_version.value(), 1);
+        assert_eq!(status.commit.lifecycle_version.value(), 1);
     }
 
     fn assert_append_annotation_rolled_back(conn: &Connection, case: &str) {

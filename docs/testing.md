@@ -1,6 +1,6 @@
 # Loop Engine Testing Doctrine
 
-**Status:** E2E authority, facet coverage, runtime operation/trace proof, executable-provider coverage, no-mock policy, provider-fixture implementation strategy (T013), aggregate publication-checkpoint semantic judgment, exact-range local gate, non-shipping `xtask`, and macOS/Linux platform test scope (T002) are settled. Protected-remote enforcement remains open until hosting exists.
+**Status:** E2E authority, facet coverage, runtime operation/trace proof, executable-provider coverage, no-mock policy, provider-fixture implementation strategy (T013), aggregate publication-checkpoint semantic judgment, exact-range local gate, non-shipping `xtask`, macOS/Linux scope, and runtime budgets are settled. Owner waived GitHub branch protection on 2026-07-23 for this private single-user repository because current plan does not support it; exact fail-closed pre-push gate and CI remain publication controls.
 
 Related documents:
 
@@ -395,7 +395,7 @@ Every behavioral defect fix adds or identifies CLI scenario that fails against f
 
 Generated-test failures preserve seed, project directory, provider fixture/version, invocation transcript, stdout, stderr, and when applicable the export artifact directory (`manifest.json`, `state.json`, `journal.jsonl`) produced by `run.export`.
 
-Suite runtime receives explicit budget. When growth exceeds budget, shard or optimize harness before weakening contracts.
+Suite runtime budget is 15 minutes for canonical deterministic quality on either supported CI platform, with workspace tests limited to 10 minutes and each standalone provider suite limited to 2 minutes. CLI E2Es are sharded by integration-test module only after measured workspace tests exceed 10 minutes; shards must preserve complete module registration and operation/facet closure. When growth exceeds budget, shard or optimize harness before weakening contracts. Runtime evidence records wall-clock duration and command exit in WP6 command ledger.
 
 ## Canonical quality gate
 

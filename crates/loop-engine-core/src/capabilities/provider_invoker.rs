@@ -27,14 +27,27 @@ pub struct InvocationFailure {
 pub enum InvocationError<E> {
     /// Trace budget could not reserve a provider boundary; process was not launched.
     TraceBudgetUnavailable,
-    /// Provider process was attempted; observation remains durable audit input.
+    /// Provider-boundary failure; observation remains durable audit input.
     Transport {
         source: E,
+        /// Whether provider process execution was attempted before failure.
+        provider_executed: bool,
         fact: Box<ProviderFact>,
         failure: Box<InvocationFailure>,
         /// Diagnostic sink failure after provider dispatch; provider outcome remains authoritative.
         trace_failure: Option<String>,
     },
+}
+
+impl<E> InvocationError<E> {
+    pub fn provider_executed(&self) -> bool {
+        match self {
+            Self::TraceBudgetUnavailable => false,
+            Self::Transport {
+                provider_executed, ..
+            } => *provider_executed,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

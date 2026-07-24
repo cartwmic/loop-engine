@@ -2518,6 +2518,7 @@ mod tests {
         .unwrap();
         let error = crate::capabilities::provider_invoker::InvocationError::Transport {
             source: (),
+            provider_executed: true,
             fact: Box::new(fact.clone()),
             failure: Box::new(crate::capabilities::provider_invoker::InvocationFailure {
                 reason: Reason::new(
@@ -2529,6 +2530,11 @@ mod tests {
             }),
             trace_failure: None,
         };
+        assert!(error.provider_executed());
+        assert!(
+            !crate::capabilities::provider_invoker::InvocationError::<()>::TraceBudgetUnavailable
+                .provider_executed()
+        );
         let associations = EvidenceAssociations::default();
         let attempt = AttemptFacts {
             transition: Some(

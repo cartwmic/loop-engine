@@ -1,4 +1,4 @@
-use crate::capabilities::persistence_commands::{AppendGuidanceAttemptCommand, CommitStatus};
+use crate::capabilities::persistence_commands::{AppendGuidanceAttemptCommand, AttemptCommit};
 use crate::capabilities::provider_catalog::{
     ProviderCatalog, ProviderResolveFailure, ResolvedProviderConfig,
 };
@@ -6,7 +6,7 @@ use crate::capabilities::provider_invoker::{
     GuidanceInvocationResult, GuidanceRequest, InvocationError, ProviderInvoker,
 };
 use crate::capabilities::run_reader::{RunReader, SelectedEvidenceReadError};
-use crate::capabilities::run_writer::RunWriter;
+use crate::capabilities::run_writer::GuidanceAttemptWriter;
 use crate::model::attempt::{AttemptFacts, JournalExtension, ProviderRole};
 use crate::model::evidence::EvidenceRecord;
 use crate::model::guidance::LiveGuidanceCapability;
@@ -54,12 +54,12 @@ pub fn execute<R, C, I, W, G, F, Q, J>(
     selected_ids: &[EvidenceId],
     mut request: G,
     mut command: F,
-) -> Result<CommitStatus, GuidanceExecutionError<R::Error, J, W::Error>>
+) -> Result<AttemptCommit, GuidanceExecutionError<R::Error, J, W::Error>>
 where
     R: RunReader,
     C: ProviderCatalog,
     I: ProviderInvoker,
-    W: RunWriter,
+    W: GuidanceAttemptWriter,
     G: FnMut(&ResolvedProviderConfig, &Run, &[EvidenceRecord]) -> Result<GuidanceRequest, Q>,
     F: for<'a> FnMut(
         &Run,
@@ -166,9 +166,9 @@ fn persist_resolution<R, C, I, Q, W, F, J>(
     selected: &[EvidenceRecord],
     resolution: &GuidanceResolution<'_, C, R, I, Q>,
     command: &mut F,
-) -> Result<CommitStatus, GuidanceExecutionError<R, J, W::Error>>
+) -> Result<AttemptCommit, GuidanceExecutionError<R, J, W::Error>>
 where
-    W: RunWriter,
+    W: GuidanceAttemptWriter,
     F: for<'a> FnMut(
         &Run,
         Option<&ResolvedProviderConfig>,
@@ -192,6 +192,16 @@ fn revalidate_guidance_command<C, R, I, Q>(
     resolution: &GuidanceResolution<'_, C, R, I, Q>,
     attempt_command: &AppendGuidanceAttemptCommand,
 ) -> Result<(), CommandError> {
+    let expected = command_for_resolution(
+        run,
+        selected,
+        resolution,
+        attempt_command.journal_entry().observed_at(),
+        attempt_command.journal_entry().request_id().clone(),
+    )?;
+    if expected != *attempt_command {
+        return Err(CommandError::JournalMismatch);
+    }
     validate_pair(
         run,
         selected,
@@ -201,15 +211,18 @@ fn revalidate_guidance_command<C, R, I, Q>(
     match resolution {
         GuidanceResolution::Provider(result) => {
             let config = config.ok_or(CommandError::JournalMismatch)?;
-            crate::operations::run_guidance::command(
+            let expected = crate::operations::run_guidance::command(
                 run,
                 config,
                 selected,
                 *result,
                 attempt_command.journal_entry().clone(),
                 attempt_command.terminal_rejection_entry().clone(),
-            )
-            .map(|_| ())
+            )?;
+            if expected != *attempt_command {
+                return Err(CommandError::JournalMismatch);
+            }
+            Ok(())
         }
         GuidanceResolution::Local(disposition) => {
             let expected_reason = match disposition {
@@ -225,13 +238,16 @@ fn revalidate_guidance_command<C, R, I, Q>(
             {
                 return Err(CommandError::JournalMismatch);
             }
-            local_rejection_command(
+            let expected = local_rejection_command(
                 run,
                 selected,
                 attempt_command.journal_entry().clone(),
                 attempt_command.terminal_rejection_entry().clone(),
-            )
-            .map(|_| ())
+            )?;
+            if expected != *attempt_command {
+                return Err(CommandError::JournalMismatch);
+            }
+            Ok(())
         }
         GuidanceResolution::SelectionInvalid | GuidanceResolution::SelectionUnavailable => {
             revalidate_guidance_pre_invocation(
@@ -279,7 +295,15 @@ fn revalidate_guidance_pre_invocation(
         attempt_command.journal_entry(),
         attempt_command.terminal_rejection_entry(),
     )?;
-    let valid = attempt_command.journal_entry().outcome() == expected_outcome
+    let expected_stale = stale_attempt_entry(
+        attempt_command.terminal_rejection_entry(),
+        "run state changed before guidance committed",
+    )?;
+    let valid = attempt_command.run_id() == run.id()
+        && attempt_command.expected_workflow_version() == run.workflow_state_version()
+        && attempt_command.expected_lifecycle_version() == run.lifecycle_version()
+        && attempt_command.stale_error_entry() == &expected_stale
+        && attempt_command.journal_entry().outcome() == expected_outcome
         && attempt_command
             .journal_entry()
             .reason()
@@ -301,6 +325,178 @@ fn revalidate_guidance_pre_invocation(
         return Err(CommandError::JournalMismatch);
     }
     Ok(())
+}
+
+/// Builds the authoritative persistence command for an observed guidance resolution.
+/// Delivery supplies correlation/time only; outcome policy and journal facts remain core-owned.
+pub fn command_for_resolution<C, R, I, Q>(
+    run: &Run,
+    selected: &[EvidenceRecord],
+    resolution: &GuidanceResolution<'_, C, R, I, Q>,
+    observed_at: crate::model::time::ObservedAt,
+    request_id: crate::model::ids::RequestId,
+) -> Result<AppendGuidanceAttemptCommand, CommandError> {
+    use crate::model::attempt::EvidenceAssociations;
+    use crate::model::bounded::BoundedText;
+    use crate::model::reason::Reason;
+
+    let associations = (!selected.is_empty()).then(|| EvidenceAssociations {
+        selected_ids: selected.iter().map(|record| record.id().clone()).collect(),
+        ..EvidenceAssociations::default()
+    });
+    let mut attempt = AttemptFacts {
+        evidence_recorded: associations
+            .as_ref()
+            .map(EvidenceAssociations::recorded_status),
+        evidence_associations: associations,
+        ..AttemptFacts::default()
+    };
+    let (outcome, reason, guidance_text) = match resolution {
+        GuidanceResolution::Local(GuidanceDisposition::StoredUnsupported) => (
+            OutcomeClass::Rejected,
+            Some(Reason::new(
+                ReasonCode::GuidanceUnsupported,
+                "stored graph does not support live guidance",
+            )?),
+            None,
+        ),
+        GuidanceResolution::Local(GuidanceDisposition::Terminal) => (
+            OutcomeClass::Rejected,
+            Some(Reason::new(
+                ReasonCode::RunLifecycleTerminal,
+                "run lifecycle is terminal",
+            )?),
+            None,
+        ),
+        GuidanceResolution::Local(GuidanceDisposition::Invoke) => {
+            return Err(CommandError::JournalMismatch);
+        }
+        GuidanceResolution::SelectionInvalid | GuidanceResolution::SelectionUnavailable => (
+            OutcomeClass::Rejected,
+            Some(Reason::new(
+                ReasonCode::EvidenceSelectionInvalid,
+                "selected evidence is invalid or unavailable",
+            )?),
+            None,
+        ),
+        GuidanceResolution::SelectionReadError(_) => (
+            OutcomeClass::Error,
+            Some(Reason::new(
+                ReasonCode::PersistenceFailed,
+                "selected evidence read failed",
+            )?),
+            None,
+        ),
+        GuidanceResolution::CatalogError(_, failure) => (
+            OutcomeClass::Error,
+            Some(Reason::new(
+                failure.reason_code(),
+                "provider registration is unavailable",
+            )?),
+            None,
+        ),
+        GuidanceResolution::RequestError(_) => (
+            OutcomeClass::Error,
+            Some(Reason::new(
+                ReasonCode::ResourceExhausted,
+                "provider guidance request exceeds bounds",
+            )?),
+            None,
+        ),
+        GuidanceResolution::Provider(Ok(invocation)) => {
+            attempt.provider_observations.push(invocation.fact.clone());
+            match &invocation.result {
+                LiveGuidanceResult::Guidance(guidance) => (
+                    OutcomeClass::Completed,
+                    None,
+                    Some(BoundedText::non_empty("guidance_text", guidance.text())?),
+                ),
+                LiveGuidanceResult::Incompatible(diagnostics) => {
+                    attempt.diagnostics = diagnostics.as_slice().to_vec();
+                    (
+                        OutcomeClass::Rejected,
+                        Some(Reason::new(
+                            ReasonCode::CompatibilityUnsupported,
+                            "provider reports guidance incompatibility",
+                        )?),
+                        None,
+                    )
+                }
+                LiveGuidanceResult::EvaluationError(diagnostics) => {
+                    attempt.diagnostics = diagnostics.as_slice().to_vec();
+                    (
+                        OutcomeClass::Error,
+                        Some(Reason::new(
+                            ReasonCode::ProviderEvaluationError,
+                            "provider guidance evaluation failed",
+                        )?),
+                        None,
+                    )
+                }
+            }
+        }
+        GuidanceResolution::Provider(Err(InvocationError::TraceBudgetUnavailable)) => (
+            OutcomeClass::Error,
+            Some(Reason::new(
+                ReasonCode::ResourceExhausted,
+                "provider trace budget unavailable",
+            )?),
+            None,
+        ),
+        GuidanceResolution::Provider(Err(InvocationError::Transport { fact, failure, .. })) => {
+            attempt.provider_observations.push(*fact.clone());
+            attempt.diagnostics = failure.diagnostics.clone();
+            (OutcomeClass::Error, Some(failure.reason.clone()), None)
+        }
+    };
+    let ordinary = JournalDraft::new(
+        run.id().clone(),
+        observed_at,
+        "run.guidance",
+        request_id.clone(),
+        outcome,
+        reason,
+        Some(attempt.clone()),
+        JournalExtension::GuidanceAttempt { guidance_text },
+    )?;
+    let terminal = JournalDraft::new(
+        run.id().clone(),
+        observed_at,
+        "run.guidance",
+        request_id.clone(),
+        OutcomeClass::Rejected,
+        Some(Reason::new(
+            ReasonCode::RunLifecycleTerminal,
+            "run lifecycle changed before guidance committed",
+        )?),
+        Some(attempt.clone()),
+        JournalExtension::GuidanceAttempt {
+            guidance_text: None,
+        },
+    )?;
+    let stale = JournalDraft::new(
+        run.id().clone(),
+        observed_at,
+        "run.guidance",
+        request_id,
+        OutcomeClass::Error,
+        Some(Reason::new(
+            ReasonCode::StateStaleVersion,
+            "run state changed before guidance committed",
+        )?),
+        Some(attempt),
+        JournalExtension::GuidanceAttempt {
+            guidance_text: None,
+        },
+    )?;
+    Ok(AppendGuidanceAttemptCommand::from_parts(
+        run.id().clone(),
+        run.workflow_state_version(),
+        run.lifecycle_version(),
+        ordinary,
+        terminal,
+        stale,
+    ))
 }
 
 pub fn disposition(run: &Run) -> GuidanceDisposition {
@@ -402,11 +598,17 @@ pub(crate) fn command<E>(
     if !result_matches {
         return Err(CommandError::JournalMismatch);
     }
+    let stale_error_entry = stale_attempt_entry(
+        &terminal_rejection_entry,
+        "run state changed before guidance committed",
+    )?;
     Ok(AppendGuidanceAttemptCommand::from_parts(
         run.id().clone(),
+        run.workflow_state_version(),
         run.lifecycle_version(),
         journal_entry,
         terminal_rejection_entry,
+        stale_error_entry,
     ))
 }
 
@@ -430,12 +632,37 @@ pub(crate) fn local_rejection_command(
     if !valid {
         return Err(CommandError::JournalMismatch);
     }
+    let stale_error_entry = stale_attempt_entry(
+        &terminal_rejection_entry,
+        "run state changed before guidance committed",
+    )?;
     Ok(AppendGuidanceAttemptCommand::from_parts(
         run.id().clone(),
+        run.workflow_state_version(),
         run.lifecycle_version(),
         journal_entry,
         terminal_rejection_entry,
+        stale_error_entry,
     ))
+}
+
+fn stale_attempt_entry(
+    terminal_entry: &JournalDraft,
+    detail: &'static str,
+) -> Result<JournalDraft, CommandError> {
+    Ok(JournalDraft::new(
+        terminal_entry.run_id().clone(),
+        terminal_entry.observed_at(),
+        "run.guidance",
+        terminal_entry.request_id().clone(),
+        OutcomeClass::Error,
+        Some(crate::model::reason::Reason::new(
+            ReasonCode::StateStaleVersion,
+            detail,
+        )?),
+        terminal_entry.attempt().cloned(),
+        terminal_entry.extension().clone(),
+    )?)
 }
 
 fn validate_pair(
@@ -765,8 +992,10 @@ mod tests {
         );
         let command = AppendGuidanceAttemptCommand::from_parts(
             run.id().clone(),
+            run.workflow_state_version(),
             run.lifecycle_version(),
             ordinary,
+            terminal.clone(),
             terminal,
         );
         let resolution: super::GuidanceResolution<'_, (), (), (), ()> =
@@ -882,25 +1111,91 @@ mod tests {
     fn invalid_selection_cannot_claim_guidance_unsupported() {
         let run = crate::operations::test_support::run();
         let attempt = AttemptFacts::default();
+        let terminal = guidance_draft(
+            OutcomeClass::Rejected,
+            ReasonCode::RunLifecycleTerminal,
+            attempt.clone(),
+        );
         let command = AppendGuidanceAttemptCommand::from_parts(
             run.id().clone(),
+            run.workflow_state_version(),
             run.lifecycle_version(),
             guidance_draft(
                 OutcomeClass::Rejected,
                 ReasonCode::GuidanceUnsupported,
                 attempt.clone(),
             ),
-            guidance_draft(
-                OutcomeClass::Rejected,
-                ReasonCode::RunLifecycleTerminal,
-                attempt,
-            ),
+            terminal.clone(),
+            terminal,
         );
         let resolution: super::GuidanceResolution<'_, (), (), (), ()> =
             super::GuidanceResolution::SelectionInvalid;
 
         assert!(matches!(
             super::revalidate_guidance_command(&run, None, &[], &resolution, &command),
+            Err(crate::operations::CommandError::JournalMismatch)
+        ));
+    }
+
+    #[test]
+    fn local_command_cannot_substitute_terminal_draft_for_stale_draft() {
+        let run = crate::operations::test_support::run();
+        let resolution: super::GuidanceResolution<'_, (), (), (), ()> =
+            super::GuidanceResolution::Local(super::GuidanceDisposition::StoredUnsupported);
+        let valid = super::command_for_resolution(
+            &run,
+            &[],
+            &resolution,
+            ObservedAt::parse("2026-07-18T00:00:00Z").unwrap(),
+            RequestId::parse("request-1").unwrap(),
+        )
+        .unwrap();
+        let forged = AppendGuidanceAttemptCommand::from_parts(
+            run.id().clone(),
+            valid.expected_workflow_version(),
+            valid.expected_lifecycle_version(),
+            valid.journal_entry().clone(),
+            valid.terminal_rejection_entry().clone(),
+            valid.terminal_rejection_entry().clone(),
+        );
+
+        assert!(matches!(
+            super::revalidate_guidance_command(&run, None, &[], &resolution, &forged),
+            Err(crate::operations::CommandError::JournalMismatch)
+        ));
+    }
+
+    #[test]
+    fn pre_invocation_command_cannot_forge_expected_workflow_version() {
+        let run = crate::operations::test_support::run();
+        let source = ();
+        let resolution: super::GuidanceResolution<'_, (), (), (), ()> =
+            super::GuidanceResolution::CatalogError(
+                &source,
+                super::ProviderResolveFailure::Missing,
+            );
+        let valid = super::command_for_resolution(
+            &run,
+            &[],
+            &resolution,
+            ObservedAt::parse("2026-07-18T00:00:00Z").unwrap(),
+            RequestId::parse("request-1").unwrap(),
+        )
+        .unwrap();
+        let forged = AppendGuidanceAttemptCommand::from_parts(
+            run.id().clone(),
+            crate::model::version::WorkflowStateVersion::try_from(
+                run.workflow_state_version().value() + 1,
+            )
+            .unwrap(),
+            valid.expected_lifecycle_version(),
+            valid.journal_entry().clone(),
+            valid.terminal_rejection_entry().clone(),
+            valid.stale_error_entry().clone(),
+        );
+
+        assert!(matches!(
+            super::revalidate_guidance_command(&run, None, &[], &resolution, &forged),
             Err(crate::operations::CommandError::JournalMismatch)
         ));
     }

@@ -111,9 +111,18 @@ impl SqliteHistoryReads {
         run_id: &RunId,
         request: &PageRequest<()>,
     ) -> Result<Page<JournalEntry>, HistoryReadError> {
+        self.history_for_operation("run.history", run_id, request)
+    }
+
+    pub fn history_for_operation(
+        &self,
+        operation_id: &'static str,
+        run_id: &RunId,
+        request: &PageRequest<()>,
+    ) -> Result<Page<JournalEntry>, HistoryReadError> {
         close_read(
             &self.trace,
-            "run.history",
+            operation_id,
             MutationClass::ReadOnly,
             || self.history_impl(run_id, request),
             |page| {

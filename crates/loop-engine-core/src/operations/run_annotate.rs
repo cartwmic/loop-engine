@@ -1,4 +1,4 @@
-use crate::capabilities::persistence_commands::{AppendAnnotationCommand, CommitStatus};
+use crate::capabilities::persistence_commands::{AppendAnnotationCommand, AttemptCommit};
 use crate::capabilities::run_writer::RunWriter;
 use crate::model::annotation::{ActorMetadata, Note};
 use crate::model::attempt::{AttemptFacts, JournalExtension};
@@ -11,7 +11,7 @@ use crate::operations::{CommandError, validate_journal};
 pub fn execute<W: RunWriter>(
     writer: &W,
     command: AppendAnnotationCommand,
-) -> Result<CommitStatus, W::Error> {
+) -> Result<AttemptCommit, W::Error> {
     writer.append_annotation(command)
 }
 

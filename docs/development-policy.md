@@ -1,6 +1,6 @@
 # Development policy
 
-**Status:** Publication-checkpoint coherence superseded per-commit scheduling by owner decision R001 (2026-07-18). Aggregate hook/publication/CI repair R002–R004 and local R005 validation are complete; T031 remains blocked until the remote accepts the authorized governance-repair checkpoint. Dependency policy and C1 empty-runtime closure landed by T030 (2026-07-18).
+**Status:** Publication-checkpoint coherence superseded per-commit scheduling by owner decision R001 (2026-07-18). Aggregate hook/publication/CI repair R002–R005, dependency policy, workspace boundaries, and fail-closed pre-commit/pre-push enforcement are implemented. Current candidate exposes complete frozen 21-operation catalog; final publication uses one advertised-remote-tip-to-candidate gate.
 
 Related documents:
 

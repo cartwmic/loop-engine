@@ -1,4 +1,4 @@
-use crate::capabilities::persistence_commands::{AppendCompatibilityAttemptCommand, CommitStatus};
+use crate::capabilities::persistence_commands::{AppendCompatibilityAttemptCommand, AttemptCommit};
 use crate::capabilities::provider_catalog::{
     ProviderCatalog, ProviderResolveFailure, ResolvedProviderConfig,
 };
@@ -6,7 +6,7 @@ use crate::capabilities::provider_invoker::{
     CompatibilityRequest, CompatibilityResult, InvocationError, ProviderInvoker,
 };
 use crate::capabilities::run_reader::RunReader;
-use crate::capabilities::run_writer::RunWriter;
+use crate::capabilities::run_writer::CompatibilityAttemptWriter;
 use crate::model::attempt::{AttemptFacts, JournalExtension, ProviderFact, ProviderRole};
 use crate::model::ids::RunId;
 use crate::model::journal::{JournalDraft, JournalEntryKind};
@@ -42,12 +42,12 @@ pub fn execute<R, C, I, W, G, F, Q, J>(
     run_id: &RunId,
     mut request: G,
     mut command: F,
-) -> Result<CommitStatus, CompatibilityExecutionError<R::Error, J, W::Error>>
+) -> Result<AttemptCommit, CompatibilityExecutionError<R::Error, J, W::Error>>
 where
     R: RunReader,
     C: ProviderCatalog,
     I: ProviderInvoker,
-    W: RunWriter,
+    W: CompatibilityAttemptWriter,
     G: FnMut(&ResolvedProviderConfig, &Run) -> Result<CompatibilityRequest, Q>,
     F: for<'a> FnMut(
         &Run,
@@ -126,9 +126,9 @@ fn persist_resolution<R, C, I, Q, W, F, J>(
     creation: Option<&ProviderObservation>,
     resolution: CompatibilityResolution<'_, C, R, I, Q>,
     command: &mut F,
-) -> Result<CommitStatus, CompatibilityExecutionError<R, J, W::Error>>
+) -> Result<AttemptCommit, CompatibilityExecutionError<R, J, W::Error>>
 where
-    W: RunWriter,
+    W: CompatibilityAttemptWriter,
     F: for<'a> FnMut(
         &Run,
         Option<&ResolvedProviderConfig>,
@@ -152,6 +152,16 @@ fn revalidate_compatibility_command<C, R, I, Q>(
     resolution: &CompatibilityResolution<'_, C, R, I, Q>,
     attempt_command: &AppendCompatibilityAttemptCommand,
 ) -> Result<(), CommandError> {
+    let expected = command_for_resolution(
+        run,
+        creation,
+        resolution,
+        attempt_command.journal_entry().observed_at(),
+        attempt_command.journal_entry().request_id().clone(),
+    )?;
+    if expected != *attempt_command {
+        return Err(CommandError::JournalMismatch);
+    }
     match resolution {
         CompatibilityResolution::Provider(result) => {
             let config = config.ok_or(CommandError::JournalMismatch)?;
@@ -208,8 +218,14 @@ fn revalidate_compatibility_pre_invocation(
         attempt_command.journal_entry(),
         attempt_command.terminal_rejection_entry(),
     )?;
+    let expected_stale = stale_attempt_entry(
+        attempt_command.terminal_rejection_entry(),
+        "run state changed before compatibility committed",
+    )?;
     let valid = attempt_command.run_id() == run.id()
+        && attempt_command.expected_workflow_version() == run.workflow_state_version()
         && attempt_command.expected_lifecycle_version() == run.lifecycle_version()
+        && attempt_command.stale_error_entry() == &expected_stale
         && attempt_command.observed_drift().is_none()
         && attempt_command.journal_entry().outcome() == OutcomeClass::Error
         && attempt_command
@@ -231,6 +247,140 @@ fn revalidate_compatibility_pre_invocation(
         return Err(CommandError::JournalMismatch);
     }
     Ok(())
+}
+
+/// Builds the authoritative persistence command for an observed compatibility resolution.
+/// Delivery supplies correlation/time only; outcome policy and journal facts remain core-owned.
+pub fn command_for_resolution<C, R, I, Q>(
+    run: &Run,
+    creation: Option<&ProviderObservation>,
+    resolution: &CompatibilityResolution<'_, C, R, I, Q>,
+    observed_at: crate::model::time::ObservedAt,
+    request_id: crate::model::ids::RequestId,
+) -> Result<AppendCompatibilityAttemptCommand, CommandError> {
+    use crate::model::compatibility::CompatibilityReport;
+    use crate::model::reason::Reason;
+
+    let mut attempt = AttemptFacts::default();
+    let mut drift = None;
+    let (outcome, reason, findings) = match resolution {
+        CompatibilityResolution::Terminal => (
+            OutcomeClass::Rejected,
+            Some(Reason::new(
+                ReasonCode::RunLifecycleTerminal,
+                "run lifecycle is terminal",
+            )?),
+            None,
+        ),
+        CompatibilityResolution::CreationObservationError(_) => (
+            OutcomeClass::Error,
+            Some(Reason::new(
+                ReasonCode::PersistenceFailed,
+                "creation provider observation is unavailable",
+            )?),
+            None,
+        ),
+        CompatibilityResolution::CatalogError(_, failure) => (
+            OutcomeClass::Error,
+            Some(Reason::new(
+                failure.reason_code(),
+                "provider registration is unavailable",
+            )?),
+            None,
+        ),
+        CompatibilityResolution::RequestError(_) => (
+            OutcomeClass::Error,
+            Some(Reason::new(
+                ReasonCode::ResourceExhausted,
+                "compatibility request exceeds bounds",
+            )?),
+            None,
+        ),
+        CompatibilityResolution::Provider(Ok(result)) => {
+            attempt.provider_observations.push(result.fact.clone());
+            drift = creation.and_then(|creation| {
+                observed_drift(creation.digest(), result.observation.digest())
+            });
+            match &result.report {
+                CompatibilityReport::Findings(findings) => {
+                    (OutcomeClass::Completed, None, Some(findings.clone()))
+                }
+                CompatibilityReport::EvaluationError(diagnostics) => {
+                    attempt.diagnostics = diagnostics.as_slice().to_vec();
+                    (
+                        OutcomeClass::Error,
+                        Some(Reason::new(
+                            ReasonCode::ProviderEvaluationError,
+                            "provider compatibility evaluation failed",
+                        )?),
+                        None,
+                    )
+                }
+            }
+        }
+        CompatibilityResolution::Provider(Err(InvocationError::TraceBudgetUnavailable)) => (
+            OutcomeClass::Error,
+            Some(Reason::new(
+                ReasonCode::ResourceExhausted,
+                "provider trace budget unavailable",
+            )?),
+            None,
+        ),
+        CompatibilityResolution::Provider(Err(InvocationError::Transport {
+            fact,
+            failure,
+            ..
+        })) => {
+            attempt.provider_observations.push(*fact.clone());
+            attempt.diagnostics = failure.diagnostics.clone();
+            (OutcomeClass::Error, Some(failure.reason.clone()), None)
+        }
+    };
+    let ordinary = JournalDraft::new(
+        run.id().clone(),
+        observed_at,
+        "run.compatibility",
+        request_id.clone(),
+        outcome,
+        reason,
+        Some(attempt.clone()),
+        JournalExtension::CompatibilityAttempt { findings },
+    )?;
+    let terminal = JournalDraft::new(
+        run.id().clone(),
+        observed_at,
+        "run.compatibility",
+        request_id.clone(),
+        OutcomeClass::Rejected,
+        Some(Reason::new(
+            ReasonCode::RunLifecycleTerminal,
+            "run lifecycle changed before compatibility committed",
+        )?),
+        Some(attempt.clone()),
+        JournalExtension::CompatibilityAttempt { findings: None },
+    )?;
+    let stale = JournalDraft::new(
+        run.id().clone(),
+        observed_at,
+        "run.compatibility",
+        request_id,
+        OutcomeClass::Error,
+        Some(Reason::new(
+            ReasonCode::StateStaleVersion,
+            "run state changed before compatibility committed",
+        )?),
+        Some(attempt),
+        JournalExtension::CompatibilityAttempt { findings: None },
+    )?;
+    Ok(AppendCompatibilityAttemptCommand::from_parts(
+        run.id().clone(),
+        run.workflow_state_version(),
+        run.lifecycle_version(),
+        drift,
+        ordinary,
+        terminal,
+        stale,
+    ))
 }
 
 pub fn can_invoke(run: &Run) -> bool {
@@ -316,12 +466,18 @@ pub(crate) fn command<E>(
     let observed_drift = result
         .ok()
         .and_then(|result| observed_drift(creation_digest, result.observation.digest()));
+    let stale_error_entry = stale_attempt_entry(
+        &terminal_rejection_entry,
+        "run state changed before compatibility committed",
+    )?;
     Ok(AppendCompatibilityAttemptCommand::from_parts(
         run.id().clone(),
+        run.workflow_state_version(),
         run.lifecycle_version(),
         observed_drift,
         journal_entry,
         terminal_rejection_entry,
+        stale_error_entry,
     ))
 }
 
@@ -342,13 +498,38 @@ pub(crate) fn local_rejection_command(
     if !valid {
         return Err(CommandError::JournalMismatch);
     }
+    let stale_error_entry = stale_attempt_entry(
+        &terminal_rejection_entry,
+        "run state changed before compatibility committed",
+    )?;
     Ok(AppendCompatibilityAttemptCommand::from_parts(
         run.id().clone(),
+        run.workflow_state_version(),
         run.lifecycle_version(),
         None,
         journal_entry,
         terminal_rejection_entry,
+        stale_error_entry,
     ))
+}
+
+fn stale_attempt_entry(
+    terminal_entry: &JournalDraft,
+    detail: &'static str,
+) -> Result<JournalDraft, CommandError> {
+    Ok(JournalDraft::new(
+        terminal_entry.run_id().clone(),
+        terminal_entry.observed_at(),
+        "run.compatibility",
+        terminal_entry.request_id().clone(),
+        OutcomeClass::Error,
+        Some(crate::model::reason::Reason::new(
+            ReasonCode::StateStaleVersion,
+            detail,
+        )?),
+        terminal_entry.attempt().cloned(),
+        terminal_entry.extension().clone(),
+    )?)
 }
 
 fn validate_pair(
@@ -650,12 +831,15 @@ mod tests {
             super::JournalExtension::CompatibilityAttempt { findings: None },
         )
         .unwrap();
+        let terminal = terminal_rejection_draft(attempt);
         let command = AppendCompatibilityAttemptCommand::from_parts(
             run.id().clone(),
+            run.workflow_state_version(),
             run.lifecycle_version(),
             None,
             ordinary,
-            terminal_rejection_draft(attempt),
+            terminal.clone(),
+            terminal,
         );
         let source = ();
         let resolution: super::CompatibilityResolution<'_, (), (), (), ()> =
@@ -663,6 +847,39 @@ mod tests {
 
         assert!(matches!(
             super::revalidate_compatibility_command(&run, None, None, &resolution, &command),
+            Err(crate::operations::CommandError::JournalMismatch)
+        ));
+    }
+
+    #[test]
+    fn pre_invocation_command_cannot_forge_expected_workflow_version() {
+        let run = crate::operations::test_support::run();
+        let source = ();
+        let resolution: super::CompatibilityResolution<'_, (), (), (), ()> =
+            super::CompatibilityResolution::CatalogError(&source, ProviderResolveFailure::Missing);
+        let valid = super::command_for_resolution(
+            &run,
+            None,
+            &resolution,
+            ObservedAt::parse("2026-07-18T00:00:00Z").unwrap(),
+            RequestId::parse("request-1").unwrap(),
+        )
+        .unwrap();
+        let forged = AppendCompatibilityAttemptCommand::from_parts(
+            run.id().clone(),
+            crate::model::version::WorkflowStateVersion::try_from(
+                run.workflow_state_version().value() + 1,
+            )
+            .unwrap(),
+            valid.expected_lifecycle_version(),
+            valid.observed_drift(),
+            valid.journal_entry().clone(),
+            valid.terminal_rejection_entry().clone(),
+            valid.stale_error_entry().clone(),
+        );
+
+        assert!(matches!(
+            super::revalidate_compatibility_command(&run, None, None, &resolution, &forged),
             Err(crate::operations::CommandError::JournalMismatch)
         ));
     }

@@ -2,7 +2,7 @@
 
 **Status:** Frozen by T006 (2026-07-17); resource bounds, collection pagination, and cursor v1 frozen by T008 (2026-07-17). Decisions [D006](change/initial-implementation/decisions.md#d006--structured-cli-contract) and [D008](change/initial-implementation/decisions.md#d008--resource-bounds-and-timeout-defaults).
 
-This document is the canonical contract for production `loop-engine` CLI rendering, global flags, structured outcome envelope schema v1, human/structured parity, stdout/stderr/trace boundaries, process exit codes, **resource bounds**, **collection pagination**, and **cursor v1**. Application subcommand argv for the frozen 21-operation target catalog is defined in [operation-catalog.md](operation-catalog.md) (D004); current alpha runtime exposure is the nine-operation subset named below. This document owns global flags, outcome rendering, bounds, and pagination only.
+This document is the canonical contract for production `loop-engine` CLI rendering, global flags, structured outcome envelope schema v1, human/structured parity, stdout/stderr/trace boundaries, process exit codes, **resource bounds**, **collection pagination**, and **cursor v1**. Application subcommand argv for the exposed frozen 21-operation catalog is defined in [operation-catalog.md](operation-catalog.md) (D004). This document owns global flags, outcome rendering, bounds, and pagination only.
 
 Related documents:
 
@@ -18,7 +18,7 @@ Related documents:
 
 Production binary name: `loop-engine`.
 
-MVP's final catalog contains exactly **21** application operations in two namespaces (`provider.*`, `run.*`). During the 2026-07-22 staged implementation, `--list-operations` reports only checkpoint-closed runtime routes; Checkpoints A through D expose `provider.add`, `provider.list`, `provider.check`, `run.create`, `run.list`, `run.terminate`, `run.show`, `run.request`, and `run.history`. Final closure requires all 21 IDs. No additional application operation, alias, or hidden route is permitted without reopening D004. CLI `--help`, `--version`, pre-dispatch usage display, and `--list-operations` are driver functions, not application operations ([operation-catalog.md](operation-catalog.md) § Explicit non-operations).
+MVP's catalog contains exactly **21** exposed application operations in two namespaces (`provider.*`, `run.*`). `--list-operations` reports all 21 runtime routes in frozen catalog order. No additional application operation, alias, or hidden route is permitted without reopening D004. CLI `--help`, `--version`, pre-dispatch usage display, and `--list-operations` are driver functions, not application operations ([operation-catalog.md](operation-catalog.md) § Explicit non-operations).
 
 ## Schema versioning
 
@@ -52,7 +52,7 @@ Global flags apply before application subcommands. Configuration path and TOML p
 | `--format <human\|json>` | Output rendering mode. Default: `human`. |
 | `--help`, `-h` | Emit usage help on stdout. Initializes trace per I46/D010. See [Driver metadata outputs](#driver-metadata-outputs). |
 | `--version` | Emit build/version metadata on stdout. Initializes trace per I46/D010. See [Driver metadata outputs](#driver-metadata-outputs). |
-| `--list-operations` | Emit currently exposed application operation IDs and argv templates on stdout (nine in the alpha). Driver metadata, not an application operation. See [Driver metadata outputs](#driver-metadata-outputs). |
+| `--list-operations` | Emit all 21 exposed application operation IDs and argv templates on stdout. Driver metadata, not an application operation. See [Driver metadata outputs](#driver-metadata-outputs). |
 
 Environment variable `LOOP_ENGINE_HOME` overrides machine-local roots for tests and portable use (D007). It is not a CLI flag.
 
@@ -62,7 +62,7 @@ Unsupported host targets fail pre-dispatch with exit `64` and rich stderr naming
 
 Application subcommand argv is frozen in [operation-catalog.md](operation-catalog.md) § Production CLI surface. The tables below are an exact copy for contract closure; if text diverges, `operation-catalog.md` is authoritative until D004 is reopened.
 
-**Alpha availability:** only `provider.add`, `provider.check`, `provider.list`, `run.create`, `run.history`, `run.list`, `run.request`, `run.show`, and `run.terminate` are callable. Remaining rows document deferred WP6 target syntax and are not hidden routes. `--list-operations` is authoritative for installed-binary availability.
+**Availability:** all 21 operation rows are callable. `--list-operations` is authoritative for installed-binary availability and argv templates.
 
 ### Provider commands
 
@@ -428,7 +428,7 @@ All successful driver-metadata invocations initialize trace per I46, leave stder
 
 ### `--help` / `-h`
 
-**Human (default):** UTF-8 usage text on stdout. Includes global flags, alpha availability summary, and pointer to `--list-operations` for currently exposed argv templates.
+**Human (default):** UTF-8 usage text on stdout. Includes global flags and pointer to `--list-operations` for exposed argv templates.
 
 **Structured (`--format json`):** one JSON object on stdout:
 
@@ -457,7 +457,7 @@ All successful driver-metadata invocations initialize trace per I46, leave stder
 
 ### `--list-operations`
 
-**Human (default):** one line per currently exposed application operation: `<OPERATION-ID><TAB><argv template>`, in stable frozen-catalog order. Alpha output contains exactly nine IDs. Final closure covers exactly all 21 IDs.
+**Human (default):** one line per currently exposed application operation: `<OPERATION-ID><TAB><argv template>`, in stable frozen-catalog order. Output contains exactly all 21 frozen catalog IDs.
 
 **Structured (`--format json`):** one JSON object on stdout:
 
@@ -465,7 +465,7 @@ All successful driver-metadata invocations initialize trace per I46, leave stder
 |---|---|---|---|
 | `schema_version` | integer | yes | Always `1` for this contract |
 | `kind` | string | yes | Always `operation_list` |
-| `operations` | array | yes | Currently exposed checkpoint-closed objects in stable frozen-catalog order; nine in the alpha and exactly 21 at final closure |
+| `operations` | array | yes | All 21 exposed operation objects in stable frozen-catalog order |
 | `operations[].id` | string | yes | Stable operation ID |
 | `operations[].argv` | string | yes | argv template copied from this document |
 | `request_id` | string | yes | Correlates invocation and trace |
@@ -555,7 +555,7 @@ Successful `run.show` adds these provider-free fields beside `data.run` and `dat
 
 ### Evidence-recorded status (`data.evidence_recorded`)
 
-Present on applicable mutation attempts after run lookup.
+Present on `run.request` attempts after run lookup. It reports which event-attempt evidence channels committed; standalone `run.evidence.add` instead reports `data.evidence_added: true` after its evidence record commits.
 
 | Field | Type | Description |
 |---|---|---|
@@ -589,6 +589,7 @@ Operation-specific fields live under `data` without breaking top-level shape:
 - **Paged reads** — `items` array plus optional `next_cursor` string.
 - **Provider catalog** — `registration`, `registrations`, `conformance`, `impact`, or `ack_token` objects as applicable.
 - **Provider invocation flag** — `provider_executed` boolean when [ux-storyboards.md](ux-storyboards.md) shows `Provider executed:` (provider-invoking operations only).
+- **Standalone evidence append** — `evidence_added: true` on completed `run.evidence.add`; human rendering derives `Evidence recorded: yes` from this field.
 - **Conformance summary** — `conformance` object for `provider.check` (default and `--active-runs` pages that include emitted-graph conformance): `protocol_major` (integer), `graph_status` (`valid` or `invalid`), `graph_revision` (string digest when available).
 - **Compatibility findings** — `findings` array for `provider.check --active-runs` active-graph rows and `run.compatibility` per-capability results; each entry names a capability or event key, `status` (`compatible`, `incompatible`, or `unknown`), and optional nested diagnostic lines.
 - **Graph/history/evidence** — `graph`, `entries`, `evidence`, `guidance`, `export` objects as applicable.
@@ -631,6 +632,7 @@ Human rendering presents the same semantic fields as structured `data`, `outcome
 | `Graph: valid\|invalid` | `data.conformance.graph_status` | `provider.check` (default conformance) | per outcome |
 | `Graph revision:` | `data.conformance.graph_revision` | `provider.check` (default conformance) | per outcome |
 | `Provider executed: yes\|no` | `data.provider_executed` | `run.guidance`, `run.compatibility`, and other provider-invoking operations that report invocation | per outcome |
+| `Evidence recorded: yes` | `data.evidence_added == true` | completed `run.evidence.add` | `0` |
 | `Guidance:` prose | `data.guidance` | `run.guidance` | per outcome |
 | `Findings:` / per-capability lines | `data.findings[*]` | `run.compatibility`, `provider.check --active-runs` active-graph rows | per outcome |
 | `Active graphs:` section | `data.items[*]` or embedded active-graph rows under conformance/findings paging | `provider.check --active-runs` | per outcome |

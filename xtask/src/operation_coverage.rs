@@ -252,6 +252,11 @@ fn locate_repository_root() -> Result<PathBuf> {
     Ok(root)
 }
 
+/// Read the frozen final operation catalog from the core source of truth.
+pub fn final_operation_ids_at(root: &Path) -> Result<BTreeSet<String>> {
+    read_planned_catalog(root)
+}
+
 fn read_planned_catalog(root: &Path) -> Result<BTreeSet<String>> {
     let source =
         fs::read_to_string(root.join("crates/loop-engine-core/src/operations/catalog.rs"))?;
@@ -423,7 +428,7 @@ fn validate_facet_manifest(root: &Path, path: &Path, expected_operation: &str) -
                         path.display()
                     )
                 })?;
-            validate_evidence_reference(root, path, reference)?;
+            validate_evidence_reference(root, path, name, reference)?;
         }
     }
     if universal != 1 {
@@ -460,6 +465,18 @@ fn required_facets(operation: &str) -> Result<&'static [&'static str]> {
             "Trace provider boundary",
             "Trace persistence boundary",
         ],
+        "provider.update" | "provider.rename" | "provider.restore" => &[
+            UNIVERSAL_FACET,
+            "Provider-catalog mutation",
+            "Rejectable provider-catalog mutation",
+            "Trace persistence boundary",
+        ],
+        "provider.disable" => &[
+            UNIVERSAL_FACET,
+            "Provider-catalog mutation",
+            "Rejectable provider-catalog mutation",
+            "Trace persistence boundary",
+        ],
         "provider.list" => &[UNIVERSAL_FACET, "Read", "Trace persistence boundary"],
         "run.create" => &[
             UNIVERSAL_FACET,
@@ -469,7 +486,73 @@ fn required_facets(operation: &str) -> Result<&'static [&'static str]> {
             "Trace provider boundary",
             "Trace persistence boundary",
         ],
+        "run.graph" => &[
+            UNIVERSAL_FACET,
+            "Read",
+            "Provider-free under missing provider",
+            "Trace persistence boundary",
+        ],
+        "run.evidence.add" => &[
+            UNIVERSAL_FACET,
+            "Run-state or run-journal mutation",
+            "Rejectable run mutation after run lookup",
+            "Lifecycle family",
+            "Journal required",
+            "Provider-free under missing provider",
+            "Trace persistence boundary",
+        ],
+        "run.evidence.list" => &[
+            UNIVERSAL_FACET,
+            "Read",
+            "Provider-free under missing provider",
+            "Trace persistence boundary",
+        ],
+        "run.annotate" => &[
+            UNIVERSAL_FACET,
+            "Run-state or run-journal mutation",
+            "Rejectable run mutation after run lookup",
+            "Lifecycle family",
+            "Journal required",
+            "Provider-free under missing provider",
+            "Trace persistence boundary",
+        ],
+        "run.label" => &[
+            UNIVERSAL_FACET,
+            "Run-state or run-journal mutation",
+            "Rejectable run mutation after run lookup",
+            "Lifecycle family",
+            "Journal required",
+            "Provider-free under missing provider",
+            "Trace persistence boundary",
+        ],
         "run.history" => &[
+            UNIVERSAL_FACET,
+            "Read",
+            "Provider-free under missing provider",
+            "Trace persistence boundary",
+        ],
+        "run.guidance" => &[
+            UNIVERSAL_FACET,
+            "Run-state or run-journal mutation",
+            "Rejectable run mutation after run lookup",
+            "Provider invoking",
+            "Lifecycle family",
+            "Compatibility sensitive",
+            "Journal required",
+            "Trace provider boundary",
+            "Trace persistence boundary",
+        ],
+        "run.compatibility" => &[
+            UNIVERSAL_FACET,
+            "Provider invoking",
+            "Read",
+            "Lifecycle family",
+            "Compatibility sensitive",
+            "Journal required",
+            "Trace provider boundary",
+            "Trace persistence boundary",
+        ],
+        "run.export" => &[
             UNIVERSAL_FACET,
             "Read",
             "Provider-free under missing provider",
@@ -516,8 +599,20 @@ fn required_facets(operation: &str) -> Result<&'static [&'static str]> {
     Ok(facets)
 }
 
-fn validate_evidence_reference(root: &Path, manifest: &Path, reference: &str) -> Result<()> {
-    let reference = reference.strip_prefix("trace:").unwrap_or(reference);
+fn validate_evidence_reference(
+    root: &Path,
+    manifest: &Path,
+    facet_name: &str,
+    reference: &str,
+) -> Result<()> {
+    let trace_reference = reference.strip_prefix("trace:");
+    if facet_name.starts_with("Trace ") != trace_reference.is_some() {
+        bail!(
+            "facet `{facet_name}` has mismatched trace evidence `{reference}`: {}",
+            manifest.display()
+        );
+    }
+    let reference = trace_reference.unwrap_or(reference);
     let (kind, target) = reference.split_once(':').ok_or_else(|| {
         anyhow::anyhow!(
             "invalid facet evidence reference `{reference}`: {}",
@@ -1001,10 +1096,15 @@ mod tests {
             .unwrap()
             .iter()
             .map(|name| {
+                let evidence = if name.starts_with("Trace ") {
+                    "trace:e2e:proof::valid_path"
+                } else {
+                    "e2e:proof::valid_path"
+                };
                 json!({
                     "name": name,
                     "status": "closed",
-                    "evidence": ["e2e:proof::valid_path"]
+                    "evidence": [evidence]
                 })
             })
             .collect::<Vec<_>>();
@@ -1070,6 +1170,27 @@ mod tests {
         value["facets"][0]["evidence"] = json!(["e2e:proof::deleted_test"]);
         write_facet(stale_reference.path(), "run.show", value);
         assert!(read_facet_manifests(stale_reference.path(), &["run.show".into()]).is_err());
+
+        let untyped_trace = tempfile::tempdir().unwrap();
+        let mut value = valid_facet("run.show");
+        let trace_facet = value["facets"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|facet| facet["name"] == "Trace persistence boundary")
+            .unwrap();
+        trace_facet["evidence"] = json!(["e2e:proof::valid_path"]);
+        write_facet(untyped_trace.path(), "run.show", value);
+        assert!(read_facet_manifests(untyped_trace.path(), &["run.show".into()]).is_err());
+
+        let trace_mislabeled_as_behavior = tempfile::tempdir().unwrap();
+        let mut value = valid_facet("run.show");
+        value["facets"][0]["evidence"] = json!(["trace:e2e:proof::valid_path"]);
+        write_facet(trace_mislabeled_as_behavior.path(), "run.show", value);
+        assert!(
+            read_facet_manifests(trace_mislabeled_as_behavior.path(), &["run.show".into()])
+                .is_err()
+        );
 
         for source in [
             "fn valid_path() {}\n",

@@ -8,7 +8,7 @@ use loop_engine_core::capabilities::digest::DigestComputer;
 use loop_engine_core::capabilities::event_attempt_writer::EventAttemptWriter;
 use loop_engine_core::capabilities::id_generator::IdGenerator;
 use loop_engine_core::capabilities::persistence_commands::{
-    AppendAnnotationCommand, CommitStatus, ReplaceLabelCommand, TerminateCommit,
+    AppendAnnotationCommand, AttemptCommit, LabelCommit, ReplaceLabelCommand, TerminateCommit,
     TerminateRunCommand,
 };
 use loop_engine_core::capabilities::provider_catalog::ProviderCatalog;
@@ -16,7 +16,9 @@ use loop_engine_core::capabilities::provider_invoker::ProviderInvoker;
 use loop_engine_core::capabilities::run_reader::{
     RunCatalogReader, RunHistoryReader, RunListFilter, RunListRow, RunLookup, RunReader,
 };
-use loop_engine_core::capabilities::run_writer::RunWriter;
+use loop_engine_core::capabilities::run_writer::{
+    CompatibilityAttemptWriter, GuidanceAttemptWriter, RunWriter,
+};
 use loop_engine_core::capabilities::{Page, PageRequest};
 use loop_engine_core::model::annotation::{ActorMetadata, Note};
 use loop_engine_core::model::bounded::BoundError;
@@ -473,7 +475,7 @@ pub fn show<R: RunLookup>(reader: &R, run_id: &RunId) -> Result<RunShow, R::Erro
     run_show::execute(reader, run_id)
 }
 
-pub fn graph<R: RunReader>(reader: &R, run_id: &RunId) -> Result<StoredGraph, R::Error> {
+pub fn graph<R: RunLookup>(reader: &R, run_id: &RunId) -> Result<StoredGraph, R::Error> {
     run_graph::execute(reader, run_id)
 }
 
@@ -490,14 +492,14 @@ pub fn history<R: RunHistoryReader>(
 pub fn annotate<W: RunWriter>(
     writer: &W,
     command: AppendAnnotationCommand,
-) -> Result<CommitStatus, W::Error> {
+) -> Result<AttemptCommit, W::Error> {
     run_annotate::execute(writer, command)
 }
 
 pub fn label<W: RunWriter>(
     writer: &W,
     command: ReplaceLabelCommand,
-) -> Result<CommitStatus, W::Error> {
+) -> Result<LabelCommit, W::Error> {
     run_label::execute(writer, command)
 }
 
@@ -556,12 +558,12 @@ pub fn guidance<R, C, I, W, G, F, Q, J>(
     delivery: &RunGuidanceDelivery,
     request: G,
     command: F,
-) -> Result<CommitStatus, GuidanceExecutionError<R::Error, J, W::Error>>
+) -> Result<AttemptCommit, GuidanceExecutionError<R::Error, J, W::Error>>
 where
     R: RunReader,
     C: ProviderCatalog,
     I: ProviderInvoker,
-    W: RunWriter,
+    W: GuidanceAttemptWriter,
     G: FnMut(
         &loop_engine_core::capabilities::provider_catalog::ResolvedProviderConfig,
         &Run,
@@ -598,12 +600,12 @@ pub fn compatibility<R, C, I, W, G, F, Q, J>(
     run_id: &RunId,
     request: G,
     command: F,
-) -> Result<CommitStatus, CompatibilityExecutionError<R::Error, J, W::Error>>
+) -> Result<AttemptCommit, CompatibilityExecutionError<R::Error, J, W::Error>>
 where
     R: RunReader,
     C: ProviderCatalog,
     I: ProviderInvoker,
-    W: RunWriter,
+    W: CompatibilityAttemptWriter,
     G: FnMut(
         &loop_engine_core::capabilities::provider_catalog::ResolvedProviderConfig,
         &Run,

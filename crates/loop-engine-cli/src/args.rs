@@ -60,7 +60,7 @@ impl GlobalCli {
             "      --list-operations    List currently exposed application operations",
             "      --format <human|json>  Output rendering mode (default: human)",
             "",
-            "Nine checkpoint-closed alpha application operations are available.",
+            "All 21 application operations are available.",
             "Use --list-operations for their authoritative argv templates.",
             "",
         ]

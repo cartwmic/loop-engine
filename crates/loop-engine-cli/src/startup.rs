@@ -403,6 +403,16 @@ fn driver_catalog_operations() -> Vec<(&'static str, &'static str)> {
                 "provider.check" => {
                     "provider check <TARGET> [--active-runs] [--cursor <CURSOR>] [--limit <COUNT>]"
                 }
+                "provider.update" => {
+                    "provider update <TARGET> --exec <PATH> [--arg <VALUE> ...] [--working-directory <PATH>] [--timeout <SECONDS>]"
+                }
+                "provider.rename" => "provider rename <TARGET> <NEW-HANDLE>",
+                "provider.disable" => {
+                    "provider disable <TARGET> [--warning-cursor <CURSOR>] [--limit <COUNT>] [--allow-active-runs <ACK-TOKEN>]"
+                }
+                "provider.restore" => {
+                    "provider restore <REGISTRATION-ID> --handle <HANDLE> --exec <PATH> --working-directory <PATH> [--arg <VALUE> ...] [--timeout <SECONDS>]"
+                }
                 "run.create" => "run create <TARGET> [--label <LABEL>] [--inputs <PATH>]",
                 "run.list" => {
                     "run list [--terminal] [--all] [--cursor <CURSOR>] [--limit <COUNT>]"
@@ -412,9 +422,25 @@ fn driver_catalog_operations() -> Vec<(&'static str, &'static str)> {
                     "run history <RUN-ID> [--cursor <CURSOR>] [--limit <COUNT>]"
                 }
                 "run.show" => "run show <RUN-ID>",
+                "run.graph" => "run graph <RUN-ID>",
+                "run.evidence.add" => {
+                    "run evidence add <RUN-ID> --kind <KIND> --ref <LOCATOR> [--digest <DIGEST>] [--media-type <TYPE>] [--metadata <PATH>]"
+                }
+                "run.evidence.list" => {
+                    "run evidence list <RUN-ID> [--cursor <CURSOR>] [--limit <COUNT>]"
+                }
+                "run.annotate" => {
+                    "run annotate <RUN-ID> [--note <TEXT>] [--actor <PATH>] [--corrects <SEQUENCE>]"
+                }
+                "run.label" => "run label <RUN-ID> [--set <LABEL> | --clear]",
                 "run.request" => {
                     "run request <RUN-ID> <EVENT> [--evidence-id <ID> ...] [--evidence <PATH>] [--note <TEXT>]"
                 }
+                "run.guidance" => {
+                    "run guidance <RUN-ID> [--evidence-id <ID> ...]"
+                }
+                "run.compatibility" => "run compatibility <RUN-ID>",
+                "run.export" => "run export <RUN-ID> --output <DIR>",
                 _ => unreachable!("driver catalog entry must own an argv template"),
             };
             (id, argv)

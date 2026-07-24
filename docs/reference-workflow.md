@@ -29,7 +29,7 @@ It demonstrates why the engine needs:
 - an immutable explanatory journal;
 - stable active-run topology across provider changes.
 
-Future implementation must prove this workflow through black-box CLI E2E coverage. Exact command spelling, provider language, artifact filenames, and presentation formatting are not prescribed by this document.
+Production black-box CLI E2Es prove this workflow through all 21 required acceptance behaviors. Exact command spelling, provider language, artifact filenames, and presentation formatting remain provider-owned and are not prescribed by this document.
 
 ## Non-prescription
 

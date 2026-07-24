@@ -1250,7 +1250,7 @@ Deferred with their operations to WP6: evidence flow (was T172), provider drift/
 ### WP5 — Alpha publication and dogfood
 
 - [x] User/operator documentation for the exposed alpha surface: root README, `../../cli-contract.md`, `../../configuration.md`, `../../operational-trace.md`, `../../persistence.md` (alpha subset of T193); docs claim no unexposed command
-- [ ] Full quality gate green; judge-gated publication of the alpha range through the canonical pre-push ritual
+- [x] Full quality gate green; judge-gated publication of the alpha range through the canonical pre-push ritual — published through WP5 at `7134e2198b905ce2740d60a24913a8512de1eefc`
 - [x] Owner dogfoods the reference software-change workflow manually through the alpha CLI; findings and pain points recorded here and used to order WP6
 
 Dogfood completed the reference provider's full explore-to-final happy path through fresh production CLI processes and exercised all nine alpha operations, including a separate active-run termination. Durable state, generated provider evidence, history, traces, and final/terminated readback agreed. Main pain points were absence of graph inspection, evidence inventory, notes/labels, live guidance, compatibility checks, provider lifecycle management, and export; large structured history output was difficult to inspect manually. WP6 order selected from that evidence: `run.graph`; provider update/rename/disable/restore; atomic evidence add/list; annotate and label; guidance then compatibility; export last. Deferred cross-operation and report work follows exposure closure. Dogfood evidence is retained under `target/junction-evidence/WP5/`.
@@ -1259,10 +1259,14 @@ Dogfood completed the reference provider's full explore-to-final happy path thro
 
 The change stays open through WP6. Owner-selected ordering from alpha dogfood is recorded above. Contents, reusing original contracts by ID:
 
-- [ ] Deferred exposures with facet manifests: `run.graph` (T154), `provider.update` (T155), `provider.rename` (T156), `provider.disable` (T157), `provider.restore` (T158), `run.evidence.add`/`run.evidence.list` (T159–T160), `run.annotate` (T161), `run.label` (T162), `run.guidance` (T164), `run.compatibility` (T165), `run.export` (T166); deferred `run.request` facet rows close here
-- [ ] Deferred acceptance families: evidence flow (T172), provider drift and stable registration identity (T175), compatibility continuity (T176), audit export (T181)
-- [ ] Reference acceptance behaviors 1–21 and acceptance report (T185–T190); requires deferred operations
-- [ ] Model-based black-box testing (T183) — owner-optional
-- [ ] Invariant/facet evidence report (T191); provider-author, operator, and migration/recovery documentation finalization (T192–T194)
-- [ ] Hardening at owner-chosen depth: runtime budget/sharding (T196), flake/leak audit (T197), repository protection (T198), clean-room acceptance audit (T199)
-- [ ] Change close (was T200): all work packages complete, `final` closure equals D004's 21 IDs, generated evidence linked, owner approves, protected remote accepts publication
+- [x] Deferred exposures with facet manifests: `run.graph` (T154), `provider.update` (T155), `provider.rename` (T156), `provider.disable` (T157), `provider.restore` (T158), `run.evidence.add`/`run.evidence.list` (T159–T160), `run.annotate` (T161), `run.label` (T162), `run.guidance` (T164), `run.compatibility` (T165), `run.export` (T166); deferred `run.request` facet rows close here
+- [x] Deferred acceptance families: evidence flow (T172), provider drift and stable registration identity (T175), compatibility continuity (T176), audit export (T181)
+- [x] Reference acceptance behaviors 1–21 and acceptance report (T185–T190) — five production-CLI suites plus versioned deterministic report generator/schema
+- [x] Model-based black-box testing (T183) — owner-optional; explicitly waived because deterministic graph, lifecycle, overlap, stale-CAS, and reference suites close required facets without generated-model authority
+- [x] Invariant/facet evidence report (T191); provider-author, operator, and migration/recovery documentation finalization (T192–T194)
+- [x] Runtime budget/sharding policy (T196) and three-pass barrier/process flake/leak audit (T197)
+- [x] Repository protection (T198) — owner-controlled and explicitly waived on 2026-07-23 for this private single-user repository; GitHub API reports current plan does not support protection/rulesets, so versioned fail-closed pre-push gate plus CI remain publication controls
+- [x] Clean-room acceptance audit (T199) — shipping dependency/source/DSL scan confirms local offline single-user scope and excluded surfaces
+- [x] Change close (was T200): all work packages complete, `final` closure equals D004's 21 IDs, generated evidence linked, owner approves, and exact advertised-remote-tip-to-candidate gate controls publication; server-side branch protection is waived per T198
+
+WP6 candidate closes all 21 core/driver/route/E2E/trace/facet catalogs. `xtask acceptance-report` binds exactly 21 reference behaviors, 47 invariants, and 21 operation manifests to stable report keys. Provider-author documentation is complete in `examples/providers/README.md`; operator, backup, migration, recovery, and troubleshooting procedures are in `../../operator-guide.md` and `../../persistence.md`. Final semantic audits cleared both core/persistence and CLI/provider scopes. Canonical deterministic quality passed 11/11 checks within budget. Owner waived unsupported server-side protection; exact post-commit aggregate publication gate and accepted push remain execution steps.

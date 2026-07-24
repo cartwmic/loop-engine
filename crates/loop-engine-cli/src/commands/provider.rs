@@ -323,6 +323,21 @@ pub fn merge_update_config(
     )?)
 }
 
+pub fn map_update_request_normalized(
+    registration_id: RegistrationId,
+    expected_config_revision: u64,
+    exec: &str,
+    argv: &[String],
+    working_directory: &str,
+    timeout_seconds: u64,
+) -> Result<ProviderUpdateRequest, ProviderMapError> {
+    Ok(ProviderUpdateRequest {
+        registration_id,
+        expected_config_revision,
+        config: ProviderConfig::new(exec, argv.to_vec(), working_directory, timeout_seconds)?,
+    })
+}
+
 pub fn map_update_request(
     registration_id: RegistrationId,
     expected_config_revision: u64,
@@ -367,6 +382,23 @@ pub fn map_disable_request(
         registration_id,
         limit: page_limit(limit),
         warning_cursor: optional_opaque_wire(warning_cursor),
+    })
+}
+
+pub fn map_restore_request_normalized(
+    registration_id: RegistrationId,
+    expected_config_revision: u64,
+    handle: &SyntaxHandle,
+    exec: &str,
+    argv: &[String],
+    working_directory: &str,
+    timeout_seconds: u64,
+) -> Result<ProviderRestoreRequest, ProviderMapError> {
+    Ok(ProviderRestoreRequest {
+        registration_id,
+        expected_config_revision,
+        handle: ProviderHandle::parse(handle.as_str())?,
+        config: ProviderConfig::new(exec, argv.to_vec(), working_directory, timeout_seconds)?,
     })
 }
 

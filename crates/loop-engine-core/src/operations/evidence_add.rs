@@ -1,4 +1,4 @@
-use crate::capabilities::persistence_commands::{AppendEvidenceCommand, CommitStatus};
+use crate::capabilities::persistence_commands::{AppendEvidenceCommand, AttemptCommit};
 use crate::capabilities::run_writer::RunWriter;
 use crate::model::attempt::{AttemptFacts, EvidenceAssociations, JournalExtension};
 use crate::model::evidence::EvidenceRecord;
@@ -16,7 +16,7 @@ pub fn supports_lifecycle(_lifecycle: Lifecycle) -> bool {
 pub fn execute<W: RunWriter>(
     writer: &W,
     command: AppendEvidenceCommand,
-) -> Result<CommitStatus, W::Error> {
+) -> Result<AttemptCommit, W::Error> {
     writer.append_evidence(command)
 }
 

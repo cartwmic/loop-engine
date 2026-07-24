@@ -8,7 +8,9 @@ pub enum ProcessError {
     RequestOversized { max: usize, actual: usize },
     #[error("provider executable was not found: {0}")]
     ExecutableNotFound(String),
-    #[error("provider spawn failed: {0}")]
+    #[error("provider spawn failed before launch: {0}")]
+    PreLaunchSpawn(#[source] io::Error),
+    #[error("provider supervision failed after launch: {0}")]
     Spawn(#[source] io::Error),
     #[error("provider stdin write failed: {0}")]
     Stdin(#[source] io::Error),

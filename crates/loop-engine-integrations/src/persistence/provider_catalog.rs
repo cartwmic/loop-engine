@@ -146,6 +146,43 @@ impl SqliteProviderCatalog {
     }
 
     /// Paginated disable warning traversal with cursor v1 integrity and final-page ack minting.
+    pub fn resolve_registration(
+        &self,
+        operation_id: &'static str,
+        registration_id: &RegistrationId,
+    ) -> Result<ProviderCatalogRow, CatalogPersistenceError> {
+        close_read(
+            &self.trace,
+            operation_id,
+            MutationClass::ReadOnly,
+            || {
+                let conn = self.connect_read()?;
+                let row = load_registration_row(&conn, registration_id.as_str())?
+                    .ok_or(CatalogPersistenceError::NotFound)?;
+                row_to_catalog_row(&row)
+            },
+            |_| ReadCompleteExtras::default(),
+            catalog_read_rejected,
+            catalog_read_failure,
+        )
+    }
+
+    pub fn disable_authorization(
+        &self,
+        acknowledgement: DisableAcknowledgement,
+    ) -> Result<(ActiveSetSnapshot, DisableAcknowledgement), CatalogPersistenceError> {
+        let conn = self.connect_read()?;
+        let integrity_key = read_integrity_key(&conn)?;
+        let decoded = decode_disable_ack(&integrity_key, &acknowledgement)?;
+        let snapshot = ActiveSetSnapshot::new(
+            decoded.active_set_count,
+            decoded.active_set_digest,
+            decoded.config_revision,
+        )
+        .map_err(|error| CatalogPersistenceError::Mapping(error.to_string()))?;
+        Ok((snapshot, acknowledgement))
+    }
+
     pub fn disable_warnings_page(
         &self,
         registration_id: &RegistrationId,
@@ -614,6 +651,7 @@ enum DecodedCursor {
 struct DecodedDisableAck {
     registration_id: String,
     config_revision: u64,
+    active_set_count: u64,
     active_set_digest: String,
     warning_traversal_digest: String,
 }
@@ -1321,6 +1359,7 @@ fn mint_disable_acknowledgement(
     warning_traversal_digest: &str,
 ) -> Result<DisableAcknowledgement, CatalogPersistenceError> {
     let payload = json!({
+        "active_set_count": snapshot.count(),
         "active_set_digest": snapshot.digest(),
         "config_revision": config_revision,
         "registration_id": registration_id.as_str(),
@@ -1360,6 +1399,10 @@ fn decode_disable_ack(
             .to_owned(),
         config_revision: payload
             .get("config_revision")
+            .and_then(Value::as_u64)
+            .ok_or(CatalogPersistenceError::InvalidAck)?,
+        active_set_count: payload
+            .get("active_set_count")
             .and_then(Value::as_u64)
             .ok_or(CatalogPersistenceError::InvalidAck)?,
         active_set_digest: payload

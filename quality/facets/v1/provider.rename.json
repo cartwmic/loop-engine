@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "operation_id": "provider.rename",
+  "facets": [
+    {
+      "name": "Valid path through production CLI, runtime operation-ID proof, correlated trace file, request/outcome payloads, and start/finish envelope",
+      "status": "closed",
+      "evidence": [
+        "e2e:checkpoint_c::provider_update_and_rename_preserve_identity_binding_and_release_old_handle",
+        "catalog:driver_catalog::runtime_catalogs_match_checkpoint_d_exposure"
+      ],
+      "owner_task": "T156"
+    },
+    {
+      "name": "Provider-catalog mutation",
+      "status": "closed",
+      "evidence": ["e2e:checkpoint_c::provider_update_and_rename_preserve_identity_binding_and_release_old_handle"],
+      "owner_task": "T156"
+    },
+    {
+      "name": "Rejectable provider-catalog mutation",
+      "status": "closed",
+      "evidence": ["e2e:checkpoint_c::provider_update_and_rename_preserve_identity_binding_and_release_old_handle"],
+      "owner_task": "T156"
+    },
+    {
+      "name": "Trace persistence boundary",
+      "status": "closed",
+      "evidence": ["trace:e2e:checkpoint_c::provider_update_and_rename_preserve_identity_binding_and_release_old_handle"],
+      "owner_task": "T156"
+    }
+  ]
+}

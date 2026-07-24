@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "operation_id": "run.guidance",
+  "facets": [
+    {
+      "name": "Valid path through production CLI, runtime operation-ID proof, correlated trace file, request/outcome payloads, and start/finish envelope",
+      "status": "closed",
+      "evidence": [
+        "e2e:checkpoint_c::deferred_run_operations_close_evidence_metadata_provider_and_export_paths",
+        "catalog:driver_catalog::runtime_catalogs_match_checkpoint_d_exposure"
+      ],
+      "owner_task": "T164"
+    },
+    {
+      "name": "Run-state or run-journal mutation",
+      "status": "closed",
+      "evidence": ["e2e:checkpoint_c::deferred_run_operations_close_evidence_metadata_provider_and_export_paths"],
+      "owner_task": "T164"
+    },
+    {
+      "name": "Rejectable run mutation after run lookup",
+      "status": "closed",
+      "evidence": ["e2e:checkpoint_c::deferred_run_operations_cover_not_found_terminal_invalid_input_and_export_collision"],
+      "owner_task": "T164"
+    },
+    {
+      "name": "Provider invoking",
+      "status": "closed",
+      "evidence": ["e2e:checkpoint_c::deferred_run_operations_close_evidence_metadata_provider_and_export_paths"],
+      "owner_task": "T164"
+    },
+    {
+      "name": "Lifecycle family",
+      "status": "closed",
+      "evidence": ["e2e:checkpoint_c::deferred_run_operations_cover_not_found_terminal_invalid_input_and_export_collision"],
+      "owner_task": "T164"
+    },
+    {
+      "name": "Compatibility sensitive",
+      "status": "closed",
+      "evidence": ["e2e:checkpoint_c::deferred_run_operations_close_evidence_metadata_provider_and_export_paths"],
+      "owner_task": "T164"
+    },
+    {
+      "name": "Journal required",
+      "status": "closed",
+      "evidence": ["e2e:checkpoint_c::deferred_run_operations_close_evidence_metadata_provider_and_export_paths"],
+      "owner_task": "T164"
+    },
+    {
+      "name": "Trace provider boundary",
+      "status": "closed",
+      "evidence": ["trace:e2e:checkpoint_c::deferred_run_operations_close_evidence_metadata_provider_and_export_paths"],
+      "owner_task": "T164"
+    },
+    {
+      "name": "Trace persistence boundary",
+      "status": "closed",
+      "evidence": ["trace:e2e:checkpoint_c::deferred_run_operations_close_evidence_metadata_provider_and_export_paths"],
+      "owner_task": "T164"
+    }
+  ]
+}

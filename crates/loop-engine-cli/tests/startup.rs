@@ -164,6 +164,22 @@ fn list_operations_json_reports_exposed_routes_and_trace_lifecycle() {
                 "argv": "provider check <TARGET> [--active-runs] [--cursor <CURSOR>] [--limit <COUNT>]"
             },
             {
+                "id": "provider.update",
+                "argv": "provider update <TARGET> --exec <PATH> [--arg <VALUE> ...] [--working-directory <PATH>] [--timeout <SECONDS>]"
+            },
+            {
+                "id": "provider.rename",
+                "argv": "provider rename <TARGET> <NEW-HANDLE>"
+            },
+            {
+                "id": "provider.disable",
+                "argv": "provider disable <TARGET> [--warning-cursor <CURSOR>] [--limit <COUNT>] [--allow-active-runs <ACK-TOKEN>]"
+            },
+            {
+                "id": "provider.restore",
+                "argv": "provider restore <REGISTRATION-ID> --handle <HANDLE> --exec <PATH> --working-directory <PATH> [--arg <VALUE> ...] [--timeout <SECONDS>]"
+            },
+            {
                 "id": "run.create",
                 "argv": "run create <TARGET> [--label <LABEL>] [--inputs <PATH>]"
             },
@@ -172,20 +188,52 @@ fn list_operations_json_reports_exposed_routes_and_trace_lifecycle() {
                 "argv": "run list [--terminal] [--all] [--cursor <CURSOR>] [--limit <COUNT>]"
             },
             {
-                "id": "run.terminate",
-                "argv": "run terminate <RUN-ID> [--note <TEXT>]"
-            },
-            {
                 "id": "run.show",
                 "argv": "run show <RUN-ID>"
+            },
+            {
+                "id": "run.graph",
+                "argv": "run graph <RUN-ID>"
+            },
+            {
+                "id": "run.history",
+                "argv": "run history <RUN-ID> [--cursor <CURSOR>] [--limit <COUNT>]"
+            },
+            {
+                "id": "run.evidence.add",
+                "argv": "run evidence add <RUN-ID> --kind <KIND> --ref <LOCATOR> [--digest <DIGEST>] [--media-type <TYPE>] [--metadata <PATH>]"
+            },
+            {
+                "id": "run.evidence.list",
+                "argv": "run evidence list <RUN-ID> [--cursor <CURSOR>] [--limit <COUNT>]"
+            },
+            {
+                "id": "run.annotate",
+                "argv": "run annotate <RUN-ID> [--note <TEXT>] [--actor <PATH>] [--corrects <SEQUENCE>]"
+            },
+            {
+                "id": "run.label",
+                "argv": "run label <RUN-ID> [--set <LABEL> | --clear]"
             },
             {
                 "id": "run.request",
                 "argv": "run request <RUN-ID> <EVENT> [--evidence-id <ID> ...] [--evidence <PATH>] [--note <TEXT>]"
             },
             {
-                "id": "run.history",
-                "argv": "run history <RUN-ID> [--cursor <CURSOR>] [--limit <COUNT>]"
+                "id": "run.guidance",
+                "argv": "run guidance <RUN-ID> [--evidence-id <ID> ...]"
+            },
+            {
+                "id": "run.compatibility",
+                "argv": "run compatibility <RUN-ID>"
+            },
+            {
+                "id": "run.terminate",
+                "argv": "run terminate <RUN-ID> [--note <TEXT>]"
+            },
+            {
+                "id": "run.export",
+                "argv": "run export <RUN-ID> --output <DIR>"
             }
         ])
     );
@@ -212,12 +260,24 @@ fn list_operations_human_reports_exposed_routes_and_trace_lifecycle() {
             "provider.add\tprovider add <HANDLE> --exec <PATH> --working-directory <PATH> [--arg <VALUE> ...] [--timeout <SECONDS>]\n",
             "provider.list\tprovider list [--enabled] [--tombstoned] [--active-runs-for <REGISTRATION-ID>] [--cursor <CURSOR>] [--limit <COUNT>]\n",
             "provider.check\tprovider check <TARGET> [--active-runs] [--cursor <CURSOR>] [--limit <COUNT>]\n",
+            "provider.update\tprovider update <TARGET> --exec <PATH> [--arg <VALUE> ...] [--working-directory <PATH>] [--timeout <SECONDS>]\n",
+            "provider.rename\tprovider rename <TARGET> <NEW-HANDLE>\n",
+            "provider.disable\tprovider disable <TARGET> [--warning-cursor <CURSOR>] [--limit <COUNT>] [--allow-active-runs <ACK-TOKEN>]\n",
+            "provider.restore\tprovider restore <REGISTRATION-ID> --handle <HANDLE> --exec <PATH> --working-directory <PATH> [--arg <VALUE> ...] [--timeout <SECONDS>]\n",
             "run.create\trun create <TARGET> [--label <LABEL>] [--inputs <PATH>]\n",
             "run.list\trun list [--terminal] [--all] [--cursor <CURSOR>] [--limit <COUNT>]\n",
-            "run.terminate\trun terminate <RUN-ID> [--note <TEXT>]\n",
             "run.show\trun show <RUN-ID>\n",
-            "run.request\trun request <RUN-ID> <EVENT> [--evidence-id <ID> ...] [--evidence <PATH>] [--note <TEXT>]\n",
+            "run.graph\trun graph <RUN-ID>\n",
             "run.history\trun history <RUN-ID> [--cursor <CURSOR>] [--limit <COUNT>]\n",
+            "run.evidence.add\trun evidence add <RUN-ID> --kind <KIND> --ref <LOCATOR> [--digest <DIGEST>] [--media-type <TYPE>] [--metadata <PATH>]\n",
+            "run.evidence.list\trun evidence list <RUN-ID> [--cursor <CURSOR>] [--limit <COUNT>]\n",
+            "run.annotate\trun annotate <RUN-ID> [--note <TEXT>] [--actor <PATH>] [--corrects <SEQUENCE>]\n",
+            "run.label\trun label <RUN-ID> [--set <LABEL> | --clear]\n",
+            "run.request\trun request <RUN-ID> <EVENT> [--evidence-id <ID> ...] [--evidence <PATH>] [--note <TEXT>]\n",
+            "run.guidance\trun guidance <RUN-ID> [--evidence-id <ID> ...]\n",
+            "run.compatibility\trun compatibility <RUN-ID>\n",
+            "run.terminate\trun terminate <RUN-ID> [--note <TEXT>]\n",
+            "run.export\trun export <RUN-ID> --output <DIR>\n",
         )
     );
 
@@ -237,7 +297,7 @@ fn unexposed_application_argv_is_rejected_before_database_open() {
             "--format",
             "json",
             "run",
-            "graph",
+            "delete",
             "019f0000-0000-7000-8000-000000000001",
         ])
         .assert()

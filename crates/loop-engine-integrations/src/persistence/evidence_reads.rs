@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use loop_engine_core::capabilities::provider_invoker::EvidenceContext;
-use loop_engine_core::capabilities::run_reader::{EvidenceInventoryRow, SelectedEvidenceReadError};
+use loop_engine_core::capabilities::run_reader::{
+    EvidenceInventoryReader, EvidenceInventoryRow, SelectedEvidenceReadError,
+};
 use loop_engine_core::capabilities::{Page, PageCursor, PageRequest};
 use loop_engine_core::model::bounded::{
     BoundError, EVIDENCE_RECORD_ENCODED_BYTES, Metadata, OPAQUE_INTEGRITY_WIRE_UTF8_BYTES,
@@ -57,6 +59,18 @@ pub enum EvidenceReadError {
     Bound(#[from] BoundError),
 }
 
+impl EvidenceInventoryReader for SqliteEvidenceReads {
+    type Error = EvidenceReadError;
+
+    fn evidence(
+        &self,
+        run_id: &RunId,
+        request: &PageRequest<()>,
+    ) -> Result<Page<EvidenceInventoryRow>, Self::Error> {
+        self.inventory(run_id, request)
+    }
+}
+
 impl SqliteEvidenceReads {
     /// Untraced bootstrap constructor (tests and internal wiring without an operational trace).
     pub fn new(path: impl Into<PathBuf>) -> Self {
@@ -75,9 +89,18 @@ impl SqliteEvidenceReads {
         run_id: &RunId,
         request: &PageRequest<()>,
     ) -> Result<Page<EvidenceInventoryRow>, EvidenceReadError> {
+        self.inventory_for_operation("run.evidence.list", run_id, request)
+    }
+
+    pub fn inventory_for_operation(
+        &self,
+        operation_id: &'static str,
+        run_id: &RunId,
+        request: &PageRequest<()>,
+    ) -> Result<Page<EvidenceInventoryRow>, EvidenceReadError> {
         close_read(
             &self.trace,
-            "run.evidence.list",
+            operation_id,
             MutationClass::ReadOnly,
             || self.inventory_impl(run_id, request),
             |page| {

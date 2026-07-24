@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 
 use loop_engine_core::capabilities::persistence_commands::{
     AppendAnnotationCommand, AppendCompatibilityAttemptCommand, AppendEvidenceCommand,
-    AppendGuidanceAttemptCommand, CommitStatus, CreateRunCommand, ReplaceLabelCommand,
-    TerminateCommit, TerminateRunCommand,
+    AppendGuidanceAttemptCommand, AttemptCommit, CommitStatus, CreateRunCommand, LabelCommit,
+    ReplaceLabelCommand, TerminateCommit, TerminateRunCommand,
 };
 use loop_engine_core::capabilities::run_writer::RunWriter;
 use loop_engine_core::model::attempt::{
@@ -161,18 +161,18 @@ impl RunWriter for SqliteRunWriter {
     fn append_evidence(
         &self,
         _command: AppendEvidenceCommand,
-    ) -> Result<CommitStatus, Self::Error> {
+    ) -> Result<AttemptCommit, Self::Error> {
         Err(RunCreateError::UnsupportedOperation("append_evidence"))
     }
 
     fn append_annotation(
         &self,
         _command: AppendAnnotationCommand,
-    ) -> Result<CommitStatus, Self::Error> {
+    ) -> Result<AttemptCommit, Self::Error> {
         Err(RunCreateError::UnsupportedOperation("append_annotation"))
     }
 
-    fn replace_label(&self, _command: ReplaceLabelCommand) -> Result<CommitStatus, Self::Error> {
+    fn replace_label(&self, _command: ReplaceLabelCommand) -> Result<LabelCommit, Self::Error> {
         Err(RunCreateError::UnsupportedOperation("replace_label"))
     }
 
@@ -183,7 +183,7 @@ impl RunWriter for SqliteRunWriter {
     fn append_guidance_attempt(
         &self,
         _command: AppendGuidanceAttemptCommand,
-    ) -> Result<CommitStatus, Self::Error> {
+    ) -> Result<AttemptCommit, Self::Error> {
         Err(RunCreateError::UnsupportedOperation(
             "append_guidance_attempt",
         ))
@@ -192,7 +192,7 @@ impl RunWriter for SqliteRunWriter {
     fn append_compatibility_attempt(
         &self,
         _command: AppendCompatibilityAttemptCommand,
-    ) -> Result<CommitStatus, Self::Error> {
+    ) -> Result<AttemptCommit, Self::Error> {
         Err(RunCreateError::UnsupportedOperation(
             "append_compatibility_attempt",
         ))

@@ -112,6 +112,16 @@ pub struct Application {
     pub compatibility: CompatibilityAttemptWriter,
     pub evidence_reads: SqliteEvidenceReads,
     pub run_request_reads: SqliteRunRequestReader,
+    #[allow(
+        dead_code,
+        reason = "composition unit harness compiles without execution routes"
+    )]
+    pub guidance_reads: loop_engine_integrations::persistence::SqliteOperationRunReader,
+    #[allow(
+        dead_code,
+        reason = "composition unit harness compiles without execution routes"
+    )]
+    pub compatibility_reads: loop_engine_integrations::persistence::SqliteOperationRunReader,
     pub history: SqliteHistoryReads,
     pub exporter: SqliteAuditExporter,
     store: SqliteStore,
@@ -145,6 +155,18 @@ pub fn build_application_from_configuration(
     let invoker = SubprocessProviderInvoker::new(trace.writer());
     let run_request_reads =
         SqliteRunRequestReader::new(adapters.run_reads.clone(), adapters.evidence_reads.clone());
+    let guidance_reads =
+        loop_engine_integrations::persistence::SqliteOperationRunReader::with_trace(
+            &database_path,
+            persistence_trace.clone(),
+            "run.guidance",
+        );
+    let compatibility_reads =
+        loop_engine_integrations::persistence::SqliteOperationRunReader::with_trace(
+            &database_path,
+            persistence_trace.clone(),
+            "run.compatibility",
+        );
     Ok(Application {
         trace,
         configuration,
@@ -161,6 +183,8 @@ pub fn build_application_from_configuration(
         compatibility: adapters.compatibility,
         evidence_reads: adapters.evidence_reads,
         run_request_reads,
+        guidance_reads,
+        compatibility_reads,
         history: adapters.history,
         exporter: SqliteAuditExporter::with_trace(database_path, persistence_trace),
         store,

@@ -12,7 +12,6 @@ pub const PLANNED_OPERATION_IDS: &[&str] = &[
     "provider.restore",
     "run.create",
     "run.list",
-    "run.terminate",
     "run.show",
     "run.graph",
     "run.history",
@@ -23,6 +22,7 @@ pub const PLANNED_OPERATION_IDS: &[&str] = &[
     "run.request",
     "run.guidance",
     "run.compatibility",
+    "run.terminate",
     "run.export",
 ];
 
@@ -67,12 +67,24 @@ pub const EXPOSED_OPERATION_IDS: &[&str] = &[
     "provider.add",
     "provider.list",
     "provider.check",
+    "provider.update",
+    "provider.rename",
+    "provider.disable",
+    "provider.restore",
     "run.create",
     "run.list",
-    "run.terminate",
     "run.show",
-    "run.request",
+    "run.graph",
     "run.history",
+    "run.evidence.add",
+    "run.evidence.list",
+    "run.annotate",
+    "run.label",
+    "run.request",
+    "run.guidance",
+    "run.compatibility",
+    "run.terminate",
+    "run.export",
 ];
 
 /// Runtime-exposed core operations. Private Phase 3 operations stay absent.
@@ -87,7 +99,7 @@ pub fn exposed_operations() -> Vec<OperationId> {
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{OperationId, exposed_operations};
+    use super::{OperationId, PLANNED_OPERATION_IDS, exposed_operations};
 
     #[test]
     fn planned_ids_are_unique_and_runtime_set_matches_checkpoint_d() {
@@ -99,17 +111,7 @@ mod tests {
                 .iter()
                 .map(|operation| operation.as_str())
                 .collect::<Vec<_>>(),
-            [
-                "provider.add",
-                "provider.list",
-                "provider.check",
-                "run.create",
-                "run.list",
-                "run.terminate",
-                "run.show",
-                "run.request",
-                "run.history",
-            ]
+            PLANNED_OPERATION_IDS
         );
         assert_eq!(
             OperationId::parse("run.show")

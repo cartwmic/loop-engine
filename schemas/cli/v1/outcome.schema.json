@@ -217,10 +217,7 @@
       "if": {
         "properties": {
           "outcome": {
-            "enum": [
-              "rejected",
-              "error"
-            ]
+            "const": "rejected"
           }
         },
         "required": [
@@ -230,7 +227,95 @@
       "then": {
         "properties": {
           "reason": {
-            "$ref": "#/$defs/ReasonObject"
+            "allOf": [
+              {
+                "$ref": "#/$defs/ReasonObject"
+              },
+              {
+                "properties": {
+                  "code": {
+                    "enum": [
+                      "actor.invalid",
+                      "catalog.ack_token.invalid",
+                      "catalog.ack_token.stale",
+                      "catalog.active_runs.changed",
+                      "catalog.config.invalid",
+                      "catalog.handle.duplicate",
+                      "catalog.handle.invalid",
+                      "catalog.handle.occupied",
+                      "catalog.registration.not_found",
+                      "compatibility.unsupported",
+                      "cursor.invalid",
+                      "event.unknown",
+                      "evidence.invalid",
+                      "evidence.selection.invalid",
+                      "export.target.invalid",
+                      "export.target.not_empty",
+                      "gate.failed",
+                      "guidance.unsupported",
+                      "input.invalid",
+                      "input.rejected",
+                      "label.invalid",
+                      "note.invalid",
+                      "run.lifecycle.denied",
+                      "run.lifecycle.terminal",
+                      "run.not_found"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "outcome": {
+            "const": "error"
+          }
+        },
+        "required": [
+          "outcome"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reason": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/ReasonObject"
+              },
+              {
+                "properties": {
+                  "code": {
+                    "enum": [
+                      "persistence.failed",
+                      "provider.crash",
+                      "provider.drift.detected",
+                      "provider.evaluation_error",
+                      "provider.evidence.malformed",
+                      "provider.executable.not_found",
+                      "provider.graph.invalid",
+                      "provider.nonzero_exit",
+                      "provider.protocol.invalid_utf8",
+                      "provider.protocol.malformed",
+                      "provider.protocol.oversized",
+                      "provider.protocol.unsupported_major",
+                      "provider.registration.missing",
+                      "provider.registration.stale",
+                      "provider.signal",
+                      "provider.spawn.failed",
+                      "provider.timeout",
+                      "provider.tombstoned",
+                      "resource.exhausted",
+                      "state.stale_version"
+                    ]
+                  }
+                }
+              }
+            ]
           }
         }
       }
@@ -395,7 +480,6 @@
         "provider.restore",
         "run.create",
         "run.list",
-        "run.terminate",
         "run.show",
         "run.graph",
         "run.history",
@@ -406,6 +490,7 @@
         "run.request",
         "run.guidance",
         "run.compatibility",
+        "run.terminate",
         "run.export"
       ],
       "type": "string"

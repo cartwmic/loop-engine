@@ -45,6 +45,7 @@ No manifest may list a facet name outside [schema.json](schema.json) `facet_name
 
 - Operations that invoke provider code **must** include **Trace provider boundary** when applicable.
 - Every MVP application operation touches persistence and **must** include **Trace persistence boundary**, closed using that operation's production CLI trace (attempted read/transaction, applicable version check, commit/rollback/read outcome).
+- Trace-facet evidence uses the `trace:e2e:<module>::<test>` namespace. Closure rejects untyped trace evidence and trace-prefixed evidence attached to non-trace facets.
 
 ## Validation
 

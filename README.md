@@ -2,14 +2,15 @@
 
 Local CLI for creating, advancing, inspecting, and terminating durable workflows supplied by executable workflow providers.
 
-## Alpha surface
+## Operation surface
 
-Current alpha exposes exactly nine application operations:
+Current release exposes all 21 application operations:
 
-- `provider.add`, `provider.check`, `provider.list`
-- `run.create`, `run.history`, `run.list`, `run.request`, `run.show`, `run.terminate`
+- Provider catalog: `provider.add`, `provider.check`, `provider.disable`, `provider.list`, `provider.rename`, `provider.restore`, `provider.update`
+- Run reads and export: `run.compatibility`, `run.evidence.list`, `run.export`, `run.graph`, `run.guidance`, `run.history`, `run.list`, `run.show`
+- Run mutations: `run.annotate`, `run.create`, `run.evidence.add`, `run.label`, `run.request`, `run.terminate`
 
-Run `loop-engine --list-operations` for authoritative argv templates. Other operations in the frozen 21-operation MVP catalog remain unavailable until their post-alpha checkpoints close.
+Run `loop-engine --list-operations` for authoritative argv templates.
 
 ## Build and isolated quick start
 
@@ -44,10 +45,42 @@ Use run ID returned by `run create`:
 ./target/debug/loop-engine run terminate <RUN-ID> --note "stopping this run"
 ```
 
+Additional inspection, metadata, and audit operations:
+
+```bash
+./target/debug/loop-engine run graph <RUN-ID>
+./target/debug/loop-engine run evidence add <RUN-ID> \
+  --kind artifact --ref 'opaque:artifact-location' \
+  --digest 'sha256:<HEX>' --media-type application/json \
+  --metadata ./metadata.json
+./target/debug/loop-engine run evidence list <RUN-ID>
+./target/debug/loop-engine run annotate <RUN-ID> \
+  --note "operator note" --actor ./actor.json
+./target/debug/loop-engine run label <RUN-ID> --set "new label"
+./target/debug/loop-engine run guidance <RUN-ID> --evidence-id <EVIDENCE-ID>
+./target/debug/loop-engine run compatibility <RUN-ID>
+./target/debug/loop-engine run export <RUN-ID> --output ./run-export
+```
+
+Evidence metadata and annotation actor files must contain one strict JSON object; duplicate keys, trailing values, and non-object roots are rejected. Evidence locators stay opaque and are never opened by engine. Export publishes `manifest.json`, `state.json`, and `journal.jsonl` atomically into a new target directory.
+
+Provider lifecycle operations preserve stable registration identity:
+
+```bash
+./target/debug/loop-engine provider update <TARGET> --exec <PATH> [--arg <VALUE> ...]
+./target/debug/loop-engine provider rename <TARGET> <NEW-HANDLE>
+./target/debug/loop-engine provider disable <TARGET>
+# If active runs exist, repeat with returned acknowledgement token:
+./target/debug/loop-engine provider disable <TARGET> --allow-active-runs <ACK-TOKEN>
+./target/debug/loop-engine provider restore <REGISTRATION-ID> \
+  --handle <HANDLE> --exec <PATH> --working-directory <PATH>
+```
+
 Every invocation creates a private JSONL trace. Structured mode (`--format json`) emits exactly one JSON object; application exits are `0` completed, `2` rejected, `1` error, and `64` pre-dispatch failure.
 
 ## Operator paths
 
+- [Install, operation, backup, migration, and troubleshooting guide](docs/operator-guide.md)
 - [CLI and exit contract](docs/cli-contract.md)
 - [Configuration and machine-local paths](docs/configuration.md)
 - [Operational trace inspection](docs/operational-trace.md)

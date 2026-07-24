@@ -301,28 +301,38 @@ impl TerminateRunCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppendGuidanceAttemptCommand {
     run_id: RunId,
+    expected_workflow_version: WorkflowStateVersion,
     expected_lifecycle_version: LifecycleVersion,
     journal_entry: JournalDraft,
     terminal_rejection_entry: JournalDraft,
+    stale_error_entry: JournalDraft,
 }
 
 impl AppendGuidanceAttemptCommand {
     pub(crate) fn from_parts(
         run_id: RunId,
+        expected_workflow_version: WorkflowStateVersion,
         expected_lifecycle_version: LifecycleVersion,
         journal_entry: JournalDraft,
         terminal_rejection_entry: JournalDraft,
+        stale_error_entry: JournalDraft,
     ) -> Self {
         Self {
             run_id,
+            expected_workflow_version,
             expected_lifecycle_version,
             journal_entry,
             terminal_rejection_entry,
+            stale_error_entry,
         }
     }
 
     pub fn run_id(&self) -> &RunId {
         &self.run_id
+    }
+
+    pub fn expected_workflow_version(&self) -> WorkflowStateVersion {
+        self.expected_workflow_version
     }
 
     pub fn expected_lifecycle_version(&self) -> LifecycleVersion {
@@ -337,27 +347,26 @@ impl AppendGuidanceAttemptCommand {
         &self.terminal_rejection_entry
     }
 
-    pub fn into_parts(self) -> (RunId, LifecycleVersion, JournalDraft, JournalDraft) {
-        (
-            self.run_id,
-            self.expected_lifecycle_version,
-            self.journal_entry,
-            self.terminal_rejection_entry,
-        )
+    pub fn stale_error_entry(&self) -> &JournalDraft {
+        &self.stale_error_entry
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn for_test(
         run_id: RunId,
+        expected_workflow_version: WorkflowStateVersion,
         expected_lifecycle_version: LifecycleVersion,
         journal_entry: JournalDraft,
         terminal_rejection_entry: JournalDraft,
+        stale_error_entry: JournalDraft,
     ) -> Self {
         Self::from_parts(
             run_id,
+            expected_workflow_version,
             expected_lifecycle_version,
             journal_entry,
             terminal_rejection_entry,
+            stale_error_entry,
         )
     }
 }
@@ -365,32 +374,42 @@ impl AppendGuidanceAttemptCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppendCompatibilityAttemptCommand {
     run_id: RunId,
+    expected_workflow_version: WorkflowStateVersion,
     expected_lifecycle_version: LifecycleVersion,
     /// `None` means one side of digest observation was unavailable.
     observed_drift: Option<bool>,
     journal_entry: JournalDraft,
     terminal_rejection_entry: JournalDraft,
+    stale_error_entry: JournalDraft,
 }
 
 impl AppendCompatibilityAttemptCommand {
     pub(crate) fn from_parts(
         run_id: RunId,
+        expected_workflow_version: WorkflowStateVersion,
         expected_lifecycle_version: LifecycleVersion,
         observed_drift: Option<bool>,
         journal_entry: JournalDraft,
         terminal_rejection_entry: JournalDraft,
+        stale_error_entry: JournalDraft,
     ) -> Self {
         Self {
             run_id,
+            expected_workflow_version,
             expected_lifecycle_version,
             observed_drift,
             journal_entry,
             terminal_rejection_entry,
+            stale_error_entry,
         }
     }
 
     pub fn run_id(&self) -> &RunId {
         &self.run_id
+    }
+
+    pub fn expected_workflow_version(&self) -> WorkflowStateVersion {
+        self.expected_workflow_version
     }
 
     pub fn expected_lifecycle_version(&self) -> LifecycleVersion {
@@ -409,38 +428,28 @@ impl AppendCompatibilityAttemptCommand {
         &self.terminal_rejection_entry
     }
 
-    pub fn into_parts(
-        self,
-    ) -> (
-        RunId,
-        LifecycleVersion,
-        Option<bool>,
-        JournalDraft,
-        JournalDraft,
-    ) {
-        (
-            self.run_id,
-            self.expected_lifecycle_version,
-            self.observed_drift,
-            self.journal_entry,
-            self.terminal_rejection_entry,
-        )
+    pub fn stale_error_entry(&self) -> &JournalDraft {
+        &self.stale_error_entry
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn for_test(
         run_id: RunId,
+        expected_workflow_version: WorkflowStateVersion,
         expected_lifecycle_version: LifecycleVersion,
         observed_drift: Option<bool>,
         journal_entry: JournalDraft,
         terminal_rejection_entry: JournalDraft,
+        stale_error_entry: JournalDraft,
     ) -> Self {
         Self::from_parts(
             run_id,
+            expected_workflow_version,
             expected_lifecycle_version,
             observed_drift,
             journal_entry,
             terminal_rejection_entry,
+            stale_error_entry,
         )
     }
 }
@@ -502,6 +511,21 @@ pub struct CommittedRunSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttemptCommit {
+    pub commit: CommitStatus,
+    pub outcome: crate::model::outcome::OutcomeClass,
+    pub reason: Option<crate::model::reason::Reason>,
+    pub run: CommittedRunSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LabelCommit {
+    pub commit: CommitStatus,
+    pub outcome: crate::model::outcome::OutcomeClass,
+    pub run: CommittedRunSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminateCommit {
     pub commit: CommitStatus,
     pub outcome: crate::model::outcome::OutcomeClass,
@@ -526,7 +550,7 @@ mod encapsulation_contract {
     use crate::model::ids::RunId;
     use crate::model::journal::JournalDraft;
     use crate::model::run::Run;
-    use crate::model::version::{JournalSequence, LifecycleVersion};
+    use crate::model::version::{JournalSequence, LifecycleVersion, WorkflowStateVersion};
 
     #[test]
     #[allow(clippy::type_complexity)]
@@ -549,14 +573,18 @@ mod encapsulation_contract {
         ) -> TerminateRunCommand = TerminateRunCommand::from_parts;
         let _: fn(
             RunId,
+            WorkflowStateVersion,
             LifecycleVersion,
+            JournalDraft,
             JournalDraft,
             JournalDraft,
         ) -> AppendGuidanceAttemptCommand = AppendGuidanceAttemptCommand::from_parts;
         let _: fn(
             RunId,
+            WorkflowStateVersion,
             LifecycleVersion,
             Option<bool>,
+            JournalDraft,
             JournalDraft,
             JournalDraft,
         ) -> AppendCompatibilityAttemptCommand = AppendCompatibilityAttemptCommand::from_parts;
@@ -588,19 +616,20 @@ mod encapsulation_contract {
         }
         fn inspect_guidance(command: &AppendGuidanceAttemptCommand) {
             let _ = command.run_id();
+            let _ = command.expected_workflow_version();
+            let _ = command.expected_lifecycle_version();
             let _ = command.journal_entry();
             let _ = command.terminal_rejection_entry();
-        }
-        fn consume_guidance(command: AppendGuidanceAttemptCommand) {
-            let _ = command.into_parts();
+            let _ = command.stale_error_entry();
         }
         fn inspect_compatibility(command: &AppendCompatibilityAttemptCommand) {
             let _ = command.run_id();
+            let _ = command.expected_workflow_version();
+            let _ = command.expected_lifecycle_version();
             let _ = command.observed_drift();
             let _ = command.journal_entry();
-        }
-        fn consume_compatibility(command: AppendCompatibilityAttemptCommand) {
-            let _ = command.into_parts();
+            let _ = command.terminal_rejection_entry();
+            let _ = command.stale_error_entry();
         }
         let _ = (
             inspect_create,
@@ -610,9 +639,7 @@ mod encapsulation_contract {
             inspect_terminate,
             consume_terminate,
             inspect_guidance,
-            consume_guidance,
             inspect_compatibility,
-            consume_compatibility,
         );
     }
 }

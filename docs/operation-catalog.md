@@ -42,7 +42,7 @@ No operation split, merge, or rename is permitted without reopening D004.
 
 ### Staged runtime exposure
 
-Per the 2026-07-22 execution-plan amendment, runtime exposure advances atomically by checkpoint while this change remains open. Checkpoints A through D expose `provider.add`, `provider.list`, `provider.check`, `run.create`, `run.list`, `run.terminate`, `run.show`, `run.request`, and `run.history`; all other catalog IDs remain private until their named WP6 checkpoint closes. `--list-operations` reports only currently exposed IDs during this staged implementation. Final closure still requires exact equality with all 21 IDs above.
+WP6 closure exposes the complete frozen 21-operation catalog. `--list-operations` reports all IDs above in stable catalog order and is the installed binary's authoritative argv inventory.
 
 ## Provider handle grammar
 

@@ -5,16 +5,28 @@ use crate::support::{
     parse_structured_stdout, scenario_provider_executable,
 };
 
-const ALPHA: [&str; 9] = [
+const EXPOSED: [&str; 21] = [
     "provider.add",
     "provider.list",
     "provider.check",
+    "provider.update",
+    "provider.rename",
+    "provider.disable",
+    "provider.restore",
     "run.create",
     "run.list",
-    "run.terminate",
     "run.show",
-    "run.request",
+    "run.graph",
     "run.history",
+    "run.evidence.add",
+    "run.evidence.list",
+    "run.annotate",
+    "run.label",
+    "run.request",
+    "run.guidance",
+    "run.compatibility",
+    "run.terminate",
+    "run.export",
 ];
 
 fn observe(recorder: &mut RuntimeCoverageRecorder, invocation: &crate::support::AlphaInvocation) {
@@ -33,6 +45,16 @@ fn observe(recorder: &mut RuntimeCoverageRecorder, invocation: &crate::support::
     assert_eq!(
         outcome[0]["envelope"], invocation.document.value,
         "trace outcome must contain exact stdout envelope",
+    );
+    let operation = invocation.document.value["operation"]
+        .as_str()
+        .expect("outcome operation");
+    assert_eq!(request[0]["operation"], operation);
+    assert!(
+        events
+            .iter()
+            .any(|event| { event["category"] == "persistence" && event["operation"] == operation }),
+        "{operation} must emit its own persistence boundary trace",
     );
     assert!(
         events
@@ -98,7 +120,7 @@ fn alpha_catalog_has_independent_runtime_and_trace_closure() {
         &[
             "run".into(),
             "create".into(),
-            registration_id,
+            registration_id.clone(),
             "--label".into(),
             "closure".into(),
         ],
@@ -126,6 +148,14 @@ fn alpha_catalog_has_independent_runtime_and_trace_closure() {
     );
     observe(&mut recorder, &show);
 
+    let graph = invoke_json(
+        &sandbox,
+        "closure-run-graph",
+        &["run".into(), "graph".into(), run_id.clone()],
+        0,
+    );
+    observe(&mut recorder, &graph);
+
     let request = invoke_json(
         &sandbox,
         "closure-run-request",
@@ -139,6 +169,80 @@ fn alpha_catalog_has_independent_runtime_and_trace_closure() {
     );
     observe(&mut recorder, &request);
 
+    let evidence_add = invoke_json(
+        &sandbox,
+        "closure-run-evidence-add",
+        &[
+            "run".into(),
+            "evidence".into(),
+            "add".into(),
+            run_id.clone(),
+            "--kind".into(),
+            "artifact".into(),
+            "--ref".into(),
+            "opaque:closure".into(),
+        ],
+        0,
+    );
+    observe(&mut recorder, &evidence_add);
+
+    let evidence_list = invoke_json(
+        &sandbox,
+        "closure-run-evidence-list",
+        &[
+            "run".into(),
+            "evidence".into(),
+            "list".into(),
+            run_id.clone(),
+        ],
+        0,
+    );
+    observe(&mut recorder, &evidence_list);
+
+    let annotate = invoke_json(
+        &sandbox,
+        "closure-run-annotate",
+        &[
+            "run".into(),
+            "annotate".into(),
+            run_id.clone(),
+            "--note".into(),
+            "closure annotation".into(),
+        ],
+        0,
+    );
+    observe(&mut recorder, &annotate);
+
+    let label = invoke_json(
+        &sandbox,
+        "closure-run-label",
+        &[
+            "run".into(),
+            "label".into(),
+            run_id.clone(),
+            "--set".into(),
+            "closure-renamed".into(),
+        ],
+        0,
+    );
+    observe(&mut recorder, &label);
+
+    let guidance = invoke_json(
+        &sandbox,
+        "closure-run-guidance",
+        &["run".into(), "guidance".into(), run_id.clone()],
+        2,
+    );
+    observe(&mut recorder, &guidance);
+
+    let compatibility = invoke_json(
+        &sandbox,
+        "closure-run-compatibility",
+        &["run".into(), "compatibility".into(), run_id.clone()],
+        0,
+    );
+    observe(&mut recorder, &compatibility);
+
     let history = invoke_json(
         &sandbox,
         "closure-run-history",
@@ -146,6 +250,21 @@ fn alpha_catalog_has_independent_runtime_and_trace_closure() {
         0,
     );
     observe(&mut recorder, &history);
+
+    let export_dir = sandbox.caller_cwd().join("closure-export");
+    let export = invoke_json(
+        &sandbox,
+        "closure-run-export",
+        &[
+            "run".into(),
+            "export".into(),
+            run_id.clone(),
+            "--output".into(),
+            export_dir.display().to_string(),
+        ],
+        0,
+    );
+    observe(&mut recorder, &export);
 
     let terminate = invoke_json(
         &sandbox,
@@ -155,7 +274,87 @@ fn alpha_catalog_has_independent_runtime_and_trace_closure() {
     );
     observe(&mut recorder, &terminate);
 
-    let expected = ALPHA
+    let update = invoke_json(
+        &sandbox,
+        "closure-provider-update",
+        &[
+            "provider".into(),
+            "update".into(),
+            "alpha".into(),
+            "--exec".into(),
+            scenario_provider_executable().display().to_string(),
+            "--arg=--scenario".into(),
+            "--arg=graph-linear".into(),
+            "--working-directory".into(),
+            sandbox.provider_cwd().display().to_string(),
+            "--timeout".into(),
+            "2".into(),
+        ],
+        0,
+    );
+    observe(&mut recorder, &update);
+
+    let rename = invoke_json(
+        &sandbox,
+        "closure-provider-rename",
+        &[
+            "provider".into(),
+            "rename".into(),
+            "alpha".into(),
+            "alpha-renamed".into(),
+        ],
+        0,
+    );
+    observe(&mut recorder, &rename);
+
+    let disable_warning = invoke_json(
+        &sandbox,
+        "closure-provider-disable-warning",
+        &["provider".into(), "disable".into(), "alpha-renamed".into()],
+        0,
+    );
+    observe(&mut recorder, &disable_warning);
+    let ack = disable_warning.document.value["data"]["ack_token"]
+        .as_str()
+        .expect("disable acknowledgement")
+        .to_owned();
+    let disable = invoke_json(
+        &sandbox,
+        "closure-provider-disable",
+        &[
+            "provider".into(),
+            "disable".into(),
+            "alpha-renamed".into(),
+            "--allow-active-runs".into(),
+            ack,
+        ],
+        0,
+    );
+    observe(&mut recorder, &disable);
+
+    let restore = invoke_json(
+        &sandbox,
+        "closure-provider-restore",
+        &[
+            "provider".into(),
+            "restore".into(),
+            registration_id,
+            "--handle".into(),
+            "alpha-restored".into(),
+            "--exec".into(),
+            scenario_provider_executable().display().to_string(),
+            "--working-directory".into(),
+            sandbox.provider_cwd().display().to_string(),
+            "--arg=--scenario".into(),
+            "--arg=graph-linear".into(),
+            "--timeout".into(),
+            "2".into(),
+        ],
+        0,
+    );
+    observe(&mut recorder, &restore);
+
+    let expected = EXPOSED
         .map(str::to_owned)
         .into_iter()
         .collect::<BTreeSet<_>>();
@@ -190,7 +389,7 @@ fn production_surface_excludes_non_goals_and_unexposed_operations() {
         .iter()
         .map(|row| row["id"].as_str().expect("operation id").to_owned())
         .collect::<BTreeSet<_>>();
-    assert_eq!(observed, ALPHA.map(str::to_owned).into_iter().collect());
+    assert_eq!(observed, EXPOSED.map(str::to_owned).into_iter().collect());
 
     for (index, argv) in [
         vec!["run", "delete", "not-a-run"],

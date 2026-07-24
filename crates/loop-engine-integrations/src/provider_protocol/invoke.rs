@@ -372,6 +372,7 @@ pub fn mapping_failure_with_code<R>(
     let (reason, diagnostics) = invocation_failure(reason_code, failure_code, &message);
     InvocationError::Transport {
         source: AdapterError::Mapping(message),
+        provider_executed: true,
         fact: Box::new(error_fact(
             config,
             request_id,
@@ -418,10 +419,12 @@ fn transport(
     trace_failure: Option<String>,
 ) -> InvocationError<AdapterError> {
     let (reason_code, failure_code) = adapter_failure_class(&source);
+    let provider_executed = adapter_failure_provider_executed(&source);
     let detail = source.to_string();
     let (reason, diagnostics) = invocation_failure(reason_code, failure_code, &detail);
     InvocationError::Transport {
         source,
+        provider_executed,
         fact: Box::new(fact),
         failure: Box::new(InvocationFailure {
             reason,
@@ -429,6 +432,19 @@ fn transport(
         }),
         trace_failure,
     }
+}
+
+fn adapter_failure_provider_executed(source: &AdapterError) -> bool {
+    !matches!(
+        source,
+        AdapterError::RequestEncoding(_)
+            | AdapterError::Process(
+                ProcessError::RequestOversized { .. }
+                    | ProcessError::ExecutableNotFound(_)
+                    | ProcessError::TimeoutOutOfRange(_)
+                    | ProcessError::PreLaunchSpawn(_),
+            )
+    )
 }
 
 fn adapter_failure_class(source: &AdapterError) -> (ReasonCode, &'static str) {
@@ -580,5 +596,35 @@ fn core_role(role: ProviderRole) -> CoreProviderRole {
         ProviderRole::EvaluateGates => CoreProviderRole::EvaluateGates,
         ProviderRole::LiveGuidance => CoreProviderRole::LiveGuidance,
         ProviderRole::CheckCompatibility => CoreProviderRole::CheckCompatibility,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AdapterError, ProcessError, adapter_failure_provider_executed};
+
+    #[test]
+    fn pre_launch_adapter_failures_are_not_provider_execution() {
+        assert!(!adapter_failure_provider_executed(
+            &AdapterError::RequestEncoding("encoding".into())
+        ));
+        assert!(!adapter_failure_provider_executed(&AdapterError::Process(
+            ProcessError::RequestOversized { max: 1, actual: 2 }
+        )));
+        assert!(!adapter_failure_provider_executed(&AdapterError::Process(
+            ProcessError::ExecutableNotFound("missing".into())
+        )));
+        assert!(!adapter_failure_provider_executed(&AdapterError::Process(
+            ProcessError::TimeoutOutOfRange(u64::MAX)
+        )));
+        assert!(!adapter_failure_provider_executed(&AdapterError::Process(
+            ProcessError::PreLaunchSpawn(std::io::Error::other("spawn syscall"))
+        )));
+        assert!(adapter_failure_provider_executed(&AdapterError::Process(
+            ProcessError::Spawn(std::io::Error::other("post-launch supervision"))
+        )));
+        assert!(adapter_failure_provider_executed(&AdapterError::Mapping(
+            "post-launch mapping".into()
+        )));
     }
 }

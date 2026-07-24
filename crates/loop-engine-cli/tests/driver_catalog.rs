@@ -18,27 +18,17 @@ fn unique<'a>(values: &[&'a str]) -> BTreeSet<&'a str> {
 
 #[test]
 fn runtime_catalogs_match_checkpoint_d_exposure() {
-    let exposed = [
-        "provider.add",
-        "provider.list",
-        "provider.check",
-        "run.create",
-        "run.list",
-        "run.terminate",
-        "run.show",
-        "run.request",
-        "run.history",
-    ];
+    let exposed = loop_engine_core::operations::catalog::PLANNED_OPERATION_IDS;
     assert_eq!(DRIVER_OPERATION_IDS, exposed);
     assert_eq!(REACHABLE_ROUTE_OPERATION_IDS, exposed);
     assert_eq!(E2E_OPERATION_IDS, exposed);
     assert_eq!(TRACE_OPERATION_IDS, exposed);
     assert_eq!(FACET_OPERATION_IDS, exposed);
-    assert_eq!(driver_operations().len(), 9);
-    assert_eq!(reachable_route_operations().len(), 9);
-    assert_eq!(e2e_operations().len(), 9);
-    assert_eq!(trace_operations().len(), 9);
-    assert_eq!(facet_operations().len(), 9);
+    assert_eq!(driver_operations().len(), 21);
+    assert_eq!(reachable_route_operations().len(), 21);
+    assert_eq!(e2e_operations().len(), 21);
+    assert_eq!(trace_operations().len(), 21);
+    assert_eq!(facet_operations().len(), 21);
 }
 
 #[test]

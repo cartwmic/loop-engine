@@ -27,7 +27,7 @@ Machine-local configuration covers:
 
 Project and global TOML files supply **defaults and registration references only**. They **MUST NOT** define provider executables, argument vectors, working directories, alternate state stores, trace roots, or database paths. Provider registration remains explicit machine-local catalog mutation (`provider.add`, `provider.update`, `provider.restore`) per I40.
 
-**Alpha availability:** `provider.add` is the only exposed registration mutation. `provider.update` and `provider.restore` below define frozen post-alpha behavior but are not callable yet. Use `loop-engine --list-operations` as runtime authority.
+`provider.add`, `provider.update`, `provider.rename`, `provider.disable`, and `provider.restore` are exposed registration mutations. Use `loop-engine --list-operations` as runtime authority.
 
 ## Machine-local roots
 
@@ -134,7 +134,7 @@ Normative owner: [D016](change/initial-implementation/decisions.md#d016-project-
 | Kind | Behavior |
 |---|---|
 | **CLI-default discovery (this section)** | Locate at most one optional `.loop-engine.toml` to merge `defaults.*` into CLI configuration |
-| **Provider registration** | Explicit catalog-mutation argv stored in SQLite; alpha exposes `provider.add`, while `provider.update` / `provider.restore` remain deferred |
+| **Provider registration** | Explicit catalog-mutation argv stored in SQLite; all provider lifecycle operations are exposed |
 | **Executable discovery** | Forbidden — no PATH search, package scan, or inference from repository layout |
 | **Workflow discovery** | Forbidden — no scanning for workflow sources, manifests, or provider packages in project trees |
 
@@ -259,7 +259,7 @@ Built-in defaults:
 - Active runs store stable provider **registration ID**; project/global defaults **MUST NOT** redefine or rebind the registration selected by an existing run (I40, I41).
 - `defaults.provider` may supply a positional `<TARGET>` only when the operation's frozen argv permits omitting that positional and argv does not include it; it **MUST NOT** invent alternate argv (for example a `--provider` flag) and **MUST NOT** retroactively change stored registration IDs on existing runs.
 - `run.create` frozen argv is `run create <TARGET> [--label <LABEL>] [--inputs <PATH>]` ([operation-catalog.md](operation-catalog.md)); `<TARGET>` is mandatory on argv as a positional token. `defaults.provider` **MUST NOT** substitute for an omitted `<TARGET>` or add a `--provider` flag.
-- Provider-catalog mutations always take executable configuration from explicit argv, never from TOML. Alpha exposes `provider.add`; `provider.update` and `provider.restore` retain this rule when exposed.
+- Provider-catalog mutations always take executable configuration from explicit argv, never from TOML. This applies to `provider.add`, `provider.update`, and `provider.restore`.
 
 ## Unknown and forbidden keys
 

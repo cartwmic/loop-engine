@@ -2,7 +2,9 @@ use std::fs;
 
 use loop_engine_core::model::evidence::EvidenceSource;
 use loop_engine_core::model::time::ObservedAt;
-use loop_engine_integrations::evidence_inputs::{InlineEvidenceLoadError, load_optional};
+use loop_engine_integrations::evidence_inputs::{
+    InlineEvidenceLoadError, load_actor_optional, load_metadata_optional, load_optional,
+};
 
 fn observed_at() -> ObservedAt {
     ObservedAt::parse("2026-07-22T12:00:00Z").unwrap()
@@ -44,6 +46,42 @@ fn strict_inline_evidence_rejects_duplicate_keys_trailing_values_and_non_array_r
 
     let root = load_document(r#"{"items":[]}"#).unwrap_err();
     assert!(matches!(root, InlineEvidenceLoadError::RootNotArray));
+}
+
+#[test]
+fn strict_metadata_and_actor_documents_require_one_object_root() {
+    let directory = tempfile::tempdir().unwrap();
+    let valid = directory.path().join("valid.json");
+    fs::write(&valid, r#"{"kind":"operator","nested":{"rank":1}}"#).unwrap();
+    let metadata = load_metadata_optional(Some(&valid)).unwrap().unwrap();
+    assert!(metadata.values().contains_key("kind"));
+    let actor = load_actor_optional(Some(&valid)).unwrap().unwrap();
+    assert!(matches!(
+        actor.value(),
+        loop_engine_core::model::bounded::Value::Object(values)
+            if values.contains_key("kind")
+    ));
+
+    for (name, document, expected_json_error) in [
+        ("array", "[]", false),
+        ("duplicate", r#"{"kind":"a","kind":"b"}"#, true),
+        ("trailing", "{} {}", true),
+    ] {
+        let path = directory.path().join(format!("{name}.json"));
+        fs::write(&path, document).unwrap();
+        let error = load_metadata_optional(Some(&path)).unwrap_err();
+        if expected_json_error {
+            assert!(matches!(error, InlineEvidenceLoadError::Json(_)));
+        } else {
+            assert!(matches!(error, InlineEvidenceLoadError::RootNotObject));
+        }
+    }
+}
+
+#[test]
+fn absent_metadata_and_actor_documents_remain_absent() {
+    assert!(load_metadata_optional(None).unwrap().is_none());
+    assert!(load_actor_optional(None).unwrap().is_none());
 }
 
 #[test]

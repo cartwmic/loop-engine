@@ -121,6 +121,8 @@ fn termination_rolls_back_state_sequence_and_journal_together() {
             1,
         );
         assert_eq!(failed.document.value["outcome"], "error");
+        assert_eq!(failed.document.value["data"]["run"]["id"], run);
+        assert!(failed.document.value["data"]["requestable_events"].is_array());
         remove_fault(&sandbox);
         let shown = invoke_json(
             &sandbox,
@@ -131,6 +133,38 @@ fn termination_rolls_back_state_sequence_and_journal_together() {
         assert_eq!(shown.document.value["data"]["run"]["lifecycle"], "active");
         assert_eq!(count_journal_entries(&sandbox.state_db_path()).unwrap(), 1);
     }
+}
+
+#[test]
+fn label_writer_failure_keeps_resolved_run_context_and_rolls_back() {
+    let sandbox = E2eSandbox::new();
+    let provider = add_scenario_provider(&sandbox, "label-fault", "graph-linear", &[]);
+    let run = create_run(&sandbox, &provider, "label-fault");
+    install_fault(&sandbox, "BEFORE INSERT", "journal_entries");
+    let failed = invoke_json(
+        &sandbox,
+        "atomicity-label",
+        &[
+            "run".into(),
+            "label".into(),
+            run.clone(),
+            "--set".into(),
+            "not-committed".into(),
+        ],
+        1,
+    );
+    assert_eq!(failed.document.value["outcome"], "error");
+    assert_eq!(failed.document.value["data"]["run"]["id"], run);
+    assert!(failed.document.value["data"]["requestable_events"].is_array());
+    remove_fault(&sandbox);
+    let shown = invoke_json(
+        &sandbox,
+        "atomicity-label-show",
+        &["run".into(), "show".into(), run],
+        0,
+    );
+    assert_eq!(shown.document.value["data"]["run"]["label"], "label-fault");
+    assert_eq!(count_journal_entries(&sandbox.state_db_path()).unwrap(), 1);
 }
 
 #[test]
@@ -174,6 +208,16 @@ fn gated_request_rolls_back_evidence_association_state_sequence_and_journal() {
             1,
         );
         assert_eq!(failed.document.value["outcome"], "error");
+        assert_eq!(failed.document.value["data"]["run"]["id"], run);
+        assert!(failed.document.value["data"]["requestable_events"].is_array());
+        assert_eq!(
+            failed.document.value["data"]["evidence_recorded"],
+            serde_json::json!({
+                "inline": false,
+                "provider": false,
+                "selected_associations": false,
+            })
+        );
         remove_fault(&sandbox);
         let shown = invoke_json(
             &sandbox,

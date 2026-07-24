@@ -49,9 +49,9 @@ Rejected patterns:
 - custom compiler plugins for log counting;
 - treating trace as competing authority over SQLite or export files.
 
-## Alpha trace inspection
+## Trace inspection
 
-Every alpha invocation returns or prints a trace path except when trace initialization itself fails. Treat each file as JSON Lines: parse one line at a time, verify every `request_id` matches the filename and CLI envelope, then follow `invocation.start` → optional boundary events → `invocation.outcome` → `invocation.finish`. Provider stdout/stderr appears only inside bounded `provider.finish`/`provider.failure` detail; it is never terminal output.
+Every invocation returns or prints a trace path except when trace initialization itself fails. Treat each file as JSON Lines: parse one line at a time, verify every `request_id` matches the filename and CLI envelope, then follow `invocation.start` → optional boundary events → `invocation.outcome` → `invocation.finish`. Provider stdout/stderr appears only inside bounded `provider.finish`/`provider.failure` detail; it is never terminal output.
 
 For diagnosis:
 
@@ -454,7 +454,7 @@ Cases run only on supported macOS and Linux hosts ([testing.md](testing.md) § S
 
 ## Operation event closure (21-operation target catalog)
 
-Alpha currently dispatches only the nine operations reported by `--list-operations`; their rows below are enforced now. Remaining rows define deferred WP6 closure and are not callable yet. Every dispatched application operation **MUST** emit at minimum: `invocation.start`, `invocation.request`, `invocation.outcome`, and `invocation.finish` unless crash or late sink failure prevents terminal lines.
+All 21 operations reported by `--list-operations` are dispatched and enforce the rows below. Every dispatched application operation **MUST** emit at minimum: `invocation.start`, `invocation.request`, `invocation.outcome`, and `invocation.finish` unless crash or late sink failure prevents terminal lines.
 
 | Operation ID | `persistence.*` | `provider.*` | `decision.*` |
 |---|---|---|---|

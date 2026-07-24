@@ -85,7 +85,7 @@ pub fn run_observed(config: &ResolvedProviderConfig, request: &[u8]) -> ProcessO
             let source = if error.kind() == std::io::ErrorKind::NotFound {
                 ProcessError::ExecutableNotFound(provider.executable().to_owned())
             } else {
-                ProcessError::Spawn(error)
+                ProcessError::PreLaunchSpawn(error)
             };
             return observation(Err(source), started, None, empty_stream(), empty_stream());
         }

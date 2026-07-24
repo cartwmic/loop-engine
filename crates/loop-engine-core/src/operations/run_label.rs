@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::capabilities::persistence_commands::{CommitStatus, ReplaceLabelCommand};
+use crate::capabilities::persistence_commands::{LabelCommit, ReplaceLabelCommand};
 use crate::capabilities::run_writer::RunWriter;
 use crate::model::attempt::JournalExtension;
 use crate::model::bounded::{BoundError, BoundedText};
@@ -21,7 +21,7 @@ pub enum LabelError {
 pub fn execute<W: RunWriter>(
     writer: &W,
     command: ReplaceLabelCommand,
-) -> Result<CommitStatus, W::Error> {
+) -> Result<LabelCommit, W::Error> {
     writer.replace_label(command)
 }
 

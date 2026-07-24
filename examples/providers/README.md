@@ -1,6 +1,6 @@
 # Provider contract validation
 
-This directory documents how independent provider authors validate protocol v1 payloads against the published JSON Schema inventory. It does **not** ship a reference provider executable; scenario and reference providers remain planned under `test-support/providers/` (T135–T142).
+This directory documents how independent provider authors implement and validate protocol v1 payloads against the published JSON Schema inventory. Product ships no bundled workflow provider. Repository includes root-excluded conformance fixtures under `test-support/providers/`; they are test examples, never runtime dependencies or state authorities.
 
 ## Normative contracts
 
@@ -59,6 +59,40 @@ Authors may validate draft request/result documents against the published JSON S
 
 Graph payloads additionally require [graph-projection.md](../../docs/graph-projection.md) wire parse rules (finite JSON numbers, duplicate-key rejection, canonical byte semantics) before `graph_revision` is meaningful.
 
-## Production exposure
+## Minimal author workflow
 
-WP1 publishes schemas and private integration tests only. The production `loop-engine` binary does not expose application provider routes yet; provider subprocess invocation remains integration-owned until later work-package exposures.
+1. Implement one executable that reads exactly one request object from stdin and writes exactly one result object to stdout.
+2. Dispatch only five protocol roles: `describe`, `validate_inputs`, `evaluate_gates`, optional `live_guidance`, and `check_compatibility`.
+3. Keep workflow policy inside provider. Never write engine SQLite state or claim current-state authority.
+4. Validate request and result DTOs against published schemas plus strict framing rules.
+5. Build executable, register exact path with `loop-engine provider add`, then run `provider check`.
+6. Exercise creation, gated requests, guidance, compatibility, drift/update, malformed input, and process-failure behavior through production CLI.
+
+Root-excluded reference fixture demonstrates complete graph, gate, evidence, guidance, and compatibility roles:
+
+```bash
+env -u RUSTUP_TOOLCHAIN CARGO_TARGET_DIR="$PWD/target/reference-provider" \
+  cargo build --locked \
+  --manifest-path test-support/providers/reference-provider/Cargo.toml
+
+export LOOP_ENGINE_HOME="$(mktemp -d)"
+./target/debug/loop-engine provider add example \
+  --exec "$PWD/target/reference-provider/debug/reference-provider" \
+  --working-directory "$PWD"
+./target/debug/loop-engine provider check example
+```
+
+Fixture dependencies, artifacts, and policy are illustrative. Do not couple product code to them or grant them direct persistence access.
+
+## Release compatibility checklist
+
+Before releasing provider update:
+
+- keep `protocol_major` at `1` unless intentionally publishing incompatible protocol;
+- emit complete valid graph from `describe`;
+- preserve run identity semantics across executable/config drift;
+- return explicit compatibility result for stored snapshots;
+- keep evidence IDs stable and unique per run attempt;
+- consume required stdin before any normal output;
+- bound diagnostics and never place protocol JSON on stderr;
+- verify `provider check` plus active-run `run compatibility` before catalog update.
