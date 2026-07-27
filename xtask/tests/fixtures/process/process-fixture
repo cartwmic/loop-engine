@@ -1,0 +1,101 @@
+#!/bin/sh
+set -eu
+
+mode=${1:?mode required}
+shift
+
+case "$mode" in
+  argv)
+    for argument in "$@"; do
+      printf '<%s>\n' "$argument"
+    done
+    ;;
+  environment)
+    printf '%s\n%s\n%s' "${HOME-}" "${PROCESS_SET-}" "${PROCESS_REMOVED-unset}"
+    ;;
+  streams)
+    printf 'stdout-bytes'
+    printf 'stderr-bytes' >&2
+    ;;
+  invalid-utf8)
+    printf '\377\000A'
+    ;;
+  invalid-utf8-one)
+    printf '\377'
+    ;;
+  invalid-utf8-two)
+    printf '\377\376'
+    ;;
+  exit)
+    exit "${1:?exit code required}"
+    ;;
+  signal)
+    kill "-${1:?signal required}" "$$"
+    ;;
+  sleep)
+    sleep "${1:-30}"
+    ;;
+  child-tree)
+    pid_file=${1:?pid file required}
+    (trap '' TERM; sleep 30) &
+    child=$!
+    printf '%s' "$child" > "$pid_file"
+    trap '' TERM
+    sleep 30
+    ;;
+  background-child)
+    pid_file=${1:?pid file required}
+    (sleep 30 </dev/null >/dev/null 2>&1) &
+    child=$!
+    printf '%s' "$child" > "$pid_file"
+    ;;
+  completed-with-stubborn-descendant)
+    pid_file=${1:?pid file required}
+    (trap '' TERM; sleep 30) &
+    child=$!
+    printf '%s' "$child" > "$pid_file"
+    ;;
+  write-pid-sleep)
+    pid_file=${1:?pid file required}
+    printf '%s' "$$" > "$pid_file"
+    sleep 30
+    ;;
+  flood-stdout)
+    while :; do
+      printf '0123456789abcdef0123456789abcdef'
+    done
+    ;;
+  flood-stderr)
+    while :; do
+      printf '0123456789abcdef0123456789abcdef' >&2
+    done
+    ;;
+  exact-output)
+    count=${1:?byte count required}
+    while [ "$count" -gt 0 ]; do
+      printf x
+      count=$((count - 1))
+    done
+    ;;
+  quick-exit-over-limit)
+    ready_file=${1:?ready file required}
+    (
+      trap 'trap "" TERM; printf "0123456789abcdef"; while :; do sleep 30; done' TERM
+      : > "$ready_file"
+      while :; do sleep 30; done
+    ) 2>/dev/null &
+    while [ ! -e "$ready_file" ]; do
+      sleep 0.01
+    done
+    ;;
+  ignore-stdin)
+    sleep 30
+    ;;
+  stdin)
+    cat
+    ;;
+  *)
+    printf 'unknown mode: %s\n' "$mode" >&2
+    exit 64
+    ;;
+esac

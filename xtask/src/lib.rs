@@ -2,16 +2,18 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::{Result, bail};
-use clap::{Parser, Subcommand};
+use anyhow::Result;
+use clap::{Parser, Subcommand, error::ErrorKind};
 
 pub mod acceptance_report;
 pub mod architecture;
+pub mod candidate;
+pub mod config;
 pub mod dependencies;
 pub mod docs_check;
-pub mod hooks;
+pub mod git;
 pub mod operation_coverage;
-pub mod publication;
+pub mod process;
 pub mod quality;
 pub mod semantic_judge;
 
@@ -19,8 +21,7 @@ pub mod semantic_judge;
 #[command(
     name = "xtask",
     about = "Loop Engine build tooling",
-    disable_help_flag = true,
-    disable_help_subcommand = true,
+    subcommand_required = true,
     disable_version_flag = true
 )]
 struct Cli {
@@ -30,8 +31,6 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Show available commands.
-    Help,
     /// Generate and validate final reference/invariant/facet acceptance evidence.
     AcceptanceReport {
         /// Repository root to inspect (defaults to the current repository).
@@ -101,90 +100,6 @@ enum Commands {
         #[arg(long, value_name = "PATH")]
         root: Option<PathBuf>,
     },
-    /// Run currently-implemented quality checks from `quality/manifest.toml`.
-    Quality {
-        /// Tree root to check (defaults to repository root).
-        #[arg(long, value_name = "PATH")]
-        root: Option<PathBuf>,
-        /// Repository root used to locate the quality manifest.
-        #[arg(long, value_name = "PATH")]
-        repo_root: Option<PathBuf>,
-        /// Override path to the incremental quality manifest.
-        #[arg(long, value_name = "PATH")]
-        manifest: Option<PathBuf>,
-        /// Exact revision to check in a temporary detached worktree.
-        #[arg(long, value_name = "REV")]
-        revision: Option<String>,
-    },
-    /// Aggregate publication / pre-push gate for one base-to-head range.
-    Publication {
-        /// Optional repository root override.
-        #[arg(long, value_name = "PATH")]
-        root: Option<PathBuf>,
-        /// Exclusive start of the unpublished range (`from..to`).
-        #[arg(long, value_name = "REV")]
-        from: Option<String>,
-        /// Inclusive end of the unpublished range (defaults to HEAD).
-        #[arg(long, value_name = "REV")]
-        to: Option<String>,
-        /// Override judge executable path.
-        #[arg(long, value_name = "PATH")]
-        executable: Option<PathBuf>,
-        /// Override request timeout in seconds.
-        #[arg(long, value_name = "SECONDS")]
-        timeout_seconds: Option<u64>,
-        /// Run deterministic publication quality only and write bound evidence.
-        #[arg(long, value_name = "PATH", conflicts_with = "quality_report_in")]
-        quality_report_out: Option<PathBuf>,
-        /// Run semantic publication only using previously bound quality evidence.
-        #[arg(long, value_name = "PATH", conflicts_with = "quality_report_out")]
-        quality_report_in: Option<PathBuf>,
-    },
-    /// Install, verify, or run versioned local git hooks.
-    Hooks {
-        #[command(subcommand)]
-        command: HooksCommand,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum HooksCommand {
-    /// Point `core.hooksPath` at the versioned `.githooks/` directory.
-    Install {
-        /// Optional repository root override.
-        #[arg(long, value_name = "PATH")]
-        root: Option<PathBuf>,
-    },
-    /// Verify hooksPath installation and pre-commit hook version.
-    Verify {
-        /// Optional repository root override.
-        #[arg(long, value_name = "PATH")]
-        root: Option<PathBuf>,
-    },
-    /// Run bounded deterministic checks against the exact staged tree.
-    PreCommit {
-        /// Optional repository root override.
-        #[arg(long, value_name = "PATH")]
-        root: Option<PathBuf>,
-    },
-    /// Run the aggregate pre-push adapter (reads remote updates from stdin).
-    PrePush {
-        /// Optional repository root override.
-        #[arg(long, value_name = "PATH")]
-        root: Option<PathBuf>,
-        /// Exact destination remote name supplied by Git's pre-push hook.
-        #[arg(long, value_name = "NAME")]
-        remote_name: Option<String>,
-        /// Exact destination remote URL supplied by Git's pre-push hook.
-        #[arg(long, value_name = "URL")]
-        remote_url: Option<String>,
-        /// Override judge executable path.
-        #[arg(long, value_name = "PATH")]
-        executable: Option<PathBuf>,
-        /// Override request timeout in seconds.
-        #[arg(long, value_name = "SECONDS")]
-        timeout_seconds: Option<u64>,
-    },
 }
 
 /// Run the xtask command dispatcher.
@@ -207,13 +122,21 @@ where
     I: IntoIterator<Item = S>,
     S: Into<OsString> + Clone,
 {
-    let cli = Cli::parse_from(args);
+    let cli = match Cli::try_parse_from(args) {
+        Ok(cli) => cli,
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            ) =>
+        {
+            error.print()?;
+            return Ok(());
+        }
+        Err(error) => return Err(error.into()),
+    };
 
     match cli.command {
-        Some(Commands::Help) => {
-            print_help();
-            Ok(())
-        }
         Some(Commands::AcceptanceReport {
             root,
             revision,
@@ -258,76 +181,8 @@ where
                 claim_bootstrap_exception,
             })
         }
-        Some(Commands::Quality {
-            root,
-            repo_root,
-            manifest,
-            revision,
-        }) => quality::run_cli(
-            root.as_deref(),
-            repo_root.as_deref(),
-            manifest.as_deref(),
-            revision.as_deref(),
-        ),
-        Some(Commands::Publication {
-            root,
-            from,
-            to,
-            executable,
-            timeout_seconds,
-            quality_report_out,
-            quality_report_in,
-        }) => publication::run_cli(
-            root.as_deref(),
-            from.as_deref(),
-            to.as_deref(),
-            executable.as_deref(),
-            timeout_seconds,
-            quality_report_out.as_deref(),
-            quality_report_in.as_deref(),
-        ),
-        Some(Commands::Hooks { command }) => match command {
-            HooksCommand::Install { root } => hooks::run_install(root.as_deref()),
-            HooksCommand::Verify { root } => hooks::run_verify(root.as_deref()),
-            HooksCommand::PreCommit { root } => hooks::run_pre_commit(root.as_deref()),
-            HooksCommand::PrePush {
-                root,
-                remote_name,
-                remote_url,
-                executable,
-                timeout_seconds,
-            } => hooks::run_pre_push(
-                root.as_deref(),
-                remote_name.as_deref(),
-                remote_url.as_deref(),
-                executable.as_deref(),
-                timeout_seconds,
-            ),
-        },
-        None => {
-            eprintln!("error: missing command");
-            print_help();
-            bail!("missing command");
-        }
+        None => unreachable!("clap requires a subcommand"),
     }
-}
-
-fn print_help() {
-    println!("Loop Engine xtask");
-    println!();
-    println!("Usage: xtask <command>");
-    println!();
-    println!("Commands:");
-    println!("  help           Show available commands");
-    println!("  acceptance-report Generate final acceptance evidence (T190–T191)");
-    println!("  architecture   Verify crate-level product dependency architecture");
-    println!("  docs-check     Verify deterministic documentation formatting and link policy");
-    println!("  dependencies   Verify dependency license/source/lockfile policy (T030)");
-    println!("  operation-coverage Verify operation catalog closure (T062)");
-    println!("  judge          Run semantic judge (`judge --staged` after T024)");
-    println!("  quality        Run currently-implemented quality manifest checks (T028)");
-    println!("  publication    Aggregate base-to-head publication / pre-push gate (R003)");
-    println!("  hooks          Install/verify/run versioned local git hooks (T027/T028)");
 }
 
 #[cfg(test)]
@@ -335,7 +190,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn help_succeeds() {
+    fn standard_help_flag_succeeds() {
+        let status = run(["xtask", "--help"]);
+        assert_eq!(status, ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn standard_help_subcommand_succeeds() {
         let status = run(["xtask", "help"]);
         assert_eq!(status, ExitCode::SUCCESS);
     }
@@ -349,6 +210,12 @@ mod tests {
     #[test]
     fn unknown_command_fails() {
         let result = Cli::try_parse_from(["xtask", "unknown"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn removed_hook_certification_commands_are_not_callable() {
+        let result = Cli::try_parse_from(["xtask", "hooks", "verify"]);
         assert!(result.is_err());
     }
 }

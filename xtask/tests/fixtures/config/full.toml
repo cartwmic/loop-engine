@@ -1,0 +1,72 @@
+schema_version = 2
+
+[defaults]
+timeout_seconds = 900
+max_output_bytes = 8388608
+
+[defaults.environment]
+unset = ["RUSTUP_TOOLCHAIN"]
+
+[defaults.environment.set]
+CARGO_TARGET_DIR = "{target_root}/cargo"
+TMPDIR = "{scratch_root}/tmp"
+
+[runner]
+inputs = [".cargo", ".githooks", "Cargo.toml", "Cargo.lock", "xtask", "quality"]
+
+[[prerequisites]]
+id = "cargo-deny"
+program = "cargo"
+args = ["deny", "--version"]
+stdout_equals = "cargo-deny 0.20.2"
+install_hint = "cargo install cargo-deny --locked --version 0.20.2"
+
+[[checks]]
+id = "diff-check"
+phases = ["pre-commit", "publication"]
+scope = "changed-files"
+program = "/usr/bin/git"
+args = ["--git-dir={git_directory}", "diff", "--check", "{base_revision}", "{candidate_revision}", "--"]
+cwd = "{candidate_root}"
+
+[[checks]]
+id = "workspace-test"
+phases = ["publication"]
+scope = "repository"
+program = "cargo"
+args = ["test", "--workspace", "--locked"]
+cwd = "{candidate_root}/xtask"
+timeout_seconds = 600
+max_output_bytes = 1048576
+
+[checks.environment]
+unset = ["REMOVE_ME"]
+
+[checks.environment.set]
+CHECK_BINDING = "{candidate_tree}:{cache_root}"
+
+[semantic]
+program = "{candidate_root}/quality/semantic-judge/v2/judge"
+args = []
+cwd = "{candidate_root}"
+timeout_seconds = 900
+max_output_bytes = 8388608
+response_schema = "quality/semantic-judge/v2/response.schema.json"
+
+[semantic.environment]
+unset = []
+
+[semantic.environment.set]
+TMPDIR = "{scratch_root}/tmp"
+
+[[semantic.axes]]
+id = "z-last"
+rubric = "quality/rubrics/z-last.md"
+
+[[semantic.axes]]
+id = "a-first"
+rubric = "quality/rubrics/a-first.md"
+
+[semantic.coherence]
+id = "coherence"
+rubric = "quality/rubrics/coherence.md"

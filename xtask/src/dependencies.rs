@@ -13,7 +13,15 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
 
-use crate::quality::CommandEvidence;
+/// Evidence owned by dependency validation, independent from scheduler records.
+#[derive(Debug, Clone)]
+pub struct DenyCommandEvidence {
+    pub command: String,
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    pub candidate_revision: String,
+}
 
 /// Repository-relative path to the dependency policy file.
 pub const DENY_TOML: &str = "deny.toml";
@@ -38,7 +46,7 @@ pub const CARGO_DENY_VERSION: &str = "0.20.2";
 /// Fail-closed cargo-deny error carrying captured command evidence.
 #[derive(Debug, Clone)]
 pub struct DenyFailure {
-    pub evidence: CommandEvidence,
+    pub evidence: DenyCommandEvidence,
 }
 
 impl std::fmt::Display for DenyFailure {
@@ -121,7 +129,7 @@ pub fn run(root: Option<&Path>) -> Result<()> {
 pub fn run_cargo_deny_with_evidence(
     root: &Path,
     candidate_revision: &str,
-) -> Result<CommandEvidence> {
+) -> Result<DenyCommandEvidence> {
     ensure_cargo_deny_available()?;
 
     let command = format!("cargo deny check (pinned {CARGO_DENY_VERSION})");
@@ -135,7 +143,7 @@ pub fn run_cargo_deny_with_evidence(
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     let exit_code = output.status.code().unwrap_or(-1);
-    let evidence = CommandEvidence {
+    let evidence = DenyCommandEvidence {
         command,
         exit_code,
         stdout,

@@ -136,7 +136,7 @@ Task boundaries follow final capabilities, not old/new migration stages. Shared-
 
 ## Package A — Generic runner foundation
 
-### T001 [ ] Define manifest v2 and binding contract
+### T001 [x] Define manifest v2 and binding contract
 
 - **Class:** Implementation.
 - **Depends:** none.
@@ -148,7 +148,7 @@ Task boundaries follow final capabilities, not old/new migration stages. Shared-
 - **Handoff:** document public config types consumed by T002/T004/T010 and binding API consumed by T011/T012.
 - **Done when:** fixture manifests parse without runner enums or project-specific branches.
 
-### T002 [ ] Implement direct typed process executor
+### T002 [x] Implement direct typed process executor
 
 - **Class:** Implementation.
 - **Depends:** T001.
@@ -160,7 +160,7 @@ Task boundaries follow final capabilities, not old/new migration stages. Shared-
 - **Handoff:** document executor and cancellation-handle contracts consumed by T003/T004/T010.
 - **Done when:** executor has no Cargo, Git, loop-engine path, or check-ID branches.
 
-### T003 [ ] Implement exact Git candidate materialization
+### T003 [x] Implement exact Git candidate materialization
 
 - **Class:** Implementation.
 - **Depends:** T002.
@@ -173,7 +173,7 @@ Task boundaries follow final capabilities, not old/new migration stages. Shared-
 - **Done when:** candidate descriptor proves exact tree, read-only source, parity, safe symlinks, and cleanup.
 - **Stop:** implementation copies current worktree as candidate source.
 
-### T004 [ ] Implement generic deterministic scheduler and evidence
+### T004 [x] Implement generic deterministic scheduler and evidence
 
 - **Class:** Implementation.
 - **Depends:** T001, T002, T003.
@@ -185,7 +185,7 @@ Task boundaries follow final capabilities, not old/new migration stages. Shared-
 - **Handoff:** record scheduler API and result types consumed by T007/T008/T010–T012.
 - **Done when:** arbitrary fixture manifests run without new Rust variants and cannot observe real-worktree source.
 
-### T005 [ ] Gate generic runner foundation
+### T005 [x] Gate generic runner foundation
 
 - **Class:** Package gate.
 - **Depends:** T004.

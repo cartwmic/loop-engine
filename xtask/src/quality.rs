@@ -1,1039 +1,714 @@
-//! Incremental currently-implemented quality manifest (T028).
+//! Generic sequential deterministic validation scheduler.
 //!
-//! The manifest at `quality/manifest.toml` lists only checks that exist today.
-//! Later tasks extend the set; T195 freezes the final canonical gate.
-//! Deterministic quality checks remain separate from semantic judgment.
+//! Repository configuration owns every executable and argument. This module
+//! expands the fixed manifest placeholders, applies typed environment changes,
+//! invokes the project-neutral process executor, and records ordered evidence.
 
-use std::collections::HashMap;
-use std::fs;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde::Serialize;
 
-use crate::acceptance_report;
-use crate::architecture;
-use crate::dependencies;
-use crate::docs_check;
-use crate::operation_coverage::{self, CoverageMode};
-use crate::semantic_judge;
+use crate::candidate::PreparedCandidate;
+use crate::config::{Check, Environment, Phase, Prerequisite, Scope};
+use crate::process::{self, EnvironmentChanges, ProcessOutcome, ProcessSpec};
 
-/// Repository-relative path to the incremental quality manifest.
-pub const MANIFEST_PATH: &str = "quality/manifest.toml";
-const QUALITY_COMMAND_UID_ENV: &str = "LOOP_ENGINE_QUALITY_COMMAND_UID";
-
-/// Supported runners for currently-implemented checks.
-pub const RUNNER_DOCS_CHECK: &str = "docs-check";
-pub const RUNNER_ARCHITECTURE: &str = "architecture";
-pub const RUNNER_CARGO_CHECK: &str = "cargo-check";
-pub const RUNNER_CARGO_TEST: &str = "cargo-test";
-pub const RUNNER_CARGO_DOC: &str = "cargo-doc";
-pub const RUNNER_CARGO_FMT: &str = "cargo-fmt";
-pub const RUNNER_CARGO_CLIPPY: &str = "cargo-clippy";
-pub const RUNNER_DEPENDENCIES: &str = "dependencies";
-pub const RUNNER_OPERATION_COVERAGE: &str = "operation-coverage";
-pub const RUNNER_ACCEPTANCE_REPORT: &str = "acceptance-report";
-pub const RUNNER_CARGO_DENY: &str = "cargo-deny";
-
-/// Exact command output captured for semantic-judge deterministic evidence.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CommandEvidence {
-    pub command: String,
-    pub exit_code: i32,
-    pub stdout: String,
-    pub stderr: String,
-    pub candidate_revision: String,
+/// Whether evidence was produced for a prerequisite or deterministic check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandKind {
+    Prerequisite,
+    Check,
 }
 
-impl CommandEvidence {
-    /// Serialize to the semantic-judge deterministic-evidence object shape.
-    pub fn to_json(&self) -> Value {
-        serde_json::json!({
-            "command": self.command,
-            "exit_code": self.exit_code,
-            "stdout": self.stdout,
-            "stderr": self.stderr,
-            "candidate_revision": self.candidate_revision,
-        })
+/// Scope retained in check evidence without coupling records to config decoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CommandScope {
+    Repository,
+    ChangedFiles,
+}
+
+impl From<Scope> for CommandScope {
+    fn from(value: Scope) -> Self {
+        match value {
+            Scope::Repository => Self::Repository,
+            Scope::ChangedFiles => Self::ChangedFiles,
+        }
     }
 }
 
-/// One currently-implemented quality check from the manifest.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct QualityCheck {
-    pub id: String,
-    pub runner: String,
+/// Phase retained in deterministic evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DeterministicPhase {
+    PreCommit,
+    Publication,
 }
 
-/// Parsed incremental quality manifest.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct QualityManifest {
-    pub schema_version: u32,
-    pub checks: Vec<QualityCheck>,
+impl From<Phase> for DeterministicPhase {
+    fn from(value: Phase) -> Self {
+        match value {
+            Phase::PreCommit => Self::PreCommit,
+            Phase::Publication => Self::Publication,
+        }
+    }
 }
 
-/// Per-check execution result.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CheckOutcome {
-    pub id: String,
-    pub runner: String,
-    pub ok: bool,
+/// Mechanically derived state of one configured command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandStatus {
+    Passed,
+    Failed,
+    SkippedSuccess,
+    Blocked,
+}
+
+/// Typed scheduler-level failure. Process-level categories stay in `process`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandFailureKind {
+    Configuration,
+    Process,
+    StdoutMismatch,
+    CandidateMutation,
+}
+
+/// Scheduler failure detail retained beside exact command/process evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CommandFailure {
+    pub kind: CommandFailureKind,
     pub message: String,
-    pub evidence: CommandEvidence,
 }
 
-/// Aggregate report for a manifest run.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct QualityReport {
-    pub manifest_path: PathBuf,
+/// Exact Git-object binding for one deterministic run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CandidateBinding {
+    pub base_revision: String,
     pub candidate_revision: String,
-    pub checks: Vec<CheckOutcome>,
+    pub candidate_tree: String,
 }
 
-impl QualityReport {
-    /// True when every check succeeded.
+/// Declared value and its independent expansion result.
+///
+/// `expanded` is absent only when expansion failed. `error` then retains the
+/// exact reason, while `declared` always preserves manifest evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ValueExpansion {
+    pub declared: String,
+    pub expanded: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Per-value environment expansion evidence after deterministic set/unset merge.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EnvironmentExpansion {
+    pub set: BTreeMap<String, ValueExpansion>,
+    pub unset: BTreeSet<String>,
+}
+
+/// Ordered evidence for one prerequisite or phase-selected check.
+#[derive(Debug, Clone, Serialize)]
+pub struct CommandRecord {
+    pub id: String,
+    pub kind: CommandKind,
+    pub scope: Option<CommandScope>,
+    pub status: CommandStatus,
+    /// Best available value: expanded when successful, otherwise declared.
+    pub program: String,
+    /// Best available values: expanded when successful, otherwise declared.
+    pub args: Vec<String>,
+    /// Best available value: expanded when successful, otherwise declared.
+    pub cwd: PathBuf,
+    /// Best available merged environment values.
+    pub environment: EnvironmentChanges,
+    pub program_expansion: ValueExpansion,
+    pub args_expansion: Vec<ValueExpansion>,
+    pub cwd_expansion: ValueExpansion,
+    pub environment_expansion: EnvironmentExpansion,
+    pub timeout_seconds: u64,
+    pub max_output_bytes: u64,
+    pub install_hint: Option<String>,
+    pub process: Option<ProcessOutcome>,
+    /// `None` means no child launched. Every launched child has `Some` evidence.
+    pub source_verified: Option<bool>,
+    pub failure: Option<CommandFailure>,
+}
+
+/// Final-neutral deterministic result consumed by validation/report callers.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeterministicResult {
+    pub phase: DeterministicPhase,
+    pub binding: CandidateBinding,
+    pub prerequisites: Vec<CommandRecord>,
+    pub checks: Vec<CommandRecord>,
+    pub final_source_verified: bool,
+    pub final_failure: Option<CommandFailure>,
+}
+
+impl DeterministicResult {
+    /// True only when all selected commands and final candidate verification pass.
     pub fn passed(&self) -> bool {
-        self.checks.iter().all(|check| check.ok)
-    }
-
-    /// Deterministic evidence for every executed quality command.
-    pub fn deterministic_evidence(&self) -> Vec<Value> {
-        self.checks
-            .iter()
-            .map(|check| check.evidence.to_json())
-            .collect()
-    }
-}
-
-/// Load and parse `quality/manifest.toml` from `repo_root` (or an override path).
-pub fn load_manifest(repo_root: &Path, manifest_path: Option<&Path>) -> Result<QualityManifest> {
-    let path = match manifest_path {
-        Some(path) => path.to_path_buf(),
-        None => repo_root.join(MANIFEST_PATH),
-    };
-    let text = fs::read_to_string(&path)
-        .with_context(|| format!("failed to read quality manifest at {}", path.display()))?;
-    parse_manifest(&text).with_context(|| format!("invalid quality manifest at {}", path.display()))
-}
-
-/// Load the quality manifest committed at `revision`, when present.
-pub fn load_manifest_at_revision(
-    repo_root: &Path,
-    revision: &str,
-) -> Result<Option<QualityManifest>> {
-    match git_show_revision(repo_root, revision, MANIFEST_PATH)? {
-        None => Ok(None),
-        Some(text) => parse_manifest(&text)
-            .with_context(|| {
-                format!("invalid quality manifest at {MANIFEST_PATH} in revision {revision}")
+        self.final_source_verified
+            && self.final_failure.is_none()
+            && self.prerequisites.iter().chain(&self.checks).all(|record| {
+                matches!(
+                    record.status,
+                    CommandStatus::Passed | CommandStatus::SkippedSuccess
+                )
             })
-            .map(Some),
     }
-}
-
-/// Reject manifest regressions: parent checks cannot be removed, renamed, or weakened.
-pub fn enforce_manifest_monotonic_evolution(
-    parent_manifest: Option<&QualityManifest>,
-    candidate_manifest: &QualityManifest,
-) -> Result<()> {
-    let Some(parent) = parent_manifest else {
-        return Ok(());
-    };
-
-    let candidate_by_id: HashMap<&str, &QualityCheck> = candidate_manifest
-        .checks
-        .iter()
-        .map(|check| (check.id.as_str(), check))
-        .collect();
-
-    for parent_check in &parent.checks {
-        let Some(candidate_check) = candidate_by_id.get(parent_check.id.as_str()) else {
-            bail!(
-                "quality manifest regression: candidate removed check `{}` present in parent manifest",
-                parent_check.id
-            );
-        };
-        if candidate_check.runner != parent_check.runner {
-            bail!(
-                "quality manifest regression: candidate changed runner for check `{}` from `{}` to `{}` (weakening or rename forbidden)",
-                parent_check.id,
-                parent_check.runner,
-                candidate_check.runner
-            );
-        }
-    }
-
-    Ok(())
-}
-
-/// Parse the constrained incremental quality manifest TOML subset.
-pub fn parse_manifest(text: &str) -> Result<QualityManifest> {
-    let mut schema_version: Option<u32> = None;
-    let mut checks = Vec::new();
-    let mut current: Option<(Option<String>, Option<String>)> = None;
-
-    let flush = |current: &mut Option<(Option<String>, Option<String>)>,
-                 checks: &mut Vec<QualityCheck>|
-     -> Result<()> {
-        if let Some((id, runner)) = current.take() {
-            let id = id.context("quality check is missing `id`")?;
-            let runner = runner.context("quality check is missing `runner`")?;
-            if id.is_empty() || runner.is_empty() {
-                bail!("quality check id/runner must be non-empty");
-            }
-            checks.push(QualityCheck { id, runner });
-        }
-        Ok(())
-    };
-
-    for raw_line in text.lines() {
-        let owned = strip_comment(raw_line);
-        let line = owned.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if line == "[[checks]]" {
-            flush(&mut current, &mut checks)?;
-            current = Some((None, None));
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("schema_version") {
-            let value = parse_assignment_value(rest, "schema_version")?;
-            let parsed = value
-                .parse::<u32>()
-                .with_context(|| format!("invalid schema_version `{value}`"))?;
-            schema_version = Some(parsed);
-            continue;
-        }
-        if let Some((id, runner)) = current.as_mut() {
-            if let Some(rest) = line.strip_prefix("id") {
-                *id = Some(parse_quoted_assignment(rest, "id")?);
-                continue;
-            }
-            if let Some(rest) = line.strip_prefix("runner") {
-                *runner = Some(parse_quoted_assignment(rest, "runner")?);
-                continue;
-            }
-            bail!("unsupported key inside [[checks]] section: {line}");
-        }
-        bail!("unsupported top-level quality manifest line: {line}");
-    }
-    flush(&mut current, &mut checks)?;
-
-    let schema_version =
-        schema_version.context("quality manifest is missing required `schema_version`")?;
-    if schema_version != 1 {
-        bail!("unsupported quality manifest schema_version {schema_version}; expected 1");
-    }
-    if checks.is_empty() {
-        bail!("quality manifest must declare at least one [[checks]] entry");
-    }
-
-    let mut seen = std::collections::BTreeSet::new();
-    for check in &checks {
-        if !seen.insert(check.id.clone()) {
-            bail!("duplicate quality check id `{}`", check.id);
-        }
-        validate_runner(&check.runner)?;
-    }
-
-    Ok(QualityManifest {
-        schema_version,
-        checks,
-    })
-}
-
-/// Run every currently-implemented check against `check_root`.
-///
-/// Fail-closed: unknown runners and any non-successful check return [`Err`].
-pub fn run_manifest(
-    check_root: &Path,
-    manifest: &QualityManifest,
-    manifest_path: &Path,
-    candidate_revision: &str,
-) -> Result<QualityReport> {
-    if !check_root.is_dir() {
-        bail!(
-            "quality check root does not exist: {}",
-            check_root.display()
-        );
-    }
-
-    let mut outcomes = Vec::with_capacity(manifest.checks.len());
-    for check in &manifest.checks {
-        enforce_detached_source_clean(check_root, &format!("before `{}`", check.id))?;
-        let check_result = run_check(check_root, check, candidate_revision);
-        let source_result =
-            enforce_detached_source_clean(check_root, &format!("after `{}`", check.id));
-        if let Err(source_error) = source_result {
-            let check_detail = check_result
-                .err()
-                .map(|error| format!("; check also failed: {error:#}"))
-                .unwrap_or_default();
-            bail!("{source_error:#}{check_detail}");
-        }
-        match check_result {
-            Ok((message, evidence)) => outcomes.push(CheckOutcome {
-                id: check.id.clone(),
-                runner: check.runner.clone(),
-                ok: true,
-                message,
-                evidence,
-            }),
-            Err(error) => {
-                let evidence = error
-                    .downcast_ref::<CheckFailure>()
-                    .map(|failure| failure.evidence.clone())
-                    .unwrap_or_else(|| CommandEvidence {
-                        command: format!(
-                            "quality check `{}` (runner `{}`)",
-                            check.id, check.runner
-                        ),
-                        exit_code: 1,
-                        stdout: String::new(),
-                        stderr: format!("{error:#}"),
-                        candidate_revision: candidate_revision.to_owned(),
-                    });
-                outcomes.push(CheckOutcome {
-                    id: check.id.clone(),
-                    runner: check.runner.clone(),
-                    ok: false,
-                    message: format!("{error:#}"),
-                    evidence,
-                });
-                bail!(
-                    "quality check `{}` (runner `{}`) failed for {}: {error:#}",
-                    check.id,
-                    check.runner,
-                    check_root.display()
-                );
-            }
-        }
-    }
-
-    Ok(QualityReport {
-        manifest_path: manifest_path.to_path_buf(),
-        candidate_revision: candidate_revision.to_owned(),
-        checks: outcomes,
-    })
-}
-
-fn enforce_detached_source_clean(check_root: &Path, phase: &str) -> Result<()> {
-    // Revision quality uses a linked-worktree `.git` file. Ordinary `--root .`
-    // quality may intentionally run with owner changes and is not publication evidence.
-    if !check_root.join(".git").is_file() {
-        return Ok(());
-    }
-    let output = Command::new("git")
-        .args([
-            "status",
-            "--porcelain=v1",
-            "--untracked-files=all",
-            "--ignored=matching",
-        ])
-        .current_dir(check_root)
-        .output()
-        .with_context(|| format!("failed checking detached source purity {phase}"))?;
-    if !output.status.success() {
-        bail!(
-            "failed checking detached source purity {phase}: {}",
-            String::from_utf8_lossy(&output.stderr).trim_end()
-        );
-    }
-    let status =
-        String::from_utf8(output.stdout).context("detached source purity status was not UTF-8")?;
-    let violations: Vec<&str> = status
-        .lines()
-        .filter(|line| {
-            let path = line.strip_prefix("!! ").unwrap_or_default();
-            let cargo_target =
-                path == "target/" || path.starts_with("target/") || path.contains("/target/");
-            !(line.starts_with("!! ") && cargo_target)
-        })
-        .collect();
-    if !violations.is_empty() {
-        bail!(
-            "detached candidate source changed {phase}; quality evidence is not revision-bound:\n{}",
-            violations.join("\n")
-        );
-    }
-    Ok(())
-}
-
-/// Load the manifest from `repo_root` (or override) and run it against `check_root`.
-///
-/// When `revision` is set, checks run against a temporary detached worktree of that
-/// revision (same detached candidate-head model as publication). `--root` / `check_root` cannot
-/// be combined with `revision`.
-pub fn run(
-    check_root: Option<&Path>,
-    repo_root: Option<&Path>,
-    manifest_path: Option<&Path>,
-    revision: Option<&str>,
-) -> Result<QualityReport> {
-    let repo = resolve_repo_root(repo_root)?;
-
-    if let Some(revision) = revision {
-        if check_root.is_some() {
-            bail!("--root cannot be combined with --revision");
-        }
-        let worktree = DetachedWorktree::create(&repo, revision)?;
-        let path = match manifest_path {
-            Some(path) => path.to_path_buf(),
-            None => worktree.path.join(MANIFEST_PATH),
-        };
-        let manifest_root = if manifest_path.is_some() {
-            repo.as_path()
-        } else {
-            worktree.path.as_path()
-        };
-        let manifest = load_manifest(manifest_root, Some(&path))?;
-        return run_manifest(&worktree.path, &manifest, &path, revision);
-    }
-
-    let path = match manifest_path {
-        Some(path) => path.to_path_buf(),
-        None => repo.join(MANIFEST_PATH),
-    };
-    let manifest = load_manifest(&repo, Some(&path))?;
-    let candidate_revision = match git_output_trimmed(&repo, &["rev-parse", "HEAD"]) {
-        Ok(revision) => revision,
-        Err(_) if check_root.is_some() => "uncommitted-working-tree".to_owned(),
-        Err(error) => return Err(error),
-    };
-    let root = match check_root {
-        Some(path) => path.to_path_buf(),
-        None => repo.clone(),
-    };
-    run_manifest(&root, &manifest, &path, &candidate_revision)
-}
-
-/// CLI entrypoint for `xtask quality`.
-pub fn run_cli(
-    check_root: Option<&Path>,
-    repo_root: Option<&Path>,
-    manifest_path: Option<&Path>,
-    revision: Option<&str>,
-) -> Result<()> {
-    let report = run(check_root, repo_root, manifest_path, revision)?;
-    println!(
-        "quality ok ({} checks from {})",
-        report.checks.len(),
-        report.manifest_path.display()
-    );
-    Ok(())
 }
 
 #[derive(Debug)]
-struct CheckFailure {
-    evidence: CommandEvidence,
-    message: String,
+struct ExpandedCommand {
+    program: String,
+    args: Vec<String>,
+    cwd: PathBuf,
+    environment: EnvironmentChanges,
+    program_expansion: ValueExpansion,
+    args_expansion: Vec<ValueExpansion>,
+    cwd_expansion: ValueExpansion,
+    environment_expansion: EnvironmentExpansion,
+    expansion_errors: Vec<String>,
+    timeout_seconds: u64,
+    max_output_bytes: u64,
 }
 
-impl CheckFailure {
-    fn new(evidence: CommandEvidence, message: impl Into<String>) -> Self {
-        Self {
-            evidence,
-            message: message.into(),
+struct Expansion<'a> {
+    candidate: &'a PreparedCandidate,
+}
+
+impl<'a> Expansion<'a> {
+    fn new(candidate: &'a PreparedCandidate) -> Self {
+        Self { candidate }
+    }
+
+    fn replacement(&self, name: &str) -> Result<&str, String> {
+        match name {
+            "git_directory" => {
+                utf8_path(self.candidate.repository().git_directory(), "git directory")
+            }
+            "candidate_root" => utf8_path(self.candidate.source_root(), "candidate root"),
+            "scratch_root" => utf8_path(self.candidate.scratch_root(), "scratch root"),
+            "cache_root" => utf8_path(self.candidate.cache_root(), "cache root"),
+            "target_root" => utf8_path(self.candidate.target_root(), "target root"),
+            "base_revision" => Ok(self.candidate.base_revision()),
+            "candidate_revision" => Ok(self.candidate.candidate_revision()),
+            "candidate_tree" => Ok(self.candidate.candidate_tree()),
+            _ => Err(format!("unknown placeholder `{{{name}}}`")),
         }
+    }
+
+    /// Expand exactly placeholders present in the original value. Replacement
+    /// contents are never rescanned, so braces in filesystem paths stay literal.
+    fn value(&self, input: &str) -> Result<String, String> {
+        let mut output = String::with_capacity(input.len());
+        let mut remainder = input;
+        while let Some(start) = remainder.find('{') {
+            output.push_str(&remainder[..start]);
+            let after_open = &remainder[start + 1..];
+            let end = after_open
+                .find('}')
+                .ok_or_else(|| format!("unclosed placeholder in `{input}`"))?;
+            let name = &after_open[..end];
+            output.push_str(self.replacement(name)?);
+            remainder = &after_open[end + 1..];
+        }
+        if remainder.contains('}') {
+            return Err(format!("unmatched closing brace in `{input}`"));
+        }
+        output.push_str(remainder);
+        Ok(output)
     }
 }
 
-impl std::fmt::Display for CheckFailure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} (exit={})\nstdout:\n{}\nstderr:\n{}",
-            self.message, self.evidence.exit_code, self.evidence.stdout, self.evidence.stderr
-        )
+/// Run prerequisites first, then phase-selected checks in manifest order.
+///
+/// Ordinary command failures are aggregated. Candidate mutation is exceptional:
+/// it blocks every remaining child, records complete blocked evidence, and still
+/// performs final source verification before deriving the result.
+pub fn run(candidate: &PreparedCandidate, phase: Phase) -> DeterministicResult {
+    let binding = CandidateBinding {
+        base_revision: candidate.base_revision().to_owned(),
+        candidate_revision: candidate.candidate_revision().to_owned(),
+        candidate_tree: candidate.candidate_tree().to_owned(),
+    };
+    let expansion = Expansion::new(candidate);
+    let manifest = candidate.manifest().manifest();
+    let mut prerequisites = Vec::with_capacity(manifest.prerequisites().len());
+    let mut checks = Vec::with_capacity(manifest.checks().len());
+    let mut mutation: Option<String> = None;
+
+    for prerequisite in manifest.prerequisites() {
+        let expanded = expand_prerequisite(candidate, prerequisite, &expansion);
+        let record = schedule_command(
+            candidate,
+            prerequisite.id(),
+            CommandKind::Prerequisite,
+            None,
+            Some(prerequisite.install_hint()),
+            prerequisite.stdout_equals(),
+            expanded,
+            mutation.as_deref(),
+            false,
+        );
+        retain_mutation(&record, &mut mutation);
+        prerequisites.push(record);
+    }
+
+    let changed_paths: BTreeSet<String> = candidate
+        .changed_paths()
+        .iter()
+        .filter_map(|path| path.to_str().map(str::to_owned))
+        .collect();
+    let changed_path_error = candidate
+        .changed_paths()
+        .iter()
+        .find(|path| path.to_str().is_none())
+        .map(|path| format!("changed path is not valid UTF-8: {}", path.display()));
+
+    for check in manifest
+        .checks()
+        .iter()
+        .filter(|check| check.phases().contains(&phase))
+    {
+        let mut expanded = expand_check(candidate, check, &expansion, &changed_paths);
+        if let Some(error) = &changed_path_error
+            && check.scope() == Scope::ChangedFiles
+        {
+            expanded.expansion_errors.push(error.clone());
+        }
+        let empty_changed = check.scope() == Scope::ChangedFiles && changed_paths.is_empty();
+        let record = schedule_command(
+            candidate,
+            check.id(),
+            CommandKind::Check,
+            Some(check.scope().into()),
+            None,
+            None,
+            expanded,
+            mutation.as_deref(),
+            empty_changed,
+        );
+        retain_mutation(&record, &mut mutation);
+        checks.push(record);
+    }
+
+    let final_verification = candidate.verify_unchanged();
+    let final_source_verified = final_verification.is_ok();
+    let final_failure = final_verification.err().map(|error| CommandFailure {
+        kind: CommandFailureKind::CandidateMutation,
+        message: format!("final candidate verification failed: {error:#}"),
+    });
+
+    DeterministicResult {
+        phase: phase.into(),
+        binding,
+        prerequisites,
+        checks,
+        final_source_verified,
+        final_failure,
     }
 }
 
-impl std::error::Error for CheckFailure {}
-
-fn run_check(
-    check_root: &Path,
-    check: &QualityCheck,
-    candidate_revision: &str,
-) -> Result<(String, CommandEvidence)> {
-    match check.runner.as_str() {
-        RUNNER_DOCS_CHECK => {
-            if quality_command_uid().is_some() {
-                let root = check_root.to_string_lossy().to_string();
-                let evidence = run_xtask_with_evidence(
-                    check_root,
-                    &["docs-check", "--root", &root],
-                    candidate_revision,
-                )?;
-                return Ok(("docs-check passed".to_owned(), evidence));
-            }
-            let command = format!("docs-check under {}", check_root.display());
-            docs_check::run(Some(check_root))
-                .with_context(|| format!("docs-check failed under {}", check_root.display()))?;
-            Ok((
-                "docs-check passed".to_owned(),
-                success_evidence(command, candidate_revision),
-            ))
-        }
-        RUNNER_ARCHITECTURE => {
-            let manifest = check_root.join("Cargo.toml");
-            if quality_command_uid().is_some() {
-                let manifest = manifest.to_string_lossy().to_string();
-                let args = architecture_xtask_args(&manifest);
-                let evidence = run_xtask_with_evidence(check_root, &args, candidate_revision)?;
-                return Ok(("architecture passed".to_owned(), evidence));
-            }
-            let command = format!("architecture {}", manifest.display());
-            architecture::run(Some(&manifest))
-                .with_context(|| format!("architecture check failed for {}", manifest.display()))?;
-            Ok((
-                "architecture passed".to_owned(),
-                success_evidence(command, candidate_revision),
-            ))
-        }
-        RUNNER_CARGO_CHECK => {
-            let args = ["check", "--workspace", "--locked"];
-            let evidence = run_cargo_with_evidence(check_root, &args, candidate_revision).map_err(
-                |evidence| {
-                    anyhow::Error::new(CheckFailure::new(
-                        evidence,
-                        "cargo check --workspace --locked failed",
-                    ))
-                },
-            )?;
-            Ok((
-                "cargo check --workspace --locked passed".to_owned(),
-                evidence,
-            ))
-        }
-        RUNNER_CARGO_TEST => {
-            let args = ["test", "--workspace", "--locked"];
-            let evidence = run_cargo_with_evidence(check_root, &args, candidate_revision).map_err(
-                |evidence| {
-                    anyhow::Error::new(CheckFailure::new(
-                        evidence,
-                        "cargo test --workspace --locked failed",
-                    ))
-                },
-            )?;
-            Ok((
-                "cargo test --workspace --locked passed".to_owned(),
-                evidence,
-            ))
-        }
-        RUNNER_CARGO_DOC => {
-            let args = ["doc", "--workspace", "--no-deps", "--locked"];
-            let evidence = run_cargo_with_evidence(check_root, &args, candidate_revision).map_err(
-                |evidence| {
-                    anyhow::Error::new(CheckFailure::new(
-                        evidence,
-                        "cargo doc --workspace --no-deps --locked failed",
-                    ))
-                },
-            )?;
-            Ok((
-                "cargo doc --workspace --no-deps --locked passed".to_owned(),
-                evidence,
-            ))
-        }
-        RUNNER_CARGO_FMT => {
-            let args = ["fmt", "--all", "--check"];
-            let evidence = run_cargo_with_evidence(check_root, &args, candidate_revision).map_err(
-                |evidence| {
-                    anyhow::Error::new(CheckFailure::new(
-                        evidence,
-                        "cargo fmt --all --check failed",
-                    ))
-                },
-            )?;
-            Ok(("cargo fmt --all --check passed".to_owned(), evidence))
-        }
-        RUNNER_CARGO_CLIPPY => {
-            let args = [
-                "clippy",
-                "--workspace",
-                "--all-targets",
-                "--",
-                "-D",
-                "warnings",
-            ];
-            let evidence = run_cargo_with_evidence(check_root, &args, candidate_revision).map_err(
-                |evidence| {
-                    anyhow::Error::new(CheckFailure::new(
-                        evidence,
-                        "cargo clippy --workspace --all-targets -- -D warnings failed",
-                    ))
-                },
-            )?;
-            Ok(("cargo clippy passed".to_owned(), evidence))
-        }
-        RUNNER_DEPENDENCIES => {
-            if quality_command_uid().is_some() {
-                let root = check_root.to_string_lossy().to_string();
-                let evidence = run_xtask_with_evidence(
-                    check_root,
-                    &["dependencies", "--root", &root],
-                    candidate_revision,
-                )?;
-                return Ok(("dependencies policy passed".to_owned(), evidence));
-            }
-            let command = format!(
-                "cargo run --locked -p xtask -- dependencies --root {}",
-                check_root.display()
-            );
-            dependencies::run(Some(check_root)).with_context(|| {
-                format!(
-                    "dependency policy gate failed under {}",
-                    check_root.display()
-                )
-            })?;
-            Ok((
-                "dependencies policy passed".to_owned(),
-                success_evidence(command, candidate_revision),
-            ))
-        }
-        RUNNER_OPERATION_COVERAGE => {
-            let command = "cargo run --locked -p xtask -- operation-coverage --mode exposed";
-            operation_coverage::run_at(check_root, CoverageMode::Exposed, "")?;
-            Ok((
-                "exposed operation coverage passed".to_owned(),
-                success_evidence(command.to_owned(), candidate_revision),
-            ))
-        }
-        RUNNER_ACCEPTANCE_REPORT => {
-            let command = format!(
-                "cargo run --locked -p xtask -- acceptance-report --root {} --revision {candidate_revision}",
-                check_root.display()
-            );
-            acceptance_report::run(Some(check_root), candidate_revision, None)?;
-            Ok((
-                "final acceptance report passed".to_owned(),
-                success_evidence(command, candidate_revision),
-            ))
-        }
-        RUNNER_CARGO_DENY => {
-            match dependencies::run_cargo_deny_with_evidence(check_root, candidate_revision) {
-                Ok(evidence) => Ok(("cargo deny check passed".to_owned(), evidence)),
-                Err(error) => {
-                    if let Some(failure) = error.downcast_ref::<dependencies::DenyFailure>() {
-                        Err(anyhow::Error::new(CheckFailure::new(
-                            failure.evidence.clone(),
-                            "cargo deny failed",
-                        )))
-                    } else {
-                        Err(error)
-                    }
-                }
-            }
-        }
-        other => bail!("unavailable quality runner `{other}` (fail-closed)"),
+fn retain_mutation(record: &CommandRecord, mutation: &mut Option<String>) {
+    if mutation.is_none()
+        && record
+            .failure
+            .as_ref()
+            .is_some_and(|failure| failure.kind == CommandFailureKind::CandidateMutation)
+    {
+        *mutation = record
+            .failure
+            .as_ref()
+            .map(|failure| failure.message.clone());
     }
 }
 
-fn success_evidence(command: String, candidate_revision: &str) -> CommandEvidence {
-    CommandEvidence {
-        command,
-        exit_code: 0,
-        stdout: String::new(),
-        stderr: String::new(),
-        candidate_revision: candidate_revision.to_owned(),
-    }
-}
-
-fn run_cargo_with_evidence(
-    check_root: &Path,
-    args: &[&str],
-    candidate_revision: &str,
-) -> Result<CommandEvidence, CommandEvidence> {
-    let command = format!("cargo {}", args.join(" "));
-    let mut process = Command::new("cargo");
-    process.args(args).current_dir(check_root);
-    apply_quality_command_uid(&mut process).map_err(|error| CommandEvidence {
-        command: command.clone(),
-        exit_code: 127,
-        stdout: String::new(),
-        stderr: error,
-        candidate_revision: candidate_revision.to_owned(),
-    })?;
-    let output = process.output().map_err(|error| CommandEvidence {
-        command: command.clone(),
-        exit_code: 127,
-        stdout: String::new(),
-        stderr: format!("failed to spawn cargo: {error}"),
-        candidate_revision: candidate_revision.to_owned(),
-    })?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    let exit_code = output.status.code().unwrap_or(-1);
-    let evidence = CommandEvidence {
-        command,
-        exit_code,
-        stdout,
-        stderr,
-        candidate_revision: candidate_revision.to_owned(),
+#[allow(clippy::too_many_arguments)]
+fn schedule_command(
+    candidate: &PreparedCandidate,
+    id: &str,
+    kind: CommandKind,
+    scope: Option<CommandScope>,
+    install_hint: Option<&str>,
+    stdout_equals: Option<&str>,
+    expanded: ExpandedCommand,
+    mutation: Option<&str>,
+    empty_changed: bool,
+) -> CommandRecord {
+    let raw_failure =
+        (!expanded.expansion_errors.is_empty()).then(|| expanded.expansion_errors.join("; "));
+    let mut record = CommandRecord {
+        id: id.to_owned(),
+        kind,
+        scope,
+        status: CommandStatus::Failed,
+        program: expanded.program,
+        args: expanded.args,
+        cwd: expanded.cwd,
+        environment: expanded.environment,
+        program_expansion: expanded.program_expansion,
+        args_expansion: expanded.args_expansion,
+        cwd_expansion: expanded.cwd_expansion,
+        environment_expansion: expanded.environment_expansion,
+        timeout_seconds: expanded.timeout_seconds,
+        max_output_bytes: expanded.max_output_bytes,
+        install_hint: install_hint.map(str::to_owned),
+        process: None,
+        source_verified: None,
+        failure: None,
     };
 
-    if output.status.success() {
-        Ok(evidence)
+    if let Some(message) = mutation {
+        record.status = CommandStatus::Blocked;
+        record.failure = Some(CommandFailure {
+            kind: CommandFailureKind::CandidateMutation,
+            message: format!("blocked after candidate mutation: {message}"),
+        });
+        return record;
+    }
+    if let Some(message) = raw_failure {
+        record.failure = Some(CommandFailure {
+            kind: CommandFailureKind::Configuration,
+            message,
+        });
+        return record;
+    }
+    let max_output_bytes = match usize::try_from(record.max_output_bytes) {
+        Ok(value) => value,
+        Err(_) => {
+            record.failure = Some(CommandFailure {
+                kind: CommandFailureKind::Configuration,
+                message: format!(
+                    "max_output_bytes {} exceeds platform limit",
+                    record.max_output_bytes
+                ),
+            });
+            return record;
+        }
+    };
+    let spec = ProcessSpec::new(
+        record.program.clone(),
+        record.args.clone(),
+        candidate.source_root(),
+        &record.cwd,
+        Duration::from_secs(record.timeout_seconds),
+        max_output_bytes,
+    )
+    .with_environment(record.environment.clone());
+    if empty_changed {
+        match process::preflight_cwd(&spec) {
+            None => record.status = CommandStatus::SkippedSuccess,
+            Some(outcome) => {
+                record.failure = Some(CommandFailure {
+                    kind: CommandFailureKind::Process,
+                    message: format!(
+                        "process preflight did not succeed: {:?}",
+                        outcome.termination
+                    ),
+                });
+                record.process = Some(outcome);
+            }
+        }
+        return record;
+    }
+    let outcome = process::execute(spec);
+    let launched = outcome.termination.spawn_failure_kind().is_none();
+    let mut failure = if outcome.success() {
+        stdout_equals.and_then(|expected| stdout_mismatch(&outcome, expected))
     } else {
-        Err(evidence)
-    }
-}
-
-fn architecture_xtask_args(manifest: &str) -> [&str; 3] {
-    ["architecture", "--manifest-path", manifest]
-}
-
-fn run_xtask_with_evidence(
-    check_root: &Path,
-    args: &[&str],
-    candidate_revision: &str,
-) -> Result<CommandEvidence> {
-    let executable = std::env::current_exe().context("resolve trusted xtask executable")?;
-    let command = format!("{} {}", executable.display(), args.join(" "));
-    let mut process = Command::new(&executable);
-    process.args(args).current_dir(check_root);
-    apply_quality_command_uid(&mut process).map_err(anyhow::Error::msg)?;
-    let output = process
-        .output()
-        .with_context(|| format!("failed spawning unprivileged `{command}`"))?;
-    let evidence = CommandEvidence {
-        command,
-        exit_code: output.status.code().unwrap_or(-1),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        candidate_revision: candidate_revision.to_owned(),
+        Some(CommandFailure {
+            kind: CommandFailureKind::Process,
+            message: format!("process did not succeed: {:?}", outcome.termination),
+        })
     };
-    if !output.status.success() {
-        return Err(anyhow::Error::new(CheckFailure::new(
-            evidence,
-            "unprivileged quality command failed",
-        )));
-    }
-    Ok(evidence)
-}
+    record.process = Some(outcome);
 
-fn quality_command_uid() -> Option<std::ffi::OsString> {
-    std::env::var_os(QUALITY_COMMAND_UID_ENV)
-}
-
-fn apply_quality_command_uid(process: &mut Command) -> std::result::Result<(), String> {
-    let Some(uid) = quality_command_uid() else {
-        return Ok(());
-    };
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        let uid = uid
-            .to_string_lossy()
-            .parse::<u32>()
-            .map_err(|error| format!("invalid {QUALITY_COMMAND_UID_ENV}: {error}"))?;
-        process.uid(uid).gid(uid);
-        Ok(())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = process;
-        Err(format!(
-            "{QUALITY_COMMAND_UID_ENV} is unsupported on this platform"
-        ))
-    }
-}
-
-fn validate_runner(runner: &str) -> Result<()> {
-    match runner {
-        RUNNER_DOCS_CHECK
-        | RUNNER_ARCHITECTURE
-        | RUNNER_CARGO_CHECK
-        | RUNNER_CARGO_TEST
-        | RUNNER_CARGO_DOC
-        | RUNNER_CARGO_FMT
-        | RUNNER_CARGO_CLIPPY
-        | RUNNER_DEPENDENCIES
-        | RUNNER_OPERATION_COVERAGE
-        | RUNNER_ACCEPTANCE_REPORT
-        | RUNNER_CARGO_DENY => Ok(()),
-        other => bail!(
-            "unknown quality runner `{other}`; currently implemented runners: {RUNNER_DOCS_CHECK}, {RUNNER_ARCHITECTURE}, {RUNNER_CARGO_CHECK}, {RUNNER_CARGO_TEST}, {RUNNER_CARGO_DOC}, {RUNNER_CARGO_FMT}, {RUNNER_CARGO_CLIPPY}, {RUNNER_DEPENDENCIES}, {RUNNER_OPERATION_COVERAGE}, {RUNNER_ACCEPTANCE_REPORT}, {RUNNER_CARGO_DENY}"
-        ),
-    }
-}
-
-fn resolve_repo_root(repo_root: Option<&Path>) -> Result<PathBuf> {
-    let path = match repo_root {
-        Some(path) => path.to_path_buf(),
-        None => find_repository_root().unwrap_or_else(semantic_judge::default_repository_root),
-    };
-    if !path.is_dir() {
-        bail!("repository root does not exist: {}", path.display());
-    }
-    Ok(path)
-}
-
-fn find_repository_root() -> Option<PathBuf> {
-    let mut current = std::env::current_dir().ok()?;
-    loop {
-        if current.join(".git").exists() && current.join("Cargo.toml").is_file() {
-            return Some(current);
+    if launched {
+        match candidate.verify_unchanged() {
+            Ok(()) => record.source_verified = Some(true),
+            Err(error) => {
+                record.source_verified = Some(false);
+                let process_detail = failure
+                    .take()
+                    .map(|failure| format!("; command also failed: {}", failure.message))
+                    .unwrap_or_default();
+                failure = Some(CommandFailure {
+                    kind: CommandFailureKind::CandidateMutation,
+                    message: format!(
+                        "candidate verification after `{id}` failed: {error:#}{process_detail}"
+                    ),
+                });
+            }
         }
-        if !current.pop() {
-            break;
+    }
+
+    record.status = if failure.is_none() {
+        CommandStatus::Passed
+    } else {
+        CommandStatus::Failed
+    };
+    record.failure = failure;
+    record
+}
+
+fn stdout_mismatch(outcome: &ProcessOutcome, expected: &str) -> Option<CommandFailure> {
+    let actual = match std::str::from_utf8(outcome.stdout.exact_bytes()) {
+        Ok(value) if outcome.stdout.complete() => value,
+        Ok(_) => {
+            return Some(CommandFailure {
+                kind: CommandFailureKind::StdoutMismatch,
+                message: "prerequisite stdout was incomplete".to_owned(),
+            });
         }
+        Err(error) => {
+            return Some(CommandFailure {
+                kind: CommandFailureKind::StdoutMismatch,
+                message: format!("prerequisite stdout was not UTF-8: {error}"),
+            });
+        }
+    };
+    let actual = actual
+        .strip_suffix('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .unwrap_or(actual);
+    if actual.contains(['\r', '\n']) || actual != expected {
+        return Some(CommandFailure {
+            kind: CommandFailureKind::StdoutMismatch,
+            message: format!("prerequisite stdout mismatch: expected `{expected}`, got `{actual}`"),
+        });
     }
     None
 }
 
-struct DetachedWorktree {
-    repo_root: PathBuf,
-    path: PathBuf,
+fn expand_prerequisite(
+    candidate: &PreparedCandidate,
+    prerequisite: &Prerequisite,
+    expansion: &Expansion<'_>,
+) -> ExpandedCommand {
+    let program_expansion = expand_value(expansion, prerequisite.program());
+    let args_expansion = prerequisite
+        .args()
+        .iter()
+        .map(|arg| expand_value(expansion, arg))
+        .collect::<Vec<_>>();
+    let cwd_expansion = expand_value(expansion, "{candidate_root}");
+    let (environment, environment_expansion) = expand_environment(
+        candidate.manifest().manifest().defaults().environment(),
+        None,
+        expansion,
+    );
+    expanded_command(
+        program_expansion,
+        args_expansion,
+        cwd_expansion,
+        environment,
+        environment_expansion,
+        candidate.manifest().manifest().defaults().timeout_seconds(),
+        candidate
+            .manifest()
+            .manifest()
+            .defaults()
+            .max_output_bytes(),
+        &[],
+    )
 }
 
-impl DetachedWorktree {
-    fn create(repo_root: &Path, commit: &str) -> Result<Self> {
-        let path = create_temp_dir("quality-revision")?;
-        let _ = fs::remove_dir_all(&path);
-        git_run(
-            repo_root,
-            &[
-                "worktree",
-                "add",
-                "--detach",
-                path.to_str().context("worktree path is not UTF-8")?,
-                commit,
-            ],
-        )
-        .with_context(|| {
-            format!(
-                "failed to create detached worktree for {commit} at {}",
-                path.display()
-            )
-        })?;
-        Ok(Self {
-            repo_root: repo_root.to_path_buf(),
-            path,
-        })
+fn expand_check(
+    candidate: &PreparedCandidate,
+    check: &Check,
+    expansion: &Expansion<'_>,
+    changed_paths: &BTreeSet<String>,
+) -> ExpandedCommand {
+    let program_expansion = expand_value(expansion, check.program());
+    let mut args_expansion = check
+        .args()
+        .iter()
+        .map(|arg| expand_value(expansion, arg))
+        .collect::<Vec<_>>();
+    if check.scope() == Scope::ChangedFiles {
+        args_expansion.extend(changed_paths.iter().map(|path| ValueExpansion {
+            declared: path.clone(),
+            expanded: Some(path.clone()),
+            error: None,
+        }));
     }
+    let cwd_expansion = expand_value(expansion, check.cwd());
+    let (environment, environment_expansion) = expand_environment(
+        candidate.manifest().manifest().defaults().environment(),
+        Some(check.environment()),
+        expansion,
+    );
+    expanded_command(
+        program_expansion,
+        args_expansion,
+        cwd_expansion,
+        environment,
+        environment_expansion,
+        check.timeout_seconds(),
+        check.max_output_bytes(),
+        &[],
+    )
 }
 
-impl Drop for DetachedWorktree {
-    fn drop(&mut self) {
-        let path = self.path.to_string_lossy().to_string();
-        let _ = Command::new("git")
-            .args(["worktree", "remove", "--force", &path])
-            .current_dir(&self.repo_root)
-            .output();
-        let _ = fs::remove_dir_all(&self.path);
-        let _ = Command::new("git")
-            .args(["worktree", "prune"])
-            .current_dir(&self.repo_root)
-            .output();
+#[allow(clippy::too_many_arguments)]
+fn expanded_command(
+    program_expansion: ValueExpansion,
+    args_expansion: Vec<ValueExpansion>,
+    cwd_expansion: ValueExpansion,
+    environment: EnvironmentChanges,
+    environment_expansion: EnvironmentExpansion,
+    timeout_seconds: u64,
+    max_output_bytes: u64,
+    additional_errors: &[String],
+) -> ExpandedCommand {
+    let mut expansion_errors = Vec::new();
+    collect_expansion_error("program", &program_expansion, &mut expansion_errors);
+    for (index, value) in args_expansion.iter().enumerate() {
+        collect_expansion_error(&format!("args[{index}]"), value, &mut expansion_errors);
     }
-}
-
-fn create_temp_dir(label: &str) -> Result<PathBuf> {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    let path = std::env::temp_dir().join(format!(
-        "loop-engine-{label}-{}-{nanos}",
-        std::process::id()
-    ));
-    fs::create_dir_all(&path)
-        .with_context(|| format!("failed to create temporary directory {}", path.display()))?;
-    Ok(path)
-}
-
-fn git_run(repo_root: &Path, args: &[&str]) -> Result<()> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(repo_root)
-        .output()
-        .with_context(|| format!("failed to execute git {}", args.join(" ")))?;
-    if !output.status.success() {
-        bail!(
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim_end()
+    collect_expansion_error("cwd", &cwd_expansion, &mut expansion_errors);
+    for (name, value) in &environment_expansion.set {
+        collect_expansion_error(
+            &format!("environment.set.{name}"),
+            value,
+            &mut expansion_errors,
         );
     }
-    Ok(())
-}
+    expansion_errors.extend_from_slice(additional_errors);
 
-fn git_output_trimmed(repo_root: &Path, args: &[&str]) -> Result<String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(repo_root)
-        .output()
-        .with_context(|| format!("failed to execute git {}", args.join(" ")))?;
-    if !output.status.success() {
-        bail!(
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim_end()
-        );
+    let program = best_value(&program_expansion).to_owned();
+    let args = args_expansion
+        .iter()
+        .map(|value| best_value(value).to_owned())
+        .collect();
+    let cwd = PathBuf::from(best_value(&cwd_expansion));
+    ExpandedCommand {
+        program,
+        args,
+        cwd,
+        environment,
+        program_expansion,
+        args_expansion,
+        cwd_expansion,
+        environment_expansion,
+        expansion_errors,
+        timeout_seconds,
+        max_output_bytes,
     }
-    Ok(String::from_utf8(output.stdout)
-        .context("git stdout is not UTF-8")?
-        .trim_end()
-        .to_owned())
 }
 
-fn git_show_revision(repo_root: &Path, revision: &str, path: &str) -> Result<Option<String>> {
-    let output = Command::new("git")
-        .args(["show", &format!("{revision}:{path}")])
-        .current_dir(repo_root)
-        .output()
-        .with_context(|| format!("failed to execute git show {revision}:{path}"))?;
-    if !output.status.success() {
-        return Ok(None);
+fn expand_value(expansion: &Expansion<'_>, declared: &str) -> ValueExpansion {
+    match expansion.value(declared) {
+        Ok(expanded) => ValueExpansion {
+            declared: declared.to_owned(),
+            expanded: Some(expanded),
+            error: None,
+        },
+        Err(error) => ValueExpansion {
+            declared: declared.to_owned(),
+            expanded: None,
+            error: Some(error),
+        },
     }
-    Ok(Some(
-        String::from_utf8(output.stdout).context("git stdout is not UTF-8")?,
-    ))
 }
 
-fn strip_comment(line: &str) -> String {
-    let mut result = String::with_capacity(line.len());
-    let mut in_string = false;
-    for ch in line.chars() {
-        if ch == '"' {
-            result.push(ch);
-            in_string = !in_string;
-            continue;
-        }
-        if ch == '#' && !in_string {
-            break;
-        }
-        result.push(ch);
+fn collect_expansion_error(context: &str, value: &ValueExpansion, errors: &mut Vec<String>) {
+    if let Some(error) = &value.error {
+        errors.push(format!("failed to expand {context}: {error}"));
     }
-    result
 }
 
-fn parse_assignment_value(rest: &str, key: &str) -> Result<String> {
-    let rest = rest.trim();
-    let Some(value) = rest.strip_prefix('=') else {
-        bail!("expected `{key} = ...`");
-    };
-    Ok(value.trim().trim_matches('"').to_owned())
+fn best_value(value: &ValueExpansion) -> &str {
+    value.expanded.as_deref().unwrap_or(&value.declared)
 }
 
-fn parse_quoted_assignment(rest: &str, key: &str) -> Result<String> {
-    let rest = rest.trim();
-    let Some(value) = rest.strip_prefix('=') else {
-        bail!("expected `{key} = \"...\"`");
-    };
-    let value = value.trim();
-    let Some(inner) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) else {
-        bail!("expected quoted string for `{key}`, got `{value}`");
-    };
-    Ok(inner.to_owned())
+fn expand_environment(
+    defaults: &Environment,
+    override_environment: Option<&Environment>,
+    expansion: &Expansion<'_>,
+) -> (EnvironmentChanges, EnvironmentExpansion) {
+    let mut declared_set = defaults.set().clone();
+    let mut unset: BTreeSet<String> = defaults.unset().iter().cloned().collect();
+    if let Some(environment) = override_environment {
+        declared_set.extend(environment.set().clone());
+        unset.extend(environment.unset().iter().cloned());
+    }
+    for name in &unset {
+        declared_set.remove(name);
+    }
+    let expanded_set = declared_set
+        .into_iter()
+        .map(|(name, value)| (name, expand_value(expansion, &value)))
+        .collect::<BTreeMap<_, _>>();
+    let best_set = expanded_set
+        .iter()
+        .map(|(name, value)| (name.clone(), best_value(value).to_owned()))
+        .collect();
+    (
+        EnvironmentChanges::new(best_set, unset.clone()),
+        EnvironmentExpansion {
+            set: expanded_set,
+            unset,
+        },
+    )
+}
+
+fn utf8_path<'a>(path: &'a Path, description: &str) -> Result<&'a str, String> {
+    path.to_str()
+        .ok_or_else(|| format!("{description} is not valid UTF-8: {}", path.display()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn parse_manifest_reads_checks() {
-        let manifest = parse_manifest(
-            r#"
-# comment
-schema_version = 1
-
-[[checks]]
-id = "docs-check"
-runner = "docs-check"
-
-[[checks]]
-id = "architecture"
-runner = "architecture"
-"#,
-        )
-        .unwrap();
-        assert_eq!(manifest.schema_version, 1);
-        assert_eq!(manifest.checks.len(), 2);
-        assert_eq!(manifest.checks[0].id, "docs-check");
-        assert_eq!(manifest.checks[1].runner, "architecture");
+    fn value(declared: &str, expanded: Option<&str>, error: Option<&str>) -> ValueExpansion {
+        ValueExpansion {
+            declared: declared.to_owned(),
+            expanded: expanded.map(str::to_owned),
+            error: error.map(str::to_owned),
+        }
     }
 
     #[test]
-    fn privileged_architecture_reexec_uses_registered_cli_flag() {
-        assert_eq!(
-            architecture_xtask_args("/candidate/Cargo.toml"),
-            ["architecture", "--manifest-path", "/candidate/Cargo.toml"]
+    fn failed_expansion_preserves_declared_and_successful_value_evidence() {
+        let command = expanded_command(
+            value("{bad}/tool", None, Some("bad path")),
+            vec![value("literal", Some("literal"), None)],
+            value("{candidate_root}", Some("/candidate"), None),
+            EnvironmentChanges::default(),
+            EnvironmentExpansion {
+                set: BTreeMap::new(),
+                unset: BTreeSet::new(),
+            },
+            17,
+            4096,
+            &[],
         );
-    }
 
-    #[test]
-    fn parse_manifest_rejects_unknown_runner() {
-        let error = parse_manifest(
-            r#"
-schema_version = 1
-
-[[checks]]
-id = "mystery"
-runner = "not-a-runner"
-"#,
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("unknown quality runner"));
-    }
-
-    #[test]
-    fn monotonic_evolution_rejects_removed_check() {
-        let parent = parse_manifest(
-            r#"
-schema_version = 1
-[[checks]]
-id = "docs-check"
-runner = "docs-check"
-[[checks]]
-id = "architecture"
-runner = "architecture"
-"#,
-        )
-        .unwrap();
-        let candidate = parse_manifest(
-            r#"
-schema_version = 1
-[[checks]]
-id = "docs-check"
-runner = "docs-check"
-"#,
-        )
-        .unwrap();
-        let error = enforce_manifest_monotonic_evolution(Some(&parent), &candidate).unwrap_err();
-        assert!(error.to_string().contains("removed check"));
-    }
-
-    #[test]
-    fn monotonic_evolution_allows_additions() {
-        let parent = parse_manifest(
-            r#"
-schema_version = 1
-[[checks]]
-id = "docs-check"
-runner = "docs-check"
-"#,
-        )
-        .unwrap();
-        let candidate = parse_manifest(
-            r#"
-schema_version = 1
-[[checks]]
-id = "docs-check"
-runner = "docs-check"
-[[checks]]
-id = "architecture"
-runner = "architecture"
-"#,
-        )
-        .unwrap();
-        enforce_manifest_monotonic_evolution(Some(&parent), &candidate).unwrap();
+        assert_eq!(command.program, "{bad}/tool");
+        assert_eq!(command.args, ["literal"]);
+        assert_eq!(command.cwd, Path::new("/candidate"));
+        assert_eq!(command.timeout_seconds, 17);
+        assert_eq!(command.max_output_bytes, 4096);
+        assert_eq!(command.program_expansion.declared, "{bad}/tool");
+        assert!(command.program_expansion.expanded.is_none());
+        assert_eq!(
+            command.args_expansion[0].expanded.as_deref(),
+            Some("literal")
+        );
+        assert_eq!(
+            command.cwd_expansion.expanded.as_deref(),
+            Some("/candidate")
+        );
+        assert_eq!(
+            command.expansion_errors,
+            ["failed to expand program: bad path"]
+        );
     }
 }
