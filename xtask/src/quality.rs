@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::candidate::PreparedCandidate;
 use crate::config::{Check, Environment, Phase, Prerequisite, Scope};
@@ -16,7 +16,7 @@ use crate::git::PRIVATE_STAGED_INDEX_ENVIRONMENT;
 use crate::process::{self, EnvironmentChanges, ProcessOutcome, ProcessSpec};
 
 /// Whether evidence was produced for a prerequisite or deterministic check.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandKind {
     Prerequisite,
@@ -24,7 +24,7 @@ pub enum CommandKind {
 }
 
 /// Scope retained in check evidence without coupling records to config decoding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CommandScope {
     Repository,
@@ -41,7 +41,7 @@ impl From<Scope> for CommandScope {
 }
 
 /// Phase retained in deterministic evidence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DeterministicPhase {
     PreCommit,
@@ -58,7 +58,7 @@ impl From<Phase> for DeterministicPhase {
 }
 
 /// Mechanically derived state of one configured command.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandStatus {
     Passed,
@@ -68,7 +68,7 @@ pub enum CommandStatus {
 }
 
 /// Typed scheduler-level failure. Process-level categories stay in `process`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandFailureKind {
     Configuration,
@@ -78,14 +78,16 @@ pub enum CommandFailureKind {
 }
 
 /// Scheduler failure detail retained beside exact command/process evidence.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CommandFailure {
     pub kind: CommandFailureKind,
     pub message: String,
 }
 
 /// Exact Git-object binding for one deterministic run.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CandidateBinding {
     pub base_revision: String,
     pub candidate_revision: String,
@@ -96,7 +98,8 @@ pub struct CandidateBinding {
 ///
 /// `expanded` is absent only when expansion failed. `error` then retains the
 /// exact reason, while `declared` always preserves manifest evidence.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ValueExpansion {
     pub declared: String,
     pub expanded: Option<String>,
@@ -104,14 +107,16 @@ pub struct ValueExpansion {
 }
 
 /// Per-value environment expansion evidence after deterministic set/unset merge.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EnvironmentExpansion {
     pub set: BTreeMap<String, ValueExpansion>,
     pub unset: BTreeSet<String>,
 }
 
 /// Ordered evidence for one prerequisite or phase-selected check.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CommandRecord {
     pub id: String,
     pub kind: CommandKind,
@@ -139,7 +144,8 @@ pub struct CommandRecord {
 }
 
 /// Final-neutral deterministic result consumed by validation/report callers.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeterministicResult {
     pub phase: DeterministicPhase,
     pub binding: CandidateBinding,
@@ -251,27 +257,8 @@ pub fn run_with_cancellation(
     };
     let expansion = Expansion::new(candidate);
     let manifest = candidate.manifest().manifest();
-    let mut prerequisites = Vec::with_capacity(manifest.prerequisites().len());
+    let (prerequisites, mut mutation) = schedule_prerequisites(candidate, &expansion, cancellation);
     let mut checks = Vec::with_capacity(manifest.checks().len());
-    let mut mutation: Option<String> = None;
-
-    for prerequisite in manifest.prerequisites() {
-        let expanded = expand_prerequisite(candidate, prerequisite, &expansion);
-        let record = schedule_command(
-            candidate,
-            prerequisite.id(),
-            CommandKind::Prerequisite,
-            None,
-            Some(prerequisite.install_hint()),
-            prerequisite.stdout_equals(),
-            expanded,
-            mutation.as_deref(),
-            false,
-            cancellation,
-        );
-        retain_mutation(&record, &mut mutation);
-        prerequisites.push(record);
-    }
 
     let changed_paths: BTreeSet<String> = candidate
         .changed_paths()
@@ -327,6 +314,53 @@ pub fn run_with_cancellation(
         final_source_verified,
         final_failure,
     }
+}
+
+/// Run only manifest prerequisite probes for installation preflight.
+///
+/// Probes retain normal expansion, environment, timeout, bounded-output, and
+/// post-process candidate verification behavior. No deterministic check runs.
+pub fn run_prerequisites(candidate: &PreparedCandidate) -> Vec<CommandRecord> {
+    run_prerequisites_with_cancellation(candidate, &process::Cancellation::new())
+}
+
+/// Run installation prerequisite probes under caller-owned cancellation.
+///
+/// Cancellation suppresses later spawns and awaits active process-group cleanup
+/// before returning control to caller-owned candidate cleanup.
+pub fn run_prerequisites_with_cancellation(
+    candidate: &PreparedCandidate,
+    cancellation: &process::Cancellation,
+) -> Vec<CommandRecord> {
+    schedule_prerequisites(candidate, &Expansion::new(candidate), cancellation).0
+}
+
+fn schedule_prerequisites(
+    candidate: &PreparedCandidate,
+    expansion: &Expansion<'_>,
+    cancellation: &process::Cancellation,
+) -> (Vec<CommandRecord>, Option<String>) {
+    let manifest = candidate.manifest().manifest();
+    let mut records = Vec::with_capacity(manifest.prerequisites().len());
+    let mut mutation = None;
+    for prerequisite in manifest.prerequisites() {
+        let expanded = expand_prerequisite(candidate, prerequisite, expansion);
+        let record = schedule_command(
+            candidate,
+            prerequisite.id(),
+            CommandKind::Prerequisite,
+            None,
+            Some(prerequisite.install_hint()),
+            prerequisite.stdout_equals(),
+            expanded,
+            mutation.as_deref(),
+            false,
+            cancellation,
+        );
+        retain_mutation(&record, &mut mutation);
+        records.push(record);
+    }
+    (records, mutation)
 }
 
 fn retain_mutation(record: &CommandRecord, mutation: &mut Option<String>) {

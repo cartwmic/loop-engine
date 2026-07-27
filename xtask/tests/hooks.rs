@@ -540,3 +540,436 @@ cwd = "{candidate_root}"
         "working tree only\n"
     );
 }
+
+fn installer_manifest(prerequisite_program: &str) -> String {
+    format!(
+        r#"schema_version = 2
+
+[defaults]
+timeout_seconds = 30
+max_output_bytes = 65536
+
+[runner]
+inputs = [".githooks", "quality/manifest.toml", "runner"]
+
+[[prerequisites]]
+id = "required-tool"
+program = "{prerequisite_program}"
+args = ["probe"]
+stdout_equals = "ready"
+install_hint = "install the required test tool"
+
+[[checks]]
+id = "unused-install-check"
+phases = ["pre-commit"]
+scope = "repository"
+program = "{{candidate_root}}/runner"
+args = ["check"]
+cwd = "{{candidate_root}}"
+"#
+    )
+}
+
+const INSTALL_RUNNER: &str =
+    "#!/bin/sh\ncase \"$1\" in probe) printf 'ready\\n' ;; check) exit 91 ;; *) exit 92 ;; esac\n";
+
+fn init_install_repository(commit: bool) -> TempDir {
+    let repo = TempDir::new().expect("install repo");
+    git(repo.path(), &["init", "-b", "main"]);
+    git(repo.path(), &["config", "user.email", "hooks-install@test"]);
+    git(repo.path(), &["config", "user.name", "Hooks Install Test"]);
+    git(repo.path(), &["config", "commit.gpgsign", "false"]);
+    fs::create_dir_all(repo.path().join(".githooks")).unwrap();
+    fs::create_dir_all(repo.path().join("quality")).unwrap();
+    for hook in ["pre-commit", "pre-push"] {
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../.githooks")
+            .join(hook);
+        let destination = repo.path().join(".githooks").join(hook);
+        fs::copy(source, &destination).unwrap();
+        fs::set_permissions(destination, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    write(
+        repo.path(),
+        "quality/manifest.toml",
+        &installer_manifest("{candidate_root}/runner"),
+    );
+    write(repo.path(), "runner", INSTALL_RUNNER);
+    fs::set_permissions(
+        repo.path().join("runner"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    git(repo.path(), &["add", ".githooks", "quality", "runner"]);
+    if commit {
+        git(repo.path(), &["commit", "-m", "install fixture"]);
+    }
+    repo
+}
+
+fn run_install(repo: &Path) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["hooks", "install"])
+        .current_dir(repo)
+        .output()
+        .expect("run hooks install")
+}
+
+fn assert_install_failed_without_config(repo: &Path, expected: &str) {
+    let output = run_install(repo);
+    assert!(
+        !output.status.success(),
+        "installation unexpectedly succeeded"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains(expected),
+        "missing `{expected}` in stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let query = Command::new("/usr/bin/git")
+        .args(["config", "--local", "--get-all", "core.hooksPath"])
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    assert_eq!(query.status.code(), Some(1));
+    assert!(query.stdout.is_empty());
+}
+
+#[test]
+fn fresh_install_sets_only_local_path_and_both_adapters_invoke_final_v2_commands() {
+    let repo = init_install_repository(true);
+    let before_status = git(repo.path(), &["status", "--porcelain=v1"]);
+    let before_hooks = [
+        fs::read(repo.path().join(".githooks/pre-commit")).unwrap(),
+        fs::read(repo.path().join(".githooks/pre-push")).unwrap(),
+    ];
+
+    let output = run_install(repo.path());
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        git(
+            repo.path(),
+            &["config", "--local", "--get-all", "core.hooksPath"]
+        ),
+        ".githooks"
+    );
+    assert_eq!(
+        git(repo.path(), &["status", "--porcelain=v1"]),
+        before_status
+    );
+    assert_eq!(
+        fs::read(repo.path().join(".githooks/pre-commit")).unwrap(),
+        before_hooks[0]
+    );
+    assert_eq!(
+        fs::read(repo.path().join(".githooks/pre-push")).unwrap(),
+        before_hooks[1]
+    );
+    assert!(!repo.path().join(".git/hooks/pre-commit").exists());
+    assert!(!repo.path().join(".git/hooks/pre-push").exists());
+
+    let bin = repo.path().join("fake-cargo-bin");
+    fs::create_dir(&bin).unwrap();
+    write(
+        repo.path(),
+        "fake-cargo-bin/cargo",
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> .git/installed-adapters.log\n",
+    );
+    fs::set_permissions(bin.join("cargo"), fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!("{}:/usr/bin:/bin", bin.display());
+    let pre_commit = Command::new(repo.path().join(".githooks/pre-commit"))
+        .current_dir(repo.path())
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert!(pre_commit.status.success());
+    let mut pre_push = Command::new(repo.path().join(".githooks/pre-push"))
+        .current_dir(repo.path())
+        .env("PATH", &path)
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::Write as _;
+    pre_push
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"refs/heads/main 0000 refs/heads/main 0000\n")
+        .unwrap();
+    assert!(pre_push.wait().unwrap().success());
+    assert_eq!(
+        fs::read_to_string(repo.path().join(".git/installed-adapters.log")).unwrap(),
+        "xtask validate --staged\nxtask validate --publication --updates-stdin\n"
+    );
+}
+
+#[test]
+fn exact_existing_install_is_idempotent_after_full_validation() {
+    let repo = init_install_repository(true);
+    assert!(run_install(repo.path()).status.success());
+    let config = fs::read(repo.path().join(".git/config")).unwrap();
+    assert!(run_install(repo.path()).status.success());
+    assert_eq!(fs::read(repo.path().join(".git/config")).unwrap(), config);
+}
+
+#[test]
+fn conflicting_local_configuration_is_reported_and_preserved() {
+    let repo = init_install_repository(true);
+    git(
+        repo.path(),
+        &["config", "--local", "core.hooksPath", "custom-hooks"],
+    );
+    let before = fs::read(repo.path().join(".git/config")).unwrap();
+    let output = run_install(repo.path());
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("conflicting local core.hooksPath"));
+    assert!(stderr.contains("`custom-hooks`"));
+    assert_eq!(fs::read(repo.path().join(".git/config")).unwrap(), before);
+}
+
+#[test]
+fn unborn_head_fails_before_configuration_change() {
+    let repo = init_install_repository(false);
+    assert_install_failed_without_config(repo.path(), "unborn HEAD");
+}
+
+#[test]
+fn missing_hook_fails_before_configuration_change() {
+    let repo = init_install_repository(true);
+    git(repo.path(), &["rm", ".githooks/pre-push"]);
+    git(repo.path(), &["commit", "-m", "remove pre-push"]);
+    assert_install_failed_without_config(repo.path(), "pre-push` is missing from HEAD");
+}
+
+#[test]
+fn non_executable_hook_fails_before_configuration_change() {
+    let repo = init_install_repository(true);
+    fs::set_permissions(
+        repo.path().join(".githooks/pre-commit"),
+        fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    git(repo.path(), &["add", ".githooks/pre-commit"]);
+    git(repo.path(), &["commit", "-m", "remove executable bit"]);
+    assert_install_failed_without_config(repo.path(), "pre-commit` is not executable in HEAD");
+}
+
+#[test]
+fn wrong_adapter_content_and_final_command_fail_before_configuration_change() {
+    let repo = init_install_repository(true);
+    let path = repo.path().join(".githooks/pre-push");
+    let wrong = fs::read_to_string(&path)
+        .unwrap()
+        .replace("--updates-stdin", "--staged");
+    fs::write(&path, wrong).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    git(repo.path(), &["add", ".githooks/pre-push"]);
+    git(repo.path(), &["commit", "-m", "wrong pre-push command"]);
+    assert_install_failed_without_config(repo.path(), "final v2 adapter contract");
+}
+
+#[test]
+fn prerequisite_tool_failure_prints_hint_and_does_not_configure_hooks() {
+    let repo = init_install_repository(true);
+    write(
+        repo.path(),
+        "quality/manifest.toml",
+        &installer_manifest("missing-install-prerequisite-tool"),
+    );
+    git(repo.path(), &["add", "quality/manifest.toml"]);
+    git(repo.path(), &["commit", "-m", "missing prerequisite"]);
+    let output = run_install(repo.path());
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("required-tool"));
+    assert!(stderr.contains("install the required test tool"));
+    let query = Command::new("/usr/bin/git")
+        .args(["config", "--local", "--get", "core.hooksPath"])
+        .current_dir(repo.path())
+        .status()
+        .unwrap();
+    assert_eq!(query.code(), Some(1));
+}
+
+#[test]
+fn sigterm_cancels_install_prerequisite_group_before_cleanup_and_configuration() {
+    let repo = init_install_repository(true);
+    let slow_manifest = r#"schema_version = 2
+
+[defaults]
+timeout_seconds = 60
+max_output_bytes = 65536
+
+[runner]
+inputs = [".githooks", "quality/manifest.toml", "runner"]
+
+[[prerequisites]]
+id = "slow-tool"
+program = "{candidate_root}/runner"
+args = ["slow", "{git_directory}", "{candidate_root}", "{scratch_root}", "{cache_root}", "{target_root}"]
+install_hint = "slow fixture"
+
+[[checks]]
+id = "unused-install-check"
+phases = ["pre-commit"]
+scope = "repository"
+program = "{candidate_root}/runner"
+args = ["unused"]
+cwd = "{candidate_root}"
+"#;
+    let slow_runner = r#"#!/bin/sh
+set -eu
+[ "$1" = slow ] || exit 97
+git_directory=$2
+printf '%s\n' "$3" "$4" "$5" "$6" > "$git_directory/candidate-roots"
+trap '' TERM
+(
+    trap '' TERM
+    sleep 2
+    touch "$git_directory/descendant-marker"
+    sleep 30
+) &
+echo $! > "$git_directory/descendant.pid"
+touch "$git_directory/prerequisite-started"
+wait
+"#;
+    write(repo.path(), "quality/manifest.toml", slow_manifest);
+    write(repo.path(), "runner", slow_runner);
+    fs::set_permissions(
+        repo.path().join("runner"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    git(repo.path(), &["add", "quality/manifest.toml", "runner"]);
+    git(repo.path(), &["commit", "-m", "slow install prerequisite"]);
+
+    let source_status = git(repo.path(), &["status", "--porcelain=v1"]);
+    let source_runner = fs::read(repo.path().join("runner")).unwrap();
+    let temp = TempDir::new().expect("candidate temp parent");
+    let child = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["hooks", "install"])
+        .current_dir(repo.path())
+        .env("TMPDIR", temp.path())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn hook installation");
+    wait_for(&repo.path().join(".git/prerequisite-started"));
+
+    let signal = Command::new("/bin/kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .expect("send SIGTERM");
+    assert!(signal.success());
+    let output = child.wait_with_output().expect("await hook installation");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("hook installation interrupted by signal 15"),
+        "{stderr}"
+    );
+
+    let descendant_pid = fs::read_to_string(repo.path().join(".git/descendant.pid")).unwrap();
+    let descendant_live = Command::new("/bin/kill")
+        .args(["-0", descendant_pid.trim()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("probe prerequisite descendant")
+        .success();
+    assert!(!descendant_live, "prerequisite descendant survived SIGTERM");
+    thread::sleep(Duration::from_millis(2200));
+    assert!(
+        !repo.path().join(".git/descendant-marker").exists(),
+        "cancelled descendant wrote its survival marker"
+    );
+
+    let materialized_roots = fs::read_to_string(repo.path().join(".git/candidate-roots")).unwrap();
+    for root in materialized_roots.lines() {
+        assert!(
+            !Path::new(root).exists(),
+            "materialized candidate root leaked: {root}"
+        );
+    }
+    assert_eq!(
+        fs::read_dir(temp.path()).unwrap().count(),
+        0,
+        "candidate storage leaked"
+    );
+    let query = Command::new("/usr/bin/git")
+        .args(["config", "--local", "--get-all", "core.hooksPath"])
+        .current_dir(repo.path())
+        .output()
+        .unwrap();
+    assert_eq!(query.status.code(), Some(1));
+    assert!(query.stdout.is_empty());
+    assert_eq!(
+        git(repo.path(), &["status", "--porcelain=v1"]),
+        source_status
+    );
+    assert_eq!(fs::read(repo.path().join("runner")).unwrap(), source_runner);
+}
+
+#[test]
+fn git_configuration_failure_leaves_source_and_candidate_untouched() {
+    let repo = init_install_repository(true);
+    let before_status = git(repo.path(), &["status", "--porcelain=v1"]);
+    fs::write(repo.path().join(".git/config.lock"), b"locked").unwrap();
+    let output = run_install(repo.path());
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("git config --local"));
+    assert_eq!(
+        git(repo.path(), &["status", "--porcelain=v1"]),
+        before_status
+    );
+    fs::remove_file(repo.path().join(".git/config.lock")).unwrap();
+    let query = Command::new("/usr/bin/git")
+        .args(["config", "--local", "--get", "core.hooksPath"])
+        .current_dir(repo.path())
+        .status()
+        .unwrap();
+    assert_eq!(query.code(), Some(1));
+}
+
+#[test]
+fn linked_worktree_installs_through_shared_local_repository_config() {
+    let repo = init_install_repository(true);
+    let linked = repo.path().join("linked-worktree");
+    git(
+        repo.path(),
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "linked-install-test",
+            linked.to_str().unwrap(),
+        ],
+    );
+    let common = git(&linked, &["rev-parse", "--git-common-dir"]);
+    let directory = git(&linked, &["rev-parse", "--git-dir"]);
+    assert_ne!(Path::new(&common), Path::new(&directory));
+
+    let output = run_install(&linked);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        git(&linked, &["config", "--local", "--get", "core.hooksPath"]),
+        ".githooks"
+    );
+    assert_eq!(
+        git(
+            repo.path(),
+            &["config", "--local", "--get", "core.hooksPath"]
+        ),
+        ".githooks"
+    );
+    assert!(!PathBuf::from(directory).join("config").exists());
+}

@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
-use serde::Serialize;
+use serde::{Deserialize, Deserializer, Serialize};
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 compile_error!("xtask process execution supports only macOS and Linux");
@@ -35,7 +35,8 @@ const CLEANUP_DEADLINE: Duration = Duration::from_secs(2);
 const LEADER_PROBE_UNCERTAINTY_DEADLINE: Duration = CLEANUP_DEADLINE;
 
 /// Environment mutations applied after inheriting caller environment.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EnvironmentChanges {
     set: BTreeMap<String, String>,
     unset: BTreeSet<String>,
@@ -143,7 +144,7 @@ impl ProcessSpec {
 }
 
 /// Encoding used to retain exact stream bytes in JSON-compatible evidence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum StreamEncoding {
     #[serde(rename = "utf-8")]
@@ -153,7 +154,7 @@ pub enum StreamEncoding {
 }
 
 /// Child stream whose independent bound was crossed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StreamKind {
     Stdout,
@@ -168,6 +169,35 @@ pub struct StreamEvidence {
     complete: bool,
     #[serde(skip)]
     exact_bytes: Vec<u8>,
+}
+
+impl<'de> Deserialize<'de> for StreamEvidence {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct WireStream {
+            encoding: StreamEncoding,
+            data: String,
+            complete: bool,
+        }
+
+        let wire = WireStream::deserialize(deserializer)?;
+        let exact_bytes = match wire.encoding {
+            StreamEncoding::Utf8 => wire.data.as_bytes().to_vec(),
+            StreamEncoding::Base64 => {
+                decode_base64(&wire.data).map_err(serde::de::Error::custom)?
+            }
+        };
+        Ok(Self {
+            encoding: wire.encoding,
+            data: wire.data,
+            complete: wire.complete,
+            exact_bytes,
+        })
+    }
 }
 
 impl StreamEvidence {
@@ -210,7 +240,7 @@ impl StreamEvidence {
 }
 
 /// Typed category for failures occurring before a child is available.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SpawnFailureKind {
     InvalidCandidateRoot,
@@ -222,7 +252,7 @@ pub enum SpawnFailureKind {
 }
 
 /// Authoritative reason one execution attempt ended.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProcessTermination {
     Exit {
@@ -256,7 +286,7 @@ impl ProcessTermination {
 }
 
 /// Evidence that no process from the launched group was left running.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CleanupOutcome {
     NotRequired,
@@ -272,7 +302,8 @@ pub enum CleanupOutcome {
 }
 
 /// Complete evidence from one process attempt.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProcessOutcome {
     pub termination: ProcessTermination,
     pub stdout: StreamEvidence,
@@ -302,12 +333,13 @@ pub struct CancellationHandle {
     control: Arc<Control>,
 }
 
-/// Project-neutral cancellation shared by a top-level caller and sequential runner.
+/// Project-neutral cancellation shared by a top-level caller and every runner.
 ///
-/// Registration closes the race between cancellation and process spawn. At most
-/// one active process is retained because deterministic scheduling is sequential.
-/// Process completion is awaited before registration is removed, and late
-/// cancellation uses the process control's reaped state rather than a stale PGID.
+/// Spawn and registration happen while holding one state lock. Cancellation can
+/// therefore either suppress a new child or observe its registered handle; no
+/// process can start in the gap between a cancellation check and registration.
+/// Multiple concurrent semantic process groups may be active. Every registered
+/// owner unregisters only after full process-group cleanup.
 #[derive(Debug, Clone, Default)]
 pub struct Cancellation {
     state: Arc<Mutex<CancellationState>>,
@@ -316,8 +348,9 @@ pub struct Cancellation {
 #[derive(Debug, Default)]
 struct CancellationState {
     requested: bool,
+    finished: bool,
     next_id: u64,
-    active: Option<(u64, CancellationHandle)>,
+    active: BTreeMap<u64, CancellationHandle>,
 }
 
 impl Cancellation {
@@ -325,45 +358,92 @@ impl Cancellation {
         Self::default()
     }
 
-    /// Request cancellation once and synchronously notify the active group.
+    /// Request cancellation once and synchronously notify every active group.
     pub fn cancel(&self) -> CancellationRequest {
         let mut state = lock(&self.state);
+        if state.finished {
+            return CancellationRequest::AlreadyFinished;
+        }
         if state.requested {
             return CancellationRequest::AlreadyRequested;
         }
         state.requested = true;
-        state
-            .active
-            .as_ref()
-            .map(|(_, handle)| handle.cancel())
-            .unwrap_or(CancellationRequest::Requested)
+        for handle in state.active.values() {
+            handle.cancel();
+        }
+        CancellationRequest::Requested
     }
 
     pub fn is_cancelled(&self) -> bool {
         lock(&self.state).requested
     }
 
-    fn register(&self, handle: CancellationHandle) -> u64 {
+    /// Atomically close cancellation before committing caller-owned evidence.
+    ///
+    /// Returns false when interruption won the race. Once true, later signals
+    /// are ignored and no new child can register through this authority.
+    pub fn finish(&self) -> bool {
         let mut state = lock(&self.state);
+        if state.requested {
+            return false;
+        }
+        debug_assert!(state.active.is_empty());
+        state.finished = true;
+        true
+    }
+
+    fn spawn(&self, spec: ProcessSpec) -> Option<RegisteredRunningProcess> {
+        let mut state = lock(&self.state);
+        if state.requested || state.finished {
+            return None;
+        }
+        let running = spawn(spec);
         let id = state.next_id;
         state.next_id = state.next_id.wrapping_add(1);
-        debug_assert!(state.active.is_none());
-        if state.requested {
-            handle.cancel();
-        }
-        state.active = Some((id, handle));
-        id
+        state.active.insert(id, running.cancellation_handle());
+        Some(RegisteredRunningProcess {
+            running: Some(running),
+            cancellation: self.clone(),
+            registration_id: id,
+        })
     }
 
     fn unregister(&self, id: u64) {
-        let mut state = lock(&self.state);
-        if state
-            .active
+        lock(&self.state).active.remove(&id);
+    }
+}
+
+/// Process owner registered with shared external cancellation.
+pub struct RegisteredRunningProcess {
+    running: Option<RunningProcess>,
+    cancellation: Cancellation,
+    registration_id: u64,
+}
+
+impl RegisteredRunningProcess {
+    pub fn cancellation_handle(&self) -> CancellationHandle {
+        self.running
             .as_ref()
-            .is_some_and(|(active, _)| *active == id)
-        {
-            state.active = None;
-        }
+            .expect("registered process remains owned until completion")
+            .cancellation_handle()
+    }
+
+    pub fn await_completion(mut self) -> ProcessOutcome {
+        let outcome = self
+            .running
+            .take()
+            .expect("registered process completion is consumed once")
+            .await_completion();
+        self.cancellation.unregister(self.registration_id);
+        outcome
+    }
+}
+
+impl Drop for RegisteredRunningProcess {
+    fn drop(&mut self) {
+        // RunningProcess drop performs group cleanup before registration removal.
+        drop(self.running.take());
+        self.cancellation.unregister(self.registration_id);
     }
 }
 
@@ -747,17 +827,32 @@ pub fn execute(spec: ProcessSpec) -> ProcessOutcome {
     spawn(spec).await_completion()
 }
 
-/// Spawn under caller-owned cancellation and await full process-group cleanup.
+/// Spawn under caller-owned cancellation without a cancel/spawn race.
 ///
-/// Registration happens immediately after spawn. Cancellation racing with that
-/// window is remembered and delivered during registration. The active handle is
-/// removed only after completion has reaped the leader and finished group probes.
+/// `None` means cancellation was already requested and no child started.
+pub fn spawn_with_cancellation(
+    spec: ProcessSpec,
+    cancellation: &Cancellation,
+) -> Option<RegisteredRunningProcess> {
+    cancellation.spawn(spec)
+}
+
+/// Spawn under caller-owned cancellation and await full process-group cleanup.
 pub fn execute_with_cancellation(spec: ProcessSpec, cancellation: &Cancellation) -> ProcessOutcome {
-    let running = spawn(spec);
-    let id = cancellation.register(running.cancellation_handle());
-    let outcome = running.await_completion();
-    cancellation.unregister(id);
-    outcome
+    match spawn_with_cancellation(spec, cancellation) {
+        Some(running) => running.await_completion(),
+        None => completed_cancelled(),
+    }
+}
+
+fn completed_cancelled() -> ProcessOutcome {
+    ProcessOutcome {
+        termination: ProcessTermination::Cancelled,
+        stdout: StreamEvidence::empty(),
+        stderr: StreamEvidence::empty(),
+        duration_millis: 0,
+        cleanup: CleanupOutcome::NotRequired,
+    }
 }
 
 /// Validate existing canonical cwd containment without spawning a child.
@@ -1618,6 +1713,61 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn decode_base64(text: &str) -> Result<Vec<u8>, String> {
+    if !text.len().is_multiple_of(4) {
+        return Err("base64 stream length is not a multiple of four".to_owned());
+    }
+    let mut output = Vec::with_capacity(text.len() / 4 * 3);
+    for (index, chunk) in text.as_bytes().chunks_exact(4).enumerate() {
+        let last = index + 1 == text.len() / 4;
+        let padding = match (chunk[2], chunk[3]) {
+            (b'=', b'=') => 2,
+            (_, b'=') => 1,
+            (_, _) => 0,
+        };
+        if padding > 0 && !last {
+            return Err("base64 stream padding appears before final quartet".to_owned());
+        }
+        let a = base64_value(chunk[0])?;
+        let b = base64_value(chunk[1])?;
+        let c = if chunk[2] == b'=' {
+            0
+        } else {
+            base64_value(chunk[2])?
+        };
+        let d = if chunk[3] == b'=' {
+            0
+        } else {
+            base64_value(chunk[3])?
+        };
+        if chunk[0] == b'=' || chunk[1] == b'=' || (chunk[2] == b'=' && chunk[3] != b'=') {
+            return Err("base64 stream has invalid padding".to_owned());
+        }
+        output.push((a << 2) | (b >> 4));
+        if padding < 2 {
+            output.push((b << 4) | (c >> 2));
+        }
+        if padding == 0 {
+            output.push((c << 6) | d);
+        }
+    }
+    if encode_base64(&output) != text {
+        return Err("base64 stream is not canonical".to_owned());
+    }
+    Ok(output)
+}
+
+fn base64_value(byte: u8) -> Result<u8, String> {
+    match byte {
+        b'A'..=b'Z' => Ok(byte - b'A'),
+        b'a'..=b'z' => Ok(byte - b'a' + 26),
+        b'0'..=b'9' => Ok(byte - b'0' + 52),
+        b'+' => Ok(62),
+        b'/' => Ok(63),
+        _ => Err("base64 stream contains an invalid character".to_owned()),
+    }
 }
 
 fn encode_base64(bytes: &[u8]) -> String {

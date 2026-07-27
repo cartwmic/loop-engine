@@ -249,7 +249,7 @@ Task boundaries follow final capabilities, not old/new migration stages. Shared-
 
 ## Package C — Semantic evidence and local publication
 
-### T010 [~] Implement final semantic contract and pipeline
+### T010 [x] Implement final semantic contract and pipeline
 
 - **Class:** Implementation.
 - **Depends:** T009.
@@ -262,7 +262,7 @@ Task boundaries follow final capabilities, not old/new migration stages. Shared-
 - **Done when:** four configured axes always produce four normalized records and coherence cannot erase any non-pass.
 - **Stop:** semantic executable chooses gate decision or duplicate registry remains active.
 
-### T011 [ ] Implement canonical evidence, advisory review, and approval
+### T011 [x] Implement canonical evidence, advisory review, and approval
 
 - **Class:** Implementation.
 - **Depends:** T010.
@@ -274,7 +274,7 @@ Task boundaries follow final capabilities, not old/new migration stages. Shared-
 - **Handoff:** document store/query constructors, advisory contract, and approval-binding predicate consumed by T012.
 - **Done when:** advisory evidence is publication-free and approval can reference only exact verified semantic-block evaluation.
 
-### T012 [ ] Implement aggregate publication and pre-push
+### T012 [x] Implement aggregate publication and pre-push
 
 - **Class:** Implementation.
 - **Depends:** T011.
@@ -287,7 +287,7 @@ Task boundaries follow final capabilities, not old/new migration stages. Shared-
 - **Done when:** pre-push uses final v2 publication path and one invocation writes one expected attempt.
 - **Stop:** approval skips deterministic checks, publication mutates evaluation disposition, or one push yields multiple verdicts.
 
-### T013 [ ] Implement idempotent hook installation
+### T013 [x] Implement idempotent hook installation
 
 - **Class:** Implementation.
 - **Depends:** T008, T012.
@@ -300,7 +300,7 @@ Task boundaries follow final capabilities, not old/new migration stages. Shared-
 - **Done when:** fresh clone can install both final hooks without manual Git config editing.
 - **Stop:** installer rewrites hooks, mutates candidate source, or silently replaces conflicting configuration.
 
-### T014 [ ] Gate final local publication stack
+### T014 [x] Gate final local publication stack
 
 - **Class:** Package gate.
 - **Depends:** T013.
@@ -313,7 +313,7 @@ Task boundaries follow final capabilities, not old/new migration stages. Shared-
 
 ## Package D — CI, final cleanup, documentation, and closeout
 
-### T015 [ ] Implement final CI path and remove remaining superseded code
+### T015 [~] Implement final CI path and remove remaining superseded code
 
 - **Class:** Implementation.
 - **Depends:** T014.

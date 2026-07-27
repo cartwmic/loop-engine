@@ -520,7 +520,7 @@ It then:
 - confirms tracked hook files exist and are executable;
 - sets local `core.hooksPath=.githooks` through `/usr/bin/git config --local`;
 - is idempotent;
-- reports previous conflicting local value before replacing it;
+- reports any conflicting local value and leaves it unchanged;
 - performs no global Git configuration.
 
 Fresh clones require this explicit command. Git provides no repository-controlled pre-hook capable of installing itself.

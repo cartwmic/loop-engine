@@ -301,11 +301,28 @@ impl SemanticAxis {
     }
 }
 
-/// Exact candidate policy digest set. Rubric keys are repository-relative and sorted.
+/// One manifest-derived semantic result/rubric binding.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SemanticBinding {
+    pub id: String,
+    pub rubric: PathBuf,
+}
+
+/// Exact ordered semantic topology declared by candidate manifest.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SemanticTopology {
+    pub axes: Vec<SemanticBinding>,
+    pub coherence: SemanticBinding,
+}
+
+/// Exact candidate policy digest set and manifest-derived semantic topology.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BindingDigests {
     manifest_digest: String,
     rubric_digests: BTreeMap<PathBuf, String>,
+    semantic_topology: Option<SemanticTopology>,
 }
 
 impl BindingDigests {
@@ -315,6 +332,10 @@ impl BindingDigests {
 
     pub fn rubric_digests(&self) -> &BTreeMap<PathBuf, String> {
         &self.rubric_digests
+    }
+
+    pub fn semantic_topology(&self) -> Option<&SemanticTopology> {
+        self.semantic_topology.as_ref()
     }
 }
 
@@ -446,6 +467,7 @@ pub fn compute_binding(
         return Ok(BindingDigests {
             manifest_digest,
             rubric_digests,
+            semantic_topology: None,
         });
     };
 
@@ -478,9 +500,24 @@ pub fn compute_binding(
         rubric_digests.insert(relative.to_path_buf(), sha256_hex(&bytes));
     }
 
+    let semantic_topology = SemanticTopology {
+        axes: semantic
+            .axes()
+            .iter()
+            .map(|axis| SemanticBinding {
+                id: axis.id().to_owned(),
+                rubric: axis.rubric().to_owned(),
+            })
+            .collect(),
+        coherence: SemanticBinding {
+            id: semantic.coherence().id().to_owned(),
+            rubric: semantic.coherence().rubric().to_owned(),
+        },
+    };
     Ok(BindingDigests {
         manifest_digest,
         rubric_digests,
+        semantic_topology: Some(semantic_topology),
     })
 }
 

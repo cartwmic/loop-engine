@@ -10,8 +10,9 @@ use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 use xtask::process::{
-    CancellationRequest, CleanupOutcome, EnvironmentChanges, ProcessSpec, ProcessTermination,
-    SpawnFailureKind, StreamEncoding, StreamKind, spawn,
+    Cancellation, CancellationRequest, CleanupOutcome, EnvironmentChanges, ProcessSpec,
+    ProcessTermination, SpawnFailureKind, StreamEncoding, StreamKind, spawn,
+    spawn_with_cancellation,
 };
 
 fn fixture() -> PathBuf {
@@ -245,6 +246,40 @@ fn externally_triggered_cancellation_is_idempotent_and_cleans_group() {
     assert_eq!(cancellation.cancel(), CancellationRequest::AlreadyFinished);
     let pid = fs::read_to_string(pid_file).expect("child pid");
     assert!(!process_is_live(pid.trim()), "child survived cancellation");
+}
+
+#[test]
+fn shared_cancellation_terminates_and_awaits_multiple_active_groups() {
+    let root = candidate();
+    let cancellation = Cancellation::new();
+    let first = spawn_with_cancellation(spec(root.path(), &["sleep", "30"]), &cancellation)
+        .expect("first registered process");
+    let second = spawn_with_cancellation(spec(root.path(), &["sleep", "30"]), &cancellation)
+        .expect("second registered process");
+
+    assert_eq!(cancellation.cancel(), CancellationRequest::Requested);
+    assert!(spawn_with_cancellation(spec(root.path(), &["sleep", "30"]), &cancellation).is_none());
+    let first = first.await_completion();
+    let second = second.await_completion();
+    assert_eq!(first.termination, ProcessTermination::Cancelled);
+    assert_eq!(second.termination, ProcessTermination::Cancelled);
+    assert!(matches!(first.cleanup, CleanupOutcome::Completed { .. }));
+    assert!(matches!(second.cleanup, CleanupOutcome::Completed { .. }));
+}
+
+#[test]
+fn cancellation_finish_atomically_excludes_late_signals_and_children() {
+    let root = candidate();
+    let finished = Cancellation::new();
+
+    assert!(finished.finish());
+    assert_eq!(finished.cancel(), CancellationRequest::AlreadyFinished);
+    assert!(spawn_with_cancellation(spec(root.path(), &["sleep", "30"]), &finished).is_none());
+    assert!(finished.finish());
+
+    let interrupted = Cancellation::new();
+    assert_eq!(interrupted.cancel(), CancellationRequest::Requested);
+    assert!(!interrupted.finish());
 }
 
 #[test]

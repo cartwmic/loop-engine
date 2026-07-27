@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loop-engine.local/quality/semantic-judge/v2/request.schema.json",
+  "title": "Semantic judge request v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "request_kind", "axis_id", "base_revision", "candidate_revision", "candidate_tree", "rubric", "diff", "resulting_files", "deterministic_evidence", "axis_results", "correction"],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "request_kind": { "enum": ["axis", "correction", "coherence"] },
+    "axis_id": { "$ref": "#/$defs/non_empty" },
+    "base_revision": { "$ref": "#/$defs/non_empty" },
+    "candidate_revision": { "$ref": "#/$defs/non_empty" },
+    "candidate_tree": { "$ref": "#/$defs/non_empty" },
+    "rubric": { "$ref": "#/$defs/rubric" },
+    "diff": { "$ref": "#/$defs/bytes" },
+    "resulting_files": { "type": "array", "items": { "$ref": "#/$defs/resulting_file" } },
+    "deterministic_evidence": { "type": "object" },
+    "axis_results": { "type": "array", "items": { "$ref": "#/$defs/axis_result" } },
+    "correction": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/correction" }] }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "request_kind": { "const": "axis" } }, "required": ["request_kind"] },
+      "then": { "properties": { "axis_results": { "maxItems": 0 }, "correction": { "type": "null" } } }
+    },
+    {
+      "if": { "properties": { "request_kind": { "const": "coherence" } }, "required": ["request_kind"] },
+      "then": { "properties": { "axis_results": { "minItems": 4, "maxItems": 4 }, "correction": { "type": "null" } } }
+    },
+    {
+      "if": { "properties": { "request_kind": { "const": "correction" } }, "required": ["request_kind"] },
+      "then": { "properties": { "correction": { "$ref": "#/$defs/correction" } } }
+    }
+  ],
+  "$defs": {
+    "non_empty": { "type": "string", "minLength": 1 },
+    "bytes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["encoding", "data"],
+      "properties": {
+        "encoding": { "enum": ["utf-8", "base64"] },
+        "data": { "type": "string" }
+      }
+    },
+    "rubric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "content"],
+      "properties": {
+        "id": { "$ref": "#/$defs/non_empty" },
+        "content": { "$ref": "#/$defs/non_empty" }
+      }
+    },
+    "resulting_file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "kind", "content"],
+      "properties": {
+        "path": { "$ref": "#/$defs/non_empty" },
+        "kind": { "enum": ["regular", "symlink", "deleted"] },
+        "content": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/bytes" }] }
+      }
+    },
+    "citation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "reference", "detail"],
+      "properties": {
+        "kind": { "enum": ["rubric", "candidate", "deterministic_evidence", "axis_result"] },
+        "reference": { "$ref": "#/$defs/non_empty" },
+        "detail": { "$ref": "#/$defs/non_empty" }
+      }
+    },
+    "axis_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "citations", "message"],
+      "properties": {
+        "id": { "$ref": "#/$defs/non_empty" },
+        "status": { "enum": ["pass", "block", "indeterminate", "unavailable"] },
+        "citations": { "type": "array", "items": { "$ref": "#/$defs/citation" } },
+        "message": { "$ref": "#/$defs/non_empty" }
+      }
+    },
+    "correction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["original_request_kind", "invalid_response", "contract_error"],
+      "properties": {
+        "original_request_kind": { "enum": ["axis", "coherence"] },
+        "invalid_response": { "$ref": "#/$defs/bytes" },
+        "contract_error": { "$ref": "#/$defs/non_empty" }
+      }
+    }
+  }
+}

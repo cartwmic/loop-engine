@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "approval.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "approval_id", "report_digest", "base_revision", "candidate_revision", "candidate_tree", "manifest_digest", "rubric_digests", "semantic_topology", "reason", "created_at"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "approval_id": { "type": "string", "format": "uuid", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+    "report_digest": { "$ref": "definitions.schema.json#/$defs/digest" },
+    "base_revision": { "$ref": "definitions.schema.json#/$defs/objectId" },
+    "candidate_revision": { "$ref": "definitions.schema.json#/$defs/objectId" },
+    "candidate_tree": { "$ref": "definitions.schema.json#/$defs/objectId" },
+    "manifest_digest": { "$ref": "definitions.schema.json#/$defs/digest" },
+    "rubric_digests": { "$ref": "definitions.schema.json#/$defs/rubricDigests" },
+    "semantic_topology": { "$ref": "definitions.schema.json#/$defs/semanticTopology" },
+    "reason": { "type": "string", "pattern": ".*\\S.*" },
+    "created_at": { "type": "string", "format": "date-time" }
+  }
+}

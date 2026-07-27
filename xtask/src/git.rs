@@ -50,6 +50,51 @@ pub struct Repository {
     effective_index: PathBuf,
 }
 
+/// Resolve only the Git common directory with one authoritative Git process.
+///
+/// Rejected and deletion-only publication inputs use this narrow path so they
+/// cannot trigger repository discovery, object queries, or candidate policy.
+pub fn common_directory_only(path: &Path) -> Result<PathBuf> {
+    let starting_path = path
+        .canonicalize()
+        .with_context(|| format!("failed to resolve repository path `{}`", path.display()))?;
+    if !starting_path.is_dir() {
+        bail!(
+            "repository start path is not a directory: {}",
+            starting_path.display()
+        );
+    }
+
+    let mut command = Command::new(GIT_PROGRAM);
+    for name in SCRUBBED_GIT_ENVIRONMENT {
+        command.env_remove(name);
+    }
+    for (name, _) in std::env::vars_os().filter(|(name, _)| {
+        let name = name.to_string_lossy();
+        name.starts_with("GIT_CONFIG_KEY_") || name.starts_with("GIT_CONFIG_VALUE_")
+    }) {
+        command.env_remove(name);
+    }
+    let output = command
+        .args(["rev-parse", "--git-common-dir"])
+        .current_dir(&starting_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context("failed to spawn /usr/bin/git")?;
+    ensure_success(&output, "git rev-parse --git-common-dir")?;
+    let common = output_path(&output.stdout, "Git common directory")?;
+    let common = if common.is_absolute() {
+        common
+    } else {
+        starting_path.join(common)
+    };
+    common
+        .canonicalize()
+        .context("failed to resolve absolute Git common directory")
+}
+
 impl Repository {
     /// Resolve repository paths using Git rather than filesystem assumptions.
     pub fn resolve(path: &Path) -> Result<Self> {
