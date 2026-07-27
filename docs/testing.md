@@ -436,7 +436,6 @@ Settled local mechanism:
 
 - version hooks under `.githooks/`;
 - pre-commit materializes the exact staged tree and runs only `git diff --cached --check`, deterministic documentation, architecture, and formatting checks;
-- explicit `cargo run -p xtask -- judge --staged` remains available for early semantic feedback but is not part of default commit latency;
 - pre-push resolves the exact remote destination tip and evaluates one aggregate base-to-head range in one detached candidate-head worktree;
 - existing branches require the advertised remote tip to be an ancestor of local head; new branches use the exact advertised integration-branch tip as base;
 - candidate-head `quality/manifest.toml` must not remove or weaken checks present at the base and runs once; pre-manifest bases use the immutable built-in baseline plus candidate-head checks when introduced;

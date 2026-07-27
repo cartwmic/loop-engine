@@ -9,7 +9,7 @@ use crate::args::{GlobalCli, parse_planned_application};
 use crate::composition::{
     LoadedConfiguration, TraceCorrelation, build_application_from_configuration,
 };
-use crate::driver_catalog::DRIVER_OPERATION_IDS;
+use crate::driver_catalog::DRIVER_OPERATIONS;
 use crate::execution::{
     PreparedApplicationCommand, execute_application_command, prepare_application_command,
 };
@@ -161,7 +161,10 @@ fn dispatch(session: TraceSession, paths: &MachinePaths, cli: GlobalCli) -> i32 
         }
     };
     let operation = command.operation_id();
-    if !DRIVER_OPERATION_IDS.contains(&operation.as_str()) {
+    if !DRIVER_OPERATIONS
+        .iter()
+        .any(|registered| registered.id == operation.as_str())
+    {
         return fail_parse_with_message(
             session,
             "usage",
@@ -360,18 +363,17 @@ fn driver_list_operations(mut session: TraceSession) -> i32 {
     let format = session.format;
     let request_id = session.request_id.clone();
     let trace_path = trace_path_string(&session.trace_path);
-    let operations = driver_catalog_operations();
     if let Err(code) = write_driver_metadata(&mut session, "list_operations", || match format {
         RenderFormat::Human => {
-            for (id, argv) in &operations {
-                println!("{id}\t{argv}");
+            for operation in DRIVER_OPERATIONS {
+                println!("{}\t{}", operation.id, operation.argv);
             }
             Ok(())
         }
         RenderFormat::Json => {
-            let rows = operations
+            let rows = DRIVER_OPERATIONS
                 .iter()
-                .map(|(id, argv)| json!({ "id": id, "argv": argv }))
+                .map(|operation| json!({ "id": operation.id, "argv": operation.argv }))
                 .collect::<Vec<_>>();
             write_stdout_json(&json!({
                 "schema_version": 1,
@@ -385,67 +387,6 @@ fn driver_list_operations(mut session: TraceSession) -> i32 {
         return code;
     }
     finish(session, 0)
-}
-
-/// Operation rows for `--list-operations`, derived from the production driver catalog.
-fn driver_catalog_operations() -> Vec<(&'static str, &'static str)> {
-    DRIVER_OPERATION_IDS
-        .iter()
-        .copied()
-        .map(|id| {
-            let argv = match id {
-                "provider.add" => {
-                    "provider add <HANDLE> --exec <PATH> --working-directory <PATH> [--arg <VALUE> ...] [--timeout <SECONDS>]"
-                }
-                "provider.list" => {
-                    "provider list [--enabled] [--tombstoned] [--active-runs-for <REGISTRATION-ID>] [--cursor <CURSOR>] [--limit <COUNT>]"
-                }
-                "provider.check" => {
-                    "provider check <TARGET> [--active-runs] [--cursor <CURSOR>] [--limit <COUNT>]"
-                }
-                "provider.update" => {
-                    "provider update <TARGET> --exec <PATH> [--arg <VALUE> ...] [--working-directory <PATH>] [--timeout <SECONDS>]"
-                }
-                "provider.rename" => "provider rename <TARGET> <NEW-HANDLE>",
-                "provider.disable" => {
-                    "provider disable <TARGET> [--warning-cursor <CURSOR>] [--limit <COUNT>] [--allow-active-runs <ACK-TOKEN>]"
-                }
-                "provider.restore" => {
-                    "provider restore <REGISTRATION-ID> --handle <HANDLE> --exec <PATH> --working-directory <PATH> [--arg <VALUE> ...] [--timeout <SECONDS>]"
-                }
-                "run.create" => "run create <TARGET> [--label <LABEL>] [--inputs <PATH>]",
-                "run.list" => {
-                    "run list [--terminal] [--all] [--cursor <CURSOR>] [--limit <COUNT>]"
-                }
-                "run.terminate" => "run terminate <RUN-ID> [--note <TEXT>]",
-                "run.history" => {
-                    "run history <RUN-ID> [--cursor <CURSOR>] [--limit <COUNT>]"
-                }
-                "run.show" => "run show <RUN-ID>",
-                "run.graph" => "run graph <RUN-ID>",
-                "run.evidence.add" => {
-                    "run evidence add <RUN-ID> --kind <KIND> --ref <LOCATOR> [--digest <DIGEST>] [--media-type <TYPE>] [--metadata <PATH>]"
-                }
-                "run.evidence.list" => {
-                    "run evidence list <RUN-ID> [--cursor <CURSOR>] [--limit <COUNT>]"
-                }
-                "run.annotate" => {
-                    "run annotate <RUN-ID> [--note <TEXT>] [--actor <PATH>] [--corrects <SEQUENCE>]"
-                }
-                "run.label" => "run label <RUN-ID> [--set <LABEL> | --clear]",
-                "run.request" => {
-                    "run request <RUN-ID> <EVENT> [--evidence-id <ID> ...] [--evidence <PATH>] [--note <TEXT>]"
-                }
-                "run.guidance" => {
-                    "run guidance <RUN-ID> [--evidence-id <ID> ...]"
-                }
-                "run.compatibility" => "run compatibility <RUN-ID>",
-                "run.export" => "run export <RUN-ID> --output <DIR>",
-                _ => unreachable!("driver catalog entry must own an argv template"),
-            };
-            (id, argv)
-        })
-        .collect()
 }
 
 fn write_driver_metadata(
@@ -802,7 +743,7 @@ fn help_usage() -> String {
         "      --list-operations    List currently exposed application operations",
         "      --format <human|json>  Output rendering mode (default: human)",
         "",
-        "Nine checkpoint-closed alpha application operations are available.",
+        "All cataloged application operations are available.",
         "Use --list-operations for their authoritative argv templates.",
         "",
     ]

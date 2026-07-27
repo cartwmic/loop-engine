@@ -1,29 +1,31 @@
-# Observability rubric v1
+# Observability consequences rubric
 
-Base-versioned focused rubric. Loaded only from the remote base revision's committed `quality/rubrics/manifest.json`. Applies to the following push only; never read from the candidate working tree for self-judgment.
+## Owner
+
+This axis owns judgment of observability consequences introduced by the exact aggregate change. It evaluates diagnostic authority, stable instrumentation boundaries, failure visibility, correlation, and truthful completeness claims.
 
 ## Criteria
 
-### OBS-1. Trace is diagnostic, not mutation authority
+### OBS-1. Trace remains diagnostic, not mutation authority
 
-Operational trace is diagnostic storage only. It **MUST NOT** become competing authority over authoritative SQLite state, journal rows, or export artifacts.
+Operational trace must stay diagnostic, not mutation authority. It must not become competing authority over SQLite current state, immutable journal facts, or export artifacts.
 
-Cite: `docs/operational-trace.md` § Scope and authority; `docs/invariants.md` § I42, I46.
+### OBS-2. Consequential work remains visible at stable boundaries
 
-### OBS-2. Journal explains; current state remains authoritative
+Changes must preserve useful correlated visibility at dispatch, provider-execution, and persistence boundaries. New alternate paths must not silently bypass the boundary that owns their observable request, result, timing, and failure facts. Pure helpers do not require per-function logging.
 
-The immutable ordered journal explains changes. Stored current state remains authoritative; journal **MUST NOT** be folded to derive current state, and state/journal **MUST NOT** silently disagree about durable mutation.
+### OBS-3. Failure timing and authority stay truthful
 
-Cite: `docs/tenets.md` § 8; `docs/invariants.md` § I12, I13, I14, I15.
+Trace initialization failure must remain pre-dispatch. Later sink failure must not retroactively change an authoritative operation outcome, and diagnostics must distinguish failure before durable work from failure after commit.
 
-### OBS-3. Visibility without silent engine work
+### OBS-4. Observation must not overclaim completeness
 
-Every CLI invocation **MUST** create an always-on structured operational trace before dispatch. Instrumentation belongs at stable operation-dispatch, provider-execution, and persistence boundaries; do not require logging in every helper.
+Abrupt process death, sink failure, bounded capture, and rotation can limit observation. Documentation, code, and evidence must not overclaim completeness or imply that missing trace data proves work did not occur.
 
-Cite: `docs/tenets.md` § 26; `docs/invariants.md` § I46.
+### OBS-5. Sensitive and unrelated process context stays out
 
-### OBS-4. Incomplete observation must not be overclaimed
+Operational evidence should contain bounded contract-relevant payloads and correlation facts without leaking inherited environment or unrelated process context. Any changed retention or exposure consequence must be addressed explicitly.
 
-Abrupt process death, storage failure, and rotation can limit trace completeness. The engine **MUST NOT** claim impossible complete observation.
+## Evidence expectations
 
-Cite: `docs/invariants.md` § I46; `docs/operational-trace.md` § Scope and authority.
+Cite changed boundaries and supplied deterministic or behavioral evidence. Block when a consequential path loses required visibility, authority becomes ambiguous, or claimed evidence exceeds what instrumentation can prove.

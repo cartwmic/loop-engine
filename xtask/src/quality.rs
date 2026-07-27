@@ -12,6 +12,7 @@ use serde::Serialize;
 
 use crate::candidate::PreparedCandidate;
 use crate::config::{Check, Environment, Phase, Prerequisite, Scope};
+use crate::git::PRIVATE_STAGED_INDEX_ENVIRONMENT;
 use crate::process::{self, EnvironmentChanges, ProcessOutcome, ProcessSpec};
 
 /// Whether evidence was produced for a prerequisite or deterministic check.
@@ -231,6 +232,18 @@ impl<'a> Expansion<'a> {
 /// it blocks every remaining child, records complete blocked evidence, and still
 /// performs final source verification before deriving the result.
 pub fn run(candidate: &PreparedCandidate, phase: Phase) -> DeterministicResult {
+    run_with_cancellation(candidate, phase, &process::Cancellation::new())
+}
+
+/// Run with cancellation owned by the top-level validation lifecycle.
+///
+/// Once requested, no later child starts. An active child is cancelled and fully
+/// awaited by the process layer before this function returns to candidate cleanup.
+pub fn run_with_cancellation(
+    candidate: &PreparedCandidate,
+    phase: Phase,
+    cancellation: &process::Cancellation,
+) -> DeterministicResult {
     let binding = CandidateBinding {
         base_revision: candidate.base_revision().to_owned(),
         candidate_revision: candidate.candidate_revision().to_owned(),
@@ -254,6 +267,7 @@ pub fn run(candidate: &PreparedCandidate, phase: Phase) -> DeterministicResult {
             expanded,
             mutation.as_deref(),
             false,
+            cancellation,
         );
         retain_mutation(&record, &mut mutation);
         prerequisites.push(record);
@@ -292,6 +306,7 @@ pub fn run(candidate: &PreparedCandidate, phase: Phase) -> DeterministicResult {
             expanded,
             mutation.as_deref(),
             empty_changed,
+            cancellation,
         );
         retain_mutation(&record, &mut mutation);
         checks.push(record);
@@ -339,6 +354,7 @@ fn schedule_command(
     expanded: ExpandedCommand,
     mutation: Option<&str>,
     empty_changed: bool,
+    cancellation: &process::Cancellation,
 ) -> CommandRecord {
     let raw_failure =
         (!expanded.expansion_errors.is_empty()).then(|| expanded.expansion_errors.join("; "));
@@ -368,6 +384,14 @@ fn schedule_command(
         record.failure = Some(CommandFailure {
             kind: CommandFailureKind::CandidateMutation,
             message: format!("blocked after candidate mutation: {message}"),
+        });
+        return record;
+    }
+    if cancellation.is_cancelled() {
+        record.status = CommandStatus::Blocked;
+        record.failure = Some(CommandFailure {
+            kind: CommandFailureKind::Process,
+            message: "blocked after validation cancellation".to_owned(),
         });
         return record;
     }
@@ -416,7 +440,7 @@ fn schedule_command(
         }
         return record;
     }
-    let outcome = process::execute(spec);
+    let outcome = process::execute_with_cancellation(spec, cancellation);
     let launched = outcome.termination.spawn_failure_kind().is_none();
     let mut failure = if outcome.success() {
         stdout_equals.and_then(|expected| stdout_mismatch(&outcome, expected))
@@ -638,6 +662,9 @@ fn expand_environment(
         declared_set.extend(environment.set().clone());
         unset.extend(environment.unset().iter().cloned());
     }
+    // Candidate commands must never inherit caller-selected index state.
+    unset.insert("GIT_INDEX_FILE".to_owned());
+    unset.insert(PRIVATE_STAGED_INDEX_ENVIRONMENT.to_owned());
     for name in &unset {
         declared_set.remove(name);
     }

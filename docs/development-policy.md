@@ -60,13 +60,7 @@ quality/semantic-judge/v1/build-smoke-request \
   | quality/semantic-judge/v1/judge
 ```
 
-After T024, explicit staged semantic feedback uses:
-
-```bash
-cargo run -p xtask -- judge --staged
-```
-
-R002 removes this command from default pre-commit execution. The versioned hook adapters clear Git's repository-local environment variables before tests spawn nested fixture repositories, then clear any caller-provided `RUSTUP_TOOLCHAIN` override before invoking Cargo so the tracked `rust-toolchain.toml` pin is authoritative. The pre-commit adapter refuses to run when hook, `xtask`, quality-manifest, dependency-policy, toolchain, or semantic-judge implementation paths contain unstaged changes. This prevents working-tree gate code from differing from its staged candidate while unrelated unstaged product/document edits remain excluded by exact-index materialization.
+R002 removes semantic judgment from default pre-commit execution. The versioned hook adapters clear Git's repository-local environment variables before tests spawn nested fixture repositories, then clear any caller-provided `RUSTUP_TOOLCHAIN` override before invoking Cargo so the tracked `rust-toolchain.toml` pin is authoritative. Runner-input parity covers hook, `xtask`, quality-manifest, dependency-policy, toolchain, and formatting-policy paths. This prevents working-tree gate code from differing from its staged candidate while unrelated unstaged product/document edits remain excluded by exact-index materialization.
 
 After T028, the canonical publication / pre-push command is:
 
@@ -101,7 +95,7 @@ Default pre-commit has no semantic disposition; any fast deterministic failure b
 
 The workspace toolchain is pinned in `rust-toolchain.toml` (Rust 1.95.0). Formatting options are frozen in repository-root `rustfmt.toml`. Inherited lint levels are defined in workspace-root `Cargo.toml` under `[workspace.lints]`; workspace members opt in with `[lints] workspace = true` in their own `Cargo.toml`.
 
-Canonical verification commands (also consumed by hooks, CI, and `cargo run -p xtask -- quality` after T028):
+Canonical verification commands declared by [`quality/manifest.toml`](../quality/manifest.toml):
 
 ```bash
 cargo fmt --all --check
@@ -129,7 +123,7 @@ Allowlist summary:
 Canonical selected-equivalent command (licenses, sources, lockfile, policy shape):
 
 ```bash
-cargo run --locked -p xtask -- dependencies
+cargo deny check
 ```
 
 Complementary advisory-database scan against the same `deny.toml` (pinned `cargo-deny` 0.20.2; missing tool or advisory DB failure blocks publication):

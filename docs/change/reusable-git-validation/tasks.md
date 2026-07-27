@@ -198,7 +198,7 @@ Task boundaries follow final capabilities, not old/new migration stages. Shared-
 
 ## Package B — Final deterministic policy and staged validation
 
-### T006 [ ] Rehome objective and semantic policy
+### T006 [x] Rehome objective and semantic policy
 
 - **Class:** Implementation.
 - **Depends:** T005.
@@ -211,7 +211,7 @@ Task boundaries follow final capabilities, not old/new migration stages. Shared-
 - **Done when:** named objective contracts have direct executable coverage, all five semantic owners have final rubric text, and no replacement expands product behavior.
 - **Stop:** a named contract lacks coverage or replacement recreates a source scanner.
 
-### T007 [ ] Install final deterministic manifest and delete superseded validators
+### T007 [x] Install final deterministic manifest and delete superseded validators
 
 - **Class:** Implementation.
 - **Depends:** T004, T006.
@@ -224,7 +224,7 @@ Task boundaries follow final capabilities, not old/new migration stages. Shared-
 - **Done when:** manifest is sole deterministic policy registry, final README-owned tests/rubrics are green, and workspace compiles without deleted APIs.
 - **Stop:** active code references deleted path or generic runner gains project-specific dispatch.
 
-### T008 [ ] Implement exact staged command and pre-commit hook
+### T008 [x] Implement exact staged command and pre-commit hook
 
 - **Class:** Implementation.
 - **Depends:** T007.
@@ -236,7 +236,7 @@ Task boundaries follow final capabilities, not old/new migration stages. Shared-
 - **Handoff:** record exact staged command/hook contract consumed by T009/T012.
 - **Done when:** pre-commit validates only index-derived source through final deterministic manifest.
 
-### T009 [ ] Gate final deterministic and staged stack
+### T009 [x] Gate final deterministic and staged stack
 
 - **Class:** Package gate.
 - **Depends:** T008.
@@ -249,7 +249,7 @@ Task boundaries follow final capabilities, not old/new migration stages. Shared-
 
 ## Package C — Semantic evidence and local publication
 
-### T010 [ ] Implement final semantic contract and pipeline
+### T010 [~] Implement final semantic contract and pipeline
 
 - **Class:** Implementation.
 - **Depends:** T009.

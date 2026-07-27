@@ -1,7 +1,6 @@
 # Dependency policy for loop-engine (T030 / D003).
 # Authoritative allowlists for licenses, sources, advisories, and bans.
-# Canonical command: `cargo run --locked -p xtask -- dependencies`
-# Complementary tooling: `cargo deny check` (same deny.toml).
+# Canonical command: `cargo deny check` through `quality/manifest.toml`.
 
 [graph]
 # Supported MVP targets only (technology.md / T002). Windows is deferred.

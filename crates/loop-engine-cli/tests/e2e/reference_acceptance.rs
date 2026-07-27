@@ -79,9 +79,55 @@ fn copy_tree(source: &Path, destination: &Path) {
         if entry.file_type().expect("fixture type").is_dir() {
             copy_tree(&entry.path(), &target);
         } else {
-            fs::copy(entry.path(), target).expect("copy fixture file");
+            let bytes = fs::read(entry.path()).expect("read fixture file");
+            fs::write(target, bytes).expect("materialize fixture file");
         }
     }
+}
+
+#[test]
+fn copy_tree_materializes_read_only_files_as_writable_scratch_files() {
+    let temporary = tempfile::tempdir().expect("create temporary directory");
+    let source_root = temporary.path().join("source");
+    let destination_root = temporary.path().join("destination");
+    let source_file = source_root.join("nested/fixture.txt");
+    fs::create_dir_all(source_file.parent().expect("source parent"))
+        .expect("create source directory");
+    fs::write(&source_file, b"immutable source").expect("write source fixture");
+
+    let original_permissions = fs::metadata(&source_file)
+        .expect("source metadata")
+        .permissions();
+    let mut read_only_permissions = original_permissions.clone();
+    read_only_permissions.set_readonly(true);
+    fs::set_permissions(&source_file, read_only_permissions).expect("make source read-only");
+
+    copy_tree(&source_root, &destination_root);
+
+    let destination_file = destination_root.join("nested/fixture.txt");
+    assert_eq!(
+        fs::read(&destination_file).expect("read destination fixture"),
+        b"immutable source"
+    );
+    assert!(
+        !fs::metadata(&destination_file)
+            .expect("destination metadata")
+            .permissions()
+            .readonly()
+    );
+    fs::write(&destination_file, b"mutated destination").expect("mutate destination fixture");
+    assert_eq!(
+        fs::read(&source_file).expect("read source after destination mutation"),
+        b"immutable source"
+    );
+    assert!(
+        fs::metadata(&source_file)
+            .expect("source metadata after copy")
+            .permissions()
+            .readonly()
+    );
+
+    fs::set_permissions(source_file, original_permissions).expect("restore source permissions");
 }
 
 fn artifact_root(sandbox: &E2eSandbox, name: &str, happy: bool) -> PathBuf {

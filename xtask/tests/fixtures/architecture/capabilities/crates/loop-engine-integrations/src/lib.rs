@@ -1,1 +1,0 @@
-//! Allowed fixture integrations crate.

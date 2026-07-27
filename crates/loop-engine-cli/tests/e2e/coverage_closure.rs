@@ -5,30 +5,6 @@ use crate::support::{
     parse_structured_stdout, scenario_provider_executable,
 };
 
-const EXPOSED: [&str; 21] = [
-    "provider.add",
-    "provider.list",
-    "provider.check",
-    "provider.update",
-    "provider.rename",
-    "provider.disable",
-    "provider.restore",
-    "run.create",
-    "run.list",
-    "run.show",
-    "run.graph",
-    "run.history",
-    "run.evidence.add",
-    "run.evidence.list",
-    "run.annotate",
-    "run.label",
-    "run.request",
-    "run.guidance",
-    "run.compatibility",
-    "run.terminate",
-    "run.export",
-];
-
 fn observe(recorder: &mut RuntimeCoverageRecorder, invocation: &crate::support::AlphaInvocation) {
     recorder.observe_invocation(Some(&invocation.document), None, Some(&invocation.trace));
     let events = &invocation.trace.events;
@@ -354,23 +330,25 @@ fn alpha_catalog_has_independent_runtime_and_trace_closure() {
     );
     observe(&mut recorder, &restore);
 
-    let expected = EXPOSED
-        .map(str::to_owned)
-        .into_iter()
+    let catalog = loop_engine_core::operations::catalog::PLANNED_OPERATION_IDS
+        .iter()
+        .map(|operation| (*operation).to_owned())
         .collect::<BTreeSet<_>>();
     assert_eq!(
         recorder
             .e2e_operations()
             .into_iter()
             .collect::<BTreeSet<_>>(),
-        expected,
+        catalog,
+        "operations observed from actual runtime outcomes must exactly cover the core catalog",
     );
     assert_eq!(
         recorder
             .trace_operations()
             .into_iter()
             .collect::<BTreeSet<_>>(),
-        expected,
+        catalog,
+        "operations observed from actual correlated traces must exactly cover the core catalog",
     );
 }
 
@@ -389,7 +367,12 @@ fn production_surface_excludes_non_goals_and_unexposed_operations() {
         .iter()
         .map(|row| row["id"].as_str().expect("operation id").to_owned())
         .collect::<BTreeSet<_>>();
-    assert_eq!(observed, EXPOSED.map(str::to_owned).into_iter().collect());
+    assert_eq!(
+        observed,
+        loop_engine_core::operations::catalog::OperationId::planned()
+            .map(|operation| operation.as_str().to_owned())
+            .collect()
+    );
 
     for (index, argv) in [
         vec!["run", "delete", "not-a-run"],

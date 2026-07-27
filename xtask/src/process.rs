@@ -11,6 +11,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -26,8 +27,12 @@ compile_error!("xtask process execution supports only macOS and Linux");
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
+const PROCESS_PROBE_INTERVAL: Duration = Duration::from_millis(250);
+const PROCESS_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 const TERMINATION_GRACE: Duration = Duration::from_millis(500);
+const REAP_GRACE: Duration = Duration::from_millis(500);
 const CLEANUP_DEADLINE: Duration = Duration::from_secs(2);
+const LEADER_PROBE_UNCERTAINTY_DEADLINE: Duration = CLEANUP_DEADLINE;
 
 /// Environment mutations applied after inheriting caller environment.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -297,6 +302,71 @@ pub struct CancellationHandle {
     control: Arc<Control>,
 }
 
+/// Project-neutral cancellation shared by a top-level caller and sequential runner.
+///
+/// Registration closes the race between cancellation and process spawn. At most
+/// one active process is retained because deterministic scheduling is sequential.
+/// Process completion is awaited before registration is removed, and late
+/// cancellation uses the process control's reaped state rather than a stale PGID.
+#[derive(Debug, Clone, Default)]
+pub struct Cancellation {
+    state: Arc<Mutex<CancellationState>>,
+}
+
+#[derive(Debug, Default)]
+struct CancellationState {
+    requested: bool,
+    next_id: u64,
+    active: Option<(u64, CancellationHandle)>,
+}
+
+impl Cancellation {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Request cancellation once and synchronously notify the active group.
+    pub fn cancel(&self) -> CancellationRequest {
+        let mut state = lock(&self.state);
+        if state.requested {
+            return CancellationRequest::AlreadyRequested;
+        }
+        state.requested = true;
+        state
+            .active
+            .as_ref()
+            .map(|(_, handle)| handle.cancel())
+            .unwrap_or(CancellationRequest::Requested)
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        lock(&self.state).requested
+    }
+
+    fn register(&self, handle: CancellationHandle) -> u64 {
+        let mut state = lock(&self.state);
+        let id = state.next_id;
+        state.next_id = state.next_id.wrapping_add(1);
+        debug_assert!(state.active.is_none());
+        if state.requested {
+            handle.cancel();
+        }
+        state.active = Some((id, handle));
+        id
+    }
+
+    fn unregister(&self, id: u64) {
+        let mut state = lock(&self.state);
+        if state
+            .active
+            .as_ref()
+            .is_some_and(|(active, _)| *active == id)
+        {
+            state.active = None;
+        }
+    }
+}
+
 impl CancellationHandle {
     /// Request process-group termination. First request sends SIGTERM
     /// synchronously; later calls never duplicate that signal.
@@ -339,13 +409,13 @@ impl RunningProcess {
                 .take()
                 .expect("completed process outcome is available exactly once"),
             RunningState::Child {
-                mut child,
+                child,
                 stdout,
                 stderr,
                 stdin,
                 deadline,
             } => self.await_child(
-                &mut child,
+                child,
                 Arc::clone(&stdout),
                 Arc::clone(&stderr),
                 Arc::clone(&stdin),
@@ -356,7 +426,7 @@ impl RunningProcess {
 
     fn await_child(
         &mut self,
-        child: &mut Child,
+        mut child: Child,
         stdout: Arc<CaptureState>,
         stderr: Arc<CaptureState>,
         stdin: Arc<WriterState>,
@@ -364,62 +434,86 @@ impl RunningProcess {
     ) -> ProcessOutcome {
         let mut supervision_error = None;
         let mut cancellation_cleanup_started = None;
+        let mut leader_probe = LeaderProbeState::default();
         let mut cleanup_probe = CleanupProbeState::default();
         let mut cleanup_failure = None;
+        let mut leader_probe_task = None;
+        let mut next_leader_probe = Instant::now();
+        let mut next_cleanup_probe = Instant::now();
 
         loop {
             let now = Instant::now();
-            match self
-                .control
-                .observe_leader(now + Duration::from_millis(100))
-            {
-                Ok(_) => {}
-                Err(error) => {
-                    supervision_error = Some(error);
-                    self.control.request(CancellationCause::Supervision);
-                }
-            }
-
-            // Zombie-aware probing observes completion without reaping: timeout
-            // never replaces an observed exit, and leader still anchors PGID.
+            // Timeout and cancellation authority remain responsive while the
+            // one in-flight external leader probe runs on a bounded worker.
             if now >= deadline && !self.control.leader_completed() {
                 self.control.request(CancellationCause::Timeout);
+            }
+
+            let mut leader_observation = leader_probe_task
+                .as_ref()
+                .and_then(LeaderProbeTask::try_observation);
+            if leader_observation.is_some() {
+                leader_probe_task = None;
+            }
+            if leader_probe_task.is_none()
+                && !self.control.leader_completed()
+                && now >= next_leader_probe
+            {
+                next_leader_probe = now + PROCESS_PROBE_INTERVAL;
+                let probe_deadline = if now < deadline {
+                    deadline.min(now + PROCESS_PROBE_TIMEOUT)
+                } else {
+                    now + PROCESS_PROBE_TIMEOUT
+                };
+                match LeaderProbeTask::spawn(Arc::clone(&self.control), probe_deadline) {
+                    Ok(task) => leader_probe_task = Some(task),
+                    Err(error) => leader_observation = Some(Err(error)),
+                }
+            }
+            if let Some(observation) = leader_observation
+                && let LeaderProbeDecision::DeadlineExceeded(error) =
+                    leader_probe.observe(Instant::now(), observation)
+            {
+                supervision_error = Some(error);
+                self.control.request(CancellationCause::Supervision);
             }
 
             if let Some(requested) = self.control.requested_at() {
                 cancellation_cleanup_started.get_or_insert(requested);
             }
             if let Some(started) = cancellation_cleanup_started {
-                if now.saturating_duration_since(started) >= TERMINATION_GRACE {
-                    self.control.send_kill_once();
-                }
-                if now.saturating_duration_since(started) >= CLEANUP_DEADLINE
-                    && !self.control.leader_completed()
-                {
-                    cleanup_failure.get_or_insert_with(|| {
-                        format!(
-                            "process leader {} remained after cancellation cleanup deadline",
-                            self.control.process_group_id
-                        )
-                    });
-                    self.control.send_kill_once();
+                match cancellation_cleanup_decision(now, started, self.control.leader_completed()) {
+                    CancellationCleanupDecision::Continue => {}
+                    CancellationCleanupDecision::SendKill => self.control.send_kill_once(),
+                    CancellationCleanupDecision::BreakAndReap => {
+                        let failure = leader_probe.latest_error.clone().unwrap_or_else(|| {
+                            format!(
+                                "process leader {} remained after cancellation cleanup deadline",
+                                self.control.process_group_id
+                            )
+                        });
+                        supervision_error = Some(failure.clone());
+                        cleanup_failure = Some(failure);
+                        self.control.send_kill_once();
+                        break;
+                    }
                 }
             }
 
-            if self.control.leader_completed() {
+            if self.control.leader_completed() && now >= next_cleanup_probe {
                 let cleanup_deadline = cleanup_probe
                     .started
                     .and_then(|started| started.checked_add(CLEANUP_DEADLINE))
                     .unwrap_or_else(|| now + CLEANUP_DEADLINE);
-                let probe_deadline = cleanup_deadline.min(now + Duration::from_millis(100));
-                let streams_drained = stdout.done.load(Ordering::Acquire)
-                    && stderr.done.load(Ordering::Acquire)
-                    && stdin.done.load(Ordering::Acquire);
-                let decision = cleanup_probe.observe(
-                    now,
-                    group_has_live_members(self.control.process_group_id, probe_deadline),
-                    streams_drained,
-                );
+                let probe_deadline = cleanup_deadline.min(now + PROCESS_PROBE_TIMEOUT);
+                let stream_drain = StreamDrainState {
+                    stdout: stdout.done.load(Ordering::Acquire),
+                    stderr: stderr.done.load(Ordering::Acquire),
+                    stdin: stdin.done.load(Ordering::Acquire),
+                };
+                let probe = group_has_live_members(self.control.process_group_id, probe_deadline);
+                next_cleanup_probe = now + PROCESS_PROBE_INTERVAL;
+                let decision = cleanup_probe.observe(Instant::now(), probe, stream_drain);
                 match decision {
                     CleanupProbeDecision::Complete => break,
                     CleanupProbeDecision::Continue => {
@@ -435,7 +529,9 @@ impl RunningProcess {
                     CleanupProbeDecision::DeadlineExceeded => {
                         cleanup_failure =
                             Some(cleanup_probe.deadline_failure(self.control.process_group_id));
-                        self.control.send_kill_once();
+                        if cleanup_probe.last_group_live || cleanup_probe.latest_error.is_some() {
+                            self.control.send_kill_once();
+                        }
                         break;
                     }
                 }
@@ -444,12 +540,36 @@ impl RunningProcess {
             thread::sleep(POLL_INTERVAL);
         }
 
-        // Reap and release group identity under same lifecycle lock used by
-        // cancellation and every group signal. No handle can signal afterward.
-        let status = match self.control.reap_leader(child) {
-            Ok(status) => Some(status),
+        // Reap and release group identity under the same lifecycle lock used
+        // by cancellation and signaling. An uninterruptible child cannot hold
+        // the caller forever: failed bounded reap transfers ownership to a
+        // signal-free background reaper after marking cleanup failed.
+        let status = match self
+            .control
+            .bounded_reap_leader(&mut child, Instant::now() + REAP_GRACE)
+        {
+            Ok(Some(status)) => Some(status),
+            Ok(None) => {
+                let message = format!(
+                    "process leader {} was not reaped within bounded reap grace",
+                    self.control.process_group_id
+                );
+                supervision_error.get_or_insert_with(|| message.clone());
+                cleanup_failure.get_or_insert_with(|| message.clone());
+                if let Err(error) = defer_reap(child) {
+                    supervision_error.get_or_insert_with(|| error.clone());
+                    cleanup_failure.get_or_insert(error);
+                }
+                None
+            }
             Err(error) => {
-                supervision_error.get_or_insert(error);
+                let mut failure = error;
+                if let Err(defer_error) = defer_reap(child) {
+                    failure.push_str("; ");
+                    failure.push_str(&defer_error);
+                }
+                supervision_error.get_or_insert_with(|| failure.clone());
+                cleanup_failure.get_or_insert(failure);
                 None
             }
         };
@@ -485,8 +605,18 @@ impl RunningProcess {
 
 impl Drop for RunningProcess {
     fn drop(&mut self) {
-        if let RunningState::Child { child, .. } = &mut self.state {
-            self.control.drop_and_reap(child);
+        let state = std::mem::replace(&mut self.state, RunningState::Completed(None));
+        if let RunningState::Child { mut child, .. } = state {
+            self.control.send_kill_once();
+            match self
+                .control
+                .bounded_reap_leader(&mut child, Instant::now() + REAP_GRACE)
+            {
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => {
+                    let _ = defer_reap(child);
+                }
+            }
         }
     }
 }
@@ -615,6 +745,19 @@ pub fn spawn(spec: ProcessSpec) -> RunningProcess {
 /// Spawn and synchronously await one process attempt.
 pub fn execute(spec: ProcessSpec) -> ProcessOutcome {
     spawn(spec).await_completion()
+}
+
+/// Spawn under caller-owned cancellation and await full process-group cleanup.
+///
+/// Registration happens immediately after spawn. Cancellation racing with that
+/// window is remembered and delivered during registration. The active handle is
+/// removed only after completion has reaped the leader and finished group probes.
+pub fn execute_with_cancellation(spec: ProcessSpec, cancellation: &Cancellation) -> ProcessOutcome {
+    let running = spawn(spec);
+    let id = cancellation.register(running.cancellation_handle());
+    let outcome = running.await_completion();
+    cancellation.unregister(id);
+    outcome
 }
 
 /// Validate existing canonical cwd containment without spawning a child.
@@ -794,8 +937,7 @@ impl Control {
     }
 
     fn observe_leader(&self, deadline: Instant) -> Result<bool, String> {
-        let mut lifecycle = lock(&self.lifecycle);
-        if lifecycle.phase != LeaderPhase::Active {
+        if lock(&self.lifecycle).phase != LeaderPhase::Active {
             return Ok(true);
         }
         let pid = self.process_group_id.to_string();
@@ -812,7 +954,10 @@ impl Control {
             .next()
             .is_some_and(|value| value.starts_with('Z'));
         if completed {
-            lifecycle.phase = LeaderPhase::Completed;
+            let mut lifecycle = lock(&self.lifecycle);
+            if lifecycle.phase == LeaderPhase::Active {
+                lifecycle.phase = LeaderPhase::Completed;
+            }
         }
         Ok(completed)
     }
@@ -857,23 +1002,35 @@ impl Control {
         }
     }
 
-    fn reap_leader(&self, child: &mut Child) -> Result<ExitStatus, String> {
-        let mut lifecycle = lock(&self.lifecycle);
-        let status = child.wait().map_err(|error| {
-            format!(
-                "failed reaping process leader {}: {error}",
-                self.process_group_id
-            )
-        })?;
-        lifecycle.phase = LeaderPhase::Released;
-        Ok(status)
-    }
-
-    fn drop_and_reap(&self, child: &mut Child) {
-        let mut lifecycle = lock(&self.lifecycle);
-        self.signal_group_locked(&mut lifecycle, Signal::SIGKILL);
-        let _ = child.wait();
-        lifecycle.phase = LeaderPhase::Released;
+    fn bounded_reap_leader(
+        &self,
+        child: &mut Child,
+        deadline: Instant,
+    ) -> Result<Option<ExitStatus>, String> {
+        loop {
+            {
+                let mut lifecycle = lock(&self.lifecycle);
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        lifecycle.phase = LeaderPhase::Released;
+                        return Ok(Some(status));
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        lifecycle.phase = LeaderPhase::Released;
+                        return Err(format!(
+                            "failed reaping process leader {}: {error}",
+                            self.process_group_id
+                        ));
+                    }
+                }
+                if Instant::now() >= deadline {
+                    lifecycle.phase = LeaderPhase::Released;
+                    return Ok(None);
+                }
+            }
+            thread::sleep(POLL_INTERVAL);
+        }
     }
 
     fn cleanup_snapshot(&self) -> (bool, bool, Vec<String>) {
@@ -1006,6 +1163,96 @@ fn spawn_writer(
 
 const PROBE_OUTPUT_LIMIT: usize = 64 * 1024;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LeaderProbeDecision {
+    Certain,
+    Continue,
+    DeadlineExceeded(String),
+}
+
+#[derive(Debug, Default)]
+struct LeaderProbeState {
+    uncertain_since: Option<Instant>,
+    latest_error: Option<String>,
+}
+
+impl LeaderProbeState {
+    fn observe(&mut self, now: Instant, probe: Result<bool, String>) -> LeaderProbeDecision {
+        match probe {
+            Ok(_) => {
+                self.uncertain_since = None;
+                self.latest_error = None;
+                LeaderProbeDecision::Certain
+            }
+            Err(error) => {
+                self.uncertain_since.get_or_insert(now);
+                self.latest_error = Some(error);
+                if self.uncertain_since.is_some_and(|started| {
+                    now.saturating_duration_since(started) >= LEADER_PROBE_UNCERTAINTY_DEADLINE
+                }) {
+                    LeaderProbeDecision::DeadlineExceeded(
+                        self.latest_error
+                            .clone()
+                            .expect("leader probe error was recorded"),
+                    )
+                } else {
+                    LeaderProbeDecision::Continue
+                }
+            }
+        }
+    }
+}
+
+struct LeaderProbeTask {
+    receiver: Receiver<Result<bool, String>>,
+}
+
+impl LeaderProbeTask {
+    fn spawn(control: Arc<Control>, deadline: Instant) -> Result<Self, String> {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        thread::Builder::new()
+            .name("validation-leader-probe".to_owned())
+            .spawn(move || {
+                let _ = sender.send(control.observe_leader(deadline));
+            })
+            .map_err(|error| format!("failed spawning targeted leader-probe worker: {error}"))?;
+        Ok(Self { receiver })
+    }
+
+    fn try_observation(&self) -> Option<Result<bool, String>> {
+        match self.receiver.try_recv() {
+            Ok(observation) => Some(observation),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => {
+                Some(Err("targeted leader-probe worker disconnected".to_owned()))
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CancellationCleanupDecision {
+    Continue,
+    SendKill,
+    BreakAndReap,
+}
+
+fn cancellation_cleanup_decision(
+    now: Instant,
+    started: Instant,
+    leader_completed: bool,
+) -> CancellationCleanupDecision {
+    if leader_completed {
+        CancellationCleanupDecision::Continue
+    } else if now.saturating_duration_since(started) >= CLEANUP_DEADLINE {
+        CancellationCleanupDecision::BreakAndReap
+    } else if now.saturating_duration_since(started) >= TERMINATION_GRACE {
+        CancellationCleanupDecision::SendKill
+    } else {
+        CancellationCleanupDecision::Continue
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CleanupProbeDecision {
     Continue,
@@ -1013,11 +1260,49 @@ enum CleanupProbeDecision {
     DeadlineExceeded,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StreamDrainState {
+    stdout: bool,
+    stderr: bool,
+    stdin: bool,
+}
+
+impl StreamDrainState {
+    #[cfg(test)]
+    const DRAINED: Self = Self {
+        stdout: true,
+        stderr: true,
+        stdin: true,
+    };
+
+    fn all_drained(self) -> bool {
+        self.stdout && self.stderr && self.stdin
+    }
+
+    fn failure_message(self) -> String {
+        let mut undrained = Vec::new();
+        if !self.stdout {
+            undrained.push("stdout");
+        }
+        if !self.stderr {
+            undrained.push("stderr");
+        }
+        if !self.stdin {
+            undrained.push("stdin");
+        }
+        format!(
+            "process streams remained undrained after cleanup deadline: {}",
+            undrained.join(", ")
+        )
+    }
+}
+
 #[derive(Debug, Default)]
 struct CleanupProbeState {
     started: Option<Instant>,
     latest_error: Option<String>,
     last_group_live: bool,
+    last_stream_drain: Option<StreamDrainState>,
 }
 
 impl CleanupProbeState {
@@ -1025,17 +1310,17 @@ impl CleanupProbeState {
         &mut self,
         now: Instant,
         probe: Result<bool, String>,
-        streams_drained: bool,
+        stream_drain: StreamDrainState,
     ) -> CleanupProbeDecision {
+        self.last_stream_drain = Some(stream_drain);
         match probe {
             Ok(false) => {
                 self.latest_error = None;
                 self.last_group_live = false;
-                return if streams_drained {
-                    CleanupProbeDecision::Complete
-                } else {
-                    CleanupProbeDecision::Continue
-                };
+                if stream_drain.all_drained() {
+                    return CleanupProbeDecision::Complete;
+                }
+                self.started.get_or_insert(now);
             }
             Ok(true) => {
                 self.latest_error = None;
@@ -1059,9 +1344,17 @@ impl CleanupProbeState {
     }
 
     fn deadline_failure(&self, process_group_id: u32) -> String {
-        self.latest_error.clone().unwrap_or_else(|| {
-            format!("process group {process_group_id} retained live members after cleanup deadline")
-        })
+        if let Some(error) = &self.latest_error {
+            return error.clone();
+        }
+        if self.last_group_live {
+            return format!(
+                "process group {process_group_id} retained live members after cleanup deadline"
+            );
+        }
+        self.last_stream_drain
+            .expect("cleanup probe records stream-drain state")
+            .failure_message()
     }
 }
 
@@ -1076,22 +1369,88 @@ fn group_has_live_members(process_group_id: u32, deadline: Instant) -> Result<bo
     }
     let pids = String::from_utf8(output)
         .map_err(|_| "targeted process-group probe returned non-UTF-8 output".to_owned())?;
+    let mut parsed_pids = Vec::new();
     for pid in pids.split_whitespace() {
         pid.parse::<u32>()
             .map_err(|_| format!("targeted process-group probe returned invalid PID `{pid}`"))?;
-        let (status, state) = bounded_probe("/bin/ps", &["-o", "stat=", "-p", pid], deadline)?;
-        if !status.success() {
-            continue;
+        parsed_pids.push(pid);
+    }
+    if parsed_pids.is_empty() {
+        return Err("targeted process-group probe returned no PIDs on success".to_owned());
+    }
+
+    let pid_list = parsed_pids.join(",");
+    let (status, states) =
+        bounded_probe("/bin/ps", &["-o", "pid=,stat=", "-p", &pid_list], deadline)?;
+    descendant_snapshot_has_live_member(status, &states, &parsed_pids)
+}
+
+fn descendant_snapshot_has_live_member(
+    status: ExitStatus,
+    states: &[u8],
+    requested_pids: &[&str],
+) -> Result<bool, String> {
+    if !status.success() {
+        if status.code() == Some(1) {
+            return Ok(false);
         }
-        let state = String::from_utf8_lossy(&state);
-        if state
-            .split_whitespace()
-            .any(|value| !value.starts_with('Z'))
-        {
+        return Err(format!("targeted descendant snapshot exited {status}"));
+    }
+
+    let states = String::from_utf8(states.to_vec())
+        .map_err(|_| "targeted descendant snapshot returned non-UTF-8 output".to_owned())?;
+    let mut saw_row = false;
+    for line in states.lines() {
+        saw_row = true;
+        let mut fields = line.split_whitespace();
+        let pid = fields.next().ok_or_else(|| {
+            "targeted descendant snapshot returned a row without a PID".to_owned()
+        })?;
+        let state = fields.next().ok_or_else(|| {
+            format!("targeted descendant snapshot returned no state for PID `{pid}`")
+        })?;
+        if fields.next().is_some() {
+            return Err(format!(
+                "targeted descendant snapshot returned extra fields for PID `{pid}`"
+            ));
+        }
+        if !requested_pids.contains(&pid) {
+            return Err(format!(
+                "targeted descendant snapshot returned unrequested PID `{pid}`"
+            ));
+        }
+        if !state.starts_with('Z') {
             return Ok(true);
         }
     }
+    if !saw_row {
+        return Err("targeted descendant snapshot returned no rows on success".to_owned());
+    }
     Ok(false)
+}
+
+fn defer_reap(mut child: Child) -> Result<(), String> {
+    let process_id = child.id();
+    thread::Builder::new()
+        .name("validation-deferred-reaper".to_owned())
+        .spawn(move || {
+            let _ = child.wait();
+        })
+        .map(|_| ())
+        .map_err(|error| {
+            format!("failed spawning deferred reaper for process leader {process_id}: {error}")
+        })
+}
+
+fn abandon_probe(mut child: Child, mut failure: String) -> String {
+    if let Err(error) = child.kill() {
+        failure.push_str(&format!("; failed killing targeted process probe: {error}"));
+    }
+    if let Err(error) = defer_reap(child) {
+        failure.push_str("; ");
+        failure.push_str(&error);
+    }
+    failure
 }
 
 fn bounded_probe(
@@ -1099,6 +1458,11 @@ fn bounded_probe(
     args: &[&str],
     deadline: Instant,
 ) -> Result<(ExitStatus, Vec<u8>), String> {
+    if Instant::now() >= deadline {
+        return Err(format!(
+            "targeted process probe `{program}` exceeded deadline before spawn"
+        ));
+    }
     let mut child = Command::new(program)
         .args(args)
         .stdin(Stdio::null())
@@ -1107,7 +1471,7 @@ fn bounded_probe(
         .spawn()
         .map_err(|error| format!("failed spawning targeted process probe `{program}`: {error}"))?;
     let mut stdout = child.stdout.take().expect("probe stdout is piped");
-    let reader = thread::Builder::new()
+    let reader = match thread::Builder::new()
         .name("validation-process-probe".to_owned())
         .spawn(move || {
             let mut retained = Vec::new();
@@ -1124,27 +1488,31 @@ fn bounded_probe(
                     Err(error) => return Err(error),
                 }
             }
-        })
-        .map_err(|error| format!("failed spawning targeted process-probe reader: {error}"))?;
+        }) {
+        Ok(reader) => reader,
+        Err(error) => {
+            let failure = abandon_probe(
+                child,
+                format!("failed spawning targeted process-probe reader: {error}"),
+            );
+            return Err(failure);
+        }
+    };
 
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => thread::sleep(POLL_INTERVAL),
             Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = reader.join();
-                return Err(format!(
-                    "targeted process probe `{program}` exceeded deadline"
+                return Err(abandon_probe(
+                    child,
+                    format!("targeted process probe `{program}` exceeded deadline"),
                 ));
             }
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = reader.join();
-                return Err(format!(
-                    "failed polling targeted process probe `{program}`: {error}"
+                return Err(abandon_probe(
+                    child,
+                    format!("failed polling targeted process probe `{program}`: {error}"),
                 ));
             }
         }
@@ -1211,26 +1579,25 @@ fn derive_cleanup(
     live_members_at_release: bool,
 ) -> CleanupOutcome {
     let (term_sent, kill_sent, signal_errors) = control.cleanup_snapshot();
-    let failure = prior_failure.or_else(|| {
-        live_members_at_release.then(|| {
-            format!(
-                "process group {} retained live members at identity release",
-                control.process_group_id
-            )
-        })
-    });
-    if let Some(message) = failure {
-        return CleanupOutcome::Failed {
-            term_sent,
-            kill_sent,
-            message,
-        };
+    let mut failures = Vec::new();
+    if let Some(failure) = prior_failure {
+        failures.push(failure);
     }
-    if !signal_errors.is_empty() {
+    if live_members_at_release {
+        let failure = format!(
+            "process group {} retained live members at identity release",
+            control.process_group_id
+        );
+        if !failures.contains(&failure) {
+            failures.push(failure);
+        }
+    }
+    failures.extend(signal_errors);
+    if !failures.is_empty() {
         return CleanupOutcome::Failed {
             term_sent,
             kill_sent,
-            message: signal_errors.join("; "),
+            message: failures.join("; "),
         };
     }
     if term_sent || kill_sent {
@@ -1285,6 +1652,111 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cleanup_failure_combines_prior_live_member_and_signal_evidence() {
+        let control = Control::new(42);
+        {
+            let mut lifecycle = lock(&control.lifecycle);
+            lifecycle.term_sent = true;
+            lifecycle.kill_sent = true;
+            lifecycle
+                .signal_errors
+                .push("failed signaling process group 42 with SIGKILL: EPERM".to_owned());
+        }
+
+        assert_eq!(
+            derive_cleanup(&control, Some("bounded cleanup expired".to_owned()), true),
+            CleanupOutcome::Failed {
+                term_sent: true,
+                kill_sent: true,
+                message: "bounded cleanup expired; process group 42 retained live members at identity release; failed signaling process group 42 with SIGKILL: EPERM".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn bounded_probe_timeout_returns_without_blocking_reap_or_reader_join() {
+        let started = Instant::now();
+        let error = bounded_probe("/bin/sleep", &["5"], started + Duration::from_millis(50))
+            .expect_err("sleep probe exceeds deadline");
+
+        assert!(error.contains("exceeded deadline"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn bounded_reap_releases_without_waiting_forever() {
+        let mut child = Command::new("/bin/sleep")
+            .arg("5")
+            .spawn()
+            .expect("spawn sleep fixture");
+        let control = Control::new(child.id());
+        let started = Instant::now();
+
+        assert_eq!(
+            control
+                .bounded_reap_leader(&mut child, started + Duration::from_millis(50))
+                .expect("bounded reap"),
+            None
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(lock(&control.lifecycle).phase, LeaderPhase::Released);
+
+        child.kill().expect("kill sleep fixture");
+        child.wait().expect("reap sleep fixture");
+    }
+
+    #[test]
+    fn leader_probe_error_then_success_recovers() {
+        let started = Instant::now();
+        let mut state = LeaderProbeState::default();
+
+        assert_eq!(
+            state.observe(started, Err("transient leader probe error".to_owned())),
+            LeaderProbeDecision::Continue
+        );
+        assert_eq!(
+            state.observe(
+                started + LEADER_PROBE_UNCERTAINTY_DEADLINE - POLL_INTERVAL,
+                Ok(false),
+            ),
+            LeaderProbeDecision::Certain
+        );
+        assert_eq!(state.uncertain_since, None);
+        assert_eq!(state.latest_error, None);
+    }
+
+    #[test]
+    fn persistent_leader_probe_error_reaches_bounded_reap_with_latest_error() {
+        let started = Instant::now();
+        let mut state = LeaderProbeState::default();
+
+        assert_eq!(
+            state.observe(started, Err("first leader probe error".to_owned())),
+            LeaderProbeDecision::Continue
+        );
+        assert_eq!(
+            state.observe(
+                started + LEADER_PROBE_UNCERTAINTY_DEADLINE,
+                Err("latest leader probe error".to_owned()),
+            ),
+            LeaderProbeDecision::DeadlineExceeded("latest leader probe error".to_owned())
+        );
+        let cleanup_started = started + LEADER_PROBE_UNCERTAINTY_DEADLINE;
+        assert_eq!(
+            cancellation_cleanup_decision(
+                cleanup_started + CLEANUP_DEADLINE,
+                cleanup_started,
+                false,
+            ),
+            CancellationCleanupDecision::BreakAndReap
+        );
+        assert_eq!(
+            state.latest_error.as_deref(),
+            Some("latest leader probe error")
+        );
+    }
+
+    #[test]
     fn cleanup_probe_error_then_empty_recovers() {
         let started = Instant::now();
         let mut state = CleanupProbeState::default();
@@ -1293,15 +1765,73 @@ mod tests {
             state.observe(
                 started,
                 Err("targeted process probe timed out".to_owned()),
-                false,
+                StreamDrainState {
+                    stdout: false,
+                    stderr: true,
+                    stdin: true,
+                },
             ),
             CleanupProbeDecision::Continue
         );
         assert_eq!(
-            state.observe(started + CLEANUP_DEADLINE - POLL_INTERVAL, Ok(false), true,),
+            state.observe(
+                started + CLEANUP_DEADLINE - POLL_INTERVAL,
+                Ok(false),
+                StreamDrainState::DRAINED,
+            ),
             CleanupProbeDecision::Complete
         );
         assert_eq!(state.latest_error, None);
+        assert!(!state.last_group_live);
+    }
+
+    #[test]
+    fn empty_group_with_undrained_stream_recovers_before_deadline() {
+        let started = Instant::now();
+        let mut state = CleanupProbeState::default();
+        let undrained = StreamDrainState {
+            stdout: true,
+            stderr: false,
+            stdin: true,
+        };
+
+        assert_eq!(
+            state.observe(started, Ok(false), undrained),
+            CleanupProbeDecision::Continue
+        );
+        assert_eq!(state.started, Some(started));
+        assert_eq!(
+            state.observe(
+                started + CLEANUP_DEADLINE - POLL_INTERVAL,
+                Ok(false),
+                StreamDrainState::DRAINED,
+            ),
+            CleanupProbeDecision::Complete
+        );
+    }
+
+    #[test]
+    fn empty_group_with_undrained_stream_fails_at_deadline_without_live_group_claim() {
+        let started = Instant::now();
+        let mut state = CleanupProbeState::default();
+        let undrained = StreamDrainState {
+            stdout: false,
+            stderr: true,
+            stdin: false,
+        };
+
+        assert_eq!(
+            state.observe(started, Ok(false), undrained),
+            CleanupProbeDecision::Continue
+        );
+        assert_eq!(
+            state.observe(started + CLEANUP_DEADLINE, Ok(false), undrained),
+            CleanupProbeDecision::DeadlineExceeded
+        );
+        assert_eq!(
+            state.deadline_failure(42),
+            "process streams remained undrained after cleanup deadline: stdout, stdin"
+        );
         assert!(!state.last_group_live);
     }
 
@@ -1311,17 +1841,53 @@ mod tests {
         let mut state = CleanupProbeState::default();
 
         assert_eq!(
-            state.observe(started, Err("first probe error".to_owned()), true),
+            state.observe(
+                started,
+                Err("first probe error".to_owned()),
+                StreamDrainState::DRAINED,
+            ),
             CleanupProbeDecision::Continue
         );
         assert_eq!(
             state.observe(
                 started + CLEANUP_DEADLINE,
                 Err("latest probe error".to_owned()),
-                true,
+                StreamDrainState::DRAINED,
             ),
             CleanupProbeDecision::DeadlineExceeded
         );
         assert_eq!(state.deadline_failure(42), "latest probe error".to_owned());
+    }
+
+    #[test]
+    fn descendant_snapshot_treats_code_one_as_vanished_and_other_failure_as_error() {
+        let vanished = ExitStatus::from_raw(1 << 8);
+        assert_eq!(
+            descendant_snapshot_has_live_member(vanished, b"", &["41"]),
+            Ok(false)
+        );
+
+        let abnormal = ExitStatus::from_raw(2 << 8);
+        assert_eq!(
+            descendant_snapshot_has_live_member(abnormal, b"", &["42"]),
+            Err("targeted descendant snapshot exited exit status: 2".to_owned())
+        );
+    }
+
+    #[test]
+    fn descendant_snapshot_keeps_zombie_filtering_and_rejects_unknown_pids() {
+        let success = ExitStatus::from_raw(0);
+        assert_eq!(
+            descendant_snapshot_has_live_member(success, b"42 Z+\n43 Z\n", &["42", "43"]),
+            Ok(false)
+        );
+        assert_eq!(
+            descendant_snapshot_has_live_member(success, b"42 Z+\n43 S+\n", &["42", "43"]),
+            Ok(true)
+        );
+        assert_eq!(
+            descendant_snapshot_has_live_member(success, b"44 S+\n", &["42", "43"]),
+            Err("targeted descendant snapshot returned unrequested PID `44`".to_owned())
+        );
     }
 }

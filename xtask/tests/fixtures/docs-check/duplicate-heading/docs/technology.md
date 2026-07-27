@@ -1,5 +1,0 @@
-# Duplicate
-
-## Section
-
-## Section

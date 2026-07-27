@@ -1,29 +1,35 @@
-# Architecture and tenet adherence rubric v1
+# Architecture, tenet, and KISS rubric
 
-Base-versioned focused rubric. Loaded only from the remote base revision's committed `quality/rubrics/manifest.json`. Applies to the following push only; never read from the candidate working tree for self-judgment.
+## Owner
+
+This axis owns semantic architecture judgment that cannot be established by Cargo metadata tests. Ordinary tests own product-crate dependency direction and sole-product-binary facts.
 
 ## Criteria
 
-### ARCH-1. Dependencies point inward (KISS boundary)
+### ARCH-1. Core internals point toward the model
 
-Product code **MUST** keep three inward-pointing crates: core ← integrations ← CLI composition root. Core **MUST NOT** depend on integrations or CLI. Within core, dependencies point toward the model.
+Within core, model must not depend on capabilities or operations, and capabilities must not depend on operations. Capability contracts should speak in core model types rather than transport, database, configuration, or CLI records.
 
-Cite: `docs/tenets.md` § 19; `docs/invariants.md` § I22, I23; `docs/architecture.md` § Composition and enforcement.
+### ARCH-2. External construction stays in owned adapters
 
-### ARCH-2. No catch-all abstractions
+Core must not construct provider processes or persistence integrations. Integrations must keep provider-process and persistence construction in their owned adapters, including executable-provider and SQLite details, and translate integration-specific errors before they cross inward.
 
-Do not create generic repositories, catch-all services, `util`, `common`, or interfaces beside implementations. Add capability only for an external side effect or genuine contract boundary.
+### ARCH-3. CLI remains the concrete composition and dispatch boundary
 
-Cite: `docs/architecture.md` § Composition and enforcement; `docs/tenets.md` § 14 (focused core / KISS).
+Concrete integration construction belongs in CLI `composition.rs`. Operation-root dispatch belongs in CLI `dispatch.rs`. Changes must not create alternate provider, persistence, composition, or operation-dispatch paths that bypass those ownership points.
 
-### ARCH-3. Judge tooling stays outside product runtime
+### ARCH-4. Integration details do not leak inward
 
-Replaceable semantic judges are invoked through one versioned generic executable contract. Judge tooling **MUST** remain outside product runtime and create no core dependency.
+Changes must ensure raw integration details do not leak into core policy or capability contracts. CLI must not select transitions, reinterpret provider verdicts, or make workflow-policy decisions.
 
-Cite: `docs/architecture.md` § Composition and enforcement; `docs/tenets.md` § 27.
+### ARCH-5. Architecture remains focused and KISS
 
-### ARCH-4. Clean-room; no OpenSpec
+Apply architecture tenets and KISS judgment to the aggregate change. Reject catch-all services, generic repositories, speculative interfaces, `util`/`common` dumping grounds, needless layer growth, or framework machinery without a genuine contract or external-effect boundary.
 
-Project work **MUST NOT** import prior loop-specific implementations or artifacts. OpenSpec-related skills, commands, and artifacts **MUST NOT** be used.
+### ARCH-6. Validation tooling stays outside product behavior
 
-Cite: `docs/tenets.md` § 18; `docs/invariants.md` § I21.
+Git validation and replaceable semantic-judge mechanics must remain outside product runtime and must not expand Loop Engine product behavior.
+
+## Evidence expectations
+
+Cite concrete changed paths and explain dependency, construction, placement, leakage, or needless-complexity consequences. Do not replace judgment with source-text token counting or demand a retired scanner.

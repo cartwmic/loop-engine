@@ -20,12 +20,16 @@ pub fn install_trace_fixture(
     fixture_relative: &str,
     traces_dir: &Path,
 ) -> Result<PathBuf, TraceParseError> {
-    let source = trace_fixture_path(fixture_relative);
+    materialize_trace_fixture(&trace_fixture_path(fixture_relative), traces_dir)
+}
+
+fn materialize_trace_fixture(source: &Path, traces_dir: &Path) -> Result<PathBuf, TraceParseError> {
     let file_name = source
         .file_name()
         .ok_or_else(|| TraceParseError::Io("fixture path has no file name".into()))?;
     let destination = traces_dir.join(file_name);
-    fs::copy(&source, &destination).map_err(|error| TraceParseError::Io(error.to_string()))?;
+    let bytes = fs::read(source).map_err(|error| TraceParseError::Io(error.to_string()))?;
+    fs::write(&destination, bytes).map_err(|error| TraceParseError::Io(error.to_string()))?;
     Ok(destination)
 }
 
@@ -225,4 +229,56 @@ fn parse_trace_line(line_number: usize, line: &str) -> Result<Value, TraceParseE
             message,
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn materialize_trace_fixture_keeps_read_only_source_and_creates_writable_destination() {
+        let temporary = tempfile::tempdir().expect("create temporary directory");
+        let source_dir = temporary.path().join("source");
+        let traces_dir = temporary.path().join("traces");
+        fs::create_dir_all(&source_dir).expect("create source directory");
+        fs::create_dir_all(&traces_dir).expect("create traces directory");
+        let source = source_dir.join("fixture.jsonl");
+        fs::write(&source, b"{\"event\":\"source\"}\n").expect("write source fixture");
+
+        let original_permissions = fs::metadata(&source)
+            .expect("source metadata")
+            .permissions();
+        let mut read_only_permissions = original_permissions.clone();
+        read_only_permissions.set_readonly(true);
+        fs::set_permissions(&source, read_only_permissions).expect("make source read-only");
+
+        let destination =
+            materialize_trace_fixture(&source, &traces_dir).expect("materialize fixture");
+
+        assert_eq!(destination, traces_dir.join("fixture.jsonl"));
+        assert_eq!(
+            fs::read(&destination).expect("read destination fixture"),
+            b"{\"event\":\"source\"}\n"
+        );
+        assert!(
+            !fs::metadata(&destination)
+                .expect("destination metadata")
+                .permissions()
+                .readonly()
+        );
+        fs::write(&destination, b"{\"event\":\"destination\"}\n")
+            .expect("mutate destination fixture");
+        assert_eq!(
+            fs::read(&source).expect("read source after destination mutation"),
+            b"{\"event\":\"source\"}\n"
+        );
+        assert!(
+            fs::metadata(&source)
+                .expect("source metadata after materialization")
+                .permissions()
+                .readonly()
+        );
+
+        fs::set_permissions(source, original_permissions).expect("restore source permissions");
+    }
 }

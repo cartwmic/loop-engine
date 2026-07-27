@@ -6,6 +6,7 @@ use std::process::{Command, Output, Stdio};
 use anyhow::{Context, Result, bail};
 
 pub const GIT_PROGRAM: &str = "/usr/bin/git";
+pub(crate) const PRIVATE_STAGED_INDEX_ENVIRONMENT: &str = "LOOP_ENGINE_INTERNAL_GIT_INDEX_FILE";
 
 const SCRUBBED_GIT_ENVIRONMENT: &[&str] = &[
     "GIT_DIR",
@@ -52,6 +53,14 @@ pub struct Repository {
 impl Repository {
     /// Resolve repository paths using Git rather than filesystem assumptions.
     pub fn resolve(path: &Path) -> Result<Self> {
+        let index = std::env::var_os("GIT_INDEX_FILE").map(PathBuf::from);
+        Self::resolve_with_index(path, index.as_deref())
+    }
+
+    /// Resolve repository paths with a typed effective-index override.
+    pub(crate) fn resolve_with_index(path: &Path, index: Option<&Path>) -> Result<Self> {
+        let invocation_directory =
+            std::env::current_dir().context("failed to resolve Git invocation directory")?;
         let starting_path = path
             .canonicalize()
             .with_context(|| format!("failed to resolve repository path `{}`", path.display()))?;
@@ -93,9 +102,13 @@ impl Repository {
         let git_directory = git_directory
             .canonicalize()
             .context("failed to canonicalize Git directory")?;
-        let effective_index = match std::env::var_os("GIT_INDEX_FILE") {
-            Some(index) if Path::new(&index).is_absolute() => PathBuf::from(index),
-            Some(index) => starting_path.join(index),
+        let effective_index = match index {
+            Some(index) if index.as_os_str().is_empty() => {
+                bail!("effective Git index path is empty")
+            }
+            Some(index) if index.is_absolute() => index.to_owned(),
+            // Git resolves GIT_INDEX_FILE relative to process invocation cwd.
+            Some(index) => invocation_directory.join(index),
             None => git_directory.join("index"),
         };
 

@@ -1,29 +1,31 @@
-# Behavioral evidence rubric v1
+# Behavioral-evidence sufficiency rubric
 
-Base-versioned focused rubric. Loaded only from the remote base revision's committed `quality/rubrics/manifest.json`. Applies to the following push only; never read from the candidate working tree for self-judgment.
+## Owner
+
+This axis owns semantic judgment of behavioral-evidence sufficiency for the exact aggregate change. Ordinary tests own objective operation-catalog equality and schema, protocol, and other executable product contracts.
 
 ## Criteria
 
-### BEH-1. CLI E2E is behavioral authority
+### BEH-1. Changed behavior has production-path proof
 
-Only black-box production-driver tests **MAY** satisfy behavioral acceptance. Lower-level tests **MUST NOT** substitute for missing production-driver coverage.
+User-visible or operational behavior must have proportionate black-box production CLI evidence. Evidence must exercise the built CLI as a separate process and observe relevant output, exit status, persistence, provider invocation, later CLI query, and correlated trace consequences.
 
-Cite: `docs/invariants.md` § I28; `docs/testing.md` § Behavioral authority; `docs/tenets.md` § 20.
+### BEH-2. Required behavior uses real integrations
 
-### BEH-2. No mock-based behavioral authority
+Behavioral authority requires real provider-process and SQLite integrations plus production parsing, rendering, configuration, and dispatch. Mock-based or in-process substitutes cannot establish product behavior.
 
-Required behavioral tests **MUST** use production CLI, persistence, and provider-process integrations. Mock frameworks and mock-based behavioral tests **MUST NOT** be used.
+### BEH-3. Evidence closes affected facets and regressions
 
-Cite: `docs/invariants.md` § I29; `docs/testing.md` § No-mock policy; `docs/tenets.md` § 21.
+Changed operations must retain sufficient valid, rejection, failure, mutation, journal, lifecycle, provider, persistence, and trace coverage for applicable facets. Avoid both missing affected paths and wasteful cross-products that add no distinct behavioral claim.
 
-### BEH-3. No invented compilation or test claims
+### BEH-4. Lower-level tests remain supporting evidence
 
-Semantic judges receive deterministic build/test/check evidence and **MUST** cite changed lines and rubric rules. Judges **MUST NOT** invent compilation or test claims.
+Lower-level schema, protocol, unit, integration, and property tests are valuable regression contracts but cannot substitute for missing production-driver evidence. Direct fixture setup can establish prerequisite state, not behavioral proof of an operation that would create that state.
 
-Cite: `docs/testing.md` § Git enforcement direction.
+### BEH-5. Claims match supplied evidence
 
-### BEH-4. Direct fixture setup is not behavioral proof
+Review only supplied deterministic evidence and resulting test content. Do not invent compilation, execution, platform, or passing-test claims. A named test without runtime observation is not proof that an operation executed.
 
-Direct fixture construction for migration/corruption or narrowly for schema-valid prerequisite state is never behavioral evidence for an operation that would create that state; such setup must later be repeated through the production CLI after the owning operation exposes.
+## Evidence expectations
 
-Cite: `docs/testing.md` § Isolation requirements.
+Cite changed behavior, exact relevant tests, and deterministic evidence. Block when evidence cannot support a changed behavioral claim or when test strategy bypasses production boundaries.

@@ -1,7 +1,0 @@
-[package]
-name = "loop-engine-integrations"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-loop-engine-core = { path = "../loop-engine-core" }

@@ -1,4 +1,0 @@
-[package]
-name = "loop-engine-integrations"
-version.workspace = true
-edition.workspace = true

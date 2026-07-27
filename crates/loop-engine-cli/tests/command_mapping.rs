@@ -41,7 +41,6 @@ use loop_engine_core::capabilities::provider_invoker::DescribeRequest;
 use loop_engine_core::capabilities::run_reader::RunListFilter;
 use loop_engine_core::model::bounded::COLLECTION_PAGE_DEFAULT_COUNT;
 use loop_engine_core::model::ids::{EventId, EvidenceId, RegistrationId, RequestId};
-use loop_engine_core::operations::catalog::OperationId;
 use loop_engine_core::operations::provider_check::ProviderCheckMode;
 
 fn parse(rest: &[&str]) -> PlannedCommand {
@@ -703,71 +702,59 @@ fn run_export_maps_to_core_export_request() {
 }
 
 #[test]
-fn planned_commands_cover_all_twenty_one_operation_ids() {
-    let samples: &[(&[&str], &str)] = &[
-        (
-            &[
-                "provider",
-                "add",
-                "h",
-                "--exec",
-                "/bin/p",
-                "--working-directory",
-                "/tmp",
-            ],
-            "provider.add",
-        ),
-        (&["provider", "list"], "provider.list"),
-        (&["provider", "check", "h"], "provider.check"),
-        (
-            &["provider", "update", "h", "--exec", "/bin/p"],
-            "provider.update",
-        ),
-        (&["provider", "rename", "h", "h2"], "provider.rename"),
-        (&["provider", "disable", "h"], "provider.disable"),
-        (
-            &[
-                "provider",
-                "restore",
-                "reg-id",
-                "--handle",
-                "h",
-                "--exec",
-                "/bin/p",
-                "--working-directory",
-                "/tmp",
-            ],
-            "provider.restore",
-        ),
-        (&["run", "create", "h"], "run.create"),
-        (&["run", "list"], "run.list"),
-        (&["run", "show", "run-id"], "run.show"),
-        (&["run", "graph", "run-id"], "run.graph"),
-        (&["run", "history", "run-id"], "run.history"),
-        (
-            &[
-                "run", "evidence", "add", "run-id", "--kind", "artifact", "--ref", "loc",
-            ],
-            "run.evidence.add",
-        ),
-        (&["run", "evidence", "list", "run-id"], "run.evidence.list"),
-        (&["run", "annotate", "run-id"], "run.annotate"),
-        (&["run", "label", "run-id", "--set", "lbl"], "run.label"),
-        (&["run", "request", "run-id", "evt"], "run.request"),
-        (&["run", "guidance", "run-id"], "run.guidance"),
-        (&["run", "compatibility", "run-id"], "run.compatibility"),
-        (&["run", "terminate", "run-id"], "run.terminate"),
-        (
-            &["run", "export", "run-id", "--output", "/tmp/out"],
-            "run.export",
-        ),
+fn planned_command_mapping_samples_exactly_cover_operation_catalog() {
+    let samples: &[&[&str]] = &[
+        &[
+            "provider",
+            "add",
+            "h",
+            "--exec",
+            "/bin/p",
+            "--working-directory",
+            "/tmp",
+        ],
+        &["provider", "list"],
+        &["provider", "check", "h"],
+        &["provider", "update", "h", "--exec", "/bin/p"],
+        &["provider", "rename", "h", "h2"],
+        &["provider", "disable", "h"],
+        &[
+            "provider",
+            "restore",
+            "reg-id",
+            "--handle",
+            "h",
+            "--exec",
+            "/bin/p",
+            "--working-directory",
+            "/tmp",
+        ],
+        &["run", "create", "h"],
+        &["run", "list"],
+        &["run", "show", "run-id"],
+        &["run", "graph", "run-id"],
+        &["run", "history", "run-id"],
+        &[
+            "run", "evidence", "add", "run-id", "--kind", "artifact", "--ref", "loc",
+        ],
+        &["run", "evidence", "list", "run-id"],
+        &["run", "annotate", "run-id"],
+        &["run", "label", "run-id", "--set", "lbl"],
+        &["run", "request", "run-id", "evt"],
+        &["run", "guidance", "run-id"],
+        &["run", "compatibility", "run-id"],
+        &["run", "terminate", "run-id"],
+        &["run", "export", "run-id", "--output", "/tmp/out"],
     ];
-    assert_eq!(samples.len(), 21);
-    for (argv, expected) in samples {
-        let command = parse(argv);
-        assert_eq!(command.operation_id().as_str(), *expected);
-    }
-    assert_eq!(OperationId::planned().count(), 21);
+    let observed_routes = samples
+        .iter()
+        .map(|argv| parse(argv).operation_id().as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        observed_routes,
+        loop_engine_core::operations::catalog::PLANNED_OPERATION_IDS,
+        "actual parsed PlannedCommand mappings must exactly cover the core catalog"
+    );
 }
 
 #[test]

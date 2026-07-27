@@ -86,14 +86,23 @@ impl std::error::Error for CandidateCleanupError {
 impl Candidate {
     /// Materialize exact effective-index state. Missing `HEAD` uses empty tree.
     pub fn staged(repository_path: &Path) -> Result<Self> {
-        Self::staged_with_after_snapshot(repository_path, || {})
+        Self::staged_with_after_snapshot(repository_path, None, || {})
+    }
+
+    /// Materialize staged state from one explicitly selected Git index.
+    pub(crate) fn staged_with_index(repository_path: &Path, index: &Path) -> Result<Self> {
+        Self::staged_with_after_snapshot(repository_path, Some(index), || {})
     }
 
     fn staged_with_after_snapshot(
         repository_path: &Path,
+        index: Option<&Path>,
         after_snapshot: impl FnOnce(),
     ) -> Result<Self> {
-        let repository = Repository::resolve(repository_path)?;
+        let repository = match index {
+            Some(index) => Repository::resolve_with_index(repository_path, Some(index)),
+            None => Repository::resolve(repository_path),
+        }?;
         let head_before = repository.head()?;
         let base_revision = match head_before.as_ref() {
             Some(head) => head.clone(),
@@ -1006,7 +1015,7 @@ mod tests {
         git(&repo, &["add", "file"]);
         git(&repo, &["commit", "-m", "two"]);
 
-        let error = Candidate::staged_with_after_snapshot(&repo, || {
+        let error = Candidate::staged_with_after_snapshot(&repo, None, || {
             git(&repo, &["reset", "--hard", "HEAD^"]);
         })
         .unwrap_err();

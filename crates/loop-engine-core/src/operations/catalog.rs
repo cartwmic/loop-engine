@@ -62,37 +62,9 @@ impl fmt::Debug for OperationId {
 #[error("unknown operation ID: {0}")]
 pub struct OperationIdError(String);
 
-/// Runtime-exposed core operation IDs. Exposure tasks edit this reviewed array.
-pub const EXPOSED_OPERATION_IDS: &[&str] = &[
-    "provider.add",
-    "provider.list",
-    "provider.check",
-    "provider.update",
-    "provider.rename",
-    "provider.disable",
-    "provider.restore",
-    "run.create",
-    "run.list",
-    "run.show",
-    "run.graph",
-    "run.history",
-    "run.evidence.add",
-    "run.evidence.list",
-    "run.annotate",
-    "run.label",
-    "run.request",
-    "run.guidance",
-    "run.compatibility",
-    "run.terminate",
-    "run.export",
-];
-
 /// Runtime-exposed core operations. Private Phase 3 operations stay absent.
 pub fn exposed_operations() -> Vec<OperationId> {
-    EXPOSED_OPERATION_IDS
-        .iter()
-        .map(|value| OperationId::parse(value).expect("exposed ID must belong to frozen catalog"))
-        .collect()
+    OperationId::planned().collect()
 }
 
 #[cfg(test)]
@@ -102,7 +74,7 @@ mod tests {
     use super::{OperationId, PLANNED_OPERATION_IDS, exposed_operations};
 
     #[test]
-    fn planned_ids_are_unique_and_runtime_set_matches_checkpoint_d() {
+    fn planned_ids_are_unique_and_exposure_derives_from_canonical_catalog() {
         let planned = OperationId::planned().collect::<Vec<_>>();
         assert_eq!(planned.len(), 21);
         assert_eq!(planned.iter().copied().collect::<BTreeSet<_>>().len(), 21);

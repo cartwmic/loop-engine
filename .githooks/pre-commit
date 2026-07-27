@@ -1,34 +1,15 @@
 #!/usr/bin/env bash
 # loop-engine-hook-version: 2
-# Thin adapter only. Bounded exact-staged pre-commit logic lives in `xtask` (R002).
 set -euo pipefail
-
-ROOT="$(git rev-parse --show-toplevel)"
+INDEX_INPUT=
+if [[ ${GIT_INDEX_FILE+x} == x ]]; then
+  [[ -n "$GIT_INDEX_FILE" ]] || { echo "pre-commit: GIT_INDEX_FILE is empty" >&2; exit 1; }
+  case "$GIT_INDEX_FILE" in /*) INDEX_INPUT="$GIT_INDEX_FILE" ;; *) INDEX_INPUT="$(pwd -P)/$GIT_INDEX_FILE" ;; esac
+  [[ -f "$INDEX_INPUT" && ! -L "$INDEX_INPUT" ]] || { echo "pre-commit: Git index is not a regular file: $INDEX_INPUT" >&2; exit 1; }
+fi
+ROOT="$(/usr/bin/git rev-parse --show-toplevel)"
 cd "$ROOT"
-
-# `cargo run` and default judge path execute from working tree. Block when any
-# gate implementation input differs from exact staged index; unrelated unstaged
-# product/docs edits remain ignored by canonical staged-tree checks.
-GATE_PATHS=(
-  .githooks/pre-commit .cargo
-  Cargo.toml Cargo.lock rust-toolchain.toml rustfmt.toml deny.toml
-  crates/*/Cargo.toml
-  xtask
-  quality/manifest.toml
-  quality/semantic-judge
-)
-if ! git diff --quiet -- "${GATE_PATHS[@]}"; then
-  echo "pre-commit blocked: gate implementation has unstaged changes; stage or restore them" >&2
-  exit 1
-fi
-UNTRACKED_GATE="$(git ls-files --others --exclude-standard -- "${GATE_PATHS[@]}")"
-if [ -n "$UNTRACKED_GATE" ]; then
-  echo "pre-commit blocked: untracked gate implementation paths must be staged or removed" >&2
-  printf '%s\n' "$UNTRACKED_GATE" >&2
-  exit 1
-fi
-
-# Git exports repository-local GIT_* variables to hooks. Clear them before
-# tests spawn isolated fixture repositories; xtask rediscovers this repo by cwd.
-unset $(git rev-parse --local-env-vars)
-exec env -u RUSTUP_TOOLCHAIN cargo run --quiet --locked -p xtask -- hooks pre-commit
+while IFS= read -r name; do unset "$name"; done < <(/usr/bin/git rev-parse --local-env-vars)
+unset LOOP_ENGINE_INTERNAL_GIT_INDEX_FILE
+if [[ -n "$INDEX_INPUT" ]]; then export LOOP_ENGINE_INTERNAL_GIT_INDEX_FILE="$INDEX_INPUT"; fi
+exec env -u RUSTUP_TOOLCHAIN cargo xtask validate --staged

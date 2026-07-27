@@ -460,32 +460,60 @@ fn unusual_utf8_paths_survive_and_report_visible_non_utf8_paths_fail_closed() {
     assert!(error.to_string().contains("UTF-8"), "{error:#}");
 }
 
-#[test]
-fn preparation_loads_manifest_and_enforces_runner_parity_including_empty_directory() {
+fn runner_directory_candidate() -> (TempDir, Candidate) {
     let repo = init_repo();
     let manifest = MINIMAL_MANIFEST.replace(
         "inputs = [\"quality/manifest.toml\"]",
         "inputs = [\"quality/manifest.toml\", \"runner\"]",
     );
     write(repo.path(), "quality/manifest.toml", manifest.as_bytes());
-    write(repo.path(), "runner/tool", b"candidate\n");
-    git(
-        repo.path(),
-        &["add", "quality/manifest.toml", "runner/tool"],
-    );
-
+    write(repo.path(), "runner/nested/deeper/tool", b"candidate\n");
+    write(repo.path(), "runner/nested/peer", b"peer\n");
+    git(repo.path(), &["add", "quality/manifest.toml", "runner"]);
     let candidate = Candidate::staged(repo.path()).unwrap();
-    fs::create_dir(repo.path().join("runner/empty-untracked")).unwrap();
+    (repo, candidate)
+}
+
+fn assert_runner_directory_parity_rejects(description: &str, mutate_worktree: impl FnOnce(&Path)) {
+    let (repo, candidate) = runner_directory_candidate();
+    mutate_worktree(repo.path());
     let error = candidate
         .prepare(SemanticRequirement::Optional)
-        .expect_err("empty untracked directory changes runner namespace");
+        .expect_err(description);
     assert!(error.to_string().contains("runner input"), "{error:#}");
+}
 
-    fs::remove_dir(repo.path().join("runner/empty-untracked")).unwrap();
-    let candidate = Candidate::staged(repo.path())
-        .unwrap()
-        .prepare(SemanticRequirement::Optional)
+#[test]
+fn preparation_loads_manifest_and_enforces_recursive_runner_directory_parity() {
+    assert_runner_directory_parity_rejects("unstaged nested content must fail parity", |root| {
+        write(root, "runner/nested/deeper/tool", b"unstaged\n");
+    });
+    assert_runner_directory_parity_rejects("untracked nested content must fail parity", |root| {
+        write(root, "runner/nested/deeper/untracked", b"untracked\n");
+    });
+    assert_runner_directory_parity_rejects("nested executable mode must fail parity", |root| {
+        fs::set_permissions(
+            root.join("runner/nested/deeper/tool"),
+            fs::Permissions::from_mode(0o755),
+        )
         .unwrap();
+    });
+    assert_runner_directory_parity_rejects("nested path type must fail parity", |root| {
+        let path = root.join("runner/nested/deeper/tool");
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+    });
+    assert_runner_directory_parity_rejects("nested namespace removal must fail parity", |root| {
+        fs::remove_file(root.join("runner/nested/peer")).unwrap();
+    });
+    assert_runner_directory_parity_rejects("empty untracked directory must fail parity", |root| {
+        fs::create_dir(root.join("runner/empty-untracked")).unwrap();
+    });
+
+    let (_repo, candidate) = runner_directory_candidate();
+    let candidate = candidate
+        .prepare(SemanticRequirement::Optional)
+        .expect("unchanged recursive runner directory must pass parity");
     assert_eq!(candidate.manifest().manifest().schema_version(), 2);
 }
 

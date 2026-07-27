@@ -314,7 +314,7 @@ fn output_exactly_at_limit_is_complete() {
     assert_eq!(outcome.termination, ProcessTermination::Exit { code: 0 });
     assert_eq!(outcome.stdout.exact_bytes().len(), 37);
     assert!(outcome.stdout.complete());
-    assert!(outcome.success());
+    assert!(outcome.success(), "{outcome:#?}");
 }
 
 #[test]
@@ -419,7 +419,10 @@ fn cancellation_cannot_overwrite_observed_completion() {
     assert_eq!(cancellation.cancel(), CancellationRequest::AlreadyFinished);
     let outcome = waiter.join().expect("await thread");
     assert_eq!(outcome.termination, ProcessTermination::Exit { code: 0 });
-    assert!(matches!(outcome.cleanup, CleanupOutcome::Completed { .. }));
+    assert!(
+        matches!(outcome.cleanup, CleanupOutcome::Completed { .. }),
+        "{outcome:#?}"
+    );
 }
 
 #[test]

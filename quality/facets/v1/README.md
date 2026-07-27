@@ -53,7 +53,7 @@ No manifest may list a facet name outside [schema.json](schema.json) `facet_name
 # JSON Schema parse (requires ajv or equivalent in CI)
 python3 -c "import json; json.load(open('quality/facets/v1/schema.json'))"
 
-# Per-manifest validation is enforced by xtask operation-coverage (T062/T167)
+# Per-manifest validation is enforced by `cargo test -p loop-engine-cli --test driver_catalog`
 ```
 
 Exposure commits are blocked when any applicable row remains `open` unless an authorized candidate closure explicitly permits it (T146–T151, T159 intermediate trees only).

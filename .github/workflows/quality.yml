@@ -312,16 +312,6 @@ jobs:
       - name: Install pinned cargo-deny
         run: cargo install cargo-deny --locked --version 0.20.2
 
-      - name: Run credential-free candidate-head deterministic quality
-        env:
-          ARTIFACT_ROOT: target/quality-artifacts/ci/${{ matrix.job }}
-        run: |
-          set -euo pipefail
-          mkdir -p "${ARTIFACT_ROOT}"
-          cargo run --locked -p xtask -- quality --root . \
-            >"${ARTIFACT_ROOT}/quality.stdout" \
-            2>"${ARTIFACT_ROOT}/quality.stderr"
-
       - name: Upload candidate-head quality artifact
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -1,29 +1,27 @@
-# Documentation impact rubric v1
+# Documentation impact and consistency rubric
 
-Base-versioned focused rubric. Loaded only from the remote base revision's committed `quality/rubrics/manifest.json`. Applies to the following push only; never read from the candidate working tree for self-judgment.
+## Owner
+
+This axis owns semantic judgment of documentation impact and consistency for the exact aggregate change and resulting candidate tree. Ordinary tests own objective formatting, link, schema, and other executable contracts.
 
 ## Criteria
 
-### DOC-1. Publication-checkpoint documentation coherence
+### DOC-1. Assess documentation impact
 
-Every accepted push **MUST** leave its candidate destination tip coherent with behavior, architecture, contracts, testing policy, and development policy introduced by the aggregate remote-base-to-candidate-head change.
+Determine whether changed behavior, architecture, contracts, operator workflow, testing policy, or development policy requires documentation changes. A conclusion that no documentation change is needed must be supported by the changed lines and resulting behavior, not assumed from file type.
 
-Cite: `docs/invariants.md` § I47; `docs/tenets.md` § 27.
+### DOC-2. Keep the resulting tree coherent
 
-### DOC-2. Exact base-to-head scope
+The resulting candidate tree must describe behavior, architecture, contracts, testing policy, and development policy consistently. New text must agree with implemented behavior and existing authoritative documents; stale or contradictory claims block.
 
-Judgment **MUST** use the exact remote-base-to-candidate-head diff and resulting tree. When documentation is unnecessary, judge **MUST** affirm that conclusion from the aggregate change.
+### DOC-3. Judge the exact aggregate scope
 
-Cite: `docs/tenets.md` § 27; `docs/invariants.md` § I47.
+Judge the complete base-to-candidate change. Commits within that unpublished range may repair one another, but follow-up work outside the candidate cannot excuse a documentation gap in this candidate.
 
-### DOC-3. Internal repair allowed; later push repair forbidden
+### DOC-4. Keep deterministic and semantic responsibilities separate
 
-Commits inside one unpublished range **MAY** repair one another. A later push **MUST NOT** substitute for coherence required at an earlier accepted publication checkpoint.
+Deterministic documentation checks prove objective properties only. They do not establish that explanations are sufficient, consequences are addressed, or documents remain semantically consistent.
 
-Cite: `docs/invariants.md` § I47; `docs/tenets.md` § 27.
+## Evidence expectations
 
-### DOC-4. Deterministic checks are complementary
-
-Deterministic formatting, link, and schema checks remain separate and **MUST NOT** replace semantic judgment.
-
-Cite: `docs/invariants.md` § I47; `docs/testing.md` § Git enforcement direction.
+Cite changed or resulting-tree paths and explain concrete inconsistency or missing impact. Do not invent behavior, build, or test results beyond supplied deterministic evidence.
