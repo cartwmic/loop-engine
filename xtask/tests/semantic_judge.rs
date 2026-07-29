@@ -494,6 +494,198 @@ fn passing_precommit_evidence_fails_before_semantic_setup_or_child_spawn() {
 }
 
 #[test]
+fn tracked_adapter_shortens_provider_tmpdir_without_leaving_alias() {
+    let root = TempDir::new().unwrap();
+    let scratch = root
+        .path()
+        .join("assigned-semantic-scratch-with-a-deliberately-long-component");
+    fs::create_dir(&scratch).unwrap();
+    let record = root.path().join("provider-tmpdir.txt");
+    let provider = root.path().join("fake-pi.py");
+    fs::write(
+        &provider,
+        r#"#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import sys
+
+request = json.loads(sys.stdin.read().split("\n\n", 1)[1])
+alias = pathlib.Path(os.environ["TMPDIR"])
+pathlib.Path(os.environ["TMP_RECORD"]).write_text(
+    f"{alias}\n{alias.resolve()}\n", encoding="utf-8"
+)
+print(json.dumps({
+    "schema_version": 2,
+    "request_kind": request["request_kind"],
+    "axis_id": request["axis_id"],
+    "base_revision": request["base_revision"],
+    "candidate_revision": request["candidate_revision"],
+    "candidate_tree": request["candidate_tree"],
+    "status": "pass",
+    "citations": [{
+        "kind": "rubric",
+        "reference": request["rubric"]["id"],
+        "detail": "adapter test",
+    }],
+    "message": "adapter test",
+}, separators=(",", ":")))
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&provider).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&provider, permissions).unwrap();
+
+    let request = json!({
+        "schema_version": 2,
+        "request_kind": "axis",
+        "axis_id": "documentation",
+        "base_revision": "base",
+        "candidate_revision": "candidate",
+        "candidate_tree": "tree",
+        "rubric": {"id": "documentation", "content": "rubric"},
+        "diff": {"encoding": "utf-8", "data": ""},
+        "resulting_files": [],
+        "deterministic_evidence": {},
+        "axis_results": [],
+        "correction": null,
+    });
+    let adapter = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("quality/semantic-judge/v2/adapter.py");
+    let output = Command::new("python3")
+        .arg(adapter)
+        .env("TMPDIR", &scratch)
+        .env("TMP_RECORD", &record)
+        .env("LOOP_ENGINE_SEMANTIC_JUDGE_PI", &provider)
+        .env("PI_CODING_AGENT_DIR", root.path().join("empty-agent"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(serde_json::to_string(&request).unwrap().as_bytes())?;
+            child.wait_with_output()
+        })
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()["status"],
+        "pass"
+    );
+
+    let recorded = fs::read_to_string(record).unwrap();
+    let mut lines = recorded.lines();
+    let alias = PathBuf::from(lines.next().unwrap());
+    let resolved = PathBuf::from(lines.next().unwrap());
+    assert_eq!(alias.parent(), Some(Path::new("/tmp")));
+    assert!(
+        alias
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("le-sem-")
+    );
+    assert_eq!(resolved, scratch.canonicalize().unwrap());
+    assert!(!alias.exists(), "temporary alias was not removed");
+}
+
+#[test]
+fn tracked_adapter_removes_tmpdir_alias_when_process_group_is_terminated() {
+    use std::io::Write;
+    use std::os::unix::process::CommandExt;
+
+    let root = TempDir::new().unwrap();
+    let scratch = root.path().join("assigned-semantic-scratch");
+    fs::create_dir(&scratch).unwrap();
+    let record = root.path().join("provider-tmpdir.txt");
+    let provider = root.path().join("blocking-pi.py");
+    fs::write(
+        &provider,
+        r#"#!/usr/bin/env python3
+import os
+import pathlib
+import signal
+
+alias = pathlib.Path(os.environ["TMPDIR"])
+pathlib.Path(os.environ["TMP_RECORD"]).write_text(str(alias), encoding="utf-8")
+while True:
+    signal.pause()
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&provider).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&provider, permissions).unwrap();
+
+    let adapter = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("quality/semantic-judge/v2/adapter.py");
+    let request = json!({
+        "schema_version": 2,
+        "request_kind": "axis",
+        "axis_id": "documentation",
+        "base_revision": "base",
+        "candidate_revision": "candidate",
+        "candidate_tree": "tree",
+        "rubric": {"id": "documentation", "content": "rubric"},
+        "diff": {"encoding": "utf-8", "data": ""},
+        "resulting_files": [],
+        "deterministic_evidence": {},
+        "axis_results": [],
+        "correction": null,
+    });
+    let mut command = Command::new("python3");
+    command
+        .arg(adapter)
+        .env("TMPDIR", &scratch)
+        .env("TMP_RECORD", &record)
+        .env("LOOP_ENGINE_SEMANTIC_JUDGE_PI", &provider)
+        .env("PI_CODING_AGENT_DIR", root.path().join("empty-agent"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .process_group(0);
+    let mut child = command.spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(serde_json::to_string(&request).unwrap().as_bytes())
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !record.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let alias = PathBuf::from(fs::read_to_string(&record).expect("provider started"));
+    assert!(alias.exists());
+
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(-(child.id() as i32)),
+        nix::sys::signal::Signal::SIGTERM,
+    )
+    .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    assert!(
+        !alias.exists(),
+        "temporary alias survived process-group termination: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn binding_mismatch_and_nonpassing_deterministic_evidence_fail_before_spawn() {
     let _serial = serial();
     let (_repo, candidate) = prepared(json!({}), 5);

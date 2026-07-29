@@ -6,9 +6,15 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import secrets
+import signal
 import subprocess
 import sys
 from typing import Any
+
+
+_ACTIVE_PROVIDER_TMP: pathlib.Path | None = None
+_CLEANUP_SIGNALS = {signal.SIGINT, signal.SIGTERM}
 
 
 def response(request: dict[str, Any], message: str) -> dict[str, Any]:
@@ -62,6 +68,67 @@ def validate_request(request: dict[str, Any]) -> None:
         raise ValueError("non-correction request cannot carry correction payload")
 
 
+def block_cleanup_signals() -> set[signal.Signals] | None:
+    if os.name != "posix" or not hasattr(signal, "pthread_sigmask"):
+        return None
+    return signal.pthread_sigmask(signal.SIG_BLOCK, _CLEANUP_SIGNALS)
+
+
+def restore_signal_mask(previous: set[signal.Signals] | None) -> None:
+    if previous is not None:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
+def short_provider_tmp(environment: dict[str, str]) -> pathlib.Path | None:
+    """Alias assigned scratch beneath /tmp so Unix socket paths remain bounded."""
+    global _ACTIVE_PROVIDER_TMP
+    scratch = environment.get("TMPDIR")
+    if os.name != "posix" or not scratch:
+        return None
+    previous_mask = block_cleanup_signals()
+    try:
+        for _ in range(8):
+            alias = pathlib.Path("/tmp") / (
+                f"le-sem-{os.getpid()}-{secrets.token_hex(8)}"
+            )
+            try:
+                alias.symlink_to(pathlib.Path(scratch), target_is_directory=True)
+                _ACTIVE_PROVIDER_TMP = alias
+                environment["TMPDIR"] = str(alias)
+                return alias
+            except FileExistsError:
+                continue
+        raise OSError("failed to allocate short semantic-provider TMPDIR alias")
+    finally:
+        restore_signal_mask(previous_mask)
+
+
+def remove_provider_tmp(alias: pathlib.Path | None) -> OSError | None:
+    global _ACTIVE_PROVIDER_TMP
+    if alias is None:
+        return None
+    previous_mask = block_cleanup_signals()
+    try:
+        try:
+            alias.unlink(missing_ok=True)
+            return None
+        except OSError as error:
+            return error
+        finally:
+            if _ACTIVE_PROVIDER_TMP == alias:
+                _ACTIVE_PROVIDER_TMP = None
+    finally:
+        restore_signal_mask(previous_mask)
+
+
+def terminate_with_cleanup(signum: int, _frame: object) -> None:
+    error = remove_provider_tmp(_ACTIVE_PROVIDER_TMP)
+    if error is not None:
+        print(f"failed removing semantic-provider TMPDIR alias: {error}", file=sys.stderr)
+    signal.signal(signum, signal.SIG_DFL)
+    os.kill(os.getpid(), signum)
+
+
 def main() -> int:
     try:
         request = json.load(sys.stdin, object_pairs_hook=reject_duplicates)
@@ -99,16 +166,35 @@ def main() -> int:
     extension = agent_dir / "git/github.com/cartwmic/pi-claude-bridge/index.ts"
     if extension.is_file():
         command.extend(["--extension", str(extension)])
+    signal.signal(signal.SIGINT, terminate_with_cleanup)
+    signal.signal(signal.SIGTERM, terminate_with_cleanup)
+    provider_environment = os.environ.copy()
+    temporary_alias: pathlib.Path | None = None
+    completed: subprocess.CompletedProcess[str] | None = None
+    provider_error: OSError | None = None
+    cleanup_error: OSError | None = None
     try:
+        temporary_alias = short_provider_tmp(provider_environment)
         completed = subprocess.run(
             command,
             input=prompt,
             text=True,
             capture_output=True,
             check=False,
+            env=provider_environment,
         )
     except OSError as error:
-        emit(response(request, f"semantic provider unavailable: {error}"))
+        provider_error = error
+    finally:
+        cleanup_error = remove_provider_tmp(temporary_alias)
+    if provider_error is not None:
+        emit(response(request, f"semantic provider unavailable: {provider_error}"))
+        return 0
+    if cleanup_error is not None:
+        emit(response(request, f"semantic provider cleanup failed: {cleanup_error}"))
+        return 0
+    if completed is None:
+        emit(response(request, "semantic provider produced no process result"))
         return 0
     if completed.returncode != 0:
         detail = completed.stderr.strip() or "no stderr"

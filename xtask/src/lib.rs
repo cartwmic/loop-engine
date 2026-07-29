@@ -1,6 +1,6 @@
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::thread;
 
@@ -54,7 +54,10 @@ enum HooksCommand {
 }
 
 #[derive(Debug, clap::Args)]
-#[command(group(ArgGroup::new("mode").required(true).multiple(false).args(["staged", "semantic", "publication"])))]
+#[command(
+    group(ArgGroup::new("mode").required(true).multiple(false).args(["staged", "semantic", "publication"])),
+    group(ArgGroup::new("publication_input").multiple(false).args(["updates_stdin", "ci_event"]))
+)]
 struct ValidateArgs {
     /// Validate the effective index as the pre-commit candidate.
     #[arg(long)]
@@ -63,11 +66,14 @@ struct ValidateArgs {
     #[arg(long, requires_all = ["base", "candidate"])]
     semantic: bool,
     /// Validate one aggregate publication from a supported input source.
-    #[arg(long, requires = "updates_stdin")]
+    #[arg(long, requires = "publication_input")]
     publication: bool,
     /// Read exact Git pre-push update lines from standard input.
-    #[arg(long, requires = "publication")]
+    #[arg(long, requires = "publication", conflicts_with = "ci_event")]
     updates_stdin: bool,
+    /// Read exact canonical CI push-event bytes from this path.
+    #[arg(long, requires = "publication", conflicts_with = "updates_stdin")]
+    ci_event: Option<PathBuf>,
     /// Advisory base revision.
     #[arg(long, requires = "semantic")]
     base: Option<OsString>,
@@ -178,7 +184,35 @@ where
             std::io::stdin()
                 .read_to_end(&mut input)
                 .context("failed reading publication updates from stdin")?;
-            let outcome = run_publication_cli(&std::env::current_dir()?, &input)?;
+            let outcome = run_publication_cli(
+                &std::env::current_dir()?,
+                &input,
+                PublicationCliInput::GitUpdateLines,
+            )?;
+            println!("{}", outcome.attempt_digest);
+            match outcome.attempt.gate_decision {
+                report::GateDecision::Pass | report::GateDecision::Approved => Ok(()),
+                report::GateDecision::Block => bail!("publication validation blocked"),
+            }
+        }
+        Ok(Cli {
+            command:
+                Some(Command::Validate(ValidateArgs {
+                    staged: false,
+                    semantic: false,
+                    publication: true,
+                    updates_stdin: false,
+                    ci_event: Some(path),
+                    ..
+                })),
+        }) => {
+            let input = std::fs::read(&path)
+                .with_context(|| format!("failed reading CI event file {}", path.display()))?;
+            let outcome = run_publication_cli(
+                &std::env::current_dir()?,
+                &input,
+                PublicationCliInput::CiPushEvent,
+            )?;
             println!("{}", outcome.attempt_digest);
             match outcome.attempt.gate_decision {
                 report::GateDecision::Pass | report::GateDecision::Approved => Ok(()),
@@ -277,9 +311,16 @@ pub fn run_advisory_with_cancellation(
     combine_advisory_operation_and_cleanup(operation, cleanup)
 }
 
+#[derive(Clone, Copy)]
+enum PublicationCliInput {
+    GitUpdateLines,
+    CiPushEvent,
+}
+
 fn run_publication_cli(
     repository_path: &Path,
     input: &[u8],
+    input_kind: PublicationCliInput,
 ) -> Result<publication::PublicationOutcome> {
     let cancellation = process::Cancellation::new();
     let mut signals =
@@ -299,7 +340,14 @@ fn run_publication_cli(
         })
         .context("failed to start signal listener")?;
 
-    let validation = publication::run_publication(repository_path, input, &cancellation);
+    let validation = match input_kind {
+        PublicationCliInput::GitUpdateLines => {
+            publication::run_publication(repository_path, input, &cancellation)
+        }
+        PublicationCliInput::CiPushEvent => {
+            publication::run_ci_publication(repository_path, input, &cancellation)
+        }
+    };
     signal_handle.close();
     let interrupted = listener
         .join()

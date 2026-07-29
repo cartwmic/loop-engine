@@ -17,7 +17,9 @@ use uuid::Uuid;
 use crate::config::{BindingDigests, SemanticTopology};
 use crate::git::Repository;
 pub use crate::publication_input::{InputEvidence, RejectionCode, UpdateTuple};
-use crate::publication_input::{ParsedUpdateDisposition, decode_input_evidence, parse_updates};
+use crate::publication_input::{
+    ParsedUpdateDisposition, decode_input_evidence, parse_ci_event, parse_updates,
+};
 use crate::quality::{CandidateBinding, DeterministicPhase, DeterministicResult};
 use crate::semantic_judge::{
     NormalizedResult, SemanticDisposition, SemanticResult, SemanticStatus,
@@ -25,6 +27,8 @@ use crate::semantic_judge::{
 
 pub const SCHEMA_VERSION: u32 = 1;
 const APPROVAL_RETRIES: usize = 32;
+const SHA1_EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+const SHA256_EMPTY_TREE: &str = "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -310,8 +314,14 @@ impl PublicationAttemptRecord {
         }
         let input = decode_input_evidence(&self.input_evidence)
             .context("attempt input_evidence is not lossless canonical evidence")?;
-        if self.input_kind == InputKind::GitUpdateLines {
-            self.validate_git_update_classification(&input)?;
+        let content_update = match self.input_kind {
+            InputKind::GitUpdateLines => {
+                self.validate_input_classification(parse_updates(&input))?
+            }
+            InputKind::CiPushEvent => self.validate_input_classification(parse_ci_event(&input))?,
+        };
+        if self.input_kind == InputKind::CiPushEvent && self.approval_digest.is_some() {
+            bail!("CI publication attempts cannot reference local approval evidence");
         }
         OffsetDateTime::parse(&self.created_at, &Rfc3339)
             .context("attempt created_at must be RFC3339")?;
@@ -329,6 +339,10 @@ impl PublicationAttemptRecord {
                 {
                     bail!("content attempt has invalid nullability");
                 }
+                let content_update = content_update
+                    .as_ref()
+                    .context("content attempt is missing parsed content update")?;
+                self.validate_content_update_binding(content_update)?;
                 validate_object_id(
                     self.base_revision.as_deref().unwrap_or_default(),
                     "base_revision",
@@ -440,18 +454,39 @@ impl PublicationAttemptRecord {
         Ok(())
     }
 
-    fn validate_git_update_classification(&self, input: &[u8]) -> Result<()> {
-        let parsed = parse_updates(input);
+    fn validate_input_classification(
+        &self,
+        parsed: crate::publication_input::ParsedUpdates,
+    ) -> Result<Option<UpdateTuple>> {
         if parsed.updates != self.updates {
-            bail!("attempt updates do not match exact canonical Git input tuples");
+            bail!("attempt updates do not match exact canonical input projection");
         }
-        let (update_kind, rejection_code) = match parsed.disposition {
-            ParsedUpdateDisposition::Content(_) => (UpdateKind::Content, None),
-            ParsedUpdateDisposition::DeletionOnly => (UpdateKind::DeletionOnly, None),
-            ParsedUpdateDisposition::Rejected(code) => (UpdateKind::Rejected, Some(code)),
+        let (update_kind, rejection_code, content_update) = match parsed.disposition {
+            ParsedUpdateDisposition::Content(update) => (UpdateKind::Content, None, Some(update)),
+            ParsedUpdateDisposition::DeletionOnly => (UpdateKind::DeletionOnly, None, None),
+            ParsedUpdateDisposition::Rejected(code) => (UpdateKind::Rejected, Some(code), None),
         };
         if self.update_kind != update_kind || self.rejection_code != rejection_code {
-            bail!("attempt Git update classification or rejection code is inconsistent");
+            bail!("attempt input classification or rejection code is inconsistent");
+        }
+        Ok(content_update)
+    }
+
+    fn validate_content_update_binding(&self, update: &UpdateTuple) -> Result<()> {
+        if self.candidate_revision.as_deref() != Some(update.local_sha.as_str()) {
+            bail!("attempt candidate_revision does not match content local_sha");
+        }
+        let expected_base = if update.remote_sha.bytes().all(|byte| byte == b'0') {
+            match update.remote_sha.len() {
+                40 => SHA1_EMPTY_TREE,
+                64 => SHA256_EMPTY_TREE,
+                _ => bail!("content remote_sha has unsupported object ID width"),
+            }
+        } else {
+            update.remote_sha.as_str()
+        };
+        if self.base_revision.as_deref() != Some(expected_base) {
+            bail!("attempt base_revision does not match normalized content remote_sha");
         }
         Ok(())
     }
@@ -837,7 +872,13 @@ enum WriteDisposition {
 fn write_immutable(path: &Path, bytes: &[u8], accept_identical: bool) -> Result<WriteDisposition> {
     let parent = path.parent().context("record path has no parent")?;
     create_durable_directory(parent)?;
-    let temporary = parent.join(format!(".tmp-{}-{}", std::process::id(), Uuid::now_v7()));
+    let temporary_parent = parent
+        .parent()
+        .context("record directory has no parent for temporary storage")?
+        .join(".tmp");
+    create_durable_directory(&temporary_parent)?;
+    let temporary =
+        temporary_parent.join(format!(".tmp-{}-{}", std::process::id(), Uuid::now_v7()));
     let mut temporary_created = false;
     let operation = (|| {
         let mut file = OpenOptions::new()
@@ -874,6 +915,7 @@ fn write_immutable(path: &Path, bytes: &[u8], accept_identical: bool) -> Result<
     let cleanup = if temporary_created {
         fs::remove_file(&temporary)
             .with_context(|| format!("failed removing temporary record {}", temporary.display()))
+            .and_then(|()| sync_directory(&temporary_parent))
             .and_then(|()| sync_directory(parent))
     } else {
         Ok(())

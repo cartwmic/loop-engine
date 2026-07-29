@@ -1,5 +1,0 @@
-#!/usr/bin/env bash
-# Build a local-mode semantic-judge request for the exact staged index tree against HEAD.
-set -euo pipefail
-ROOT="$(cd "$(dirname "$0")" && pwd)"
-exec python3 "$ROOT/request_builder.py" --staged "$@"

@@ -81,7 +81,7 @@ fn prepared(manifest_text: &str, changes: &[(&str, &str)]) -> (TempDir, Prepared
 
 fn prepared_at(repo: &Path, manifest_text: &str, changes: &[(&str, &str)]) -> PreparedCandidate {
     fs::create_dir_all(repo).expect("create repo");
-    git(repo, &["init", "-b", "main"]);
+    git(repo, &["init", "-q", "-b", "main"]);
     git(repo, &["config", "user.email", "quality@test"]);
     git(repo, &["config", "user.name", "Quality Test"]);
     git(repo, &["config", "commit.gpgsign", "false"]);

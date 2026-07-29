@@ -1,6 +1,6 @@
 # Loop Engine Testing Doctrine
 
-**Status:** E2E authority, facet coverage, runtime operation/trace proof, executable-provider coverage, no-mock policy, provider-fixture implementation strategy (T013), aggregate publication-checkpoint semantic judgment, exact-range local gate, non-shipping `xtask`, macOS/Linux scope, and runtime budgets are settled. Owner waived GitHub branch protection on 2026-07-23 for this private single-user repository because current plan does not support it; exact fail-closed pre-push gate and CI remain publication controls.
+**Status:** E2E authority, facet coverage, runtime operation/trace proof, executable-provider coverage, no-mock policy, provider-fixture strategy, exact-candidate validation v2, non-shipping `xtask`, macOS/Linux scope, and runtime budgets are settled. Cooperative local hooks gate commit/push; push-only CI independently re-evaluates published revision.
 
 Related documents:
 
@@ -118,7 +118,7 @@ Before fixture packages exist in the workspace tree, the following prerequisites
 | Prerequisite | Requirement |
 |---|---|
 | Toolchain | Rust `1.95.0` from root `rust-toolchain.toml` (same as product) |
-| Host triples | One native fixture binary per authoritative CI row in [technology.md](technology.md) § Authoritative CI matrix |
+| Host triples | Native fixture binaries for supported host triples; push CI currently exercises Linux x86-64, with final acceptance recording macOS and Linux evidence |
 | Build command | `cargo build --manifest-path test-support/providers/<package>/Cargo.toml --locked` (or `cargo test --manifest-path … --locked` for fixture-owned tests) |
 | Extra runtimes | None for core acceptance (no Python/Node/shell interpreter requirement beyond explicit shebang scenarios) |
 | Product coupling | Zero `path` or version dependency from any workspace member to fixture crates |
@@ -366,7 +366,7 @@ Architecture/build checks prevent alternate provider/persistence/dispatch paths,
 
 Normative OS/architecture matrix, permission semantics, process termination, path rules, and unsupported-platform policy live in [technology.md](technology.md) § Supported platforms. Testing mirrors only scope that differs:
 
-- required E2E, provider-fixture, migration, atomicity, and trace suites **MUST** pass on all four authoritative CI targets (`linux-x86_64`, `linux-aarch64`, `macos-aarch64`, `macos-x86_64`);
+- required E2E, provider-fixture, migration, atomicity, and trace suites **MUST** pass on supported macOS and glibc Linux before release; push CI currently supplies Linux x86-64 evidence, and final acceptance records named macOS and Linux results;
 - provider fixtures are Rust executables built for the host triple under test; Unix shell-script providers appear only in scenarios that explicitly exercise shebang/script behavior;
 - trace `RLIMIT_FSIZE` / `SIGXFSZ` late-sink injection cases (Cases A and B in [operational-trace.md](operational-trace.md#deterministic-unix-sigxfsz--rlimit_fsize-e2e-contract)) run only on supported macOS and Linux hosts via external wrapper with no production test branch;
 - isolation harnesses set `LOOP_ENGINE_HOME` to temporary roots and never rely on Windows path or permission semantics.
@@ -417,41 +417,19 @@ Behavioral authority remains with CLI E2Es even when supplemental checks run.
 
 ## Git enforcement direction
 
-Git hooks can enforce cooperative local workflow but cannot be unbypassable on user-controlled machine.
+Git hooks enforce cooperative local workflow but cannot be unbypassable on owner-controlled machine.
 
-Settled semantic policy:
+Settled mechanism:
 
-- one generic versioned judge-executable contract supports focused rubrics for documentation impact, observability, architecture/tenet adherence including KISS, and behavioral evidence;
-- one accepted push is one publication checkpoint, judged from exact remote destination tip to candidate local head and resulting tree;
-- commits inside the unpublished range may be incomplete and may repair one another; only the accepted range endpoint is authoritative;
-- remote base revision's rubric judges candidate head, so changed rubric applies only to the following push; exact foundation-base R001 migration alone uses an explicitly owner-selected aggregate migration rubric because frozen seed text encodes superseded scheduling;
-- pre-commit runs bounded fast deterministic staged checks by default; staged semantic judgment is explicit advisory tooling;
-- pre-push and authoritative remote gate fail closed on failed, unavailable, or indeterminate aggregate judgment;
-- semantic judges receive deterministic build/test/check evidence for the candidate head and must cite changed/resulting lines and base-rubric rules rather than invent compilation or test claims;
-- deterministic documentation, architecture, and quality checks remain separate from semantic judgment.
+- tracked hooks live under `.githooks/` and install through `cargo xtask hooks install`;
+- pre-commit runs complete manifest-declared deterministic `pre-commit` phase against exact index tree, excluding unstaged and untracked contamination;
+- explicit advisory command runs complete deterministic `publication` phase, four semantic axes, and coherence against candidate commit equal to `HEAD`;
+- pre-push consumes exact Git update lines and produces one aggregate verdict for zero or one content tip; force pushes judge resulting content, deletion-only passes without candidate execution, malformed/multi-tip input blocks;
+- every deterministic non-pass blocks without approval path;
+- all focused semantic axes execute despite another non-pass; coherence cannot erase focused status; malformed successful output gets one correction attempt;
+- candidate [`quality/manifest.toml`](../quality/manifest.toml) and candidate rubrics apply immediately and are sole policy registry;
+- semantic contract is generic [v2 JSON over stdio](../quality/semantic-judge/v2/README.md); runner contains no product command or rubric dispatch;
+- exact deterministic/semantic/report bindings are immutable evidence; owner approval can authorize only exact `semantic_block` report, never deterministic failure;
+- push-only CI uses same publication lifecycle against pushed revision, ignores local approvals, and uploads independent evidence on pass/block.
 
-Frozen contract (T012): generic executable request/result v1 at [quality/semantic-judge/v1/README.md](../quality/semantic-judge/v1/README.md); foundation seed rubric manifest at [quality/rubrics/manifest.json](../quality/rubrics/manifest.json) for base `7552af5968b4a2c10aefd01fbfa6c351817e1b8b`; commands and CI provisioning owner in [development-policy.md](development-policy.md). R001 supersedes the old per-commit scheduling policy without changing protocol field names.
-
-Settled local mechanism:
-
-- version hooks under `.githooks/`;
-- pre-commit materializes the exact staged tree and runs only `git diff --cached --check`, deterministic documentation, architecture, and formatting checks;
-- pre-push resolves the exact remote destination tip and evaluates one aggregate base-to-head range in one detached candidate-head worktree;
-- existing branches require the advertised remote tip to be an ancestor of local head; new branches use the exact advertised integration-branch tip as base;
-- candidate-head `quality/manifest.toml` must not remove or weaken checks present at the base and runs once; pre-manifest bases use the immutable built-in baseline plus candidate-head checks when introduced;
-- exact quality command evidence (command, exit, stdout, stderr, candidate revision) is injected into the one semantic-judge request;
-- one aggregate judge JSON response is emitted before blocking disposition, including fail/indeterminate/unavailable;
-- pre-push rejects multiple non-delete updates and candidates different from checked-out `HEAD`, keeping one push bound to one checkpoint;
-- protected-`main` `pull_request_target` CI runs trusted-base deterministic publication and semantic phases on separate runners; deterministic source/evidence is privileged over unprivileged candidate subprocesses, and semantic runner imports only a hash-bound Git bundle, so candidate workflow/code receives no semantic credentials;
-- no duplicated gate logic between hooks and CI;
-- non-shipping Rust `xtask` installs hooks and runs canonical gate.
-
-Candidate authoritative mechanism after remote exists:
-
-- protect `main` from direct writes;
-- require branch current with `main`;
-- require canonical gate before merge;
-- make releases depend on same gate;
-- prevent bypass where hosting platform supports it.
-
-Server-side controls are authority. Local hooks provide earlier feedback and accidental-regression protection.
+CI runs after publication. Neither CI nor local hooks prevent direct owner push, and repository claims no server-side branch protection. Commands, evidence paths, approval retry, and failure handling are in [development-policy.md](development-policy.md).

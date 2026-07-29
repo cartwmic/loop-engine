@@ -313,7 +313,7 @@ Task boundaries follow final capabilities, not old/new migration stages. Shared-
 
 ## Package D — CI, final cleanup, documentation, and closeout
 
-### T015 [~] Implement final CI path and remove remaining superseded code
+### T015 [x] Implement final CI path and remove remaining superseded code
 
 - **Class:** Implementation.
 - **Depends:** T014.
@@ -326,7 +326,7 @@ Task boundaries follow final capabilities, not old/new migration stages. Shared-
 - **Done when:** CI uses same v2 publication lifecycle, no active retired path remains, and full gate stays green.
 - **Stop:** CI diverges from local publication semantics or active code/config references retired path.
 
-### T016 [ ] Update owner-facing validation documentation
+### T016 [x] Update owner-facing validation documentation
 
 - **Class:** Implementation.
 - **Depends:** T015.
@@ -338,7 +338,7 @@ Task boundaries follow final capabilities, not old/new migration stages. Shared-
 - **Handoff:** preserve final acceptance map with exact documentation and evidence locations.
 - **Done when:** fresh owner can install and operate final validation without reading Rust source or migration history.
 
-### T017 [ ] Run final acceptance and independent conformance review
+### T017 [x] Run final acceptance and independent conformance review
 
 - **Class:** Closeout/package gate.
 - **Depends:** T016.

@@ -12,7 +12,9 @@ use crate::candidate::{Candidate, PreparedCandidate};
 use crate::config::{self, BindingDigests, Phase, SemanticRequirement};
 use crate::process::Cancellation;
 use crate::publication_input::UpdateTuple;
-pub use crate::publication_input::{ParsedUpdateDisposition, ParsedUpdates, parse_updates};
+pub use crate::publication_input::{
+    ParsedUpdateDisposition, ParsedUpdates, parse_ci_event, parse_updates,
+};
 use crate::report::{
     DerivedDisposition, EvaluationRecord, GateDecision, InputKind, PublicationAttemptRecord,
     RejectionCode, SCHEMA_VERSION, Store, UpdateKind,
@@ -31,23 +33,60 @@ pub fn run_publication(
     input: &[u8],
     cancellation: &Cancellation,
 ) -> Result<PublicationOutcome> {
-    let parsed = parse_updates(input);
+    run_parsed_publication(
+        repository_path,
+        parse_updates(input),
+        InputKind::GitUpdateLines,
+        true,
+        cancellation,
+    )
+}
+
+/// Validate exact canonical CI push-event bytes. CI never consults local
+/// approval evidence; it always runs semantic review after a fresh pass.
+pub fn run_ci_publication(
+    repository_path: &Path,
+    input: &[u8],
+    cancellation: &Cancellation,
+) -> Result<PublicationOutcome> {
+    run_parsed_publication(
+        repository_path,
+        parse_ci_event(input),
+        InputKind::CiPushEvent,
+        false,
+        cancellation,
+    )
+}
+
+fn run_parsed_publication(
+    repository_path: &Path,
+    parsed: ParsedUpdates,
+    input_kind: InputKind,
+    approvals_enabled: bool,
+    cancellation: &Cancellation,
+) -> Result<PublicationOutcome> {
     match parsed.disposition.clone() {
         ParsedUpdateDisposition::Rejected(code) => {
             let store = narrow_store(repository_path)?;
             finish_without_children(cancellation)?;
-            let attempt = non_content_attempt(&parsed, UpdateKind::Rejected, Some(code))?;
+            let attempt =
+                non_content_attempt(&parsed, input_kind, UpdateKind::Rejected, Some(code))?;
             write_outcome(&store, attempt)
         }
         ParsedUpdateDisposition::DeletionOnly => {
             let store = narrow_store(repository_path)?;
             finish_without_children(cancellation)?;
-            let attempt = non_content_attempt(&parsed, UpdateKind::DeletionOnly, None)?;
+            let attempt = non_content_attempt(&parsed, input_kind, UpdateKind::DeletionOnly, None)?;
             write_outcome(&store, attempt)
         }
-        ParsedUpdateDisposition::Content(update) => {
-            run_content(repository_path, parsed, update, cancellation)
-        }
+        ParsedUpdateDisposition::Content(update) => run_content(
+            repository_path,
+            parsed,
+            update,
+            input_kind,
+            approvals_enabled,
+            cancellation,
+        ),
     }
 }
 
@@ -55,6 +94,8 @@ fn run_content(
     repository_path: &Path,
     parsed: ParsedUpdates,
     update: UpdateTuple,
+    input_kind: InputKind,
+    approvals_enabled: bool,
     cancellation: &Cancellation,
 ) -> Result<PublicationOutcome> {
     let base = if is_zero_oid(&update.remote_sha) {
@@ -66,7 +107,13 @@ fn run_content(
         .context("failed to materialize publication candidate")?
         .prepare(SemanticRequirement::Required)
         .context("failed to prepare publication candidate")?;
-    let pending = build_content_pending(&candidate, parsed, cancellation);
+    let pending = build_content_pending(
+        &candidate,
+        parsed,
+        input_kind,
+        approvals_enabled,
+        cancellation,
+    );
     let cleanup = candidate
         .cleanup()
         .map_err(anyhow::Error::new)
@@ -97,6 +144,8 @@ struct PendingContent {
 fn build_content_pending(
     candidate: &PreparedCandidate,
     parsed: ParsedUpdates,
+    input_kind: InputKind,
+    approvals_enabled: bool,
     cancellation: &Cancellation,
 ) -> Result<PendingContent> {
     // Capture every policy binding before configured children can mutate source.
@@ -128,15 +177,19 @@ fn build_content_pending(
                 DerivedDisposition::DeterministicBlock,
                 GateDecision::Block,
             )
-        } else if let Some((report_digest, evaluation, approval_digest, approval)) = store
-            .select_approved_evaluation(
-                candidate.base_revision(),
-                candidate.candidate_revision(),
-                candidate.candidate_tree(),
-                binding.manifest_digest(),
-                &rubric_digests,
-                &topology,
-            )?
+        } else if let Some((report_digest, evaluation, approval_digest, approval)) =
+            if approvals_enabled {
+                store.select_approved_evaluation(
+                    candidate.base_revision(),
+                    candidate.candidate_revision(),
+                    candidate.candidate_tree(),
+                    binding.manifest_digest(),
+                    &rubric_digests,
+                    &topology,
+                )?
+            } else {
+                None
+            }
         {
             if !approval.matches_evaluation(&report_digest, &evaluation)
                 || !approval.matches_binding(
@@ -181,7 +234,7 @@ fn build_content_pending(
     let attempt = PublicationAttemptRecord {
         schema_version: SCHEMA_VERSION,
         update_kind: UpdateKind::Content,
-        input_kind: InputKind::GitUpdateLines,
+        input_kind,
         input_evidence: parsed.input_evidence,
         updates: parsed.updates,
         rejection_code: None,
@@ -207,6 +260,7 @@ fn build_content_pending(
 
 fn non_content_attempt(
     parsed: &ParsedUpdates,
+    input_kind: InputKind,
     update_kind: UpdateKind,
     rejection_code: Option<RejectionCode>,
 ) -> Result<PublicationAttemptRecord> {
@@ -214,7 +268,7 @@ fn non_content_attempt(
     Ok(PublicationAttemptRecord {
         schema_version: SCHEMA_VERSION,
         update_kind,
-        input_kind: InputKind::GitUpdateLines,
+        input_kind,
         input_evidence: parsed.input_evidence.clone(),
         updates: parsed.updates.clone(),
         rejection_code,

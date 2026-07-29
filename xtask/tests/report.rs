@@ -20,6 +20,8 @@ use xtask::semantic_judge::{
 const BASE: &str = "1111111111111111111111111111111111111111";
 const CANDIDATE: &str = "2222222222222222222222222222222222222222";
 const TREE: &str = "3333333333333333333333333333333333333333";
+const SHA1_EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+const SHA256_EMPTY_TREE: &str = "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321";
 
 fn git(repo: &Path, args: &[&str]) -> String {
     let output = Command::new("/usr/bin/git")
@@ -51,6 +53,64 @@ fn deterministic(pass: bool) -> DeterministicResult {
         checks: Vec::new(),
         final_source_verified: pass,
         final_failure: None,
+    }
+}
+
+fn content_attempt_for_update(
+    input_kind: InputKind,
+    candidate: &str,
+    remote: &str,
+    base: &str,
+) -> PublicationAttemptRecord {
+    let tree = "3".repeat(candidate.len());
+    let input = match input_kind {
+        InputKind::GitUpdateLines => {
+            format!("refs/heads/main {candidate} refs/heads/main {remote}\n")
+        }
+        InputKind::CiPushEvent => {
+            format!(r#"{{"before":"{remote}","after":"{candidate}","ref":"refs/heads/main"}}"#)
+        }
+    };
+    PublicationAttemptRecord {
+        schema_version: SCHEMA_VERSION,
+        update_kind: UpdateKind::Content,
+        input_kind,
+        input_evidence: InputEvidence {
+            encoding: "utf-8".to_owned(),
+            data: input,
+        },
+        updates: vec![UpdateTuple {
+            local_ref: "refs/heads/main".to_owned(),
+            local_sha: candidate.to_owned(),
+            remote_ref: "refs/heads/main".to_owned(),
+            remote_sha: remote.to_owned(),
+        }],
+        rejection_code: None,
+        base_revision: Some(base.to_owned()),
+        candidate_revision: Some(candidate.to_owned()),
+        candidate_tree: Some(tree.clone()),
+        manifest_digest: Some("4".repeat(64)),
+        rubric_digests: Some(BTreeMap::from([(
+            "quality/rubrics/test.md".to_owned(),
+            "5".repeat(64),
+        )])),
+        fresh_deterministic_results: vec![DeterministicResult {
+            phase: DeterministicPhase::Publication,
+            binding: CandidateBinding {
+                base_revision: base.to_owned(),
+                candidate_revision: candidate.to_owned(),
+                candidate_tree: tree,
+            },
+            prerequisites: Vec::new(),
+            checks: Vec::new(),
+            final_source_verified: true,
+            final_failure: None,
+        }],
+        evaluation_report_digest: Some("6".repeat(64)),
+        approval_digest: None,
+        derived_disposition: DerivedDisposition::SemanticBlock,
+        gate_decision: GateDecision::Block,
+        created_at: "2026-07-25T00:00:00Z".to_owned(),
     }
 }
 
@@ -227,6 +287,36 @@ fn concurrent_first_writers_leave_durable_canonical_record_without_temps() {
                 .starts_with(".tmp-")
         );
     }
+}
+
+#[test]
+fn crash_residue_in_unscanned_temp_directories_does_not_block_approval_lookup() {
+    let root = TempDir::new().unwrap();
+    let store = Store::from_common_directory(root.path());
+    let record = evaluation(root.path(), true, Some(SemanticStatus::Block));
+    let report_digest = store.write_evaluation(&record).unwrap();
+    let _ = store.approve(&report_digest, "crash residue test").unwrap();
+
+    for directory in [
+        store.root().join(".tmp"),
+        store.root().join("approvals/.tmp"),
+    ] {
+        assert!(directory.is_dir(), "missing {}", directory.display());
+        fs::write(directory.join(".tmp-crash-residue"), b"incomplete").unwrap();
+    }
+
+    let selected = store
+        .select_approved_evaluation(
+            &record.base_revision,
+            &record.candidate_revision,
+            &record.candidate_tree,
+            &record.manifest_digest,
+            &record.rubric_digests,
+            &record.semantic_topology,
+        )
+        .unwrap()
+        .expect("approval remains discoverable");
+    assert_eq!(selected.0, report_digest);
 }
 
 #[test]
@@ -610,6 +700,22 @@ fn attempt_validation_rederives_input_and_deterministic_disposition() {
     };
     assert!(deletion.validate().is_ok());
 
+    let mut ci_deletion = deletion.clone();
+    ci_deletion.input_kind = InputKind::CiPushEvent;
+    ci_deletion.input_evidence.data = format!(
+        r#"{{"before":"{BASE}","after":"{}","ref":"refs/heads/old"}}"#,
+        "0".repeat(40)
+    );
+    ci_deletion.updates = vec![UpdateTuple {
+        local_ref: "refs/heads/old".to_owned(),
+        local_sha: "0".repeat(40),
+        remote_ref: "refs/heads/old".to_owned(),
+        remote_sha: BASE.to_owned(),
+    }];
+    assert!(ci_deletion.validate().is_ok());
+    ci_deletion.input_evidence.data.push('\n');
+    assert!(ci_deletion.validate().is_err());
+
     deletion.input_evidence.data = format!("refs/heads/main {CANDIDATE} refs/heads/main {BASE}\n");
     deletion.updates = vec![UpdateTuple {
         local_ref: "refs/heads/main".to_owned(),
@@ -661,6 +767,19 @@ fn attempt_validation_rederives_input_and_deterministic_disposition() {
         created_at: "2026-07-25T00:00:00Z".to_owned(),
     };
     assert!(content.validate().is_ok());
+    let mut forged_ci_approval = content.clone();
+    forged_ci_approval.input_kind = InputKind::CiPushEvent;
+    forged_ci_approval.input_evidence.data =
+        format!(r#"{{"before":"{BASE}","after":"{CANDIDATE}","ref":"refs/heads/main"}}"#);
+    forged_ci_approval.approval_digest = Some("b".repeat(64));
+    forged_ci_approval.gate_decision = GateDecision::Approved;
+    assert!(
+        forged_ci_approval
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("cannot reference local approval")
+    );
     content.fresh_deterministic_results = vec![deterministic(false)];
     assert!(
         content
@@ -679,6 +798,81 @@ fn attempt_validation_rederives_input_and_deterministic_disposition() {
             .to_string()
             .contains("contradicts")
     );
+}
+
+#[test]
+fn content_attempt_revisions_bind_exact_parsed_content_update() {
+    for input_kind in [InputKind::GitUpdateLines, InputKind::CiPushEvent] {
+        let ordinary = content_attempt_for_update(input_kind, CANDIDATE, BASE, BASE);
+        assert!(ordinary.validate().is_ok());
+
+        let mut forged_candidate = ordinary.clone();
+        let forged_oid = "7".repeat(40);
+        forged_candidate.candidate_revision = Some(forged_oid.clone());
+        forged_candidate.fresh_deterministic_results[0]
+            .binding
+            .candidate_revision = forged_oid;
+        assert!(
+            forged_candidate
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("candidate_revision")
+        );
+
+        let mut forged_base = ordinary;
+        let forged_oid = "8".repeat(40);
+        forged_base.base_revision = Some(forged_oid.clone());
+        forged_base.fresh_deterministic_results[0]
+            .binding
+            .base_revision = forged_oid;
+        assert!(
+            forged_base
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("base_revision")
+        );
+
+        for (width, empty_tree) in [(40, SHA1_EMPTY_TREE), (64, SHA256_EMPTY_TREE)] {
+            let candidate = "2".repeat(width);
+            let zero = "0".repeat(width);
+            let valid_new_branch =
+                content_attempt_for_update(input_kind, &candidate, &zero, empty_tree);
+            assert!(valid_new_branch.validate().is_ok());
+
+            let mut wrong_empty_tree = valid_new_branch;
+            let wrong_oid = "9".repeat(width);
+            wrong_empty_tree.base_revision = Some(wrong_oid.clone());
+            wrong_empty_tree.fresh_deterministic_results[0]
+                .binding
+                .base_revision = wrong_oid;
+            assert!(
+                wrong_empty_tree
+                    .validate()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("base_revision")
+            );
+        }
+    }
+
+    let deletion_remote = "9".repeat(40);
+    let zero = "0".repeat(40);
+    let mut mixed = content_attempt_for_update(InputKind::GitUpdateLines, CANDIDATE, BASE, BASE);
+    mixed.input_evidence.data = format!(
+        "(delete) {zero} refs/heads/old {deletion_remote}\nrefs/heads/main {CANDIDATE} refs/heads/main {BASE}\n"
+    );
+    mixed.updates.insert(
+        0,
+        UpdateTuple {
+            local_ref: "(delete)".to_owned(),
+            local_sha: zero,
+            remote_ref: "refs/heads/old".to_owned(),
+            remote_sha: deletion_remote,
+        },
+    );
+    assert!(mixed.validate().is_ok());
 }
 
 #[test]

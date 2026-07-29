@@ -42,6 +42,15 @@ pub struct ParsedUpdates {
     pub disposition: ParsedUpdateDisposition,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CiPushEvent {
+    before: String,
+    after: String,
+    #[serde(rename = "ref")]
+    reference: String,
+}
+
 /// Parse complete pre-push stdin into one canonical aggregate disposition.
 ///
 /// Canonical update evidence is stably tuple-sorted. Exact duplicate content
@@ -110,6 +119,45 @@ pub fn parse_updates(input: &[u8]) -> ParsedUpdates {
     }
 }
 
+/// Parse exact canonical CI push-event bytes and project one Git update tuple.
+///
+/// CI input is a closed object whose byte representation must exactly equal the
+/// canonical serialization of its `before`, `after`, and `ref` fields.
+pub fn parse_ci_event(input: &[u8]) -> ParsedUpdates {
+    let input_evidence = input_evidence(input);
+    let malformed = || ParsedUpdates {
+        input_evidence: input_evidence.clone(),
+        updates: Vec::new(),
+        disposition: ParsedUpdateDisposition::Rejected(RejectionCode::MalformedCiEvent),
+    };
+    let Ok(text) = std::str::from_utf8(input) else {
+        return malformed();
+    };
+    let Ok(event) = serde_json::from_str::<CiPushEvent>(text) else {
+        return malformed();
+    };
+    if serde_json::to_vec(&event).ok().as_deref() != Some(input) || !valid_ci_event_shape(&event) {
+        return malformed();
+    }
+
+    let update = UpdateTuple {
+        local_ref: event.reference.clone(),
+        local_sha: event.after,
+        remote_ref: event.reference,
+        remote_sha: event.before,
+    };
+    let disposition = if is_zero_oid(&update.local_sha) {
+        ParsedUpdateDisposition::DeletionOnly
+    } else {
+        ParsedUpdateDisposition::Content(update.clone())
+    };
+    ParsedUpdates {
+        input_evidence,
+        updates: vec![update],
+        disposition,
+    }
+}
+
 /// Decode lossless input evidence. Base64 accepts only canonical padded RFC 4648
 /// standard-alphabet text.
 pub fn decode_input_evidence(evidence: &InputEvidence) -> Result<Vec<u8>> {
@@ -155,6 +203,14 @@ fn updates_have_valid_shape(updates: &[UpdateTuple]) -> bool {
             valid_ref(&update.local_ref) && update.local_ref != "(delete)"
         }
     })
+}
+
+fn valid_ci_event_shape(event: &CiPushEvent) -> bool {
+    valid_oid(&event.before)
+        && valid_oid(&event.after)
+        && event.before.len() == event.after.len()
+        && !(is_zero_oid(&event.before) && is_zero_oid(&event.after))
+        && valid_ref(&event.reference)
 }
 
 fn valid_oid(value: &str) -> bool {

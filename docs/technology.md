@@ -218,8 +218,9 @@ Production behavior is tested through CLI with executable provider fixtures. Exp
 - `proptest` for optional pure and black-box generated cases;
 - temporary project directories and selected SQLite persistence stores;
 - Cargo formatting, Clippy, and dependency/advisory tooling;
-- non-shipping Rust `xtask` for canonical gate and hooks;
-- generic versioned semantic-judge executable contract with focused documentation, observability, architecture/tenet/KISS, and behavioral-evidence rubrics.
+- non-shipping Rust `xtask` for exact-candidate Git mechanics, direct process execution, immutable reports, approvals, and tracked hooks;
+- typed schema-v2 [`quality/manifest.toml`](../quality/manifest.toml) as sole deterministic and semantic policy registry;
+- generic semantic-judge v2 JSON-over-stdio contract with focused documentation, observability, architecture/tenet/KISS, behavioral-evidence, and coherence rubrics.
 
 Exact test libraries remain implementation choices; [testing.md](testing.md) defines required behavior independent of harness library.
 
@@ -291,20 +292,11 @@ These behaviors apply on all supported platforms without alternate implementatio
 | Paths | Unix path separators; lexical absolute normalization at registration/update; empty `LOOP_ENGINE_HOME` treated as unset; non-empty `LOOP_ENGINE_HOME` overrides machine-local roots for tests and portable use with existing-path symlink resolution or lexical identity for nonexistent roots; caller CWD is never inherited for machine-local roots or provider working directory; normative layout in [configuration.md](configuration.md). |
 | Shell providers | A provider may be a shebang script invoked as the configured executable path. Engine never performs implicit shell interpolation on executable or argument vector. |
 
-### Authoritative CI matrix
+### Validation CI evidence
 
-R004 supersedes T029 scheduling. Protected-`main` `pull_request_target` workflow with credential-free trusted-base quality evidence, unprivileged candidate-influenced subprocesses against privileged source/evidence, inert hash-bound Git-bundle transfer, and fresh-runner `publication / aggregate` semantic phase **MUST** perform exact base/head checkpoint once without exposing judge credentials to candidate code. Deterministic candidate-head quality **MUST** run on each row below without semantic-judge credentials:
+[`.github/workflows/quality.yml`](../.github/workflows/quality.yml) is push-only and currently executes on pinned Ubuntu x86-64 infrastructure. It checks out pushed candidate, provisions pinned Rust/cargo-deny/mise/Go and external semantic credentials, then invokes candidate `cargo xtask validate --publication --ci-event <path>` once. Candidate manifest and rubrics apply immediately.
 
-| CI job | Host image | Host CPU | Target triple |
-|---|---|---|---|
-| `linux-x86_64` | `ubuntu-24.04` | x64 | `x86_64-unknown-linux-gnu` |
-| `linux-aarch64` | `ubuntu-24.04-arm` | arm64 | `aarch64-unknown-linux-gnu` |
-| `macos-aarch64` | `macos-15` | arm64 | `aarch64-apple-darwin` |
-| `macos-x86_64` | `macos-15-intel` | Intel | `x86_64-apple-darwin` |
-
-GitHub-hosted macOS workflow labels select host CPU architecture: `macos-15` runs on arm64 (Apple Silicon); `macos-15-intel` runs on Intel x86_64. Pin these labels rather than `macos-latest` so quality matrix rows stay stable across GitHub image promotions.
-
-Local development may use any supported triple; CI coverage is authoritative for release confidence.
+CI independently verifies published revision and ignores Git-local owner approvals. It uploads command output plus evaluation/attempt records on pass or block. It cannot prevent direct push and makes no branch-protection claim. Supported platform contract remains four triples above; final release evidence must include named macOS and glibc Linux results rather than claiming current workflow is four-row matrix.
 
 ## Pinned toolchain and workspace layout
 
@@ -387,9 +379,9 @@ Dev: `assert_cmd`, `tempfile`.
 
 ### `xtask` (non-shipping)
 
-Runtime: `clap`, `anyhow`, `cargo_metadata`, `serde`, `serde_json`, `camino`, `walkdir`.
+Runtime: `clap`, `anyhow`, `serde`, `serde_json`, `sha2`, `time`, `toml`, `uuid`, `nix`, `signal-hook`.
 
-Dev: `tempfile`.
+Dev: `cargo_metadata`, `tempfile`.
 
 Product crates **MUST NOT** depend on `xtask`.
 
@@ -410,7 +402,7 @@ Each fixture package carries its own tracked `Cargo.lock`, builds with `cargo bu
 #### Language, runtime, and dependencies
 
 - Rust edition `2024`, toolchain `1.95.0` (same pinned channel as product).
-- One native executable per authoritative CI host triple ([Supported platforms](#supported-platforms)).
+- One native executable per supported host triple when that platform is under acceptance.
 - Runtime dependencies only: `serde`, `serde_json`, `schemars`, `thiserror` at shared versions/features above.
 - No Python, Node, or other acceptance runtime for core E2Es. Unix shell appears only when a scenario explicitly exercises shebang/script provider configuration (D002) or when a `process-helpers/` binary is a minimal signal/PGID probe.
 
@@ -449,7 +441,7 @@ When a case requires signal delivery, PGID verification, or orphaned-child clean
 |---|---|
 | Toolchain | Rust `1.95.0` from root `rust-toolchain.toml` |
 | Build | `cargo build --manifest-path test-support/providers/<package>/Cargo.toml --locked` before E2E harness resolves absolute executable paths |
-| CI matrix | All four authoritative rows build and run fixture-owned tests and CLI E2Es that depend on fixtures |
+| Platform evidence | Fixture-owned tests and dependent CLI E2Es run on named macOS and glibc Linux acceptance hosts; push CI currently covers Linux x86-64 |
 | Product coupling | Zero workspace `path` or version dependency on fixture crates |
 
 Testing obligations and facet usage of the ledger are mirrored in [testing.md](testing.md) § Provider fixture strategy (T013).

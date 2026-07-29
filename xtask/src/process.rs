@@ -1454,8 +1454,22 @@ impl CleanupProbeState {
 }
 
 fn group_has_live_members(process_group_id: u32, deadline: Instant) -> Result<bool, String> {
+    let mut probe = |program: &str, args: &[&str], probe_deadline: Instant| {
+        bounded_probe(program, args, probe_deadline)
+    };
+    group_has_live_members_with_probe(process_group_id, deadline, &mut probe)
+}
+
+fn group_has_live_members_with_probe<F>(
+    process_group_id: u32,
+    deadline: Instant,
+    probe: &mut F,
+) -> Result<bool, String>
+where
+    F: FnMut(&str, &[&str], Instant) -> Result<(ExitStatus, Vec<u8>), String>,
+{
     let group = process_group_id.to_string();
-    let (status, output) = bounded_probe("/usr/bin/pgrep", &["-g", &group], deadline)?;
+    let (status, output) = probe("/usr/bin/pgrep", &["-g", &group], deadline)?;
     if !status.success() {
         if status.code() == Some(1) {
             return Ok(false);
@@ -1475,9 +1489,50 @@ fn group_has_live_members(process_group_id: u32, deadline: Instant) -> Result<bo
     }
 
     let pid_list = parsed_pids.join(",");
-    let (status, states) =
-        bounded_probe("/bin/ps", &["-o", "pid=,stat=", "-p", &pid_list], deadline)?;
-    descendant_snapshot_has_live_member(status, &states, &parsed_pids)
+    let (status, states) = probe("/bin/ps", &["-o", "pid=,stat=", "-p", &pid_list], deadline)?;
+    if descendant_snapshot_has_live_member(status, &states, &parsed_pids)? {
+        return Ok(true);
+    }
+
+    // A member from the first snapshot can fork a replacement and exit before
+    // `ps` observes it. Re-enumerate after every apparently empty snapshot;
+    // only the already-observed zombie/vanished identities may remain.
+    let (status, output) = probe("/usr/bin/pgrep", &["-g", &group], deadline)?;
+    confirmation_snapshot_has_new_member(status, &output, &parsed_pids)
+}
+
+fn confirmation_snapshot_has_new_member(
+    status: ExitStatus,
+    output: &[u8],
+    observed_pids: &[&str],
+) -> Result<bool, String> {
+    if !status.success() {
+        if status.code() == Some(1) {
+            return Ok(false);
+        }
+        return Err(format!(
+            "targeted process-group confirmation probe exited {status}"
+        ));
+    }
+    let pids = String::from_utf8(output.to_vec()).map_err(|_| {
+        "targeted process-group confirmation probe returned non-UTF-8 output".to_owned()
+    })?;
+    let mut saw_pid = false;
+    for pid in pids.split_whitespace() {
+        pid.parse::<u32>().map_err(|_| {
+            format!("targeted process-group confirmation probe returned invalid PID `{pid}`")
+        })?;
+        saw_pid = true;
+        if !observed_pids.contains(&pid) {
+            return Ok(true);
+        }
+    }
+    if !saw_pid {
+        return Err(
+            "targeted process-group confirmation probe returned no PIDs on success".to_owned(),
+        );
+    }
+    Ok(false)
 }
 
 fn descendant_snapshot_has_live_member(
@@ -2007,6 +2062,66 @@ mod tests {
             CleanupProbeDecision::DeadlineExceeded
         );
         assert_eq!(state.deadline_failure(42), "latest probe error".to_owned());
+    }
+
+    #[test]
+    fn group_probe_reenumerates_after_original_members_vanish() {
+        use std::collections::VecDeque;
+
+        let mut responses = VecDeque::from([
+            (ExitStatus::from_raw(0), b"41\n".to_vec()),
+            (ExitStatus::from_raw(1 << 8), Vec::new()),
+            (ExitStatus::from_raw(0), b"42\n".to_vec()),
+        ]);
+        let mut calls = Vec::new();
+        let mut probe = |program: &str, args: &[&str], _deadline: Instant| {
+            calls.push((program.to_owned(), args.join(" ")));
+            Ok(responses.pop_front().expect("expected probe response"))
+        };
+
+        assert_eq!(
+            group_has_live_members_with_probe(41, Instant::now(), &mut probe),
+            Ok(true)
+        );
+        assert!(responses.is_empty());
+        assert_eq!(
+            calls,
+            vec![
+                ("/usr/bin/pgrep".to_owned(), "-g 41".to_owned()),
+                ("/bin/ps".to_owned(), "-o pid=,stat= -p 41".to_owned()),
+                ("/usr/bin/pgrep".to_owned(), "-g 41".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn confirmation_snapshot_detects_replacement_after_original_members_vanish() {
+        let success = ExitStatus::from_raw(0);
+        assert_eq!(
+            confirmation_snapshot_has_new_member(success, b"41\n42\n", &["41"]),
+            Ok(true)
+        );
+        assert_eq!(
+            confirmation_snapshot_has_new_member(success, b"41\n", &["41", "42"]),
+            Ok(false)
+        );
+
+        let vanished = ExitStatus::from_raw(1 << 8);
+        assert_eq!(
+            confirmation_snapshot_has_new_member(vanished, b"", &["41"]),
+            Ok(false)
+        );
+        let abnormal = ExitStatus::from_raw(2 << 8);
+        assert!(
+            confirmation_snapshot_has_new_member(abnormal, b"", &["41"])
+                .unwrap_err()
+                .contains("confirmation probe exited")
+        );
+        assert!(
+            confirmation_snapshot_has_new_member(success, b"not-a-pid\n", &["41"])
+                .unwrap_err()
+                .contains("invalid PID")
+        );
     }
 
     #[test]

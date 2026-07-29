@@ -637,26 +637,28 @@ Deletion-only pushes, empty changed-file checks, and successful idempotent hook 
 
 ## Acceptance
 
-Change is complete when:
+Executable acceptance map. Test names are Rust test function names at exact tracked paths; package-gate evidence lives in Git common directory handoffs.
 
-- fresh clone installs hooks through one documented idempotent command;
-- pre-commit proves unstaged and untracked contamination cannot affect checks or runner inputs;
-- every configured command starts beneath candidate root;
-- missing Go/cargo-deny prerequisites fail without installing tools;
-- all configured deterministic checks run against exact index tree;
-- force-push candidate is judged by resulting content;
-- deletion-only and multi-tip behavior match contract;
-- runner contains no hardcoded Cargo or loop-engine quality command dispatch;
-- ordinary tests enforce metadata architecture rules and operation catalog equality;
-- all four semantic axes execute despite another axis blocking;
-- coherence cannot erase an axis non-pass;
-- malformed judge output gets exactly one correction attempt;
-- semantic approval succeeds only for exact failed report and reason;
-- approved retry retains semantic-block disposition and records `gate_decision=approved`;
-- deterministic approval attempt is rejected;
-- changed base/candidate/tree/config/rubric invalidates approval;
-- CI ignores local approval and uploads independent evaluation/attempt records;
-- macOS validation passes and Linux passes through owner-authorized CI or a named recorded Linux-container equivalent;
-- no active v1 compatibility dispatch or duplicate policy registry remains;
-- obsolete validation code and stale policy documentation are removed;
-- `xtask` dependency and line-count reduction is recorded in final change evidence.
+| Acceptance bullet | Test/evidence |
+|---|---|
+| Fresh clone installs hooks through one documented idempotent command. | `xtask/tests/hooks.rs::fresh_install_sets_only_local_path_and_both_adapters_invoke_final_v2_commands`; `xtask/tests/hooks.rs::exact_existing_install_is_idempotent_after_full_validation`; owner command in `docs/development-policy.md` § Owner setup. |
+| Pre-commit excludes unstaged/untracked contamination and protects runner inputs. | `xtask/tests/hooks.rs::exact_index_excludes_unstaged_and_untracked_product_content`; `xtask/tests/hooks.rs::runner_input_mismatch_fails_before_any_check`; `xtask/tests/candidate.rs::staged_candidate_excludes_unstaged_and_untracked_content`. |
+| Every configured command starts beneath candidate root. | `xtask/tests/config.rs::repository_paths_and_candidate_cwds_cannot_escape`; `xtask/tests/process.rs::rejects_cwd_outside_candidate_root_including_symlink_escape`; `xtask/tests/candidate.rs::source_is_sealed_and_auxiliary_roots_are_distinct_writable_external_paths`. |
+| Missing Go/cargo-deny fails without installation. | `xtask/tests/hooks.rs::prerequisite_tool_failure_prints_hint_and_does_not_configure_hooks`; `xtask/tests/manifest_policy.rs::final_manifest_is_exact_project_policy_registry`; `quality/manifest.toml` sets both mise auto-install disable variables. |
+| All deterministic checks run against exact index tree. | `xtask/tests/hooks.rs::explicit_fixture_index_is_the_accepted_candidate`; `xtask/tests/hooks.rs::deterministic_failures_are_aggregated_in_manifest_order`; `xtask/tests/manifest_policy.rs::final_manifest_is_exact_project_policy_registry`. |
+| Force-push candidate is judged by resulting content. | `xtask/tests/publication.rs::ordinary_new_force_mixed_and_approved_retry_keep_one_aggregate_verdict`. |
+| Deletion-only and multi-tip behavior matches contract. | `xtask/tests/publication.rs::complete_parser_matrix_preserves_exact_evidence_and_frozen_rejections`; `xtask/tests/publication.rs::rejected_and_deletion_attempts_have_exact_nullability_and_only_common_dir_git_query`. |
+| Runner has no hardcoded Cargo or loop-engine policy dispatch. | `xtask/tests/manifest_policy.rs::final_manifest_is_exact_project_policy_registry`; T017 retired/reference and source search recorded at `$(git rev-parse --git-common-dir)/loop-engine/change/reusable-git-validation/handoffs/T017.md`. |
+| Ordinary tests enforce metadata architecture and operation catalog equality. | `xtask/tests/workspace_architecture.rs::current_workspace_has_inward_dependencies_and_one_product_binary`; `crates/loop-engine-cli/tests/driver_catalog.rs::production_driver_registry_exactly_matches_operation_catalog`; `crates/loop-engine-cli/tests/e2e/coverage_closure.rs::alpha_catalog_has_independent_runtime_and_trace_closure`. |
+| All four semantic axes execute despite one blocking. | `xtask/tests/semantic_judge.rs::focused_axes_fan_out_with_isolated_rubrics_scratch_and_typed_candidate_context`; `xtask/tests/semantic_judge.rs::status_matrix_and_coherence_are_monotonic`. |
+| Coherence cannot erase axis non-pass. | `xtask/tests/semantic_judge.rs::status_matrix_and_coherence_are_monotonic`. |
+| Malformed judge output receives exactly one correction attempt. | `xtask/tests/semantic_judge.rs::malformed_output_gets_exactly_one_bounded_correction`; `xtask/tests/semantic_judge.rs::malformed_contract_fields_fail_closed_after_one_correction`. |
+| Semantic approval requires exact failed report and reason. | `xtask/tests/report.rs::approval_accepts_only_verified_semantic_block_and_repeats_distinctly`; `xtask/tests/validation_commands.rs::cli_advisory_and_approval_dispatch_write_expected_evidence`. |
+| Approved retry keeps semantic-block and records `gate_decision=approved`. | `xtask/tests/publication.rs::ordinary_new_force_mixed_and_approved_retry_keep_one_aggregate_verdict`; `xtask/tests/report.rs::content_attempt_store_checks_report_approval_and_policy_bindings`. |
+| Deterministic block cannot be approved. | `xtask/tests/publication.rs::approval_never_bypasses_fresh_deterministic_failure_or_changed_base`; `xtask/tests/report.rs::approval_accepts_only_verified_semantic_block_and_repeats_distinctly`. |
+| Changed base/candidate/tree/config/rubric invalidates approval. | `xtask/tests/report.rs::approval_binding_predicate_invalidates_every_bound_component`; `xtask/tests/publication.rs::approval_never_bypasses_fresh_deterministic_failure_or_changed_base`; `xtask/tests/publication.rs::rubric_mutation_or_deletion_stores_one_pre_run_bound_block_without_semantic`. |
+| CI ignores local approval and uploads independent evaluation/attempt evidence. | `xtask/tests/publication.rs::ci_event_binds_pushed_candidate_and_ignores_local_approval`; `xtask/tests/workflow.rs::final_ci_is_push_only_and_uses_one_publication_lifecycle`; `xtask/tests/workflow.rs::final_ci_pins_tools_and_keeps_credentials_external`. |
+| macOS and Linux acceptance passes. | Darwin package evidence: `$(git rev-parse --git-common-dir)/loop-engine/change/reusable-git-validation/handoffs/T015.md`; final named macOS/Linux evidence: `$(git rev-parse --git-common-dir)/loop-engine/change/reusable-git-validation/handoffs/T017.md`. |
+| No active v1 dispatch or duplicate policy registry remains. | `xtask/tests/manifest_policy.rs::final_manifest_is_exact_project_policy_registry`; `xtask/tests/workflow.rs::final_ci_is_push_only_and_uses_one_publication_lifecycle`; deletion/search evidence in `$(git rev-parse --git-common-dir)/loop-engine/change/reusable-git-validation/handoffs/T015.md`. |
+| Obsolete validation code and stale policy documentation are removed. | T015 deleted inventory at `$(git rev-parse --git-common-dir)/loop-engine/change/reusable-git-validation/handoffs/T015.md`; T016 contradiction-search evidence at `$(git rev-parse --git-common-dir)/loop-engine/change/reusable-git-validation/handoffs/T016.md`. Historical `docs/change/initial-implementation/**` is excluded. |
+| `xtask` dependency and line-count reduction is recorded. | Final before/after metrics at `$(git rev-parse --git-common-dir)/loop-engine/change/reusable-git-validation/handoffs/T017.md`. |

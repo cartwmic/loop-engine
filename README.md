@@ -82,6 +82,16 @@ Provider lifecycle operations preserve stable registration identity:
 
 Every invocation creates a private JSONL trace. Structured mode (`--format json`) emits exactly one JSON object; application exits are `0` completed, `2` rejected, `1` error, and `64` pre-dispatch failure.
 
+## Development validation
+
+From existing committed checkout, install tracked Git hooks once:
+
+```bash
+cargo xtask hooks install
+```
+
+Pre-commit validates exact staged tree. Pre-push validates one aggregate publication and stores immutable evidence beneath Git common directory. See [development policy](docs/development-policy.md) for prerequisites, commands, reports, semantic approval, retry, and independent push-CI behavior.
+
 ## Operator paths
 
 - [Harness-neutral agent skill seed](examples/skills/using-loop-engine/SKILL.md)

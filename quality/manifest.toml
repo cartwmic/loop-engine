@@ -45,7 +45,7 @@ id = "diff-check"
 phases = ["pre-commit", "publication"]
 scope = "changed-files"
 program = "/usr/bin/git"
-args = ["--git-dir={git_directory}", "diff", "--check", "{base_revision}", "{candidate_revision}", "--"]
+args = ["--git-dir={git_directory}", "--literal-pathspecs", "diff", "--check", "{base_revision}", "{candidate_revision}", "--"]
 cwd = "{candidate_root}"
 
 [[checks]]

@@ -1,7 +1,8 @@
 //! Unix external `RLIMIT_FSIZE` wrapper for late-sink E2E injection (T145).
 //!
 //! Production code receives no test branch ([operational-trace.md] § Deterministic
-//! Unix SIGXFSZ / RLIMIT_FSIZE E2E contract). The wrapper ignores `SIGXFSZ` and
+//! Unix SIGXFSZ / RLIMIT_FSIZE E2E contract). The wrapper ignores `SIGXFSZ` by its
+//! POSIX signal number because Debian `dash` rejects the `SIGXFSZ` spelling, then
 //! applies `ulimit -f` to the child shell because workspace `unsafe_code` is forbidden.
 //!
 //! `run_with_rlimit_fsize` uses the sandbox caller CWD and writes a harness transcript
@@ -86,8 +87,7 @@ fn build_wrapped_command(
         quoted.push_str(&shell_quote(arg));
     }
 
-    let script =
-        format!("trap '' SIGXFSZ 2>/dev/null || true\nulimit -f {blocks}\nexec {quoted}\n");
+    let script = format!("trap '' 25\nulimit -f {blocks}\nexec {quoted}\n");
 
     let mut command = Command::new("sh");
     command
@@ -168,7 +168,7 @@ pub(crate) fn verify_rlimit_blocks_writes(byte_limit: u64) -> Result<(), RlimitE
     let blocks = ulimit_blocks(byte_limit);
     let write_bytes = byte_limit.saturating_add(BLOCK_SIZE);
     let script = format!(
-        "trap '' SIGXFSZ 2>/dev/null || true\nulimit -f {blocks}\ntarget=$(mktemp)\nif dd if=/dev/zero of=\"$target\" bs=1 count={write_bytes} 2>/dev/null; then\n  exit 0\nelse\n  exit 1\nfi\n"
+        "trap '' 25\nulimit -f {blocks}\ntarget=$(mktemp)\nif dd if=/dev/zero of=\"$target\" bs=1 count={write_bytes} 2>/dev/null; then\n  exit 0\nelse\n  exit 1\nfi\n"
     );
     let output = Command::new("sh")
         .arg("-c")

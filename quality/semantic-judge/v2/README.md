@@ -27,10 +27,10 @@ Malformed successful output receives exactly one `correction` invocation. Both a
 
 ## Scheduling and authority
 
-Exactly four focused axes come only from `quality/manifest.toml`. Runner executes them concurrently in manifest order for normalized output. Each gets only own rubric and distinct candidate-external writable scratch root. Coherence gets another distinct root and runs last.
+Exactly four focused axes and coherence come only from candidate [`quality/manifest.toml`](../../manifest.toml); candidate policy applies immediately through sole v2 path. Runner executes axes concurrently in manifest order for normalized output. Each gets only own rubric and distinct candidate-external writable scratch root. Coherence gets another distinct root and runs last.
 
 After every semantic child runner verifies candidate source bytes, paths, modes, symlinks, and sealed permissions against bound tree. Mutation cancels and awaits active sibling groups, suppresses later correction/coherence children, and synthesizes complete `unavailable` records. Coherence mutation also blocks.
 
 Rust runner mechanically derives `pass` only when all four focused statuses and coherence are `pass`. Every `block`, `indeterminate`, or `unavailable` yields `semantic_block`; judge never chooses gate decision or approval eligibility.
 
-Schemas are [`request.schema.json`](request.schema.json) and [`response.schema.json`](response.schema.json).
+Schemas are [`request.schema.json`](request.schema.json) and [`response.schema.json`](response.schema.json). Owner commands, report paths, and approval semantics are in [`docs/development-policy.md`](../../../docs/development-policy.md).

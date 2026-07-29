@@ -1,10 +1,31 @@
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
+use tempfile::TempDir;
 use xtask::config::{Phase, Scope, SemanticRequirement, load_manifest};
 
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
+}
+
+fn git(repo: &Path, args: &[&str]) -> String {
+    let output = Command::new("/usr/bin/git")
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {}: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .trim_end()
+        .to_owned()
 }
 
 #[test]
@@ -75,6 +96,7 @@ fn final_manifest_is_exact_project_policy_registry() {
             "/usr/bin/git",
             &[
                 "--git-dir={git_directory}",
+                "--literal-pathspecs",
                 "diff",
                 "--check",
                 "{base_revision}",
@@ -225,4 +247,51 @@ fn final_manifest_is_exact_project_policy_registry() {
         semantic.coherence().rubric(),
         Path::new("quality/rubrics/coherence.md")
     );
+}
+
+#[test]
+fn final_diff_check_treats_pathspec_magic_filenames_as_literals() {
+    let repo = TempDir::new().unwrap();
+    git(repo.path(), &["init", "-q", "-b", "main"]);
+    git(repo.path(), &["config", "user.email", "validation@test"]);
+    git(repo.path(), &["config", "user.name", "Validation Test"]);
+    fs::write(repo.path().join("seed"), "seed\n").unwrap();
+    git(repo.path(), &["add", "-A"]);
+    git(repo.path(), &["commit", "-q", "-m", "base"]);
+    let base = git(repo.path(), &["rev-parse", "HEAD"]);
+
+    let magic_path = ":(exclude)*";
+    fs::write(repo.path().join(magic_path), "trailing whitespace \n").unwrap();
+    git(
+        repo.path(),
+        &["--literal-pathspecs", "add", "--", magic_path],
+    );
+    git(repo.path(), &["commit", "-q", "-m", "candidate"]);
+    let candidate = git(repo.path(), &["rev-parse", "HEAD"]);
+
+    let document = load_manifest(
+        &repository_root().join("quality/manifest.toml"),
+        SemanticRequirement::Required,
+    )
+    .unwrap();
+    let check = &document.manifest().checks()[0];
+    assert_eq!(check.id(), "diff-check");
+    let git_directory = repo.path().join(".git");
+    let mut args: Vec<String> = check
+        .args()
+        .iter()
+        .map(|arg| {
+            arg.replace("{git_directory}", &git_directory.to_string_lossy())
+                .replace("{base_revision}", &base)
+                .replace("{candidate_revision}", &candidate)
+        })
+        .collect();
+    args.push(magic_path.to_owned());
+    let output = Command::new(check.program())
+        .args(&args)
+        .current_dir(repo.path())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains(":(exclude)*:1: trailing whitespace"));
 }
