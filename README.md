@@ -2,6 +2,35 @@
 
 Local CLI for creating, advancing, inspecting, and terminating durable workflows supplied by executable workflow providers.
 
+## If you are familiar with workflow engines
+
+A traditional workflow engine usually owns execution: it schedules tasks, dispatches workers or service calls, waits for their results, and applies retry or timeout policy. Loop Engine owns only coordination. A human, agent, script, or external system inspects the current state, performs the work elsewhere, and asks the engine to accept an event. The engine advances the run only when the stored graph permits the transition and any provider-defined gates pass.
+
+That inversion is the point. Loop Engine is a durable control plane for externally performed work, not a worker runtime or agent orchestrator. An agent is simply one possible caller, using the same operations and workflow semantics as a human or script.
+
+| Concern | Traditional workflow engine (common model) | Loop Engine |
+|---|---|---|
+| Primary abstraction | Tasks for the engine to execute | States of work performed outside the engine |
+| Workflow definition | A declarative graph plus task or worker implementations | One executable provider that emits the graph and implements gates and guidance |
+| Progress | Task completion, callbacks, or engine-triggered transitions | An explicit event request from the current actor |
+| Enforcement | Worker outcome and orchestration policy | Engine-resolved transitions plus provider-defined validation gates |
+| Working context | Workflow variables and task payloads | Immutable run inputs, append-only evidence references, notes, and current state |
+| Durability | Long-running execution, queues, retries, and timers | Durable state and handoff across CLI processes, agent sessions, and actors |
+| Runtime | Commonly a server, scheduler, queue, and worker fleet | A local CLI, executable providers, and SQLite |
+| History | Execution and task history | An ordered journal explaining requests, gate verdicts, evidence, and state changes |
+
+This model is useful when the hard part is keeping human or agent-driven work on-policy across interruptions and revision cycles. Prompts and agent sessions are temporary; the run's state, graph snapshot, evidence, and history are not. A new actor can inspect the run and continue without reconstructing the workflow from chat history or trusting a previous actor's claim that the work is done. Workflow-specific policy remains testable code in the provider instead of being split between a declarative graph, prompts, and ad hoc scripts.
+
+Use Loop Engine when:
+
+- primary work must remain in an existing human, agent, script, or tool environment;
+- runs need to survive process, session, or actor boundaries;
+- progress should require explicit, domain-specific validation rather than a completion claim;
+- revision loops and evidence-backed handoffs are central to the workflow; or
+- you want durable coordination without operating a workflow service.
+
+Use a traditional workflow engine when the engine must schedule and execute jobs, provide timers or automatic retries, coordinate parallel workers or child workflows, or operate as a distributed multi-user service. Loop Engine deliberately does not provide those capabilities.
+
 ## Operation surface
 
 Current release exposes all 21 application operations:
