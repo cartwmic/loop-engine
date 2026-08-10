@@ -1,9 +1,9 @@
-# Dependency policy for loop-engine (T030 / D003).
+# Dependency policy for loop-engine.
 # Authoritative allowlists for licenses, sources, advisories, and bans.
-# Canonical command: `cargo deny check` through `quality/manifest.toml`.
+# Canonical command: `cargo deny check`.
 
 [graph]
-# Supported MVP targets only (technology.md / T002). Windows is deferred.
+# Supported MVP targets only (technology.md). Windows is deferred.
 targets = [
     "aarch64-apple-darwin",
     "x86_64-apple-darwin",
@@ -23,7 +23,7 @@ unmaintained = "workspace"
 ignore = []
 
 [licenses]
-# Deny-by-default allowlist compatible with dual MIT/Apache-2.0 (D003).
+# Deny-by-default allowlist compatible with dual MIT/Apache-2.0.
 # Copyleft-only expressions are rejected. SPDX OR alternatives that include an
 # allowed license remain acceptable (for example MIT OR LGPL-2.1-or-later).
 confidence-threshold = 0.8

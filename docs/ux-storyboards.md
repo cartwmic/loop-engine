@@ -1,6 +1,6 @@
 # Loop Engine Interaction Storyboards
 
-**Status:** Normative product interaction semantics. Stable operation IDs and CLI argv are frozen in [operation-catalog.md](operation-catalog.md) (T004). Structured envelope field names, human parity mapping, and exit codes are frozen in [cli-contract.md](cli-contract.md) (T006; [D006](change/initial-implementation/decisions.md#d006--structured-cli-contract)).
+**Status:** Normative product interaction semantics. Stable operation IDs and CLI argv are defined in [operation-catalog.md](operation-catalog.md). Structured envelope field names, human parity mapping, and exit codes are defined in [cli-contract.md](cli-contract.md).
 
 Related documents:
 
@@ -35,7 +35,7 @@ Detailed reason code explains exact denial/failure. Every dispatched result expo
 
 ## Operational trace contract
 
-Normative JSONL v1 schema, permissions, budget, and late sink-failure rules: [operational-trace.md](operational-trace.md) (T010).
+Normative JSONL v1 schema, permissions, budget, and late sink-failure rules: [operational-trace.md](operational-trace.md).
 
 Every CLI invocation initializes one current-user-only structured JSONL trace before operation dispatch. Failure to initialize secure trace stops invocation before provider execution, persistence mutation, or dispatch and emits rich stderr failure. When trace exists, request ID correlates human/structured result with exact file.
 

@@ -1,14 +1,13 @@
 # Provider Protocol v1 — Transport
 
-**Status:** Frozen by T005 (2026-07-17). Decision [D005](change/initial-implementation/decisions.md#d005--provider-protocol-v1).
+**Status:** Provider subprocess transport v1 contract is settled.
 
 This document is the language-neutral normative contract for provider subprocess transport. An independent provider author can implement protocol v1 from this document without reading engine source. JSON Schema files are published under `schemas/provider/v1/`; author workflow, conformance commands, and fixture examples are in [`examples/providers/README.md`](../examples/providers/README.md). This document defines envelopes, process behavior, role semantics, and outcome mapping.
 
 Related documents:
 
-- [Decision D005](change/initial-implementation/decisions.md#d005--provider-protocol-v1)
-- [Decision D008](change/initial-implementation/decisions.md#d008--resource-bounds-and-timeout-defaults) — authoritative numeric bounds in [cli-contract.md](cli-contract.md#resource-bounds-d008)
-- [Application operation catalog](operation-catalog.md) — provider role/result rows and reason taxonomy (D004)
+- [Resource bounds](cli-contract.md#resource-bounds) — authoritative numeric bounds
+- [Application operation catalog](operation-catalog.md) — provider role/result rows and reason taxonomy
 - [Product intent](intent.md)
 - [Code architecture](architecture.md)
 - [Technology direction](technology.md)
@@ -37,7 +36,7 @@ Out of scope for v1 (stop conditions — redesign before proceeding):
 - streaming, chunked, or multiplexed protocol on one stdio channel;
 - Windows provider subprocess transport.
 
-Graph projection field semantics and canonical encoding are frozen in [graph-projection.md](graph-projection.md) (T014, D014). Evidence wire shapes are frozen separately (T084). This document references graph projection only where transport requires shape or bounds.
+Graph projection field semantics and canonical encoding are defined in [graph-projection.md](graph-projection.md). Evidence wire shapes are defined by this protocol and its published schemas. This document references graph projection only where transport requires shape or bounds.
 
 ## Process model
 
@@ -67,7 +66,7 @@ A provider may be a shebang script referenced by `registration.executable`. The 
 
 ## Process group establishment
 
-On supported Unix platforms (D002), before transferring control to the provider executable:
+On supported Unix platforms, before transferring control to the provider executable:
 
 1. Integration creates the provider process in a **new dedicated process group** isolated from the engine (caller) process group.
 2. After spawn, integration **verifies** that the provider process belongs to the expected dedicated process group (PGID).
@@ -84,7 +83,7 @@ Provider code runs with the caller's OS permissions. The engine does not sandbox
 - Content: exactly **one** UTF-8 JSON object (the request envelope).
 - After the JSON document bytes, integration closes stdin so the provider observes EOF.
 - No length prefix, delimiter line, or trailing bytes after the JSON document.
-- Maximum encoded request size: **`provider_request_json_bytes`** (4 MiB; [cli-contract.md](cli-contract.md#resource-bounds-d008)).
+- Maximum encoded request size: **`provider_request_json_bytes`** (4 MiB; [cli-contract.md](cli-contract.md#resource-bounds)).
 - If encoded request size exceeds the bound **before spawn**, integration rejects the invocation as an engine-side operation error (`resource.exhausted`); the provider is never spawned and never receives the request.
 - Invalid UTF-8 in the encoded request document (validated before spawn) is `provider.protocol.invalid_utf8`.
 
@@ -93,7 +92,7 @@ Provider code runs with the caller's OS permissions. The engine does not sandbox
 - Content: exactly **one** UTF-8 JSON object (the result envelope).
 - Provider writes the document then closes stdout and exits.
 - Integration drains stdout until the provider process exits (or stdout closes).
-- Maximum encoded result size: **`provider_result_stdout_bytes`** (1 MiB; [cli-contract.md](cli-contract.md#resource-bounds-d008)).
+- Maximum encoded result size: **`provider_result_stdout_bytes`** (1 MiB; [cli-contract.md](cli-contract.md#resource-bounds)).
 - If encoded stdout exceeds the bound, the invocation maps to `provider.protocol.oversized`.
 - Integration must drain the full stdout stream regardless of size. Operational trace retains in-bound stdout exactly; when retention exceeds the bound, integration stores a prefix up to the bound and records explicit truncation metadata (original byte length and truncated flag).
 - Empty stdout, multiple JSON values, or trailing non-whitespace after the document is `provider.protocol.malformed`.
@@ -103,7 +102,7 @@ Provider code runs with the caller's OS permissions. The engine does not sandbox
 
 - Arbitrary diagnostic byte stream. It does not carry the authoritative result and is not required to be UTF-8.
 - Integration drains stderr until the provider process exits.
-- Maximum retained size in operational trace: **`provider_stderr_trace_bytes`** (1 MiB; [cli-contract.md](cli-contract.md#resource-bounds-d008)).
+- Maximum retained size in operational trace: **`provider_stderr_trace_bytes`** (1 MiB; [cli-contract.md](cli-contract.md#resource-bounds)).
 - When retention exceeds the bound, integration stores a prefix up to the bound and records explicit truncation metadata (original byte length and truncated flag) in the operational trace.
 - Stderr size or retention limits do **not** map to `provider.protocol.oversized`.
 - Stderr content never overrides semantic mapping of a valid, independently complete stdout result; non-zero exit after valid stdout still yields `provider.nonzero_exit` unless a more specific signal/crash code applies.
@@ -192,11 +191,11 @@ Integration resolves the enabled registration **once** per engine operation need
 | Field | Description |
 |---|---|
 | `registration_id` | Stable immutable machine-local workflow identity (I37). |
-| `config_revision` | Monotonic registration configuration revision observed at resolve time (D009). |
+| `config_revision` | Monotonic registration configuration revision observed at resolve time. |
 | `executable` | Absolute executable path used as `argv[0]` at spawn. |
 | `argv` | Arguments after `argv[0]` (`argv[1..]`), passed verbatim. Empty list is valid. |
 | `working_directory` | Absolute working directory used for spawn. |
-| `timeout_seconds` | Positive integer wall-clock timeout for this invocation. Default **`provider_timeout_seconds_default`** ([cli-contract.md](cli-contract.md#resource-bounds-d008)). |
+| `timeout_seconds` | Positive integer wall-clock timeout for this invocation. Default **`provider_timeout_seconds_default`** ([cli-contract.md](cli-contract.md#resource-bounds)). |
 
 Between `describe` and `validate_inputs` during `run.create`, integration uses the same resolved `registration_id`, `config_revision`, `executable`, `argv`, and `working_directory`, and compares observed executable digest when available. Detected executable change without a matching config revision is `provider.drift.detected` (operation error).
 
@@ -218,7 +217,7 @@ Within `protocol_major` 1:
 
 ## Timeout and termination
 
-On supported Unix platforms (D002), when `timeout_seconds` elapses:
+On supported Unix platforms, when `timeout_seconds` elapses:
 
 1. Integration sends **SIGTERM** to the **verified provider process group** only (see [Process group establishment](#process-group-establishment)).
 2. After a **5-second** grace period, integration sends **SIGKILL** to the same verified provider PGID if any member remains.
@@ -226,7 +225,7 @@ On supported Unix platforms (D002), when `timeout_seconds` elapses:
 
 Once the wall-clock deadline fires, the invocation outcome is **unconditionally** `provider.timeout`. Partial or complete stdout observed after the deadline does not change this mapping. A successful invocation requires that a complete valid result envelope **and** process exit (per [Exit status](#exit-status)) both complete **before** the deadline.
 
-`timeout_seconds` is configurable per registration or per invocation override at resolve time (I40). Engine default is **`provider_timeout_seconds_default`** (60 seconds; [cli-contract.md](cli-contract.md#resource-bounds-d008)).
+`timeout_seconds` is configurable per registration or per invocation override at resolve time (I40). Engine default is **`provider_timeout_seconds_default`** (60 seconds; [cli-contract.md](cli-contract.md#resource-bounds)).
 
 ## No state authority
 
@@ -241,7 +240,7 @@ The engine alone commits state and journal facts after validating provider outpu
 
 ## Five roles
 
-Role names are stable protocol identifiers. They are **not** application operations (I40, D004).
+Role names are stable protocol identifiers. They are **not** application operations (I40).
 
 | Role | Purpose |
 |---|---|
@@ -253,7 +252,7 @@ Role names are stable protocol identifiers. They are **not** application operati
 
 ## Role-specific result applicability
 
-Each role exposes only the `result.kind` values listed below. Roles **must not** invent generic `rejected` or other cross-role denial variants. Domain rejections are derived by the engine from role-valid results plus catalog rules (D004).
+Each role exposes only the `result.kind` values listed below. Roles **must not** invent generic `rejected` or other cross-role denial variants. Domain rejections are derived by the engine from role-valid results plus catalog rules.
 
 | Role | Permitted `result.kind` | Engine consumer mapping (summary) |
 |---|---|---|
@@ -306,7 +305,7 @@ Invoker integration performs catalog resolution **before** spawning; the provide
 
 ## Payload and result shapes (transport level)
 
-Detailed wire schemas are implemented in T084 from [graph-projection.md](graph-projection.md). Transport requires these discriminant and containment rules:
+Detailed wire schemas are published under `schemas/provider/v1/` from the shapes in [graph-projection.md](graph-projection.md). Transport requires these discriminant and containment rules:
 
 ### `describe`
 
@@ -336,7 +335,7 @@ Detailed wire schemas are implemented in T084 from [graph-projection.md](graph-p
 
 - **Request `payload`:** `snapshot` similar to gate context without transition authority.
 - **`result.kind`:** `guidance` | `incompatible` | `evaluation_error`
-- **`guidance`:** `text` string (at most `guidance_text_bytes`; [cli-contract.md](cli-contract.md#resource-bounds-d008)).
+- **`guidance`:** `text` string (at most `guidance_text_bytes`; [cli-contract.md](cli-contract.md#resource-bounds)).
 - **`incompatible`:** stored-guidance capability mismatch → `compatibility.unsupported` when engine selected live guidance.
 - **`evaluation_error`:** `diagnostics` array. No evidence fields.
 
@@ -524,4 +523,4 @@ Examples use minimal placeholder graph objects. They are valid JSON and language
 
 ## Schema implementation boundary
 
-T084 publishes `schemas/provider/v1/*.json` generated from this contract and [graph-projection.md](graph-projection.md). Canonical bytes and golden vectors are normative in [graph-projection.md](graph-projection.md#golden-vectors). Numeric bounds are named in [cli-contract.md](cli-contract.md#resource-bounds-d008) (D008, T008).
+Published schemas under `schemas/provider/v1/` are generated from this contract and [graph-projection.md](graph-projection.md). Canonical bytes and golden vectors are normative in [graph-projection.md](graph-projection.md#golden-vectors). Numeric bounds are named in [cli-contract.md](cli-contract.md#resource-bounds).

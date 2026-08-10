@@ -1,6 +1,6 @@
 # Loop Engine Code Architecture
 
-**Status:** Three-crate structure, executable-provider boundary, per-run graph snapshots, authoritative-state-plus-journal model, selected SQLite persistence integration (pragmas, migrations, transaction boundaries, and CAS semantics frozen in [persistence.md](persistence.md), T009), journal entry wire shapes (frozen in [journal-contract.md](journal-contract.md), T011), and machine-local configuration layout are settled. T031–T052 implement the framework-free core model and deterministic decision boundary. T053–T083 add narrow external-effect capabilities and private application operations; production adapters and public exposure remain later phases.
+**Status:** Three-crate structure, executable-provider boundary, per-run graph snapshots, authoritative-state-plus-journal model, selected SQLite persistence integration, journal entry wire shapes, and machine-local configuration layout are settled. Product crates implement framework-free core semantics, narrow external-effect capabilities, application operations, production adapters, and CLI exposure.
 
 Related documents:
 
@@ -119,7 +119,7 @@ CLI must not select transitions, reinterpret provider verdicts, or make workflow
 
 ## Application operation catalog
 
-MVP exposes exactly **21** stable application operation IDs frozen by [operation-catalog.md](operation-catalog.md) (D004). Two namespaces:
+MVP exposes exactly **21** stable application operation IDs defined by [operation-catalog.md](operation-catalog.md). Two namespaces:
 
 **Provider (7):** `provider.add`, `provider.list`, `provider.check`, `provider.update`, `provider.rename`, `provider.disable`, `provider.restore`
 
@@ -231,7 +231,7 @@ Provider graph changes affect new runs only. MVP has no active-run graph migrati
 
 ## Persistence authority
 
-Normative SQLite pragmas, migration policy, transaction boundaries, workflow/registration CAS, catalog-mutation digest guards, and rollback narratives: [persistence.md](persistence.md) (D009, T009).
+Normative SQLite pragmas, migration policy, transaction boundaries, workflow/registration CAS, catalog-mutation digest guards, and rollback narratives: [persistence.md](persistence.md).
 
 Current run state and lifecycle are authoritative records. Internal workflow-state/lifecycle version guards evaluated transitions and is not caller-managed token; annotation/label versions do not invalidate gate evaluation. Journal is append-only explanatory history.
 
@@ -302,9 +302,8 @@ Conformance covers protocol framing/handshake, operation result shapes, input-fr
 
 Concrete construction occurs only in CLI composition root. Core does not instantiate process or persistence integrations.
 
-Cargo manifests enforce crate-level direction. Automated architecture check must enforce core's internal model/capabilities/operations direction, prohibit outer dependencies in core, and prevent direct provider/persistence/dispatch bypass outside approved integrations and composition root.
+Cargo manifests document crate-level direction. Core's internal model/capabilities/operations separation and approved integration/composition boundaries are architectural constraints; product code must not introduce direct provider, persistence, or dispatch bypasses.
 
-Development validation stays outside product runtime and creates no core dependency. Non-shipping `xtask` owns exact Git candidate materialization, direct process execution, deterministic aggregation, semantic scheduling, immutable evidence, approval lookup, aggregate publication parsing, and tracked-hook installation. [`quality/manifest.toml`](../quality/manifest.toml) is sole command, axis, and rubric registry; candidate policy applies immediately. Replaceable judges implement generic [semantic v2 JSON-over-stdio contract](../quality/semantic-judge/v2/README.md). Focused rubrics cover documentation, observability, internal architecture/tenets/KISS, and behavioral evidence; coherence runs after all axes and cannot erase non-pass. Ordinary tests, not generic runner source scans, enforce product metadata architecture and operation-catalog closure. Owner commands and dispositions are defined in [development-policy.md](development-policy.md).
 
 Do not create generic repositories, catch-all services, `util`, `common`, or interfaces beside implementations. Add capability only for external side effect or genuine contract boundary.
 

@@ -1,14 +1,11 @@
 # Loop Engine Configuration
 
-**Status:** Machine-local layout frozen by T007 (2026-07-17); project-default discovery frozen by T016 (2026-07-17). Decisions [D007](change/initial-implementation/decisions.md#d007-configuration-and-filesystem-layout) and [D016](change/initial-implementation/decisions.md#d016-project-default-discovery).
+**Status:** Machine-local layout and project-default discovery are settled.
 
-This document is the canonical contract for machine-local filesystem layout, `LOOP_ENGINE_HOME`, global/project TOML shape, precedence, unknown-key policy, path normalization, registration executable/working-directory rules, malformed-config behavior, caller-working-directory independence, and project-default ancestor discovery. Global CLI rendering flags and numeric resource bounds are in [cli-contract.md](cli-contract.md) (D006, D008).
+This document is the canonical contract for machine-local filesystem layout, `LOOP_ENGINE_HOME`, global/project TOML shape, precedence, unknown-key policy, path normalization, registration executable/working-directory rules, malformed-config behavior, caller-working-directory independence, and project-default ancestor discovery. Global CLI rendering flags and numeric resource bounds are in [cli-contract.md](cli-contract.md).
 
 Related documents:
 
-- [Decision D007](change/initial-implementation/decisions.md#d007-configuration-and-filesystem-layout)
-- [Decision D008](change/initial-implementation/decisions.md#d008-resource-bounds-and-timeout-defaults)
-- [Decision D016](change/initial-implementation/decisions.md#d016-project-default-discovery)
 - [CLI contract](cli-contract.md)
 - [Application operation catalog](operation-catalog.md)
 - [Code architecture](architecture.md)
@@ -20,7 +17,7 @@ Related documents:
 Machine-local configuration covers:
 
 - one global defaults file under the user config root;
-- one optional project defaults file discovered per D016;
+- one optional project defaults file discovered by the ancestor-search rules below;
 - one SQLite state database under the machine state root;
 - one operational-trace directory under the machine state root;
 - provider registrations stored in SQLite (not in TOML).
@@ -127,7 +124,7 @@ Caller CWD **MUST NOT** alter provider subprocess working directory for stored r
 
 ## Project-default discovery
 
-Normative owner: [D016](change/initial-implementation/decisions.md#d016-project-default-discovery). Frozen by T016 (2026-07-17).
+Project-default discovery follows the ancestor-search rules below.
 
 ### What this is and is not
 
@@ -219,7 +216,7 @@ No other top-level keys are permitted.
 |---|---|:---:|---|
 | `format` | string | no | `human` or `json`; mirrors `--format` |
 | `provider` | string | no | Default provider **reference** (enabled handle or registration ID) for a positional `<TARGET>` only when the operation's frozen argv in [operation-catalog.md](operation-catalog.md) permits omitting that positional; **MUST NOT** invent alternate argv (for example a `--provider` flag) |
-| `timeout_seconds` | integer | no | Default provider timeout when an operation does not override it; positive; bound name `provider_timeout_seconds_default` in [cli-contract.md](cli-contract.md#resource-bounds-d008) |
+| `timeout_seconds` | integer | no | Default provider timeout when an operation does not override it; positive; bound name `provider_timeout_seconds_default` in [cli-contract.md](cli-contract.md#resource-bounds) |
 
 No other `defaults` keys are permitted.
 
@@ -234,7 +231,7 @@ No other `defaults` keys are permitted.
 
 ### File size
 
-Each TOML configuration file is bounded to **`toml_config_file_bytes`** (1 MiB; [cli-contract.md](cli-contract.md#resource-bounds-d008)). Exceeding the bound is a pre-dispatch configuration error.
+Each TOML configuration file is bounded to **`toml_config_file_bytes`** (1 MiB; [cli-contract.md](cli-contract.md#resource-bounds)). Exceeding the bound is a pre-dispatch configuration error.
 
 ## Precedence
 
@@ -250,7 +247,7 @@ Built-in defaults:
 |---|---|
 | `format` | `human` |
 | `provider` | unset |
-| `timeout_seconds` | `provider_timeout_seconds_default` (60; [cli-contract.md](cli-contract.md#resource-bounds-d008)) |
+| `timeout_seconds` | `provider_timeout_seconds_default` (60; [cli-contract.md](cli-contract.md#resource-bounds)) |
 
 `LOOP_ENGINE_HOME` is not part of this merge; it selects filesystem roots only.
 
@@ -285,7 +282,7 @@ Path normalization applies to filesystem paths in configuration roots, `LOOP_ENG
 
 Given an input path string:
 
-1. Reject empty paths and paths exceeding **`filesystem_path_utf8_bytes`** ([cli-contract.md](cli-contract.md#resource-bounds-d008)).
+1. Reject empty paths and paths exceeding **`filesystem_path_utf8_bytes`** ([cli-contract.md](cli-contract.md#resource-bounds)).
 2. Expand a leading `~` to `$HOME`.
 3. If the path is relative, resolve it against the **caller CWD at the moment the path is supplied** (registration mutation argv only). Relative `LOOP_ENGINE_HOME` values are invalid and **MUST NOT** be resolved against caller CWD.
 4. Apply POSIX lexical simplification of `.` and `..` components.

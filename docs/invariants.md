@@ -1,6 +1,6 @@
 # Loop Engine System Invariants
 
-**Status:** Living foundation. Settled invariants are normative. Packaging and tooling invariants C1–C4 are settled by T001. Remaining candidate recommendations elsewhere are explicitly unresolved and must not be treated as decisions.
+**Status:** Living foundation. Settled invariants are normative. Packaging and persistence invariants are settled. Remaining candidate recommendations elsewhere are explicitly unresolved and must not be treated as decisions.
 
 Normative terms **MUST**, **MUST NOT**, **SHOULD**, and **MAY** express requirement strength.
 
@@ -307,13 +307,7 @@ Operation dispatcher **MUST** record request/outcome envelope for every operatio
 
 Abrupt process/machine failure, storage failure, and rotation can limit trace completeness; engine **MUST NOT** claim impossible complete observation. Instrument stable choke points rather than require every function to log.
 
-### I47. Every publication checkpoint is documentation-coherent
-
-Every accepted push **MUST** leave the candidate destination tip coherent with behavior, architecture, contracts, testing policy, and development policy introduced by the aggregate change from the exact remote destination tip. Versioned semantic judge **MUST** evaluate that one remote-base-to-candidate-head diff and resulting tree through the generic replaceable executable contract. The remote base revision's rubric judges the candidate head, so an accepted rubric change applies to the following push. Foundation commit `7552af5968b4a2c10aefd01fbfa6c351817e1b8b` remains the initial rubric seed. Exact foundation-base migration from its superseded scheduling language **MAY** use the one owner-selected aggregate migration rubric named in development policy; deterministic quality and determinate semantic pass remain mandatory.
-
-Commits within one unpublished push range **MAY** be incomplete and **MAY** repair one another; publication authority attaches to the range endpoint, not each internal commit. Pre-commit **MUST** run only bounded fast deterministic staged checks by default; semantic staged judgment remains explicit advisory tooling. Before publication, the aggregate range **MUST** receive one determinate semantic `pass`; `fail`, `unavailable`, or `indeterminate` blocks pre-push and authoritative CI. Deterministic formatting, documentation, architecture, schema, and quality checks remain separate and cannot replace semantic judgment.
-
-## Settled packaging and tooling invariants
+## Settled packaging and persistence invariants
 
 Atomic local transactional persistence remains the authority model (I12–I14). SQLite through bundled `rusqlite` is the selected persistence integration that satisfies that model in MVP.
 
@@ -324,14 +318,6 @@ The control plane **MUST** ship as one native `loop-engine` executable. It **MUS
 ### C2. State and journal use SQLite with JSON/JSONL export
 
 Authoritative state and journal **MUST** persist through the selected SQLite integration with bundled SQLite. Stable JSON state export and JSONL journal export **MUST** remain available for inspection and **MUST NOT** become competing write authorities.
-
-### C3. Exact staged content and publication checkpoints are gated
-
-Every local commit **MUST** pass bounded deterministic checks against exact staged content. Every publication checkpoint **MUST** pass canonical deterministic quality at candidate head plus one aggregate semantic judgment from exact destination base to candidate head. Versioned local hooks **MUST** delegate to non-duplicated implementations. An eventual protected remote **MUST** require equivalent aggregate authority before merge or release.
-
-### C4. Build tooling uses a Rust `xtask`
-
-Non-shipping workspace member `xtask` **MUST** be the sole canonical implementation of hook installation, exact-revision quality execution, documentation/architecture/dependency checks, and publication coordination. Product runtime **MUST NOT** depend on `xtask`.
 
 ## Explicit non-invariants
 

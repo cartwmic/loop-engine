@@ -1,8 +1,8 @@
 # Loop Engine Persistence Schema
 
-**Status:** Frozen by T105. Migration version **`0001`** (`crates/loop-engine-integrations/migrations/0001_initial.sql`).
+**Status:** Published SQLite schema reference for migration **`0001`** (`crates/loop-engine-integrations/migrations/0001_initial.sql`).
 
-This document is the canonical DDL reference for bundled SQLite tables, columns, constraints, and indexes. Transactional semantics, CAS rules, and journal wire shapes remain in [persistence.md](persistence.md) (D009/T009) and [journal-contract.md](journal-contract.md) (D011/T011).
+This document is the canonical DDL reference for bundled SQLite tables, columns, constraints, and indexes. Transactional semantics, CAS rules, and journal wire shapes remain in [persistence.md](persistence.md) and [journal-contract.md](journal-contract.md).
 
 Related documents:
 
@@ -214,9 +214,9 @@ All other constraint or integrity failures map to `persistence.failed`.
 - ORM-managed shadow tables or dual-write stores.
 - Per-field decomposition of journal attempt nests (stored in `encoded_payload_json`).
 - Provider-catalog journal rows (I40).
-- SQL enforcement of D008 encoded-size bounds, handle grammar, graph semantic validation, or RFC 3339 timestamp syntax (integration validates before write).
+- SQL enforcement of encoded-size bounds, handle grammar, graph semantic validation, or RFC 3339 timestamp syntax (integration validates before write).
 
-## Verification rules (T105)
+## Verification rules
 
 - `integration_metadata` holds exactly one `integrity_key` row of 32 bytes initialized via `randomblob(32)`.
 - Enabled handle uniqueness is enforced only among enabled rows via partial unique index.

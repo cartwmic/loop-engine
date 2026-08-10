@@ -1,15 +1,12 @@
 # Application Operation Catalog
 
-**Status:** Frozen by T004 (2026-07-17). Decision [D004](change/initial-implementation/decisions.md#d004--application-operation-catalog).
+**Status:** Closed catalog of 21 application operations with stable IDs, CLI ownership, facets, provider roles, reason codes, mutation classes, and lifecycle ownership.
 
 This document is the canonical closed catalog of MVP application operations. It fixes stable operation IDs, production CLI argv/flag ownership, behavioral facet applicability, provider-role invocation rows, reason-code taxonomy, mutation classification, lifecycle-facet ownership, and explicit non-operations. Generic semantics from [architecture.md](architecture.md), [invariants.md](invariants.md), [testing.md](testing.md), and [ux-storyboards.md](ux-storyboards.md) remain authoritative; this catalog names the operations that implement them.
 
 Related documents:
 
-- [Decision D004](change/initial-implementation/decisions.md#d004--application-operation-catalog)
-- [Decision D005](change/initial-implementation/decisions.md#d005--provider-protocol-v1)
-- [Coverage map](change/initial-implementation/coverage.md)
-- [Export contract](export-contract.md) (D015)
+- [Export contract](export-contract.md)
 - [Facet inventory schema](../quality/facets/v1/schema.json)
 
 ## Closed catalog (21 operations)
@@ -38,11 +35,11 @@ Related documents:
 | 20 | `run.terminate` | run |
 | 21 | `run.export` | run |
 
-No operation split, merge, or rename is permitted without reopening D004.
+No operation split, merge, or rename is permitted without updating this catalog and its contracts.
 
-### Staged runtime exposure
+### Runtime exposure
 
-WP6 closure exposes the complete frozen 21-operation catalog. `--list-operations` reports all IDs above in stable catalog order and is the installed binary's authoritative argv inventory.
+`--list-operations` reports all IDs above in stable catalog order and is the installed binary's authoritative argv inventory.
 
 ## Provider handle grammar
 
@@ -58,15 +55,15 @@ One-character handles are valid. CLI `<TARGET>` for provider-catalog commands ac
 
 ## Production CLI surface
 
-Global rendering, structured-mode, trace, configuration, and help/version flags are owned by [cli-contract.md](cli-contract.md) (frozen by T006, [D006](change/initial-implementation/decisions.md#d006--structured-cli-contract)). This section owns **application** subcommand argv only.
+Global rendering, structured-mode, trace, configuration, and help/version flags are owned by [cli-contract.md](cli-contract.md). This section owns **application** subcommand argv only.
 
 Notation:
 
 - `<TARGET>` — provider handle or registration ID (provider-catalog commands and `run.create`).
 - `<RUN-ID>` — stable run ID (all run commands except `run.create`).
-- `<PATH>` — bounded filesystem path per [cli-contract.md](cli-contract.md) [Resource bounds (D008)](cli-contract.md#resource-bounds-d008) (`filesystem_path_utf8_bytes`).
+- `<PATH>` — bounded filesystem path per [cli-contract.md](cli-contract.md) [Resource bounds](cli-contract.md#resource-bounds) (`filesystem_path_utf8_bytes`).
 - `<CURSOR>` — opaque cursor v1 per [cli-contract.md](cli-contract.md) [Collection pagination and cursor v1](cli-contract.md#collection-pagination-and-cursor-v1).
-- `<COUNT>` — page count ceiling per [cli-contract.md](cli-contract.md) [Resource bounds (D008)](cli-contract.md#resource-bounds-d008) (`collection_page_default_count`, `collection_page_max_count`).
+- `<COUNT>` — page count ceiling per [cli-contract.md](cli-contract.md) [Resource bounds](cli-contract.md#resource-bounds) (`collection_page_default_count`, `collection_page_max_count`).
 - Repeatable flags may appear multiple times in stable argv order.
 
 ### Provider commands
@@ -145,18 +142,18 @@ Rejectable run mutation after successful run lookup records rejection in journal
 
 `run.compatibility` on terminal lifecycle rejects by lifecycle. `run.request` / `run.guidance` reject only selected unsupported capabilities; supported and gate-free paths remain usable.
 
-## Update without approval vs disable acknowledgement
+## Update vs disable acknowledgement
 
 | Operation | Active runs present | Caller acknowledgement | Mutation |
 |---|---|---|---|
 | `provider.update` | Allowed | **Not required** | Immediate atomic config replacement under same registration ID; config revision increments; affected count + paged impact link returned |
 | `provider.disable` | Allowed with warning | **Required** via final-page `ack_token` and `--allow-active-runs` | Tombstone only after token validates full active-set digest + config revision |
 
-Drift of executable/policy for active runs requires no approval; stored graph remains fixed; gate attempts journal actual locator/digest (storyboard 6, I8).
+Drift of executable/policy for active runs requires no acknowledgement; stored graph remains fixed; gate attempts journal actual locator/digest (storyboard 6, I8).
 
 ## Behavioral facet flags
 
-Facet names match [testing.md](testing.md) exactly. Universal row applies to every operation. Additional rows list only non-universal facets from [coverage.md](change/initial-implementation/coverage.md).
+Facet names match [testing.md](testing.md) exactly. Universal row applies to every operation. Additional rows list only non-universal facets from the operation manifests.
 
 | Operation ID | Applicable facets (beyond universal) |
 |---|---|
@@ -184,11 +181,11 @@ Facet names match [testing.md](testing.md) exactly. Universal row applies to eve
 
 Universal facet (every operation): **Valid path through production CLI, runtime operation-ID proof, correlated trace file, request/outcome payloads, and start/finish envelope**.
 
-Exposure tasks close applicable facets in `quality/facets/v1/<operation-id>.json` before commit (see [quality/facets/v1/README.md](../quality/facets/v1/README.md)).
+Each operation records applicable facets in `quality/facets/v1/<operation-id>.json` (see [quality/facets/v1/README.md](../quality/facets/v1/README.md)).
 
 ## Lifecycle-family ownership
 
-Distributed ownership matches [testing.md](testing.md). Each row is closed by named owner before that operation's exposure.
+Distributed ownership matches [testing.md](testing.md). Each row is owned by the operation listed in the table.
 
 | Lifecycle-family member | Owner operation(s) |
 |---|---|
@@ -207,13 +204,13 @@ Distributed ownership matches [testing.md](testing.md). Each row is closed by na
 | Terminal live guidance rejection | `run.guidance` |
 | Terminal compatibility check rejection | `run.compatibility` |
 
-## Provider role and result rows (D005)
+## Provider role and result rows
 
 Transport, process-group spawn setup, protocol-major, framing, timeout, crash, malformed, invalid-UTF-8, pre-spawn request overflow, and oversized authoritative result failures are **operation errors** for every invoked role. Engine never retries. One fresh provider process per provider call.
 
 ### Transport bounds
 
-Named limits and overflow policy are canonical in [cli-contract.md](cli-contract.md) [Resource bounds (D008)](cli-contract.md#resource-bounds-d008) (frozen by T008, [D008](change/initial-implementation/decisions.md#d008--resource-bounds-and-timeout-defaults)) and [Overflow and rejection policy](cli-contract.md#overflow-and-rejection-policy). Catalog operation-error mapping:
+Named limits and overflow policy are canonical in [cli-contract.md](cli-contract.md) [Resource bounds](cli-contract.md#resource-bounds) and [Overflow and rejection policy](cli-contract.md#overflow-and-rejection-policy). Catalog operation-error mapping:
 
 | Condition | Reason code | Notes |
 |---|---|---|
@@ -302,7 +299,7 @@ Three top-level outcome classes (I34): `completed`, `rejected`, `error`. Structu
 | `export.target.invalid` | rejected | `run.export` |
 | `export.target.not_empty` | rejected | `run.export` |
 
-Completed operations with no denial or failure carry `"reason": null` per [cli-contract.md](cli-contract.md) (D006). Omission of `reason` is not permitted in structured mode.
+Completed operations with no denial or failure carry `"reason": null` per [cli-contract.md](cli-contract.md). Omission of `reason` is not permitted in structured mode.
 
 ## Caller-action mapping
 
@@ -362,23 +359,22 @@ Satisfies [I39](invariants.md) per-run explicit check distinct from registration
 
 ### `run.export`
 
-Resolves [D015](change/initial-implementation/decisions.md#d015--audit-export-scope): read-only `manifest.json` + `state.json` + `journal.jsonl` for inspection and regression artifacts without import, restore, replay, or locator dereference. Normative schemas, ordering, manifest hashes, atomic publication, and CLI `data.export` shape are frozen in [export-contract.md](export-contract.md). Supports testing doctrine export scenarios and reference-workflow audit needs without becoming write authority.
+Provides read-only `manifest.json` + `state.json` + `journal.jsonl` for inspection and regression artifacts without import, restore, replay, or locator dereference. Normative schemas, ordering, manifest hashes, atomic publication, and CLI `data.export` shape are defined in [export-contract.md](export-contract.md). Supports testing doctrine export scenarios and reference-workflow audit needs without becoming write authority.
 
 ## Explicit non-operations
 
-The following must **not** appear in core/driver/route/E2E/trace catalog equality (I25/I26, [coverage.md](change/initial-implementation/coverage.md)):
+The following must **not** appear in core/driver/route/E2E/trace catalog equality (I25/I26):
 
 - CLI `--help`, `--version`, and pre-dispatch usage display
 - `--list-operations` and driver operation-list metadata
 - Provider protocol roles: `describe`, `validate_inputs`, `evaluate_gates`, `live_guidance`, `check_compatibility`
 - Database migration, startup initialization, and schema generation invoked outside dispatched application operations
-- `xtask` quality, hook, judge, architecture, report, and schema-generation commands
 - Reference/scenario provider self-tests
 
-## Verification rules (T004)
+## Verification rules
 
 - Provider-catalog mutation: fresh-process `provider.list` is authoritative proof; **no** per-run journal at check time.
 - Rejected or errored `run.create`: **no** run and **no** run journal.
 - Rejectable run mutation after run lookup: fresh `run.history` (and state where applicable) proves rejection journaling and unchanged state on denial.
 - Facet inventories validate against `quality/facets/v1/schema.json`; facet names match [testing.md](testing.md) exactly.
-- Closure stages in [tasks.md](change/initial-implementation/tasks.md) compare runtime catalog sets; final stage requires exact D004 21-ID equality.
+- Runtime catalog sets must match the exact 21-ID inventory above.

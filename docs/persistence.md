@@ -1,13 +1,12 @@
 # Loop Engine Persistence
 
-**Status:** Frozen by T009 (2026-07-17). Decision [D009](change/initial-implementation/decisions.md#d009--sqlite-schema-and-concurrency-policy).
+**Status:** SQLite persistence authority, migration, transaction, and concurrency contracts are settled.
 
-This document is the canonical contract for bundled SQLite connection pragmas, busy/locking policy, forward-only migration and schema-version compatibility, transaction boundaries, workflow and registration-config compare-and-swap (CAS) semantics, catalog-mutation affected-run digest guards, create-versus-catalog writer linearization, label/note/evidence concurrency, and rollback narratives. Database file location is frozen in [configuration.md](configuration.md) (D007). Journal entry shape and bounds are owned by D011/T011; table DDL is owned by T105 (`0001_initial.sql`).
+This document is the canonical contract for bundled SQLite connection pragmas, busy/locking policy, forward-only migration and schema-version compatibility, transaction boundaries, workflow and registration-config compare-and-swap (CAS) semantics, catalog-mutation affected-run digest guards, create-versus-catalog writer linearization, label/note/evidence concurrency, and rollback narratives. Database file location is defined in [configuration.md](configuration.md). Journal entry shape and bounds are owned by [journal-contract.md](journal-contract.md); table DDL is `crates/loop-engine-integrations/migrations/0001_initial.sql`.
 
 Related documents:
 
-- [Decision D009](change/initial-implementation/decisions.md#d009--sqlite-schema-and-concurrency-policy)
-- [Resource bounds (D008)](cli-contract.md#resource-bounds-d008) — `sqlite_busy_timeout_ms`
+- [Resource bounds](cli-contract.md#resource-bounds) — `sqlite_busy_timeout_ms`
 - [Machine-local configuration](configuration.md)
 - [Application operation catalog](operation-catalog.md)
 - [Provider protocol v1](provider-protocol-v1.md)
@@ -68,7 +67,7 @@ Apply persisted pragmas on every connection only **after** the [startup schema p
 | `foreign_keys` | `ON` | Enforce referential integrity for catalog/run/journal associations |
 | `journal_mode` | `WAL` | Concurrent readers with one writer; append workload with checkpoint recovery (**write-affecting**; must not run before future-version rejection) |
 | `synchronous` | `FULL` | Acknowledged commits are durable across process crash and power loss |
-| `busy_timeout` | `sqlite_busy_timeout_ms` | Bounded wait on `SQLITE_BUSY` before surfacing persistence failure ([cli-contract.md](cli-contract.md#resource-bounds-d008), T008) |
+| `busy_timeout` | `sqlite_busy_timeout_ms` | Bounded wait on `SQLITE_BUSY` before surfacing persistence failure ([cli-contract.md](cli-contract.md#resource-bounds)) |
 | `temp_store` | `MEMORY` | Keep small temp structures off disk for short transactions |
 
 `busy_timeout` is set from the `sqlite_busy_timeout_ms` bound on every connection for its lifetime. Integrations **MUST NOT** disable foreign keys, downgrade to rollback journal mode, or set `synchronous = OFF` in production paths.
@@ -113,13 +112,13 @@ Migrations are forward-only, ordered, and transactional. Integration uses `rusql
 | Applied version `=` binary supported version | Open normally |
 | Applied version `>` binary supported version | Fail open with persistence error naming supported and observed versions; no reads or writes; rejection occurs inside the startup schema pipeline before write-affecting pragmas |
 
-MVP ships one supported schema generation (`0001`, published by T105). Export and CLI envelope schema versions are independent integers ([cli-contract.md](cli-contract.md), D015).
+MVP ships one supported schema generation (`0001`). Export and CLI envelope schema versions are independent integers ([cli-contract.md](cli-contract.md)).
 
 At the supported version, open **MUST** verify each bundled v1 table and index by comparing live `sqlite_master.sql` to the authoritative shape derived from `0001_initial.sql` (not names alone). Deterministic mismatches classify as missing objects or SQL divergence.
 
-### Migration `0001` schema (T105)
+### Migration `0001` schema
 
-**Status:** Published by T105. Canonical DDL: `crates/loop-engine-integrations/migrations/0001_initial.sql`. Frozen table/column/index reference: [persistence-schema.md](persistence-schema.md).
+**Status:** Published schema. Canonical DDL: `crates/loop-engine-integrations/migrations/0001_initial.sql`. Frozen table/column/index reference: [persistence-schema.md](persistence-schema.md).
 
 Migration `0001` materializes every semantic branch required by this contract:
 
@@ -133,7 +132,7 @@ Migration `0001` materializes every semantic branch required by this contract:
 - indexes for active runs by registration, catalog/history/evidence ordering, and catalog pagination;
 - `ON DELETE RESTRICT` on all run-scoped foreign keys and no run-delete path (I45).
 
-Journal entry payload encoding is T011; this document freezes transactional semantics. Column-level authority and mutability are frozen in [persistence-schema.md](persistence-schema.md).
+Journal entry payload encoding is defined in [journal-contract.md](journal-contract.md); this document freezes transactional semantics. Column-level authority and mutability are frozen in [persistence-schema.md](persistence-schema.md).
 
 ## Integration integrity key
 
@@ -432,7 +431,7 @@ Atomicity E2Es may inject SQLite abort triggers or fixture corruption **only** t
 - Individual-run deletion or silent compaction (I45).
 - Active-run graph migration or gate bypass persistence.
 
-## Verification rules (T009)
+## Verification rules
 
 - `synchronous=FULL` with acknowledged-commit durability narrative matches [Connection pragmas](#connection-pragmas) and [Acknowledged-commit durability](#acknowledged-commit-durability).
 - `busy_timeout` references `sqlite_busy_timeout_ms` only; no independent numeric literal.

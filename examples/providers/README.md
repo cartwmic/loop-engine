@@ -24,7 +24,7 @@ Provider protocol v1 JSON Schemas live under `schemas/provider/v1/`:
 | `live-guidance-request.json` / `live-guidance-result.json` | `live_guidance` |
 | `check-compatibility-request.json` / `check-compatibility-result.json` | `check_compatibility` |
 
-Each envelope schema pins `protocol_major` `1`. Request schemas additionally pin the operation `role`. Bound marker names in `x-loop-engine-bounds` reference [cli-contract.md](../../docs/cli-contract.md#resource-bounds-d008); numeric limits are not duplicated here.
+Each envelope schema pins `protocol_major` `1`. Request schemas additionally pin the operation `role`. Bound marker names in `x-loop-engine-bounds` reference [cli-contract.md](../../docs/cli-contract.md#resource-bounds); numeric limits are not duplicated here.
 
 ## Regenerating published schemas
 
@@ -34,7 +34,7 @@ From the repository root:
 cargo run -p loop-engine-integrations --example generate_provider_schemas
 ```
 
-This overwrites the eleven files under `schemas/provider/v1/` from integration DTO types (T084). It does not build or run a provider executable.
+This overwrites the eleven files under `schemas/provider/v1/` from integration DTO types. It does not build or run a provider executable.
 
 ## Repository validation commands
 

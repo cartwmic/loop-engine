@@ -1,13 +1,12 @@
 # Loop Engine Operational Trace
 
-**Status:** Frozen by T010 (2026-07-17). Decision [D010](change/initial-implementation/decisions.md#d010--operational-trace-contract).
+**Status:** Operational trace JSONL v1 schema, lifecycle, budgets, and failure behavior are settled.
 
-This document is the canonical contract for per-invocation JSONL operational trace schema v1, file permissions, initialization and flush lifecycle, encoded-byte budget and cross-process rotation, provider payload retention without raw/parsed duplication, driver and pre-dispatch invocation behavior, late sink-failure truthfulness, and deterministic Unix `SIGXFSZ` / `RLIMIT_FSIZE` end-to-end proof. Trace directory location is frozen in [configuration.md](configuration.md) (D007). Named numeric bounds are frozen in [cli-contract.md](cli-contract.md#resource-bounds-d008) (D008); this document references bound **names** only.
+This document is the canonical contract for per-invocation JSONL operational trace schema v1, file permissions, initialization and flush lifecycle, encoded-byte budget and cross-process rotation, provider payload retention without raw/parsed duplication, driver and pre-dispatch invocation behavior, late sink-failure truthfulness, and deterministic Unix `SIGXFSZ` / `RLIMIT_FSIZE` end-to-end proof. Trace directory location is defined in [configuration.md](configuration.md). Named numeric bounds are defined in [cli-contract.md](cli-contract.md#resource-bounds); this document references bound **names** only.
 
 Related documents:
 
-- [Decision D010](change/initial-implementation/decisions.md#d010--operational-trace-contract)
-- [Resource bounds and trace budgets](cli-contract.md#resource-bounds-d008)
+- [Resource bounds and trace budgets](cli-contract.md#resource-bounds)
 - [Operational trace budgets (cross-process)](cli-contract.md#operational-trace-budgets-cross-process)
 - [Dispatch boundary](cli-contract.md#dispatch-boundary)
 - [Machine-local configuration](configuration.md)
@@ -71,11 +70,11 @@ Missing terminal lines do not prove rollback: inspect authoritative state with `
 | Rotation coordinator lock | `{machine_home_root}/traces/.rotation.lock` | `0600` (created atomically) |
 | Per-invocation reservation sidecar | `{machine_home_root}/traces/.reserve/{request_id}.json` | `0600` (created atomically) |
 
-On supported Unix platforms (D002), the engine **MUST** create missing parent directories with mode `0700` and each new trace file with mode `0600`. Permission failure before dispatch is a trace-initialization failure: no application operation dispatch, no provider subprocess, and no persistence mutation.
+On supported Unix platforms, the engine **MUST** create missing parent directories with mode `0700` and each new trace file with mode `0600`. Permission failure before dispatch is a trace-initialization failure: no application operation dispatch, no provider subprocess, and no persistence mutation.
 
 `request_id` is an opaque stable identifier (at most `identifier_utf8_bytes`) shared by the trace filename, CLI `request_id` / `trace` fields, and every JSONL line's `request_id` field.
 
-Inherited process environment is **never** copied into trace (I42, D005).
+Inherited process environment is **never** copied into trace (I42).
 
 ## Initialization, write, and flush lifecycle
 
@@ -329,7 +328,7 @@ Read paths use `mutation_class` `read_only` or `export_read`. Every opened persi
 
 ## Cross-process budget and rotation
 
-Numeric bounds are defined only in [cli-contract.md](cli-contract.md#resource-bounds-d008). This section states behavior.
+Numeric bounds are defined only in [cli-contract.md](cli-contract.md#resource-bounds). This section states behavior.
 
 | Phase | Rule |
 |---|---|
@@ -632,17 +631,17 @@ The common JSONL line envelope is indexed at [schemas/index.json](../schemas/ind
 
 | Property | Value |
 |---|---|
-| Exposure | **Published** — generated from integration types (T084/T010) |
+| Exposure | **Published** — generated from integration types |
 | Generation | `cargo run -p loop-engine-integrations --example generate_trace_schema` (writes JSON Schema to stdout; published artifact path above) |
 | Validation | `cargo test -p loop-engine-integrations published_trace_fixtures_are_versioned_and_never_duplicate_parsed_stdout` |
 | Fixtures | `schemas/trace/v1/fixtures/*.json` (non-normative line-shape examples) |
 
 Trace is diagnostic storage only. It is not authoritative state, does not replay into current workflow state, and never substitutes for SQLite or export artifacts.
 
-## Verification rules (T010)
+## Verification rules
 
 - JSONL contract examples parse linewise as valid JSON.
-- Numeric behavior references bound names in [cli-contract.md](cli-contract.md#resource-bounds-d008) only; per-file reservation sum (`trace_init_reservation_bytes` + `provider_calls_per_paged_invocation_max` × `trace_provider_call_reservation_bytes` = 116 MiB) stays below `trace_file_max_bytes` (120 MiB).
+- Numeric behavior references bound names in [cli-contract.md](cli-contract.md#resource-bounds) only; per-file reservation sum (`trace_init_reservation_bytes` + `provider_calls_per_paged_invocation_max` × `trace_provider_call_reservation_bytes` = 116 MiB) stays below `trace_file_max_bytes` (120 MiB).
 - Operation event closure table covers all 21 application operation IDs from [operation-catalog.md](operation-catalog.md); every `read_only` and `export_read` row closes with `read_complete` or `read_failure`, never `commit`/`rollback`.
 - Trace persistence boundary facet ([testing.md](testing.md) § Facet matrix, [quality/facets/v1/README.md](../quality/facets/v1/README.md)) closes on attempted read/transaction, applicable version check, and commit/rollback/read outcome per operation exposure trace.
 - Every opened persistence read emits `persistence.intent` then exactly one `persistence.read_complete` or `persistence.read_failure`; read outcomes are not mutation authority.
@@ -663,4 +662,4 @@ Trace is diagnostic storage only. It is not authoritative state, does not replay
 - Per-function mandatory logging or trace context threading.
 - Impossible crash-complete trace guarantees.
 - Production `RLIMIT_FSIZE` / fault-injection branches.
-- Windows trace permission semantics (deferred with D002).
+- Windows trace permission semantics are deferred.

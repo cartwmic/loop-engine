@@ -1,13 +1,11 @@
 # Loop Engine CLI Contract
 
-**Status:** Frozen by T006 (2026-07-17); resource bounds, collection pagination, and cursor v1 frozen by T008 (2026-07-17). Decisions [D006](change/initial-implementation/decisions.md#d006--structured-cli-contract) and [D008](change/initial-implementation/decisions.md#d008--resource-bounds-and-timeout-defaults).
+**Status:** CLI rendering, structured outcomes, resource bounds, collection pagination, and cursor v1 are settled.
 
-This document is the canonical contract for production `loop-engine` CLI rendering, global flags, structured outcome envelope schema v1, human/structured parity, stdout/stderr/trace boundaries, process exit codes, **resource bounds**, **collection pagination**, and **cursor v1**. Application subcommand argv for the exposed frozen 21-operation catalog is defined in [operation-catalog.md](operation-catalog.md) (D004). This document owns global flags, outcome rendering, bounds, and pagination only.
+This document is the canonical contract for production `loop-engine` CLI rendering, global flags, structured outcome envelope schema v1, human/structured parity, stdout/stderr/trace boundaries, process exit codes, **resource bounds**, **collection pagination**, and **cursor v1**. Application subcommand argv for the exposed 21-operation catalog is defined in [operation-catalog.md](operation-catalog.md). This document owns global flags, outcome rendering, bounds, and pagination only.
 
 Related documents:
 
-- [Decision D006](change/initial-implementation/decisions.md#d006--structured-cli-contract)
-- [Decision D008](change/initial-implementation/decisions.md#d008--resource-bounds-and-timeout-defaults)
 - [Application operation catalog](operation-catalog.md)
 - [System invariants](invariants.md) — I18, I27, I34, I46
 - [Interaction storyboards](ux-storyboards.md)
@@ -18,7 +16,7 @@ Related documents:
 
 Production binary name: `loop-engine`.
 
-MVP's catalog contains exactly **21** exposed application operations in two namespaces (`provider.*`, `run.*`). `--list-operations` reports all 21 runtime routes in frozen catalog order. No additional application operation, alias, or hidden route is permitted without reopening D004. CLI `--help`, `--version`, pre-dispatch usage display, and `--list-operations` are driver functions, not application operations ([operation-catalog.md](operation-catalog.md) § Explicit non-operations).
+MVP's catalog contains exactly **21** exposed application operations in two namespaces (`provider.*`, `run.*`). `--list-operations` reports all 21 runtime routes in catalog order. No additional application operation, alias, or hidden route is permitted without updating the catalog contract. CLI `--help`, `--version`, pre-dispatch usage display, and `--list-operations` are driver functions, not application operations ([operation-catalog.md](operation-catalog.md) § Explicit non-operations).
 
 ## Schema versioning
 
@@ -30,7 +28,7 @@ Structured CLI outcome envelope uses integer field `schema_version` with current
 | Breaking | Removing, renaming, changing meaning or type, or making an optional field newly required requires a new `schema_version` |
 | Support | MVP accepts only `schema_version` `1`. No support-duration promise is made for superseded versions |
 
-The same additive/breaking/support rule applies to audit export schemas (D015).
+The same additive/breaking/support rule applies to audit export schemas.
 
 Within major version `1`, same-major evolution is additive: new optional fields may appear and readers ignore unknown fields. Wire JSON consumed by integrations **MUST** reject duplicate object keys and trailing values after the first complete document ([provider-protocol-v1.md](provider-protocol-v1.md) § Byte framing; [graph-projection.md](graph-projection.md) § Wire JSON parse requirements).
 
@@ -45,22 +43,22 @@ Human and structured modes invoke the same operations, observe the same underlyi
 
 ## Global flags
 
-Global flags apply before application subcommands. Configuration path and TOML precedence are frozen in `configuration.md` (T007); only rendering and driver-metadata globals are owned here.
+Global flags apply before application subcommands. Configuration path and TOML precedence are defined in `configuration.md`; only rendering and driver-metadata globals are owned here.
 
 | Flag | Purpose |
 |---|---|
 | `--format <human\|json>` | Output rendering mode. Default: `human`. |
-| `--help`, `-h` | Emit usage help on stdout. Initializes trace per I46/D010. See [Driver metadata outputs](#driver-metadata-outputs). |
-| `--version` | Emit build/version metadata on stdout. Initializes trace per I46/D010. See [Driver metadata outputs](#driver-metadata-outputs). |
+| `--help`, `-h` | Emit usage help on stdout. Initializes trace per I46. See [Driver metadata outputs](#driver-metadata-outputs). |
+| `--version` | Emit build/version metadata on stdout. Initializes trace per I46. See [Driver metadata outputs](#driver-metadata-outputs). |
 | `--list-operations` | Emit all 21 exposed application operation IDs and argv templates on stdout. Driver metadata, not an application operation. See [Driver metadata outputs](#driver-metadata-outputs). |
 
-Environment variable `LOOP_ENGINE_HOME` overrides machine-local roots for tests and portable use (D007). It is not a CLI flag.
+Environment variable `LOOP_ENGINE_HOME` overrides machine-local roots for tests and portable use. It is not a CLI flag.
 
-Unsupported host targets fail pre-dispatch with exit `64` and rich stderr naming the detected target and supported triples (D002).
+Unsupported host targets fail pre-dispatch with exit `64` and rich stderr naming the detected target and supported triples.
 
 ## Application argv surface
 
-Application subcommand argv is frozen in [operation-catalog.md](operation-catalog.md) § Production CLI surface. The tables below are an exact copy for contract closure; if text diverges, `operation-catalog.md` is authoritative until D004 is reopened.
+Application subcommand argv is defined in [operation-catalog.md](operation-catalog.md) § Production CLI surface. The tables below are an exact copy for contract closure; if text diverges, `operation-catalog.md` is authoritative.
 
 **Availability:** all 21 operation rows are callable. `--list-operations` is authoritative for installed-binary availability and argv templates.
 
@@ -95,16 +93,16 @@ Application subcommand argv is frozen in [operation-catalog.md](operation-catalo
 | `run.terminate` | `run terminate <RUN-ID> [--note <TEXT>]` |
 | `run.export` | `run export <RUN-ID> --output <DIR>` |
 
-Paged operations additionally expose `--cursor` and `--limit` as defined in the catalog. Cursor v1 schema, numeric bounds, and pagination rules are frozen in [Resource bounds (D008)](#resource-bounds-d008) and [Collection pagination and cursor v1](#collection-pagination-and-cursor-v1) below.
+Paged operations additionally expose `--cursor` and `--limit` as defined in the catalog. Cursor v1 schema, numeric bounds, and pagination rules are defined in [Resource bounds](#resource-bounds) and [Collection pagination and cursor v1](#collection-pagination-and-cursor-v1) below.
 
-## Resource bounds (D008)
+## Resource bounds
 
 **Canonical source of truth.** Every scalar, payload, path, argv, configuration, diagnostic, trace, and timeout bound is named once in this table. Other foundation documents reference these names; they **MUST NOT** restate numeric limits independently.
 
 | Name | Bound | Applies to |
 |---|---:|---|
 | `identifier_utf8_bytes` | 128 | Registration IDs, run IDs, evidence IDs, invocation IDs, and other stable identifiers |
-| `provider_handle_utf8_bytes` | 128 | Provider handles (D004 grammar) |
+| `provider_handle_utf8_bytes` | 128 | Provider handles (operation-catalog grammar) |
 | `run_label_utf8_bytes` | 256 | Optional run display labels |
 | `note_text_utf8_bytes` | 65,536 (64 KiB) | Annotation and attempt note text |
 | `actor_metadata_encoded_bytes` | 16,384 (16 KiB) | Opaque actor metadata on journal attempts |
@@ -150,7 +148,7 @@ Paged operations additionally expose `--cursor` and `--limit` as defined in the 
 
 Complete opaque wire values (`--cursor`, `--warning-cursor`, `--allow-active-runs`, `data.next_cursor`, and `data.ack_token`) are measured **after** URL-safe base64 encoding (RFC 4648 §5, no padding) as UTF-8 bytes of the wire string callers pass and parsers read. Inner canonical JSON (`{"mac":"…","payload":{…}}`) is measured **before** base64 encoding when computing worst-case size.
 
-Symbolic components (see [Resource bounds (D008)](#resource-bounds-d008)):
+Symbolic components (see [Resource bounds](#resource-bounds)):
 
 | Symbol | Meaning |
 |---|---|
@@ -207,21 +205,21 @@ Component budgets are subordinate to aggregate envelopes:
 
 Evidence locators are bounded opaque non-empty UTF-8 strings with no NUL or C0/C1 control characters, at most `evidence_locator_utf8_bytes`. The engine does not parse locators as URIs or paths, dereference them, resolve them against caller CWD, or judge portability. Self-contained versus provider-documented input-relative meaning is a caller/provider convention; the engine rejects only syntax and bounds violations and preserves exact locator bytes.
 
-### Contract owners
+### Contract ownership
 
-| Concern | Canonical document | Freezing task |
-|---|---|---|
-| Named bounds table (this section) | `cli-contract.md` | T008 |
-| Cursor v1 schema and pagination | `cli-contract.md` | T008 |
-| Provider byte framing and timeout termination | `provider-protocol-v1.md` | T005 (bounds referenced here) |
-| Configuration file size and built-in `timeout_seconds` | `configuration.md` | T007 (bounds referenced here) |
-| SQLite connection pragmas and busy/locking policy | `persistence.md` | T009 (bounds referenced here) |
-| Trace reservation behavior and rotation | `technology.md` (summary); `operational-trace.md` (T010) | T008/T010 |
-| Provider JSON wire schemas | `provider-protocol-v1.md` + `schemas/provider/v1/*` | T084 |
-| Structured CLI outcome JSON Schema | `schemas/cli/v1/outcome.schema.json` + [schema index](../schemas/index.json) | T125/T134 |
-| Journal entry wire shapes | `journal-contract.md` | T011 |
+| Concern | Canonical document |
+|---|---|
+| Named bounds table (this section) | `cli-contract.md` |
+| Cursor v1 schema and pagination | `cli-contract.md` |
+| Provider byte framing and timeout termination | `provider-protocol-v1.md` |
+| Configuration file size and built-in `timeout_seconds` | `configuration.md` |
+| SQLite connection pragmas and busy/locking policy | `persistence.md` |
+| Trace reservation behavior and rotation | `technology.md` (summary); `operational-trace.md` |
+| Provider JSON wire schemas | `provider-protocol-v1.md` + `schemas/provider/v1/*` |
+| Structured CLI outcome JSON Schema | `schemas/cli/v1/outcome.schema.json` + [schema index](../schemas/index.json) |
+| Journal entry wire shapes | `journal-contract.md` |
 
-End-to-end proof owners for pagination and trace reservations: T147 (registration list and zero-row `--active-runs-for`), T150/T152 (run list, history, and `--active-runs` compatibility pages), T157/T175 (nonempty impact/disable warning pages), T160 (evidence list), T101/T152/T182 (trace directory budget and per-invocation reservation limits).
+Production CLI tests cover pagination, provider-call limits, and trace reservation boundaries.
 
 ## Collection pagination and cursor v1
 
@@ -565,7 +563,7 @@ Present on `run.request` attempts after run lookup. It reports which event-attem
 
 ### Export result (`data.export`)
 
-Present on successful `run.export` only. Normative artifact schemas, atomic publication, and completion-marker semantics are in [export-contract.md](export-contract.md) (D015). Structured CLI success **MUST NOT** emit artifact bytes on stdout; only metadata paths below. Artifact bytes are written only under `--output <DIR>`.
+Present on successful `run.export` only. Normative artifact schemas, atomic publication, and completion-marker semantics are in [export-contract.md](export-contract.md). Structured CLI success **MUST NOT** emit artifact bytes on stdout; only metadata paths below. Artifact bytes are written only under `--output <DIR>`.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -809,15 +807,15 @@ The machine-readable JSON Schema for the [structured outcome envelope](#structur
 
 | Property | Value |
 |---|---|
-| Exposure | **Planned** — WP1 publishes the schema and private renderer only; no production application operation route is exposed yet |
-| Generation | None — the published file is maintained alongside the private CLI renderer |
+| Exposure | **Published** — production CLI emits this schema for every dispatched application operation |
+| Generation | Maintained with the production CLI renderer and indexed under `schemas/cli/v1/` |
 | Validation | `cargo test -p loop-engine-cli published_schema_enums_match_core_catalog_and_taxonomy`; `cargo test -p loop-engine-cli contract_examples_render_with_eight_required_top_level_fields` |
 
-Structured application dispatch emits **exactly one** UTF-8 JSON outcome envelope on stdout after dispatch ([Stdout, stderr, and trace boundaries](#stdout-stderr-and-trace-boundaries)). Operational trace remains a separate JSONL file initialized before dispatch when possible (I46, D010); provider streams never appear on CLI stdout or stderr.
+Structured application dispatch emits **exactly one** UTF-8 JSON outcome envelope on stdout after dispatch ([Stdout, stderr, and trace boundaries](#stdout-stderr-and-trace-boundaries)). Operational trace remains a separate JSONL file initialized before dispatch when possible (I46); provider streams never appear on CLI stdout or stderr.
 
-## Verification rules (T006)
+## Verification rules
 
-- Every D004 operation argv row appears exactly once in this document and matches `operation-catalog.md`.
+- Every operation argv row appears exactly once in this document and matches `operation-catalog.md`.
 - No extra application operation appears in argv tables.
 - Each contract example is valid JSON with consistent `outcome`, `reason.code`, and exit mapping.
 - Dispatch table distinguishes pre-dispatch failure (empty stdout, exit `64`), successful driver metadata (stdout per [Driver metadata outputs](#driver-metadata-outputs), exit `0`), and application dispatch (one outcome envelope, exit `0`/`2`/`1`).
@@ -826,9 +824,9 @@ Structured application dispatch emits **exactly one** UTF-8 JSON outcome envelop
 - Human and structured modes preserve semantic parity per table above.
 - Reason codes are drawn only from [operation-catalog.md](operation-catalog.md) § Outcome and reason taxonomy.
 
-## Verification rules (T008)
+## Verification rules
 
-- Every bound in [Resource bounds (D008)](#resource-bounds-d008) appears exactly once in the named table; no other foundation document restates numeric limits.
+- Every bound in [Resource bounds](#resource-bounds) appears exactly once in the named table; no other foundation document restates numeric limits.
 - Aggregate envelope arithmetic (gate request, describe result, journal entry, structured CLI envelope) matches component bound names.
 - Trace reservation arithmetic: per-call worst case stays below `trace_provider_call_reservation_bytes`; per-invocation reservation sum stays below `trace_file_max_bytes`; directory budget uses actual bytes plus unused reservation remainder only.
 - Opaque integrity wire bound arithmetic: `W_post + H_wire = opaque_integrity_wire_utf8_bytes`; sample disable `ack_token` and cursor v1 examples satisfy `len_utf8(wire) ≤ opaque_integrity_wire_utf8_bytes` (post-base64).
@@ -836,5 +834,5 @@ Structured application dispatch emits **exactly one** UTF-8 JSON outcome envelop
 - Disable `ack_token` examples verify MAC under the `loop-engine.integrations.disable-ack-v1` domain and bind registration ID, `config_revision`, `active_set_digest`, and completed `warning_traversal_digest`.
 - Pagination covers `provider.registrations`, `provider.registration_active_runs`, `provider.check_active_runs`, `provider.disable_warnings`, `run.catalog`, `run.history`, and `run.evidence` with the documented sort keys and filter fingerprints.
 - Selected evidence overflow rejects before provider invocation; selected evidence is never truncated.
-- E2E proof owners: T147 (registration list and zero-row `--active-runs-for`), T150/T152 (run list, history, `--active-runs` compatibility pages), T157/T175 (nonempty impact/disable warning pages), T160 (evidence list), T101/T152/T182 (trace directory budget and per-invocation reservation limits).
+- Production E2E coverage exercises registration list and zero-row `--active-runs-for`, run list/history/compatibility pages, non-empty impact and disable-warning pages, evidence list, and trace directory/per-invocation reservation limits.
 - Provider timeout termination grace period remains owned solely by [provider-protocol-v1.md](provider-protocol-v1.md) (5-second `SIGTERM` grace; not restated here).

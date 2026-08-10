@@ -1,6 +1,6 @@
 # Loop Engine Testing Doctrine
 
-**Status:** E2E authority, facet coverage, runtime operation/trace proof, executable-provider coverage, no-mock policy, provider-fixture strategy, exact-candidate validation v2, non-shipping `xtask`, macOS/Linux scope, and runtime budgets are settled. Cooperative local hooks gate commit/push; push-only CI independently re-evaluates published revision.
+**Status:** E2E authority, facet coverage, runtime operation/trace proof, executable-provider coverage, no-mock policy, provider-fixture strategy, and macOS/Linux scope are settled.
 
 Related documents:
 
@@ -15,7 +15,6 @@ Related documents:
 - [CLI contract](cli-contract.md)
 - [SQLite persistence policy](persistence.md)
 - [Export contract](export-contract.md)
-- [Development policy](development-policy.md)
 - [Provider protocol v1](provider-protocol-v1.md)
 
 ## Authoritative claim
@@ -52,11 +51,11 @@ Mock frameworks and mock-based behavioral tests are prohibited.
 
 Temporary filesystems, executable provider fixtures, legacy databases, malformed protocol responses, deliberate corruption, and independent reference models are real test inputs rather than replacements for product behavior.
 
-## Provider fixture strategy (T013)
+## Provider fixture strategy
 
-Normative package layout, toolchain, and CI build rules live in [technology.md](technology.md) § Standalone provider fixtures. This section states testing obligations only.
+Normative package layout, toolchain, and fixture build rules live in [technology.md](technology.md) § Standalone provider fixtures. This section states testing obligations only.
 
-Required behavioral E2Es exercise the production CLI against real provider subprocesses per [provider-protocol-v1.md](provider-protocol-v1.md) (D005). Fixtures are external executables, not in-process mocks or product-library shims.
+Required behavioral E2Es exercise the production CLI against real provider subprocesses per [provider-protocol-v1.md](provider-protocol-v1.md). Fixtures are external executables, not in-process mocks or product-library shims.
 
 ### Packages and roles
 
@@ -78,7 +77,7 @@ Fixtures **MUST NOT**:
 
 Fixtures **MAY** use scenario-controlled temporary directories, argv-selected JSON config files, and append-only ledger files under those directories only.
 
-E2E harnesses register fixture binaries via `provider.add` using absolute paths produced by `cargo build --manifest-path test-support/providers/<package>/Cargo.toml --locked` for the host CI triple. Harnesses **MUST NOT** inject fixture code into the product process.
+E2E harnesses register fixture binaries via `provider.add` using absolute paths produced by `cargo build --manifest-path test-support/providers/<package>/Cargo.toml --locked` for the supported host triple. Harnesses **MUST NOT** inject fixture code into the product process.
 
 ### Invocation ledger
 
@@ -107,18 +106,18 @@ When a failure mode requires signal delivery, process-group establishment verifi
 - implement no `describe`/`validate_inputs`/`evaluate_gates`/`live_guidance`/`check_compatibility` roles;
 - import no product crates;
 - touch no authoritative database;
-- are used only in scenarios that explicitly target Unix process semantics (D002).
+- are used only in scenarios that explicitly target Unix process semantics.
 
 Unix shell-script providers appear **only** in scenarios that explicitly exercise shebang/script executable configuration, not as a substitute for the Rust acceptance fixtures.
 
-### CI and runtime prerequisites (T013)
+### Runtime prerequisites
 
 Before fixture packages exist in the workspace tree, the following prerequisites are frozen:
 
 | Prerequisite | Requirement |
 |---|---|
 | Toolchain | Rust `1.95.0` from root `rust-toolchain.toml` (same as product) |
-| Host triples | Native fixture binaries for supported host triples; push CI currently exercises Linux x86-64, with final acceptance recording macOS and Linux evidence |
+| Host triples | Native fixture binaries for supported host triples; final acceptance records named macOS and Linux evidence |
 | Build command | `cargo build --manifest-path test-support/providers/<package>/Cargo.toml --locked` (or `cargo test --manifest-path … --locked` for fixture-owned tests) |
 | Extra runtimes | None for core acceptance (no Python/Node/shell interpreter requirement beyond explicit shebang scenarios) |
 | Product coupling | Zero `path` or version dependency from any workspace member to fixture crates |
@@ -140,7 +139,7 @@ A test declaration such as “covers run.request” is insufficient. Production 
 
 ## Structured outcome envelope
 
-Frozen by [cli-contract.md](cli-contract.md) (T006, D006). Every structured CLI outcome after dispatch includes stable operation ID and one of three semantic outcome classes:
+Frozen by [cli-contract.md](cli-contract.md). Every structured CLI outcome after dispatch includes stable operation ID and one of three semantic outcome classes:
 
 - completed operation;
 - domain rejection;
@@ -270,9 +269,9 @@ Cover realistic multi-command histories through separate processes, including pr
 
 Cover restart, authoritative-state loading, journal ordering, atomicity of every mutation and attempt-only journal/evidence append, unknown-event and terminal-denial journaling after run lookup, no run journal for rejected creation, distinct committed-status reporting for inline evidence, selected associations, and provider evidence on applicable attempts, provider timeout/crash journaling, abrupt process death with explicitly limited audit guarantee, migration, corruption, export, interrupted processes, and history inspection before manual retry.
 
-Normative migration, pragma, transaction-boundary, CAS, and rollback expectations: [persistence.md](persistence.md) (D009, T009).
+Normative migration, pragma, transaction-boundary, CAS, and rollback expectations: [persistence.md](persistence.md).
 
-Normative export artifact set, ordering, manifest hashes, sibling-staging atomic publication, no-import guarantee, and failure cleanup: [export-contract.md](export-contract.md) (D015, T015). Required scenarios prove `run.export` across active, final, and terminated runs; reject non-empty output directories; leave SQLite unchanged; never dereference evidence locators; validate exported `manifest.json` digests against on-disk payload bytes; and prove crash/fault behavior for the publication protocol.
+Normative export artifact set, ordering, manifest hashes, sibling-staging atomic publication, no-import guarantee, and failure cleanup: [export-contract.md](export-contract.md). Required scenarios prove `run.export` across active, final, and terminated runs; reject non-empty output directories; leave SQLite unchanged; never dereference evidence locators; validate exported `manifest.json` digests against on-disk payload bytes; and prove crash/fault behavior for the publication protocol.
 
 Do not require replay or historical state reconstruction.
 
@@ -320,11 +319,11 @@ Cover global/project CLI defaults without provider rebinding, malformed configur
 
 ### Model-based black-box testing
 
-Owner-optional, deferred past alpha (amendment 2026-07-22): generative model-based testing supplements the deterministic facet-matrix suites and never substitutes for them; its absence does not block operation completeness or publication. When adopted: executable provider fixtures may generate small graphs and event sequences. Run them through CLI and compare authoritative current state and journal facts to smaller independent reference model. Preserve seed and reproduction artifacts on failure.
+Generative model-based testing supplements deterministic facet-matrix suites and never substitutes for them. When adopted, executable provider fixtures may generate small graphs and event sequences. Run them through CLI and compare authoritative current state and journal facts to smaller independent reference model. Preserve seed and reproduction artifacts on failure.
 
 ## Audit export contracts
 
-Normative `run.export` ownership, artifact set (`manifest.json`, `state.json`, `journal.jsonl`), deterministic ordering, manifest `sha256:` digests, output-directory collision/permission rules, sibling-staging atomic publication and cleanup, D006 schema-version policy, structured CLI `data.export` shape, and no-import guarantee are frozen in [export-contract.md](export-contract.md) (D015, T015).
+Normative `run.export` ownership, artifact set (`manifest.json`, `state.json`, `journal.jsonl`), deterministic ordering, manifest `sha256:` digests, output-directory collision/permission rules, sibling-staging atomic publication and cleanup, schema-version policy, structured CLI `data.export` shape, and no-import guarantee are defined in [export-contract.md](export-contract.md).
 
 Required black-box scenarios prove:
 
@@ -346,7 +345,7 @@ Structured mode **MUST NOT** emit artifact bytes on stdout. Export directory pre
 
 ## Operational trace contracts
 
-Normative JSONL v1 categories, field shapes, budget behavior, driver/parse rules, late sink-failure truthfulness, and Unix `SIGXFSZ`/`RLIMIT_FSIZE` injection contract are frozen in [operational-trace.md](operational-trace.md) (T010). Required black-box scenarios parse real per-invocation JSONL trace and verify stable semantic categories rather than exact full-log snapshots.
+Normative JSONL v1 categories, field shapes, budget behavior, driver/parse rules, late sink-failure truthfulness, and Unix `SIGXFSZ`/`RLIMIT_FSIZE` injection contract are defined in [operational-trace.md](operational-trace.md). Required black-box scenarios parse real per-invocation JSONL trace and verify stable semantic categories rather than exact full-log snapshots.
 
 Every dispatched operation proves:
 
@@ -366,7 +365,7 @@ Architecture/build checks prevent alternate provider/persistence/dispatch paths,
 
 Normative OS/architecture matrix, permission semantics, process termination, path rules, and unsupported-platform policy live in [technology.md](technology.md) § Supported platforms. Testing mirrors only scope that differs:
 
-- required E2E, provider-fixture, migration, atomicity, and trace suites **MUST** pass on supported macOS and glibc Linux before release; push CI currently supplies Linux x86-64 evidence, and final acceptance records named macOS and Linux results;
+- required E2E, provider-fixture, migration, atomicity, and trace suites **MUST** pass on supported macOS and glibc Linux before release, with final acceptance recording named macOS and Linux results;
 - provider fixtures are Rust executables built for the host triple under test; Unix shell-script providers appear only in scenarios that explicitly exercise shebang/script behavior;
 - trace `RLIMIT_FSIZE` / `SIGXFSZ` late-sink injection cases (Cases A and B in [operational-trace.md](operational-trace.md#deterministic-unix-sigxfsz--rlimit_fsize-e2e-contract)) run only on supported macOS and Linux hosts via external wrapper with no production test branch;
 - isolation harnesses set `LOOP_ENGINE_HOME` to temporary roots and never rely on Windows path or permission semantics.
@@ -394,42 +393,3 @@ Required scenarios cannot be ignored, quarantined, or accepted as known failures
 Every behavioral defect fix adds or identifies CLI scenario that fails against faulty behavior and passes after correction. Existing coverage counts only when failure can be demonstrated.
 
 Generated-test failures preserve seed, project directory, provider fixture/version, invocation transcript, stdout, stderr, and when applicable the export artifact directory (`manifest.json`, `state.json`, `journal.jsonl`) produced by `run.export`.
-
-Suite runtime budget is 15 minutes for canonical deterministic quality on either supported CI platform, with workspace tests limited to 10 minutes and each standalone provider suite limited to 2 minutes. CLI E2Es are sharded by integration-test module only after measured workspace tests exceed 10 minutes; shards must preserve complete module registration and operation/facet closure. When growth exceeds budget, shard or optimize harness before weakening contracts. Runtime evidence records wall-clock duration and command exit in WP6 command ledger.
-
-## Canonical quality gate
-
-Complete revision gate includes:
-
-- formatting;
-- compilation;
-- Clippy with warnings denied;
-- architecture dependency checks;
-- optional pure property tests;
-- provider-protocol same-major and conformance fixtures;
-- state/journal migration and atomicity fixtures;
-- complete CLI E2E suite;
-- operation/driver/E2E/trace-catalog coverage equality;
-- focused semantic-judge rubrics for documentation impact, observability, architecture/tenets/KISS, and behavioral evidence;
-- dependency, license, and advisory checks.
-
-Behavioral authority remains with CLI E2Es even when supplemental checks run.
-
-## Git enforcement direction
-
-Git hooks enforce cooperative local workflow but cannot be unbypassable on owner-controlled machine.
-
-Settled mechanism:
-
-- tracked hooks live under `.githooks/` and install through `cargo xtask hooks install`;
-- pre-commit runs complete manifest-declared deterministic `pre-commit` phase against exact index tree, excluding unstaged and untracked contamination;
-- explicit advisory command runs complete deterministic `publication` phase, four semantic axes, and coherence against candidate commit equal to `HEAD`;
-- pre-push consumes exact Git update lines and produces one aggregate verdict for zero or one content tip; force pushes judge resulting content, deletion-only passes without candidate execution, malformed/multi-tip input blocks;
-- every deterministic non-pass blocks without approval path;
-- all focused semantic axes execute despite another non-pass; coherence cannot erase focused status; malformed successful output gets one correction attempt;
-- candidate [`quality/manifest.toml`](../quality/manifest.toml) and candidate rubrics apply immediately and are sole policy registry;
-- semantic contract is generic [v2 JSON over stdio](../quality/semantic-judge/v2/README.md); runner contains no product command or rubric dispatch;
-- exact deterministic/semantic/report bindings are immutable evidence; owner approval can authorize only exact `semantic_block` report, never deterministic failure;
-- push-only CI uses same publication lifecycle against pushed revision, ignores local approvals, and uploads independent evidence on pass/block.
-
-CI runs after publication. Neither CI nor local hooks prevent direct owner push, and repository claims no server-side branch protection. Commands, evidence paths, approval retry, and failure handling are in [development-policy.md](development-policy.md).

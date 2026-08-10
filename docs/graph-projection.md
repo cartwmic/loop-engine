@@ -1,14 +1,13 @@
 # Loop Engine Graph Projection and Canonical Encoding
 
-**Status:** Frozen by T014 (2026-07-17). T041 implements the encoding-neutral core semantic projection; canonical DTO encoding and graph-revision hashing remain integration work. Decision [D014](change/initial-implementation/decisions.md#d014--canonical-graph-encoding).
+**Status:** Graph projection semantics, canonical encoding, and graph-revision hashing are settled.
 
-This document is the canonical contract for provider-emitted workflow graph projection field semantics, semantic validation expectations, canonical integration DTO v1, deterministic byte encoding, `graph_revision` computation, metadata treatment (including RFC 8785 / JCS metadata number encoding), golden vectors, and the field-change matrix governing when graph identity changes. Named numeric bounds are frozen in [cli-contract.md](cli-contract.md#resource-bounds-d008) (D008); this document references bound **names** only. Provider subprocess transport remains in [provider-protocol-v1.md](provider-protocol-v1.md) (T005). JSON Schema files are published in T084; this document is normative for semantics and canonical bytes.
+This document is the canonical contract for provider-emitted workflow graph projection field semantics, semantic validation expectations, canonical integration DTO v1, deterministic byte encoding, `graph_revision` computation, metadata treatment (including RFC 8785 / JCS metadata number encoding), golden vectors, and the field-change matrix governing when graph identity changes. Named numeric bounds are defined in [cli-contract.md](cli-contract.md#resource-bounds); this document references bound **names** only. Provider subprocess transport remains in [provider-protocol-v1.md](provider-protocol-v1.md). JSON Schema files are published under `schemas/provider/v1/`; this document is normative for semantics and canonical bytes.
 
 Related documents:
 
-- [Decision D014](change/initial-implementation/decisions.md#d014--canonical-graph-encoding)
 - [Provider protocol v1](provider-protocol-v1.md)
-- [Resource bounds (D008)](cli-contract.md#resource-bounds-d008)
+- [Resource bounds](cli-contract.md#resource-bounds)
 - [Persistence contract](persistence.md)
 - [Journal contract](journal-contract.md)
 - [Technology direction](technology.md) — graph validation direction
@@ -28,7 +27,7 @@ This contract does **not** govern:
 
 - provider subprocess transport or envelope framing ([provider-protocol-v1.md](provider-protocol-v1.md));
 - executable file digest observation (audit-only `executable_digest`);
-- evidence wire shapes (T084);
+- evidence wire shapes;
 - run input **values** accepted at creation (immutable after creation per I32).
 
 Rejected patterns:
@@ -73,7 +72,7 @@ canonical bytes (UTF-8) ──SHA-256──► graph_revision
         └──► immutable stored graph snapshot (persistence)
 ```
 
-Core exposes `model::graph_projection::SemanticGraphProjection` over all digest-relevant state, transition, gate, input-kind, guidance, metadata, and capability fields (T041). Construction sorts unordered semantic collections, so provider ordering does not change projection equality; any meaningful field change does. Frozen protocol v1 has no standalone state title/summary or input-description fields: presentation beyond state ID and static guidance is provider metadata, while input semantics use the required `kind` token and optional metadata. Integrations own wire DTO types, canonical DTO types, byte encoding, and hashing (T086). Core **MUST NOT** import Serde, JSON libraries, or hashing crates for this pipeline.
+Core exposes `model::graph_projection::SemanticGraphProjection` over all digest-relevant state, transition, gate, input-kind, guidance, metadata, and capability fields. Construction sorts unordered semantic collections, so provider ordering does not change projection equality; any meaningful field change does. Frozen protocol v1 has no standalone state title/summary or input-description fields: presentation beyond state ID and static guidance is provider metadata, while input semantics use the required `kind` token and optional metadata. Integrations own wire DTO types, canonical DTO types, byte encoding, and hashing. Core **MUST NOT** import Serde, JSON libraries, or hashing crates for this pipeline.
 
 ## Provider wire graph projection (protocol v1)
 
@@ -165,7 +164,7 @@ Integrations using `serde_json` (approved in [technology.md](technology.md)) **M
 
 Validation runs on the core semantic graph after wire mapping and before canonicalization. Invalid graphs are `provider.graph.invalid` and prevent run creation (I6, I34).
 
-Required checks (non-exhaustive; T040 owns the full matrix):
+Required checks include:
 
 | Rule | Invariant |
 |---|---|
@@ -269,7 +268,7 @@ Example: `sha256:6fd8334d3ebc9290b92e18b9667ff6072ca013f2295930bc4ffdf9a071b89d7
 
 ## Metadata treatment
 
-Provider-defined `metadata` objects at graph, state, transition, and input-declaration levels are part of the stored snapshot and canonical projection when non-empty (D014, I37).
+Provider-defined `metadata` objects at graph, state, transition, and input-declaration levels are part of the stored snapshot and canonical projection when non-empty (I37).
 
 Rules:
 
@@ -582,6 +581,6 @@ Provider implementation drift does not recompute stored `graph_revision` on acti
 
 ## Schema implementation boundary
 
-T084 publishes `schemas/provider/v1/graph.json` from the wire shapes in this document. T086 implements the mapping and canonical encoder in `integrations`. T041 implements the core semantic projection without serialization technology.
+`schemas/provider/v1/graph.json` publishes the graph wire shape from this contract. Integrations implement mapping and canonical encoding; core implements the semantic projection without serialization technology.
 
 Breaking changes to canonical field semantics or ordering require a new `canonical_graph_version` and a new major provider protocol or explicit migration design; same-major provider protocol additions cannot redefine existing canonical fields.

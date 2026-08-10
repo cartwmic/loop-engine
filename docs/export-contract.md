@@ -1,13 +1,12 @@
 # Loop Engine Export Contract
 
-**Status:** Frozen by T015 (2026-07-17). Decision [D015](change/initial-implementation/decisions.md#d015--audit-export-scope).
+**Status:** `run.export` ownership, read-only snapshot semantics, atomic publication, and artifact schemas are settled.
 
-This document is the canonical contract for `run.export` operation ownership, output-directory collision/permission/atomic-publication behavior, `manifest.json` / `state.json` / `journal.jsonl` schemas, deterministic ordering, file-hash rules, evidence and provider-observation inclusion, D006 additive/breaking compatibility and support-duration policy, structured CLI success shape, and the no-import guarantee. Journal entry wire shapes are owned by [journal-contract.md](journal-contract.md) (D011/T011); canonical graph bytes are owned by [graph-projection.md](graph-projection.md) (D014/T014); consistent read semantics are owned by [persistence.md](persistence.md) (D009/T009). Named numeric bounds are frozen in [cli-contract.md](cli-contract.md#resource-bounds-d008) (D008); this document references bound **names** only.
+This document is the canonical contract for `run.export` operation ownership, output-directory collision/permission/atomic-publication behavior, `manifest.json` / `state.json` / `journal.jsonl` schemas, deterministic ordering, file-hash rules, evidence and provider-observation inclusion, structured CLI success shape, and the no-import guarantee. Journal entry wire shapes are owned by [journal-contract.md](journal-contract.md); canonical graph bytes are owned by [graph-projection.md](graph-projection.md); consistent read semantics are owned by [persistence.md](persistence.md). Named numeric bounds are defined in [cli-contract.md](cli-contract.md#resource-bounds); this document references bound **names** only.
 
 Related documents:
 
-- [Decision D015](change/initial-implementation/decisions.md#d015--audit-export-scope)
-- [Structured CLI contract](cli-contract.md) — envelope, rendering modes, D006 schema versioning
+- [Structured CLI contract](cli-contract.md) — envelope, rendering modes, and schema versioning
 - [Application operation catalog](operation-catalog.md) — `run.export` argv, reason codes, facets
 - [Journal contract](journal-contract.md)
 - [Graph projection and canonical encoding](graph-projection.md)
@@ -53,13 +52,13 @@ Provider observations needed for inspection (`provider_observations`, `gate_verd
 | Provider subprocess | **None** — provider-free under missing provider |
 | Per-run journal append | **None** — read/export only |
 | Export artifact schemas | This document (`export_schema_version` `1`, `export_manifest_schema_version` `1`) |
-| Implementation | `integrations` export encoder (T116); core export request shape (T060/T083); CLI adapter (T132/T166) |
+| Implementation | `integrations` export encoder, core export request shape, and CLI adapter |
 
-No other application operation, driver function, migration hook, or `xtask` command writes `state.json`, `journal.jsonl`, or export `manifest.json` for a run.
+No other application operation or driver function writes `state.json`, `journal.jsonl`, or export `manifest.json` for a run.
 
 ## Output directory policy
 
-`--output <DIR>` names the export root. `<DIR>` is bounded by `filesystem_path_utf8_bytes` ([cli-contract.md](cli-contract.md#resource-bounds-d008)).
+`--output <DIR>` names the export root. `<DIR>` is bounded by `filesystem_path_utf8_bytes` ([cli-contract.md](cli-contract.md#resource-bounds)).
 
 Relative `<DIR>` values **MUST** be resolved to one absolute path before target validation and before the SQLite consistent-read snapshot. Export **MUST** reuse that same anchored absolute path for staging, `rename(2)`, parent `fsync`, and structured CLI `export.output`.
 
@@ -69,7 +68,7 @@ Relative `<DIR>` values **MUST** be resolved to one absolute path before target 
 |---|---|
 | Lexically invalid, oversize, or non-directory-creatable path | `outcome: rejected`, `reason.code: export.target.invalid` |
 | Path exists and contains **any** filesystem entry (file or directory) | `outcome: rejected`, `reason.code: export.target.not_empty` |
-| Path does not exist | `<DIR>` is created only by the atomic rename of a completed `0700` staging directory (D002); no pre-create |
+| Path does not exist | `<DIR>` is created only by the atomic rename of a completed `0700` staging directory; no pre-create |
 | Path exists and is an empty directory | Publish by atomic rename replacing the empty directory |
 | Parent not writable, permission denied, or media read-only | `outcome: rejected`, `reason.code: export.target.invalid` |
 | Run ID not found | `outcome: rejected`, `reason.code: run.not_found` |
@@ -97,12 +96,12 @@ Before creating a staging directory, export **MUST** verify:
 #### Publication steps
 
 1. Open one consistent read snapshot of the target run and all journal rows ([persistence.md](persistence.md)).
-2. Create a unique sibling staging directory in the parent of `<DIR>` (for example `<parent>/.loop-export-staging-<pid>-<nonce>`), mode `0700` on supported Unix platforms (D002). Staging **MUST** reside on the same filesystem as `<DIR>` so a single `rename(2)` publishes atomically.
+2. Create a unique sibling staging directory in the parent of `<DIR>` (for example `<parent>/.loop-export-staging-<pid>-<nonce>`), mode `0700` on supported Unix platforms. Staging **MUST** reside on the same filesystem as `<DIR>` so a single `rename(2)` publishes atomically.
 3. Encode and write the **complete** artifact set inside staging: `state.json`, `journal.jsonl`, then `manifest.json` **last**.
 4. Compute `sha256:` digests and byte lengths from the **on-disk bytes** of each payload file; manifest `files` **MUST** list only `journal.jsonl` and `state.json`.
 5. `fsync` each payload file and `manifest.json`.
 6. `fsync` the staging directory file descriptor.
-7. Atomically `rename(2)` the staging directory to `<DIR>` using supported Unix semantics (D002):
+7. Atomically `rename(2)` the staging directory to `<DIR>` using supported Unix semantics:
    - when `<DIR>` does not exist: `rename(staging, <DIR>)` creates `<DIR>`;
    - when `<DIR>` exists as an empty directory: `rename(staging, <DIR>)` replaces the empty directory.
 8. `fsync` the parent directory of `<DIR>`.
@@ -150,7 +149,7 @@ Implementations **MAY** remove staging directories matching the implementation's
 
 - the directory is a direct child of the parent used for export publication;
 - the directory name matches the implementation's documented staging pattern (for example `.loop-export-staging-*`);
-- the directory is owned by the current uid on supported Unix platforms (D002);
+- the directory is owned by the current uid on supported Unix platforms;
 - the directory contains no valid `manifest.json` whose payload hashes verify, or the directory is older than an implementation-defined stale threshold for abandoned invocations.
 
 Cleanup **MUST NOT** delete arbitrary user directories, unrelated hidden files, or a staging directory belonging to an in-flight export in another process.
@@ -176,9 +175,9 @@ Structured CLI success **MUST** include:
 }
 ```
 
-When this document and [cli-contract.md](cli-contract.md) § Common `data` extensions differ on `run.export`, this document is authoritative until D015 is reopened.
+When this document and [cli-contract.md](cli-contract.md) § Common `data` extensions differ on `run.export`, this document is authoritative.
 
-## Schema versioning (D006 alignment)
+## Schema versioning
 
 Export uses independent integer schema fields per artifact. Rules mirror [cli-contract.md](cli-contract.md) § Schema versioning:
 
@@ -324,7 +323,7 @@ MVP **MUST NOT** ship:
 - `run.import`, `run.restore`, or any ingest of `manifest.json` / `state.json` / `journal.jsonl`;
 - catalog or run rebinding from export paths or locators;
 - replay reducers that treat export as a write path;
-- implicit promotion of export files into SQLite through migration, startup, or `xtask`.
+- implicit promotion of export files into SQLite through migration or startup.
 
 Export consumers may diff, archive, or inspect offline. They **MUST NOT** assume cross-machine mobility, executable rebinding, or workspace identity preservation ([I41](invariants.md#i41-run-identity-is-not-workspace-identity)).
 
@@ -382,13 +381,13 @@ Machine-readable JSON Schemas for `manifest.json`, `state.json`, and one `journa
 
 | Property | Value |
 |---|---|
-| Exposure | **Published** — normative artifact shapes frozen by T015/T116 |
+| Exposure | **Published** — normative artifact shapes are defined by this contract |
 | Generation | None in repository tooling |
 | Validation | Export encoder and `verify_published_export` integration checks enforce on-disk shapes; no separate schema-file validation command is defined |
 
 Structured CLI success for `run.export` emits exactly one outcome envelope on stdout with `data.export` metadata only; artifact bytes are written only under `--output <DIR>` ([cli-contract.md](cli-contract.md) § Rendering modes).
 
-## Verification rules (T015)
+## Verification rules
 
 - `run.export` is the sole export writer; export never mutates SQLite or invokes providers.
 - Output directory collision rejects with `export.target.not_empty` without overwriting.

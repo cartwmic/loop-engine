@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-# loop-engine-hook-version: 2
-set -euo pipefail
-ROOT="$(/usr/bin/git rev-parse --show-toplevel)"
-cd "$ROOT"
-unset $(/usr/bin/git rev-parse --local-env-vars)
-exec env -u RUSTUP_TOOLCHAIN cargo xtask validate --publication --updates-stdin

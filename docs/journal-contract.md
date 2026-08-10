@@ -1,13 +1,12 @@
 # Loop Engine Journal Contract
 
-**Status:** Frozen by T011 (2026-07-17). T046 implements immutable encoding-neutral core journal and attempt facts plus the aggregate size guard; integration-owned persistence and JSON DTOs remain later phases. Decision [D011](change/initial-implementation/decisions.md#d011--journal-granularity).
+**Status:** Immutable journal schema, attempt facts, sequence allocation, correction links, and encoded-size bounds are settled.
 
-This document is the canonical contract for immutable per-run activity journal entry schema v1, entry kinds, attempt shape, monotonic sequence allocation, correction links, provider/gate/evidence nesting, `state_changed` alignment with the structured CLI envelope, aggregate and component encoded-size bounds, oversize rejection, and operation journal obligations. Named numeric bounds are frozen in [cli-contract.md](cli-contract.md#resource-bounds-d008) (D008); this document references bound **names** only. Transactional insert semantics and version/sequence allocation are frozen in [persistence.md](persistence.md) (D009); table DDL is owned by T105 (`0001_initial.sql`).
+This document is the canonical contract for immutable per-run activity journal entry schema v1, entry kinds, attempt shape, monotonic sequence allocation, correction links, provider/gate/evidence nesting, `state_changed` alignment with the structured CLI envelope, aggregate and component encoded-size bounds, oversize rejection, and operation journal obligations. Named numeric bounds are defined in [cli-contract.md](cli-contract.md#resource-bounds); this document references bound **names** only. Transactional insert semantics and version/sequence allocation are defined in [persistence.md](persistence.md); table DDL is `crates/loop-engine-integrations/migrations/0001_initial.sql`.
 
 Related documents:
 
-- [Decision D011](change/initial-implementation/decisions.md#d011--journal-granularity)
-- [Resource bounds (D008)](cli-contract.md#resource-bounds-d008)
+- [Resource bounds](cli-contract.md#resource-bounds)
 - [Structured CLI contract](cli-contract.md) — `data.run.state_changed`, `data.evidence_recorded`, reason taxonomy
 - [Persistence contract](persistence.md)
 - [Application operation catalog](operation-catalog.md)
@@ -27,9 +26,9 @@ The activity journal is **explanatory storage only** (I12–I15, C2). It is **no
 - evidence authority beyond bounded references and associations recorded with an attempt;
 - a second write path for provider-catalog mutations.
 
-Core **MUST NOT** derive current state by replaying journal entries ([architecture.md](architecture.md)). Export `journal.jsonl` (D015) is a read-only snapshot of stored entries; it never becomes write authority and does not promise replay.
+Core **MUST NOT** derive current state by replaying journal entries ([architecture.md](architecture.md)). Export `journal.jsonl` is a read-only snapshot of stored entries; it never becomes write authority and does not promise replay.
 
-One **aggregate immutable** journal entry is appended per meaningful operation or post-lookup attempt (D011). Core represents the exact eight entry kinds as `model::journal::JournalEntryKind`; `JournalEntry` exposes observation accessors but no edit, delete, fold, or replay API. Corrections and clarifications append new entries linked to prior `sequence` values (I13). Integration encoding supplies exact measured full-entry and named nested-component byte lengths through `JournalEncodedSizes` before core admits a `JournalEntry`; zero-sized claims must match absent components, component maxima are checked independently, and one byte beyond `journal_entry_encoded_bytes` rejects rather than truncates.
+One **aggregate immutable** journal entry is appended per meaningful operation or post-lookup attempt. Core represents the exact eight entry kinds as `model::journal::JournalEntryKind`; `JournalEntry` exposes observation accessors but no edit, delete, fold, or replay API. Corrections and clarifications append new entries linked to prior `sequence` values (I13). Integration encoding supplies exact measured full-entry and named nested-component byte lengths through `JournalEncodedSizes` before core admits a `JournalEntry`; zero-sized claims must match absent components, component maxima are checked independently, and one byte beyond `journal_entry_encoded_bytes` rejects rather than truncates.
 
 Rejected patterns:
 
@@ -50,7 +49,7 @@ Each stored journal entry is one UTF-8 JSON object. Export writes the same objec
 
 ## Immutable entry kinds
 
-`entry_kind` is a closed string enum. Implementations **MUST NOT** invent additional kinds without reopening D011.
+`entry_kind` is a closed string enum. Implementations **MUST NOT** invent additional kinds without updating this contract.
 
 | `entry_kind` | Producing operation(s) | Typical `outcome` values |
 |---|---|---|
@@ -157,7 +156,7 @@ Structured CLI `data.run.state_changed` answers one question only: **did the wor
 
 ## Provider observations nesting
 
-Encoded size of the `provider_observations` array **MUST NOT** exceed `journal_provider_facts_encoded_bytes` ([cli-contract.md](cli-contract.md#resource-bounds-d008)). The array **MUST** list every attempted provider subprocess invocation for the producing operation in deterministic invocation order. Each element is one bounded observation; the array **MUST NOT** duplicate operational-trace payloads (request/result JSON, stdout/stderr, or stream metadata). Correlation uses `invocation_id` only; full protocol exchange detail remains in operational trace ([operational-trace.md](operational-trace.md)).
+Encoded size of the `provider_observations` array **MUST NOT** exceed `journal_provider_facts_encoded_bytes` ([cli-contract.md](cli-contract.md#resource-bounds)). The array **MUST** list every attempted provider subprocess invocation for the producing operation in deterministic invocation order. Each element is one bounded observation; the array **MUST NOT** duplicate operational-trace payloads (request/result JSON, stdout/stderr, or stream metadata). Correlation uses `invocation_id` only; full protocol exchange detail remains in operational trace ([operational-trace.md](operational-trace.md)).
 
 ### Per-observation object
 
@@ -236,7 +235,7 @@ The term **annotation** names the `annotation` entry kind produced by `run.annot
 
 ## Component and aggregate bounds
 
-All encoded-size limits use canonical bound **names** from [cli-contract.md](cli-contract.md#resource-bounds-d008). Integrations measure UTF-8 encoded JSON bytes of each nested object independently before assembly. Numeric limits **MUST** be resolved from that table and [aggregate envelope arithmetic — Journal entry](cli-contract.md#aggregate-envelope-arithmetic) at verification time; this document does not restate them.
+All encoded-size limits use canonical bound **names** from [cli-contract.md](cli-contract.md#resource-bounds). Integrations measure UTF-8 encoded JSON bytes of each nested object independently before assembly. Numeric limits **MUST** be resolved from that table and [aggregate envelope arithmetic — Journal entry](cli-contract.md#aggregate-envelope-arithmetic) at verification time; this document does not restate them.
 
 | Bound name | Applies to |
 |---|---|
@@ -252,7 +251,7 @@ Component budgets are subordinate to `journal_entry_encoded_bytes`. No field may
 
 ### Maximum encoded-size arithmetic
 
-Worst-case component sum uses each component at its bound from [cli-contract.md](cli-contract.md#resource-bounds-d008):
+Worst-case component sum uses each component at its bound from [cli-contract.md](cli-contract.md#resource-bounds):
 
 | Component | Symbol |
 |---|---|
@@ -269,7 +268,7 @@ Worst-case component sum uses each component at its bound from [cli-contract.md]
 
 **Aggregate cap:** `encoded_len(entry) ≤ journal_entry_encoded_bytes` when `S + H ≤ journal_entry_encoded_bytes`
 
-Therefore one encoded entry fits one `collection_page_data_budget_bytes` history page without record truncation ([cli-contract.md aggregate envelope arithmetic — Journal entry](cli-contract.md#aggregate-envelope-arithmetic), D008).
+Therefore one encoded entry fits one `collection_page_data_budget_bytes` history page without record truncation ([cli-contract.md aggregate envelope arithmetic — Journal entry](cli-contract.md#aggregate-envelope-arithmetic)).
 
 ### One-byte-over rejection
 
@@ -726,12 +725,12 @@ Authoritative state remains at `design-review`; CLI reports `"state_changed": fa
 
 Sequence `5` (gate rejection example) remains immutable; this entry appends linked clarification only.
 
-## Verification rules (T011)
+## Verification rules
 
 - Every immutable `entry_kind` appears in [Immutable entry kinds](#immutable-entry-kinds) and maps to exactly one producing operation class.
 - [Operation journal obligations](#operation-journal-obligations) covers all 21 application operations and matches [operation-catalog.md](operation-catalog.md) mutation classification.
-- Component bound names match [cli-contract.md](cli-contract.md#resource-bounds-d008) without independent numeric literals.
-- Maximum encoded-size arithmetic: `S + H = journal_entry_encoded_bytes` per [aggregate envelope arithmetic — Journal entry](cli-contract.md#aggregate-envelope-arithmetic); numeric resolution **MUST** use [cli-contract.md](cli-contract.md#resource-bounds-d008) only; single entry fits `collection_page_data_budget_bytes` per the same section.
+- Component bound names match [cli-contract.md](cli-contract.md#resource-bounds) without independent numeric literals.
+- Maximum encoded-size arithmetic: `S + H = journal_entry_encoded_bytes` per [aggregate envelope arithmetic — Journal entry](cli-contract.md#aggregate-envelope-arithmetic); numeric resolution **MUST** use [cli-contract.md](cli-contract.md#resource-bounds) only; single entry fits `collection_page_data_budget_bytes` per the same section.
 - One-byte-over rule rejects when `encoded_len(entry) > journal_entry_encoded_bytes` (minimum excess: `journal_entry_encoded_bytes + 1` in encoded-length terms) with no truncation.
 - Self-loop example shows `transition.applied: true` with equal `state_before.state` and `state_after.state` and documents CLI `state_changed: false`.
 - `note` / `annotation` / `corrects_sequence` vocabulary matches `run.annotate`, `run.request`, and `run.terminate` argv in [operation-catalog.md](operation-catalog.md).

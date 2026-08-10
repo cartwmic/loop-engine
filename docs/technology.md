@@ -1,6 +1,6 @@
 # Loop Engine Technology Direction
 
-**Status:** Rust control plane, three-crate Clean Architecture, code-only executable providers, per-run graph snapshots, authoritative state plus immutable journal, native CLI packaging (C1), bundled SQLite persistence (C2), exact-revision gate (C3), non-shipping `xtask` (C4), macOS/Linux platform support (T002), dual MIT/Apache-2.0 project license (T003), machine-local configuration layout (T007), project-default ancestor discovery (T016), resource bounds/pagination/trace reservations (T008), SQLite pragmas/migration/concurrency policy (T009), operational trace JSONL v1 contract (T010), provider-fixture implementation strategy (T013), canonical graph encoding (`graph_revision`) (T014), and read-only audit export contract (`run.export`) (T015) are settled. Individual libraries beyond the approved dependency contract and release packaging beyond Cargo-built binaries remain recommendations or open decisions. Provider protocol v1 **transport** is frozen in [provider-protocol-v1.md](provider-protocol-v1.md) (T005); machine-local paths, TOML precedence, and project-default discovery are frozen in [configuration.md](configuration.md) (T007, T016); named bounds, pagination, and cursor v1 are frozen in [cli-contract.md](cli-contract.md) (T008); SQLite connection pragmas, busy policy, migrations, transaction boundaries, and CAS semantics are frozen in [persistence.md](persistence.md) (T009); graph projection semantics and canonical bytes are frozen in [graph-projection.md](graph-projection.md) (T014); audit export schemas and publication rules are frozen in [export-contract.md](export-contract.md) (T015); evidence wire schemas remain T084.
+**Status:** Rust control plane, three-crate Clean Architecture, code-only executable providers, per-run graph snapshots, authoritative state plus immutable journal, bundled SQLite persistence, machine-local configuration, bounded CLI resources, operational trace JSONL, canonical graph encoding, and read-only audit export are settled. Individual libraries beyond approved dependencies and release packaging beyond Cargo-built binaries remain recommendations or open decisions. Provider protocol transport, machine-local paths and project defaults, CLI bounds and pagination, SQLite semantics, graph projection, audit export, and evidence wire schemas are defined by their respective contracts.
 
 Related documents:
 
@@ -70,7 +70,7 @@ MVP authoring support provides protocol schemas, examples, actionable diagnostic
 
 ## Provider subprocess direction
 
-Normative transport contract: [provider-protocol-v1.md](provider-protocol-v1.md) (D005, T005).
+Normative transport contract: [provider-protocol-v1.md](provider-protocol-v1.md).
 
 Provider boundary remains language-neutral and out-of-process. No dynamic-library ABI is planned.
 
@@ -95,7 +95,7 @@ Invocation requirements (see [provider-protocol-v1.md](provider-protocol-v1.md) 
 - core operation resolves registration exactly once and passes immutable `registration` object; invoker never queries catalog during provider execution;
 - one UTF-8 JSON request envelope on stdin, then EOF; exactly one UTF-8 JSON result envelope on stdout;
 - `protocol_major` 1 with same-major unknown-field ignore; unsupported major errors;
-- timeout configurable per registration (`timeout_seconds`, default `provider_timeout_seconds_default` per [cli-contract.md](cli-contract.md#resource-bounds-d008)); on supported Unix platforms timeout kills the provider process group (`SIGTERM`, 5-second grace per [provider-protocol-v1.md](provider-protocol-v1.md), then `SIGKILL`);
+- timeout configurable per registration (`timeout_seconds`, default `provider_timeout_seconds_default` per [cli-contract.md](cli-contract.md#resource-bounds)); on supported Unix platforms timeout kills the provider process group (`SIGTERM`, 5-second grace per [provider-protocol-v1.md](provider-protocol-v1.md), then `SIGKILL`);
 - bounded stdout/stderr retained without redaction in rotating per-invocation operational trace;
 - unavailable/crashed/malformed/timed-out provider fails closed for authoritative operations;
 - provider identity and available digest/version recorded;
@@ -115,7 +115,7 @@ Instrumentation stays at three choke points:
 
 Add explicit internal events only for consequential decisions not explained by those boundaries. Do not thread trace context through every helper, require per-function attributes, add custom compiler plugin, or scan source for logging-call counts. Crate visibility and architecture checks prevent bypass; production CLI E2Es parse real trace files.
 
-Trace rotates by configurable file-count and total-byte limits (`trace_retained_files_max`, `trace_directory_budget_bytes`; [cli-contract.md](cli-contract.md#resource-bounds-d008)) and never removes an open file. Cross-process rotation counts actual encoded bytes plus only unused reservation remainder; per-invocation reservations (`trace_init_reservation_bytes`, `trace_provider_call_reservation_bytes`, `provider_calls_per_paged_invocation_max`) are frozen in [cli-contract.md](cli-contract.md#operational-trace-budgets-cross-process). Trace is diagnostic storage rather than state/journal authority. JSONL v1 event categories, field shapes, permissions, flush lifecycle, late sink-failure truthfulness, and E2E injection contract are frozen in [operational-trace.md](operational-trace.md) (T010). Full retained payloads can contain sensitive caller/provider data; no encryption or redaction is promised.
+Trace rotates by configurable file-count and total-byte limits (`trace_retained_files_max`, `trace_directory_budget_bytes`; [cli-contract.md](cli-contract.md#resource-bounds)) and never removes an open file. Cross-process rotation counts actual encoded bytes plus only unused reservation remainder; per-invocation reservations (`trace_init_reservation_bytes`, `trace_provider_call_reservation_bytes`, `provider_calls_per_paged_invocation_max`) are defined in [cli-contract.md](cli-contract.md#operational-trace-budgets-cross-process). Trace is diagnostic storage rather than state/journal authority. JSONL v1 event categories, field shapes, permissions, flush lifecycle, late sink-failure truthfulness, and E2E injection contract are defined in [operational-trace.md](operational-trace.md). Full retained payloads can contain sensitive caller/provider data; no encryption or redaction is promised.
 
 ## Graph validation direction
 
@@ -127,7 +127,7 @@ Validation stages:
 2. Structural DTO validation.
 3. Core semantic checks for initial/final states, final-state sink rule, at most one transition per `(state,event)`, identifiers, transition targets, gate references, static-guidance/live-guidance-capability declarations, and supported semantics.
 
-Invalid provider graph is operation error and prevents run creation. Engine computes `graph_revision` from canonical integration DTO bytes after wire mapping and core semantic validation, including topology, gates, input declarations, static guidance, live-guidance capability, and retained provider metadata ([graph-projection.md](graph-projection.md), D014). Canonical encoding is integration-owned; core exposes digest-relevant semantic fields without Serde or JSON serialization. Stored canonical snapshot is fixed for run; `graph_revision` remains distinct from stable registration identity and from `executable_digest`. Latest provider graph is not consulted during active-run transition resolution.
+Invalid provider graph is operation error and prevents run creation. Engine computes `graph_revision` from canonical integration DTO bytes after wire mapping and core semantic validation, including topology, gates, input declarations, static guidance, live-guidance capability, and retained provider metadata ([graph-projection.md](graph-projection.md)). Canonical encoding is integration-owned; core exposes digest-relevant semantic fields without Serde or JSON serialization. Stored canonical snapshot is fixed for run; `graph_revision` remains distinct from stable registration identity and from `executable_digest`. Latest provider graph is not consulted during active-run transition resolution.
 
 ## Provider drift direction
 
@@ -159,7 +159,7 @@ Selected topology:
 
 Bundled SQLite supplies transactions, crash recovery, cross-process writer locking, migrations, and journal queries without service. Public UX assumes one current caller per run and exposes no optimistic revision token.
 
-Exact pragmas, busy timeout, migration rules, schema-version compatibility, transaction boundaries, workflow/registration CAS, catalog-mutation digest guards, rollback narratives, and export read-snapshot semantics are frozen in [persistence.md](persistence.md) (T009). Exact machine-local paths (`state.db`, `traces/`, global/project TOML locations, `LOOP_ENGINE_HOME` semantics) are frozen in [configuration.md](configuration.md). Export canonical encoding, ordering, manifest hashes, and D006-aligned schema-version policy are frozen in [export-contract.md](export-contract.md) (T015).
+Exact pragmas, busy timeout, migration rules, schema-version compatibility, transaction boundaries, workflow/registration CAS, catalog-mutation digest guards, rollback narratives, and export read-snapshot semantics are defined in [persistence.md](persistence.md). Exact machine-local paths (`state.db`, `traces/`, global/project TOML locations, `LOOP_ENGINE_HOME` semantics) are defined in [configuration.md](configuration.md). Export canonical encoding, ordering, manifest hashes, and schema-version policy are defined in [export-contract.md](export-contract.md).
 
 Still open:
 
@@ -218,15 +218,14 @@ Production behavior is tested through CLI with executable provider fixtures. Exp
 - `proptest` for optional pure and black-box generated cases;
 - temporary project directories and selected SQLite persistence stores;
 - Cargo formatting, Clippy, and dependency/advisory tooling;
-- non-shipping Rust `xtask` for exact-candidate Git mechanics, direct process execution, immutable reports, approvals, and tracked hooks;
-- typed schema-v2 [`quality/manifest.toml`](../quality/manifest.toml) as sole deterministic and semantic policy registry;
-- generic semantic-judge v2 JSON-over-stdio contract with focused documentation, observability, architecture/tenet/KISS, behavioral-evidence, and coherence rubrics.
+- operation facet manifests under [`quality/facets/v1/`](../quality/facets/v1/), which record production CLI coverage;
+- standard dependency and advisory tooling where needed for local development.
 
 Exact test libraries remain implementation choices; [testing.md](testing.md) defines required behavior independent of harness library.
 
 ## Distribution and compatibility
 
-Settled for MVP (T001):
+Settled for MVP:
 
 - shared crate/package version `0.1.0`;
 - one native `loop-engine` binary built from source with Cargo only;
@@ -234,19 +233,19 @@ Settled for MVP (T001):
 - no public minimum supported Rust version before first stable release;
 - development toolchain pinned in `rust-toolchain.toml` (see below).
 
-Settled for MVP (T002):
+Settled for MVP:
 
 - supported OS families: macOS and Linux (glibc) only;
 - supported Rust target triples: `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`;
 - Windows and all other OS/architecture combinations are unsupported for MVP;
 - Unix semantics for permissions, process-group termination, signals, paths, and shell-script providers without speculative cross-platform abstraction.
 
-Settled for MVP (T003):
+Settled for MVP:
 
 - dual MIT/Apache-2.0 project license;
 - canonical license texts at root `LICENSE-MIT` and `LICENSE-APACHE`;
 - root `README.md` dual-license notice;
-- workspace and every shipping crate use SPDX expression `license = "MIT OR Apache-2.0"` (T017);
+- workspace and every shipping crate use SPDX expression `license = "MIT OR Apache-2.0"`;
 - workspace package metadata references root `readme = "README.md"` where applicable;
 - root-excluded `test-support/providers/*` standalone fixtures use the same SPDX expression unless a fixture documents a divergent test-only policy.
 
@@ -278,7 +277,7 @@ MVP supports exactly four Rust target triples on two OS families. Implementation
 
 - Building, testing, or running `loop-engine` on an unsupported target is not a supported workflow.
 - If the control plane is invoked on an unsupported host, it **MUST** fail before operation dispatch with exit code `64` and a rich stderr message naming the detected target and listing supported triples. No partial feature set is offered.
-- Windows support is deferred, not merely untested: it requires redesign of provider subprocess transport (D005), filesystem layout (D007), operational trace permissions and late-sink behavior (D010), and provider fixtures (D013) before any Windows-targeting work proceeds.
+- Windows support is deferred, not merely untested: it requires redesign of provider subprocess transport, filesystem layout, operational trace permissions and late-sink behavior, and provider fixtures before any Windows-targeting work proceeds.
 
 ### Unix implementation semantics
 
@@ -288,19 +287,11 @@ These behaviors apply on all supported platforms without alternate implementatio
 |---|---|
 | File permissions | Machine-local state, trace, and other sensitive paths are current-user-only: directories `0700`, files `0600`. Permission failure before dispatch stops the invocation. |
 | Provider timeout | Kill the verified provider process group: `SIGTERM`, brief grace, then `SIGKILL`. Conforming descendants must remain in that group and must not survive timeout; providers are not sandboxed against deliberate group escape. |
-| Provider exit/signals | Non-zero exit, signal termination, and crash are interpreted per Unix process semantics and mapped to operation errors per D004. |
+| Provider exit/signals | Non-zero exit, signal termination, and crash are interpreted per Unix process semantics and mapped to operation errors. |
 | Paths | Unix path separators; lexical absolute normalization at registration/update; empty `LOOP_ENGINE_HOME` treated as unset; non-empty `LOOP_ENGINE_HOME` overrides machine-local roots for tests and portable use with existing-path symlink resolution or lexical identity for nonexistent roots; caller CWD is never inherited for machine-local roots or provider working directory; normative layout in [configuration.md](configuration.md). |
 | Shell providers | A provider may be a shebang script invoked as the configured executable path. Engine never performs implicit shell interpolation on executable or argument vector. |
 
-### Validation CI evidence
-
-[`.github/workflows/quality.yml`](../.github/workflows/quality.yml) is push-only and currently executes on pinned Ubuntu x86-64 infrastructure. It checks out pushed candidate, provisions pinned Rust/cargo-deny/mise/Go and external semantic credentials, then invokes candidate `cargo xtask validate --publication --ci-event <path>` once. Candidate manifest and rubrics apply immediately.
-
-CI independently verifies published revision and ignores Git-local owner approvals. It uploads command output plus evaluation/attempt records on pass or block. It cannot prevent direct push and makes no branch-protection claim. Supported platform contract remains four triples above; final release evidence must include named macOS and glibc Linux results rather than claiming current workflow is four-row matrix.
-
 ## Pinned toolchain and workspace layout
-
-T001 freezes the following for T017–T019 manifest preload:
 
 | Setting | Value |
 |---|---|
@@ -309,12 +300,11 @@ T001 freezes the following for T017–T019 manifest preload:
 | Workspace resolver | `3` |
 | Shared `[workspace.package].version` | `0.1.0` |
 
-Workspace members (added by T018/T019):
+Workspace members:
 
 - `crates/loop-engine-core`
 - `crates/loop-engine-integrations`
 - `crates/loop-engine-cli`
-- `xtask`
 
 Root workspace **MUST** exclude provider fixture crates. Standalone packages live outside workspace membership at:
 
@@ -325,7 +315,7 @@ Each fixture package carries its own tracked `Cargo.lock`, is built with `cargo 
 
 ## Approved dependency contract
 
-Exact crate versions and enabled features below are normative for T018/T019 manifest preload and fixture bootstrap. Patch versions are exact; later tasks may add new dependencies only through explicit contract amendments.
+Exact crate versions and enabled features below describe current workspace dependencies and fixture bootstrap. Patch versions are exact; future additions should preserve the approved dependency policy.
 
 ### Shared workspace dependency versions
 
@@ -347,10 +337,6 @@ Exact crate versions and enabled features below are normative for T018/T019 mani
 | `clap` | `4.6.2` | `derive` |
 | `miette` | `7.6.0` | `fancy` |
 | `toml` | `1.1.3` | — |
-| `anyhow` | `1.0.103` | — |
-| `cargo_metadata` | `0.23.1` | — |
-| `camino` | `1.2.4` | — |
-| `walkdir` | `2.5.0` | — |
 | `assert_cmd` | `2.2.2` | — |
 | `proptest` | `1.11.0` | — |
 | `tempfile` | `3.27.0` | — |
@@ -377,17 +363,9 @@ Runtime: `loop-engine-core`, `loop-engine-integrations`, `clap`, `miette`, `serd
 
 Dev: `assert_cmd`, `tempfile`.
 
-### `xtask` (non-shipping)
+### Standalone provider fixtures
 
-Runtime: `clap`, `anyhow`, `serde`, `serde_json`, `sha2`, `time`, `toml`, `uuid`, `nix`, `signal-hook`.
-
-Dev: `cargo_metadata`, `tempfile`.
-
-Product crates **MUST NOT** depend on `xtask`.
-
-### Standalone provider fixtures (T013)
-
-Provider fixtures implement real D005 subprocess providers for production CLI E2Es. They are **not** workspace members, **not** product dependencies, and **not** in-process test doubles.
+Provider fixtures implement real protocol subprocess providers for production CLI E2Es. They are **not** workspace members, **not** product dependencies, and **not** in-process test doubles.
 
 #### Package layout
 
@@ -404,19 +382,19 @@ Each fixture package carries its own tracked `Cargo.lock`, builds with `cargo bu
 - Rust edition `2024`, toolchain `1.95.0` (same pinned channel as product).
 - One native executable per supported host triple when that platform is under acceptance.
 - Runtime dependencies only: `serde`, `serde_json`, `schemars`, `thiserror` at shared versions/features above.
-- No Python, Node, or other acceptance runtime for core E2Es. Unix shell appears only when a scenario explicitly exercises shebang/script provider configuration (D002) or when a `process-helpers/` binary is a minimal signal/PGID probe.
+- No Python, Node, or other acceptance runtime for core E2Es. Unix shell appears only when a scenario explicitly exercises shebang/script provider configuration or when a `process-helpers/` binary is a minimal signal/PGID probe.
 
 #### Subprocess isolation
 
 Fixtures **MUST**:
 
-- run as the configured provider executable in a fresh OS process per role invocation (D005);
+- run as the configured provider executable in a fresh OS process per role invocation;
 - speak protocol v1 on stdin/stdout only;
 - keep software-domain semantics inside fixture packages (reference workflow graph, gate policies, evidence conventions).
 
 Fixtures **MUST NOT**:
 
-- depend on, import, link, or `include!` `loop-engine-core`, `loop-engine-integrations`, `loop-engine-cli`, `xtask`, or generated product schemas;
+- depend on, import, link, or `include!` `loop-engine-core`, `loop-engine-integrations`, `loop-engine-cli`, or generated product schemas;
 - open, read, or write authoritative `state.db`, engine `traces/`, or registration catalog;
 - act as mocks, stubs, or in-process shims for product behavior.
 
@@ -441,7 +419,7 @@ When a case requires signal delivery, PGID verification, or orphaned-child clean
 |---|---|
 | Toolchain | Rust `1.95.0` from root `rust-toolchain.toml` |
 | Build | `cargo build --manifest-path test-support/providers/<package>/Cargo.toml --locked` before E2E harness resolves absolute executable paths |
-| Platform evidence | Fixture-owned tests and dependent CLI E2Es run on named macOS and glibc Linux acceptance hosts; push CI currently covers Linux x86-64 |
+| Platform evidence | Fixture-owned tests and dependent CLI E2Es run on named macOS and glibc Linux acceptance hosts |
 | Product coupling | Zero workspace `path` or version dependency on fixture crates |
 
-Testing obligations and facet usage of the ledger are mirrored in [testing.md](testing.md) § Provider fixture strategy (T013).
+Testing obligations and facet usage of the ledger are mirrored in [testing.md](testing.md) § Provider fixture strategy.

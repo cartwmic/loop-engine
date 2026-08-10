@@ -3,7 +3,6 @@ members = [
     "crates/loop-engine-core",
     "crates/loop-engine-integrations",
     "crates/loop-engine-cli",
-    "xtask",
 ]
 resolver = "3"
 exclude = ["test-support/providers/*"]

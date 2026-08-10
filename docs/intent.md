@@ -132,10 +132,6 @@ The production CLI is the authoritative behavioral test driver. Every applicatio
 
 Black-box end-to-end tests exercise the shipped binary with real persistence and real executable provider fixtures. Every catalog operation must also be observed in passing required E2E trace envelopes. Mock-based behavioral tests are excluded. Pure core property tests remain optional supplemental tools for combinatorial exploration, but they do not count toward operational completeness.
 
-## Publication-checkpoint coherence
-
-Every accepted push leaves its destination tip coherent with relevant foundation and future user/developer documentation. Generic versioned semantic judge evaluates the exact aggregate change from remote destination tip to local candidate head once. Commits within that unpublished range may be incomplete or repair one another. Fast deterministic staged checks protect normal commits; explicit staged judgment remains available for early feedback. Pre-push and authoritative CI fail closed unless the aggregate range receives a determinate semantic pass. Judge uses the remote base revision's rubric so candidate change cannot weaken its own review.
-
 ## Configuration direction
 
 Machine-local provider registrations are authoritative and include explicit executable, arguments, working directory, and configurable timeout; configuring them authorizes execution with caller permissions. Global/project configuration may supply CLI defaults or registration references but cannot redefine registration selected by existing run. Machine-local catalog remains addressable independent of caller working directory. Provider registrations, stable workflow identities, run state, graph snapshots, transition evidence, metadata, and journal entries persist where required by semantics. Exact paths and configuration format remain undecided.

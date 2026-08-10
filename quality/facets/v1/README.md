@@ -1,6 +1,6 @@
 # Operation facet inventories (v1)
 
-**Status:** Frozen by T004 (2026-07-17).
+**Status:** Operation facet inventory schema v1 is published.
 
 Each exposed application operation owns one machine-readable facet manifest validated by [schema.json](schema.json). Manifests record behavioral closure required by [testing.md](../../../docs/testing.md) and [operation-catalog.md](../../../docs/operation-catalog.md).
 
@@ -24,7 +24,7 @@ The `operation_id` field inside the manifest **must** equal the filename stem ex
 | `open` | Applicable facet not yet closed by production CLI evidence |
 | `closed` | Passing production CLI E2E and/or trace proof recorded in `evidence` |
 
-Exposure tasks start with all applicable rows `open`. A row becomes `closed` only when named evidence is recorded. Aggregate tasks (for example T174, T182) may repeat already-closed rows but cannot supply first proof for an operation's mandatory facet.
+Coverage starts with all applicable rows `open`. A row becomes `closed` only when named evidence is recorded. Aggregate coverage may repeat already-closed rows but cannot supply first proof for an operation's mandatory facet.
 
 `closed` rows **must** include at least one `evidence` string naming exact proof, for example:
 
@@ -39,7 +39,7 @@ Derive applicable facet names from [operation-catalog.md](../../../docs/operatio
 
 **Valid path through production CLI, runtime operation-ID proof, correlated trace file, request/outcome payloads, and start/finish envelope**
 
-No manifest may list a facet name outside [schema.json](schema.json) `facet_name` enum. Names must match [testing.md](../../../docs/testing.md) § Facet matrix exactly. Each manifest must include the universal valid-path row (enforced by schema `contains`). Closure validation (T062/T167) must reject duplicate facet `name` values in one manifest even when row bodies differ.
+No manifest may list a facet name outside [schema.json](schema.json) `facet_name` enum. Names must match [testing.md](../../../docs/testing.md) § Facet matrix exactly. Each manifest must include the universal valid-path row (enforced by schema `contains`). Manifest validation must reject duplicate facet `name` values in one manifest even when row bodies differ.
 
 ## Provider and persistence trace rows
 
@@ -50,13 +50,13 @@ No manifest may list a facet name outside [schema.json](schema.json) `facet_name
 ## Validation
 
 ```bash
-# JSON Schema parse (requires ajv or equivalent in CI)
+# JSON syntax check
 python3 -c "import json; json.load(open('quality/facets/v1/schema.json'))"
 
 # Per-manifest validation is enforced by `cargo test -p loop-engine-cli --test driver_catalog`
 ```
 
-Exposure commits are blocked when any applicable row remains `open` unless an authorized candidate closure explicitly permits it (T146–T151, T159 intermediate trees only).
+Coverage review should account for every applicable row and its recorded evidence.
 
 ## Example (illustrative)
 
