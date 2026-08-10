@@ -1,4 +1,0 @@
--- Logical corruption: journal payload missing required ts field.
-UPDATE journal_entries
-SET encoded_payload_json = '{"journal_schema_version":1,"sequence":1,"run_id":"019f0000-0000-7000-8000-000000000101","outcome":"completed","operation":"run.create","request_id":"req-create-001","entry_kind":"run.created","state_before":{"state":"draft","lifecycle":"active","workflow_state_version":1,"lifecycle_version":1},"state_after":{"state":"draft","lifecycle":"active","workflow_state_version":1,"lifecycle_version":1},"provider_observations":[{"registration_id":"019f0000-0000-7000-8000-000000000001","config_revision":1,"role":"describe","invocation_id":"pv-describe-001","executable":"/bin/provider","outcome":"completed"}],"graph_revision":"sha256:6fd8334d3ebc9290b92e18b9667ff6072ca013f2295930bc4ffdf9a071b89d77"}'
-WHERE run_id = '019f0000-0000-7000-8000-000000000101' AND sequence = 1;

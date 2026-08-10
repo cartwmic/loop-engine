@@ -1,7 +1,0 @@
-{
-  "initial_state": "draft",
-  "states": [{"id": "draft", "static_guidance": "Prepare the change.", "final": false}],
-  "transitions": [],
-  "input_declarations": [],
-  "live_guidance_supported": false
-}
