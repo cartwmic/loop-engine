@@ -1,0 +1,38 @@
+//! Core domain vocabulary for Loop Engine.
+//!
+//! The core crate is deliberately independent of persistence, subprocess,
+//! configuration, and CLI concerns.  It contains durable/provider-bound value
+//! types and semantic operation outcomes used by later core layers.
+
+mod model;
+pub mod operations;
+mod outcome;
+mod ports;
+mod workflow;
+
+pub use model::{
+    ContextRecord, ContextRecordId, ControlRevision, DurableEvaluation, DurableEvaluationResult,
+    EvaluationFeedback, EvaluationRequest, EvaluationResult, EventId, HistoryAction, HistoryEntry,
+    JsonValue, Lifecycle, PriorEvaluation, ProviderAssociation, ProviderSelector, Run, RunId,
+    SemanticSequence, State, StateId, Timestamp, Transition, TransitionHistoryOutcome,
+    TransitionKind, Workflow, WorkflowId,
+};
+pub use operations::{
+    execute_append, execute_event, execute_history, execute_list, execute_show, execute_start,
+    execute_terminate, lineage_for_transition, project_show, request_from_snapshot, AppendRequest,
+    EventRequest, EventResult, HistoryRequest, ListRequest, ProjectionError, RequestableEvent,
+    ShowProjection, ShowRequest, StartRequest, TerminateRunRequest,
+};
+pub use outcome::{OperationOutcome, OperationStatus, OutcomeIssue};
+pub use ports::{
+    AppendContextRequest, AppendContextResult, CheckedEvaluationSnapshot,
+    CheckedEvaluationSnapshotRequest, CommitTransitionRequest, CommitTransitionResult,
+    CreateRunRequest, CreateRunResult, Persistence, PersistenceConflict, PersistenceError,
+    PersistenceFailure, PersistenceRejection, ProviderError, ProviderGateway,
+    ProviderResolutionError, ProviderResolver, RecordDenialRequest, RecordDenialResult, RunSummary,
+    ShowData, TerminateRequest, TerminateResult,
+};
+pub use workflow::{
+    resolve_transition, validate_workflow, workflow_validation_errors, TransitionResolutionError,
+    WorkflowValidationError,
+};
