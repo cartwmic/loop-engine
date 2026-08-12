@@ -1,6 +1,6 @@
 # Software-change provider
 
-`software-change` is Loop Engine's repo-local reference provider for the software-change workflow. It implements the provider subprocess contract:
+`software-change` is Loop Engine's reference provider for the software-change workflow, distributed as a standalone binary with its shipped data embedded. A repository checkout remains the development path. It implements the provider subprocess contract:
 
 - `describe` returns the fixed workflow topology and static authoring guidance.
 - `evaluate` checks the exact transition, validates configured artifact schemas and revision links, then evaluates externally supplied review evidence.
@@ -10,25 +10,34 @@ The frozen requirement record this crate's acceptance suite traces to (R1–R27,
 
 Per-run obligations live in immutable initial input. The provider is called by Loop Engine; it does not discover or load a config profile by itself.
 
-## Repo-local distribution and registration
+## Distribution and registration
 
-Standalone or installed packaging is not part of v0.1. Build from repository root:
+Standalone releases are published for macOS arm64 and Linux x86_64. Each provider archive contains the `software-change` executable and both project license texts; verify its `.sha256` checksum before installation.
+
+An installed provider binary carries its shipped workflow data. Materialize that data under a caller-chosen root:
+
+```sh
+DATA_ROOT="$HOME/.local/share/software-change-provider"
+software-change data-dump "$DATA_ROOT"
+```
+
+The command creates `DATA_ROOT/crates/software-change-provider/data/...` with the configs, templates, reviewer protocol, calibration manifest, and fixtures embedded in the binary. It preserves those repository-relative paths so guidance citations resolve under `DATA_ROOT`; it refuses to overwrite an existing target file. Copy a selected profile from that tree to a run-specific file, replace its placeholder `artifact_root` with an absolute artifact directory, and register the installed provider under an exact, case-sensitive alias:
+
+```toml
+[providers.software-change]
+command = "/absolute/path/to/installed/software-change"
+args = []
+```
+
+Keep machine-specific `providers.toml` outside committed repository files and pass its path with Loop Engine's `--config` option. No provider registration file is committed by this crate.
+
+For repository development, build from the checkout instead:
 
 ```sh
 cargo build -p software-change-provider
 ```
 
-This produces `target/debug/software-change`. Register that binary under an exact, case-sensitive alias in a local `providers.toml`:
-
-```toml
-[providers.software-change]
-command = "/absolute/path/to/loop-engine/target/debug/software-change"
-args = []
-```
-
-`command` must be an absolute path to the built executable. Keep this machine-specific `providers.toml` outside committed repository files, and pass its path with `--provider-config` (or use Loop Engine's documented provider-config discovery). No provider registration file is committed by this crate.
-
-The distribution contract is repo-local: binary registration points at an absolute executable path, while shipped workflow data remains at repo-relative paths under `crates/software-change-provider/data/`.
+This produces `target/debug/software-change`; the checkout's `crates/software-change-provider/data/` tree supplies the development copies of shipped data.
 
 ## Shipped data
 
@@ -82,19 +91,21 @@ PROVIDER_CONFIG="/absolute/path/to/your/providers.toml"
 mkdir -p "$ARTIFACT_ROOT"
 ```
 
-Copy each selected profile to a run-specific file. Before starting, replace `/abs/path/to/change/artifacts` in that copy with `$ARTIFACT_ROOT` (or another absolute artifact directory), then run the matching command:
+Copy each selected profile to a run-specific file. For installed binaries after `data-dump`, source profiles from `$DATA_ROOT`; for checkout development, set `DATA_ROOT="$PWD"` first. Before starting, replace `/abs/path/to/change/artifacts` in that copy with `$ARTIFACT_ROOT` (or another absolute artifact directory), then run the matching command:
 
 ```sh
-cp crates/software-change-provider/data/configs/minimal.json /tmp/software-change-minimal.json
-"$ENGINE" --database "$DB" --provider-config "$PROVIDER_CONFIG" --json \
+DATA_ROOT="$HOME/.local/share/software-change-provider"
+
+cp "$DATA_ROOT/crates/software-change-provider/data/configs/minimal.json" /tmp/software-change-minimal.json
+"$ENGINE" --database "$DB" --config "$PROVIDER_CONFIG" --json \
   start software-change "@/tmp/software-change-minimal.json" "software change (minimal)"
 
-cp crates/software-change-provider/data/configs/standard.json /tmp/software-change-standard.json
-"$ENGINE" --database "$DB" --provider-config "$PROVIDER_CONFIG" --json \
+cp "$DATA_ROOT/crates/software-change-provider/data/configs/standard.json" /tmp/software-change-standard.json
+"$ENGINE" --database "$DB" --config "$PROVIDER_CONFIG" --json \
   start software-change "@/tmp/software-change-standard.json" "software change (standard)"
 
-cp crates/software-change-provider/data/configs/high-rigor.json /tmp/software-change-high-rigor.json
-"$ENGINE" --database "$DB" --provider-config "$PROVIDER_CONFIG" --json \
+cp "$DATA_ROOT/crates/software-change-provider/data/configs/high-rigor.json" /tmp/software-change-high-rigor.json
+"$ENGINE" --database "$DB" --config "$PROVIDER_CONFIG" --json \
   start software-change "@/tmp/software-change-high-rigor.json" "software change (high-rigor)"
 ```
 

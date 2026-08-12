@@ -15,12 +15,44 @@ use protocol::{DescribeRequest, EvaluateRequest};
 use serde::Serialize;
 use serde_json::Value;
 use std::io::{self, Read, Write};
+use std::path::Path;
 
 fn main() {
     std::process::exit(run());
 }
 
 fn run() -> i32 {
+    let mut args = std::env::args_os();
+    let _program = args.next();
+    match args.next() {
+        Some(command) if command == "data-dump" => {
+            let Some(destination) = args.next() else {
+                return data_dump_usage("missing destination directory");
+            };
+            if args.next().is_some() {
+                return data_dump_usage("data-dump accepts exactly one destination directory");
+            }
+            return match software_change_provider::embedded_data::dump(Path::new(&destination)) {
+                Ok(()) => 0,
+                Err(error) => {
+                    eprintln!("data-dump failed: {error}");
+                    1
+                }
+            };
+        }
+        Some(command) => {
+            return data_dump_usage(&format!(
+                "unsupported command `{}`",
+                command.to_string_lossy()
+            ));
+        }
+        None => {}
+    }
+
+    run_protocol()
+}
+
+fn run_protocol() -> i32 {
     let mut input = String::new();
     if let Err(error) = io::stdin().read_to_string(&mut input) {
         return protocol_error(format!("could not read request: {error}"));
@@ -47,6 +79,11 @@ fn run() -> i32 {
         "evaluate" => evaluate(request),
         other => protocol_error(format!("unsupported provider operation `{other}`")),
     }
+}
+
+fn data_dump_usage(message: &str) -> i32 {
+    eprintln!("{message}; usage: software-change data-dump DIR");
+    2
 }
 
 fn describe(request: Value) -> i32 {

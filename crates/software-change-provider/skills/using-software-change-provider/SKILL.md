@@ -7,7 +7,7 @@ description: Use when running the software-change workflow through Loop Engine w
 
 ## Overview
 
-`software-change` is Loop Engine's repo-local reference provider. Workflow: `explore → design → design-review → plan → plan-review → implement → implementation-review → validation → end`, with check-free `revise` edges from each review state back to its authoring state.
+`software-change` is Loop Engine's reference provider, distributed standalone with its shipped data embedded (`software-change data-dump DIR` materializes it); a repo checkout remains the development path. Workflow: `explore → design → design-review → plan → plan-review → implement → implementation-review → validation → end`, with check-free `revise` edges from each review state back to its authoring state.
 
 The provider is deterministic only: it validates artifact schemas and revision links, then aggregates externally supplied review evidence. It never generates prompts, invokes a model, or judges findings — **you** commission semantic review and append the verdicts. Per-run obligations are frozen in immutable `initial_input`.
 

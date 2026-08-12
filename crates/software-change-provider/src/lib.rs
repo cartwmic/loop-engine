@@ -7,6 +7,8 @@
 mod config;
 mod schema;
 
+pub mod embedded_data;
+
 /// Validate one shipped initial-input template with production config rules.
 #[doc(hidden)]
 pub fn validate_config_for_tests(initial_input: &serde_json::Value) -> Result<(), String> {
