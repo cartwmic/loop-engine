@@ -628,16 +628,19 @@ pub(crate) fn extract_metadata(
         ));
     }
 
-    let coverage = match object.get("coverage") {
-        Some(value) => Some(extract_coverage(subject, value)?),
-        None if is_report_subject(subject) => {
-            return Err(metadata_error(
-                subject,
-                "/coverage",
-                "report requires coverage manifest",
-            ))
+    let coverage = if is_report_subject(subject) {
+        match object.get("coverage") {
+            Some(value) => Some(extract_coverage(subject, value)?),
+            None => {
+                return Err(metadata_error(
+                    subject,
+                    "/coverage",
+                    "report requires coverage manifest",
+                ))
+            }
         }
-        None => None,
+    } else {
+        None
     };
 
     Ok(ArtifactMetadata {
@@ -1039,6 +1042,57 @@ mod tests {
         assert_eq!(coverage.commit(), "abc123");
         assert_eq!(coverage.documents()[0].path(), "docs/PRD.md");
         assert_eq!(coverage.documents()[0].revision(), "doc-2");
+    }
+
+    #[test]
+    fn design_coverage_array_is_ignored_during_metadata_extraction() {
+        let metadata = extract_metadata(
+            "design.json",
+            &json!({
+                "revision": "design-1",
+                "author": {"name": "cartwmic", "kind": "human"},
+                "intent_revision": "intent-1",
+                "approach": "A structural design.",
+                "elements": [{
+                    "name": "component",
+                    "responsibility": "Owns component behavior."
+                }],
+                "decisions": [{
+                    "choice": "Use component.",
+                    "rationale": "It meets the requirement.",
+                    "rejected": []
+                }],
+                "risks": [{
+                    "risk": "Component failure.",
+                    "mitigation": "Test component behavior."
+                }],
+                "coverage": [{
+                    "acceptance": "A visible result exists.",
+                    "delivered_by": "component"
+                }]
+            }),
+        )
+        .expect("schema-valid design metadata");
+
+        assert_eq!(metadata.revision(), "design-1");
+        assert_eq!(metadata.author().name(), "cartwmic");
+        assert_eq!(metadata.author().kind(), "human");
+        assert!(metadata.coverage().is_none());
+    }
+
+    #[test]
+    fn report_with_malformed_coverage_is_metadata_invariant_failure() {
+        let error = extract_metadata(
+            "validation-report.json",
+            &json!({
+                "revision": "report-1",
+                "author": {"name": "cartwmic", "kind": "human"},
+                "coverage": []
+            }),
+        )
+        .expect_err("report coverage must be an object");
+        assert_eq!(error.path(), "/coverage");
+        assert_eq!(error.message(), "coverage must be an object");
     }
 
     #[test]
