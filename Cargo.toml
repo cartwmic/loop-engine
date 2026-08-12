@@ -9,7 +9,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 publish = false
@@ -23,3 +23,7 @@ installers = ["shell"]
 # Keep cargo-dist's automatic package README and license inclusion enabled.
 auto-includes = true
 checksum = "sha256"
+
+[profile.dist]
+inherits = "release"
+lto = "thin"

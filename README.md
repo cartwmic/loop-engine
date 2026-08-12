@@ -20,7 +20,7 @@ Each archive has a matching `.sha256` file; release `sha256.sum` provides the un
 The generated cargo-dist installers are the simplest way to install both binaries and choose the platform automatically:
 
 ```sh
-VERSION=v0.2.0
+VERSION=v0.2.1
 curl --proto '=https' --tlsv1.2 -LsSf \
   "https://github.com/cartwmic/loop-engine/releases/download/$VERSION/loop-cli-installer.sh" | sh
 curl --proto '=https' --tlsv1.2 -LsSf \
@@ -30,12 +30,12 @@ curl --proto '=https' --tlsv1.2 -LsSf \
 With [mise](https://mise.jdx.dev/), manage `loop-engine` as one tool and use the provider's separate release installer. Do not add two executable selections for the same GitHub repository to one mise config: mise canonicalizes them to one tool entry, so one binary would be missing.
 
 ```sh
-mise use --global 'github:cartwmic/loop-engine[exe=loop-engine]@v0.2.0'
+mise use --global 'github:cartwmic/loop-engine[exe=loop-engine]@v0.2.1'
 curl --proto '=https' --tlsv1.2 -LsSf \
-  "https://github.com/cartwmic/loop-engine/releases/download/v0.2.0/software-change-provider-installer.sh" | sh
+  "https://github.com/cartwmic/loop-engine/releases/download/v0.2.1/software-change-provider-installer.sh" | sh
 ```
 
-Verified with `mise use --dry-run --path /tmp/mise.toml 'github:cartwmic/loop-engine[exe=loop-engine]@v0.2.0'`: one `github:cartwmic/loop-engine@v0.2.0` entry is created, which is why provider installation remains a separate command.
+Verified with `mise use --dry-run --path /tmp/mise.toml 'github:cartwmic/loop-engine[exe=loop-engine]@v0.2.1'`: one `github:cartwmic/loop-engine@v0.2.1` entry is created, which is why provider installation remains a separate command.
 
 ### Build from source
 
@@ -53,3 +53,11 @@ cargo build --release -p loop-cli -p software-change-provider
 # target/release/loop-engine
 # target/release/software-change
 ```
+
+Release preflight: before pushing a version tag, run a real cargo-dist build on each supported release target; `dist plan` alone does not compile. For this release, the macOS arm64 proof is:
+
+```sh
+dist build --tag=v0.2.1 --artifacts=local --target=aarch64-apple-darwin
+```
+
+The build must succeed and produce both binary archives before tagging. Repeat for `x86_64-unknown-linux-gnu` in CI or a matching Linux environment.
