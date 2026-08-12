@@ -702,6 +702,7 @@ optional supporting context
 The review gates are:
 
 ```text
+intent (explore → design)
 design-review
 plan-review
 implementation-review

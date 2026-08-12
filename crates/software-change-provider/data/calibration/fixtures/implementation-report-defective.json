@@ -1,0 +1,25 @@
+{
+  "revision": "bad-1",
+  "author": {
+    "name": "implementation-agent",
+    "kind": "agent"
+  },
+  "plan_revision": "1",
+  "coverage": {
+    "commit": "repo-state-bad",
+    "documents": [
+      {
+        "path": "README.md",
+        "revision": "unknown"
+      }
+    ]
+  },
+  "summary": "Added a prompt generator, a long-running review service, and an automatic model judge outside the planned boundary.",
+  "changed_surface": [
+    "src/judge.rs",
+    "src/service.rs"
+  ],
+  "validation": [
+    "It should work."
+  ]
+}

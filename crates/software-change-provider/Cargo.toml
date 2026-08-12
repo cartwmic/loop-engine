@@ -1,0 +1,18 @@
+[package]
+name = "software-change-provider"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "software-change"
+path = "src/main.rs"
+
+[dependencies]
+loop-core = { path = "../loop-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+loop-integrations = { path = "../loop-integrations" }

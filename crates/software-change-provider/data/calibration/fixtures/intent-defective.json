@@ -1,0 +1,17 @@
+{
+  "revision": "bad-1",
+  "author": {
+    "name": "change-owner",
+    "kind": "human"
+  },
+  "problem": "Build the new Rust provider crate.",
+  "outcome": "Implement all required modules correctly.",
+  "acceptance": [
+    "Code is good.",
+    "Use the preferred architecture."
+  ],
+  "constraints": [
+    "Must use my chosen module names and implementation sequence."
+  ],
+  "non_goals": []
+}

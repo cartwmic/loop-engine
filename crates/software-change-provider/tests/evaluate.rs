@@ -1,0 +1,521 @@
+use serde_json::{json, Value};
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+struct TestDir {
+    path: PathBuf,
+}
+
+impl TestDir {
+    fn new() -> Self {
+        let suffix = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "software-change-provider-evaluate-{}-{suffix}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).expect("create temporary artifact root");
+        Self { path }
+    }
+
+    fn root_value(&self) -> Value {
+        json!(self.path.to_string_lossy().to_string())
+    }
+
+    fn write_json(&self, subject: &str, value: &Value) {
+        fs::write(self.path.join(subject), serde_json::to_vec(value).unwrap())
+            .expect("write artifact JSON");
+    }
+
+    fn write_text(&self, subject: &str, value: &str) {
+        fs::write(self.path.join(subject), value).expect("write artifact text");
+    }
+}
+
+impl Drop for TestDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+fn transition(source: &str, event: &str, target: &str, kind: &str) -> Value {
+    json!({
+        "source": source,
+        "event": event,
+        "target": target,
+        "kind": kind
+    })
+}
+
+fn checked(source: &str, event: &str, target: &str) -> Value {
+    transition(source, event, target, "checked")
+}
+
+fn base_request(initial_input: Value, transition: Value) -> Value {
+    json!({
+        "operation": "evaluate",
+        "workflow": {
+            "id": "software-change",
+            "initial_state": "explore",
+            "states": [],
+            "transitions": []
+        },
+        "initial_input": initial_input,
+        "context": [],
+        "transition": transition,
+        "prior_evaluations": []
+    })
+}
+
+fn metadata_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "revision": {"type": "string", "minLength": 1},
+            "author": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "minLength": 1},
+                    "kind": {
+                        "type": "string",
+                        "enum": ["human", "agent", "script"]
+                    }
+                },
+                "required": ["name", "kind"],
+                "additionalProperties": false
+            }
+        },
+        "required": ["revision", "author"],
+        "additionalProperties": false
+    })
+}
+
+fn config_with_schema(subject: &str, root: Option<&TestDir>) -> Value {
+    let mut config = json!({
+        "config_version": "test-1",
+        "review_policies": {},
+        "artifact_schemas": {subject: metadata_schema()}
+    });
+    if let Some(root) = root {
+        config["artifact_root"] = root.root_value();
+    }
+    config
+}
+
+fn config_with_axis(root: &TestDir) -> Value {
+    json!({
+        "config_version": "test-1",
+        "artifact_root": root.root_value(),
+        "review_policies": {
+            "intent": [{"id": "axis", "description": "test axis"}]
+        },
+        "artifact_schemas": {"intent.json": metadata_schema()}
+    })
+}
+
+fn valid_metadata(revision: &str) -> Value {
+    json!({
+        "revision": revision,
+        "author": {"name": "owner", "kind": "human"}
+    })
+}
+
+fn context_record(data: Value) -> Value {
+    json!({
+        "id": "context-1",
+        "kind": "review-evidence",
+        "data": data,
+        "sequence": 1,
+        "created_at": 1
+    })
+}
+
+fn run_provider(request: Value) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_software-change"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn software-change provider");
+    let request = serde_json::to_vec(&request).expect("serialize provider request");
+    child
+        .stdin
+        .take()
+        .expect("provider stdin")
+        .write_all(&request)
+        .expect("write provider request");
+    child.wait_with_output().expect("wait for provider")
+}
+
+fn response(output: &Output) -> Value {
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "provider stdout is not JSON: {error}; stdout={:?}; stderr={:?}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })
+}
+
+fn assert_exit(output: &Output, code: i32) {
+    assert_eq!(
+        output.status.code(),
+        Some(code),
+        "stderr={:?}",
+        output.stderr
+    );
+}
+
+#[test]
+fn zero_obligation_allows_without_artifact_root() {
+    let output = run_provider(base_request(
+        json!({"config_version": "none", "review_policies": {}}),
+        checked("explore", "intent-ready", "design"),
+    ));
+    assert_exit(&output, 0);
+    assert_eq!(response(&output), json!({"result": "allow"}));
+}
+
+#[test]
+fn schema_deny_is_byte_identical_when_only_context_varies() {
+    let root = TestDir::new();
+    let mut artifact = valid_metadata("1");
+    artifact["unexpected"] = json!(true);
+    root.write_json("intent.json", &artifact);
+    let config = config_with_schema("intent.json", Some(&root));
+    let transition = checked("explore", "intent-ready", "design");
+
+    let first = run_provider(base_request(config.clone(), transition.clone()));
+    let mut second_request = base_request(config, transition);
+    second_request["context"] = json!([context_record(json!({"untrusted": "ignored"}))]);
+    let second = run_provider(second_request);
+
+    assert_exit(&first, 0);
+    assert_exit(&second, 0);
+    assert_eq!(first.stdout, second.stdout);
+    let value = response(&first);
+    assert_eq!(value["result"], "deny");
+    assert_eq!(value["feedback"]["code"], "software-change-schema-invalid");
+    assert_eq!(value["feedback"]["message"], "not judged: fix shape first");
+    assert!(!value["feedback"]["details"]["violations"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn approval_transition_rechecks_current_subject_after_ready_pass() {
+    let root = TestDir::new();
+    root.write_json("design.json", &valid_metadata("1"));
+    let config = config_with_schema("design.json", Some(&root));
+
+    let ready = run_provider(base_request(
+        config.clone(),
+        checked("design", "design-ready", "design-review"),
+    ));
+    assert_exit(&ready, 0);
+    assert_eq!(response(&ready), json!({"result": "allow"}));
+
+    let mut malformed = valid_metadata("1");
+    malformed["unexpected"] = json!(true);
+    root.write_json("design.json", &malformed);
+    let approval = run_provider(base_request(
+        config,
+        checked("design-review", "approved", "plan"),
+    ));
+    assert_exit(&approval, 0);
+    assert_eq!(approval.status.code(), Some(0));
+    assert_eq!(
+        response(&approval)["feedback"]["code"],
+        "software-change-schema-invalid"
+    );
+}
+
+#[test]
+fn prior_denials_are_flat_and_accumulate_across_requests() {
+    let root = TestDir::new();
+    root.write_json("intent.json", &json!("not an object"));
+    let config = config_with_schema("intent.json", Some(&root));
+    let transition = checked("explore", "intent-ready", "design");
+
+    let first = run_provider(base_request(config.clone(), transition.clone()));
+    let first_value = response(&first);
+    let mut second_request = base_request(config, transition.clone());
+    second_request["prior_evaluations"] = json!([{
+        "transition": transition,
+        "result": {"result": "deny", "feedback": first_value["feedback"].clone()},
+        "sequence": 7,
+        "occurred_at": 7
+    }]);
+    let second = run_provider(second_request);
+    assert_exit(&second, 0);
+    let details = &response(&second)["feedback"]["details"];
+    let prior = details["prior_denials"]
+        .as_array()
+        .expect("prior denials array");
+    assert_eq!(prior.len(), 1);
+    assert_eq!(
+        prior[0],
+        json!({
+            "sequence": 7,
+            "code": "software-change-schema-invalid",
+            "message": "not judged: fix shape first"
+        })
+    );
+    assert!(prior[0].get("details").is_none());
+}
+
+#[test]
+fn unsupported_tuple_returns_exact_unsupported_result() {
+    let output = run_provider(base_request(
+        json!({"config_version": "none", "review_policies": {}}),
+        checked("explore", "wrong-event", "design"),
+    ));
+    assert_exit(&output, 0);
+    assert_eq!(output.stdout, br#"{"result":"unsupported"}"#);
+}
+
+#[test]
+fn missing_review_policies_is_evaluation_error_naming_shipped_configs() {
+    let output = run_provider(base_request(
+        json!({"config_version": "test-1"}),
+        checked("explore", "intent-ready", "design"),
+    ));
+    assert_exit(&output, 1);
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("minimal"));
+    assert!(stderr.contains("standard"));
+    assert!(stderr.contains("high-rigor"));
+}
+
+#[test]
+fn evidence_phase_denies_with_configured_axis_diagnostics() {
+    let root = TestDir::new();
+    root.write_json("intent.json", &valid_metadata("1"));
+    let output = run_provider(base_request(
+        config_with_axis(&root),
+        checked("explore", "intent-ready", "design"),
+    ));
+    assert_exit(&output, 0);
+    let value = response(&output);
+    assert_eq!(
+        value["feedback"]["code"],
+        "software-change-review-incomplete"
+    );
+    assert_eq!(value["feedback"]["message"], "review evidence incomplete");
+    assert!(value["feedback"]["details"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|axis| axis["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["category"] == "missing")));
+}
+
+#[test]
+fn every_checked_reference_route_is_accepted_when_obligations_are_empty() {
+    let routes = [
+        ("explore", "intent-ready", "design"),
+        ("design", "design-ready", "design-review"),
+        ("design-review", "approved", "plan"),
+        ("plan", "plan-ready", "plan-review"),
+        ("plan-review", "approved", "implement"),
+        ("implement", "implementation-ready", "implementation-review"),
+        ("implementation-review", "approved", "validation"),
+        ("validation", "passed", "end"),
+    ];
+    for (source, event, target) in routes {
+        let output = run_provider(base_request(
+            json!({"config_version": "none", "review_policies": {}}),
+            checked(source, event, target),
+        ));
+        assert_exit(&output, 0);
+        assert_eq!(
+            response(&output),
+            json!({"result": "allow"}),
+            "{source} {event}"
+        );
+    }
+}
+
+#[test]
+fn each_single_field_tuple_mismatch_is_unsupported() {
+    let routes = [
+        ("explore", "intent-ready", "design"),
+        ("design", "design-ready", "design-review"),
+        ("design-review", "approved", "plan"),
+        ("plan", "plan-ready", "plan-review"),
+        ("plan-review", "approved", "implement"),
+        ("implement", "implementation-ready", "implementation-review"),
+        ("implementation-review", "approved", "validation"),
+        ("validation", "passed", "end"),
+    ];
+    for (source, event, target) in routes {
+        let variants = [
+            checked("wrong", event, target),
+            checked(source, "wrong", target),
+            checked(source, event, "wrong"),
+            transition(source, event, target, "check-free"),
+        ];
+        for transition in variants {
+            let output = run_provider(base_request(
+                json!({"config_version": "none", "review_policies": {}}),
+                transition,
+            ));
+            assert_exit(&output, 0);
+            assert_eq!(response(&output), json!({"result": "unsupported"}));
+        }
+    }
+}
+
+#[test]
+fn absent_artifact_is_schema_deny() {
+    let root = TestDir::new();
+    let output = run_provider(base_request(
+        config_with_schema("intent.json", Some(&root)),
+        checked("explore", "intent-ready", "design"),
+    ));
+    assert_exit(&output, 0);
+    let value = response(&output);
+    assert_eq!(value["feedback"]["code"], "software-change-schema-invalid");
+    assert!(value["feedback"]["details"]["violations"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("work not yet authored"));
+}
+
+#[test]
+fn unparseable_artifact_is_schema_deny() {
+    let root = TestDir::new();
+    root.write_text("intent.json", "not JSON");
+    let output = run_provider(base_request(
+        config_with_schema("intent.json", Some(&root)),
+        checked("explore", "intent-ready", "design"),
+    ));
+    assert_exit(&output, 0);
+    let value = response(&output);
+    assert_eq!(value["feedback"]["code"], "software-change-schema-invalid");
+    assert!(value["feedback"]["details"]["violations"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("not parseable JSON"));
+}
+
+#[test]
+fn revision_link_mismatch_is_schema_deny_naming_both_artifacts() {
+    let root = TestDir::new();
+    let mut config = json!({
+        "config_version": "test-1",
+        "artifact_root": root.root_value(),
+        "review_policies": {},
+        "artifact_schemas": {
+            "design.json": metadata_schema(),
+            "intent.json": metadata_schema()
+        },
+        "revision_links": [{
+            "from": "design.json",
+            "field": "intent_revision",
+            "to": "intent.json"
+        }]
+    });
+    root.write_json(
+        "design.json",
+        &json!({
+            "revision": "d1",
+            "author": {"name": "owner", "kind": "human"},
+            "intent_revision": "i1"
+        }),
+    );
+    root.write_json("intent.json", &valid_metadata("i2"));
+    // Keep source schema closed-field semantics from hiding link behavior: the
+    // source schema in this inline config explicitly permits the link field.
+    config["artifact_schemas"]["design.json"]["properties"]["intent_revision"] =
+        json!({"type": "string", "minLength": 1});
+    let output = run_provider(base_request(
+        config,
+        checked("design", "design-ready", "design-review"),
+    ));
+    assert_exit(&output, 0);
+    let value = response(&output);
+    assert_eq!(value["feedback"]["code"], "software-change-schema-invalid");
+    let message = value["feedback"]["details"]["violations"][0]["message"]
+        .as_str()
+        .unwrap();
+    assert!(message.contains("design.json"));
+    assert!(message.contains("intent.json"));
+}
+
+#[test]
+fn inaccessible_artifact_root_is_evaluation_error() {
+    let missing_root = Path::new("/tmp/software-change-provider-root-that-does-not-exist-9f5e");
+    let mut config = config_with_schema("intent.json", None);
+    config["artifact_root"] = json!(missing_root.to_string_lossy().to_string());
+    let output = run_provider(base_request(
+        config,
+        checked("explore", "intent-ready", "design"),
+    ));
+    assert_exit(&output, 1);
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("artifact_root"));
+}
+
+#[test]
+fn malformed_config_classes_exit_one_without_stdout_result() {
+    let cases = vec![
+        (
+            "unknown top-level",
+            json!({"config_version": "x", "review_policies": {}, "typo": true}),
+        ),
+        ("missing config version", json!({"review_policies": {}})),
+        (
+            "empty config version",
+            json!({"config_version": "", "review_policies": {}}),
+        ),
+        (
+            "unknown gate",
+            json!({"config_version": "x", "review_policies": {"nope": []}}),
+        ),
+        (
+            "bad required authors",
+            json!({
+                "config_version": "x",
+                "review_policies": {"intent": [{"id": "axis", "description": "x", "required_authors": 0}]}
+            }),
+        ),
+        (
+            "unknown artifact",
+            json!({"config_version": "x", "review_policies": {}, "artifact_schemas": {"nope.json": {"type": "object"}}}),
+        ),
+        (
+            "bad schema keyword",
+            json!({"config_version": "x", "review_policies": {}, "artifact_schemas": {"intent.json": {"type": "object", "nope": true}}}),
+        ),
+        (
+            "axes without schema",
+            json!({"config_version": "x", "review_policies": {"intent": [{"id": "axis", "description": "x"}]}}),
+        ),
+        (
+            "links without schemas",
+            json!({"config_version": "x", "review_policies": {}, "revision_links": [{"from": "design.json", "field": "intent_revision", "to": "intent.json"}]}),
+        ),
+        (
+            "malformed link shape",
+            json!({"config_version": "x", "review_policies": {}, "revision_links": [{"from": "design.json", "to": "intent.json"}]}),
+        ),
+    ];
+    for (name, config) in cases {
+        let output = run_provider(base_request(
+            config,
+            checked("explore", "intent-ready", "design"),
+        ));
+        assert_exit(&output, 1);
+        assert!(output.stdout.is_empty(), "{name} emitted stdout");
+    }
+}

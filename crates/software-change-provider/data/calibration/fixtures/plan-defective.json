@@ -1,0 +1,28 @@
+{
+  "revision": "bad-1",
+  "author": {
+    "name": "plan-author",
+    "kind": "human"
+  },
+  "design_revision": "1",
+  "objective": "Replace external evidence checks with a model that decides truth and finish quickly.",
+  "tasks": [
+    {
+      "id": "all",
+      "objective": "Build everything and fix any issue.",
+      "dependencies": [],
+      "source_of_truth": [
+        "README"
+      ],
+      "deliverables": [
+        "Working code"
+      ],
+      "out_of_scope": [],
+      "validation": [
+        "Run tests"
+      ],
+      "handoff": "Done."
+    }
+  ],
+  "dependency_graph": []
+}

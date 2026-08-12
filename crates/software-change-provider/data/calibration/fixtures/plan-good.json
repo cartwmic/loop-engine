@@ -1,0 +1,96 @@
+{
+  "revision": "1",
+  "author": {
+    "name": "plan-author",
+    "kind": "human"
+  },
+  "design_revision": "1",
+  "objective": "Deliver the frozen provider design as a repository-local reference workflow with executable proof for every acceptance criterion.",
+  "tasks": [
+    {
+      "id": "foundation",
+      "objective": "Create the provider crate, strict protocol DTOs, describe snapshot, generic schema checker, and validated config query surface.",
+      "dependencies": [],
+      "source_of_truth": [
+        "technical-design.md \u00a73-\u00a75",
+        "prd.md R1, R6, R9-R12"
+      ],
+      "deliverables": [
+        "Compiling software-change binary",
+        "Schema and config unit tests",
+        "Stable protocol handoff for evaluator"
+      ],
+      "out_of_scope": [
+        "Provider-side judging",
+        "Engine topology changes"
+      ],
+      "validation": [
+        "cargo test -p software-change-provider",
+        "Schema allowlist and malformed-config matrices pass"
+      ],
+      "handoff": "Record exported DTO and config query contracts; downstream artifact and evidence tasks consume them without reshaping."
+    },
+    {
+      "id": "semantics",
+      "objective": "Implement contained artifact reads, revision links, evidence aggregation, gate mapping, and evaluation ordering.",
+      "dependencies": [
+        "foundation"
+      ],
+      "source_of_truth": [
+        "technical-design.md \u00a75-\u00a79",
+        "prd.md R2-R5, R13-R19"
+      ],
+      "deliverables": [
+        "Artifact and evidence modules",
+        "Complete evaluate path",
+        "Provider-level negative and precedence tests"
+      ],
+      "out_of_scope": [
+        "Model invocation",
+        "Calibration attestation"
+      ],
+      "validation": [
+        "cargo test --workspace",
+        "Tuple, recheck, denial-lineage, and evidence supersession cases pass"
+      ],
+      "handoff": "Publish response shapes, deny details, and artifact outcome taxonomy for acceptance tests."
+    },
+    {
+      "id": "reference-data-and-proof",
+      "objective": "Ship profile data, templates, reviewer protocol, calibration skeleton, acceptance tests, and repository documentation.",
+      "dependencies": [
+        "semantics"
+      ],
+      "source_of_truth": [
+        "technical-design.md \u00a710-\u00a713",
+        "prd.md R21-R27 and A1-A15"
+      ],
+      "deliverables": [
+        "Three validated configs",
+        "Templates and reviewer protocol",
+        "Owner-attested calibration manifest",
+        "A1-A15 proof matrix"
+      ],
+      "out_of_scope": [
+        "Standalone packaging",
+        "Automated calibration harness"
+      ],
+      "validation": [
+        "cargo test --workspace",
+        "Calibration coverage and observed-vs-expected checks",
+        "Requirement-to-proof audit"
+      ],
+      "handoff": "Name exact data paths and residual owner attestations; final audit consumes the complete proof surface."
+    }
+  ],
+  "dependency_graph": [
+    {
+      "from": "foundation",
+      "to": "semantics"
+    },
+    {
+      "from": "semantics",
+      "to": "reference-data-and-proof"
+    }
+  ]
+}

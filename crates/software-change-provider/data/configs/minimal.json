@@ -1,0 +1,622 @@
+{
+  "config_version": "minimal-2",
+  "artifact_root": "/abs/path/to/change/artifacts",
+  "review_policies": {
+    "intent": [],
+    "design-review": [],
+    "plan-review": [],
+    "implementation-review": [],
+    "validation": [
+      {
+        "id": "intent-delivered",
+        "description": "Validation evidence demonstrates intent outcomes and acceptance boundaries were delivered.",
+        "example_prompt": "Judge intent-delivered only. Confirm validation report maps intent outcomes and acceptance evidence to observable proof, not merely completed work. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/minimal.json#/artifact_schemas/validation-report.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings."
+      }
+    ]
+  },
+  "artifact_schemas": {
+    "intent.json": {
+      "type": "object",
+      "required": [
+        "revision",
+        "author",
+        "problem",
+        "outcome",
+        "acceptance",
+        "constraints",
+        "non_goals"
+      ],
+      "properties": {
+        "revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "author": {
+          "type": "object",
+          "required": [
+            "name",
+            "kind"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "human",
+                "agent",
+                "script"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "problem": {
+          "type": "string",
+          "minLength": 1
+        },
+        "outcome": {
+          "type": "string",
+          "minLength": 1
+        },
+        "acceptance": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0
+        },
+        "non_goals": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "design.json": {
+      "type": "object",
+      "required": [
+        "revision",
+        "author",
+        "intent_revision",
+        "approach",
+        "elements",
+        "decisions",
+        "risks",
+        "coverage"
+      ],
+      "properties": {
+        "revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "author": {
+          "type": "object",
+          "required": [
+            "name",
+            "kind"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "human",
+                "agent",
+                "script"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "intent_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approach": {
+          "type": "string",
+          "minLength": 1
+        },
+        "elements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "responsibility"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "responsibility": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "minItems": 1
+        },
+        "decisions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "choice",
+              "rationale"
+            ],
+            "properties": {
+              "choice": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rationale": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rejected": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 0
+              }
+            },
+            "additionalProperties": false
+          },
+          "minItems": 0
+        },
+        "risks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "risk",
+              "mitigation"
+            ],
+            "properties": {
+              "risk": {
+                "type": "string",
+                "minLength": 1
+              },
+              "mitigation": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "minItems": 0
+        },
+        "coverage": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "acceptance",
+              "delivered_by"
+            ],
+            "properties": {
+              "acceptance": {
+                "type": "string",
+                "minLength": 1
+              },
+              "delivered_by": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "plan.json": {
+      "type": "object",
+      "required": [
+        "revision",
+        "author",
+        "design_revision",
+        "objective",
+        "tasks",
+        "dependency_graph"
+      ],
+      "properties": {
+        "revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "author": {
+          "type": "object",
+          "required": [
+            "name",
+            "kind"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "human",
+                "agent",
+                "script"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "design_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "objective": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tasks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "objective",
+              "dependencies",
+              "source_of_truth",
+              "deliverables",
+              "out_of_scope",
+              "validation",
+              "handoff"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "objective": {
+                "type": "string",
+                "minLength": 1
+              },
+              "dependencies": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 0
+              },
+              "source_of_truth": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              },
+              "deliverables": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              },
+              "out_of_scope": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 0
+              },
+              "validation": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              },
+              "handoff": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "minItems": 1
+        },
+        "dependency_graph": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "from",
+              "to"
+            ],
+            "properties": {
+              "from": {
+                "type": "string",
+                "minLength": 1
+              },
+              "to": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "minItems": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "implementation-report.json": {
+      "type": "object",
+      "required": [
+        "revision",
+        "author",
+        "plan_revision",
+        "coverage",
+        "summary",
+        "changed_surface",
+        "validation"
+      ],
+      "properties": {
+        "revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "author": {
+          "type": "object",
+          "required": [
+            "name",
+            "kind"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "human",
+                "agent",
+                "script"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "plan_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "coverage": {
+          "type": "object",
+          "required": [
+            "commit",
+            "documents"
+          ],
+          "properties": {
+            "commit": {
+              "type": "string",
+              "minLength": 1
+            },
+            "documents": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "path",
+                  "revision"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "revision": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": false
+              },
+              "minItems": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "changed_surface": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "validation": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "validation-report.json": {
+      "type": "object",
+      "required": [
+        "revision",
+        "author",
+        "intent_revision",
+        "coverage",
+        "outcome",
+        "requirements",
+        "validation"
+      ],
+      "properties": {
+        "revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "author": {
+          "type": "object",
+          "required": [
+            "name",
+            "kind"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "human",
+                "agent",
+                "script"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "intent_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "coverage": {
+          "type": "object",
+          "required": [
+            "commit",
+            "documents"
+          ],
+          "properties": {
+            "commit": {
+              "type": "string",
+              "minLength": 1
+            },
+            "documents": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "path",
+                  "revision"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "revision": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": false
+              },
+              "minItems": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "outcome": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requirements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "requirement",
+              "proof"
+            ],
+            "properties": {
+              "requirement": {
+                "type": "string",
+                "minLength": 1
+              },
+              "proof": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "minItems": 1
+        },
+        "validation": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "revision_links": [
+    {
+      "from": "design.json",
+      "field": "intent_revision",
+      "to": "intent.json"
+    },
+    {
+      "from": "plan.json",
+      "field": "design_revision",
+      "to": "design.json"
+    },
+    {
+      "from": "implementation-report.json",
+      "field": "plan_revision",
+      "to": "plan.json"
+    },
+    {
+      "from": "validation-report.json",
+      "field": "intent_revision",
+      "to": "intent.json"
+    }
+  ],
+  "extra": {
+    "profile": "minimal",
+    "template_root": "crates/software-change-provider/data/templates"
+  }
+}

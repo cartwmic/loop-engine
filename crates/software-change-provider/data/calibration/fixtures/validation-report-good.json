@@ -1,0 +1,54 @@
+{
+  "revision": "1",
+  "author": {
+    "name": "validation-agent",
+    "kind": "agent"
+  },
+  "intent_revision": "1",
+  "coverage": {
+    "commit": "repo-state-2026-08-12",
+    "documents": [
+      {
+        "path": "loop-engine-software-change-provider-prd.md",
+        "revision": "v1.0"
+      },
+      {
+        "path": "loop-engine-software-change-provider-technical-design.md",
+        "revision": "v1.0"
+      },
+      {
+        "path": "docs/PRD.md",
+        "revision": "reference-workflow-v2"
+      },
+      {
+        "path": "loop-engine-software-change-provider-task-packets.md",
+        "revision": "v1.0"
+      }
+    ]
+  },
+  "outcome": "The provider enforces frozen profile obligations, deterministic schema precedence, current-revision evidence, and the unchanged reference topology.",
+  "requirements": [
+    {
+      "requirement": "Configured checked transitions do not become vacuous allows.",
+      "proof": "A1 and A3 provider and acceptance tests exercise schema and evidence denial before allow."
+    },
+    {
+      "requirement": "Malformed artifacts are denied before semantic evidence.",
+      "proof": "A12 compares schema denial with empty and populated contexts and names every violation."
+    },
+    {
+      "requirement": "Evidence aggregation honors revision, author independence, quorum, and standing failures.",
+      "proof": "A4-A6, A8, and A10 unit matrices cover conformance, supersession, stale config, and distinct authors."
+    },
+    {
+      "requirement": "Repository documents agree with delivered reference behavior.",
+      "proof": "Docs-integrated review covered the repo PRD, provider PRD, design, and packet documents at the recorded commit."
+    }
+  ],
+  "validation": [
+    "cargo test --workspace passed",
+    "cargo clippy --workspace --all-targets passed",
+    "cargo fmt --all -- --check passed",
+    "Acceptance matrix A1-A15 completed; calibration remains owner-attested per PROCEDURE.md"
+  ]
+}

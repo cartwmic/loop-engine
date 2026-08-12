@@ -3,6 +3,7 @@ members = [
     "crates/loop-core",
     "crates/loop-integrations",
     "crates/loop-cli",
+    "crates/software-change-provider",
     "tests/fixtures",
 ]
 resolver = "2"

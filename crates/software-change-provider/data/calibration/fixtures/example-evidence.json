@@ -1,0 +1,16 @@
+{
+  "kind": "review-evidence",
+  "data": {
+    "gate": "intent",
+    "policy_id": "solution-agnostic",
+    "result": "pass",
+    "findings": "",
+    "author": {
+      "name": "reviewer-sol",
+      "kind": "agent"
+    },
+    "subject": "intent.json",
+    "subject_revision": "1",
+    "config_version": "standard-2"
+  }
+}

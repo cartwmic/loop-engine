@@ -1,0 +1,27 @@
+{
+  "revision": "bad-1",
+  "author": {
+    "name": "validation-agent",
+    "kind": "agent"
+  },
+  "intent_revision": "1",
+  "coverage": {
+    "commit": "repo-state-bad",
+    "documents": [
+      {
+        "path": "README.md",
+        "revision": "unknown"
+      }
+    ]
+  },
+  "outcome": "Looks good.",
+  "requirements": [
+    {
+      "requirement": "Everything works.",
+      "proof": "Tests passed."
+    }
+  ],
+  "validation": [
+    "Ran some tests."
+  ]
+}

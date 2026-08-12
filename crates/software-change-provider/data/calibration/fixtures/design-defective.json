@@ -1,0 +1,28 @@
+{
+  "revision": "bad-1",
+  "author": {
+    "name": "design-author",
+    "kind": "human"
+  },
+  "intent_revision": "1",
+  "approach": "Step 1 build an automatic model judge. Step 2 add a long-running review manager. Step 3 update every document and keep retrying until all gates pass.",
+  "elements": [
+    {
+      "name": "manager",
+      "responsibility": "Do everything required by the change."
+    }
+  ],
+  "decisions": [
+    {
+      "choice": "Use an automatic model judge.",
+      "rationale": "It is convenient."
+    }
+  ],
+  "risks": [],
+  "coverage": [
+    {
+      "acceptance": "Ship every future workflow feature.",
+      "delivered_by": "the manager"
+    }
+  ]
+}
