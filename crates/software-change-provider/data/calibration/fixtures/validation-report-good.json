@@ -29,20 +29,20 @@
   "outcome": "The provider enforces frozen profile obligations, deterministic schema precedence, current-revision evidence, and the unchanged reference topology.",
   "requirements": [
     {
-      "requirement": "Configured checked transitions do not become vacuous allows.",
-      "proof": "A1 and A3 provider and acceptance tests exercise schema and evidence denial before allow."
+      "requirement": "A caller can inspect the frozen policies and artifact schemas before evaluating a transition.",
+      "proof": "A1 asserts show displays the run's policies and schemas before any evaluation; A15 asserts every shipped profile exposes policies and schemas via show after start."
     },
     {
-      "requirement": "Malformed artifacts are denied before semantic evidence.",
-      "proof": "A12 compares schema denial with empty and populated contexts and names every violation."
+      "requirement": "A malformed subject artifact is denied with each violated rule named before semantic evidence is considered.",
+      "proof": "A12 compares the schema denial with empty and populated evidence contexts byte-for-byte and asserts every violated rule is named; A1 exercises the deny-then-fix progression."
     },
     {
-      "requirement": "Evidence aggregation honors revision, author independence, quorum, and standing failures.",
-      "proof": "A4-A6, A8, and A10 unit matrices cover conformance, supersession, stale config, and distinct authors."
+      "requirement": "Current-revision evidence from distinct non-subject authors is required for every configured axis.",
+      "proof": "A5 revision-bump cycle denies stale evidence naming both revisions; A6 independence matrix rejects duplicate and subject authors; A10 rejects mismatched config versions."
     },
     {
-      "requirement": "Repository documents agree with delivered reference behavior.",
-      "proof": "Docs-integrated review covered the repo PRD, provider PRD, design, and packet documents at the recorded commit."
+      "requirement": "The reference workflow reaches its terminal state only after its configured validation obligations are satisfied.",
+      "proof": "A1 walks the full graph and reaches end only after validation-gate evidence satisfies its axes; A3 asserts no checked transition is an unconditional allow."
     }
   ],
   "validation": [

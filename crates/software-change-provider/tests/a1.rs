@@ -64,7 +64,7 @@ fn standard_run_progresses_schema_deny_then_evidence_deny_then_allow() {
             "agent",
             "intent.json",
             "1",
-            "standard-2",
+            "standard-3",
         );
         // Keep sequence values visible in source even though persistence owns
         // durable sequence allocation; enumerate documents append order.

@@ -15,7 +15,7 @@ Provider checks evidence shape and aggregation. Reviewer decides truth externall
     "author": {"name": "reviewer-sol", "kind": "agent"},
     "subject": "design.json",
     "subject_revision": "3",
-    "config_version": "standard-2"
+    "config_version": "standard-3"
   }
 }
 ```

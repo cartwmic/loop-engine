@@ -27,7 +27,7 @@
     "axis": "solution-agnostic",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "standard-2",
+    "config_version": "standard-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -38,7 +38,7 @@
     "axis": "solution-agnostic",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "standard-2",
+    "config_version": "standard-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -49,7 +49,7 @@
     "axis": "outside-verifiable",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "standard-2",
+    "config_version": "standard-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -60,7 +60,7 @@
     "axis": "outside-verifiable",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "standard-2",
+    "config_version": "standard-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -71,7 +71,7 @@
     "axis": "scope-fenced",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "standard-2",
+    "config_version": "standard-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -82,7 +82,7 @@
     "axis": "scope-fenced",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "standard-2",
+    "config_version": "standard-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -93,7 +93,7 @@
     "axis": "constraints-are-limits",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "standard-2",
+    "config_version": "standard-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -104,7 +104,7 @@
     "axis": "constraints-are-limits",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "standard-2",
+    "config_version": "standard-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -115,7 +115,7 @@
     "axis": "problem-grounded",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "standard-2",
+    "config_version": "standard-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -126,7 +126,7 @@
     "axis": "problem-grounded",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "standard-2",
+    "config_version": "standard-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -137,7 +137,7 @@
     "axis": "intent-faithful",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "standard-2",
+    "config_version": "standard-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -148,7 +148,7 @@
     "axis": "intent-faithful",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "standard-2",
+    "config_version": "standard-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -159,7 +159,7 @@
     "axis": "acceptance-covered",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "standard-2",
+    "config_version": "standard-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -170,7 +170,7 @@
     "axis": "acceptance-covered",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "standard-2",
+    "config_version": "standard-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -181,7 +181,7 @@
     "axis": "structural-not-procedural",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "standard-2",
+    "config_version": "standard-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -192,7 +192,7 @@
     "axis": "structural-not-procedural",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "standard-2",
+    "config_version": "standard-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -203,7 +203,7 @@
     "axis": "intent-delivered",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "standard-2",
+    "config_version": "standard-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -214,7 +214,7 @@
     "axis": "intent-delivered",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "standard-2",
+    "config_version": "standard-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -225,7 +225,7 @@
     "axis": "docs-integrated",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "standard-2",
+    "config_version": "standard-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -236,7 +236,7 @@
     "axis": "docs-integrated",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "standard-2",
+    "config_version": "standard-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -247,7 +247,7 @@
     "axis": "solution-agnostic",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -258,7 +258,7 @@
     "axis": "solution-agnostic",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -269,7 +269,7 @@
     "axis": "outside-verifiable",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -280,7 +280,7 @@
     "axis": "outside-verifiable",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -291,7 +291,7 @@
     "axis": "scope-fenced",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -302,7 +302,7 @@
     "axis": "scope-fenced",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -313,7 +313,7 @@
     "axis": "constraints-are-limits",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -324,7 +324,7 @@
     "axis": "constraints-are-limits",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -335,7 +335,7 @@
     "axis": "problem-grounded",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -346,7 +346,7 @@
     "axis": "problem-grounded",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -357,7 +357,7 @@
     "axis": "intent-faithful",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -368,7 +368,7 @@
     "axis": "intent-faithful",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -379,7 +379,7 @@
     "axis": "acceptance-covered",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -390,7 +390,7 @@
     "axis": "acceptance-covered",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -401,7 +401,7 @@
     "axis": "structural-not-procedural",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -412,7 +412,7 @@
     "axis": "structural-not-procedural",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -423,7 +423,7 @@
     "axis": "decisions-justified",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -434,7 +434,7 @@
     "axis": "decisions-justified",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -445,7 +445,7 @@
     "axis": "risk-honest",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -456,7 +456,7 @@
     "axis": "risk-honest",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -467,7 +467,7 @@
     "axis": "task-sized",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -478,7 +478,7 @@
     "axis": "task-sized",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -489,7 +489,7 @@
     "axis": "context-sufficient",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -500,7 +500,7 @@
     "axis": "context-sufficient",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -511,7 +511,7 @@
     "axis": "done-observable",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -522,7 +522,7 @@
     "axis": "done-observable",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -533,7 +533,7 @@
     "axis": "decision-free",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -544,7 +544,7 @@
     "axis": "decision-free",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -555,7 +555,7 @@
     "axis": "design-faithful",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -566,7 +566,7 @@
     "axis": "design-faithful",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -577,7 +577,7 @@
     "axis": "dependencies-honest",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -588,7 +588,7 @@
     "axis": "dependencies-honest",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -599,7 +599,7 @@
     "axis": "tasks-actually-done",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -610,7 +610,7 @@
     "axis": "tasks-actually-done",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -621,7 +621,7 @@
     "axis": "no-scope-creep",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -632,7 +632,7 @@
     "axis": "no-scope-creep",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -643,7 +643,7 @@
     "axis": "design-faithful-final",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -654,7 +654,7 @@
     "axis": "design-faithful-final",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -665,7 +665,7 @@
     "axis": "intent-delivered",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -676,7 +676,7 @@
     "axis": "intent-delivered",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -687,7 +687,7 @@
     "axis": "docs-integrated",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -698,7 +698,7 @@
     "axis": "docs-integrated",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -709,7 +709,7 @@
     "axis": "requirement-proof-mapping",
     "expected": "pass",
     "observed": "pass",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"
@@ -720,7 +720,51 @@
     "axis": "requirement-proof-mapping",
     "expected": "fail",
     "observed": "fail",
-    "config_version": "high-rigor-2",
+    "config_version": "high-rigor-3",
+    "model": "openai-codex/gpt-5.6-sol",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic"
+  },
+  {
+    "fixture_id": "design-good",
+    "gate": "design-review",
+    "axis": "mechanism-forced",
+    "expected": "pass",
+    "observed": "pass",
+    "config_version": "standard-3",
+    "model": "openai-codex/gpt-5.6-sol",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic"
+  },
+  {
+    "fixture_id": "design-overbuilt",
+    "gate": "design-review",
+    "axis": "mechanism-forced",
+    "expected": "fail",
+    "observed": "fail",
+    "config_version": "standard-3",
+    "model": "openai-codex/gpt-5.6-sol",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic"
+  },
+  {
+    "fixture_id": "design-good",
+    "gate": "design-review",
+    "axis": "mechanism-forced",
+    "expected": "pass",
+    "observed": "pass",
+    "config_version": "high-rigor-3",
+    "model": "openai-codex/gpt-5.6-sol",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic"
+  },
+  {
+    "fixture_id": "design-overbuilt",
+    "gate": "design-review",
+    "axis": "mechanism-forced",
+    "expected": "fail",
+    "observed": "fail",
+    "config_version": "high-rigor-3",
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic"

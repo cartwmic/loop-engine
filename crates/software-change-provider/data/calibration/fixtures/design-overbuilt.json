@@ -1,0 +1,94 @@
+{
+  "revision": "1",
+  "author": {
+    "name": "design-author",
+    "kind": "human"
+  },
+  "intent_revision": "1",
+  "approach": "A stateless provider binary reads the frozen initial-input configuration, validates contained authored artifacts with a small generic schema checker, then aggregates opaque external review evidence for the exact checked transition. Versioned configs, templates, and reviewer prompts remain data files.",
+  "elements": [
+    {
+      "name": "protocol boundary",
+      "responsibility": "Parse one strict request, dispatch describe or evaluate, and emit one strict result with the defined exit taxonomy."
+    },
+    {
+      "name": "generic schema checker",
+      "responsibility": "Validate only the allowlisted schema subset and return deterministic exhaustive violations without knowing workflow subjects."
+    },
+    {
+      "name": "evidence evaluator",
+      "responsibility": "Attribute, conform, supersede, and judge external evidence against configured axes without reading files or judging truth."
+    },
+    {
+      "name": "versioned data profiles",
+      "responsibility": "Supply policies, schemas, prompts, templates, reviewer protocol, and calibration fixtures outside provider code."
+    },
+    {
+      "name": "speculative plugin registry and cache",
+      "responsibility": "Register optional future plugins and cache design decisions for reuse across unrelated changes; no current acceptance line requires extensibility or caching."
+    }
+  ],
+  "decisions": [
+    {
+      "choice": "Keep revision linkage in a separate config declaration.",
+      "rationale": "Cross-artifact equality is needed by this workflow but is not a generic schema keyword.",
+      "rejected": [
+        "Embedding a workflow-specific keyword in the generic checker."
+      ]
+    },
+    {
+      "choice": "Use a bounded in-crate schema subset.",
+      "rationale": "It provides deterministic shape checks without importing uncalibrated full JSON Schema behavior.",
+      "rejected": [
+        "A full schema dependency with unused keywords.",
+        "A new custom artifact language."
+      ]
+    },
+    {
+      "choice": "Treat author identity as the exact name-kind pair and exclude the subject author.",
+      "rationale": "Evidence aggregation needs deterministic distinctness and independence while preserving external claims.",
+      "rejected": [
+        "Cryptographic identity or provider-side author allowlists."
+      ]
+    },
+    {
+      "choice": "Add a speculative plugin registry with a config-content cache ahead of any current requirement.",
+      "rationale": "Anticipates possible future third-party gate extensions and repeated config reads, accepted as forward investment; no current acceptance line requires it.",
+      "rejected": [
+        "Deferring the registry and cache until an actual extension or performance requirement exists."
+      ]
+    }
+  ],
+  "risks": [
+    {
+      "risk": "An author may edit an artifact materially without changing its declared revision.",
+      "mitigation": "Trust this residual explicitly and recheck the current declared artifact at every approval boundary."
+    },
+    {
+      "risk": "Manual calibration judgments may reveal a shipped prompt that is too strict.",
+      "mitigation": "Owner-attested good-but-imperfect fixtures define the futility guard; prompt or config changes bump config_version and restart affected attestation."
+    },
+    {
+      "risk": "The plugin contract may drift before any consumer exists, and the config cache can serve stale policy content after an edit.",
+      "mitigation": "Version the plugin interface from the start and invalidate the cache on config file modification time."
+    }
+  ],
+  "coverage": [
+    {
+      "acceptance": "Frozen obligations and schemas are inspectable before evaluation.",
+      "delivered_by": "protocol boundary and versioned data profiles"
+    },
+    {
+      "acceptance": "Malformed artifacts deny before evidence and name every violated rule.",
+      "delivered_by": "generic schema checker and exact-transition evaluator"
+    },
+    {
+      "acceptance": "Current evidence must satisfy configured axes and independence rules.",
+      "delivered_by": "evidence evaluator and profile policies"
+    },
+    {
+      "acceptance": "The reference workflow reaches its terminal state only after configured validation obligations are satisfied.",
+      "delivered_by": "gate map validation obligations and the terminal transition evaluator"
+    }
+  ]
+}

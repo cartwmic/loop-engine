@@ -60,6 +60,7 @@ fn expected_axes() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
                 "intent-faithful",
                 "acceptance-covered",
                 "structural-not-procedural",
+                "mechanism-forced",
             ]),
         ),
         ("plan-review", BTreeSet::new()),
@@ -91,6 +92,7 @@ fn high_rigor_axes() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
                 "structural-not-procedural",
                 "decisions-justified",
                 "risk-honest",
+                "mechanism-forced",
             ]),
         ),
         (
@@ -212,7 +214,13 @@ fn assert_b2_schema(subject: &str, schema: &Value) {
 fn all_profiles_pass_production_config_validation_and_have_exact_subjects() {
     for profile in PROFILES {
         let config = load_profile(profile);
-        assert_eq!(config["config_version"], format!("{profile}-2"));
+        let expected_version = match *profile {
+            "minimal" => "minimal-2",
+            "standard" => "standard-3",
+            "high-rigor" => "high-rigor-3",
+            _ => unreachable!("unknown profile {profile}"),
+        };
+        assert_eq!(config["config_version"], expected_version);
         software_change_provider::validate_config_for_tests(&config)
             .unwrap_or_else(|error| panic!("{profile} rejected by production validator: {error}"));
 

@@ -4,6 +4,8 @@
 
 - `describe` returns the fixed workflow topology and static authoring guidance.
 - `evaluate` checks the exact transition, validates configured artifact schemas and revision links, then evaluates externally supplied review evidence.
+
+The frozen requirement record this crate's acceptance suite traces to (R1–R27, A1–A15, including amendments) lives at [`docs/prd.md`](docs/prd.md).
 - Semantic review is external. The provider does not generate prompts, invoke a model, or decide whether review findings are true.
 
 Per-run obligations live in immutable initial input. The provider is called by Loop Engine; it does not discover or load a config profile by itself.

@@ -1,5 +1,5 @@
 {
-  "config_version": "high-rigor-2",
+  "config_version": "high-rigor-3",
   "artifact_root": "/abs/path/to/change/artifacts",
   "review_policies": {
     "intent": [
@@ -58,6 +58,12 @@
         "id": "risk-honest",
         "description": "Design names specific material risks and accepted residuals.",
         "example_prompt": "Judge risk-honest only. Confirm risks are specific to this design and name material stated exposures or residuals; do not demand generic engineering hazard lists. Template: crates/software-change-provider/data/templates/design.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/design.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 2
+      },
+      {
+        "id": "mechanism-forced",
+        "description": "the axis judges that every design mechanism is forced by a named requirement and no needed mechanism is missing.",
+        "example_prompt": "Judge mechanism-forced only. Symmetric test: every mechanism, section, or configurable surface in the design must name (or obviously trace to) a forcing requirement — an unforced mechanism is a material defect (overbuild); conversely a claimed simplification or omission is a finding only if a concrete uncovered failure or unmet requirement can be named (no simplicity-for-its-own-sake denials). Template: crates/software-change-provider/data/templates/design.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/design.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
         "required_authors": 2
       }
     ],
