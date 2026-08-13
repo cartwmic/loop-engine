@@ -1,10 +1,21 @@
 # Loop Engine
 
+## Overview
+
 Loop Engine is a durable workflow CLI. It stores run state in SQLite and coordinates external workflow-provider executables; primary work stays outside the engine.
 
-Agent operation is documented in [`docs/agent-usage.md`](docs/agent-usage.md). Reference providers: [`crates/software-change-provider/README.md`](crates/software-change-provider/README.md) and focused PRD section 11 [`crates/policy-document-provider/README.md`](crates/policy-document-provider/README.md).
+Current release is v0.4.0 (`MIT OR Apache-2.0`). The living product requirements are [docs/PRD.md](docs/PRD.md). Agent CLI semantics are [docs/agent-usage.md](docs/agent-usage.md). Checkout operating rules for agents are [AGENTS.md](AGENTS.md).
 
-## Install
+- Operators installing or invoking binaries: [Getting Started](#getting-started) and [Usage](#usage).
+- Agents running a workflow: [docs/agent-usage.md](docs/agent-usage.md) plus the provider README and skill.
+- Maintainers cutting a release: [Validation](#validation).
+
+Reference providers:
+
+- [`crates/software-change-provider/README.md`](crates/software-change-provider/README.md) — software-change workflow (PRD section 10).
+- [`crates/policy-document-provider/README.md`](crates/policy-document-provider/README.md) — policy-document workflow (PRD section 11).
+
+## Getting Started
 
 ### Prebuilt GitHub Releases
 
@@ -22,7 +33,7 @@ Each archive has a matching `.sha256` file; release `sha256.sum` provides the un
 Generated cargo-dist installers choose platform automatically:
 
 ```sh
-VERSION=v0.3.0
+VERSION=v0.4.0
 curl --proto '=https' --tlsv1.2 -LsSf \
   "https://github.com/cartwmic/loop-engine/releases/download/$VERSION/loop-cli-installer.sh" | sh
 curl --proto '=https' --tlsv1.2 -LsSf \
@@ -34,10 +45,10 @@ curl --proto '=https' --tlsv1.2 -LsSf \
 With [mise](https://mise.jdx.dev/), manage `loop-engine` as one tool and use separate provider installers. Do not add multiple executable selections for the same GitHub repository to one mise config: mise canonicalizes them to one tool entry, so binaries would be missing.
 
 ```sh
-mise use --global 'github:cartwmic/loop-engine[exe=loop-engine]@v0.3.0'
+mise use --global 'github:cartwmic/loop-engine[exe=loop-engine]@v0.4.0'
 for app in software-change-provider policy-document-provider; do
   curl --proto '=https' --tlsv1.2 -LsSf \
-    "https://github.com/cartwmic/loop-engine/releases/download/v0.3.0/$app-installer.sh" | sh
+    "https://github.com/cartwmic/loop-engine/releases/download/v0.4.0/$app-installer.sh" | sh
 done
 ```
 
@@ -62,11 +73,43 @@ cargo build --release -p loop-cli -p software-change-provider -p policy-document
 # target/release/policy-document
 ```
 
-## Release preflight
+## Usage
+
+`loop-engine` stores run state in the `--database` SQLite file and snapshots provider association, workflow topology, and state instructions at `start`. Perform the work named by `show` externally, append durable context when the provider requires it, then request one event from `requestable_events`.
+
+```text
+loop-engine [--database DB] [--config CONFIG] [--json] [--timeout-ms MS] start [--id RUN_ID] PROVIDER INITIAL_JSON [LABEL]
+loop-engine [--database DB] [--json] list
+loop-engine [--database DB] [--json] show RUN_ID
+loop-engine [--database DB] [--json] append [--record-id RECORD_ID] RUN_ID KIND DATA_JSON
+loop-engine [--database DB] [--json] event RUN_ID EVENT_ID
+loop-engine [--database DB] [--json] history RUN_ID
+loop-engine [--database DB] [--json] terminate RUN_ID
+```
+
+Pass `--json` on every invocation and parse the single envelope. Pass `--config` to `start` with uncommitted machine-local provider TOML using an exact alias and an absolute command path:
+
+```toml
+[providers.software-change]
+command = "/absolute/path/to/software-change"
+args = []
+
+[providers.policy-document]
+command = "/absolute/path/to/policy-document"
+args = []
+```
+
+`start` initial input and `append` data accept JSON inline, `@FILE`, or `-` (stdin). `start` returns the run ID at `result.run.id`. Reuse the same database and run ID for every later operation. `show` is provider-free.
+
+With `--json`, exit `0` is `completed`, `10` is `rejected` (follow feedback; nothing is inferred as advancement), `20` is `error` (re-read `show`), and `2` is `invalid-invocation`. Full envelope and handoff rules: [docs/agent-usage.md](docs/agent-usage.md).
+
+`loop-engine --help` and `--version` work before any operation. `software-change --help`/`-h` describes `describe`, `evaluate`, and `data-dump`; `--version`/`-V` prints the Cargo package version. `policy-document` accepts `data-dump DIR` on argv and otherwise reads one JSON request on stdin; it does not implement `--help` or `--version`. Historical v0.2.2 release installers predate the software-change CLI flags.
+
+## Validation
 
 Supported publication matrix is exactly three applications (`loop-cli`, `software-change-provider`, `policy-document-provider`) by two native targets (`aarch64-apple-darwin`, `x86_64-unknown-linux-gnu`). `dist plan` describes this matrix; it does not compile or run archives.
 
-Run baseline checks, generated-workflow validation, plan assertion, and full source-tree production journey before release handoff:
+Run baseline checks, generated-workflow validation, plan assertion, and full source-tree production journeys before release handoff:
 
 ```sh
 cargo test --workspace
@@ -105,6 +148,8 @@ dist build --tag="$TAG" --artifacts=local --target=aarch64-apple-darwin
 
 Run packaged smoke with extracted `loop-engine`, `software-change`, and `policy-document` paths. Each provider must materialize embedded data, and both provider journeys must run outside checkout; policy-document covers both draft and audit modes. A macOS host build proves only macOS arm64; Linux x86_64 native build and archive smoke remain CI proof when no Linux host is available.
 
+Journey evidence records are synthetic and schema-conforming. They prove deterministic policy mechanics, routing, aggregation, and persistence; they do not prove semantic review quality.
+
 ### Publication path
 
 Release workflow is dispatch-only. Do not push a version tag to trigger publication. After versioning, preflight, and review for a new unpublished tag, dispatch the generated workflow with that tag input:
@@ -117,10 +162,8 @@ Dispatch runs cargo-dist's native local-build matrix first, then its generated g
 
 Private/free GitHub repositories cannot fully prevent an owner from creating an out-of-band raw tag. Such a tag is outside supported release procedure and does not trigger this workflow; future repository rulesets or plan capability would be needed for prevention.
 
-Historical `v0.2.0`, `v0.2.1`, and `v0.2.2` tags remain immutable. `v0.2.2` was the fix-forward release for contract closure; historical release facts are not rewritten. v0.3.0 adds policy-document to the same native archive, installer, source-journey, and packaged-smoke gates as the engine and software-change provider.
+Historical `v0.2.0`, `v0.2.1`, and `v0.2.2` tags remain immutable. `v0.2.2` was the fix-forward release for contract closure; historical release facts are not rewritten. v0.3.0 added policy-document to the same native archive, installer, source-journey, and packaged-smoke gates as the engine and software-change provider.
 
 ### Direct pushes to main
 
 Direct pushes to `main` run `.github/workflows/push-to-main.yml`. That read-only dispatcher checks out the pushed SHA, computes the pinned cargo-dist 0.32.0 plan, and calls reusable `preflight.yml`; preflight owns workspace tests, warning-denying clippy, formatting, generated-release checks, release assertions, and source production-journey proof. The dispatcher has no publication job. `.github/workflows/release.yml` remains cargo-dist-generated and dispatch-only.
-
-Binaries built from v0.3.0 source identify themselves before stdin processing: `software-change --help` (or `-h`) describes `describe`, `evaluate`, and `data-dump`; `software-change --version` (or `-V`) reports the Cargo package version. Historical v0.2.2 release installers predate these flags.

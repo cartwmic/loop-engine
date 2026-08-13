@@ -1,8 +1,14 @@
 # Policy document provider
 
-`policy-document` is release- and source-distributed external provider for PRD section 11. Fixed topology is `prepare` → `deterministic-review` → `semantic-review` → `end`; both revision edges are check-free. Initial input is closed JSON containing `schema_version`, `profile_version`, `mode` (`draft` or `audit`), absolute target `{id,path}`, non-empty deterministic policies, and non-empty semantic policies.
+## Overview
 
-## Build and materialize profiles
+`policy-document` is the release- and source-distributed external provider for PRD section 11. It never edits the target, invokes a reviewer, or judges semantic quality. It reads exact UTF-8 target bytes, applies run-frozen deterministic policies, and aggregates externally supplied semantic verdicts bound to the current digest.
+
+Fixed topology is `prepare` → `deterministic-review` → `semantic-review` → `end`; both revision edges are check-free. Initial input is closed JSON containing `schema_version`, `profile_version`, `mode` (`draft` or `audit`), absolute target `{id,path}`, non-empty deterministic policies, and non-empty semantic policies. Agent procedure for this crate is [AGENTS.md](AGENTS.md). Drive a run with [skills/using-policy-document-provider/SKILL.md](skills/using-policy-document-provider/SKILL.md).
+
+README profile `readme-1` supplies title, purpose, onboarding, usage, validation, command, and local-reference deterministic floors. AGENTS profile `agents-1` supplies scope/authority, workflow/validation, completion/handoff, command, and local-reference floors; no title or exact heading spelling is required.
+
+## Setup
 
 ```sh
 cargo build --release -p loop-cli -p policy-document-provider
@@ -18,7 +24,7 @@ Dump refuses to overwrite any directory entry, including dangling symlinks. On w
 
 Copy chosen JSON profile, set `mode`, and replace target path with absolute path. Keep target ID `README.md` or `AGENTS.md` for shipped profiles.
 
-## Register and start
+## Usage
 
 Create `/tmp/policy-document-providers.toml`:
 
@@ -39,7 +45,7 @@ loop-engine --database /tmp/policy-document.sqlite --json event docs-audit ready
 loop-engine --database /tmp/policy-document.sqlite --json event docs-audit passed
 ```
 
-README profile supplies title, purpose, onboarding, usage, validation, command, and local-reference deterministic floors. AGENTS profile supplies scope/authority, workflow/validation, completion/handoff, command, and local-reference floors; no title or exact heading spelling is required.
+`start` returns the run ID at `result.run.id`. Request `ready` after authoring the target, then checked `passed` for deterministic review. On `policy-document-nonconforming`, fix every reported violation, request check-free `revise`, and repeat from `prepare`.
 
 ## External evidence
 
@@ -54,6 +60,8 @@ loop-engine --database /tmp/policy-document.sqlite --json append \
 Evidence requires exact frozen fields and enums. One current pass and no current standing fail are required per semantic axis. Malformed attributable evidence blocks until any later shape-conforming record for that axis. Wrong profile, target, or digest is stale and never satisfies current conformance. Any target byte change requires fresh evidence.
 
 Reviewer identity, digest, and verdict remain caller claims, not signatures or provenance. Provider reads target once per evaluation but cannot lock it between evaluation and engine transition commit. Evaluation receives a fixed context snapshot; a concurrent append can be absent from an in-flight decision. Serialize `append` and `event` operations per run using one logical mutator.
+
+## Validation
 
 Run source journeys against shipped profile bytes:
 
