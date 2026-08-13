@@ -562,7 +562,7 @@ Only semantically durable evaluations enter the lineage:
 - provider/process/protocol failures are not included;
 - stale `allow` or `deny` results and otherwise uncommitted evaluations are not included.
 
-The provider decides whether and how to use prior evaluation lineage. Independent or "blind" review is provider policy: a provider may deliberately ignore previous evaluations without requiring a different engine semantic.
+The provider decides whether and how to use prior evaluation lineage for validation diagnostics or evidence aggregation. A provider may deliberately ignore previous evaluations when validating current evidence without requiring a different engine semantic; lineage never performs semantic review, which remains external.
 
 ### 8.4 Evaluation Results
 
@@ -808,11 +808,11 @@ instructions are precise and non-contradictory
 content is appropriately scoped and concise
 ```
 
-Semantic evaluation may use an LLM or another provider-owned evaluator.
+Semantic judgment stays external to provider evaluation. A reviewer or model may produce ordinary `review-evidence` context records; provider validates strict shape, configured policy identity, target identity, profile version, and SHA-256 of exact bytes.
 
 The final `semantic-review → end` evaluation must establish the target's **complete current conformance**, including re-establishing deterministic policies as necessary. This prevents edits made after an earlier deterministic pass from allowing finalization with newly introduced deterministic violations.
 
-Previous durable `allow`/`deny` results for the exact semantic transition are supplied to subsequent evaluations. The provider may use them for iterative review or deliberately ignore them for an independent review strategy.
+Previous durable `allow`/`deny` results for the exact semantic transition are supplied to subsequent evaluations. The provider may use them to inform validation diagnostics or evidence aggregation, or deliberately ignore them when validating current evidence. Lineage never performs semantic review; semantic judgment remains external.
 
 Failed checks deny progression and return actionable feedback. Revision is represented by the caller taking a check-free `revise` edge and then progressing through review again.
 
@@ -820,11 +820,11 @@ The workflow must demonstrate:
 
 - both draft and audit modes;
 - deterministic and semantic policies supplied as initial input;
-- deterministic and semantic provider-owned evaluation;
+- provider-owned deterministic evaluation plus provider validation and aggregation of externally produced semantic evidence, with semantic judgment remaining external;
 - repeated edit/revalidate cycles;
 - deterministic conformance re-established before finalization after revisions;
 - use of prior evaluation findings;
-- provider-controlled independent review when desired;
+- provider-controlled workflow progression and deterministic/evidence validation while semantic review remains external;
 - durable actor handoff;
 - no document-specific core semantics.
 
@@ -937,7 +937,7 @@ v0.1 is complete when the following are demonstrated end to end.
 - Deterministic policy failure blocks progression with actionable findings.
 - Semantic policy failure blocks progression with actionable findings.
 - Successive semantic reviews may use previous findings.
-- The provider can perform independent review by ignoring prior lineage without an engine-level blindness mode.
+- Successive external semantic reviews may use previous findings; provider may use prior lineage only to inform validation diagnostics or evidence aggregation, or ignore it when validating current evidence.
 - The actor can revise and request evaluation repeatedly until policies pass.
 - After deterministic review passes, a later document revision that violates a deterministic policy cannot finalize until deterministic conformance is re-established according to the external state observed by provider evaluation.
 - The workflow does not rely on Loop Engine atomically locking, versioning, or committing the external document together with workflow state.

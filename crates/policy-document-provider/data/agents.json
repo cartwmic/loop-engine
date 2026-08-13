@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "profile_version": "agents-1",
+  "mode": "audit",
+  "target": {"id": "AGENTS.md", "path": "/abs/path/to/AGENTS.md"},
+  "deterministic_policies": [
+    {"id":"document-present","type":"non-empty"},
+    {"id":"scope-authority","type":"required-heading","aliases":["Scope","Authority","Scope and Authority","Repository Scope","Instruction Scope"]},
+    {"id":"workflow-validation","type":"required-heading","aliases":["Workflow","Development Workflow","Working in This Repository","Validation","Testing"]},
+    {"id":"completion-handoff","type":"required-heading","aliases":["Completion","Definition of Done","Done","Handoff","Completion and Handoff"]},
+    {"id":"workflow-command","type":"command-in-section","section_aliases":["Workflow","Development Workflow","Working in This Repository","Validation","Testing"]},
+    {"id":"local-references","type":"local-references-resolve"}
+  ],
+  "semantic_policies": [
+    {"id":"success-path-completeness","description":"An unfamiliar agent can follow a complete successful work path.","example_prompt":"Review success-path completeness for a fresh capable agent."},
+    {"id":"operational-precision","description":"Work and validation instructions are executable and precise.","example_prompt":"Review operational precision and executable commands."},
+    {"id":"authority-resolution","description":"Scope and instruction authority are resolved without contradiction.","example_prompt":"Review authority resolution and precedence."},
+    {"id":"risk-boundary-sufficiency","description":"Repository-specific safety boundaries relevant to work are covered.","example_prompt":"Review repository-specific risk-boundary sufficiency."},
+    {"id":"completion-handoff","description":"Completion evidence and durable handoff information are precise.","example_prompt":"Review completion evidence and durable handoff."}
+  ]
+}

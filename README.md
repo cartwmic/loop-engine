@@ -2,7 +2,7 @@
 
 Loop Engine is a durable workflow CLI. It stores run state in SQLite and coordinates external workflow-provider executables; primary work stays outside the engine.
 
-Agent operation is documented in [`docs/agent-usage.md`](docs/agent-usage.md). The reference software-change provider is documented in [`crates/software-change-provider/README.md`](crates/software-change-provider/README.md).
+Agent operation is documented in [`docs/agent-usage.md`](docs/agent-usage.md). Reference providers: [`crates/software-change-provider/README.md`](crates/software-change-provider/README.md) and focused PRD section 11 [`crates/policy-document-provider/README.md`](crates/policy-document-provider/README.md).
 
 ## Install
 
@@ -37,19 +37,21 @@ curl --proto '=https' --tlsv1.2 -LsSf \
 
 ### Build from source
 
-Install either binary directly from GitHub:
+Install all three binaries from GitHub source (only the first two are release-distributed):
 
 ```sh
 cargo install --git https://github.com/cartwmic/loop-engine loop-cli --bin loop-engine --locked
 cargo install --git https://github.com/cartwmic/loop-engine software-change-provider --bin software-change --locked
+cargo install --git https://github.com/cartwmic/loop-engine policy-document-provider --bin policy-document --locked
 ```
 
-Or build both from a checkout:
+Or build all three binaries from a checkout (the policy-document provider is source-only and excluded from the release matrix):
 
 ```sh
-cargo build --release -p loop-cli -p software-change-provider
+cargo build --release -p loop-cli -p software-change-provider -p policy-document-provider
 # target/release/loop-engine
 # target/release/software-change
+# target/release/policy-document
 ```
 
 ## Release preflight
