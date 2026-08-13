@@ -213,7 +213,7 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "loop-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "loop-core",
  "loop-integrations",
@@ -223,7 +223,7 @@ dependencies = [
 
 [[package]]
 name = "loop-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -231,7 +231,7 @@ dependencies = [
 
 [[package]]
 name = "loop-integrations"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "loop-core",
  "rusqlite",
@@ -243,7 +243,7 @@ dependencies = [
 
 [[package]]
 name = "loop-reference-fixtures"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "loop-core",
  "loop-integrations",
@@ -272,7 +272,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "policy-document-provider"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "loop-core",
  "serde",
@@ -424,7 +424,7 @@ checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
 name = "software-change-provider"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "loop-core",
  "loop-integrations",
