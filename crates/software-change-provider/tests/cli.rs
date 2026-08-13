@@ -9,15 +9,22 @@ fn invoke(arguments: &[&str], stdin: &[u8]) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .expect("software-change binary should spawn");
-    child
+    let write_result = child
         .stdin
         .take()
         .expect("software-change stdin should be available")
-        .write_all(stdin)
-        .expect("stdin should be accepted");
-    child
+        .write_all(stdin);
+    let output = child
         .wait_with_output()
-        .expect("software-change process should exit")
+        .expect("software-change process should exit");
+    if let Err(error) = write_result {
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "unexpected stdin write failure: {error}"
+        );
+    }
+    output
 }
 
 #[test]
