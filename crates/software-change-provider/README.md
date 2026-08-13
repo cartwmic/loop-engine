@@ -7,6 +7,7 @@
 
 The frozen requirement record this crate's acceptance suite traces to (R1–R27, A1–A15, including amendments) lives at [`docs/prd.md`](docs/prd.md).
 - Semantic review is external. The provider does not generate prompts, invoke a model, or decide whether review findings are true.
+- Reviewer convergence contract lives in [`data/reviewer-protocol.md`](data/reviewer-protocol.md): binary evidence stays unchanged; candidate output is triaged before append or mutation; material in-scope findings require consequence proof, focused external reconsideration handles disputed candidates, and no waiver is granted by round count.
 
 Per-run obligations live in immutable initial input. The provider is called by Loop Engine; it does not discover or load a config profile by itself.
 
@@ -142,6 +143,12 @@ cp "$DATA_ROOT/crates/software-change-provider/data/configs/high-rigor.json" /tm
 ```
 
 `start` returns the run ID at `result.run.id`. The CLI accepts `@FILE` JSON input as shown above. The artifact directory contains the fixed subject filenames expected by the selected schema: `intent.json`, `design.json`, `plan.json`, `implementation-report.json`, and `validation-report.json`.
+
+## Convergence and owning-phase routes
+
+At each review state, first perform a comprehensive review of all visible material findings. Triage candidate reviewer output before append or mutation against mandatory failure burden, independent scope/materiality, consequence, and current evidence. Append accepted in-scope material failures; use focused external reconsideration for disputed candidates. After a fix, confirmation review checks accepted fixes, affected scope, downstream consistency, and regressions. A late finding must supply current evidence, violated in-scope obligation, concrete consequence, validation gap, and provenance classifying it as newly exposed, fix-introduced, or previously overlooked; previous visibility or reviewer overlook does not waive a known material defect. Comprehensive-first review still bars drip-feeding, and unrelated reopening must meet independent scope/materiality burden. A default three-round circuit breaker changes review method only and never waives a known defect.
+
+Validation-report-local defects stay in validation: edit and recheck `validation-report.json`, then retry checked `passed`; do not use `revise` for report-local corrections. From validation, nearest check-free `revise` is only for implementation-owned defects. Select phase-named owning routes for earlier defects: `revise-intent` (`design-review → explore`), `revise-design` (`plan-review → design` or later review states), and `revise-plan` (`implementation-review`/`validation → plan`). Zero advisory comments is not required for completion.
 
 ## Read obligations and continue
 

@@ -46,6 +46,17 @@ GATE_SUBJECT = {
     "implementation-review": "implementation-report.json",
     "validation": "validation-report.json",
 }
+SUCCESSOR_ROUTE_CASES = (
+    ("design-review", "revise-intent", "explore"),
+    ("plan-review", "revise-design", "design"),
+    ("plan-review", "revise-intent", "explore"),
+    ("implementation-review", "revise-plan", "plan"),
+    ("implementation-review", "revise-design", "design"),
+    ("implementation-review", "revise-intent", "explore"),
+    ("validation", "revise-plan", "plan"),
+    ("validation", "revise-design", "design"),
+    ("validation", "revise-intent", "explore"),
+)
 
 
 class JourneyFailure(RuntimeError):
@@ -170,8 +181,10 @@ class Journey:
         self._append_marker("journey-marker-equals", equals=True)
         self._assert_marker_persistence()
 
+        successor_route_cases = 0
         if self.mode == "source" and self.depth == "full":
             self._run_full_source()
+            successor_route_cases = len(SUCCESSOR_ROUTE_CASES)
         else:
             self._run_checked_prefix()
 
@@ -184,6 +197,7 @@ class Journey:
                     "run_id": self.run_id,
                     "database": str(self.database),
                     "artifact_root": str(self.artifact_root),
+                    "successor_route_cases": successor_route_cases,
                     "synthetic_evidence_scope": (
                         "Deterministic mechanics only; synthetic records are not semantic verdict quality."
                     ),
@@ -214,9 +228,9 @@ class Journey:
         missing = sorted(required.difference(profile))
         if missing:
             raise JourneyFailure(f"high-rigor profile is missing fields: {', '.join(missing)}")
-        if profile.get("config_version") != "high-rigor-3":
+        if profile.get("config_version") != "high-rigor-4":
             raise JourneyFailure(
-                f"journey requires high-rigor-3, got {profile.get('config_version')!r}"
+                f"journey requires high-rigor-4, got {profile.get('config_version')!r}"
             )
         schemas = profile.get("artifact_schemas")
         if not isinstance(schemas, dict) or set(schemas) != set(SUBJECTS):
@@ -339,7 +353,15 @@ class Journey:
         if workflow.get("id") != "software-change" or workflow.get("initial_state") != "explore":
             raise JourneyFailure("provider startup probe returned the wrong workflow")
 
-    def _engine(self, operation: Sequence[str], *, state: str, event: str = "none", axis: str = "none") -> Dict[str, Any]:
+    def _engine_for(
+        self,
+        run_id: str,
+        operation: Sequence[str],
+        *,
+        state: str,
+        event: str = "none",
+        axis: str = "none",
+    ) -> Dict[str, Any]:
         assert self.database is not None
         command = [str(self.engine), "--database", str(self.database), "--json"]
         command.extend(operation)
@@ -366,10 +388,26 @@ class Journey:
             raise JourneyFailure("engine response is not an object", state=state, event=event, axis=axis)
         return response
 
+    def _engine(
+        self,
+        operation: Sequence[str],
+        *,
+        state: str,
+        event: str = "none",
+        axis: str = "none",
+    ) -> Dict[str, Any]:
+        return self._engine_for(
+            self.run_id, operation, state=state, event=event, axis=axis
+        )
+
     def _start(self) -> None:
+        self._start_run(self.run_id)
+
+    def _start_run(self, run_id: str) -> None:
         assert self.profile_path is not None
         assert self.provider_config is not None
-        response = self._engine(
+        response = self._engine_for(
+            run_id,
             [
                 "--config",
                 str(self.provider_config),
@@ -377,7 +415,7 @@ class Journey:
                 "30000",
                 "start",
                 "--id",
-                self.run_id,
+                run_id,
                 "software-change",
                 "@" + str(self.profile_path),
                 "production journey",
@@ -387,24 +425,41 @@ class Journey:
         )
         self._expect_status(response, "completed", event="start", state="explore")
         result = response.get("result", {})
-        if result.get("run", {}).get("id") != self.run_id:
-            raise JourneyFailure("start did not preserve the caller-owned run ID", state="explore", event="start")
+        if result.get("run", {}).get("id") != run_id:
+            raise JourneyFailure(
+                "start did not preserve the caller-owned run ID", state="explore", event="start"
+            )
 
-    def _show(self) -> Dict[str, Any]:
-        response = self._engine(["show", self.run_id], state=self.state, event="show")
-        self._expect_status(response, "completed", event="show", state=self.state)
+    def _show_for(self, run_id: str, *, state: str, event: str) -> Dict[str, Any]:
+        response = self._engine_for(
+            run_id, ["show", run_id], state=state, event=event
+        )
+        self._expect_status(response, "completed", event=event, state=state)
         return response["result"]
 
-    def _assert_show(self, expected_state: str, event: str) -> Dict[str, Any]:
-        shown = self._show()
+    def _show(self) -> Dict[str, Any]:
+        return self._show_for(self.run_id, state=self.state, event="show")
+
+    def _assert_show_for(
+        self, run_id: str, expected_state: str, event: str
+    ) -> Dict[str, Any]:
+        shown = self._show_for(run_id, state=expected_state, event=event)
         actual = shown.get("current_state")
         if actual != expected_state:
             raise JourneyFailure(
-                f"expected state {expected_state}, got {actual}", state=self.state, event=event
+                f"expected state {expected_state}, got {actual}",
+                state=expected_state,
+                event=event,
             )
-        self.state = expected_state
         if not isinstance(shown.get("requestable_events"), list):
-            raise JourneyFailure("show omitted requestable_events", state=self.state, event=event)
+            raise JourneyFailure(
+                "show omitted requestable_events", state=expected_state, event=event
+            )
+        return shown
+
+    def _assert_show(self, expected_state: str, event: str) -> Dict[str, Any]:
+        shown = self._assert_show_for(self.run_id, expected_state, event)
+        self.state = expected_state
         return shown
 
     def _append_marker(self, record_id: str, *, equals: bool) -> None:
@@ -456,9 +511,15 @@ class Journey:
                     f"history lost caller-owned record ID {record_id!r}", state=self.state, event="history", axis="record-id"
                 )
 
+    def _event_for(
+        self, run_id: str, event: str, *, state: str, axis: str = "none"
+    ) -> Dict[str, Any]:
+        return self._engine_for(
+            run_id, ["event", run_id, event], state=state, event=event, axis=axis
+        )
+
     def _event(self, event: str, axis: str = "none") -> Dict[str, Any]:
-        response = self._engine(["event", self.run_id, event], state=self.state, event=event, axis=axis)
-        return response
+        return self._event_for(self.run_id, event, state=self.state, axis=axis)
 
     def _expect_denial(self, event: str, axis: str, code: str) -> Dict[str, Any]:
         response = self._event(event, axis)
@@ -472,17 +533,29 @@ class Journey:
         self._assert_show(self.state, event + "-denied")
         return response
 
-    def _expect_allow(self, event: str, target: str) -> Dict[str, Any]:
-        response = self._event(event)
-        self._expect_status(response, "completed", event=event, state=self.state)
+    def _expect_allow_for(
+        self, run_id: str, state: str, event: str, target: str
+    ) -> Dict[str, Any]:
+        response = self._event_for(run_id, event, state=state)
+        self._expect_status(response, "completed", event=event, state=state)
         if response.get("result", {}).get("run", {}).get("current_state") != target:
             raise JourneyFailure(
-                f"event {event} did not reach {target}", state=self.state, event=event
+                f"event {event} did not reach {target}", state=state, event=event
             )
-        self._assert_show(target, event)
+        self._assert_show_for(run_id, target, event)
+        return response
+
+    def _expect_allow(self, event: str, target: str) -> Dict[str, Any]:
+        response = self._expect_allow_for(self.run_id, self.state, event, target)
+        self.state = target
         return response
 
     def _append_evidence(self, gate: str) -> None:
+        self._append_evidence_for(self.run_id, gate, state=self.state)
+
+    def _append_evidence_for(
+        self, run_id: str, gate: str, *, state: str, record_prefix: str = ""
+    ) -> None:
         subject = GATE_SUBJECT[gate]
         revision = self._fixture_revision(subject)
         axes = self.profile["review_policies"][gate]
@@ -495,7 +568,7 @@ class Journey:
                 if index >= max(2, required_authors):
                     break
                 author = f"synthetic-{gate}-{axis}-{suffix}"
-                record_id = f"evidence-{gate}-{axis}-{suffix}"
+                record_id = f"{record_prefix}evidence-{gate}-{axis}-{suffix}"
                 data = {
                     "gate": gate,
                     "policy_id": axis,
@@ -507,22 +580,120 @@ class Journey:
                     "config_version": self.profile["config_version"],
                 }
                 record = json.dumps(data, separators=(",", ":"))
-                response = self._engine(
-                    ["append", f"--record-id={record_id}", self.run_id, "review-evidence", record],
-                    state=self.state,
+                response = self._engine_for(
+                    run_id,
+                    ["append", f"--record-id={record_id}", run_id, "review-evidence", record],
+                    state=state,
                     event="append",
                     axis=axis,
                 )
                 self._expect_status(
-                    response, "completed", event="append", axis=axis, state=self.state
+                    response, "completed", event="append", axis=axis, state=state
                 )
                 if response.get("result", {}).get("context", {}).get("id") != record_id:
                     raise JourneyFailure(
                         f"evidence record ID was changed for {gate}/{axis}",
-                        state=self.state,
+                        state=state,
                         event="append",
                         axis=axis,
                     )
+
+    def _prepare_successor_state(self, run_id: str, target: str) -> None:
+        self._start_run(run_id)
+        self._append_evidence_for(
+            run_id, "intent", state="explore", record_prefix=f"{run_id}-"
+        )
+        self._expect_allow_for(run_id, "explore", "intent-ready", "design")
+        self._expect_allow_for(run_id, "design", "design-ready", "design-review")
+        if target == "design-review":
+            return
+
+        self._append_evidence_for(
+            run_id, "design-review", state="design-review", record_prefix=f"{run_id}-"
+        )
+        self._expect_allow_for(run_id, "design-review", "approved", "plan")
+        self._expect_allow_for(run_id, "plan", "plan-ready", "plan-review")
+        if target == "plan-review":
+            return
+
+        self._append_evidence_for(
+            run_id, "plan-review", state="plan-review", record_prefix=f"{run_id}-"
+        )
+        self._expect_allow_for(run_id, "plan-review", "approved", "implement")
+        self._expect_allow_for(
+            run_id, "implement", "implementation-ready", "implementation-review"
+        )
+        if target == "implementation-review":
+            return
+
+        self._append_evidence_for(
+            run_id,
+            "implementation-review",
+            state="implementation-review",
+            record_prefix=f"{run_id}-",
+        )
+        self._expect_allow_for(
+            run_id, "implementation-review", "approved", "validation"
+        )
+        if target != "validation":
+            raise JourneyFailure(f"unsupported successor route source state: {target}")
+
+    def _run_successor_route_proof(self) -> None:
+        for index, (source, event, target) in enumerate(SUCCESSOR_ROUTE_CASES, start=1):
+            run_id = f"successor-route-{index:02d}-{event}"
+            self._prepare_successor_state(run_id, source)
+            shown = self._assert_show_for(run_id, source, "route-exposure")
+            candidates = [
+                candidate
+                for candidate in shown["requestable_events"]
+                if candidate.get("event") == event
+            ]
+            if len(candidates) != 1:
+                raise JourneyFailure(
+                    f"successor run exposed {len(candidates)} {event!r} routes from {source}",
+                    state=source,
+                    event=event,
+                    axis="route",
+                )
+            candidate = candidates[0]
+            if candidate.get("target") != target or candidate.get("kind") != "check-free":
+                raise JourneyFailure(
+                    f"successor run exposed wrong {source}/{event} route: {candidate}",
+                    state=source,
+                    event=event,
+                    axis="route",
+                )
+
+            response = self._event_for(run_id, event, state=source, axis="route")
+            self._expect_status(response, "completed", event=event, state=source, axis="route")
+            committed = response.get("result", {}).get("run", {})
+            if committed.get("id") != run_id or committed.get("current_state") != target:
+                raise JourneyFailure(
+                    f"live {source}/{event} request committed wrong run target: {committed}",
+                    state=source,
+                    event=event,
+                    axis="route",
+                )
+            self._assert_show_for(run_id, target, "route-persisted")
+            history = self._engine_for(
+                run_id, ["history", run_id], state=target, event="history", axis="route"
+            )
+            self._expect_status(history, "completed", event="history", state=target, axis="route")
+            if not any(
+                entry.get("action", {}).get("kind") == "transition"
+                and entry["action"].get("transition", {}).get("source") == source
+                and entry["action"]["transition"].get("event") == event
+                and entry["action"]["transition"].get("target") == target
+                and entry["action"].get("outcome", {}).get("outcome") == "committed"
+                for entry in history.get("result", [])
+            ):
+                raise JourneyFailure(
+                    f"history omitted committed {source}/{event}/{target} route",
+                    state=target,
+                    event="history",
+                    axis="route",
+                )
+        print(f"successor route proof passed: {len(SUCCESSOR_ROUTE_CASES)} fresh runs")
 
     def _fixture_revision(self, subject: str) -> str:
         assert self.fixture_root is not None
@@ -622,6 +793,8 @@ class Journey:
             for entry in transitions
         ):
             raise JourneyFailure("history omitted expected denial lineage", state=self.state, event="history")
+
+        self._run_successor_route_proof()
 
     @staticmethod
     def _expect_status(

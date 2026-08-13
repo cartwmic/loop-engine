@@ -1,5 +1,5 @@
 {
-  "config_version": "minimal-2",
+  "config_version": "minimal-3",
   "artifact_root": "/abs/path/to/change/artifacts",
   "review_policies": {
     "intent": [],

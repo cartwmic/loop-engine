@@ -26,7 +26,7 @@ pub(crate) fn software_change_workflow() -> Workflow {
             State::new(
                 "design-review",
                 "Design review",
-                "For `design.json`, run the configured deterministic check first, before commissioning external review. Then read policy obligations via `show` and append conforming `review-evidence` records using `crates/software-change-provider/data/reviewer-protocol.md`; use `crates/software-change-provider/data/templates/design.md` as the artifact shape.",
+                "For `design.json`, run the configured deterministic check first, before commissioning external review. Then read policy obligations via `show` and follow `crates/software-change-provider/data/reviewer-protocol.md`: triage candidate reviewer output before append or mutation, require consequence proof and scope/materiality classification, and append only accepted in-scope material failures or conforming passes. The first review is comprehensive; use focused external reconsideration for disputed candidates and confirmation review for accepted fixes and downstream regressions. Late findings require current evidence, violated obligation, concrete consequence, validation gap, and provenance (`newly exposed`, `fix-introduced`, or `previously overlooked`); previous visibility or reviewer overlook does not waive known material defects. Comprehensive-first and scope/materiality burdens still bar drip-feeding or unrelated reopening. Select the owning phase for accepted defects: use nearest check-free `revise` for design corrections or `revise-intent` for intent-owned defects; do not waive known defects.",
                 false,
             ),
             State::new(
@@ -38,7 +38,7 @@ pub(crate) fn software_change_workflow() -> Workflow {
             State::new(
                 "plan-review",
                 "Plan review",
-                "For `plan.json`, run the configured deterministic check first, before commissioning external review. Then read policy obligations via `show` and append conforming `review-evidence` records using `crates/software-change-provider/data/reviewer-protocol.md`; use `crates/software-change-provider/data/templates/task-packet.md` as the artifact shape.",
+                "For `plan.json`, run the configured deterministic check first, before commissioning external review. Then read policy obligations via `show` and follow `crates/software-change-provider/data/reviewer-protocol.md`: triage candidate reviewer output before append or mutation, require consequence proof and scope/materiality classification, and append only accepted in-scope material failures or conforming passes. The first review is comprehensive; use focused external reconsideration for disputed candidates and confirmation review for accepted fixes and downstream regressions. Late findings require current evidence, violated obligation, concrete consequence, validation gap, and provenance (`newly exposed`, `fix-introduced`, or `previously overlooked`); previous visibility or reviewer overlook does not waive known material defects. Comprehensive-first and scope/materiality burdens still bar drip-feeding or unrelated reopening. Select the owning phase for accepted defects: use nearest check-free `revise` for plan corrections, `revise-design` for design-owned defects, or `revise-intent` for intent-owned defects; do not waive known defects.",
                 false,
             ),
             State::new(
@@ -50,13 +50,13 @@ pub(crate) fn software_change_workflow() -> Workflow {
             State::new(
                 "implementation-review",
                 "Implementation review",
-                "For `implementation-report.json`, run the configured deterministic check first, before commissioning external review. Then read policy obligations via `show` and append conforming `review-evidence` records using `crates/software-change-provider/data/reviewer-protocol.md`; report coverage must identify repository state and covered document revisions.",
+                "For `implementation-report.json`, run the configured deterministic check first, before commissioning external review. Then read policy obligations via `show` and follow `crates/software-change-provider/data/reviewer-protocol.md`: triage candidate reviewer output before append or mutation, require consequence proof and scope/materiality classification, and append only accepted in-scope material failures or conforming passes. The first review is comprehensive; use focused external reconsideration for disputed candidates and confirmation review for accepted fixes and downstream regressions. Late findings require current evidence, violated obligation, concrete consequence, validation gap, and provenance (`newly exposed`, `fix-introduced`, or `previously overlooked`); previous visibility or reviewer overlook does not waive known material defects. Comprehensive-first and scope/materiality burdens still bar drip-feeding or unrelated reopening. Select the owning phase for accepted defects: use nearest check-free `revise` for implementation corrections, `revise-plan` for plan-owned defects, `revise-design` for design-owned defects, or `revise-intent` for intent-owned defects; do not waive known defects. Report coverage must identify repository state and covered document revisions.",
                 false,
             ),
             State::new(
                 "validation",
                 "Validation",
-                "For `validation-report.json`, run the configured deterministic check first, before commissioning external review. Then read policy obligations via `show`, verify intent delivery and documentation integration, and append conforming `review-evidence` records using `crates/software-change-provider/data/reviewer-protocol.md`; use `crates/software-change-provider/data/templates/validation-report.md` as the artifact shape.",
+                "For `validation-report.json`, run the configured deterministic check first, before commissioning external review. Then read policy obligations via `show`, verify intent delivery and documentation integration, and follow `crates/software-change-provider/data/reviewer-protocol.md`: triage candidate reviewer output before append or mutation, require consequence proof and scope/materiality classification, and append only accepted in-scope material failures or conforming passes. The first review is comprehensive; use focused external reconsideration for disputed candidates and confirmation review for accepted fixes and downstream regressions. Late findings require current evidence, violated obligation, concrete consequence, validation gap, and provenance (`newly exposed`, `fix-introduced`, or `previously overlooked`); previous visibility or reviewer overlook does not waive known material defects. Comprehensive-first and scope/materiality burdens still bar drip-feeding or unrelated reopening. Validation-report-local defects stay in validation: edit and recheck `validation-report.json`, then retry checked `passed`; do not use `revise` for report-local corrections. From validation, select the owning phase: `revise` is only for implementation-owned defects; use `revise-plan` for plan-owned defects, `revise-design` for design-owned defects, or `revise-intent` for intent-owned defects. Do not waive known defects. Use the validation report template as the artifact shape.",
                 false,
             ),
             State::new(
@@ -71,9 +71,12 @@ pub(crate) fn software_change_workflow() -> Workflow {
             Transition::checked("design", "design-ready", "design-review"),
             Transition::checked("design-review", "approved", "plan"),
             Transition::check_free("design-review", "revise", "design"),
+            Transition::check_free("design-review", "revise-intent", "explore"),
             Transition::checked("plan", "plan-ready", "plan-review"),
             Transition::checked("plan-review", "approved", "implement"),
             Transition::check_free("plan-review", "revise", "plan"),
+            Transition::check_free("plan-review", "revise-design", "design"),
+            Transition::check_free("plan-review", "revise-intent", "explore"),
             Transition::checked(
                 "implement",
                 "implementation-ready",
@@ -85,8 +88,14 @@ pub(crate) fn software_change_workflow() -> Workflow {
                 "validation",
             ),
             Transition::check_free("implementation-review", "revise", "implement"),
+            Transition::check_free("implementation-review", "revise-plan", "plan"),
+            Transition::check_free("implementation-review", "revise-design", "design"),
+            Transition::check_free("implementation-review", "revise-intent", "explore"),
             Transition::checked("validation", "passed", "end"),
             Transition::check_free("validation", "revise", "implement"),
+            Transition::check_free("validation", "revise-plan", "plan"),
+            Transition::check_free("validation", "revise-design", "design"),
+            Transition::check_free("validation", "revise-intent", "explore"),
         ],
     )
 }

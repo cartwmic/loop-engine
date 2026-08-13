@@ -7,7 +7,7 @@ description: Use when running the software-change workflow through Loop Engine w
 
 ## Overview
 
-`software-change` is Loop Engine's reference provider, distributed standalone with its shipped data embedded (`software-change data-dump DIR` materializes it); a repo checkout remains the development path. Workflow: `explore → design → design-review → plan → plan-review → implement → implementation-review → validation → end`, with check-free `revise` edges from each review state back to its authoring state.
+`software-change` is Loop Engine's reference provider, distributed standalone with its shipped data embedded (`software-change data-dump DIR` materializes it); a repo checkout remains the development path. Workflow: `explore → design → design-review → plan → plan-review → implement → implementation-review → validation → end`, with validation-report-local corrections staying in validation after edit/recheck for checked `passed`; from validation, nearest check-free `revise` is only for implementation-owned defects. Phase-named owning routes (`revise-intent`, `revise-design`, `revise-plan`) handle upstream defects from review states. Reviewer convergence contract requires candidate triage before append or mutation, focused external reconsideration for disputed candidates, comprehensive first review, bounded confirmation review, and a three-round circuit breaker that never waives known defects. Late findings still require current evidence, violated obligation, consequence, validation gap, and provenance (`newly exposed`, `fix-introduced`, or `previously overlooked`); prior visibility or overlook does not waive known material defects, while comprehensive-first and scope/materiality burdens block drip-feeding or unrelated reopening.
 
 The provider is deterministic only: it validates artifact schemas and revision links, then aggregates externally supplied review evidence. It never generates prompts, invokes a model, or judges findings — **you** commission semantic review and append the verdicts. Per-run obligations are frozen in immutable `initial_input`.
 
@@ -64,7 +64,7 @@ loop-engine --database "$DB" --json append "$RUN_ID" review-evidence @verdict.js
   "author": {"name": "reviewer-sol", "kind": "agent"},
   "subject": "design.json",
   "subject_revision": "3",
-  "config_version": "standard-3"
+  "config_version": "standard-4"
 }
 ```
 
@@ -82,6 +82,7 @@ All eight fields required; `result` is exactly `pass` or `fail`; `author.kind` i
 - Stale `subject_revision` never satisfies; wrong `config_version` counts as neither pass nor fail.
 - Nonconforming records block the axis with a malformed diagnostic until a later conforming record supersedes them.
 - No waivers: a material finding stands until fixed or the revision changes.
+- Late findings remain actionable when they provide current evidence, violated obligation, concrete consequence, validation gap, and provenance as newly exposed, fix-introduced, or previously overlooked; timing, prior visibility, or reviewer overlook does not waive materiality. Comprehensive-first review and scope/materiality burdens still bar drip-feeding and unrelated reopening.
 
 ## Production proof boundary
 

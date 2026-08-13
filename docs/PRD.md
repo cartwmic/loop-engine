@@ -661,30 +661,41 @@ design
 
 design-review
   ├─ approved [checked] → plan
-  └─ revise [check-free] → design
+  ├─ revise [check-free] → design
+  └─ revise-intent [check-free] → explore
 
 plan
   └─ plan-ready [checked] → plan-review
 
 plan-review
   ├─ approved [checked] → implement
-  └─ revise [check-free] → plan
+  ├─ revise [check-free] → plan
+  ├─ revise-design [check-free] → design
+  └─ revise-intent [check-free] → explore
 
 implement
   └─ implementation-ready [checked] → implementation-review
 
 implementation-review
   ├─ approved [checked] → validation
-  └─ revise [check-free] → implement
+  ├─ revise [check-free] → implement
+  ├─ revise-plan [check-free] → plan
+  ├─ revise-design [check-free] → design
+  └─ revise-intent [check-free] → explore
 
 validation
   ├─ passed [checked] → end
-  └─ revise [check-free] → implement
+  ├─ revise [check-free] → implement
+  ├─ revise-plan [check-free] → plan
+  ├─ revise-design [check-free] → design
+  └─ revise-intent [check-free] → explore
 
 end [final]
 ```
 
 The provider may inspect repository state, documents, tests, reviews, or other software-specific information. Core understands none of those concepts.
+
+Review-state routing is explicit in this reference graph: external review operators select the phase owning an accepted material defect through `revise-intent`, `revise-design`, or `revise-plan`; validation-report-local defects stay in validation: edit and recheck `validation-report.json`, then retry checked `passed`; from validation, nearest `revise` is only for implementation-owned defects. Candidate reviewer output is triaged before append or artifact mutation, and disputed candidates use focused external reconsideration. A late finding requires current evidence, violated in-scope obligation, concrete consequence, validation gap, and provenance as newly exposed, fix-introduced, or previously overlooked; prior visibility or reviewer overlook does not waive known materiality. Comprehensive-first review still bars drip-feeding, and unrelated reopening must meet independent scope/materiality burden. A default three-round circuit breaker changes review method only and never waives a known defect. These are provider/operator conventions, not Loop Engine core policy or a review subsystem.
 
 ### 10.1 Run-Configured Semantic Review Policies
 

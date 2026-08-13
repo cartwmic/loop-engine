@@ -1,7 +1,13 @@
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 
 const PROFILES: &[&str] = &["minimal", "standard", "high-rigor"];
+
+fn shipped_text(relative: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
+    fs::read_to_string(&path).unwrap_or_else(|error| panic!("could not read {path:?}: {error}"))
+}
 const SUBJECTS: &[&str] = &[
     "intent.json",
     "design.json",
@@ -215,9 +221,9 @@ fn all_profiles_pass_production_config_validation_and_have_exact_subjects() {
     for profile in PROFILES {
         let config = load_profile(profile);
         let expected_version = match *profile {
-            "minimal" => "minimal-2",
-            "standard" => "standard-3",
-            "high-rigor" => "high-rigor-3",
+            "minimal" => "minimal-3",
+            "standard" => "standard-4",
+            "high-rigor" => "high-rigor-4",
             _ => unreachable!("unknown profile {profile}"),
         };
         assert_eq!(config["config_version"], expected_version);
@@ -392,6 +398,73 @@ fn report_schemas_require_coverage_manifest() {
                     .map(|value| string(value, "coverage required entry"))
                     .collect();
             assert_eq!(coverage_required, BTreeSet::from(["commit", "documents"]));
+        }
+    }
+}
+
+#[test]
+fn reviewer_protocol_defines_convergence_contract() {
+    let protocol = shipped_text("data/reviewer-protocol.md");
+    for clause in [
+        "before append or mutation",
+        "mandatory failure burden",
+        "scope and materiality",
+        "consequence proof",
+        "existing validation does not already resolve",
+        "focused external reconsideration",
+        "comprehensive first review",
+        "confirmation review",
+        "late material finding",
+        "current supplied evidence",
+        "validation gap",
+        "newly exposed",
+        "fix-introduced",
+        "previously overlooked",
+        "previous visibility or reviewer overlook does not waive",
+        "three-round circuit breaker",
+        "never waives a known defect",
+        "no unresolved accepted in-scope material finding",
+        "zero advisory comments is not required",
+        "validation-local `validation-report.json` corrections stay in validation",
+        "retry checked `passed`",
+        "in `validation`, use nearest `revise` only for an implementation-owned defect",
+    ] {
+        assert!(
+            protocol.to_ascii_lowercase().contains(clause),
+            "reviewer protocol missing convergence clause: {clause}"
+        );
+    }
+    assert!(!protocol.contains(
+        "why it was not visible in earlier supplied evidence or was introduced by an accepted fix"
+    ));
+}
+
+#[test]
+fn authoritative_docs_integrate_convergence_contract_and_routes() {
+    let provider_prd = shipped_text("docs/prd.md");
+    let provider_readme = shipped_text("README.md");
+    let engine_prd = shipped_text("../../docs/PRD.md");
+    for (name, text) in [
+        ("provider PRD", provider_prd),
+        ("provider README", provider_readme),
+        ("engine PRD", engine_prd),
+    ] {
+        for clause in [
+            "revise-intent",
+            "revise-design",
+            "revise-plan",
+            "focused external reconsideration",
+            "validation gap",
+            "previously overlooked",
+            "three-round",
+            "validation-report-local",
+            "retry checked `passed`",
+            "implementation-owned",
+        ] {
+            assert!(
+                text.to_ascii_lowercase().contains(clause),
+                "{name} missing convergence clause: {clause}"
+            );
         }
     }
 }
