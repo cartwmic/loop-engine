@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "profile_version": "readme-1",
+  "mode": "audit",
+  "target": {"id": "README.md", "path": "/abs/path/to/README.md"},
+  "deterministic_policies": [
+    {"id":"document-present","type":"non-empty"},
+    {"id":"project-title","type":"any-heading","level":1},
+    {"id":"purpose","type":"required-heading","aliases":["Purpose","Overview","About"]},
+    {"id":"onboarding","type":"required-heading","aliases":["Installation","Getting Started","Quick Start","Setup"]},
+    {"id":"usage","type":"required-heading","aliases":["Usage","Examples"]},
+    {"id":"validation","type":"required-heading","aliases":["Validation","Testing","Tests"]},
+    {"id":"onboarding-command","type":"command-in-section","section_aliases":["Installation","Getting Started","Quick Start","Setup"]},
+    {"id":"validation-command","type":"command-in-section","section_aliases":["Validation","Testing","Tests"]},
+    {"id":"local-references","type":"local-references-resolve"}
+  ],
+  "semantic_policies": [
+    {"id":"product-fidelity","description":"README accurately represents product purpose and behavior.","example_prompt":"Review product fidelity against supplied project evidence."},
+    {"id":"onboarding-sufficiency","description":"A new operator can complete onboarding.","example_prompt":"Review onboarding sufficiency and prerequisites."},
+    {"id":"audience-navigation","description":"README helps intended audiences find relevant paths.","example_prompt":"Review audience navigation and information structure."},
+    {"id":"clarity-scope","description":"README is clear, scoped, and non-contradictory.","example_prompt":"Review clarity, scope, and contradictions."}
+  ]
+}

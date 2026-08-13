@@ -4,6 +4,7 @@ members = [
     "crates/loop-integrations",
     "crates/loop-cli",
     "crates/software-change-provider",
+    "crates/policy-document-provider",
     "tests/fixtures",
 ]
 resolver = "2"
