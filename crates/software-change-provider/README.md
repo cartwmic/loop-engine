@@ -39,6 +39,38 @@ cargo build -p software-change-provider
 
 This produces `target/debug/software-change`; the checkout's `crates/software-change-provider/data/` tree supplies the development copies of shipped data.
 
+## Production-boundary proof
+
+The repository-owned journey runner has one contract with two adapters:
+
+```sh
+python3 scripts/production-journey.py \
+  --mode source \
+  --engine target/debug/loop-engine \
+  --provider target/debug/software-change \
+  --data-root "$PWD" \
+  --work-root "${TMPDIR:-/tmp}/loop-engine-production-journey" \
+  --profile crates/software-change-provider/data/configs/high-rigor.json \
+  --traversal-depth full
+```
+
+Source full mode uses separate engine processes for every operation, explicit provider TOML, a fresh SQLite file, and the checkout's shipped profile/fixtures. It proves schema and evidence mechanics, revision-link denial, aggregation, transitions, persisted context, and terminal state. Its synthetic conforming evidence is shape/routing test data only; it does not establish semantic review quality.
+
+Packaged smoke accepts extracted `loop-engine` and `software-change` paths, calls `software-change data-dump` into an empty root, and uses only the dumped high-rigor profile and fixtures:
+
+```sh
+python3 scripts/production-journey.py \
+  --mode packaged \
+  --engine /path/to/extracted/loop-engine \
+  --provider /path/to/extracted/software-change \
+  --data-root "${TMPDIR:-/tmp}/software-change-dump" \
+  --work-root "${TMPDIR:-/tmp}/loop-engine-packaged-journey" \
+  --profile high-rigor.json \
+  --traversal-depth checked-prefix
+```
+
+The packaged adapter does not read checkout provider data after `data-dump`. Native archive smoke runs on macOS arm64 and Linux x86_64 in the dispatch-only cargo-dist workflow before host publication.
+
 ## Shipped data
 
 These are the shipped files consumed by provider tests, guidance, and review procedure. Config profiles are complete initial-input templates; copy one for a run and replace its placeholder `artifact_root` with an absolute existing artifact directory.

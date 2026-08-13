@@ -1,0 +1,81 @@
+name: cargo-dist archive smoke
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: cargo-dist plan manifest supplied by the generated release workflow
+        required: true
+        type: string
+
+jobs:
+  archive-smoke:
+    name: archive smoke (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            target: aarch64-apple-darwin
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    env:
+      DIST_PLAN: ${{ inputs.plan }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Assert the release plan matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "$DIST_PLAN" > "$RUNNER_TEMP/dist-plan.json"
+          python3 scripts/assert-dist-plan.py "$RUNNER_TEMP/dist-plan.json"
+      - name: Download native archives
+        uses: actions/download-artifact@v8
+        with:
+          pattern: artifacts-build-local-*
+          path: target/distrib/
+          merge-multiple: true
+      - name: Extract and smoke both applications
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='${{ matrix.target }}'
+          extract="$RUNNER_TEMP/extracted-$target"
+          data_root="$RUNNER_TEMP/journey-data-$target"
+          work_root="$RUNNER_TEMP/journey-work-$target"
+          smoke_cwd="$RUNNER_TEMP/packaged-smoke-cwd-$target"
+          checkout_root="$(cd "$GITHUB_WORKSPACE" && pwd -P)"
+          rm -rf "$extract" "$data_root" "$work_root" "$smoke_cwd"
+          mkdir -p "$extract" "$work_root" "$smoke_cwd"
+
+          for app in loop-cli software-change-provider; do
+            archive="target/distrib/${app}-${target}.tar.xz"
+            test -f "$archive"
+            tar -xJf "$archive" -C "$extract"
+          done
+
+          engine="$(find "$extract" -type f -name loop-engine -perm -u+x -print -quit)"
+          provider="$(find "$extract" -type f -name software-change -perm -u+x -print -quit)"
+          test -n "$engine"
+          test -n "$provider"
+
+          # Packaged proof must not inherit checkout-relative files or cwd.
+          cd "$smoke_cwd"
+          test "$(pwd -P)" != "$checkout_root"
+          test -z "$(ls -A "$smoke_cwd")"
+          printf 'packaged smoke cwd outside checkout: %s (checkout: %s)\n' \
+            "$(pwd -P)" "$checkout_root"
+          python3 "$GITHUB_WORKSPACE/scripts/production-journey.py" \
+            --mode packaged \
+            --engine "$engine" \
+            --provider "$provider" \
+            --data-root "$data_root" \
+            --work-root "$work_root" \
+            --profile high-rigor.json \
+            --traversal-depth checked-prefix

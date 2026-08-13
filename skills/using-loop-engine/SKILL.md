@@ -40,7 +40,7 @@ loop-engine [--database DB] [--json] history RUN_ID
 loop-engine [--database DB] [--json] terminate RUN_ID
 ```
 
-`start` returns the run ID at `result.run.id`; supply `--id`/`--record-id` when the orchestrator owns identity. `append` is opaque to core and never changes state.
+`start` returns the run ID at `result.run.id`; supply `--id` when the orchestrator owns run identity. `append` accepts both `--record-id VALUE` and `--record-id=VALUE`; supplied IDs remain unchanged through result, `show`, and `history`. Append is opaque to core and never changes state.
 
 ## Canonical loop
 
@@ -68,6 +68,7 @@ Parse JSON even on nonzero exit. Treat only `completed` as success. Never infer 
 ## Rules
 
 - One logical mutating actor per run: serialize `append`, `event`, and `terminate` calls; never race them from parallel workers. Concurrent reads are fine. Context appended during an in-flight checked evaluation does not invalidate or reach that evaluation.
+- Production-boundary proof uses `scripts/production-journey.py`; source full mode drives separate engine processes and packaged checked-prefix mode consumes only provider data materialized by `data-dump`. Synthetic evidence proves deterministic mechanics, not semantic verdict quality.
 - `initial_input` is immutable run configuration; never attempt to replace it.
 - Context records are immutable and append-only.
 - Provider association, workflow topology, and state instructions are snapshotted at `start`; changing TOML cannot redirect an existing run.

@@ -32,7 +32,7 @@ loop-engine [--database DB] [--json] history RUN_ID
 loop-engine [--database DB] [--json] terminate RUN_ID
 ```
 
-Global options may appear before or after the operation; the timeout option is shown once above to keep the skeleton brief. `start` resolves the provider alias and returns the run ID in `result.run.id`; supply `--id` when the orchestrator owns run identity. Supply `--record-id` for an orchestrator-owned context-record identity. `append` accepts opaque `KIND` and `DATA_JSON` and does not change state.
+Global options may appear before or after the operation; the timeout option is shown once above to keep the skeleton brief. `start` resolves the provider alias and returns the run ID in `result.run.id`; supply `--id` when the orchestrator owns run identity. Supply `--record-id` for an orchestrator-owned context-record identity. `append` accepts both `--record-id VALUE` and `--record-id=VALUE`; it accepts opaque `KIND` and `DATA_JSON` and does not change state.
 
 ## Canonical loop
 
@@ -67,8 +67,19 @@ At `start`, the provider alias resolves once to its configured `command` and ord
 
 - Treat `initial_input` as immutable run configuration; never attempt to replace it.
 - Treat context `kind` and `data` as opaque to Loop Engine core, but follow provider/state conventions for them; records are immutable and append-only.
-- Use unique stable `--id` and `--record-id` values whenever an orchestrator controls identity.
+- Use unique stable `--id` and `--record-id` values whenever an orchestrator controls identity. Append accepts both `--record-id VALUE` and `--record-id=VALUE`; supplied IDs remain unchanged in append results, `show` context, and durable `history`.
 - Request only an event shown for the current state, and request one at a time.
 - Follow rejection feedback; append corrected evidence or steering before retrying the shown event.
 - Do not progress final or terminated runs; `show` exposes no requestable events there.
 - Use `history` for a semantic audit of creation, appends, transitions, checked-transition denials, and termination; other rejections (such as unavailable events or terminal mutations) are absent, and history is not an exhaustive execution trace.
+
+## Executable proof boundaries
+
+Repository checks name boundaries they actually cross:
+
+- component tests cover parser, core, SQLite, provider schema/evidence, and protocol behavior;
+- composed tests combine engine operations, SQLite, and provider subprocesses below CLI process boundary;
+- `scripts/production-journey.py --mode source --traversal-depth full` drives separate `loop-engine` processes through provider TOML, SQLite, production `software-change` process, copied high-rigor artifacts, deterministic denials, evidence aggregation, and terminal state;
+- `scripts/production-journey.py --mode packaged --traversal-depth checked-prefix` consumes extracted binaries, calls `data-dump`, and runs release-critical checked transition from dumped data only.
+
+Journey evidence records are synthetic, schema-conforming pass records. They prove deterministic policy mechanics, author independence, revision-link handling, routing, aggregation, and persistence; they do not prove semantic review or verdict quality. Semantic review remains external.

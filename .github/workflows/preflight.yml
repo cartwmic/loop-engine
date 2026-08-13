@@ -1,0 +1,61 @@
+name: production preflight
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: cargo-dist plan manifest supplied by generated release workflow
+        required: true
+        type: string
+
+jobs:
+  baseline-and-source-journey:
+    name: baseline and full source journey
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Install dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh
+      - name: Assert release plan matrix
+        shell: bash
+        env:
+          DIST_PLAN: ${{ inputs.plan }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$DIST_PLAN" > "$RUNNER_TEMP/dist-plan.json"
+          python3 scripts/assert-dist-plan.py "$RUNNER_TEMP/dist-plan.json"
+          python3 scripts/assert-release-gates.py
+      - name: Run journey interface negative self-test
+        run: python3 scripts/production-journey.py --self-test
+      - name: Test workspace
+        run: cargo test --workspace
+      - name: Clippy workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check generated release workflow
+        run: dist generate --check
+      - name: Build journey binaries
+        run: cargo build --locked -p loop-cli -p software-change-provider
+      - name: Run full production source journey
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/production-journey-work"
+          python3 scripts/production-journey.py \
+            --mode source \
+            --engine target/debug/loop-engine \
+            --provider target/debug/software-change \
+            --data-root "$GITHUB_WORKSPACE" \
+            --work-root "$RUNNER_TEMP/production-journey-work" \
+            --profile crates/software-change-provider/data/configs/high-rigor.json \
+            --traversal-depth full

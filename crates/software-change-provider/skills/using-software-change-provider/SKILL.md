@@ -82,3 +82,7 @@ All eight fields required; `result` is exactly `pass` or `fail`; `author.kind` i
 - Stale `subject_revision` never satisfies; wrong `config_version` counts as neither pass nor fail.
 - Nonconforming records block the axis with a malformed diagnostic until a later conforming record supersedes them.
 - No waivers: a material finding stands until fixed or the revision changes.
+
+## Production proof boundary
+
+Use `scripts/production-journey.py` for repository and archive checks. Source `full` mode drives separate Loop Engine processes across provider TOML, SQLite, production provider, shipped high-rigor artifacts, deterministic denials, evidence aggregation, and terminal state. Packaged `checked-prefix` mode starts extracted binaries, materializes embedded data with `data-dump`, and runs one checked transition from that dump. Synthetic pass records prove schema/evidence shape, independence, routing, aggregation, and persistence only; they are not semantic review judgments.

@@ -681,7 +681,7 @@ fn parse_primary_command(
                 start_id,
                 None,
                 None,
-                record_id.clone(),
+                None,
                 event,
             )?;
             Ok(PrimaryCommand::Append(AppendArgs {
@@ -1660,6 +1660,56 @@ mod tests {
     }
 
     #[test]
+    fn append_parser_preserves_separate_record_id_value() {
+        let parsed = parse_args([
+            "append",
+            "--record-id",
+            "caller-record",
+            "run-1",
+            "note",
+            "{}",
+        ])
+        .expect("append with separate record id should parse");
+        let ParsedRequest::Operation {
+            command: PrimaryCommand::Append(args),
+            ..
+        } = parsed
+        else {
+            panic!("expected append operation");
+        };
+        assert_eq!(args.record_id.as_deref(), Some("caller-record"));
+    }
+
+    #[test]
+    fn append_parser_preserves_equals_record_id_value() {
+        let parsed = parse_args(["append", "--record-id=caller-record", "run-1", "note", "{}"])
+            .expect("append with equals record id should parse");
+        let ParsedRequest::Operation {
+            command: PrimaryCommand::Append(args),
+            ..
+        } = parsed
+        else {
+            panic!("expected append operation");
+        };
+        assert_eq!(args.record_id.as_deref(), Some("caller-record"));
+    }
+
+    #[test]
+    fn append_parser_still_rejects_foreign_options() {
+        let error = parse_args([
+            "append",
+            "--provider",
+            "software-change",
+            "run-1",
+            "note",
+            "{}",
+        ])
+        .expect_err("append must reject start-only provider option");
+        assert_eq!(error.code, "invalid-invocation");
+        assert!(error.message.contains("another operation"));
+    }
+
+    #[test]
     fn malformed_invocation_has_distinct_exit_code_and_json_is_valid() {
         let result = execute(["--json", "event", "only-run"]);
         assert_eq!(result.exit_code, EXIT_INVALID_INVOCATION);
@@ -1887,9 +1937,11 @@ printf '%s' '{"id":"cli-fixture","initial_state":"start","states":[{"id":"start"
         let append = execute([
             "--json".to_owned(),
             "append".to_owned(),
+            "--record-id".to_owned(),
+            "caller-record-separate".to_owned(),
             run_id.clone(),
             "note".to_owned(),
-            context_data_json,
+            context_data_json.clone(),
             "--database".to_owned(),
             database.clone(),
         ]);
@@ -1898,7 +1950,65 @@ printf '%s' '{"id":"cli-fixture","initial_state":"start","states":[{"id":"start"
         assert_eq!(append_json["status"], "completed");
         assert_internal_metadata_absent(&append_json);
         assert_eq!(append_json["result"]["run"]["id"], run_id);
+        assert_eq!(
+            append_json["result"]["context"]["id"],
+            "caller-record-separate"
+        );
         assert_eq!(append_json["result"]["context"]["data"], context_data);
+
+        let append_equals = execute([
+            "--json".to_owned(),
+            "append".to_owned(),
+            "--record-id=caller-record-equals".to_owned(),
+            run_id.clone(),
+            "note".to_owned(),
+            serde_json::to_string(&context_data).unwrap(),
+            "--database".to_owned(),
+            database.clone(),
+        ]);
+        assert_eq!(append_equals.exit_code, EXIT_COMPLETED);
+        let append_equals_json: Value = serde_json::from_str(&append_equals.stdout).unwrap();
+        assert_eq!(append_equals_json["status"], "completed");
+        assert_eq!(
+            append_equals_json["result"]["context"]["id"],
+            "caller-record-equals"
+        );
+
+        let caller_show = execute([
+            "--json".to_owned(),
+            "show".to_owned(),
+            run_id.clone(),
+            "--database".to_owned(),
+            database.clone(),
+        ]);
+        assert_eq!(caller_show.exit_code, EXIT_COMPLETED);
+        let caller_show_json: Value = serde_json::from_str(&caller_show.stdout).unwrap();
+        assert_eq!(
+            caller_show_json["result"]["context"][0]["id"],
+            "caller-record-separate"
+        );
+        assert_eq!(
+            caller_show_json["result"]["context"][1]["id"],
+            "caller-record-equals"
+        );
+
+        let caller_history = execute([
+            "--json".to_owned(),
+            "history".to_owned(),
+            run_id.clone(),
+            "--database".to_owned(),
+            database.clone(),
+        ]);
+        assert_eq!(caller_history.exit_code, EXIT_COMPLETED);
+        let caller_history_json: Value = serde_json::from_str(&caller_history.stdout).unwrap();
+        let history_ids = caller_history_json["result"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|entry| entry["action"]["context_record_id"].as_str())
+            .collect::<Vec<_>>();
+        assert!(history_ids.contains(&"caller-record-separate"));
+        assert!(history_ids.contains(&"caller-record-equals"));
 
         let human_append = execute([
             "append".to_owned(),

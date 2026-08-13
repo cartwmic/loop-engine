@@ -9,7 +9,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 publish = false
@@ -23,6 +23,12 @@ installers = ["shell"]
 # Keep cargo-dist's automatic package README and license inclusion enabled.
 auto-includes = true
 checksum = "sha256"
+dispatch-releases = true
+pr-run-mode = "upload"
+# cargo-dist 0.32 global-artifact hooks run after local matrix builds and are
+# direct host dependencies; keeping both proof workflows here makes failures
+# publication-blocking without editing generated release.yml.
+global-artifacts-jobs = ["./preflight", "./archive-smoke"]
 
 [profile.dist]
 inherits = "release"
