@@ -114,7 +114,15 @@ def main() -> int:
     if "  workflow_dispatch:" not in workflow or re.search(r"^  push:", workflow, re.MULTILINE):
         fail("release workflow must be dispatch-only, without tag-push trigger")
     if 'python3 "$GITHUB_WORKSPACE/scripts/production-journey.py"' not in archive_smoke:
-        fail("archive smoke must invoke runner through absolute GITHUB_WORKSPACE path")
+        fail("archive smoke must invoke software-change runner through absolute GITHUB_WORKSPACE path")
+    if 'python3 "$GITHUB_WORKSPACE/scripts/policy-document-journey.py"' not in archive_smoke:
+        fail("archive smoke must invoke policy-document runner through absolute GITHUB_WORKSPACE path")
+    if 'for app in loop-cli software-change-provider policy-document-provider' not in archive_smoke:
+        fail("archive smoke must extract all three release applications")
+    if '"$policy_provider" data-dump "$policy_data_root"' not in archive_smoke:
+        fail("archive smoke must materialize policy-document profiles from packaged binary")
+    if 'for mode in draft audit' not in archive_smoke:
+        fail("archive smoke must exercise both policy-document modes")
     if 'cd "$smoke_cwd"' not in archive_smoke:
         fail("archive smoke must change into its isolated temporary cwd")
     if 'test "$(pwd -P)" != "$checkout_root"' not in archive_smoke:

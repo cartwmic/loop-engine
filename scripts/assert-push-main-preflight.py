@@ -52,10 +52,15 @@ def main() -> int:
         "cargo clippy --workspace --all-targets -- -D warnings",
         "cargo fmt --all -- --check",
         "dist generate --check",
-        "python3 scripts/assert-dist-plan.py",
+        "python3 scripts/assert-dist-plan.py --self-test",
+        "python3 scripts/assert-dist-plan.py \"$RUNNER_TEMP/dist-plan.json\"",
         "python3 scripts/assert-release-gates.py",
         "python3 scripts/production-journey.py --self-test",
+        "cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider",
         "--traversal-depth full",
+        "python3 scripts/policy-document-journey.py",
+        "--profile crates/policy-document-provider/data/readme.json",
+        "for mode in draft audit",
     )
     missing = [token for token in required_preflight if token not in preflight]
     if missing:

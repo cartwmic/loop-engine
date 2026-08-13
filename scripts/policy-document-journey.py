@@ -84,12 +84,14 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--engine", required=True)
     parser.add_argument("--provider", required=True)
+    parser.add_argument("--profile", required=True)
     parser.add_argument("--mode", choices=("draft", "audit"), default="draft")
     args = parser.parse_args()
     engine = Path(args.engine).resolve()
     provider = Path(args.provider).resolve()
-    repository = Path(__file__).resolve().parent.parent
-    shipped_profile = repository / "crates/policy-document-provider/data/readme.json"
+    shipped_profile = Path(args.profile).resolve()
+    if not shipped_profile.is_file():
+        parser.error(f"profile is not a file: {shipped_profile}")
 
     with tempfile.TemporaryDirectory(prefix="policy-document-journey-") as temporary:
         work = Path(temporary)

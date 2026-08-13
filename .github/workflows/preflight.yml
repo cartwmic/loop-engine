@@ -32,6 +32,7 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s' "$DIST_PLAN" > "$RUNNER_TEMP/dist-plan.json"
+          python3 scripts/assert-dist-plan.py --self-test
           python3 scripts/assert-dist-plan.py "$RUNNER_TEMP/dist-plan.json"
           python3 scripts/assert-release-gates.py
           python3 scripts/assert-push-main-preflight.py
@@ -46,8 +47,8 @@ jobs:
       - name: Check generated release workflow
         run: dist generate --check
       - name: Build journey binaries
-        run: cargo build --locked -p loop-cli -p software-change-provider
-      - name: Run full production source journey
+        run: cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider
+      - name: Run full software-change source journey
         shell: bash
         run: |
           set -euo pipefail
@@ -60,3 +61,14 @@ jobs:
             --work-root "$RUNNER_TEMP/production-journey-work" \
             --profile crates/software-change-provider/data/configs/high-rigor.json \
             --traversal-depth full
+      - name: Run policy-document source journeys
+        shell: bash
+        run: |
+          set -euo pipefail
+          for mode in draft audit; do
+            python3 scripts/policy-document-journey.py \
+              --engine target/debug/loop-engine \
+              --provider target/debug/policy-document \
+              --profile crates/policy-document-provider/data/readme.json \
+              --mode "$mode"
+          done

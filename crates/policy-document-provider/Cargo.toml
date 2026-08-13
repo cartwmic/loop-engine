@@ -6,6 +6,9 @@ license.workspace = true
 publish.workspace = true
 repository.workspace = true
 
+[package.metadata.dist]
+dist = true
+
 [[bin]]
 name = "policy-document"
 path = "src/main.rs"

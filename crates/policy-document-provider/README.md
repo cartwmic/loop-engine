@@ -1,6 +1,6 @@
 # Policy document provider
 
-`policy-document` is source-distributed external provider for PRD section 11. Fixed topology is `prepare` → `deterministic-review` → `semantic-review` → `end`; both revision edges are check-free. Initial input is closed JSON containing `schema_version`, `profile_version`, `mode` (`draft` or `audit`), absolute target `{id,path}`, non-empty deterministic policies, and non-empty semantic policies.
+`policy-document` is release- and source-distributed external provider for PRD section 11. Fixed topology is `prepare` → `deterministic-review` → `semantic-review` → `end`; both revision edges are check-free. Initial input is closed JSON containing `schema_version`, `profile_version`, `mode` (`draft` or `audit`), absolute target `{id,path}`, non-empty deterministic policies, and non-empty semantic policies.
 
 ## Build and materialize profiles
 
@@ -55,4 +55,16 @@ Evidence requires exact frozen fields and enums. One current pass and no current
 
 Reviewer identity, digest, and verdict remain caller claims, not signatures or provenance. Provider reads target once per evaluation but cannot lock it between evaluation and engine transition commit. Evaluation receives a fixed context snapshot; a concurrent append can be absent from an in-flight decision. Serialize `append` and `event` operations per run using one logical mutator.
 
-Run source journey with `python3 scripts/policy-document-journey.py --engine target/debug/loop-engine --provider target/debug/policy-document --mode draft` (or `audit`).
+Run source journeys against shipped profile bytes:
+
+```sh
+for mode in draft audit; do
+  python3 scripts/policy-document-journey.py \
+    --engine target/debug/loop-engine \
+    --provider target/debug/policy-document \
+    --profile crates/policy-document-provider/data/readme.json \
+    --mode "$mode"
+done
+```
+
+Packaged archive smoke extracts `loop-engine` and `policy-document`, runs `policy-document data-dump` into an empty temporary root, then runs both modes from an empty working directory using only dumped profile bytes. macOS arm64 and Linux x86_64 archive smoke must pass before release publication.

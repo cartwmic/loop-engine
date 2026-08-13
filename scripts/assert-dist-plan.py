@@ -15,10 +15,11 @@ TARGETS = {
 }
 APPS = {
     "loop-cli",
+    "policy-document-provider",
     "software-change-provider",
 }
 ARCHIVE_RE = re.compile(
-    r"^(?P<app>loop-cli|software-change-provider)-(?P<target>"
+    r"^(?P<app>loop-cli|policy-document-provider|software-change-provider)-(?P<target>"
     r"aarch64-apple-darwin|x86_64-unknown-linux-gnu)\.tar\.xz$"
 )
 
@@ -38,13 +39,39 @@ def archive_pairs(release: Dict[str, Any]) -> Set[tuple[str, str]]:
         match = ARCHIVE_RE.fullmatch(artifact)
         if not match:
             fail(f"unexpected archive artifact {artifact!r}")
-        pairs.add((match.group("app"), match.group("target")))
+        pair = (match.group("app"), match.group("target"))
+        if pair in pairs:
+            fail(f"duplicate archive artifact {artifact!r}")
+        pairs.add(pair)
     return pairs
 
 
+def self_test() -> int:
+    duplicate = {
+        "artifacts": [
+            "loop-cli-aarch64-apple-darwin.tar.xz",
+            "loop-cli-aarch64-apple-darwin.tar.xz",
+        ]
+    }
+    try:
+        archive_pairs(duplicate)
+    except SystemExit as error:
+        if "duplicate archive artifact" not in str(error):
+            raise
+    else:
+        fail("self-test accepted duplicate archive artifact")
+    print("cargo-dist plan assertion self-test passed: duplicate archive rejected")
+    return 0
+
+
 def main() -> int:
+    if sys.argv[1:] == ["--self-test"]:
+        return self_test()
     if len(sys.argv) != 2:
-        print(f"usage: {Path(sys.argv[0]).name} DIST-PLAN.json", file=sys.stderr)
+        print(
+            f"usage: {Path(sys.argv[0]).name} DIST-PLAN.json | --self-test",
+            file=sys.stderr,
+        )
         return 2
     path = Path(sys.argv[1])
     try:
