@@ -34,6 +34,7 @@ jobs:
           printf '%s' "$DIST_PLAN" > "$RUNNER_TEMP/dist-plan.json"
           python3 scripts/assert-dist-plan.py "$RUNNER_TEMP/dist-plan.json"
           python3 scripts/assert-release-gates.py
+          python3 scripts/assert-push-main-preflight.py
       - name: Run journey interface negative self-test
         run: python3 scripts/production-journey.py --self-test
       - name: Test workspace

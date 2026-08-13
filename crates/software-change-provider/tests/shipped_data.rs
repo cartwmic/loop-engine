@@ -272,7 +272,7 @@ fn all_profiles_pass_production_config_validation_and_have_exact_subjects() {
 }
 
 #[test]
-fn profiles_carry_exact_r12_axes_and_high_rigor_counts() {
+fn profiles_carry_exact_shipped_profile_mapping_and_author_counts() {
     let minimal = axis_map(&load_profile("minimal"));
     assert_eq!(
         minimal,

@@ -25,6 +25,19 @@ fn run() -> i32 {
     let mut args = std::env::args_os();
     let _program = args.next();
     match args.next() {
+        Some(command) if command == "--help" || command == "-h" => {
+            if args.next().is_some() {
+                return data_dump_usage("help accepts no additional arguments");
+            }
+            return provider_help();
+        }
+        Some(command) if command == "--version" || command == "-V" => {
+            if args.next().is_some() {
+                return data_dump_usage("version accepts no additional arguments");
+            }
+            println!("software-change {}", env!("CARGO_PKG_VERSION"));
+            return 0;
+        }
         Some(command) if command == "data-dump" => {
             let Some(destination) = args.next() else {
                 return data_dump_usage("missing destination directory");
@@ -79,6 +92,13 @@ fn run_protocol() -> i32 {
         "evaluate" => evaluate(request),
         other => protocol_error(format!("unsupported provider operation `{other}`")),
     }
+}
+
+fn provider_help() -> i32 {
+    println!(
+        "software-change\n\nUsage:\n  software-change < stdin\n  software-change data-dump DIR\n  software-change --help | -h\n  software-change --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nData:\n  data-dump  materialize embedded provider data under DIR"
+    );
+    0
 }
 
 fn data_dump_usage(message: &str) -> i32 {

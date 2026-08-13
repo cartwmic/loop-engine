@@ -1,0 +1,46 @@
+## Identity
+
+record-kind: fictional repository state
+HEAD: repo-state-2026-08-13
+coverage label: repo-state-2026-08-13
+
+## Change listing
+
+command: git diff-tree --name-status repo-state-2026-08-13^ repo-state-2026-08-13
+command exit status: 0
+stdout:
+A\tfictional-repo/provider/src/judge.rs
+A\tfictional-repo/provider/src/service.rs
+
+## Plan surface inventory
+
+foundation: no Cargo.toml, src/main.rs, src/protocol.rs, src/config.rs, or src/schema.rs in this state
+semantics: no src/artifacts.rs, src/evidence.rs, src/gates.rs, or src/workflow.rs in this state
+reference-data-and-proof: no data/configs, data/templates, data/reviewer-protocol.md, data/calibration, or acceptance-test files in this state
+
+## File excerpts
+
+foundation excerpt: provider/src/judge.rs contains an automatic judge entry; provider/src/service.rs contains a long-running manager entry.
+semantics excerpt: provider/src/judge.rs and provider/src/service.rs are the only provider source paths in the change listing.
+reference-data-and-proof excerpt: no config, template, reviewer-protocol, calibration, or acceptance-test path appears in the change listing.
+
+## Validation
+
+command: cargo check --workspace
+exit status: 101
+result: process stopped because provider/Cargo.toml was not present
+command: cargo test --workspace
+status: not run
+result: no test process started
+command: cargo clippy --workspace --all-targets
+status: not run
+result: no lint process started
+command: cargo fmt --all -- --check
+status: not run
+result: no formatting process started
+
+## Record notes
+
+all paths above use fictional-repo/ labels
+validation records preserve command status or not-run state
+repository state is supplied as static UTF-8 material

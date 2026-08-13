@@ -1,16 +1,48 @@
 {
-  "revision": "bad-1",
+  "revision": "r15",
   "author": {
     "name": "validation-agent",
     "kind": "agent"
   },
-  "intent_revision": "1",
+  "intent_revision": "r15",
   "coverage": {
-    "commit": "repo-state-bad",
+    "commit": "repo-state-2026-08-13",
     "documents": [
       {
-        "path": "README.md",
+        "path": "fictional-repo/README.md",
         "revision": "unknown"
+      },
+      {
+        "path": "fictional-repo/provider/README.md",
+        "revision": "unknown"
+      },
+      {
+        "path": "fictional-repo/docs/PRD.md",
+        "revision": "unknown"
+      },
+      {
+        "path": "fictional-repo/loop-engine-software-change-provider-prd.md",
+        "revision": "unknown"
+      },
+      {
+        "path": "fictional-repo/loop-engine-software-change-provider-technical-design.md",
+        "revision": "unknown"
+      },
+      {
+        "path": "fictional-repo/loop-engine-software-change-provider-task-packets.md",
+        "revision": "unknown"
+      },
+      {
+        "path": "fictional-repo/implementation-evidence/requirement-to-proof.md",
+        "revision": "unknown"
+      },
+      {
+        "path": "fictional-repo/scripts/assert-doc-authority.py",
+        "revision": "v1.1"
+      },
+      {
+        "path": "fictional-repo/docs/review-contract.md",
+        "revision": "v1.0"
       }
     ]
   },
@@ -22,6 +54,7 @@
     }
   ],
   "validation": [
-    "Ran some tests."
+    "Ran some tests.",
+    "python3 fictional-repo/scripts/assert-doc-authority.py was listed, but no captured output or exit status was supplied."
   ]
 }

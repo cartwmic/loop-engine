@@ -156,3 +156,11 @@ Inspect `initial_input.review_policies` and `initial_input.artifact_schemas` the
 For checked transitions, evaluation performs deterministic schema and link checks before consulting review evidence. Missing or unparseable expected artifacts produce a schema denial; invalid or inaccessible artifact roots produce an evaluation error. Evidence denials identify unsatisfied policy axes. Check-free `revise` transitions do not require provider evaluation.
 
 See [`docs/agent-usage.md`](../../docs/agent-usage.md) for the complete Loop Engine command surface and JSON outcome handling.
+
+## Candidate identity and supplied calibration data
+
+Binaries built from this source revision accept `software-change --help` (or `-h`) and `software-change --version` (or `-V`) without stdin. Help names `describe`, `evaluate`, and `data-dump`; version comes from the packaged Cargo version. The public v0.2.2 release predates these flags. No-argument stdin protocol and `data-dump DIR` behavior remain unchanged.
+
+`data-dump` includes `data/calibration/reviewer-instruction.txt` and stable fictional companions under `data/calibration/companions/fictional-repo/`. Calibration fixtures use `fictional-repo/` labels only; reviewers receive mapped companion bytes and never resolve labels against a live checkout. `data/calibration/PROCEDURE.md` defines one fresh exact-byte external review per row: fixed instruction, prompt, protocol, template, recursively sorted schema, subject, required good predecessors, sorted companions, and canonical request JSON. A11 hashes those ordered source records with big-endian length framing; framing identifies exact supplied records and is not model-call transport. Digest is mechanical test identity, not semantic review proof; changing supplied bytes requires fresh owner review before changing attestation metadata. No shipped harness invokes reviewers or rewrites manifest attestations.
+
+Evidence denial details separate current blockers (`details.diagnostics`) from stale or stale-config recovery context (`details.informational`). Prior denials and inert records remain separate fields. Stale evidence never satisfies current obligations.

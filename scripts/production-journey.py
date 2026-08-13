@@ -291,6 +291,29 @@ class Journey:
         )
 
     def _probe_startup(self) -> None:
+        for flag in ("--help", "-h"):
+            help_output = subprocess.run(
+                [str(self.provider), flag], input="", text=True, capture_output=True, check=False
+            )
+            if help_output.returncode != 0 or help_output.stderr or "software-change" not in help_output.stdout:
+                raise JourneyFailure(
+                    f"software-change {flag} startup probe failed: "
+                    f"{help_output.stderr.strip() or help_output.returncode}"
+                )
+        for flag in ("--version", "-V"):
+            provider_version = subprocess.run(
+                [str(self.provider), flag], input="", text=True, capture_output=True, check=False
+            )
+            if provider_version.returncode != 0 or provider_version.stderr or not provider_version.stdout.strip():
+                raise JourneyFailure(
+                    f"software-change {flag} startup probe failed: "
+                    f"{provider_version.stderr.strip() or provider_version.returncode}"
+                )
+            # The binary is authoritative for its package identity.  Keep the
+            # probe independent of checkout metadata when running archives.
+            if not provider_version.stdout.startswith("software-change ") or len(provider_version.stdout.splitlines()) != 1:
+                raise JourneyFailure("software-change version probe returned malformed identity")
+
         version = subprocess.run(
             [str(self.engine), "--version"], text=True, capture_output=True, check=False
         )

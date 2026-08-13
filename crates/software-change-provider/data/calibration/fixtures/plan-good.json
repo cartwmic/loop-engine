@@ -1,96 +1,296 @@
 {
-  "revision": "1",
+  "revision": "r15",
   "author": {
     "name": "plan-author",
     "kind": "human"
   },
-  "design_revision": "1",
-  "objective": "Deliver the frozen provider design as a repository-local reference workflow with executable proof for every acceptance criterion.",
+  "design_revision": "r15",
+  "objective": "Deliver the frozen provider design as a repository-local reference workflow with seven component-sized implementation packets and executable proof for every acceptance criterion.",
   "tasks": [
     {
-      "id": "foundation",
-      "objective": "Create the provider crate, strict protocol DTOs, describe snapshot, generic schema checker, and validated config query surface.",
+      "id": "protocol-and-config-contract",
+      "objective": "Define strict request and result contracts, dispatch behavior, static topology description, and caller-selected profile freeze semantics without conflating inspectable run input with describe.",
       "dependencies": [],
       "source_of_truth": [
-        "technical-design.md \u00a73-\u00a75",
-        "prd.md R1, R6, R9-R12"
+        "intent.json#/acceptance/0",
+        "intent.json#/constraints/0",
+        "design.json#/elements/0",
+        "design.json#/decisions/0",
+        "design.json#/decisions/1",
+        "design.json#/decisions/3",
+        "design.json#/decisions/4",
+        "fictional-repo/provider/data/configs/minimal.json",
+        "fictional-repo/provider/data/configs/standard.json",
+        "fictional-repo/provider/data/configs/high-rigor.json"
       ],
       "deliverables": [
-        "Compiling software-change binary",
-        "Schema and config unit tests",
-        "Stable protocol handoff for evaluator"
+        "Provider crate manifest in fictional-repo/provider/Cargo.toml",
+        "Exact provider protocol contract implementation in fictional-repo/provider/src/protocol.rs and fictional-repo/provider/src/main.rs: flat describe request {\"operation\":\"describe\"}; flat evaluate request fields operation, workflow, initial_input, context, transition, prior_evaluations; reject unknown fields; describe returns only the exact static workflow topology snapshot; evaluate returns exactly {\"result\":\"allow\"}, {\"result\":\"unsupported\"}, or {\"result\":\"deny\",\"feedback\":{\"code\",\"message\",\"details\"?}}; exit 0 means valid response written, 1 evaluation/config failure with stderr/no stdout response, 2 protocol/usage failure with stderr/no stdout response; one request/process.",
+        "Frozen profile-selection and inspection contract: caller selects one full canonical profile and passes that exact value as start initial_input; Loop Engine freezes exact initial_input; show projects frozen initial_input unchanged; flat evaluate carries the same frozen initial_input; describe does not expose selected profile policies or artifact schemas",
+        "Protocol contract tests in fictional-repo/provider/tests/describe_protocol.rs with snapshot fictional-repo/provider/tests/snapshots/describe.json"
       ],
       "out_of_scope": [
-        "Provider-side judging",
-        "Engine topology changes"
+        "Schema validation, evidence aggregation, checked-transition routing, and semantic review judgment",
+        "Workflow state mutation and documentation integration"
       ],
       "validation": [
-        "cargo test -p software-change-provider",
-        "Schema allowlist and malformed-config matrices pass"
+        "cargo test -p software-change-provider --test describe_protocol",
+        "Assert malformed JSON and unknown operations return protocol errors without stdout, unknown evaluate envelope fields are rejected, and flat describe output matches fictional-repo/provider/tests/snapshots/describe.json byte-for-byte as only the exact static workflow topology snapshot; selected profile policies and artifact schemas are not in describe; caller-selected full canonical profile survives start initial_input freeze, show projects frozen initial_input unchanged, and flat evaluate carries that exact frozen initial_input."
       ],
-      "handoff": "Record exported DTO and config query contracts; downstream artifact and evidence tasks consume them without reshaping."
+      "handoff": "Produce DTOs in fictional-repo/provider/src/protocol.rs and fictional-repo/provider/src/main.rs; profile selection takes one full canonical profile through start initial_input rather than describe, while Loop Engine owns exact freeze and show/evaluate projection. Schema-and-artifact-validation, evidence-evaluator, and versioned-reference-data consume these contracts without reshaping them."
     },
     {
-      "id": "semantics",
-      "objective": "Implement contained artifact reads, revision links, evidence aggregation, gate mapping, and evaluation ordering.",
+      "id": "schema-and-artifact-validation",
+      "objective": "Validate the bounded schema subset, contained authored artifacts, and declared cross-artifact revision links with deterministic exhaustive violations.",
       "dependencies": [
-        "foundation"
+        "protocol-and-config-contract"
       ],
       "source_of_truth": [
-        "technical-design.md \u00a75-\u00a79",
-        "prd.md R2-R5, R13-R19"
+        "intent.json#/acceptance/1",
+        "intent.json#/constraints/1",
+        "design.json#/elements/1",
+        "design.json#/decisions/0",
+        "design.json#/decisions/1",
+        "fictional-repo/provider/data/configs/minimal.json",
+        "fictional-repo/provider/data/configs/standard.json",
+        "fictional-repo/provider/data/configs/high-rigor.json"
       ],
       "deliverables": [
-        "Artifact and evidence modules",
-        "Complete evaluate path",
-        "Provider-level negative and precedence tests"
+        "Bounded schema validation in fictional-repo/provider/src/schema.rs",
+        "Contained artifact reads and revision-link checks in fictional-repo/provider/src/artifacts.rs",
+        "Deterministic structural-denial assertions in fictional-repo/provider/tests/evaluate.rs and fictional-repo/provider/tests/a3.rs"
       ],
       "out_of_scope": [
-        "Model invocation",
-        "Calibration attestation"
+        "Evidence attribution or semantic review judgment",
+        "Checked-transition selection, workflow persistence, and terminal routing",
+        "Canonical policy/config content authoring or integration; versioned-reference-data owns preserving and integrating the shipped profile data"
+      ],
+      "validation": [
+        "cargo test -p software-change-provider --test evaluate",
+        "cargo test -p software-change-provider --test a3",
+        "Assert absent and unparseable subjects deny, schema_deny_reports_every_simultaneous_structural_violation returns every exact path/rule pair in deterministic order, schema_deny_is_byte_identical_when_only_context_varies keeps evidence out of structural denial, revision_link_mismatch_is_schema_deny_naming_both_artifacts names both documents, and traversal escapes remain provider errors."
+      ],
+      "handoff": "Produce ArtifactReadOutcome, structural violation ordering, and revision-link diagnostics in fictional-repo/provider/src/artifacts.rs and fictional-repo/provider/src/schema.rs; checked-transition-evaluator consumes these outcomes before evidence evaluation."
+    },
+    {
+      "id": "evidence-evaluator",
+      "objective": "Aggregate configured external evidence by exact gate, axis, subject revision, config version, and author identity without reading files or judging semantic truth.",
+      "dependencies": [
+        "protocol-and-config-contract"
+      ],
+      "source_of_truth": [
+        "intent.json#/acceptance/2",
+        "intent.json#/constraints/0",
+        "design.json#/elements/2",
+        "design.json#/decisions/2",
+        "design.json#/decisions/5",
+        "fictional-repo/provider/data/reviewer-protocol.md",
+        "fictional-repo/provider/data/configs/minimal.json",
+        "fictional-repo/provider/data/configs/standard.json",
+        "fictional-repo/provider/data/configs/high-rigor.json"
+      ],
+      "deliverables": [
+        "Evidence attribution, conformance, supersession, and diagnostic types in fictional-repo/provider/src/evidence.rs",
+        "Current-revision and config-version filtering with distinct non-subject-author counting",
+        "Evidence aggregation coverage in fictional-repo/provider/tests/a5.rs and unit tests in fictional-repo/provider/src/evidence.rs"
+      ],
+      "out_of_scope": [
+        "Filesystem access, artifact schema checks, transition routing, and workflow state mutation",
+        "Provider-side semantic judging or model invocation"
+      ],
+      "validation": [
+        "cargo test -p software-change-provider --lib",
+        "cargo test -p software-change-provider --test a5",
+        "Assert stale_revision_does_not_satisfy_and_names_both_revisions, stale_config_does_not_satisfy_and_names_both_versions, subject-author exclusion, n_two_requires_distinct_non_subject_authors_and_rejects_standing_fail, and latest same-author verdict supersession."
+      ],
+      "handoff": "Produce EvidenceEvaluation, EvidenceDiagnostic, and exact AuthorIdentity behavior in fictional-repo/provider/src/evidence.rs; checked-transition-evaluator consumes ordered diagnostics and the satisfied result without reimplementing attribution."
+    },
+    {
+      "id": "versioned-reference-data",
+      "objective": "Integrate existing canonical frozen policies, schemas, prompts, templates, and reviewer protocol as inspectable reference data selected by initial run input without authoring their content.",
+      "dependencies": [
+        "protocol-and-config-contract",
+        "schema-and-artifact-validation"
+      ],
+      "source_of_truth": [
+        "fictional-repo/provider/data/configs/minimal.json",
+        "fictional-repo/provider/data/configs/standard.json",
+        "fictional-repo/provider/data/configs/high-rigor.json",
+        "fictional-repo/provider/data/templates/intent.md",
+        "fictional-repo/provider/data/templates/design.md",
+        "fictional-repo/provider/data/templates/task-packet.md",
+        "fictional-repo/provider/data/templates/implementation-report.md",
+        "fictional-repo/provider/data/templates/validation-report.md",
+        "fictional-repo/provider/data/reviewer-protocol.md",
+        "design.json#/elements/3",
+        "design.json#/decisions/1"
+      ],
+      "deliverables": [
+        "Preserve exact bytes and semantics of existing canonical configs at fictional-repo/provider/data/configs/minimal.json, fictional-repo/provider/data/configs/standard.json, and fictional-repo/provider/data/configs/high-rigor.json, except integration needed to embed or expose them",
+        "Preserve exact bytes and semantics of existing canonical templates at fictional-repo/provider/data/templates/intent.md, fictional-repo/provider/data/templates/design.md, fictional-repo/provider/data/templates/task-packet.md, fictional-repo/provider/data/templates/implementation-report.md, and fictional-repo/provider/data/templates/validation-report.md, plus fictional-repo/provider/data/reviewer-protocol.md; no prompt, axis, or schema authoring",
+        "Embedded lookup parity in fictional-repo/provider/src/embedded_data.rs with tests fictional-repo/provider/tests/embedded_data.rs and fictional-repo/provider/tests/shipped_data.rs"
+      ],
+      "out_of_scope": [
+        "Provider-side semantic judging, owner verdicts, and external review attestation",
+        "Prompt, axis, schema, or reviewer-protocol content authoring or semantic changes",
+        "Transition routing and workflow persistence"
+      ],
+      "validation": [
+        "cargo test -p software-change-provider --test embedded_data embedded_manifest_exactly_matches_on_disk_data_tree -- --exact",
+        "cargo test -p software-change-provider --test shipped_data all_profiles_pass_production_config_validation_and_have_exact_subjects -- --exact",
+        "cargo test -p software-change-provider --test shipped_data profiles_carry_exact_shipped_profile_mapping_and_author_counts -- --exact",
+        "cargo test -p software-change-provider --lib schema::tests::allowlist_pin_matches_normative_subset -- --exact",
+        "cargo test -p software-change-provider --test shipped_data every_axis_prompt_references_subject_template_schema_and_all_antipedantry_guards -- --exact"
+      ],
+      "handoff": "After protocol-and-config-contract and schema-and-artifact-validation, expose embedded lookup keys for unchanged canonical configs, templates, and reviewer protocol in fictional-repo/provider/src/embedded_data.rs; checked-transition-evaluator and acceptance-proof consume the validated profile projection."
+    },
+    {
+      "id": "checked-transition-evaluator",
+      "objective": "Consume validated artifact, evidence, and profile projections; map exact reference checked and check-free revise tuples with frozen subject/evidence routing, preserve denial precedence, and permit terminal progress only after configured validation obligations pass.",
+      "dependencies": [
+        "schema-and-artifact-validation",
+        "evidence-evaluator",
+        "versioned-reference-data"
+      ],
+      "source_of_truth": [
+        "intent.json#/acceptance/1",
+        "intent.json#/acceptance/2",
+        "intent.json#/acceptance/3",
+        "intent.json#/constraints/0",
+        "intent.json#/constraints/2",
+        "design.json#/elements/0",
+        "design.json#/elements/1",
+        "design.json#/elements/2",
+        "design.json#/elements/4",
+        "design.json#/decisions/0",
+        "design.json#/decisions/2"
+      ],
+      "deliverables": [
+        "Checked-transition gate mapping and response projection in fictional-repo/provider/src/gates.rs",
+        "Reference workflow terminal obligation handling in fictional-repo/provider/src/workflow.rs",
+        "Exact reference topology and routing contract in fictional-repo/provider/src/workflow.rs and fictional-repo/provider/src/gates.rs: checked tuples are explore/intent-ready/design, design/design-ready/design-review, design-review/approved/plan, plan/plan-ready/plan-review, plan-review/approved/implement, implement/implementation-ready/implementation-review, implementation-review/approved/validation, validation/passed/end; check-free revise tuples are design-review/revise/design, plan-review/revise/plan, implementation-review/revise/implement, validation/revise/implement; route explore/intent-ready/design to subject intent.json and evidence gate intent; route design/design-ready/design-review to subject design.json and no evidence gate; route design-review/approved/plan to subject design.json and evidence gate design-review; route plan/plan-ready/plan-review to subject plan.json and no evidence gate; route plan-review/approved/implement to subject plan.json and evidence gate plan-review; route implement/implementation-ready/implementation-review to subject implementation-report.json and no evidence gate; route implementation-review/approved/validation to subject implementation-report.json and evidence gate implementation-review; route validation/passed/end to subject validation-report.json and evidence gate validation; revise tuples carry no subject or evidence; no new states or transitions",
+        "Selected-transition, precedence, and denial-lineage assertions in fictional-repo/provider/tests/a1.rs, fictional-repo/provider/tests/a9.rs, and fictional-repo/provider/tests/a15.rs"
+      ],
+      "out_of_scope": [
+        "Engine routing or durable state mutation",
+        "New workflow states, model invocation, provider-side semantic judging, and external review attestation"
+      ],
+      "validation": [
+        "cargo test -p software-change-provider --test a1",
+        "cargo test -p software-change-provider --test a9",
+        "cargo test -p software-change-provider --test a15",
+        "Assert schema denial precedes evidence denial, schema_deny_reports_every_simultaneous_structural_violation proves malformed subjects report every named path/rule pair, stale/self-authored/duplicate-author and incomplete configured obligations refuse checked transitions, supported tuples return allow/deny/unsupported taxonomy, exact checked tuples are explore/intent-ready/design, design/design-ready/design-review, design-review/approved/plan, plan/plan-ready/plan-review, plan-review/approved/implement, implement/implementation-ready/implementation-review, implementation-review/approved/validation, validation/passed/end, exact check-free revise tuples are design-review/revise/design, plan-review/revise/plan, implementation-review/revise/implement, validation/revise/implement, subject/evidence routing matches intent.json and intent evidence, design.json and design-review evidence, plan.json and plan-review evidence, implementation-report.json and implementation-review evidence, validation-report.json and validation evidence with schema-only readiness routes, and no other topology is accepted."
+      ],
+      "handoff": "Produce exact allow/deny/unsupported response and denial-detail types in fictional-repo/provider/src/gates.rs, exact checked/revise topology and subject/evidence routing in fictional-repo/provider/src/workflow.rs and gates.rs, and terminal obligation behavior; acceptance-proof consumes these frozen outputs plus the versioned profile projection without changing engine routing."
+    },
+    {
+      "id": "acceptance-proof",
+      "objective": "Map each intent acceptance requirement to executable provider or engine proof while keeping supplied review records limited to deterministic mechanics.",
+      "dependencies": [
+        "checked-transition-evaluator",
+        "versioned-reference-data"
+      ],
+      "source_of_truth": [
+        "intent.json#/acceptance/0",
+        "intent.json#/acceptance/1",
+        "intent.json#/acceptance/2",
+        "intent.json#/acceptance/3",
+        "design.json#/elements/0",
+        "design.json#/elements/1",
+        "design.json#/elements/2",
+        "design.json#/elements/3",
+        "design.json#/elements/4"
+      ],
+      "deliverables": [
+        "Acceptance tests in fictional-repo/provider/tests/a2.rs, fictional-repo/provider/tests/a7.rs, fictional-repo/provider/tests/a8.rs, fictional-repo/provider/tests/a11.rs, fictional-repo/provider/tests/a12.rs, fictional-repo/provider/tests/a13.rs, fictional-repo/provider/tests/a14.rs, and fictional-repo/provider/tests/r25.rs",
+        "Requirement-to-proof matrix at fictional-repo/implementation-evidence/requirement-to-proof.md",
+        "Executable proof-map checker at fictional-repo/scripts/assert-requirement-proof.py; it maps all four exact intent acceptance requirements to named proofs and checks the supplied repository-state proof inventory",
+        "A mechanical audit showing every acceptance line maps to an existing named test and no supplied review record is presented as semantic review quality"
+      ],
+      "out_of_scope": [
+        "Prompt, schema, protocol, or runtime behavior changes",
+        "Owner semantic verdicts, live model invocation, and documentation authority decisions"
       ],
       "validation": [
         "cargo test --workspace",
-        "Tuple, recheck, denial-lineage, and evidence supersession cases pass"
+        "python3 fictional-repo/scripts/assert-requirement-proof.py"
       ],
-      "handoff": "Publish response shapes, deny details, and artifact outcome taxonomy for acceptance tests."
+      "handoff": "Produce the acceptance tests, fictional-repo/implementation-evidence/requirement-to-proof.md, and fictional-repo/scripts/assert-requirement-proof.py; authoritative-doc-integration consumes this proof matrix, checker, and successful workspace output."
     },
     {
-      "id": "reference-data-and-proof",
-      "objective": "Ship profile data, templates, reviewer protocol, calibration skeleton, acceptance tests, and repository documentation.",
+      "id": "authoritative-doc-integration",
+      "objective": "Integrate delivered behavior and proof into fictional-repo documentation while keeping the authoritative product boundary singular.",
       "dependencies": [
-        "semantics"
+        "acceptance-proof"
       ],
       "source_of_truth": [
-        "technical-design.md \u00a710-\u00a713",
-        "prd.md R21-R27 and A1-A15"
+        "intent.json#/outcome",
+        "intent.json#/constraints/2",
+        "design.json#/elements/0",
+        "design.json#/elements/4",
+        "fictional-repo/docs/PRD.md"
       ],
       "deliverables": [
-        "Three validated configs",
-        "Templates and reviewer protocol",
-        "Owner-attested calibration manifest",
-        "A1-A15 proof matrix"
+        "Fictional root README at fictional-repo/README.md linking the authoritative PRD, proof matrix, and fictional-repo/provider/README.md",
+        "Provider README at fictional-repo/provider/README.md describing data, protocol, and test contracts",
+        "Authoritative product document at fictional-repo/docs/PRD.md linked to fictional-repo/implementation-evidence/requirement-to-proof.md",
+        "Supplemental change PRD at fictional-repo/loop-engine-software-change-provider-prd.md, technical design at fictional-repo/loop-engine-software-change-provider-technical-design.md, and task packets at fictional-repo/loop-engine-software-change-provider-task-packets.md",
+        "An explicit authority rule: fictional-repo/docs/PRD.md is authoritative and the change-scoped PRD is supplemental/non-authoritative",
+        "Executable authority/link checker at fictional-repo/scripts/assert-doc-authority.py; run it with `python3 fictional-repo/scripts/assert-doc-authority.py`."
       ],
       "out_of_scope": [
-        "Standalone packaging",
-        "Automated calibration harness"
+        "Standalone installed packaging, provider runtime changes, and workflow topology changes",
+        "Deleting current real-repository docs solely for consolidation"
       ],
       "validation": [
         "cargo test --workspace",
-        "Calibration coverage and observed-vs-expected checks",
-        "Requirement-to-proof audit"
+        "test -s fictional-repo/README.md && test -s fictional-repo/provider/README.md && test -s fictional-repo/docs/PRD.md && test -s fictional-repo/implementation-evidence/requirement-to-proof.md",
+        "python3 fictional-repo/scripts/assert-requirement-proof.py",
+        "python3 fictional-repo/scripts/assert-doc-authority.py"
       ],
-      "handoff": "Name exact data paths and residual owner attestations; final audit consumes the complete proof surface."
+      "handoff": "Produce fictional-repo/README.md, fictional-repo/provider/README.md, fictional-repo/docs/PRD.md, fictional-repo/implementation-evidence/requirement-to-proof.md, fictional-repo/scripts/assert-doc-authority.py, and the supplemental change PRD, technical design, and task packets; validation report and docs-integrated review consume these exact document, checker, and proof paths."
     }
   ],
   "dependency_graph": [
     {
-      "from": "foundation",
-      "to": "semantics"
+      "from": "protocol-and-config-contract",
+      "to": "schema-and-artifact-validation"
     },
     {
-      "from": "semantics",
-      "to": "reference-data-and-proof"
+      "from": "protocol-and-config-contract",
+      "to": "evidence-evaluator"
+    },
+    {
+      "from": "protocol-and-config-contract",
+      "to": "versioned-reference-data"
+    },
+    {
+      "from": "schema-and-artifact-validation",
+      "to": "versioned-reference-data"
+    },
+    {
+      "from": "schema-and-artifact-validation",
+      "to": "checked-transition-evaluator"
+    },
+    {
+      "from": "evidence-evaluator",
+      "to": "checked-transition-evaluator"
+    },
+    {
+      "from": "versioned-reference-data",
+      "to": "checked-transition-evaluator"
+    },
+    {
+      "from": "checked-transition-evaluator",
+      "to": "acceptance-proof"
+    },
+    {
+      "from": "versioned-reference-data",
+      "to": "acceptance-proof"
+    },
+    {
+      "from": "acceptance-proof",
+      "to": "authoritative-doc-integration"
     }
   ]
 }

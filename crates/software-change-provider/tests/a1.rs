@@ -63,7 +63,7 @@ fn standard_run_progresses_schema_deny_then_evidence_deny_then_allow() {
             "reviewer-a1",
             "agent",
             "intent.json",
-            "1",
+            "r15",
             "standard-3",
         );
         // Keep sequence values visible in source even though persistence owns
@@ -77,7 +77,7 @@ fn standard_run_progresses_schema_deny_then_evidence_deny_then_allow() {
 
     // Ensure shipped evidence path was consumed as JSON, not copied into a
     // test-local representation.
-    assert_eq!(intent_revision(&intent), "1");
+    assert_eq!(intent_revision(&intent), "r15");
 }
 
 fn intent_revision(intent: &Value) -> &str {

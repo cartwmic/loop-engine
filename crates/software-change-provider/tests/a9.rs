@@ -110,9 +110,20 @@ fn engine_classifies_stale_config_evidence_as_review_denial() {
         .iter()
         .find(|axis| axis["axis"] == "axis")
         .expect("axis diagnostic");
-    let stale_config = axis["diagnostics"]
+    assert!(axis["diagnostics"]
         .as_array()
-        .expect("diagnostics")
+        .expect("blocking diagnostics")
+        .iter()
+        .all(|diagnostic| diagnostic["category"] != "stale_config"));
+    let informational_axis = details["informational"]
+        .as_array()
+        .expect("informational axis diagnostics")
+        .iter()
+        .find(|axis| axis["axis"] == "axis")
+        .expect("informational axis diagnostic");
+    let stale_config = informational_axis["diagnostics"]
+        .as_array()
+        .expect("informational diagnostics")
         .iter()
         .find(|diagnostic| diagnostic["category"] == "stale_config")
         .expect("stale config diagnostic");

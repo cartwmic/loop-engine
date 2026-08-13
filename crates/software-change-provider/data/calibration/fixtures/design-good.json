@@ -1,11 +1,11 @@
 {
-  "revision": "1",
+  "revision": "r15",
   "author": {
     "name": "design-author",
     "kind": "human"
   },
-  "intent_revision": "1",
-  "approach": "A stateless provider binary reads the frozen initial-input configuration, validates contained authored artifacts with a small generic schema checker, then aggregates opaque external review evidence for the exact checked transition. Versioned configs, templates, and reviewer prompts remain data files.",
+  "intent_revision": "r15",
+  "approach": "A stateless provider binary evaluates caller-selected frozen initial input: the caller passes one full canonical profile as start initial_input, Loop Engine freezes that value, show projects it unchanged, and evaluate carries it unchanged; flat describe returns only the exact static workflow topology. A bounded generic schema checker validates contained authored artifacts and emits deterministic exhaustive structural violations; the checked transition evaluator consumes that output, maps every named violation into denial details before or without evidence satisfaction, then evaluates opaque external review evidence for the selected checked transition. Versioned configs, templates, and reviewer prompts remain inspectable reference data. This approach is required by compatibility with the existing Loop Engine provider boundary: it invokes one local subprocess per request, and this change cannot alter the reference workflow state or transition topology.",
   "elements": [
     {
       "name": "protocol boundary",
@@ -21,7 +21,11 @@
     },
     {
       "name": "versioned data profiles",
-      "responsibility": "Supply policies, schemas, prompts, templates, reviewer protocol, and calibration fixtures outside provider code."
+      "responsibility": "Supply selected run's frozen policies, schemas, prompts, templates, and reviewer protocol as inspectable reference data outside provider judging code; no profile catalog is hard-coded in design."
+    },
+    {
+      "name": "checked transition evaluator",
+      "responsibility": "Consume deterministic exhaustive structural violations from the generic schema checker and map each named violation into checked-transition denial details before or without evidence satisfaction; then apply the configured evidence gate and permit the reference workflow terminal transition only after configured validation obligations pass."
     }
   ],
   "decisions": [
@@ -33,11 +37,11 @@
       ]
     },
     {
-      "choice": "Use a bounded in-crate schema subset.",
-      "rationale": "It provides deterministic shape checks without importing uncalibrated full JSON Schema behavior.",
+      "choice": "Freeze one bounded schema language shared by the generic checker and versioned data profiles: types object, array, and string; object keywords additionalProperties, properties, required, and type; array keywords items, minItems, and type; string keywords enum, minLength, and type. additionalProperties must be false (literal false only); unknown keywords and invalid keyword placement are rejected; instance checking collects every applicable violation in deterministic path/rule order.",
+      "rationale": "The schema checker and shipped profile schemas consume one inspectable contract, so callers get exhaustive structural denial without full JSON Schema or workflow-specific interpretation.",
       "rejected": [
-        "A full schema dependency with unused keywords.",
-        "A new custom artifact language."
+        "Full JSON Schema and its unneeded keyword surface.",
+        "A second custom artifact language or profile-specific schema dialect."
       ]
     },
     {
@@ -45,6 +49,34 @@
       "rationale": "Evidence aggregation needs deterministic distinctness and independence while preserving external claims.",
       "rejected": [
         "Cryptographic identity or provider-side author allowlists."
+      ]
+    },
+    {
+      "choice": "Preserve exact provider protocol contract: flat describe request {\"operation\":\"describe\"}; flat evaluate request fields operation, workflow, initial_input, context, transition, prior_evaluations; reject unknown fields; describe returns workflow; evaluate returns exactly {\"result\":\"allow\"}, {\"result\":\"unsupported\"}, or {\"result\":\"deny\",\"feedback\":{\"code\",\"message\",\"details\"?}}; exit 0 means valid response written, 1 evaluation/config failure with stderr/no stdout response, 2 protocol/usage failure with stderr/no stdout response; one request/process.",
+      "rationale": "Compatibility with the existing Loop Engine provider boundary requires one local subprocess per request and forbids changing the reference workflow state or transition topology. Recording this exact contract gives the plan worker a complete protocol boundary and leaves no request, response, exit, or process behavior to invent.",
+      "rejected": [
+        "Adding nested request envelopes or extra request fields.",
+        "Allowing unknown fields or multiple requests in one process.",
+        "Changing response variants or exit meanings to fit an implementation preference."
+      ]
+    },
+    {
+      "choice": "Transport complete caller-selected canonical profile as immutable initial_input rather than profile identifier or repository lookup.",
+      "rationale": "Loop Engine already freezes initial_input, so exact run-frozen profile bytes make obligations inspectable/replayable and prevent provider environment/catalog drift; describe remains static workflow topology rather than selected-profile data.",
+      "rejected": [
+        "Resolving profile identifier through provider catalog/environment.",
+        "Loading mutable repository profile at evaluation.",
+        "Embedding selected policies in describe."
+      ]
+    },
+    {
+      "choice": "Freeze evidence aggregation by exact gate, policy axis, subject, subject_revision, config_version, and author (name, kind): only current subject revision and frozen config version can satisfy; subject author is excluded; latest conforming verdict per exact (axis, current subject revision, author identity) stands; every required distinct non-subject author must be present with zero standing fails, and duplicate records from one author do not increase author count; malformed or nonconforming current-axis records block until a later conforming record for the same gate and axis supersedes them. Provider evaluates supplied claims deterministically but does not authenticate identity or judge semantic truth.",
+      "rationale": "This prevents stale, duplicate, or self-authored evidence from laundering obligation satisfaction while preserving a deterministic provider boundary for external semantic judgment.",
+      "rejected": [
+        "Vote counting, which could let repeated or opposing claims launder a standing obligation.",
+        "Accepting stale or config-mismatched evidence, which could replay judgment against obsolete subjects or obligations.",
+        "Counting duplicate records from one author, which would counterfeit independent author coverage.",
+        "Provider-side identity authentication or semantic judging, which would cross the external-judgment boundary."
       ]
     }
   ],
@@ -54,26 +86,30 @@
       "mitigation": "Trust this residual explicitly and recheck the current declared artifact at every approval boundary."
     },
     {
-      "risk": "Manual calibration judgments may reveal a shipped prompt that is too strict.",
-      "mitigation": "Owner-attested good-but-imperfect fixtures define the futility guard; prompt or config changes bump config_version and restart affected attestation."
+      "risk": "A shipped profile may contain an unsupported bounded-schema keyword or revision-link mismatch, making configured obligations unavailable or misapplied.",
+      "mitigation": "Deterministic startup/profile validation rejects unsupported schema keywords, malformed revision links, and missing configured obligation references before evaluation."
+    },
+    {
+      "risk": "Exact name-kind declared identity is unauthenticated; a subject can claim another identity.",
+      "mitigation": "Provider preserves deterministic declared-identity checks; external process and provenance controls remain outside scope, so this residual is accepted."
     }
   ],
   "coverage": [
     {
-      "acceptance": "Frozen obligations and schemas are inspectable before evaluation.",
-      "delivered_by": "protocol boundary and versioned data profiles"
+      "acceptance": "A caller can inspect the frozen policies and artifact schemas before evaluating a transition.",
+      "delivered_by": "Decision 5 freezes complete caller-selected canonical profile transport; caller-selected full canonical profile is passed as start initial_input, frozen by Loop Engine, and projected unchanged through show and evaluate; flat describe returns only the exact static workflow topology."
     },
     {
-      "acceptance": "Malformed artifacts deny before evidence and name every violated rule.",
-      "delivered_by": "generic schema checker and exact-transition evaluator"
+      "acceptance": "A malformed subject artifact is denied with each violated structural rule named.",
+      "delivered_by": "Generic schema checker returns exhaustive violations; checked transition evaluator maps every exact path/rule into denial details before or without evidence satisfaction; evaluate.rs::schema_deny_reports_every_simultaneous_structural_violation proves that production relationship."
     },
     {
-      "acceptance": "Current evidence must satisfy configured axes and independence rules.",
-      "delivered_by": "evidence evaluator and profile policies"
+      "acceptance": "A checked transition refuses stale, self-authored, duplicate-author, or configured-obligation-incomplete evidence.",
+      "delivered_by": "Decision 6 freezes exact evidence attribution and standing-verdict semantics; evidence evaluator applies current-revision/config, subject-author, supersession, malformed-block, and distinct-author rules, and checked transition evaluator refuses incomplete results."
     },
     {
-      "acceptance": "The reference workflow reaches its terminal state only after configured validation obligations are satisfied.",
-      "delivered_by": "gate map validation obligations and the terminal transition evaluator"
+      "acceptance": "The reference workflow reaches its terminal state only after its configured validation obligations are satisfied.",
+      "delivered_by": "Checked transition evaluator maps the terminal gate to versioned data profile obligations and requires the configured validation axes."
     }
   ]
 }

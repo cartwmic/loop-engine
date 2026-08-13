@@ -20,3 +20,4 @@ serde_json = "1"
 
 [dev-dependencies]
 loop-integrations = { path = "../loop-integrations" }
+sha2 = "0.10"

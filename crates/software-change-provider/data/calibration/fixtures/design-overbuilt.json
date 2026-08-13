@@ -1,10 +1,10 @@
 {
-  "revision": "1",
+  "revision": "r15",
   "author": {
     "name": "design-author",
     "kind": "human"
   },
-  "intent_revision": "1",
+  "intent_revision": "r15",
   "approach": "A stateless provider binary reads the frozen initial-input configuration, validates contained authored artifacts with a small generic schema checker, then aggregates opaque external review evidence for the exact checked transition. Versioned configs, templates, and reviewer prompts remain data files.",
   "elements": [
     {

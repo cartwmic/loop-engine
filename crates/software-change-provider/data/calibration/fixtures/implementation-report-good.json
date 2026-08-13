@@ -1,37 +1,77 @@
 {
-  "revision": "1",
+  "revision": "r15",
   "author": {
     "name": "implementation-agent",
     "kind": "agent"
   },
-  "plan_revision": "1",
+  "plan_revision": "r15",
   "coverage": {
     "commit": "repo-state-2026-08-12",
     "documents": [
       {
-        "path": "loop-engine-software-change-provider-prd.md",
-        "revision": "v1.0"
+        "path": "fictional-repo/README.md",
+        "revision": "v1.1"
       },
       {
-        "path": "loop-engine-software-change-provider-technical-design.md",
-        "revision": "v1.0"
+        "path": "fictional-repo/provider/README.md",
+        "revision": "v1.1"
       },
       {
-        "path": "loop-engine-software-change-provider-task-packets.md",
-        "revision": "v1.0"
+        "path": "fictional-repo/docs/PRD.md",
+        "revision": "reference-workflow-v3"
+      },
+      {
+        "path": "fictional-repo/implementation-evidence/requirement-to-proof.md",
+        "revision": "v1.1"
+      },
+      {
+        "path": "fictional-repo/loop-engine-software-change-provider-prd.md",
+        "revision": "v1.1"
+      },
+      {
+        "path": "fictional-repo/loop-engine-software-change-provider-technical-design.md",
+        "revision": "v1.1"
+      },
+      {
+        "path": "fictional-repo/loop-engine-software-change-provider-task-packets.md",
+        "revision": "v1.1"
+      },
+      {
+        "path": "fictional-repo/scripts/assert-doc-authority.py",
+        "revision": "v1.1"
+      },
+      {
+        "path": "fictional-repo/scripts/assert-requirement-proof.py",
+        "revision": "v1.1"
       }
     ]
   },
-  "summary": "Implemented the stateless software-change provider, generic artifact checks, evidence aggregation, and shipped reference data described by the frozen plan.",
+  "summary": "Implemented the revised seven-task stateless software-change provider plan: strict protocol/config contracts, bounded schema and artifact validation with exhaustive checker-to-denial projection, external evidence evaluation, versioned reference data, checked-transition evaluation, executable acceptance proof, and authoritative documentation integration.",
   "changed_surface": [
-    "crates/software-change-provider/src",
-    "crates/software-change-provider/data",
-    "crates/software-change-provider/tests"
+    "fictional-repo/provider/src",
+    "fictional-repo/provider/data",
+    "fictional-repo/provider/tests",
+    "fictional-repo/README.md",
+    "fictional-repo/provider/README.md",
+    "fictional-repo/docs/PRD.md",
+    "fictional-repo/implementation-evidence/requirement-to-proof.md",
+    "fictional-repo/scripts/assert-requirement-proof.py",
+    "fictional-repo/loop-engine-software-change-provider-prd.md",
+    "fictional-repo/loop-engine-software-change-provider-technical-design.md",
+    "fictional-repo/loop-engine-software-change-provider-task-packets.md",
+    "fictional-repo/scripts/assert-doc-authority.py"
   ],
   "validation": [
     "cargo check --workspace passed",
+    "cargo test -p software-change-provider --test evaluate schema_deny_reports_every_simultaneous_structural_violation -- --exact passed",
+    "cargo test -p software-change-provider --test embedded_data passed",
+    "cargo test -p software-change-provider --test shipped_data passed",
     "cargo test --workspace passed",
     "cargo clippy --workspace --all-targets passed",
-    "cargo fmt --all -- --check passed"
+    "cargo fmt --all -- --check passed",
+    "python3 scripts/production-journey.py passed",
+    "python3 fictional-repo/scripts/assert-requirement-proof.py",
+    "python3 fictional-repo/scripts/assert-doc-authority.py",
+    "Docs-integrated coverage supplied every listed fictional companion; semantic review remained external to provider mechanics."
   ]
 }

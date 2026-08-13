@@ -1,10 +1,10 @@
 {
-  "revision": "bad-1",
+  "revision": "r15",
   "author": {
     "name": "design-author",
     "kind": "human"
   },
-  "intent_revision": "1",
+  "intent_revision": "r15",
   "approach": "Step 1 build an automatic model judge. Step 2 add a long-running review manager. Step 3 update every document and keep retrying until all gates pass.",
   "elements": [
     {
@@ -18,7 +18,12 @@
       "rationale": "It is convenient."
     }
   ],
-  "risks": [],
+  "risks": [
+    {
+      "risk": "The automatic model judge and long-running review manager introduce no meaningful failure modes.",
+      "mitigation": "No mitigation is needed because their convenience guarantees correctness."
+    }
+  ],
   "coverage": [
     {
       "acceptance": "Ship every future workflow feature.",

@@ -1,54 +1,81 @@
 {
-  "revision": "1",
+  "revision": "r15",
   "author": {
     "name": "validation-agent",
     "kind": "agent"
   },
-  "intent_revision": "1",
+  "intent_revision": "r15",
   "coverage": {
     "commit": "repo-state-2026-08-12",
     "documents": [
       {
-        "path": "loop-engine-software-change-provider-prd.md",
-        "revision": "v1.0"
+        "path": "fictional-repo/README.md",
+        "revision": "v1.1"
       },
       {
-        "path": "loop-engine-software-change-provider-technical-design.md",
-        "revision": "v1.0"
+        "path": "fictional-repo/provider/README.md",
+        "revision": "v1.1"
       },
       {
-        "path": "docs/PRD.md",
-        "revision": "reference-workflow-v2"
+        "path": "fictional-repo/docs/PRD.md",
+        "revision": "reference-workflow-v3"
       },
       {
-        "path": "loop-engine-software-change-provider-task-packets.md",
-        "revision": "v1.0"
+        "path": "fictional-repo/loop-engine-software-change-provider-prd.md",
+        "revision": "v1.1"
+      },
+      {
+        "path": "fictional-repo/loop-engine-software-change-provider-technical-design.md",
+        "revision": "v1.1"
+      },
+      {
+        "path": "fictional-repo/loop-engine-software-change-provider-task-packets.md",
+        "revision": "v1.1"
+      },
+      {
+        "path": "fictional-repo/implementation-evidence/requirement-to-proof.md",
+        "revision": "v1.1"
+      },
+      {
+        "path": "fictional-repo/scripts/assert-doc-authority.py",
+        "revision": "v1.1"
+      },
+      {
+        "path": "fictional-repo/scripts/assert-requirement-proof.py",
+        "revision": "v1.1"
       }
     ]
   },
-  "outcome": "The provider enforces frozen profile obligations, deterministic schema precedence, current-revision evidence, and the unchanged reference topology.",
+  "outcome": "The revised provider plan is complete: it enforces frozen profile obligations, deterministic schema precedence, current-revision evidence, and terminal validation obligations while documentation names one authoritative product PRD and preserves the external semantic-review boundary.",
   "requirements": [
     {
       "requirement": "A caller can inspect the frozen policies and artifact schemas before evaluating a transition.",
-      "proof": "A1 asserts show displays the run's policies and schemas before any evaluation; A15 asserts every shipped profile exposes policies and schemas via show after start."
+      "proof": "a1::standard_run_progresses_schema_deny_then_evidence_deny_then_allow and a15::every_shipped_profile_starts_and_exposes_policies_and_schemas assert caller-selected canonical profile is frozen in initial_input and projected unchanged through show; evaluate carries the same frozen initial_input, while describe_protocol::describe_matches_committed_snapshot_byte_for_byte asserts flat describe is exact static workflow topology only."
     },
     {
-      "requirement": "A malformed subject artifact is denied with each violated rule named before semantic evidence is considered.",
-      "proof": "A12 compares the schema denial with empty and populated evidence contexts byte-for-byte and asserts every violated rule is named; A1 exercises the deny-then-fix progression."
+      "requirement": "A malformed subject artifact is denied with each violated structural rule named.",
+      "proof": "schema::tests::instance_collects_object_rules_and_nested_properties returns all simultaneous required, additionalProperties, and nested minLength violations; evaluate.rs::schema_deny_reports_every_simultaneous_structural_violation proves checker-to-denial projection preserves every exact path/rule pair in deterministic order; existing evaluate.rs structural-denial tests cover absent, unparseable, revision-link, and context-independent cases."
     },
     {
-      "requirement": "Current-revision evidence from distinct non-subject authors is required for every configured axis.",
-      "proof": "A5 revision-bump cycle denies stale evidence naming both revisions; A6 independence matrix rejects duplicate and subject authors; A10 rejects mismatched config versions."
+      "requirement": "A checked transition refuses stale, self-authored, duplicate-author, or configured-obligation-incomplete evidence.",
+      "proof": "evidence.rs::stale_revision_does_not_satisfy_and_names_both_revisions, stale_config_does_not_satisfy_and_names_both_versions, subject_author_identity_requires_exact_name_and_kind_pair, and n_two_requires_distinct_non_subject_authors_and_rejects_standing_fail plus evaluate.rs::evidence_phase_denies_with_configured_axis_diagnostics assert these mechanics."
     },
     {
       "requirement": "The reference workflow reaches its terminal state only after its configured validation obligations are satisfied.",
-      "proof": "A1 proves the standard run exposes frozen obligations, denies the intent boundary for missing shape and evidence, then reaches design after intent evidence satisfies its axes; scripts/production-journey.py full source mode proves terminal traversal, while A3 asserts no checked transition is an unconditional allow."
+      "proof": "scripts/production-journey.py denies validation→end before validation evidence, then asserts final lifecycle, no requestable events, and denial lineage after configured evidence is appended; supplied review records exercise deterministic provider mechanics only and do not establish semantic review quality."
     }
   ],
   "validation": [
+    "cargo test -p software-change-provider --lib schema::tests::instance_collects_object_rules_and_nested_properties passed",
+    "cargo test -p software-change-provider --test evaluate schema_deny_reports_every_simultaneous_structural_violation -- --exact passed",
+    "cargo test -p software-change-provider --test embedded_data passed",
+    "cargo test -p software-change-provider --test shipped_data passed",
     "cargo test --workspace passed",
     "cargo clippy --workspace --all-targets passed",
     "cargo fmt --all -- --check passed",
-    "Acceptance matrix A1-A15 completed; calibration remains owner-attested per PROCEDURE.md"
+    "python3 scripts/production-journey.py passed",
+    "python3 fictional-repo/scripts/assert-requirement-proof.py",
+    "python3 fictional-repo/scripts/assert-doc-authority.py",
+    "Docs-integrated coverage supplied exact mapped companions for every listed document; semantic review remained external to provider execution."
   ]
 }

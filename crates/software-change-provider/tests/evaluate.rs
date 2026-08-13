@@ -181,6 +181,43 @@ fn zero_obligation_allows_without_artifact_root() {
 }
 
 #[test]
+fn schema_deny_reports_every_simultaneous_structural_violation() {
+    let root = TestDir::new();
+    root.write_json(
+        "intent.json",
+        &json!({
+            "author": {"name": "", "kind": "unknown"},
+            "unexpected": true
+        }),
+    );
+    let output = run_provider(base_request(
+        config_with_schema("intent.json", Some(&root)),
+        checked("explore", "intent-ready", "design"),
+    ));
+    assert_exit(&output, 0);
+    let value = response(&output);
+    assert_eq!(value["result"], "deny");
+    assert_eq!(value["feedback"]["code"], "software-change-schema-invalid");
+    assert_eq!(
+        value["feedback"]["details"]["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|violation| json!({
+                "path": violation["path"],
+                "rule": violation["rule"]
+            }))
+            .collect::<Vec<_>>(),
+        vec![
+            json!({"path": "", "rule": "required"}),
+            json!({"path": "/author/kind", "rule": "enum"}),
+            json!({"path": "/author/name", "rule": "minLength"}),
+            json!({"path": "/unexpected", "rule": "additionalProperties"}),
+        ]
+    );
+}
+
+#[test]
 fn schema_deny_is_byte_identical_when_only_context_varies() {
     let root = TestDir::new();
     let mut artifact = valid_metadata("1");
@@ -317,6 +354,67 @@ fn evidence_phase_denies_with_configured_axis_diagnostics() {
             .unwrap()
             .iter()
             .any(|d| d["category"] == "missing")));
+}
+
+#[test]
+fn mixed_current_blocker_and_stale_context_separates_feedback_projection() {
+    let root = TestDir::new();
+    root.write_json("intent.json", &valid_metadata("2"));
+    let config = config_with_axis(&root);
+    let transition = checked("explore", "intent-ready", "design");
+    let mut request = base_request(config, transition);
+    request["context"] = json!([
+        context_record(json!({
+            "gate": "intent",
+            "policy_id": "axis",
+            "result": "fail",
+            "findings": "current blocker",
+            "author": {"name": "current-reviewer", "kind": "agent"},
+            "subject": "intent.json",
+            "subject_revision": "2",
+            "config_version": "test-1"
+        })),
+        context_record(json!({
+            "gate": "intent",
+            "policy_id": "axis",
+            "result": "pass",
+            "findings": "",
+            "author": {"name": "stale-reviewer", "kind": "agent"},
+            "subject": "intent.json",
+            "subject_revision": "1",
+            "config_version": "test-1"
+        }))
+    ]);
+
+    let output = run_provider(request);
+    assert_exit(&output, 0);
+    let details = &response(&output)["feedback"]["details"];
+    let blocking = details["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|axis| axis["axis"] == "axis")
+        .unwrap();
+    assert!(blocking["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|diagnostic| diagnostic["category"] == "failed"
+            && diagnostic["findings"] == "current blocker"));
+    assert!(blocking["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|diagnostic| diagnostic["category"] != "stale"));
+    let informational = details["informational"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|axis| axis["axis"] == "axis")
+        .unwrap();
+    assert_eq!(informational["diagnostics"][0]["category"], "stale");
+    assert_eq!(informational["diagnostics"][0]["evidence_revision"], "1");
+    assert_eq!(informational["diagnostics"][0]["current_revision"], "2");
 }
 
 #[test]

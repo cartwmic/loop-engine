@@ -78,24 +78,31 @@ python3 scripts/production-journey.py \
   --traversal-depth full
 ```
 
-Build local host-target archives and smoke extracted binaries before handoff:
+Build local host-target archives and smoke extracted binaries before handoff. Use only a newly approved, unpublished release tag; never reuse an existing public tag:
 
 ```sh
-dist build --tag=v0.2.2 --artifacts=local --target=aarch64-apple-darwin
+TAG=vX.Y.Z
+dist build --tag="$TAG" --artifacts=local --target=aarch64-apple-darwin
 ```
 
 Run packaged smoke with extracted `loop-engine` and `software-change` paths using the packaged adapter described in [`crates/software-change-provider/README.md`](crates/software-change-provider/README.md). A macOS host build proves only macOS arm64; Linux x86_64 native build and archive smoke remain CI proof when no Linux host is available.
 
 ### Publication path
 
-Release workflow is dispatch-only. Do not push a version tag to trigger publication. After preflight and review, dispatch the generated workflow with its tag input:
+Release workflow is dispatch-only. Do not push a version tag to trigger publication. After versioning, preflight, and review for a new unpublished tag, dispatch the generated workflow with that tag input:
 
 ```sh
-gh workflow run release.yml --ref main -f tag=v0.2.2
+gh workflow run release.yml --ref main -f tag="$TAG"
 ```
 
 Dispatch runs cargo-dist's native local-build matrix first, then its generated global-artifact dependencies: preflight, global artifacts, and archive smoke. Host directly depends on all four proof gates and can create the version tag and GitHub Release only after each succeeds. cargo-dist 0.32's generated host expression tolerates skipped dependencies, so `scripts/assert-release-gates.py` proves supported hook topology makes skipped required gates unreachable on publishing paths and rejects failure/skipped regressions. Pull requests run the same preflight and upload-mode artifact path without publication.
 
 Private/free GitHub repositories cannot fully prevent an owner from creating an out-of-band raw tag. Such a tag is outside supported release procedure and does not trigger this workflow; future repository rulesets or plan capability would be needed for prevention.
 
-Historical `v0.2.0` and `v0.2.1` tags remain immutable. `v0.2.2` is fix-forward release for contract closure; historical release facts are not rewritten.
+Historical `v0.2.0`, `v0.2.1`, and `v0.2.2` tags remain immutable. `v0.2.2` was the fix-forward release for contract closure; historical release facts are not rewritten. Current hardening candidate does not authorize a release, tag, or reuse of `v0.2.2`.
+
+### Direct pushes to main
+
+Direct pushes to `main` run `.github/workflows/push-to-main.yml`. That read-only dispatcher checks out the pushed SHA, computes the pinned cargo-dist 0.32.0 plan, and calls reusable `preflight.yml`; preflight owns workspace tests, warning-denying clippy, formatting, generated-release checks, release assertions, and source production-journey proof. The dispatcher has no publication job. `.github/workflows/release.yml` remains cargo-dist-generated and dispatch-only.
+
+Binaries built from this source revision identify themselves before stdin processing: `software-change --help` (or `-h`) describes `describe`, `evaluate`, and `data-dump`; `software-change --version` (or `-V`) reports the Cargo package version. The pinned public v0.2.2 installers above predate these flags.

@@ -44,15 +44,26 @@ fn revision_bump_retires_old_pass_until_current_revision_is_reviewed() {
         stale_value["feedback"]["code"],
         "software-change-review-incomplete"
     );
-    let axis = stale_value["feedback"]["details"]["diagnostics"]
+    let blocking_axis = stale_value["feedback"]["details"]["diagnostics"]
         .as_array()
-        .expect("axis diagnostics")
+        .expect("blocking axis diagnostics")
         .iter()
         .find(|axis| axis["axis"] == "axis")
-        .expect("axis diagnostic");
-    let stale_diagnostic = axis["diagnostics"]
+        .expect("blocking axis diagnostic");
+    assert!(blocking_axis["diagnostics"]
         .as_array()
-        .expect("diagnostics")
+        .expect("blocking diagnostics")
+        .iter()
+        .all(|diagnostic| diagnostic["category"] != "stale"));
+    let informational_axis = stale_value["feedback"]["details"]["informational"]
+        .as_array()
+        .expect("informational axis diagnostics")
+        .iter()
+        .find(|axis| axis["axis"] == "axis")
+        .expect("informational axis diagnostic");
+    let stale_diagnostic = informational_axis["diagnostics"]
+        .as_array()
+        .expect("informational diagnostics")
         .iter()
         .find(|diagnostic| diagnostic["category"] == "stale")
         .expect("stale diagnostic");

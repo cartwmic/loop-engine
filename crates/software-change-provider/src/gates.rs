@@ -264,6 +264,7 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
             let details = json!({
                 "phase": "evidence",
                 "diagnostics": details.get("diagnostics").cloned().unwrap_or(Value::Array(Vec::new())),
+                "informational": details.get("informational").cloned().unwrap_or(Value::Array(Vec::new())),
                 "inert_records": details.get("inert_records").cloned().unwrap_or(Value::Array(Vec::new())),
                 "prior_denials": prior_denials(request),
             });

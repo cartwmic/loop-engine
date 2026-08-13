@@ -29,6 +29,97 @@ pub static FILES: &[EmbeddedFile] = &[
         )),
     },
     EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/reviewer-instruction.txt",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/reviewer-instruction.txt"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/companions/fictional-repo/README.md",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/companions/fictional-repo/README.md"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/companions/fictional-repo/implementation-evidence/repo-state-2026-08-12.txt",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/companions/fictional-repo/implementation-evidence/repo-state-2026-08-12.txt"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/companions/fictional-repo/implementation-evidence/repo-state-2026-08-13.txt",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/companions/fictional-repo/implementation-evidence/repo-state-2026-08-13.txt"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/companions/fictional-repo/implementation-evidence/requirement-to-proof.md",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/companions/fictional-repo/implementation-evidence/requirement-to-proof.md"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/companions/fictional-repo/docs/PRD.md",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/companions/fictional-repo/docs/PRD.md"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/companions/fictional-repo/loop-engine-software-change-provider-prd.md",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/companions/fictional-repo/loop-engine-software-change-provider-prd.md"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/companions/fictional-repo/loop-engine-software-change-provider-task-packets.md",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/companions/fictional-repo/loop-engine-software-change-provider-task-packets.md"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/companions/fictional-repo/loop-engine-software-change-provider-technical-design.md",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/companions/fictional-repo/loop-engine-software-change-provider-technical-design.md"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/companions/fictional-repo/provider/README.md",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/companions/fictional-repo/provider/README.md"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/companions/fictional-repo/scripts/assert-doc-authority.py",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/companions/fictional-repo/scripts/assert-doc-authority.py"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/companions/fictional-repo/scripts/assert-requirement-proof.py",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/companions/fictional-repo/scripts/assert-requirement-proof.py"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/companions/fictional-repo/docs/review-contract.md",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/companions/fictional-repo/docs/review-contract.md"
+        )),
+    },
+    EmbeddedFile {
         path: "crates/software-change-provider/data/calibration/fixtures/design-defective.json",
         bytes: include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),

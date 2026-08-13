@@ -688,6 +688,8 @@ The provider may inspect repository state, documents, tests, reviews, or other s
 
 ### 10.1 Run-Configured Semantic Review Policies
 
+The software-change provider's shipped review contract remains external and deterministic at its boundary. Binaries built from this candidate source expose identity through `--help`/`-h` and `--version`/`-V` before stdin; public v0.2.2 binaries predate those flags. Direct pushes to `main` reuse read-only production preflight at the pushed SHA. Calibration fixtures are supplied-material-only and use stable fictional path labels with shipped companions, so review does not resolve labels against a live checkout. Stale evidence is recovery context under `details.informational`; current unsatisfied obligations remain under blocking `details.diagnostics`.
+
 At run creation, the software-change workflow may receive semantic review policies in immutable initial input. These policies configure what must be reviewed at the review/validation gates without changing workflow topology.
 
 The initial input may contain the equivalent of:

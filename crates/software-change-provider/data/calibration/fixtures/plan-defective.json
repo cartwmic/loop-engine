@@ -1,10 +1,10 @@
 {
-  "revision": "bad-1",
+  "revision": "r15",
   "author": {
     "name": "plan-author",
     "kind": "human"
   },
-  "design_revision": "1",
+  "design_revision": "r15",
   "objective": "Replace external evidence checks with a model that decides truth and finish quickly.",
   "tasks": [
     {
@@ -12,7 +12,7 @@
       "objective": "Build everything and fix any issue.",
       "dependencies": [],
       "source_of_truth": [
-        "README"
+        "fictional-repo/README.md"
       ],
       "deliverables": [
         "Working code"

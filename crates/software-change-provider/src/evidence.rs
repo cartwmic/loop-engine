@@ -115,6 +115,7 @@ pub(crate) struct InertEvidence {
 pub(crate) struct EvidenceEvaluation {
     pub(crate) satisfied: bool,
     pub(crate) diagnostics: Vec<AxisDiagnostic>,
+    pub(crate) informational: Vec<AxisDiagnostic>,
     pub(crate) inert_records: Vec<InertEvidence>,
 }
 
@@ -125,6 +126,10 @@ impl EvidenceEvaluation {
 
     pub(crate) fn diagnostics(&self) -> &[AxisDiagnostic] {
         &self.diagnostics
+    }
+
+    pub(crate) fn informational(&self) -> &[AxisDiagnostic] {
+        &self.informational
     }
 
     pub(crate) fn inert_records(&self) -> &[InertEvidence] {
@@ -234,6 +239,7 @@ pub(crate) fn evaluate_evidence(
     }
 
     let mut diagnostics = Vec::new();
+    let mut informational = Vec::new();
     let mut all_axes_satisfied = true;
 
     // Stages 4–6: latest-wins supersession happened above through the full
@@ -309,18 +315,6 @@ pub(crate) fn evaluate_evidence(
                     reasons: malformed_reasons.clone(),
                 });
             }
-            axis_diagnostics.extend(stale.into_iter().map(
-                |(evidence_revision, current_revision)| EvidenceDiagnostic::Stale {
-                    evidence_revision,
-                    current_revision,
-                },
-            ));
-            axis_diagnostics.extend(stale_config.into_iter().map(
-                |(evidence_version, run_version)| EvidenceDiagnostic::StaleConfig {
-                    evidence_version,
-                    run_version,
-                },
-            ));
             if (distinct_present.len() as u64) < policy.required_authors() {
                 axis_diagnostics.push(EvidenceDiagnostic::Independence {
                     required: policy.required_authors(),
@@ -331,6 +325,26 @@ pub(crate) fn evaluate_evidence(
                 axis: axis.clone(),
                 diagnostics: axis_diagnostics,
             });
+
+            let mut informational_diagnostics = Vec::new();
+            informational_diagnostics.extend(stale.into_iter().map(
+                |(evidence_revision, current_revision)| EvidenceDiagnostic::Stale {
+                    evidence_revision,
+                    current_revision,
+                },
+            ));
+            informational_diagnostics.extend(stale_config.into_iter().map(
+                |(evidence_version, run_version)| EvidenceDiagnostic::StaleConfig {
+                    evidence_version,
+                    run_version,
+                },
+            ));
+            if !informational_diagnostics.is_empty() {
+                informational.push(AxisDiagnostic {
+                    axis: axis.clone(),
+                    diagnostics: informational_diagnostics,
+                });
+            }
         }
     }
 
@@ -342,6 +356,7 @@ pub(crate) fn evaluate_evidence(
     EvidenceEvaluation {
         satisfied: all_axes_satisfied,
         diagnostics,
+        informational,
         inert_records,
     }
 }
@@ -1106,7 +1121,7 @@ mod tests {
             &author("owner", "human"),
         );
         assert!(!result.is_satisfied());
-        assert!(result.diagnostics().iter().any(|axis| {
+        assert!(result.informational().iter().any(|axis| {
             axis.diagnostics.iter().any(|diagnostic| {
                 matches!(diagnostic, EvidenceDiagnostic::Stale { evidence_revision, current_revision } if evidence_revision == "old" && current_revision == "new")
             })
@@ -1127,7 +1142,7 @@ mod tests {
             &author("owner", "human"),
         );
         assert!(!result.is_satisfied());
-        assert!(result.diagnostics().iter().any(|axis| {
+        assert!(result.informational().iter().any(|axis| {
             axis.diagnostics.iter().any(|diagnostic| {
                 matches!(diagnostic, EvidenceDiagnostic::StaleConfig { evidence_version, run_version } if evidence_version == "old-1" && run_version == RUN_VERSION)
             })

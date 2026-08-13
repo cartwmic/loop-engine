@@ -1,0 +1,46 @@
+name: push-to-main preflight
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: plan pushed commit
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    outputs:
+      manifest: ${{ steps.dist-plan.outputs.manifest }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          submodules: recursive
+      - name: Install dist 0.32.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh
+      - id: dist-plan
+        name: Generate pushed-SHA dist plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          dist plan --output-format=json > "$RUNNER_TEMP/dist-plan.json"
+          printf 'manifest=' >> "$GITHUB_OUTPUT"
+          jq -c . "$RUNNER_TEMP/dist-plan.json" >> "$GITHUB_OUTPUT"
+
+  preflight:
+    name: run reusable production preflight
+    needs: plan
+    uses: ./.github/workflows/preflight.yml
+    with:
+      plan: ${{ needs.plan.outputs.manifest }}
+    secrets: inherit
