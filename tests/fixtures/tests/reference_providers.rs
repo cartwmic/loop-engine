@@ -5,10 +5,13 @@ use loop_core::{
 use loop_integrations::{ProviderError, ProviderInvocation, SubprocessProviderGateway};
 use loop_reference_fixtures::{
     agents_policy_input, document_policy, fixture_binary, policy_document_initial_input,
-    policy_document_workflow, readme_policy_input, software_change_initial_input,
-    software_change_initial_input_with_behavior, software_change_policy_set_a,
-    software_change_policy_set_b, software_change_review_context, software_change_workflow,
-    FixtureProvider, DESIGN_REVIEW_GATE, PLAN_REVIEW_GATE,
+    policy_document_workflow, readme_policy_input, research_artifact_schemas, research_brief,
+    research_initial_input, research_policy_set_a, research_review_context,
+    research_revision_links, research_verification, research_workflow,
+    software_change_initial_input, software_change_initial_input_with_behavior,
+    software_change_policy_set_a, software_change_policy_set_b, software_change_review_context,
+    software_change_workflow, FixtureProvider, DESIGN_REVIEW_GATE, PLAN_REVIEW_GATE,
+    RESEARCH_VERIFY_GATE,
 };
 use serde_json::{json, Value};
 use std::fs;
@@ -648,4 +651,183 @@ fn policy_document_input_constructor_keeps_identity_and_policy_shapes() {
     assert_eq!(input["mode"], "draft");
     assert_eq!(input["document"]["identity"], "file:///tmp/README.md");
     assert_eq!(input["semantic_policies"][0]["id"], "meaning");
+}
+
+fn research_request(
+    input: Value,
+    transition: Transition,
+    context: Vec<ContextRecord>,
+) -> EvaluationRequest {
+    EvaluationRequest::new(research_workflow(), input, context, transition, Vec::new())
+}
+
+fn evaluate_research(
+    input: Value,
+    transition: Transition,
+    context: Vec<ContextRecord>,
+) -> Result<EvaluationResult, ProviderError> {
+    gateway().evaluate(
+        &association("research-provider"),
+        research_request(input, transition, context),
+    )
+}
+
+fn write_json(root: &std::path::Path, name: &str, value: &Value) {
+    fs::write(
+        root.join(name),
+        serde_json::to_vec_pretty(value).expect("serialize"),
+    )
+    .expect("write");
+}
+
+#[test]
+fn research_describe_has_scope_gather_verify_synthesize_end_topology(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let described = gateway().describe(&association("research-provider"))?;
+    assert_eq!(described, research_workflow());
+    assert_eq!(described.states.len(), 5);
+    assert_eq!(described.transitions.len(), 10);
+    assert_eq!(
+        described
+            .states
+            .iter()
+            .filter(|state| state.is_final)
+            .map(|state| state.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["end"]
+    );
+    Ok(())
+}
+
+#[test]
+fn research_missing_artifact_denies_scoped() {
+    let root = tempdir().expect("artifact root");
+    let input = research_initial_input(
+        root.path().to_string_lossy(),
+        research_policy_set_a(),
+        research_artifact_schemas(),
+        research_revision_links(),
+        "fixture-1",
+    );
+    let result = evaluate_research(
+        input,
+        Transition::checked("scope", "scoped", "gather"),
+        Vec::new(),
+    )
+    .expect("provider response");
+    let EvaluationResult::Deny { feedback } = result else {
+        panic!("missing brief must deny");
+    };
+    assert_eq!(feedback.code, "research-schema-invalid");
+    assert_eq!(feedback.details.as_ref().unwrap()["phase"], "schema");
+}
+
+#[test]
+fn research_missing_evidence_denies_verified() {
+    let root = tempdir().expect("artifact root");
+    write_json(root.path(), "brief.json", &research_brief("1", "owner"));
+    write_json(
+        root.path(),
+        "sources.json",
+        &loop_reference_fixtures::research_sources("1", "1", "owner"),
+    );
+    write_json(
+        root.path(),
+        "verification.json",
+        &research_verification("1", "1", "owner"),
+    );
+    let input = research_initial_input(
+        root.path().to_string_lossy(),
+        research_policy_set_a(),
+        research_artifact_schemas(),
+        research_revision_links(),
+        "fixture-1",
+    );
+    let result = evaluate_research(
+        input,
+        Transition::checked("verify", "verified", "synthesize"),
+        Vec::new(),
+    )
+    .expect("provider response");
+    let EvaluationResult::Deny { feedback } = result else {
+        panic!("missing verify evidence must deny");
+    };
+    assert_eq!(feedback.code, "research-review-incomplete");
+    assert_eq!(feedback.details.as_ref().unwrap()["phase"], "evidence");
+}
+
+#[test]
+fn research_independent_pass_allows_verified() {
+    let root = tempdir().expect("artifact root");
+    write_json(root.path(), "brief.json", &research_brief("1", "owner"));
+    write_json(
+        root.path(),
+        "sources.json",
+        &loop_reference_fixtures::research_sources("1", "1", "owner"),
+    );
+    write_json(
+        root.path(),
+        "verification.json",
+        &research_verification("1", "1", "owner"),
+    );
+    let input = research_initial_input(
+        root.path().to_string_lossy(),
+        research_policy_set_a(),
+        research_artifact_schemas(),
+        research_revision_links(),
+        "fixture-1",
+    );
+    let context = vec![
+        research_review_context(
+            "claim-grounded",
+            RESEARCH_VERIFY_GATE,
+            "claim-grounded",
+            true,
+            "",
+            "reviewer",
+            "agent",
+            "verification.json",
+            "1",
+            "fixture-1",
+            1,
+        ),
+        research_review_context(
+            "adversarial",
+            RESEARCH_VERIFY_GATE,
+            "adversarial",
+            true,
+            "",
+            "reviewer",
+            "agent",
+            "verification.json",
+            "1",
+            "fixture-1",
+            2,
+        ),
+    ];
+    let result = evaluate_research(
+        input,
+        Transition::checked("verify", "verified", "synthesize"),
+        context,
+    )
+    .expect("provider response");
+    assert_eq!(result, EvaluationResult::Allow);
+}
+
+#[test]
+fn research_check_free_revise_allows_without_artifacts() {
+    let input = research_initial_input(
+        "/tmp/unused",
+        research_policy_set_a(),
+        research_artifact_schemas(),
+        research_revision_links(),
+        "fixture-1",
+    );
+    let result = evaluate_research(
+        input,
+        Transition::check_free("gather", "revise", "scope"),
+        Vec::new(),
+    )
+    .expect("provider response");
+    assert_eq!(result, EvaluationResult::Allow);
 }

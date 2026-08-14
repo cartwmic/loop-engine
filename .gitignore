@@ -3,3 +3,5 @@
 .pi-subagents/
 __pycache__/
 *.pyc
+
+.loop-engine/

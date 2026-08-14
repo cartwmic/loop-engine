@@ -117,12 +117,20 @@ def main() -> int:
         fail("archive smoke must invoke software-change runner through absolute GITHUB_WORKSPACE path")
     if 'python3 "$GITHUB_WORKSPACE/scripts/policy-document-journey.py"' not in archive_smoke:
         fail("archive smoke must invoke policy-document runner through absolute GITHUB_WORKSPACE path")
-    if 'for app in loop-cli software-change-provider policy-document-provider' not in archive_smoke:
-        fail("archive smoke must extract all three release applications")
+    if 'python3 "$GITHUB_WORKSPACE/scripts/research-journey.py"' not in archive_smoke:
+        fail("archive smoke must invoke research runner through absolute GITHUB_WORKSPACE path")
+    if 'for app in loop-cli software-change-provider policy-document-provider research-provider' not in archive_smoke:
+        fail("archive smoke must extract all four release applications")
     if '"$policy_provider" data-dump "$policy_data_root"' not in archive_smoke:
         fail("archive smoke must materialize policy-document profiles from packaged binary")
     if 'for mode in draft audit' not in archive_smoke:
         fail("archive smoke must exercise both policy-document modes")
+    if 'research_data_root="$RUNNER_TEMP/research-data-$target"' not in archive_smoke:
+        fail("archive smoke must isolate a unique empty research dump root")
+    if '--data-root "$research_data_root"' not in archive_smoke:
+        fail("archive smoke must pass the isolated research dump root to the packaged journey")
+    if '-name research -perm -u+x' not in archive_smoke:
+        fail("archive smoke must locate the packaged research executable")
     if 'cd "$smoke_cwd"' not in archive_smoke:
         fail("archive smoke must change into its isolated temporary cwd")
     if 'test "$(pwd -P)" != "$checkout_root"' not in archive_smoke:

@@ -1,0 +1,178 @@
+{
+  "config_version": "research-1",
+  "artifact_root": "/abs/path/to/research/artifacts",
+  "review_policies": {
+    "verify": [
+      {
+        "id": "claim-grounded",
+        "description": "Each verification claim is supported by cited source extracts rather than unsourced assertion.",
+        "example_prompt": "Judge claim-grounded only. Confirm every claim in verification.json names source ids present in sources.json and quotes or paraphrases extracts that actually support the claim. Template: crates/research-provider/data/templates/verification.md. Schema: crates/research-provider/data/configs/standard.json#/artifact_schemas/verification.json. Deny only a material defect plausibly affecting research success against the brief; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings."
+      },
+      {
+        "id": "adversarial",
+        "description": "Verification records a genuine challenge to each claim rather than only confirming evidence.",
+        "example_prompt": "Judge adversarial only. Confirm each claim records a challenge that could falsify it using cited sources, including contrary extracts or an explicit statement that no contrary extract was found after search. Template: crates/research-provider/data/templates/verification.md. Schema: crates/research-provider/data/configs/standard.json#/artifact_schemas/verification.json. Deny only a material defect plausibly affecting research success against the brief; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings."
+      }
+    ],
+    "synthesize": [
+      {
+        "id": "cited-conclusion",
+        "description": "The report conclusion is grounded in verified claims and cited sources, not new unsourced assertions.",
+        "example_prompt": "Judge cited-conclusion only. Confirm report.json conclusion and citations map to verification claims and source ids, and do not introduce material claims that verification never checked. Template: crates/research-provider/data/templates/report.md. Schema: crates/research-provider/data/configs/standard.json#/artifact_schemas/report.json. Deny only a material defect plausibly affecting research success against the brief; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings."
+      },
+      {
+        "id": "scope-faithful",
+        "description": "The report conclusion stays inside the brief's question, scope, acceptance, constraints, and non-goals.",
+        "example_prompt": "Judge scope-faithful only. Confirm report.json conclusion stays within the brief's question, scope, acceptance, constraints, and non_goals and does not expand into out-of-scope claims. Template: crates/research-provider/data/templates/report.md. Schema: crates/research-provider/data/configs/standard.json#/artifact_schemas/report.json. Deny only a material defect plausibly affecting research success against the brief; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings."
+      }
+    ]
+  },
+  "artifact_schemas": {
+    "brief.json": {
+      "type": "object",
+      "required": ["revision", "author", "question", "scope", "acceptance", "constraints", "non_goals"],
+      "properties": {
+        "revision": {"type": "string", "minLength": 1},
+        "author": {
+          "type": "object",
+          "required": ["name", "kind"],
+          "properties": {
+            "name": {"type": "string", "minLength": 1},
+            "kind": {"type": "string", "enum": ["human", "agent", "script"]}
+          },
+          "additionalProperties": false
+        },
+        "question": {"type": "string", "minLength": 1},
+        "scope": {"type": "string", "minLength": 1},
+        "acceptance": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "minItems": 1
+        },
+        "constraints": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "minItems": 0
+        },
+        "non_goals": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "minItems": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "sources.json": {
+      "type": "object",
+      "required": ["revision", "author", "brief_revision", "sources"],
+      "properties": {
+        "revision": {"type": "string", "minLength": 1},
+        "author": {
+          "type": "object",
+          "required": ["name", "kind"],
+          "properties": {
+            "name": {"type": "string", "minLength": 1},
+            "kind": {"type": "string", "enum": ["human", "agent", "script"]}
+          },
+          "additionalProperties": false
+        },
+        "brief_revision": {"type": "string", "minLength": 1},
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["id", "title", "locator", "extract"],
+            "properties": {
+              "id": {"type": "string", "minLength": 1},
+              "title": {"type": "string", "minLength": 1},
+              "locator": {"type": "string", "minLength": 1},
+              "extract": {"type": "string", "minLength": 1}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "verification.json": {
+      "type": "object",
+      "required": ["revision", "author", "sources_revision", "claims"],
+      "properties": {
+        "revision": {"type": "string", "minLength": 1},
+        "author": {
+          "type": "object",
+          "required": ["name", "kind"],
+          "properties": {
+            "name": {"type": "string", "minLength": 1},
+            "kind": {"type": "string", "enum": ["human", "agent", "script"]}
+          },
+          "additionalProperties": false
+        },
+        "sources_revision": {"type": "string", "minLength": 1},
+        "claims": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["id", "statement", "source_ids", "support", "challenge"],
+            "properties": {
+              "id": {"type": "string", "minLength": 1},
+              "statement": {"type": "string", "minLength": 1},
+              "source_ids": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "string", "minLength": 1}
+              },
+              "support": {"type": "string", "minLength": 1},
+              "challenge": {"type": "string", "minLength": 1}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "report.json": {
+      "type": "object",
+      "required": ["revision", "author", "verification_revision", "conclusion", "citations"],
+      "properties": {
+        "revision": {"type": "string", "minLength": 1},
+        "author": {
+          "type": "object",
+          "required": ["name", "kind"],
+          "properties": {
+            "name": {"type": "string", "minLength": 1},
+            "kind": {"type": "string", "enum": ["human", "agent", "script"]}
+          },
+          "additionalProperties": false
+        },
+        "verification_revision": {"type": "string", "minLength": 1},
+        "conclusion": {"type": "string", "minLength": 1},
+        "citations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["claim_id", "source_id"],
+            "properties": {
+              "claim_id": {"type": "string", "minLength": 1},
+              "source_id": {"type": "string", "minLength": 1}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "revision_links": [
+    {"from": "sources.json", "field": "brief_revision", "to": "brief.json"},
+    {"from": "verification.json", "field": "sources_revision", "to": "sources.json"},
+    {"from": "report.json", "field": "verification_revision", "to": "verification.json"}
+  ],
+  "extra": {
+    "profile": "standard",
+    "template_root": "crates/research-provider/data/templates"
+  }
+}

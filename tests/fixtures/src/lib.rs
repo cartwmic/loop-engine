@@ -1,7 +1,7 @@
 //! Deterministic provider fixtures for the Loop Engine reference workflows.
 //!
 //! This crate is test infrastructure, not a production provider SDK.  The
-//! two binaries use the same v0.1 one-request/one-response subprocess wire
+//! three binaries use the same v0.1 one-request/one-response subprocess wire
 //! contract as real providers, while keeping reference-workflow conventions
 //! local to this fixture crate.
 
@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 /// The executable names built by this fixture package.
 pub const SOFTWARE_CHANGE_PROVIDER: &str = "software-change-provider";
 pub const POLICY_DOCUMENT_PROVIDER: &str = "policy-document-provider";
+pub const RESEARCH_PROVIDER: &str = "research-provider";
 
 /// Reference software-change review gates.
 pub const DESIGN_REVIEW_GATE: &str = "design-review";
@@ -29,6 +30,7 @@ pub const VALIDATION_GATE: &str = "validation";
 pub enum FixtureProvider {
     SoftwareChange,
     PolicyDocument,
+    Research,
 }
 
 /// A response written by a fixture executable.
@@ -199,6 +201,7 @@ pub fn process_request(
             let workflow = match provider {
                 FixtureProvider::SoftwareChange => software_change_workflow(),
                 FixtureProvider::PolicyDocument => policy_document_workflow(),
+                FixtureProvider::Research => research_workflow(),
             };
             Ok(FixtureResponse::Json(
                 serde_json::to_value(workflow).map_err(|error| {
@@ -216,6 +219,7 @@ pub fn process_request(
                 FixtureProvider::PolicyDocument => {
                     evaluate_policy_document(request).map(FixtureResponse::Json)
                 }
+                FixtureProvider::Research => evaluate_research(request).map(FixtureResponse::Json),
             }
         }
         other => Err(FixtureError::new(format!(
@@ -356,6 +360,58 @@ pub fn policy_document_workflow() -> Workflow {
             Transition::check_free("deterministic-review", "revise", "prepare"),
             Transition::checked("semantic-review", "passed", "end"),
             Transition::check_free("semantic-review", "revise", "prepare"),
+        ],
+    )
+}
+
+/// Exact research reference topology from production `research-provider`.
+pub fn research_workflow() -> Workflow {
+    Workflow::new(
+        "research",
+        "scope",
+        vec![
+            State::new(
+                "scope",
+                "Scope",
+                "Author the research brief in brief.json.",
+                false,
+            ),
+            State::new(
+                "gather",
+                "Gather",
+                "Record gathered sources in sources.json.",
+                false,
+            ),
+            State::new(
+                "verify",
+                "Verify",
+                "Author claims in verification.json and obtain independent review evidence.",
+                false,
+            ),
+            State::new(
+                "synthesize",
+                "Synthesize",
+                "Author the cited conclusion in report.json and obtain independent review evidence.",
+                false,
+            ),
+            State::new(
+                "end",
+                "End",
+                "The research run is complete.",
+                true,
+            ),
+        ],
+        vec![
+            Transition::checked("scope", "scoped", "gather"),
+            Transition::checked("gather", "gathered", "verify"),
+            Transition::check_free("gather", "revise", "scope"),
+            Transition::checked("verify", "verified", "synthesize"),
+            Transition::check_free("verify", "revise", "gather"),
+            Transition::check_free("verify", "revise-brief", "scope"),
+            Transition::checked("synthesize", "completed", "end"),
+            Transition::check_free("synthesize", "revise", "verify"),
+            Transition::check_free("synthesize", "revise-sources", "gather"),
+            Transition::check_free("synthesize", "revise-brief", "scope"),
         ],
     )
 }
@@ -543,6 +599,841 @@ pub fn agents_policy_input(document_path: impl AsRef<str>, mode: &str) -> Value 
             "durable handoff"
         )]),
         "independent",
+    )
+}
+
+/// Research review gates that require independent evidence.
+pub const RESEARCH_VERIFY_GATE: &str = "verify";
+pub const RESEARCH_SYNTHESIZE_GATE: &str = "synthesize";
+
+/// Build research immutable initial input.
+pub fn research_initial_input(
+    artifact_root: impl AsRef<str>,
+    review_policies: Value,
+    artifact_schemas: Value,
+    revision_links: Value,
+    config_version: &str,
+) -> Value {
+    json!({
+        "config_version": config_version,
+        "artifact_root": artifact_root.as_ref(),
+        "review_policies": review_policies,
+        "artifact_schemas": artifact_schemas,
+        "revision_links": revision_links
+    })
+}
+
+/// Standard research policy set matching the shipped profile axes.
+pub fn research_policy_set_a() -> Value {
+    json!({
+        (RESEARCH_VERIFY_GATE): [
+            {"id": "claim-grounded", "description": "Claims cite supporting extracts."},
+            {"id": "adversarial", "description": "Claims record a genuine challenge."}
+        ],
+        (RESEARCH_SYNTHESIZE_GATE): [
+            {"id": "cited-conclusion", "description": "The conclusion is grounded in verified claims."},
+            {"id": "scope-faithful", "description": "The conclusion stays inside the brief."}
+        ]
+    })
+}
+
+/// A second research policy configuration sharing no policy IDs with set A.
+pub fn research_policy_set_b() -> Value {
+    json!({
+        (RESEARCH_VERIFY_GATE): [
+            {"id": "source-quality", "description": "Cited sources are inspectable."}
+        ],
+        (RESEARCH_SYNTHESIZE_GATE): [
+            {"id": "conclusion-cited", "description": "The conclusion names its citations."}
+        ]
+    })
+}
+
+/// Bounded artifact schemas sufficient for fixture schema+link checks.
+pub fn research_artifact_schemas() -> Value {
+    json!({
+        "brief.json": research_brief_schema(),
+        "sources.json": research_sources_schema(),
+        "verification.json": research_verification_schema(),
+        "report.json": research_report_schema()
+    })
+}
+
+/// Shipped-style revision links binding later artifacts to earlier revisions.
+pub fn research_revision_links() -> Value {
+    json!([
+        {"from": "sources.json", "field": "brief_revision", "to": "brief.json"},
+        {"from": "verification.json", "field": "sources_revision", "to": "sources.json"},
+        {"from": "report.json", "field": "verification_revision", "to": "verification.json"}
+    ])
+}
+
+fn research_author_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["name", "kind"],
+        "properties": {
+            "name": {"type": "string", "minLength": 1},
+            "kind": {"type": "string", "enum": ["human", "agent", "script"]}
+        },
+        "additionalProperties": false
+    })
+}
+
+fn research_brief_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["revision", "author", "question", "scope", "acceptance", "constraints", "non_goals"],
+        "properties": {
+            "revision": {"type": "string", "minLength": 1},
+            "author": research_author_schema(),
+            "question": {"type": "string", "minLength": 1},
+            "scope": {"type": "string", "minLength": 1},
+            "acceptance": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+            "constraints": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 0},
+            "non_goals": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 0}
+        },
+        "additionalProperties": false
+    })
+}
+
+fn research_sources_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["revision", "author", "brief_revision", "sources"],
+        "properties": {
+            "revision": {"type": "string", "minLength": 1},
+            "author": research_author_schema(),
+            "brief_revision": {"type": "string", "minLength": 1},
+            "sources": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "required": ["id", "title", "locator", "extract"],
+                    "properties": {
+                        "id": {"type": "string", "minLength": 1},
+                        "title": {"type": "string", "minLength": 1},
+                        "locator": {"type": "string", "minLength": 1},
+                        "extract": {"type": "string", "minLength": 1}
+                    },
+                    "additionalProperties": false
+                }
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn research_verification_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["revision", "author", "sources_revision", "claims"],
+        "properties": {
+            "revision": {"type": "string", "minLength": 1},
+            "author": research_author_schema(),
+            "sources_revision": {"type": "string", "minLength": 1},
+            "claims": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "required": ["id", "statement", "source_ids", "support", "challenge"],
+                    "properties": {
+                        "id": {"type": "string", "minLength": 1},
+                        "statement": {"type": "string", "minLength": 1},
+                        "source_ids": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {"type": "string", "minLength": 1}
+                        },
+                        "support": {"type": "string", "minLength": 1},
+                        "challenge": {"type": "string", "minLength": 1}
+                    },
+                    "additionalProperties": false
+                }
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn research_report_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["revision", "author", "verification_revision", "conclusion", "citations"],
+        "properties": {
+            "revision": {"type": "string", "minLength": 1},
+            "author": research_author_schema(),
+            "verification_revision": {"type": "string", "minLength": 1},
+            "conclusion": {"type": "string", "minLength": 1},
+            "citations": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "required": ["claim_id", "source_id"],
+                    "properties": {
+                        "claim_id": {"type": "string", "minLength": 1},
+                        "source_id": {"type": "string", "minLength": 1}
+                    },
+                    "additionalProperties": false
+                }
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn research_author(name: &str) -> Value {
+    json!({"name": name, "kind": "human"})
+}
+
+/// A schema-valid research brief.
+pub fn research_brief(revision: &str, author: &str) -> Value {
+    json!({
+        "revision": revision,
+        "author": research_author(author),
+        "question": "What is the capital of France?",
+        "scope": "One inspectable geography fact.",
+        "acceptance": ["Name the capital city."],
+        "constraints": ["Cite one source extract."],
+        "non_goals": ["Travel advice."]
+    })
+}
+
+/// A schema-valid sources artifact bound to a brief revision.
+pub fn research_sources(revision: &str, brief_revision: &str, author: &str) -> Value {
+    json!({
+        "revision": revision,
+        "author": research_author(author),
+        "brief_revision": brief_revision,
+        "sources": [{
+            "id": "src-1",
+            "title": "Atlas",
+            "locator": "https://example.invalid/paris",
+            "extract": "Paris is the capital of France."
+        }]
+    })
+}
+
+/// A schema-valid verification artifact bound to a sources revision.
+pub fn research_verification(revision: &str, sources_revision: &str, author: &str) -> Value {
+    json!({
+        "revision": revision,
+        "author": research_author(author),
+        "sources_revision": sources_revision,
+        "claims": [{
+            "id": "claim-1",
+            "statement": "Paris is the capital of France.",
+            "source_ids": ["src-1"],
+            "support": "The atlas extract names Paris as the capital.",
+            "challenge": "No contrary extract was found after search."
+        }]
+    })
+}
+
+/// A schema-valid report artifact bound to a verification revision.
+pub fn research_report(revision: &str, verification_revision: &str, author: &str) -> Value {
+    json!({
+        "revision": revision,
+        "author": research_author(author),
+        "verification_revision": verification_revision,
+        "conclusion": "Paris is the capital of France.",
+        "citations": [{"claim_id": "claim-1", "source_id": "src-1"}]
+    })
+}
+
+/// Construct one externally produced research review-evidence value.
+#[allow(clippy::too_many_arguments)]
+pub fn research_review_evidence(
+    gate: &str,
+    policy_id: &str,
+    passed: bool,
+    findings: &str,
+    author_name: &str,
+    author_kind: &str,
+    subject: &str,
+    subject_revision: &str,
+    config_version: &str,
+) -> Value {
+    json!({
+        "gate": gate,
+        "policy_id": policy_id,
+        "result": if passed { "pass" } else { "fail" },
+        "findings": findings,
+        "author": {"name": author_name, "kind": author_kind},
+        "subject": subject,
+        "subject_revision": subject_revision,
+        "config_version": config_version
+    })
+}
+
+/// Construct a context record containing research review evidence.
+#[allow(clippy::too_many_arguments)]
+pub fn research_review_context(
+    record_id: &str,
+    gate: &str,
+    policy_id: &str,
+    passed: bool,
+    findings: &str,
+    author_name: &str,
+    author_kind: &str,
+    subject: &str,
+    subject_revision: &str,
+    config_version: &str,
+    sequence: u64,
+) -> ContextRecord {
+    ContextRecord::new(
+        record_id,
+        "review-evidence",
+        research_review_evidence(
+            gate,
+            policy_id,
+            passed,
+            findings,
+            author_name,
+            author_kind,
+            subject,
+            subject_revision,
+            config_version,
+        ),
+        sequence.into(),
+        (sequence as i64).into(),
+    )
+}
+
+fn evaluate_research(request: EvaluateRequest) -> Result<Value, FixtureError> {
+    request.validate_operation()?;
+    let _ = &request.workflow;
+    let Some(route) = research_route(&request.transition) else {
+        return Ok(json!({"result": "unsupported"}));
+    };
+    let Some(subject) = route.subject else {
+        return Ok(json!({"result": "allow"}));
+    };
+
+    let schemas = request.initial_input.get("artifact_schemas");
+    let schema = schemas.and_then(|value| value.get(subject));
+    let links = research_links_from(&request.initial_input, subject);
+    let axes = route
+        .gate
+        .and_then(|gate| research_axes(&request.initial_input, gate));
+    if schema.is_none() && links.is_empty() && axes.as_ref().is_none_or(|value| value.is_empty()) {
+        return Ok(json!({"result": "allow"}));
+    }
+
+    let document = match research_read_artifact(&request.initial_input, subject) {
+        Ok(document) => document,
+        Err(ResearchRead::Deny(violations)) => {
+            return Ok(research_schema_deny(&request, violations))
+        }
+        Err(ResearchRead::Error(message)) => return Err(FixtureError::new(message)),
+    };
+
+    if let Some(schema) = schema {
+        let violations = research_schema_violations(schema, &document, "");
+        if !violations.is_empty() {
+            return Ok(research_schema_deny(&request, violations));
+        }
+    }
+
+    for link in &links {
+        match research_check_link(&request.initial_input, subject, &document, link) {
+            Ok(()) => {}
+            Err(ResearchRead::Deny(violations)) => {
+                return Ok(research_schema_deny(&request, violations))
+            }
+            Err(ResearchRead::Error(message)) => return Err(FixtureError::new(message)),
+        }
+    }
+
+    let Some(gate) = route.gate else {
+        return Ok(json!({"result": "allow"}));
+    };
+    let axes = axes.unwrap_or_default();
+    if axes.is_empty() {
+        return Ok(json!({"result": "allow"}));
+    }
+
+    let revision = document
+        .get("revision")
+        .and_then(Value::as_str)
+        .ok_or_else(|| FixtureError::new(format!("{subject} requires revision")))?;
+    let subject_author = document.get("author").cloned().unwrap_or(Value::Null);
+    let config_version = request
+        .initial_input
+        .get("config_version")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if let Some(details) = research_evidence_details(
+        &request.context,
+        gate,
+        subject,
+        revision,
+        &subject_author,
+        config_version,
+        &axes,
+    ) {
+        let mut details = details;
+        details["prior_denials"] = research_prior_denials(&request);
+        return Ok(json!({
+            "result": "deny",
+            "feedback": {
+                "code": "research-review-incomplete",
+                "message": "review evidence incomplete",
+                "details": details
+            }
+        }));
+    }
+    Ok(json!({"result": "allow"}))
+}
+
+#[derive(Clone, Copy)]
+struct ResearchRoute {
+    source: &'static str,
+    event: &'static str,
+    target: &'static str,
+    kind: loop_core::TransitionKind,
+    subject: Option<&'static str>,
+    gate: Option<&'static str>,
+}
+
+fn research_route(transition: &Transition) -> Option<ResearchRoute> {
+    const ROUTES: &[ResearchRoute] = &[
+        ResearchRoute {
+            source: "scope",
+            event: "scoped",
+            target: "gather",
+            kind: loop_core::TransitionKind::Checked,
+            subject: Some("brief.json"),
+            gate: None,
+        },
+        ResearchRoute {
+            source: "gather",
+            event: "gathered",
+            target: "verify",
+            kind: loop_core::TransitionKind::Checked,
+            subject: Some("sources.json"),
+            gate: None,
+        },
+        ResearchRoute {
+            source: "gather",
+            event: "revise",
+            target: "scope",
+            kind: loop_core::TransitionKind::CheckFree,
+            subject: None,
+            gate: None,
+        },
+        ResearchRoute {
+            source: "verify",
+            event: "verified",
+            target: "synthesize",
+            kind: loop_core::TransitionKind::Checked,
+            subject: Some("verification.json"),
+            gate: Some(RESEARCH_VERIFY_GATE),
+        },
+        ResearchRoute {
+            source: "verify",
+            event: "revise",
+            target: "gather",
+            kind: loop_core::TransitionKind::CheckFree,
+            subject: None,
+            gate: None,
+        },
+        ResearchRoute {
+            source: "verify",
+            event: "revise-brief",
+            target: "scope",
+            kind: loop_core::TransitionKind::CheckFree,
+            subject: None,
+            gate: None,
+        },
+        ResearchRoute {
+            source: "synthesize",
+            event: "completed",
+            target: "end",
+            kind: loop_core::TransitionKind::Checked,
+            subject: Some("report.json"),
+            gate: Some(RESEARCH_SYNTHESIZE_GATE),
+        },
+        ResearchRoute {
+            source: "synthesize",
+            event: "revise",
+            target: "verify",
+            kind: loop_core::TransitionKind::CheckFree,
+            subject: None,
+            gate: None,
+        },
+        ResearchRoute {
+            source: "synthesize",
+            event: "revise-sources",
+            target: "gather",
+            kind: loop_core::TransitionKind::CheckFree,
+            subject: None,
+            gate: None,
+        },
+        ResearchRoute {
+            source: "synthesize",
+            event: "revise-brief",
+            target: "scope",
+            kind: loop_core::TransitionKind::CheckFree,
+            subject: None,
+            gate: None,
+        },
+    ];
+    ROUTES.iter().copied().find(|route| {
+        route.source == transition.source.as_str()
+            && route.event == transition.event.as_str()
+            && route.target == transition.target.as_str()
+            && route.kind == transition.kind
+    })
+}
+
+enum ResearchRead {
+    Deny(Vec<Value>),
+    Error(String),
+}
+
+fn research_read_artifact(input: &Value, subject: &str) -> Result<Value, ResearchRead> {
+    let root = input
+        .get("artifact_root")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ResearchRead::Error("artifact_root must be a string path".to_owned()))?;
+    let path = Path::new(root).join(subject);
+    match fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str(&content).map_err(|error| {
+            ResearchRead::Deny(vec![json!({
+                "path": format!("/{subject}"),
+                "rule": "artifact-read",
+                "message": format!("{subject} is not JSON: {error}")
+            })])
+        }),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Err(ResearchRead::Deny(vec![json!({
+                "path": format!("/{subject}"),
+                "rule": "artifact-read",
+                "message": format!("work not yet authored: {subject}")
+            })]))
+        }
+        Err(error) => Err(ResearchRead::Error(format!(
+            "could not read {subject}: {error}"
+        ))),
+    }
+}
+
+fn research_links_from(input: &Value, subject: &str) -> Vec<(String, String)> {
+    input
+        .get("revision_links")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|link| {
+            let from = link.get("from").and_then(Value::as_str)?;
+            if from != subject {
+                return None;
+            }
+            Some((
+                link.get("field").and_then(Value::as_str)?.to_owned(),
+                link.get("to").and_then(Value::as_str)?.to_owned(),
+            ))
+        })
+        .collect()
+}
+
+fn research_check_link(
+    input: &Value,
+    subject: &str,
+    document: &Value,
+    link: &(String, String),
+) -> Result<(), ResearchRead> {
+    let (field, target) = link;
+    let expected = research_read_artifact(input, target)?
+        .get("revision")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    let actual = document.get(field).and_then(Value::as_str).unwrap_or("");
+    if actual == expected {
+        return Ok(());
+    }
+    Err(ResearchRead::Deny(vec![json!({
+        "path": "/revision-links",
+        "rule": "revision-link",
+        "message": format!("{subject}.{field} must equal {target}.revision ({actual} != {expected})")
+    })]))
+}
+
+fn research_schema_violations(schema: &Value, instance: &Value, path: &str) -> Vec<Value> {
+    let mut violations = Vec::new();
+    if let Some(expected) = schema.get("type").and_then(Value::as_str) {
+        let matches = match expected {
+            "object" => instance.is_object(),
+            "array" => instance.is_array(),
+            "string" => instance.is_string(),
+            "number" => instance.is_number(),
+            "boolean" => instance.is_boolean(),
+            _ => true,
+        };
+        if !matches {
+            violations.push(json!({
+                "path": path,
+                "rule": "type",
+                "message": format!("expected {expected}")
+            }));
+            return violations;
+        }
+    }
+    if let Some(required) = schema.get("required").and_then(Value::as_array) {
+        if let Some(object) = instance.as_object() {
+            for key in required.iter().filter_map(Value::as_str) {
+                if !object.contains_key(key) {
+                    violations.push(json!({
+                        "path": path,
+                        "rule": "required",
+                        "message": format!("missing {key}")
+                    }));
+                }
+            }
+        }
+    }
+    if let Some(min_length) = schema.get("minLength").and_then(Value::as_u64) {
+        if instance
+            .as_str()
+            .is_none_or(|value| (value.len() as u64) < min_length)
+        {
+            violations.push(json!({
+                "path": path,
+                "rule": "minLength",
+                "message": format!("shorter than {min_length}")
+            }));
+        }
+    }
+    if let Some(allowed) = schema.get("enum").and_then(Value::as_array) {
+        if !allowed.contains(instance) {
+            violations.push(json!({
+                "path": path,
+                "rule": "enum",
+                "message": "value is not allowed"
+            }));
+        }
+    }
+    if let Some(min_items) = schema.get("minItems").and_then(Value::as_u64) {
+        if instance
+            .as_array()
+            .is_none_or(|value| (value.len() as u64) < min_items)
+        {
+            violations.push(json!({
+                "path": path,
+                "rule": "minItems",
+                "message": format!("fewer than {min_items} items")
+            }));
+        }
+    }
+    if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+        if let Some(object) = instance.as_object() {
+            if schema.get("additionalProperties") == Some(&Value::Bool(false)) {
+                for key in object.keys() {
+                    if !properties.contains_key(key) {
+                        violations.push(json!({
+                            "path": format!("{path}/{key}"),
+                            "rule": "additionalProperties",
+                            "message": format!("unexpected {key}")
+                        }));
+                    }
+                }
+            }
+            for (key, child_schema) in properties {
+                if let Some(child) = object.get(key) {
+                    let child_path = if path.is_empty() {
+                        format!("/{key}")
+                    } else {
+                        format!("{path}/{key}")
+                    };
+                    violations.extend(research_schema_violations(child_schema, child, &child_path));
+                }
+            }
+        }
+    }
+    if let Some(items) = schema.get("items") {
+        if let Some(array) = instance.as_array() {
+            for (index, child) in array.iter().enumerate() {
+                let child_path = format!("{path}/{index}");
+                violations.extend(research_schema_violations(items, child, &child_path));
+            }
+        }
+    }
+    violations
+}
+
+fn research_axes(input: &Value, gate: &str) -> Option<Vec<ReviewPolicy>> {
+    let policies = input.get("review_policies")?.get(gate)?.as_array()?;
+    let mut axes = Vec::new();
+    for policy in policies {
+        let id = policy
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())?;
+        let description = policy
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or(id);
+        axes.push(ReviewPolicy {
+            id: id.to_owned(),
+            description: description.to_owned(),
+        });
+    }
+    Some(axes)
+}
+
+fn research_evidence_details(
+    context: &[ContextRecord],
+    gate: &str,
+    subject: &str,
+    revision: &str,
+    subject_author: &Value,
+    config_version: &str,
+    axes: &[ReviewPolicy],
+) -> Option<Value> {
+    let subject_name = subject_author.get("name").and_then(Value::as_str);
+    let subject_kind = subject_author.get("kind").and_then(Value::as_str);
+    let mut latest: BTreeMap<(String, String, String), (bool, String)> = BTreeMap::new();
+    let mut stale = Vec::new();
+    let mut ordered = context.iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|record| record.sequence);
+    for record in ordered {
+        if record.kind != "review-evidence" {
+            continue;
+        }
+        let Some(object) = record.data.as_object() else {
+            continue;
+        };
+        let Some(record_gate) = object.get("gate").and_then(Value::as_str) else {
+            continue;
+        };
+        if record_gate != gate {
+            continue;
+        }
+        let Some(policy_id) = object.get("policy_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(record_subject) = object.get("subject").and_then(Value::as_str) else {
+            continue;
+        };
+        if record_subject != subject {
+            continue;
+        }
+        let Some(record_revision) = object.get("subject_revision").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(record_config) = object.get("config_version").and_then(Value::as_str) else {
+            continue;
+        };
+        if record_config != config_version {
+            continue;
+        }
+        let result = object.get("result").and_then(Value::as_str);
+        let passed = match result {
+            Some("pass") => true,
+            Some("fail") => false,
+            _ => continue,
+        };
+        let author = object.get("author").and_then(Value::as_object);
+        let Some(author_name) = author
+            .and_then(|value| value.get("name"))
+            .and_then(Value::as_str)
+        else {
+            continue;
+        };
+        let Some(author_kind) = author
+            .and_then(|value| value.get("kind"))
+            .and_then(Value::as_str)
+        else {
+            continue;
+        };
+        if !matches!(author_kind, "human" | "agent" | "script") {
+            continue;
+        }
+        if record_revision != revision {
+            stale.push(json!({
+                "policy_id": policy_id,
+                "diagnostics": [{"category": "stale"}]
+            }));
+            continue;
+        }
+        if subject_name == Some(author_name) && subject_kind == Some(author_kind) {
+            continue;
+        }
+        latest.insert(
+            (
+                policy_id.to_owned(),
+                author_name.to_owned(),
+                author_kind.to_owned(),
+            ),
+            (passed, record.id.to_string()),
+        );
+    }
+
+    let mut diagnostics = Vec::new();
+    for axis in axes {
+        let standing: Vec<_> = latest
+            .iter()
+            .filter(|((policy_id, _, _), _)| policy_id == &axis.id)
+            .collect();
+        if standing.iter().any(|(_, (passed, _))| !*passed) {
+            diagnostics.push(json!({
+                "policy_id": axis.id,
+                "diagnostics": [{"category": "fail"}]
+            }));
+            continue;
+        }
+        if standing.is_empty() {
+            diagnostics.push(json!({
+                "policy_id": axis.id,
+                "diagnostics": [{"category": "missing"}]
+            }));
+        }
+    }
+    if diagnostics.is_empty() {
+        return None;
+    }
+    Some(json!({
+        "phase": "evidence",
+        "diagnostics": diagnostics,
+        "informational": stale,
+        "inert_records": []
+    }))
+}
+
+fn research_schema_deny(request: &EvaluateRequest, violations: Vec<Value>) -> Value {
+    json!({
+        "result": "deny",
+        "feedback": {
+            "code": "research-schema-invalid",
+            "message": "not judged: fix shape first",
+            "details": {
+                "phase": "schema",
+                "violations": violations,
+                "prior_denials": research_prior_denials(request)
+            }
+        }
+    })
+}
+
+fn research_prior_denials(request: &EvaluateRequest) -> Value {
+    Value::Array(
+        request
+            .prior_evaluations
+            .iter()
+            .filter_map(|evaluation| {
+                evaluation.feedback().map(|feedback| {
+                    json!({
+                        "code": feedback.code,
+                        "message": feedback.message
+                    })
+                })
+            })
+            .collect(),
     )
 }
 
@@ -1059,6 +1950,31 @@ mod unit_tests {
                 .unwrap()
                 .is_final
         );
+    }
+
+    #[test]
+    fn research_topology_is_exact() {
+        let workflow = research_workflow();
+        assert_eq!(workflow.initial_state.as_str(), "scope");
+        assert_eq!(workflow.states.len(), 5);
+        assert_eq!(workflow.transitions.len(), 10);
+        assert_eq!(
+            workflow
+                .states
+                .iter()
+                .map(|state| state.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["scope", "gather", "verify", "synthesize", "end"]
+        );
+        assert!(
+            workflow
+                .states
+                .iter()
+                .find(|state| state.id.as_str() == "end")
+                .unwrap()
+                .is_final
+        );
+        assert_eq!(workflow, research_workflow());
     }
 
     #[test]

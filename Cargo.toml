@@ -5,6 +5,7 @@ members = [
     "crates/loop-cli",
     "crates/software-change-provider",
     "crates/policy-document-provider",
+    "crates/research-provider",
     "tests/fixtures",
 ]
 resolver = "2"

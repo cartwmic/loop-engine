@@ -14,12 +14,13 @@ Reference providers:
 
 - [`crates/software-change-provider/README.md`](crates/software-change-provider/README.md) — software-change workflow (PRD section 10).
 - [`crates/policy-document-provider/README.md`](crates/policy-document-provider/README.md) — policy-document workflow (PRD section 11).
+- [`crates/research-provider/README.md`](crates/research-provider/README.md) — research workflow (PRD section 12).
 
 ## Getting Started
 
 ### Prebuilt GitHub Releases
 
-Starting with v0.3.0, releases publish separate cargo-dist archives for all three binaries and supported targets:
+Starting with v0.3.0, releases publish separate cargo-dist archives for all four binaries and supported targets:
 
 - `loop-cli-aarch64-apple-darwin.tar.xz` — macOS arm64, contains `loop-engine`.
 - `loop-cli-x86_64-unknown-linux-gnu.tar.xz` — Linux x86_64, contains `loop-engine`.
@@ -27,8 +28,10 @@ Starting with v0.3.0, releases publish separate cargo-dist archives for all thre
 - `software-change-provider-x86_64-unknown-linux-gnu.tar.xz` — Linux x86_64, contains `software-change`.
 - `policy-document-provider-aarch64-apple-darwin.tar.xz` — macOS arm64, contains `policy-document`.
 - `policy-document-provider-x86_64-unknown-linux-gnu.tar.xz` — Linux x86_64, contains `policy-document`.
+- `research-provider-aarch64-apple-darwin.tar.xz` — macOS arm64, contains `research`.
+- `research-provider-x86_64-unknown-linux-gnu.tar.xz` — Linux x86_64, contains `research`.
 
-Each archive has a matching `.sha256` file; release `sha256.sum` provides the unified checksum list. Archives include `LICENSE-MIT` and `LICENSE-APACHE`. Download matching archives from [GitHub Releases](https://github.com/cartwmic/loop-engine/releases), verify checksums, and place all three binaries on `PATH`.
+Each archive has a matching `.sha256` file; release `sha256.sum` provides the unified checksum list. Archives include `LICENSE-MIT` and `LICENSE-APACHE`. Download matching archives from [GitHub Releases](https://github.com/cartwmic/loop-engine/releases), verify checksums, and place all four binaries on `PATH`.
 
 Generated cargo-dist installers choose platform automatically:
 
@@ -40,13 +43,15 @@ curl --proto '=https' --tlsv1.2 -LsSf \
   "https://github.com/cartwmic/loop-engine/releases/download/$VERSION/software-change-provider-installer.sh" | sh
 curl --proto '=https' --tlsv1.2 -LsSf \
   "https://github.com/cartwmic/loop-engine/releases/download/$VERSION/policy-document-provider-installer.sh" | sh
+curl --proto '=https' --tlsv1.2 -LsSf \
+  "https://github.com/cartwmic/loop-engine/releases/download/$VERSION/research-provider-installer.sh" | sh
 ```
 
 With [mise](https://mise.jdx.dev/), manage `loop-engine` as one tool and use separate provider installers. Do not add multiple executable selections for the same GitHub repository to one mise config: mise canonicalizes them to one tool entry, so binaries would be missing.
 
 ```sh
 mise use --global 'github:cartwmic/loop-engine[exe=loop-engine]@v0.5.0'
-for app in software-change-provider policy-document-provider; do
+for app in software-change-provider policy-document-provider research-provider; do
   curl --proto '=https' --tlsv1.2 -LsSf \
     "https://github.com/cartwmic/loop-engine/releases/download/v0.5.0/$app-installer.sh" | sh
 done
@@ -56,21 +61,23 @@ Historical v0.2.2 releases include only `loop-engine` and `software-change`.
 
 ### Build from source
 
-Install all three binaries from GitHub source:
+Install all four binaries from GitHub source:
 
 ```sh
 cargo install --git https://github.com/cartwmic/loop-engine loop-cli --bin loop-engine --locked
 cargo install --git https://github.com/cartwmic/loop-engine software-change-provider --bin software-change --locked
 cargo install --git https://github.com/cartwmic/loop-engine policy-document-provider --bin policy-document --locked
+cargo install --git https://github.com/cartwmic/loop-engine research-provider --bin research --locked
 ```
 
-Or build all three binaries from a checkout:
+Or build all four binaries from a checkout:
 
 ```sh
-cargo build --release -p loop-cli -p software-change-provider -p policy-document-provider
+cargo build --release -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider
 # target/release/loop-engine
 # target/release/software-change
 # target/release/policy-document
+# target/release/research
 ```
 
 ## Usage
@@ -97,17 +104,21 @@ args = []
 [providers.policy-document]
 command = "/absolute/path/to/policy-document"
 args = []
+
+[providers.research]
+command = "/absolute/path/to/research"
+args = []
 ```
 
 `start` initial input and `append` data accept JSON inline, `@FILE`, or `-` (stdin). `start` returns the run ID at `result.run.id`. Reuse the same database and run ID for every later operation. `show` is provider-free.
 
 With `--json`, exit `0` is `completed`, `10` is `rejected` (follow feedback; nothing is inferred as advancement), `20` is `error` (re-read `show`), and `2` is `invalid-invocation`. Full envelope and handoff rules: [docs/agent-usage.md](docs/agent-usage.md).
 
-`loop-engine --help` and `--version` work before any operation. `software-change --help`/`-h` describes `describe`, `evaluate`, and `data-dump`; `--version`/`-V` prints the Cargo package version. `policy-document` accepts `data-dump DIR` on argv and otherwise reads one JSON request on stdin; it does not implement `--help` or `--version`. Historical v0.2.2 release installers predate the software-change CLI flags.
+`loop-engine --help` and `--version` work before any operation. `software-change --help`/`-h` and `research --help`/`-h` describe `describe`, `evaluate`, and `data-dump`; `--version`/`-V` prints the Cargo package version. `policy-document` accepts `data-dump DIR` on argv and otherwise reads one JSON request on stdin; it does not implement `--help` or `--version`. Historical v0.2.2 release installers predate the software-change CLI flags.
 
 ## Validation
 
-Supported publication matrix is exactly three applications (`loop-cli`, `software-change-provider`, `policy-document-provider`) by two native targets (`aarch64-apple-darwin`, `x86_64-unknown-linux-gnu`). `dist plan` describes this matrix; it does not compile or run archives.
+Supported publication matrix is exactly four applications (`loop-cli`, `software-change-provider`, `policy-document-provider`, `research-provider`) by two native targets (`aarch64-apple-darwin`, `x86_64-unknown-linux-gnu`). `dist plan` describes this matrix; it does not compile or run archives.
 
 Run baseline checks, generated-workflow validation, plan assertion, and full source-tree production journeys before release handoff:
 
@@ -121,7 +132,8 @@ python3 scripts/assert-dist-plan.py --self-test
 python3 scripts/assert-dist-plan.py /tmp/loop-engine-dist-plan.json
 python3 scripts/assert-release-gates.py
 python3 scripts/production-journey.py --self-test
-cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider
+python3 scripts/research-journey.py --self-test
+cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider
 python3 scripts/production-journey.py \
   --mode source \
   --engine target/debug/loop-engine \
@@ -137,6 +149,11 @@ for mode in draft audit; do
     --profile crates/policy-document-provider/data/readme.json \
     --mode "$mode"
 done
+python3 scripts/research-journey.py \
+  --mode source \
+  --engine target/debug/loop-engine \
+  --provider target/debug/research \
+  --profile crates/research-provider/data/configs/standard.json
 ```
 
 Build local host-target archives and smoke extracted binaries before handoff. Use only a newly approved, unpublished release tag; never reuse an existing public tag:
@@ -146,7 +163,7 @@ TAG=vX.Y.Z
 dist build --tag="$TAG" --artifacts=local --target=aarch64-apple-darwin
 ```
 
-Run packaged smoke with extracted `loop-engine`, `software-change`, and `policy-document` paths. Each provider must materialize embedded data, and both provider journeys must run outside checkout; policy-document covers both draft and audit modes. A macOS host build proves only macOS arm64; Linux x86_64 native build and archive smoke remain CI proof when no Linux host is available.
+Run packaged smoke with extracted `loop-engine`, `software-change`, `policy-document`, and `research` paths. Each provider must materialize embedded data, and all provider journeys must run outside checkout; policy-document covers both draft and audit modes, and the research packaged journey materializes embedded data via `data-dump` / `--mode packaged`. A macOS host build proves only macOS arm64; Linux x86_64 native build and archive smoke remain CI proof when no Linux host is available.
 
 Journey evidence records are synthetic and schema-conforming. They prove deterministic policy mechanics, routing, aggregation, and persistence; they do not prove semantic review quality.
 
@@ -162,7 +179,7 @@ Dispatch runs cargo-dist's native local-build matrix first, then its generated g
 
 Private/free GitHub repositories cannot fully prevent an owner from creating an out-of-band raw tag. Such a tag is outside supported release procedure and does not trigger this workflow; future repository rulesets or plan capability would be needed for prevention.
 
-Historical `v0.2.0`, `v0.2.1`, and `v0.2.2` tags remain immutable. `v0.2.2` was the fix-forward release for contract closure; historical release facts are not rewritten. v0.3.0 added policy-document to the same native archive, installer, source-journey, and packaged-smoke gates as the engine and software-change provider.
+Historical `v0.2.0`, `v0.2.1`, and `v0.2.2` tags remain immutable. `v0.2.2` was the fix-forward release for contract closure; historical release facts are not rewritten. v0.3.0 added policy-document to the same native archive, installer, source-journey, and packaged-smoke gates as the engine and software-change provider. Research joins the same native archive, installer, source-journey, and packaged-smoke gates.
 
 ### Direct pushes to main
 

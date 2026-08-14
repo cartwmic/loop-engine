@@ -56,11 +56,15 @@ def main() -> int:
         "python3 scripts/assert-dist-plan.py \"$RUNNER_TEMP/dist-plan.json\"",
         "python3 scripts/assert-release-gates.py",
         "python3 scripts/production-journey.py --self-test",
-        "cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider",
+        "python3 scripts/research-journey.py --self-test",
+        "cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider",
         "--traversal-depth full",
         "python3 scripts/policy-document-journey.py",
         "--profile crates/policy-document-provider/data/readme.json",
         "for mode in draft audit",
+        "python3 scripts/research-journey.py",
+        "--provider target/debug/research",
+        "--profile crates/research-provider/data/configs/standard.json",
     )
     missing = [token for token in required_preflight if token not in preflight]
     if missing:

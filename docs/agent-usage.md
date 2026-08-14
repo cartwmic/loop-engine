@@ -80,6 +80,8 @@ Repository checks name boundaries they actually cross:
 - component tests cover parser, core, SQLite, provider schema/evidence, and protocol behavior;
 - composed tests combine engine operations, SQLite, and provider subprocesses below CLI process boundary;
 - `scripts/production-journey.py --mode source --traversal-depth full` drives separate `loop-engine` processes through provider TOML, SQLite, production `software-change` process, copied high-rigor artifacts, deterministic denials, evidence aggregation, and terminal state;
-- `scripts/production-journey.py --mode packaged --traversal-depth checked-prefix` consumes extracted binaries, calls `data-dump`, and runs release-critical checked transition from dumped data only.
+- `scripts/production-journey.py --mode packaged --traversal-depth checked-prefix` consumes extracted binaries, calls `data-dump`, and runs release-critical checked transition from dumped data only;
+- `scripts/research-journey.py --mode source` drives separate `loop-engine` processes through provider TOML, SQLite, production `research` process, copied standard profile, schema/evidence denials, and terminal state;
+- `scripts/research-journey.py --mode packaged` consumes extracted binaries, calls `data-dump`, and runs the release-critical checked prefix from dumped data only.
 
 Journey evidence records are synthetic, schema-conforming pass records. They prove deterministic policy mechanics, author independence, revision-link handling, routing, aggregation, and persistence; they do not prove semantic review or verdict quality. Semantic review remains external.

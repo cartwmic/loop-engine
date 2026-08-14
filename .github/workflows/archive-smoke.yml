@@ -41,7 +41,7 @@ jobs:
           pattern: artifacts-build-local-*
           path: target/distrib/
           merge-multiple: true
-      - name: Extract and smoke all three applications
+      - name: Extract and smoke all four applications
         shell: bash
         run: |
           set -euo pipefail
@@ -50,14 +50,15 @@ jobs:
           software_data_root="$RUNNER_TEMP/software-change-data-$target"
           software_work_root="$RUNNER_TEMP/software-change-work-$target"
           policy_data_root="$RUNNER_TEMP/policy-document-data-$target"
+          research_data_root="$RUNNER_TEMP/research-data-$target"
           smoke_cwd="$RUNNER_TEMP/packaged-smoke-cwd-$target"
           checkout_root="$(cd "$GITHUB_WORKSPACE" && pwd -P)"
           rm -rf \
             "$extract" "$software_data_root" "$software_work_root" \
-            "$policy_data_root" "$smoke_cwd"
-          mkdir -p "$extract" "$software_work_root" "$smoke_cwd"
+            "$policy_data_root" "$research_data_root" "$smoke_cwd"
+          mkdir -p "$extract" "$software_work_root" "$research_data_root" "$smoke_cwd"
 
-          for app in loop-cli software-change-provider policy-document-provider; do
+          for app in loop-cli software-change-provider policy-document-provider research-provider; do
             archive="target/distrib/${app}-${target}.tar.xz"
             test -f "$archive"
             tar -xJf "$archive" -C "$extract"
@@ -66,9 +67,11 @@ jobs:
           engine="$(find "$extract" -type f -name loop-engine -perm -u+x -print -quit)"
           software_provider="$(find "$extract" -type f -name software-change -perm -u+x -print -quit)"
           policy_provider="$(find "$extract" -type f -name policy-document -perm -u+x -print -quit)"
+          research_provider="$(find "$extract" -type f -name research -perm -u+x -print -quit)"
           test -n "$engine"
           test -n "$software_provider"
           test -n "$policy_provider"
+          test -n "$research_provider"
 
           # Packaged proof must not inherit checkout-relative provider data or cwd.
           cd "$smoke_cwd"
@@ -95,3 +98,10 @@ jobs:
               --profile "$policy_profile" \
               --mode "$mode"
           done
+
+          python3 "$GITHUB_WORKSPACE/scripts/research-journey.py" \
+            --mode packaged \
+            --engine "$engine" \
+            --provider "$research_provider" \
+            --data-root "$research_data_root" \
+            --profile standard.json

@@ -1,4 +1,4 @@
-//! End-to-end acceptance suites for the two v0.1 reference workflows.
+//! End-to-end acceptance suites for the three reference workflows.
 //!
 //! These tests intentionally compose the core operations with the real SQLite
 //! adapter, the real one-shot subprocess gateway, and the fixture provider
@@ -18,9 +18,12 @@ use loop_integrations::{
 };
 use loop_reference_fixtures::{
     agents_policy_input, document_policy, fixture_binary, policy_document_initial_input,
-    policy_document_workflow, readme_policy_input, software_change_initial_input,
-    software_change_policy_set_a, software_change_policy_set_b, software_change_review_context,
-    software_change_workflow, DESIGN_REVIEW_GATE, IMPLEMENTATION_REVIEW_GATE, PLAN_REVIEW_GATE,
+    policy_document_workflow, readme_policy_input, research_artifact_schemas, research_brief,
+    research_initial_input, research_policy_set_a, research_report, research_review_context,
+    research_revision_links, research_sources, research_verification, research_workflow,
+    software_change_initial_input, software_change_policy_set_a, software_change_policy_set_b,
+    software_change_review_context, software_change_workflow, DESIGN_REVIEW_GATE,
+    IMPLEMENTATION_REVIEW_GATE, PLAN_REVIEW_GATE, RESEARCH_SYNTHESIZE_GATE, RESEARCH_VERIFY_GATE,
     VALIDATION_GATE,
 };
 use serde_json::{json, Value};
@@ -34,6 +37,7 @@ use tempfile::tempdir;
 const PROVIDER_ALIAS: &str = "reference";
 const SOFTWARE_ALIAS: &str = "software";
 const DOCUMENT_ALIAS: &str = "document";
+const RESEARCH_ALIAS: &str = "research";
 
 /// A composition root used by the acceptance suites.
 ///
@@ -182,6 +186,15 @@ fn reference_resolver() -> ConfiguredProviderResolver {
             DOCUMENT_ALIAS,
             ProviderInvocation::new(
                 fixture_binary("policy-document-provider")
+                    .to_string_lossy()
+                    .into_owned(),
+                Vec::<String>::new(),
+            ),
+        ),
+        (
+            RESEARCH_ALIAS,
+            ProviderInvocation::new(
+                fixture_binary("research-provider")
                     .to_string_lossy()
                     .into_owned(),
                 Vec::<String>::new(),
@@ -998,6 +1011,143 @@ fn policy_document_provider_policy_shape_neutrality_uses_same_composed_mechanism
         require_completed(engine.event(run_id, "passed"));
         assert_eq!(engine.show(run_id).lifecycle, Lifecycle::Final);
     }
+    Ok(())
+}
+
+fn write_research_artifact(root: &Path, name: &str, value: &Value) {
+    fs::write(
+        root.join(name),
+        serde_json::to_vec_pretty(value).expect("serialize artifact"),
+    )
+    .expect("write research artifact");
+}
+
+#[test]
+fn research_reference_workflow_end_to_end_from_clean_durable_state(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let state = tempdir()?;
+    let artifacts = tempdir()?;
+    let database = state.path().join("research.sqlite");
+    let engine = Composition::new(&database, reference_resolver());
+    let input = research_initial_input(
+        artifacts.path().to_string_lossy(),
+        research_policy_set_a(),
+        research_artifact_schemas(),
+        research_revision_links(),
+        "fixture-1",
+    );
+    let started = engine.start("research-e2e", RESEARCH_ALIAS, input.clone());
+    assert_eq!(started.workflow, research_workflow());
+    let initial = engine.show("research-e2e");
+    assert_eq!(initial.initial_input, input);
+    assert_eq!(initial.current_state, StateId::from("scope"));
+    assert_eq!(initial.workflow_id.as_str(), "research");
+    assert_requestable(&initial, "scoped", core::TransitionKind::Checked);
+
+    let missing_brief = require_rejected(engine.event("research-e2e", "scoped"));
+    assert_eq!(missing_brief.code, "research-schema-invalid");
+    assert_eq!(missing_brief.details.as_ref().unwrap()["phase"], "schema");
+    assert_eq!(
+        engine.show("research-e2e").current_state,
+        StateId::from("scope")
+    );
+
+    write_research_artifact(
+        artifacts.path(),
+        "brief.json",
+        &research_brief("1", "owner"),
+    );
+    require_completed(engine.event("research-e2e", "scoped"));
+    assert_eq!(
+        engine.show("research-e2e").current_state,
+        StateId::from("gather")
+    );
+
+    write_research_artifact(
+        artifacts.path(),
+        "sources.json",
+        &research_sources("1", "1", "owner"),
+    );
+    require_completed(engine.event("research-e2e", "gathered"));
+    assert_eq!(
+        engine.show("research-e2e").current_state,
+        StateId::from("verify")
+    );
+
+    write_research_artifact(
+        artifacts.path(),
+        "verification.json",
+        &research_verification("1", "1", "owner"),
+    );
+    let missing_verify = require_rejected(engine.event("research-e2e", "verified"));
+    assert_eq!(missing_verify.code, "research-review-incomplete");
+    assert_eq!(
+        missing_verify.details.as_ref().unwrap()["phase"],
+        "evidence"
+    );
+    assert_eq!(
+        engine.show("research-e2e").current_state,
+        StateId::from("verify")
+    );
+
+    for (index, axis) in ["claim-grounded", "adversarial"].into_iter().enumerate() {
+        engine.append_record(
+            "research-e2e",
+            research_review_context(
+                &format!("verify-{axis}"),
+                RESEARCH_VERIFY_GATE,
+                axis,
+                true,
+                "",
+                "reviewer",
+                "agent",
+                "verification.json",
+                "1",
+                "fixture-1",
+                (index as u64) + 1,
+            ),
+        );
+    }
+    require_completed(engine.event("research-e2e", "verified"));
+    assert_eq!(
+        engine.show("research-e2e").current_state,
+        StateId::from("synthesize")
+    );
+
+    write_research_artifact(
+        artifacts.path(),
+        "report.json",
+        &research_report("1", "1", "owner"),
+    );
+    let missing_synthesize = require_rejected(engine.event("research-e2e", "completed"));
+    assert_eq!(missing_synthesize.code, "research-review-incomplete");
+
+    for (index, axis) in ["cited-conclusion", "scope-faithful"]
+        .into_iter()
+        .enumerate()
+    {
+        engine.append_record(
+            "research-e2e",
+            research_review_context(
+                &format!("synthesize-{axis}"),
+                RESEARCH_SYNTHESIZE_GATE,
+                axis,
+                true,
+                "",
+                "reviewer",
+                "agent",
+                "report.json",
+                "1",
+                "fixture-1",
+                (index as u64) + 3,
+            ),
+        );
+    }
+    require_completed(engine.event("research-e2e", "completed"));
+    let terminal = engine.show("research-e2e");
+    assert_eq!(terminal.current_state, StateId::from("end"));
+    assert_eq!(terminal.lifecycle, Lifecycle::Final);
+    assert!(terminal.requestable_events.is_empty());
     Ok(())
 }
 
