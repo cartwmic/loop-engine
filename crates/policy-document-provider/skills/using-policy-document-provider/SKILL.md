@@ -46,8 +46,8 @@ Reuse that database and returned run ID for every operation.
 
 | Profile | Deterministic floors | Semantic axes |
 |---|---|---|
-| `readme-1` | non-empty document; H1; purpose, onboarding, usage, and validation sections; commands in onboarding and validation; resolving local references | product fidelity, onboarding sufficiency, audience navigation, clarity/scope |
-| `agents-1` | non-empty document; scope/authority, workflow/validation, and completion/handoff sections; workflow command; resolving local references | success-path completeness, operational precision, authority resolution, risk boundaries, completion/handoff |
+| `readme-2` | non-empty document; H1; purpose, onboarding, usage, and validation sections; commands in onboarding and validation; resolving local references | product-fidelity, onboarding-sufficiency, audience-navigation, clarity-scope, honest-fitness, verifiable-claims, troubleshooting-sharp-edges |
+| `agents-2` | non-empty document; scope/authority, workflow/validation, and completion/handoff sections; workflow command; resolving local references | success-path-completeness, operational-precision, authority-resolution, risk-boundary-sufficiency, completion-handoff, non-discoverable-sharp-edges, ambiguity-resolution, signal-density, living-config |
 
 Heading aliases are case-insensitive; profiles do not require exact heading spelling. Commands must be non-comment content inside a fenced block within the matching section. Keep local references relative to target parent; web, mail, data, fragment-only, and protocol-relative links are ignored by local resolution.
 
@@ -84,7 +84,7 @@ loop-engine --database "$DB" --json append \
   "author": {"name": "reviewer-sol", "kind": "agent"},
   "target_id": "README.md",
   "target_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-  "profile_version": "readme-1"
+  "profile_version": "readme-2"
 }
 ```
 

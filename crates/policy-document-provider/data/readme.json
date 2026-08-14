@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "profile_version": "readme-1",
+  "profile_version": "readme-2",
   "mode": "audit",
   "target": {"id": "README.md", "path": "/abs/path/to/README.md"},
   "deterministic_policies": [
@@ -17,7 +17,10 @@
   "semantic_policies": [
     {"id":"product-fidelity","description":"README accurately represents product purpose and behavior.","example_prompt":"Review product fidelity against supplied project evidence."},
     {"id":"onboarding-sufficiency","description":"A new operator can complete onboarding.","example_prompt":"Review onboarding sufficiency and prerequisites."},
-    {"id":"audience-navigation","description":"README helps intended audiences find relevant paths.","example_prompt":"Review audience navigation and information structure."},
-    {"id":"clarity-scope","description":"README is clear, scoped, and non-contradictory.","example_prompt":"Review clarity, scope, and contradictions."}
+    {"id":"audience-navigation","description":"README helps intended audiences find relevant paths and does not impersonate AGENTS.md. Humans get product purpose and install; operator traps and agent runbooks are linked, not copied.","example_prompt":"Review audience navigation against the repository. Confirm humans, operators, and agents are sent to the right document. README may overlap AGENTS.md on one-line purpose but must not contradict it or dump the agent runbook. Deep procedure lives in skills or AGENTS.md and is linked, not copied. Use the tree and sibling AGENTS.md or skills as evidence."},
+    {"id":"clarity-scope","description":"README is clear, scoped, and non-contradictory.","example_prompt":"Review clarity, scope, and contradictions."},
+    {"id":"honest-fitness","description":"README states what the product is, who it is for, and when not to use it. Limitations that would change a user's decision are named, including frozen versus living surface and public versus internal API when those would change the decision. If none exist, that conclusion is explicit and grounded in the repository tree.","example_prompt":"Compare this README to the repository. Name limitations, non-goals, and fitness boundaries that would change a user's decision to adopt or depend on the product, including none-known only if the tree supports that. Fail omitted decision-changing limitations, or a none-known claim that the tree contradicts. Architecture tours do not satisfy. Use the tree as evidence, not the document alone."},
+    {"id":"verifiable-claims","description":"Install, dump, journey, and test commands in the README are the real commands. Product adjectives without a check fail unless tied to a command or dated artifact. Stale copies of commands that exist in a skill or CI file fail.","example_prompt":"Compare README claims and commands to the repository, skills, and CI. Fail commands that would not work as written, adjectives such as production-ready that have no check or dated artifact, and stale copies of commands that live elsewhere. This axis is about truth of claims, not heading presence."},
+    {"id":"troubleshooting-sharp-edges","description":"Common human stalls are a symptom-cause-fix, or a pointer to the AGENTS.md or skill that owns the operator trap. README does not hide operator-only gotchas in a marketing overview and does not dump the full agent runbook.","example_prompt":"Compare this README to the repository. List common stalls a new human operator would hit. For each, the README must give symptom, cause, and fix, or a pointer to the document that owns it. Fail happy-path-only READMEs when the tree shows known stalls. If no such stalls exist, say so explicitly from the tree."}
   ]
 }

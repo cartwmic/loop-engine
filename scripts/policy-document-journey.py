@@ -42,16 +42,22 @@ def show_state(engine: Path, database: Path, run_id: str, state: str) -> dict[st
     return shown["result"]
 
 
-def evidence(axis: str, digest: str, author: str) -> dict[str, Any]:
+def evidence(
+    axis: str,
+    digest: str,
+    author: str,
+    profile_version: str,
+    target_id: str,
+) -> dict[str, Any]:
     return {
         "gate": "semantic-review",
         "policy_id": axis,
         "result": "pass",
         "findings": "",
         "author": {"name": author, "kind": "script"},
-        "target_id": "README.md",
+        "target_id": target_id,
         "target_sha256": digest,
-        "profile_version": "readme-1",
+        "profile_version": profile_version,
     }
 
 
@@ -62,6 +68,8 @@ def append_evidence(
     axes: list[str],
     digest: str,
     prefix: str,
+    profile_version: str,
+    target_id: str,
 ) -> None:
     for index, axis in enumerate(axes):
         response = call(
@@ -73,7 +81,16 @@ def append_evidence(
                 f"{prefix}-{index}",
                 run_id,
                 "review-evidence",
-                json.dumps(evidence(axis, digest, prefix), separators=(",", ":")),
+                json.dumps(
+                    evidence(
+                        axis,
+                        digest,
+                        prefix,
+                        profile_version,
+                        target_id,
+                    ),
+                    separators=(",", ":"),
+                ),
             ],
         )
         assert response["status"] == "completed", response
@@ -111,6 +128,8 @@ def main() -> int:
         profile["target"]["path"] = str(target)
         profile_path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
         axes = [item["id"] for item in profile["semantic_policies"]]
+        profile_version = profile["profile_version"]
+        target_id = profile["target"]["id"]
         run_id = f"policy-document-{args.mode}-journey"
 
         started = call(
@@ -173,7 +192,16 @@ def main() -> int:
         ]
         initial_digest = hashlib.sha256(target.read_bytes()).hexdigest()
         assert missing["target_sha256"] == initial_digest
-        append_evidence(engine, database, run_id, axes, initial_digest, "initial-review")
+        append_evidence(
+            engine,
+            database,
+            run_id,
+            axes,
+            initial_digest,
+            "initial-review",
+            profile_version,
+            target_id,
+        )
 
         # Finalization must rerun deterministic policy before consulting evidence.
         broken = conforming.replace("## Validation", "Validation")
@@ -201,7 +229,16 @@ def main() -> int:
         fresh_digest = hashlib.sha256(target.read_bytes()).hexdigest()
         assert fresh_digest != initial_digest
         assert stale["target_sha256"] == fresh_digest
-        append_evidence(engine, database, run_id, axes, fresh_digest, "fresh-review")
+        append_evidence(
+            engine,
+            database,
+            run_id,
+            axes,
+            fresh_digest,
+            "fresh-review",
+            profile_version,
+            target_id,
+        )
 
         final = call(engine, database, ["event", run_id, "passed"])
         assert final["status"] == "completed", final

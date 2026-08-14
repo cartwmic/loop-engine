@@ -175,8 +175,8 @@ mod tests {
     #[test]
     fn shipped_profiles_have_frozen_policy_sets() {
         for (name, version, target, count, semantic) in [
-            ("readme", "readme-1", "README.md", 9, 4),
-            ("agents", "agents-1", "AGENTS.md", 6, 5),
+            ("readme", "readme-2", "README.md", 9, 7),
+            ("agents", "agents-2", "AGENTS.md", 6, 9),
         ] {
             let raw = if name == "readme" {
                 include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/readme.json"))
@@ -218,6 +218,35 @@ mod tests {
                 ]
             };
             assert_eq!(ids, expected);
+            let semantic_ids = parsed
+                .semantic_policies
+                .iter()
+                .map(|policy| policy.id.as_str())
+                .collect::<Vec<_>>();
+            let expected_semantic = if name == "readme" {
+                vec![
+                    "product-fidelity",
+                    "onboarding-sufficiency",
+                    "audience-navigation",
+                    "clarity-scope",
+                    "honest-fitness",
+                    "verifiable-claims",
+                    "troubleshooting-sharp-edges",
+                ]
+            } else {
+                vec![
+                    "success-path-completeness",
+                    "operational-precision",
+                    "authority-resolution",
+                    "risk-boundary-sufficiency",
+                    "completion-handoff",
+                    "non-discoverable-sharp-edges",
+                    "ambiguity-resolution",
+                    "signal-density",
+                    "living-config",
+                ]
+            };
+            assert_eq!(semantic_ids, expected_semantic);
             assert!(!ids.contains(&"project-title") || name == "readme");
             assert!(matches!(
                 parsed.deterministic_policies.last(),

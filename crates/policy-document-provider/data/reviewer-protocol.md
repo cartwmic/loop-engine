@@ -13,7 +13,7 @@ Semantic judgment stays external. Reviewer appends one ordinary `review-evidence
     "author": {"name": "reviewer", "kind": "agent"},
     "target_id": "README.md",
     "target_sha256": "<64 lowercase hexadecimal SHA-256 of exact target bytes>",
-    "profile_version": "readme-1"
+    "profile_version": "readme-2"
   }
 }
 ```

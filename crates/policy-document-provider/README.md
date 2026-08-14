@@ -6,7 +6,7 @@
 
 Fixed topology is `prepare` → `deterministic-review` → `semantic-review` → `end`; both revision edges are check-free. Initial input is closed JSON containing `schema_version`, `profile_version`, `mode` (`draft` or `audit`), absolute target `{id,path}`, non-empty deterministic policies, and non-empty semantic policies. Agent procedure for this crate is [AGENTS.md](AGENTS.md). Drive a run with [skills/using-policy-document-provider/SKILL.md](skills/using-policy-document-provider/SKILL.md).
 
-README profile `readme-1` supplies title, purpose, onboarding, usage, validation, command, and local-reference deterministic floors. AGENTS profile `agents-1` supplies scope/authority, workflow/validation, completion/handoff, command, and local-reference floors; no title or exact heading spelling is required.
+README profile `readme-2` supplies title, purpose, onboarding, usage, validation, command, and local-reference deterministic floors; those floors are unchanged. Semantic axes add honest fitness, verifiable claims, and troubleshooting sharp edges, and tighten audience navigation so README does not impersonate AGENTS.md. AGENTS profile `agents-2` supplies scope/authority, workflow/validation, completion/handoff, command, and local-reference floors; those floors are unchanged, and no title or exact heading spelling is required. Semantic axes add non-discoverable sharp edges, ambiguity resolution, signal density, and living config, and tighten operational precision, authority resolution, and risk-boundary sufficiency.
 
 ## Setup
 
@@ -54,7 +54,7 @@ Provider never invokes reviewer/model and never edits target. Compute digest ove
 ```sh
 loop-engine --database /tmp/policy-document.sqlite --json append \
   --record-id product-fidelity-review docs-audit review-evidence \
-  '{"gate":"semantic-review","policy_id":"product-fidelity","result":"pass","findings":"","author":{"name":"reviewer","kind":"agent"},"target_id":"README.md","target_sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","profile_version":"readme-1"}'
+  '{"gate":"semantic-review","policy_id":"product-fidelity","result":"pass","findings":"","author":{"name":"reviewer","kind":"agent"},"target_id":"README.md","target_sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","profile_version":"readme-2"}'
 ```
 
 Evidence requires exact frozen fields and enums. One current pass and no current standing fail are required per semantic axis. Malformed attributable evidence blocks until any later shape-conforming record for that axis. Wrong profile, target, or digest is stale and never satisfies current conformance. Any target byte change requires fresh evidence.

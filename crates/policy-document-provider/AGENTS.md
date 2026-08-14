@@ -10,7 +10,7 @@ Do not treat this crate as a document editor, reviewer, or model caller. It read
 
 Use this crate's [README.md](README.md) as the provider-contract summary and [skills/using-policy-document-provider/SKILL.md](skills/using-policy-document-provider/SKILL.md) to drive a run. Engine product requirements for this workflow are PRD section 11 in the repository `docs/PRD.md`. Repository-root `AGENTS.md` and `docs/agent-usage.md` govern checkout-wide operation and CLI envelopes.
 
-Shipped profiles `readme-1` and `agents-1` are product. Keep `target.id` as `README.md` or `AGENTS.md` and keep `profile_version` unless you are intentionally authoring a custom profile. Deterministic and semantic policies live in immutable initial input; do not bake document-specific policy into provider code.
+Shipped profiles `readme-2` and `agents-2` are product. Keep `target.id` as `README.md` or `AGENTS.md` and keep `profile_version` unless you are intentionally authoring a custom profile. Deterministic and semantic policies live in immutable initial input; do not bake document-specific policy into provider code.
 
 ## Workflow
 
