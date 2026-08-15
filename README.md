@@ -82,7 +82,7 @@ cargo build --release -p loop-cli -p software-change-provider -p policy-document
 
 ## Usage
 
-`loop-engine` stores run state in the `--database` SQLite file and snapshots provider association, workflow topology, and state instructions at `start`. Perform the work named by `show` externally, append durable context when the provider requires it, then request one event from `requestable_events`.
+`loop-engine` stores run state in a SQLite catalog and snapshots provider association, workflow topology, and state instructions at `start`. Omit `--database` unless isolating. When `--database` and database env vars are unset, the catalog is `$LOOP_ENGINE_HOME/loop.db` or `$LOOP_HOME/loop.db` if either home env is set, else `$XDG_DATA_HOME/loop-engine/loop.db` if `XDG_DATA_HOME` is set, else `$HOME/.local/share/loop-engine/loop.db`. `list` from any working directory reads that same file. `--database /path/to/dir/loop.db` isolates SQLite and `/path/to/dir/runs/<id>/`. Perform the work named by `show` externally, append durable context when the provider requires it, then request one event from `requestable_events`.
 
 ```text
 loop-engine [--database DB] [--config CONFIG] [--json] [--timeout-ms MS] start [--id RUN_ID] PROVIDER INITIAL_JSON [LABEL]
@@ -94,7 +94,7 @@ loop-engine [--database DB] [--json] history RUN_ID
 loop-engine [--database DB] [--json] terminate RUN_ID
 ```
 
-Pass `--json` on every invocation and parse the single envelope. Pass `--config` to `start` with uncommitted machine-local provider TOML using an exact alias and an absolute command path:
+Pass `--json` and parse the single envelope. Pass `--config` to `start` with uncommitted machine-local provider TOML using an exact alias and an absolute command path:
 
 ```toml
 [providers.software-change]
@@ -110,7 +110,14 @@ command = "/absolute/path/to/research"
 args = []
 ```
 
-`start` initial input and `append` data accept JSON inline, `@FILE`, or `-` (stdin). `start` returns the run ID at `result.run.id`. Reuse the same database and run ID for every later operation. `show` is provider-free.
+Usual-case `start` omits `--database` and `artifact_root`; the engine allocates a durable per-run directory and records that absolute path in object `initial_input`. Pass a nonempty `artifact_root` only to isolate files. `list` JSON includes optional `provider` (the start alias) and `artifact_root`; `show` and `history` JSON keys are unchanged.
+
+```sh
+loop-engine --json --config /absolute/path/to/providers.toml \
+  start software-change @/tmp/profile.json "my run"
+```
+
+`start` initial input and `append` data accept JSON inline, `@FILE`, or `-` (stdin). `start` returns the run ID at `result.run.id`. Reuse the same catalog and run ID for every later operation. `show` is provider-free.
 
 With `--json`, exit `0` is `completed`, `10` is `rejected` (follow feedback; nothing is inferred as advancement), `20` is `error` (re-read `show`), and `2` is `invalid-invocation`. Full envelope and handoff rules: [docs/agent-usage.md](docs/agent-usage.md).
 

@@ -183,6 +183,11 @@ pub struct CreateRunRequest {
     pub initial_state: StateId,
     pub lifecycle: Lifecycle,
     pub created_at: Timestamp,
+    /// Exact case-sensitive start alias (`ProviderSelector` string).
+    pub provider: String,
+    /// Recorded path from start composition. `None` only for migrated
+    /// historical rows; new creates always pass `Some`.
+    pub artifact_root: Option<String>,
 }
 
 impl CreateRunRequest {
@@ -196,6 +201,8 @@ impl CreateRunRequest {
         initial_state: impl Into<StateId>,
         lifecycle: Lifecycle,
         created_at: Timestamp,
+        provider: impl Into<String>,
+        artifact_root: Option<String>,
     ) -> Self {
         Self {
             id: id.into(),
@@ -206,6 +213,8 @@ impl CreateRunRequest {
             initial_state: initial_state.into(),
             lifecycle,
             created_at,
+            provider: provider.into(),
+            artifact_root,
         }
     }
 }
@@ -421,6 +430,8 @@ pub struct RunSummary {
     pub workflow_id: crate::WorkflowId,
     pub lifecycle: Lifecycle,
     pub current_state: StateId,
+    pub provider: Option<String>,
+    pub artifact_root: Option<String>,
 }
 
 impl From<&Run> for RunSummary {
@@ -431,6 +442,8 @@ impl From<&Run> for RunSummary {
             workflow_id: run.workflow.id.clone(),
             lifecycle: run.lifecycle,
             current_state: run.current_state.clone(),
+            provider: None,
+            artifact_root: None,
         }
     }
 }
@@ -869,6 +882,8 @@ mod tests {
             "start",
             Lifecycle::Active,
             Timestamp::from_unix_millis(1),
+            "stub",
+            Some("/allocated/run-1".to_owned()),
         );
         let error = persistence.create_run(request).unwrap_err();
         assert_eq!(error.code(), "persistence-failure");

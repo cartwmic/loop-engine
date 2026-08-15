@@ -21,14 +21,14 @@ cargo build -p loop-cli -p software-change-provider
 
 Register `target/debug/software-change` under alias `software-change` (absolute `command` path) in an uncommitted machine-local `providers.toml`.
 
-Pick a profile from [data/configs/](../../data/configs/) — `minimal.json` (validation gate only), `standard.json` (intent, design-review, validation axes), or `high-rigor.json` (all axes; two distinct reviewers on design-review and validation axes). Copy it to a run-specific file, replace the placeholder `artifact_root` with an absolute existing directory, then:
+Pick a profile from [data/configs/](../../data/configs/) — `minimal.json` (validation gate only), `standard.json` (intent, design-review, validation axes), or `high-rigor.json` (all axes; two distinct reviewers on design-review and validation axes). Copy it to a run-specific file. Omit the placeholder `artifact_root` in the usual case; the engine allocates the durable directory and records that absolute path in object `initial_input` (`show` reveals it). Pass `artifact_root` only to isolate files to a caller-chosen absolute existing directory. Then:
 
 ```sh
-loop-engine --database "$DB" --config "$PROVIDER_CONFIG" --json \
+loop-engine --json --config "$PROVIDER_CONFIG" \
   start software-change "@/tmp/software-change-standard.json" "my change"
 ```
 
-The artifact directory uses fixed subject filenames: `intent.json`, `design.json`, `plan.json`, `implementation-report.json`, `validation-report.json`.
+Pass `--database /path/to/dir/loop.db` only to isolate SQLite and `/path/to/dir/runs/<id>/`. Once the run exists, subject files live under the allocated (or caller) `artifact_root` using fixed filenames: `intent.json`, `design.json`, `plan.json`, `implementation-report.json`, `validation-report.json`.
 
 ## Gate map
 
@@ -52,7 +52,7 @@ The artifact directory uses fixed subject filenames: `intent.json`, `design.json
 4. Append one record per axis judgment — `kind` is `review-evidence`, `data` is the eight-field object:
 
 ```sh
-loop-engine --database "$DB" --json append "$RUN_ID" review-evidence @verdict.json
+loop-engine --json append "$RUN_ID" review-evidence @verdict.json
 ```
 
 ```json

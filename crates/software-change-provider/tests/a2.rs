@@ -30,15 +30,23 @@ fn missing_policies_errors_on_first_check_and_leaves_engine_state_unchanged() {
 }
 
 #[test]
-fn explicitly_empty_policies_walk_to_end_without_artifact_root() {
+fn explicitly_empty_policies_walk_to_end_with_allocated_artifact_root() {
     let state = TestDir::new("a2-empty-state");
     let engine = Engine::new(state.path().join("empty.sqlite"));
     let input = json!({"config_version": "none", "review_policies": {}});
-    engine.start_ok("empty-policies", input.clone());
+    engine.start_ok("empty-policies", input);
 
     let shown = engine.show("empty-policies");
-    assert_eq!(shown.initial_input, input);
-    assert!(shown.initial_input.get("artifact_root").is_none());
+    let allocated = state
+        .path()
+        .join("runs")
+        .join("empty-policies")
+        .canonicalize()
+        .expect("allocated catalog path");
+    assert_eq!(
+        shown.initial_input["artifact_root"],
+        json!(allocated.to_string_lossy().to_string())
+    );
     assert!(shown.initial_input.get("artifact_schemas").is_none());
     assert!(shown
         .initial_input

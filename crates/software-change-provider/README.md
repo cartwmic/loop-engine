@@ -26,7 +26,7 @@ DATA_ROOT="$HOME/.local/share/software-change-provider"
 software-change data-dump "$DATA_ROOT"
 ```
 
-The command creates `DATA_ROOT/crates/software-change-provider/data/...` with the configs, templates, reviewer protocol, calibration manifest, and fixtures embedded in the binary. It preserves those repository-relative paths so guidance citations resolve under `DATA_ROOT`; it refuses to overwrite an existing target file. Copy a selected profile from that tree to a run-specific file, replace its placeholder `artifact_root` with an absolute artifact directory, and register the installed provider under an exact, case-sensitive alias:
+The command creates `DATA_ROOT/crates/software-change-provider/data/...` with the configs, templates, reviewer protocol, calibration manifest, and fixtures embedded in the binary. It preserves those repository-relative paths so guidance citations resolve under `DATA_ROOT`; it refuses to overwrite an existing target file. Copy a selected profile from that tree to a run-specific file. Omit the placeholder `artifact_root` in the usual case so the engine allocates the durable directory; pass `artifact_root` only to isolate files to a caller-chosen absolute existing directory. Register the installed provider under an exact, case-sensitive alias:
 
 ```toml
 [providers.software-change]
@@ -51,31 +51,28 @@ Build the engine binary too, or replace `target/debug/loop-engine` below with an
 ```sh
 cargo build -p loop-cli -p software-change-provider
 ENGINE=target/debug/loop-engine
-DB="$PWD/.loop-engine/loop.db"
-ARTIFACT_ROOT="$PWD/change-artifacts"
 PROVIDER_CONFIG="/absolute/path/to/your/providers.toml"
-mkdir -p "$ARTIFACT_ROOT"
 ```
 
-Copy each selected profile to a run-specific file. For installed binaries after `data-dump`, source profiles from `$DATA_ROOT`; for checkout development, set `DATA_ROOT="$PWD"` first. Before starting, replace `/abs/path/to/change/artifacts` in that copy with `$ARTIFACT_ROOT` (or another absolute artifact directory), then run the matching command:
+Copy each selected profile to a run-specific file. For installed binaries after `data-dump`, source profiles from `$DATA_ROOT`; for checkout development, set `DATA_ROOT="$PWD"` first. Omit `artifact_root` from that copy in the usual case so the engine allocates the durable directory, then run the matching command:
 
 ```sh
 DATA_ROOT="$HOME/.local/share/software-change-provider"
 
 cp "$DATA_ROOT/crates/software-change-provider/data/configs/minimal.json" /tmp/software-change-minimal.json
-"$ENGINE" --database "$DB" --config "$PROVIDER_CONFIG" --json \
+"$ENGINE" --json --config "$PROVIDER_CONFIG" \
   start software-change "@/tmp/software-change-minimal.json" "software change (minimal)"
 
 cp "$DATA_ROOT/crates/software-change-provider/data/configs/standard.json" /tmp/software-change-standard.json
-"$ENGINE" --database "$DB" --config "$PROVIDER_CONFIG" --json \
+"$ENGINE" --json --config "$PROVIDER_CONFIG" \
   start software-change "@/tmp/software-change-standard.json" "software change (standard)"
 
 cp "$DATA_ROOT/crates/software-change-provider/data/configs/high-rigor.json" /tmp/software-change-high-rigor.json
-"$ENGINE" --database "$DB" --config "$PROVIDER_CONFIG" --json \
+"$ENGINE" --json --config "$PROVIDER_CONFIG" \
   start software-change "@/tmp/software-change-high-rigor.json" "software change (high-rigor)"
 ```
 
-`start` returns the run ID at `result.run.id`. The CLI accepts `@FILE` JSON input as shown above. The artifact directory contains the fixed subject filenames expected by the selected schema: `intent.json`, `design.json`, `plan.json`, `implementation-report.json`, and `validation-report.json`.
+`start` returns the run ID at `result.run.id`. The CLI accepts `@FILE` JSON input as shown above. Once the run exists, `show` reveals the allocated (or caller) `artifact_root` inside object `initial_input`. Subject files use the fixed filenames expected by the selected schema: `intent.json`, `design.json`, `plan.json`, `implementation-report.json`, and `validation-report.json`. Pass `--database /path/to/dir/loop.db` only to isolate SQLite and `/path/to/dir/runs/<id>/`. Pass a nonempty `artifact_root` only to isolate files to a caller-chosen absolute existing directory.
 
 ## Validation
 
@@ -111,7 +108,7 @@ The packaged adapter does not read checkout provider data after `data-dump`. Nat
 
 ## Shipped data
 
-These are the shipped files consumed by provider tests, guidance, and review procedure. Config profiles are complete initial-input templates; copy one for a run and replace its placeholder `artifact_root` with an absolute existing artifact directory.
+These are the shipped files consumed by provider tests, guidance, and review procedure. Config profiles are complete initial-input templates; copy one for a run and omit the placeholder `artifact_root` unless isolating files to a caller-chosen absolute existing directory.
 
 ### Config profiles
 
@@ -159,7 +156,7 @@ Validation-report-local defects stay in validation: edit and recheck `validation
 Use the engine's provider-free `show` operation after `start` and before each event:
 
 ```sh
-"$ENGINE" --database "$DB" --json show RUN_ID
+"$ENGINE" --json show RUN_ID
 ```
 
 Inspect `initial_input.review_policies` and `initial_input.artifact_schemas` there. `show` is the durable handoff for run-frozen obligations; changing a source profile does not change an existing run. Follow state guidance, append external review records with `append` using [`crates/software-change-provider/data/reviewer-protocol.md`](data/reviewer-protocol.md), and request events with `event` rather than targeting states directly.

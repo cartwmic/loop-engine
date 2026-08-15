@@ -62,6 +62,14 @@ impl Composition {
         SqlitePersistence::open(&self.database).expect("open durable acceptance database")
     }
 
+    fn catalog_root(&self) -> PathBuf {
+        self.database
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+
     fn start(&self, run_id: &str, provider: &str, initial_input: Value) -> Run {
         let persistence = self.persistence();
         let outcome = core::execute_start(
@@ -71,6 +79,7 @@ impl Composition {
                 initial_input,
                 None,
                 Timestamp::from_unix_millis(1),
+                self.catalog_root(),
             ),
             &self.resolver,
             &self.gateway,
@@ -307,6 +316,26 @@ impl ProviderGateway for UnavailableGateway {
     }
 }
 
+fn with_allocated_artifact_root(mut input: Value, database: &Path, run_id: &str) -> Value {
+    let catalog_root = database
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let allocated = catalog_root
+        .join("runs")
+        .join(run_id)
+        .canonicalize()
+        .expect("allocated run directory")
+        .to_string_lossy()
+        .into_owned();
+    input
+        .as_object_mut()
+        .expect("object initial_input")
+        .insert("artifact_root".to_owned(), json!(allocated));
+    input
+}
+
 fn policy_axes(input: &Value, gate: &str) -> Vec<String> {
     input["review_policies"][gate]
         .as_array()
@@ -375,7 +404,10 @@ fn software_change_reference_workflow_end_to_end_from_clean_durable_state(
     let minimal = engine.start("software-minimal", SOFTWARE_ALIAS, minimal_input.clone());
     assert_eq!(minimal.workflow, software_change_workflow());
     let initial = engine.show("software-minimal");
-    assert_eq!(initial.initial_input, minimal_input);
+    assert_eq!(
+        initial.initial_input,
+        with_allocated_artifact_root(minimal_input, &database, "software-minimal")
+    );
     assert_eq!(initial.current_state, StateId::from("explore"));
     assert_eq!(initial.workflow_id.as_str(), "software-change");
     assert_eq!(
@@ -416,7 +448,10 @@ fn software_change_reference_workflow_end_to_end_from_clean_durable_state(
         substantial_run.provider_association,
         minimal.provider_association
     );
-    assert_eq!(substantial_run.initial_input, substantial_input);
+    assert_eq!(
+        substantial_run.initial_input,
+        with_allocated_artifact_root(substantial_input, &database, "software-substantial")
+    );
     let substantial_show = engine.show("software-substantial");
     assert_eq!(substantial_show.context.len(), 1);
     assert_eq!(
@@ -787,7 +822,10 @@ fn policy_document_reference_workflow_draft_audit_and_current_conformance_end_to
     let draft = engine.start("document-draft", DOCUMENT_ALIAS, readme_input.clone());
     assert_eq!(draft.workflow, policy_document_workflow());
     let draft_show = engine.show("document-draft");
-    assert_eq!(draft_show.initial_input, readme_input);
+    assert_eq!(
+        draft_show.initial_input,
+        with_allocated_artifact_root(readme_input, &database, "document-draft")
+    );
     assert_eq!(draft_show.initial_input["mode"], "draft");
     let recovered_readme = PathBuf::from(
         draft_show.initial_input["document"]["path"]
@@ -927,7 +965,10 @@ fn policy_document_reference_workflow_draft_audit_and_current_conformance_end_to
     let audit_input = agents_policy_input(agents.to_string_lossy(), "audit");
     let audit = engine.start("document-audit", DOCUMENT_ALIAS, audit_input.clone());
     assert_eq!(audit.workflow, draft.workflow);
-    assert_eq!(engine.show("document-audit").initial_input, audit_input);
+    assert_eq!(
+        engine.show("document-audit").initial_input,
+        with_allocated_artifact_root(audit_input, &database, "document-audit")
+    );
     assert_eq!(engine.show("document-audit").initial_input["mode"], "audit");
     require_completed(engine.event("document-audit", "ready"));
     require_completed(engine.event("document-audit", "passed"));
@@ -1001,7 +1042,10 @@ fn policy_document_provider_policy_shape_neutrality_uses_same_composed_mechanism
         let run = engine.start(run_id, DOCUMENT_ALIAS, input.clone());
         assert_eq!(run.workflow, policy_document_workflow());
         let show = engine.show(run_id);
-        assert_eq!(show.initial_input, input);
+        assert_eq!(
+            show.initial_input,
+            with_allocated_artifact_root(input, &database, run_id)
+        );
         assert!(show.initial_input["document"]["path"]
             .as_str()
             .unwrap()

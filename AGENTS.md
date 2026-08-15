@@ -34,7 +34,12 @@ cargo fmt --all -- --check
 
 CI preflight also runs `dist generate --check`, `scripts/assert-dist-plan.py`, `scripts/assert-release-gates.py`, `scripts/assert-push-main-preflight.py`, `scripts/production-journey.py --self-test`, `scripts/research-journey.py --self-test`, a locked build of the four release packages, the software-change source journey (`--mode source --traversal-depth full` against high-rigor), both policy-document source journey modes, and the research source journey. Reproduce those when the change can affect release proof, journeys, or generated workflow.
 
-Drive production runs with `loop-engine`. Pass `--json` and an explicit `--database` on every invocation; pass `--config` on `start` with uncommitted machine-local provider TOML. Use exact aliases `software-change`, `policy-document`, and `research` and absolute `command` paths. Do not commit provider TOML, run databases, or secrets.
+Drive production runs with `loop-engine`. Pass `--json` and parse the single JSON envelope. Pass `--config` on `start` with uncommitted machine-local provider TOML. Omit `--database` unless isolating (`--database /path/to/dir/loop.db`); when `--database` and database env vars are unset, the catalog is `$LOOP_ENGINE_HOME/loop.db` or `$LOOP_HOME/loop.db` if either home env is set, else `$XDG_DATA_HOME/loop-engine/loop.db` if `XDG_DATA_HOME` is set, else `$HOME/.local/share/loop-engine/loop.db`. `list` from any working directory reads that same file. Omit `artifact_root` unless isolating files. Use exact aliases `software-change`, `policy-document`, and `research` and absolute `command` paths. Do not commit provider TOML, run databases, or secrets.
+
+```sh
+loop-engine --json --config /absolute/path/to/providers.toml \
+  start software-change @/tmp/profile.json "my run"
+```
 
 Parse the single JSON envelope even on nonzero exit. Treat only `status: "completed"` as success. `rejected` (exit 10) is an understood denial — follow feedback and continue. `error` (exit 20) means nothing advanced; re-run `show`. Request events from the latest `show`, never states. Serialize `append`, `event`, and `terminate` per run.
 

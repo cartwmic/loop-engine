@@ -2,8 +2,8 @@ use loop_core::{
     AppendContextRequest, CheckedEvaluationSnapshotRequest, CommitTransitionRequest,
     CreateRunRequest, EvaluationFeedback, HistoryAction, Lifecycle, Persistence,
     PersistenceConflict, PersistenceError, PersistenceRejection, ProviderAssociation,
-    RecordDenialRequest, State, TerminateRequest, Timestamp, Transition, TransitionHistoryOutcome,
-    Workflow,
+    RecordDenialRequest, RunSummary, State, TerminateRequest, Timestamp, Transition,
+    TransitionHistoryOutcome, Workflow,
 };
 use loop_integrations::SqlitePersistence;
 use rusqlite::Connection;
@@ -37,6 +37,8 @@ fn create_request(id: &str) -> CreateRunRequest {
         "start",
         Lifecycle::Active,
         Timestamp::from_unix_millis(100),
+        "test-provider",
+        Some("/allocated/run-dir".to_owned()),
     )
 }
 
@@ -465,5 +467,95 @@ fn required_history_failure_rolls_back_run_creation() -> Result<(), Box<dyn std:
         setup.load_authoritative_run(&"run-create-fails".into()),
         Err(PersistenceError::NotFound { .. })
     ));
+    Ok(())
+}
+
+#[test]
+fn create_run_persists_provider_and_artifact_root_for_list(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = SqlitePersistence::open_in_memory()?;
+    let created = adapter.create_run(create_request("run-list-catalog"))?;
+    let listed = adapter.list_runs()?;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id.as_str(), "run-list-catalog");
+    assert_eq!(listed[0].provider.as_deref(), Some("test-provider"));
+    assert_eq!(
+        listed[0].artifact_root.as_deref(),
+        Some("/allocated/run-dir")
+    );
+
+    let from_run = RunSummary::from(&created.run);
+    assert_eq!(from_run.provider, None);
+    assert_eq!(from_run.artifact_root, None);
+    assert_ne!(from_run.provider, listed[0].provider);
+    assert_ne!(from_run.artifact_root, listed[0].artifact_root);
+    Ok(())
+}
+
+#[test]
+fn opening_legacy_catalog_adds_nullable_provider_and_artifact_root_columns(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let path = directory.path().join("legacy.sqlite");
+    {
+        let connection = Connection::open(&path)?;
+        connection.execute_batch(
+            "CREATE TABLE runs (
+                id                           TEXT PRIMARY KEY NOT NULL,
+                label                        TEXT,
+                workflow_id                  TEXT NOT NULL,
+                workflow_json                TEXT NOT NULL,
+                provider_association_json    TEXT NOT NULL,
+                initial_input_json           TEXT NOT NULL,
+                current_state                TEXT NOT NULL,
+                lifecycle                    TEXT NOT NULL CHECK (lifecycle IN ('active', 'final', 'terminated')),
+                control_revision             INTEGER NOT NULL CHECK (control_revision >= 0),
+                last_sequence                INTEGER NOT NULL CHECK (last_sequence >= 1),
+                created_at                   INTEGER NOT NULL
+            );",
+        )?;
+        connection.execute(
+            "INSERT INTO runs (
+                id, label, workflow_id, workflow_json, provider_association_json,
+                initial_input_json, current_state, lifecycle, control_revision,
+                last_sequence, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            rusqlite::params![
+                "legacy-run",
+                "legacy",
+                "test-workflow",
+                "{}",
+                "{}",
+                "{}",
+                "start",
+                "active",
+                0,
+                1,
+                100,
+            ],
+        )?;
+    }
+
+    let adapter = SqlitePersistence::open(&path)?;
+    let listed = adapter.list_runs()?;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id.as_str(), "legacy-run");
+    assert_eq!(listed[0].provider, None);
+    assert_eq!(listed[0].artifact_root, None);
+    drop(adapter);
+
+    let connection = Connection::open(&path)?;
+    let mut statement = connection.prepare("PRAGMA table_info('runs')")?;
+    let names: Vec<String> = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<_, _>>()?;
+    assert!(
+        names.iter().any(|name| name == "provider"),
+        "provider column missing after open: {names:?}"
+    );
+    assert!(
+        names.iter().any(|name| name == "artifact_root"),
+        "artifact_root column missing after open: {names:?}"
+    );
     Ok(())
 }

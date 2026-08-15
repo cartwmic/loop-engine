@@ -27,14 +27,14 @@ command = "/absolute/path/to/target/debug/research"
 args = []
 ```
 
-Copy `crates/research-provider/data/configs/standard.json` to a run-specific file, replace the placeholder `artifact_root` with an absolute existing directory, then:
+Copy `crates/research-provider/data/configs/standard.json` to a run-specific file. Omit the placeholder `artifact_root` in the usual case; the engine allocates the durable directory and records that absolute path in object `initial_input` (`show` reveals it). Pass `artifact_root` only to isolate files to a caller-chosen absolute existing directory. Then:
 
 ```sh
-loop-engine --database "$DB" --config "$PROVIDER_CONFIG" --json \
+loop-engine --json --config "$PROVIDER_CONFIG" \
   start research "@/tmp/research-standard.json" "my research"
 ```
 
-Fixed subject filenames in `artifact_root`: `brief.json`, `sources.json`, `verification.json`, `report.json`. Shipped `config_version` is `research-1`.
+Pass `--database /path/to/dir/loop.db` only to isolate SQLite and `/path/to/dir/runs/<id>/`. Once the run exists, subject files live under the allocated (or caller) `artifact_root` using fixed filenames: `brief.json`, `sources.json`, `verification.json`, `report.json`. Shipped `config_version` is `research-1`.
 
 For an installed binary, dump into an empty directory first (`research data-dump "$DATA_ROOT"`), then copy `$DATA_ROOT/crates/research-provider/data/configs/standard.json`.
 
@@ -80,7 +80,7 @@ Verification-local `verification.json` corrections stay in verify: edit, recheck
 5. Append one `review-evidence` record per axis judgment:
 
 ```sh
-loop-engine --database "$DB" --json append "$RUN_ID" review-evidence @verdict.json
+loop-engine --json append "$RUN_ID" review-evidence @verdict.json
 ```
 
 ```json

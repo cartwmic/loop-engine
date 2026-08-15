@@ -12,6 +12,9 @@ pub struct InitialInput {
     pub target: Target,
     pub deterministic_policies: Vec<DeterministicPolicy>,
     pub semantic_policies: Vec<SemanticPolicy>,
+    /// Reserved catalog key composed at start. Accepted and ignored; never a file root.
+    #[serde(default)]
+    pub artifact_root: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -266,16 +269,30 @@ mod tests {
         )))
         .unwrap();
         value["target"]["path"] = Value::String("/tmp/README.md".into());
-        value["unknown"] = Value::Bool(true);
-        assert!(InitialInput::parse(&value).is_err());
-        let mut value: Value = serde_json::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/data/readme.json"
-        )))
-        .unwrap();
-        value["target"]["path"] = Value::String("/tmp/README.md".into());
-        value["deterministic_policies"] = Value::Array(Vec::new());
-        assert!(InitialInput::parse(&value).is_err());
+        let mut with_root = value.clone();
+        with_root["artifact_root"] = Value::String("/tmp/unused".into());
+        assert!(InitialInput::parse(&with_root).is_ok());
+        let mut with_null = value.clone();
+        with_null["artifact_root"] = Value::Null;
+        assert!(InitialInput::parse(&with_null).is_ok());
+        let mut unknown = value.clone();
+        unknown["unknown"] = Value::Bool(true);
+        assert!(InitialInput::parse(&unknown).is_err());
+        let mut empty = value.clone();
+        empty["deterministic_policies"] = Value::Array(Vec::new());
+        assert!(InitialInput::parse(&empty).is_err());
+    }
+
+    #[test]
+    fn initial_input_accepts_reserved_artifact_root_and_ignores_it() {
+        let mut value = base();
+        value["artifact_root"] = Value::String("/tmp/unused".into());
+        let parsed = InitialInput::parse(&value).unwrap();
+        assert_eq!(parsed.artifact_root.as_deref(), Some("/tmp/unused"));
+        assert_eq!(parsed.target.path, "/tmp/README.md");
+        value["not_a_reserved_key"] = Value::Bool(true);
+        let err = InitialInput::parse(&value).unwrap_err();
+        assert!(err.contains("unknown field"), "{err}");
     }
 
     fn base() -> Value {

@@ -83,6 +83,7 @@ mod tests {
     };
     use serde_json::{json, Value};
     use std::cell::RefCell;
+    use std::path::{Path, PathBuf};
 
     fn workflow(initial_final: bool) -> Workflow {
         Workflow::new(
@@ -269,36 +270,196 @@ mod tests {
         }
     }
 
-    fn start_request() -> start::Request {
+    fn start_request(catalog_root: impl Into<PathBuf>) -> start::Request {
         start::Request::new(
             "run-1",
             "fake",
             json!({"objective": "test"}),
             Some("example".to_owned()),
             Timestamp::from_unix_millis(10),
+            catalog_root,
         )
+    }
+
+    fn temp_catalog() -> tempfile::TempDir {
+        tempfile::tempdir().expect("temp catalog root")
+    }
+
+    fn allocated_canonical(catalog_root: &Path, run_id: &str) -> PathBuf {
+        catalog_root
+            .join("runs")
+            .join(run_id)
+            .canonicalize()
+            .expect("engine-owned run directory")
+    }
+
+    fn allocated_canonical_string(catalog_root: &Path, run_id: &str) -> String {
+        allocated_canonical(catalog_root, run_id)
+            .to_string_lossy()
+            .into_owned()
     }
 
     #[test]
     fn start_resolves_describes_validates_and_creates_atomically() {
+        let catalog = temp_catalog();
         let resolver = FakeResolver::default();
         let gateway = FakeGateway::default();
         let persistence = FakePersistence::default();
 
-        let outcome = start::execute(start_request(), &resolver, &gateway, &persistence);
+        let outcome = start::execute(
+            start_request(catalog.path()),
+            &resolver,
+            &gateway,
+            &persistence,
+        );
 
         assert!(outcome.is_completed());
         assert_eq!(*resolver.calls.borrow(), 1);
         assert_eq!(*gateway.describe_calls.borrow(), 1);
         assert_eq!(persistence.created.borrow().len(), 1);
         let request = &persistence.created.borrow()[0];
+        let allocated = allocated_canonical_string(catalog.path(), "run-1");
         assert_eq!(request.lifecycle, Lifecycle::Active);
         assert_eq!(request.initial_state, StateId::from("start"));
-        assert_eq!(request.initial_input, json!({"objective": "test"}));
+        assert_eq!(
+            request.initial_input,
+            json!({"objective": "test", "artifact_root": allocated})
+        );
+        assert_eq!(request.provider, "fake");
+        assert_eq!(request.artifact_root.as_deref(), Some(allocated.as_str()));
+        assert!(allocated_canonical(catalog.path(), "run-1").is_dir());
+    }
+
+    #[test]
+    fn start_keeps_nonempty_caller_artifact_root_and_still_creates_allocated_dir() {
+        let catalog = temp_catalog();
+        let resolver = FakeResolver::default();
+        let gateway = FakeGateway::default();
+        let persistence = FakePersistence::default();
+        let request = start::Request::new(
+            "run-1",
+            "fake",
+            json!({"objective": "test", "artifact_root": "relative/caller-path"}),
+            Some("example".to_owned()),
+            Timestamp::from_unix_millis(10),
+            catalog.path(),
+        );
+
+        let outcome = start::execute(request, &resolver, &gateway, &persistence);
+
+        assert!(outcome.is_completed());
+        let created = &persistence.created.borrow()[0];
+        assert_eq!(
+            created.initial_input,
+            json!({"objective": "test", "artifact_root": "relative/caller-path"})
+        );
+        assert_eq!(
+            created.artifact_root.as_deref(),
+            Some("relative/caller-path")
+        );
+        assert_eq!(created.provider, "fake");
+        assert!(allocated_canonical(catalog.path(), "run-1").is_dir());
+    }
+
+    #[test]
+    fn start_treats_empty_null_missing_or_non_string_artifact_root_as_absent() {
+        let cases = [
+            json!({"objective": "test", "artifact_root": ""}),
+            json!({"objective": "test", "artifact_root": null}),
+            json!({"objective": "test"}),
+            json!({"objective": "test", "artifact_root": 1}),
+            json!({"objective": "test", "artifact_root": true}),
+            json!({"objective": "test", "artifact_root": []}),
+            json!({"objective": "test", "artifact_root": {}}),
+        ];
+        for (index, initial_input) in cases.into_iter().enumerate() {
+            let catalog = temp_catalog();
+            let run_id = format!("run-{index}");
+            let resolver = FakeResolver::default();
+            let gateway = FakeGateway::default();
+            let persistence = FakePersistence::default();
+            let request = start::Request::new(
+                run_id.clone(),
+                "fake",
+                initial_input,
+                None,
+                Timestamp::from_unix_millis(10),
+                catalog.path(),
+            );
+
+            let outcome = start::execute(request, &resolver, &gateway, &persistence);
+
+            assert!(outcome.is_completed(), "case {index}");
+            let created = &persistence.created.borrow()[0];
+            let allocated = allocated_canonical_string(catalog.path(), &run_id);
+            assert_eq!(
+                created.initial_input.get("artifact_root"),
+                Some(&json!(allocated)),
+                "case {index}"
+            );
+            assert_eq!(
+                created.artifact_root.as_deref(),
+                Some(allocated.as_str()),
+                "case {index}"
+            );
+            assert_eq!(created.provider, "fake", "case {index}");
+            assert!(allocated_canonical(catalog.path(), &run_id).is_dir());
+        }
+    }
+
+    #[test]
+    fn start_does_not_rewrite_non_object_initial_input() {
+        let catalog = temp_catalog();
+        let resolver = FakeResolver::default();
+        let gateway = FakeGateway::default();
+        let persistence = FakePersistence::default();
+        let request = start::Request::new(
+            "run-1",
+            "fake",
+            json!("just a string"),
+            None,
+            Timestamp::from_unix_millis(10),
+            catalog.path(),
+        );
+
+        let outcome = start::execute(request, &resolver, &gateway, &persistence);
+
+        assert!(outcome.is_completed());
+        let created = &persistence.created.borrow()[0];
+        assert_eq!(created.initial_input, json!("just a string"));
+        let allocated = allocated_canonical_string(catalog.path(), "run-1");
+        assert_eq!(created.artifact_root.as_deref(), Some(allocated.as_str()));
+        assert_eq!(created.provider, "fake");
+        assert!(allocated_canonical(catalog.path(), "run-1").is_dir());
+    }
+
+    #[test]
+    fn from_run_for_run_summary_sets_provider_and_artifact_root_none() {
+        let run = Run::new(
+            "run-1",
+            Some("example".to_owned()),
+            workflow(false),
+            ProviderAssociation::new(json!({"provider": "fake"})),
+            json!({"objective": "test", "artifact_root": "/allocated/run-1"}),
+            "start",
+            Lifecycle::Active,
+            0_u64.into(),
+            1_u64.into(),
+            Timestamp::from_unix_millis(10),
+        );
+        let summary = RunSummary::from(&run);
+        assert_eq!(summary.provider, None);
+        assert_eq!(summary.artifact_root, None);
+        assert_eq!(summary.id, run.id);
+        assert_eq!(summary.label, run.label);
+        assert_eq!(summary.workflow_id, run.workflow.id);
+        assert_eq!(summary.lifecycle, run.lifecycle);
+        assert_eq!(summary.current_state, run.current_state);
     }
 
     #[test]
     fn invalid_described_workflow_is_error_and_does_not_create_a_run() {
+        let catalog = temp_catalog();
         let resolver = FakeResolver::default();
         let gateway = FakeGateway {
             described: Some(Ok(Workflow::new(
@@ -311,7 +472,12 @@ mod tests {
         };
         let persistence = FakePersistence::default();
 
-        let outcome = start::execute(start_request(), &resolver, &gateway, &persistence);
+        let outcome = start::execute(
+            start_request(catalog.path()),
+            &resolver,
+            &gateway,
+            &persistence,
+        );
 
         assert!(outcome.is_error());
         assert_eq!(persistence.created.borrow().len(), 0);
@@ -319,6 +485,7 @@ mod tests {
 
     #[test]
     fn final_initial_state_creates_a_final_run() {
+        let catalog = temp_catalog();
         let resolver = FakeResolver::default();
         let gateway = FakeGateway {
             described: Some(Ok(workflow(true))),
@@ -326,7 +493,12 @@ mod tests {
         };
         let persistence = FakePersistence::default();
 
-        let outcome = start::execute(start_request(), &resolver, &gateway, &persistence);
+        let outcome = start::execute(
+            start_request(catalog.path()),
+            &resolver,
+            &gateway,
+            &persistence,
+        );
 
         assert!(outcome.is_completed());
         assert_eq!(persistence.created.borrow()[0].lifecycle, Lifecycle::Final);
@@ -416,6 +588,8 @@ mod tests {
             workflow_id: "workflow".into(),
             lifecycle: Lifecycle::Active,
             current_state: "start".into(),
+            provider: None,
+            artifact_root: None,
         };
         let persistence = FakePersistence {
             list_result: RefCell::new(Some(Ok(vec![summary.clone()]))),
@@ -541,6 +715,7 @@ mod tests {
 
     #[test]
     fn provider_and_persistence_failures_are_errors_with_stable_codes() {
+        let catalog = temp_catalog();
         let resolver = FakeResolver {
             result: Some(Err(ProviderResolutionError::unavailable(
                 "config",
@@ -550,7 +725,12 @@ mod tests {
         };
         let gateway = FakeGateway::default();
         let persistence = FakePersistence::default();
-        let resolution = start::execute(start_request(), &resolver, &gateway, &persistence);
+        let resolution = start::execute(
+            start_request(catalog.path()),
+            &resolver,
+            &gateway,
+            &persistence,
+        );
         assert_eq!(resolution.issue().unwrap().code, "provider-unavailable");
         assert_eq!(persistence.created.borrow().len(), 0);
 

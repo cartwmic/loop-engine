@@ -894,6 +894,7 @@ fn execute_operation(options: CliOptions, command: PrimaryCommand) -> Execution 
                 args.initial_input,
                 args.label,
                 now_timestamp(),
+                catalog_root(&paths.database),
             );
             let outcome = core::execute_start(request, &resolver, &gateway, &persistence)
                 .map(CliCreateRunResult::from);
@@ -1012,10 +1013,6 @@ fn resolve_paths(options: &CliOptions) -> Result<ResolvedPaths, CliError> {
             ])
         })
         .or_else(|| application_home().map(|home| home.join("loop.db")))
-        .or_else(|| {
-            let project = project_directory().join(".loop-engine").join("loop.db");
-            Some(project)
-        })
         .or_else(|| data_directory().map(|directory| directory.join("loop.db")))
         .ok_or_else(|| {
             CliError::new(
@@ -1045,6 +1042,14 @@ fn resolve_paths(options: &CliOptions) -> Result<ResolvedPaths, CliError> {
         database: expand_tilde(database.as_path()),
         provider_config,
     })
+}
+
+fn catalog_root(database: &Path) -> PathBuf {
+    database
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 fn project_directory() -> PathBuf {
@@ -1292,6 +1297,8 @@ struct CliRunSummary {
     workflow_id: core::WorkflowId,
     lifecycle: core::Lifecycle,
     current_state: core::StateId,
+    provider: Option<String>,
+    artifact_root: Option<String>,
 }
 
 impl From<core::RunSummary> for CliRunSummary {
@@ -1302,6 +1309,8 @@ impl From<core::RunSummary> for CliRunSummary {
             workflow_id: summary.workflow_id,
             lifecycle: summary.lifecycle,
             current_state: summary.current_state,
+            provider: summary.provider,
+            artifact_root: summary.artifact_root,
         }
     }
 }
@@ -1538,6 +1547,8 @@ mod tests {
     use super::*;
     use loop_core::{EvaluationFeedback, OutcomeIssue};
     use serde_json::json;
+    use std::ffi::OsString;
+    use std::sync::{Mutex, MutexGuard};
 
     /// Internal run metadata is omitted by the explicit DTO at its known
     /// projection boundary.  Do not recurse into opaque caller JSON here:
@@ -1574,6 +1585,24 @@ mod tests {
             .split_once('\n')
             .expect("human output must have a status line");
         serde_json::from_str(body.trim()).expect("human projection body must be valid JSON")
+    }
+
+    fn allocated_run_dir(database: &Path, run_id: &str) -> PathBuf {
+        catalog_root(database)
+            .join("runs")
+            .join(run_id)
+            .canonicalize()
+            .expect("allocated run directory")
+    }
+
+    fn with_allocated_artifact_root(mut input: Value, database: &Path, run_id: &str) -> Value {
+        input.as_object_mut().expect("object initial_input").insert(
+            "artifact_root".to_owned(),
+            json!(allocated_run_dir(database, run_id)
+                .to_string_lossy()
+                .into_owned()),
+        );
+        input
     }
 
     #[test]
@@ -1865,11 +1894,13 @@ printf '%s' '{"id":"cli-fixture","initial_state":"start","states":[{"id":"start"
         assert_eq!(start_json["status"], "completed");
         assert_internal_metadata_absent(&start_json);
         assert_eq!(start_json["result"]["run"]["lifecycle"], "active");
-        assert_eq!(start_json["result"]["run"]["initial_input"], initial_input);
         let run_id = start_json["result"]["run"]["id"]
             .as_str()
             .unwrap()
             .to_owned();
+        let composed_input =
+            with_allocated_artifact_root(initial_input.clone(), Path::new(&database), &run_id);
+        assert_eq!(start_json["result"]["run"]["initial_input"], composed_input);
 
         let list = execute([
             "--json".to_owned(),
@@ -1882,6 +1913,15 @@ printf '%s' '{"id":"cli-fixture","initial_state":"start","states":[{"id":"start"
         assert_eq!(list_json["status"], "completed");
         assert_internal_metadata_absent(&list_json);
         assert_eq!(list_json["result"][0]["id"], run_id);
+        assert_eq!(list_json["result"][0]["provider"], "fixture");
+        let listed_artifact_root = list_json["result"][0]["artifact_root"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(!listed_artifact_root.is_empty());
+        assert_eq!(
+            listed_artifact_root,
+            allocated_run_dir(Path::new(&database), &run_id).to_string_lossy()
+        );
 
         let show = execute([
             "--json".to_owned(),
@@ -1895,7 +1935,12 @@ printf '%s' '{"id":"cli-fixture","initial_state":"start","states":[{"id":"start"
         assert_eq!(show_json["status"], "completed");
         assert_internal_metadata_absent(&show_json);
         assert_eq!(show_json["result"]["run_id"], run_id);
-        assert_eq!(show_json["result"]["initial_input"], initial_input);
+        assert_eq!(show_json["result"]["initial_input"], composed_input);
+        let show_result = show_json["result"]
+            .as_object()
+            .expect("show result must be an object");
+        assert!(!show_result.contains_key("provider"));
+        assert!(!show_result.contains_key("artifact_root"));
 
         let context_data = json!({
             "text": "hello",
@@ -1931,8 +1976,13 @@ printf '%s' '{"id":"cli-fixture","initial_state":"start","states":[{"id":"start"
             .expect("human start must render a run object");
         assert!(!human_start_run.contains_key("control_revision"));
         assert!(!human_start_run.contains_key("last_sequence"));
-        assert_eq!(human_start_json["run"]["initial_input"], initial_input);
         let human_run_id = human_start_json["run"]["id"].as_str().unwrap().to_owned();
+        let human_composed = with_allocated_artifact_root(
+            initial_input.clone(),
+            Path::new(&database),
+            &human_run_id,
+        );
+        assert_eq!(human_start_json["run"]["initial_input"], human_composed);
 
         let append = execute([
             "--json".to_owned(),
@@ -2036,7 +2086,7 @@ printf '%s' '{"id":"cli-fixture","initial_state":"start","states":[{"id":"start"
             .as_object()
             .expect("human show must render an object")
             .contains_key("last_sequence"));
-        assert_eq!(show_human_json["initial_input"], initial_input);
+        assert_eq!(show_human_json["initial_input"], human_composed);
         assert_eq!(show_human_json["context"][0]["data"], context_data);
 
         let event = execute([
@@ -2106,5 +2156,314 @@ printf '%s' '{"id":"cli-fixture","initial_state":"start","states":[{"id":"start"
         assert_internal_metadata_absent(&error_json);
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    const CATALOG_ENV_VARS: &[&str] = &[
+        "HOME",
+        "XDG_DATA_HOME",
+        "LOOP_ENGINE_HOME",
+        "LOOP_HOME",
+        "LOOP_ENGINE_DATABASE",
+        "LOOP_ENGINE_DATABASE_PATH",
+        "LOOP_DATABASE",
+        "LOOP_DATABASE_PATH",
+        "LOOP_DB_PATH",
+        "LOOP_ENGINE_DB",
+        "LOOP_DB",
+    ];
+
+    struct TempRoot(PathBuf);
+
+    impl TempRoot {
+        fn new(label: &str) -> Self {
+            let path = std::env::temp_dir().join(unique_token(label));
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    struct ProcessIsolation {
+        _lock: MutexGuard<'static, ()>,
+        previous_cwd: PathBuf,
+        previous_vars: Vec<(String, Option<OsString>)>,
+    }
+
+    impl ProcessIsolation {
+        fn acquire() -> Self {
+            let lock = ENV_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let previous_cwd = std::env::current_dir().expect("current directory");
+            let previous_vars = CATALOG_ENV_VARS
+                .iter()
+                .map(|name| ((*name).to_owned(), std::env::var_os(name)))
+                .collect();
+            Self {
+                _lock: lock,
+                previous_cwd,
+                previous_vars,
+            }
+        }
+
+        fn set_home_and_xdg(&self, home: &Path, xdg_data_home: &Path) {
+            std::env::set_var("HOME", home);
+            std::env::set_var("XDG_DATA_HOME", xdg_data_home);
+            for name in CATALOG_ENV_VARS {
+                if *name == "HOME" || *name == "XDG_DATA_HOME" {
+                    continue;
+                }
+                std::env::remove_var(name);
+            }
+        }
+
+        fn chdir(&self, path: &Path) {
+            std::env::set_current_dir(path).expect("chdir");
+        }
+    }
+
+    impl Drop for ProcessIsolation {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.previous_cwd);
+            for (name, value) in &self.previous_vars {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn write_fixture_provider(root: &Path) -> (PathBuf, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::create_dir_all(root).unwrap();
+        let provider_path = root.join("provider.sh");
+        fs::write(
+            &provider_path,
+            r#"#!/bin/sh
+read request
+printf '%s' '{"id":"cli-fixture","initial_state":"start","states":[{"id":"start","title":"Start","instructions":"Begin","final":false},{"id":"middle","title":"Middle","instructions":"Continue","final":false}],"transitions":[{"source":"start","event":"finish","target":"middle","kind":"check-free"}]}'
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&provider_path, permissions).unwrap();
+
+        let config_path = root.join("providers.toml");
+        let command = provider_path.to_string_lossy().replace('"', "\\\"");
+        fs::write(
+            &config_path,
+            format!("[providers.fixture]\ncommand = \"{command}\"\n"),
+        )
+        .unwrap();
+        (config_path, root.join("loop.db"))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn default_catalog_is_user_level_and_cwd_independent() {
+        let root = TempRoot::new("cli-default-catalog");
+        let isolation = ProcessIsolation::acquire();
+        let home = root.path().join("home");
+        let xdg = root.path().join("xdg");
+        let cwd_a = root.path().join("cwd-a");
+        let cwd_b = root.path().join("cwd-b");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&xdg).unwrap();
+        fs::create_dir_all(&cwd_a).unwrap();
+        fs::create_dir_all(&cwd_b).unwrap();
+        isolation.set_home_and_xdg(&home, &xdg);
+
+        let provider_root = root.path().join("provider");
+        let (config_path, _) = write_fixture_provider(&provider_root);
+
+        isolation.chdir(&cwd_a);
+        let start = execute([
+            "--json".to_owned(),
+            "start".to_owned(),
+            "fixture".to_owned(),
+            json!({"goal": "catalog"}).to_string(),
+            "--config".to_owned(),
+            config_path.to_string_lossy().into_owned(),
+        ]);
+        assert_eq!(start.exit_code, EXIT_COMPLETED, "{}", start.stdout);
+        let start_json: Value = serde_json::from_str(&start.stdout).unwrap();
+        let run_id = start_json["result"]["run"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        isolation.chdir(&cwd_b);
+        let list = execute(["--json".to_owned(), "list".to_owned()]);
+        assert_eq!(list.exit_code, EXIT_COMPLETED, "{}", list.stdout);
+        let list_json: Value = serde_json::from_str(&list.stdout).unwrap();
+        assert_eq!(list_json["result"][0]["id"], run_id);
+
+        assert!(!cwd_a.join(".loop-engine").join("loop.db").exists());
+        assert!(!cwd_b.join(".loop-engine").join("loop.db").exists());
+        assert!(xdg.join("loop-engine").join("loop.db").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn isolated_database_creates_sibling_runs_dir_and_does_not_write_machine_default() {
+        let root = TempRoot::new("cli-isolated-db");
+        let isolation = ProcessIsolation::acquire();
+        let home = root.path().join("home");
+        let xdg = root.path().join("xdg");
+        let catalog = root.path().join("catalog");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&xdg).unwrap();
+        isolation.set_home_and_xdg(&home, &xdg);
+
+        let (config_path, database) = write_fixture_provider(&catalog);
+        let start = execute([
+            "--json".to_owned(),
+            "start".to_owned(),
+            "fixture".to_owned(),
+            json!({"goal": "isolated"}).to_string(),
+            "--database".to_owned(),
+            database.to_string_lossy().into_owned(),
+            "--config".to_owned(),
+            config_path.to_string_lossy().into_owned(),
+        ]);
+        assert_eq!(start.exit_code, EXIT_COMPLETED, "{}", start.stdout);
+        let start_json: Value = serde_json::from_str(&start.stdout).unwrap();
+        let run_id = start_json["result"]["run"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        assert!(catalog.join("runs").join(&run_id).is_dir());
+        assert!(!xdg.join("loop-engine").join("loop.db").exists());
+        assert!(!home
+            .join(".local")
+            .join("share")
+            .join("loop-engine")
+            .join("loop.db")
+            .exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn start_keeps_caller_nonempty_artifact_root_and_still_creates_allocated_dir() {
+        let root = TempRoot::new("cli-keep-caller");
+        let (config_path, database) = write_fixture_provider(root.path());
+        let caller_input = json!({
+            "goal": "keep-caller",
+            "artifact_root": "relative/caller-path"
+        });
+        let start = execute([
+            "--json".to_owned(),
+            "start".to_owned(),
+            "fixture".to_owned(),
+            caller_input.to_string(),
+            "--database".to_owned(),
+            database.to_string_lossy().into_owned(),
+            "--config".to_owned(),
+            config_path.to_string_lossy().into_owned(),
+        ]);
+        assert_eq!(start.exit_code, EXIT_COMPLETED, "{}", start.stdout);
+        let start_json: Value = serde_json::from_str(&start.stdout).unwrap();
+        let run_id = start_json["result"]["run"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(start_json["result"]["run"]["initial_input"], caller_input);
+        assert!(allocated_run_dir(&database, &run_id).is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn start_non_object_input_unchanged_but_list_has_provider_and_artifact_root() {
+        let root = TempRoot::new("cli-non-object");
+        let (config_path, database) = write_fixture_provider(root.path());
+        let start = execute([
+            "--json".to_owned(),
+            "start".to_owned(),
+            "fixture".to_owned(),
+            "\"plain-string\"".to_owned(),
+            "--database".to_owned(),
+            database.to_string_lossy().into_owned(),
+            "--config".to_owned(),
+            config_path.to_string_lossy().into_owned(),
+        ]);
+        assert_eq!(start.exit_code, EXIT_COMPLETED, "{}", start.stdout);
+        let start_json: Value = serde_json::from_str(&start.stdout).unwrap();
+        let run_id = start_json["result"]["run"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(start_json["result"]["run"]["initial_input"], "plain-string");
+
+        let list = execute([
+            "--json".to_owned(),
+            "list".to_owned(),
+            "--database".to_owned(),
+            database.to_string_lossy().into_owned(),
+        ]);
+        assert_eq!(list.exit_code, EXIT_COMPLETED, "{}", list.stdout);
+        let list_json: Value = serde_json::from_str(&list.stdout).unwrap();
+        assert_eq!(list_json["result"][0]["provider"], "fixture");
+        let artifact_root = list_json["result"][0]["artifact_root"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(!artifact_root.is_empty());
+        assert_eq!(
+            artifact_root,
+            allocated_run_dir(&database, &run_id).to_string_lossy()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn show_json_has_no_top_level_provider_or_artifact_root() {
+        let root = TempRoot::new("cli-show-keys");
+        let (config_path, database) = write_fixture_provider(root.path());
+        let start = execute([
+            "--json".to_owned(),
+            "start".to_owned(),
+            "fixture".to_owned(),
+            json!({"goal": "show-keys"}).to_string(),
+            "--database".to_owned(),
+            database.to_string_lossy().into_owned(),
+            "--config".to_owned(),
+            config_path.to_string_lossy().into_owned(),
+        ]);
+        assert_eq!(start.exit_code, EXIT_COMPLETED, "{}", start.stdout);
+        let start_json: Value = serde_json::from_str(&start.stdout).unwrap();
+        let run_id = start_json["result"]["run"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let show = execute([
+            "--json".to_owned(),
+            "show".to_owned(),
+            run_id,
+            "--database".to_owned(),
+            database.to_string_lossy().into_owned(),
+        ]);
+        assert_eq!(show.exit_code, EXIT_COMPLETED, "{}", show.stdout);
+        let show_json: Value = serde_json::from_str(&show.stdout).unwrap();
+        let result = show_json["result"]
+            .as_object()
+            .expect("show result must be an object");
+        assert!(!result.contains_key("provider"));
+        assert!(!result.contains_key("artifact_root"));
     }
 }

@@ -37,7 +37,9 @@ CREATE TABLE IF NOT EXISTS runs (
     lifecycle                    TEXT NOT NULL CHECK (lifecycle IN ('active', 'final', 'terminated')),
     control_revision             INTEGER NOT NULL CHECK (control_revision >= 0),
     last_sequence                INTEGER NOT NULL CHECK (last_sequence >= 1),
-    created_at                   INTEGER NOT NULL
+    created_at                   INTEGER NOT NULL,
+    provider                     TEXT,
+    artifact_root                TEXT
 );
 
 CREATE TABLE IF NOT EXISTS context_records (
@@ -99,6 +101,7 @@ impl SqlitePersistence {
     /// [`Persistence`] methods below.
     pub fn from_connection(connection: Connection) -> Result<Self, PersistenceError> {
         configure_connection(&connection).map_err(sqlite_failure)?;
+        ensure_run_catalog_columns(&connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
         })
@@ -133,8 +136,8 @@ impl Persistence for SqlitePersistence {
                         id, label, workflow_id, workflow_json,
                         provider_association_json, initial_input_json,
                         current_state, lifecycle, control_revision,
-                        last_sequence, created_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                        last_sequence, created_at, provider, artifact_root
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                     params![
                         request.id.as_str(),
                         request.label,
@@ -147,6 +150,8 @@ impl Persistence for SqlitePersistence {
                         to_sqlite_i64(initial_revision.as_u64(), "control revision")?,
                         to_sqlite_i64(initial_sequence.as_u64(), "semantic sequence")?,
                         request.created_at.as_unix_millis(),
+                        request.provider,
+                        request.artifact_root,
                     ],
                 )
                 .map_err(sqlite_failure)?;
@@ -374,7 +379,7 @@ impl Persistence for SqlitePersistence {
         let connection = self.lock()?;
         let mut statement = connection
             .prepare(
-                "SELECT id, label, workflow_id, lifecycle, current_state
+                "SELECT id, label, workflow_id, lifecycle, current_state, provider, artifact_root
                  FROM runs
                  ORDER BY created_at ASC, id ASC",
             )
@@ -388,18 +393,23 @@ impl Persistence for SqlitePersistence {
                     row.get::<_, String>(2)?,
                     lifecycle,
                     row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
                 ))
             })
             .map_err(sqlite_failure)?;
 
         rows.map(|row| {
-            let (id, label, workflow_id, lifecycle, current_state) = row.map_err(sqlite_failure)?;
+            let (id, label, workflow_id, lifecycle, current_state, provider, artifact_root) =
+                row.map_err(sqlite_failure)?;
             Ok(RunSummary {
                 id: RunId::new(id),
                 label,
                 workflow_id: loop_core::WorkflowId::new(workflow_id),
                 lifecycle: parse_lifecycle(&lifecycle)?,
                 current_state: StateId::new(current_state),
+                provider,
+                artifact_root,
             })
         })
         .collect()
@@ -496,6 +506,31 @@ fn configure_connection(connection: &Connection) -> rusqlite::Result<()> {
     // continuing with a weaker journal mode.
     let _: String = connection.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
     connection.execute_batch(SCHEMA)
+}
+
+fn ensure_run_catalog_columns(connection: &Connection) -> Result<(), PersistenceError> {
+    let columns = run_table_columns(connection)?;
+    if !columns.iter().any(|name| name == "provider") {
+        connection
+            .execute("ALTER TABLE runs ADD COLUMN provider TEXT", [])
+            .map_err(sqlite_failure)?;
+    }
+    if !columns.iter().any(|name| name == "artifact_root") {
+        connection
+            .execute("ALTER TABLE runs ADD COLUMN artifact_root TEXT", [])
+            .map_err(sqlite_failure)?;
+    }
+    Ok(())
+}
+
+fn run_table_columns(connection: &Connection) -> Result<Vec<String>, PersistenceError> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info('runs')")
+        .map_err(sqlite_failure)?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(sqlite_failure)?;
+    rows.map(|row| row.map_err(sqlite_failure)).collect()
 }
 
 fn begin_immediate(connection: &mut Connection) -> Result<Transaction<'_>, PersistenceError> {

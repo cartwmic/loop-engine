@@ -293,6 +293,12 @@ impl Engine {
         initial_input: Value,
     ) -> OperationOutcome<core::CreateRunResult> {
         let persistence = self.persistence();
+        let catalog_root = self
+            .database
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
         core::execute_start(
             core::StartRequest::new(
                 run_id,
@@ -300,6 +306,7 @@ impl Engine {
                 initial_input,
                 None,
                 Timestamp::from_unix_millis(1),
+                catalog_root,
             ),
             &self.resolver,
             &self.gateway,

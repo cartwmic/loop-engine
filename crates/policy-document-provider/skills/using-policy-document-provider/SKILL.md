@@ -33,14 +33,14 @@ For an installed provider, materialize embedded profiles and guidance into an em
 policy-document data-dump "$DATA_ROOT"
 ```
 
-Choose [readme.json](../../data/readme.json) or [agents.json](../../data/agents.json). Copy it to a run-specific file; set `mode` to `draft` or `audit`; replace `target.path` with the absolute target path. Keep shipped `target.id` and `profile_version` unchanged unless intentionally authoring a custom profile.
+Choose [readme.json](../../data/readme.json) or [agents.json](../../data/agents.json). Copy it to a run-specific file; set `mode` to `draft` or `audit`; replace `target.path` with the absolute target path. Keep shipped `target.id` and `profile_version` unchanged unless intentionally authoring a custom profile. Omit `artifact_root` in the usual case; the reserved key is accepted and ignored, and the provider is not required to write artifact files. Other unknown `initial_input` keys still fail.
 
 ```sh
-loop-engine --database "$DB" --config "$PROVIDER_CONFIG" --json \
+loop-engine --json --config "$PROVIDER_CONFIG" \
   start policy-document @"$PROFILE" "document audit"
 ```
 
-Reuse that database and returned run ID for every operation.
+Pass `--database /path/to/dir/loop.db` only to isolate SQLite and `/path/to/dir/runs/<id>/`. Reuse the returned run ID for every later operation.
 
 ## Profile map
 
@@ -71,7 +71,7 @@ Heading aliases are case-insensitive; profiles do not require exact heading spel
 Append `data` as the eight-field object below; Loop Engine supplies context record `kind` separately:
 
 ```sh
-loop-engine --database "$DB" --json append \
+loop-engine --json append \
   --record-id "$RECORD_ID" "$RUN_ID" review-evidence @verdict.json
 ```
 

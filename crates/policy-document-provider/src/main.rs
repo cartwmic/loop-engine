@@ -306,4 +306,28 @@ mod tests {
             .unwrap_err()
             .contains("unknown field"));
     }
+
+    #[test]
+    fn checked_passed_evaluate_parses_composed_object_with_artifact_root() {
+        let path = target("# Title\n");
+        let mut req = request(
+            &path,
+            Transition::checked("deterministic-review", "passed", "semantic-review"),
+            Vec::new(),
+        );
+        req.initial_input["artifact_root"] = json!("/tmp/unused");
+        let response = evaluation_response(&req).unwrap_or_else(|error| {
+            panic!("composed object with artifact_root must parse; got evaluation error: {error}")
+        });
+        let result = response["result"].as_str().unwrap_or("");
+        assert!(
+            result == "allow" || result == "deny",
+            "expected allow or policy deny, got {response}"
+        );
+        assert_ne!(
+            response["feedback"]["code"], "invalid-initial-input",
+            "{response}"
+        );
+        fs::remove_file(path).unwrap();
+    }
 }

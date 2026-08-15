@@ -50,6 +50,8 @@ fn create_run(
         "start",
         Lifecycle::Active,
         Timestamp::from_unix_millis(1),
+        "blocking-test-gateway",
+        Some("/allocated/concurrency".to_owned()),
     ))?;
     Ok(created.run)
 }

@@ -7,11 +7,14 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::{Path, PathBuf};
 
 /// Caller-supplied values needed to create a run.
 ///
 /// The run ID and timestamp are deliberately supplied by the caller or
 /// composition root.  Core does not invent identifier or clock ports.
+/// `catalog_root` is the parent of the resolved catalog database; start
+/// allocates `<catalog_root>/runs/<run_id>/` before `create_run`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Request {
     pub id: crate::RunId,
@@ -19,6 +22,7 @@ pub struct Request {
     pub label: Option<String>,
     pub initial_input: Value,
     pub created_at: Timestamp,
+    pub catalog_root: PathBuf,
 }
 
 impl Request {
@@ -28,6 +32,7 @@ impl Request {
         initial_input: Value,
         label: Option<String>,
         created_at: Timestamp,
+        catalog_root: impl Into<PathBuf>,
     ) -> Self {
         Self {
             id: id.into(),
@@ -35,6 +40,7 @@ impl Request {
             label,
             initial_input,
             created_at,
+            catalog_root: catalog_root.into(),
         }
     }
 
@@ -44,8 +50,16 @@ impl Request {
         initial_input: Value,
         label: impl Into<String>,
         created_at: Timestamp,
+        catalog_root: impl Into<PathBuf>,
     ) -> Self {
-        Self::new(id, provider, initial_input, Some(label.into()), created_at)
+        Self::new(
+            id,
+            provider,
+            initial_input,
+            Some(label.into()),
+            created_at,
+            catalog_root,
+        )
     }
 }
 
@@ -55,7 +69,9 @@ pub type Result = CreateRunResult;
 /// Execute `start` through the provider and persistence ports.
 ///
 /// Provider resolution and description happen before validation and before
-/// persistence is called.  The persistence adapter owns the atomic run plus
+/// persistence is called.  After a valid workflow, start allocates the
+/// engine-owned per-run directory and composes reserved `artifact_root` into
+/// stored object input.  The persistence adapter owns the atomic run plus
 /// creation-history write.
 pub fn execute<R, G, P>(
     request: Request,
@@ -102,15 +118,24 @@ where
         Lifecycle::Active
     };
 
+    let allocated = match allocate_run_directory(&request.catalog_root, &request.id) {
+        Ok(path) => path,
+        Err((code, message)) => return OperationOutcome::error(code, message),
+    };
+    let (composed_input, recorded_artifact_root) =
+        compose_stored_input(request.initial_input, &allocated);
+
     let create = CreateRunRequest::new(
         request.id,
         request.label,
         workflow,
         association,
-        request.initial_input,
+        composed_input,
         initial_state,
         lifecycle,
         request.created_at,
+        request.provider.as_str().to_owned(),
+        Some(recorded_artifact_root),
     );
 
     match persistence.create_run(create) {
@@ -133,4 +158,65 @@ where
     P: crate::Persistence + ?Sized,
 {
     execute(request, resolver, gateway, persistence)
+}
+
+fn allocate_run_directory(
+    catalog_root: &Path,
+    run_id: &crate::RunId,
+) -> std::result::Result<PathBuf, (String, String)> {
+    let catalog_root = if catalog_root.is_relative() {
+        let current_dir = std::env::current_dir().map_err(|error| {
+            (
+                "run-directory-failed".to_owned(),
+                format!("could not resolve current directory for catalog root: {error}"),
+            )
+        })?;
+        current_dir.join(catalog_root)
+    } else {
+        catalog_root.to_path_buf()
+    };
+    let allocated = catalog_root.join("runs").join(run_id.as_str());
+    std::fs::create_dir_all(&allocated).map_err(|error| {
+        (
+            "run-directory-failed".to_owned(),
+            format!(
+                "could not create run directory `{}`: {error}",
+                allocated.display()
+            ),
+        )
+    })?;
+    std::fs::canonicalize(&allocated).map_err(|error| {
+        (
+            "run-directory-failed".to_owned(),
+            format!(
+                "could not canonicalize run directory `{}`: {error}",
+                allocated.display()
+            ),
+        )
+    })
+}
+
+/// Compose stored `initial_input` and the catalog `artifact_root` string.
+///
+/// A JSON object that already has a non-empty string `artifact_root` keeps
+/// that string (including a relative path).  Other objects receive the
+/// allocated canonical path.  Non-objects are left unchanged; the catalog
+/// column still records the allocated path.
+fn compose_stored_input(initial_input: Value, allocated_canonical: &Path) -> (Value, String) {
+    let allocated = allocated_canonical.to_string_lossy().into_owned();
+    match initial_input {
+        Value::Object(mut map) => {
+            let caller_path = match map.get("artifact_root") {
+                Some(Value::String(value)) if !value.is_empty() => Some(value.clone()),
+                _ => None,
+            };
+            if let Some(recorded) = caller_path {
+                (Value::Object(map), recorded)
+            } else {
+                map.insert("artifact_root".to_owned(), Value::String(allocated.clone()));
+                (Value::Object(map), allocated)
+            }
+        }
+        other => (other, allocated),
+    }
 }

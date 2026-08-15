@@ -4,7 +4,7 @@
 
 `policy-document` is the release- and source-distributed external provider for PRD section 11. It never edits the target, invokes a reviewer, or judges semantic quality. It reads exact UTF-8 target bytes, applies run-frozen deterministic policies, and aggregates externally supplied semantic verdicts bound to the current digest.
 
-Fixed topology is `prepare` → `deterministic-review` → `semantic-review` → `end`; both revision edges are check-free. Initial input is closed JSON containing `schema_version`, `profile_version`, `mode` (`draft` or `audit`), absolute target `{id,path}`, non-empty deterministic policies, and non-empty semantic policies. Agent procedure for this crate is [AGENTS.md](AGENTS.md). Drive a run with [skills/using-policy-document-provider/SKILL.md](skills/using-policy-document-provider/SKILL.md).
+Fixed topology is `prepare` → `deterministic-review` → `semantic-review` → `end`; both revision edges are check-free. Initial input is closed JSON containing `schema_version`, `profile_version`, `mode` (`draft` or `audit`), absolute target `{id,path}`, non-empty deterministic policies, and non-empty semantic policies. Reserved `artifact_root` is accepted and ignored; omit it in the usual case. The provider is not required to write artifact files. Other unknown `initial_input` keys still fail. Agent procedure for this crate is [AGENTS.md](AGENTS.md). Drive a run with [skills/using-policy-document-provider/SKILL.md](skills/using-policy-document-provider/SKILL.md).
 
 README profile `readme-2` supplies title, purpose, onboarding, usage, validation, command, and local-reference deterministic floors; those floors are unchanged. Semantic axes add honest fitness, verifiable claims, and troubleshooting sharp edges, and tighten audience navigation so README does not impersonate AGENTS.md. AGENTS profile `agents-2` supplies scope/authority, workflow/validation, completion/handoff, command, and local-reference floors; those floors are unchanged, and no title or exact heading spelling is required. Semantic axes add non-discoverable sharp edges, ambiguity resolution, signal density, and living config, and tighten operational precision, authority resolution, and risk-boundary sufficiency.
 
@@ -34,25 +34,24 @@ command = "/absolute/path/to/target/release/policy-document"
 args = []
 ```
 
-Then use fresh SQLite store and copied profile:
+Then start with the copied profile. Omit `--database` unless isolating, and omit `artifact_root` (the reserved key is accepted and ignored; the provider is not required to write artifact files):
 
 ```sh
-loop-engine --database /tmp/policy-document.sqlite --json \
-  --config /tmp/policy-document-providers.toml \
+loop-engine --json --config /tmp/policy-document-providers.toml \
   start --id docs-audit policy-document @/tmp/readme.json "README audit"
-loop-engine --database /tmp/policy-document.sqlite --json show docs-audit
-loop-engine --database /tmp/policy-document.sqlite --json event docs-audit ready
-loop-engine --database /tmp/policy-document.sqlite --json event docs-audit passed
+loop-engine --json show docs-audit
+loop-engine --json event docs-audit ready
+loop-engine --json event docs-audit passed
 ```
 
-`start` returns the run ID at `result.run.id`. Request `ready` after authoring the target, then checked `passed` for deterministic review. On `policy-document-nonconforming`, fix every reported violation, request check-free `revise`, and repeat from `prepare`.
+Pass `--database /path/to/dir/loop.db` only to isolate SQLite and `/path/to/dir/runs/<id>/`. `start` returns the run ID at `result.run.id`. Request `ready` after authoring the target, then checked `passed` for deterministic review. On `policy-document-nonconforming`, fix every reported violation, request check-free `revise`, and repeat from `prepare`.
 
 ## External evidence
 
 Provider never invokes reviewer/model and never edits target. Compute digest over exact bytes (for example `shasum -a 256 /absolute/path/to/README.md`) and append one evidence record per configured semantic axis:
 
 ```sh
-loop-engine --database /tmp/policy-document.sqlite --json append \
+loop-engine --json append \
   --record-id product-fidelity-review docs-audit review-evidence \
   '{"gate":"semantic-review","policy_id":"product-fidelity","result":"pass","findings":"","author":{"name":"reviewer","kind":"agent"},"target_id":"README.md","target_sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","profile_version":"readme-2"}'
 ```

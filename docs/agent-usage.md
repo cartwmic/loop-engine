@@ -4,7 +4,11 @@ Use `loop-engine` to coordinate durable workflow state. Perform the primary work
 
 ## Deterministic setup
 
-Pass an explicit `--database` path on every invocation and reuse it for the run's lifetime. Pass `--json` on every invocation. Pass an explicit `--config` path to `start`; do not rely on path discovery or environment defaults.
+Omit `--database` unless isolating. When `--database` and database env vars are unset, the catalog is `$LOOP_ENGINE_HOME/loop.db` or `$LOOP_HOME/loop.db` if either home env is set, else `$XDG_DATA_HOME/loop-engine/loop.db` if `XDG_DATA_HOME` is set, else `$HOME/.local/share/loop-engine/loop.db`. `list` from any working directory reads that same file. Pass `--database /path/to/dir/loop.db` only to isolate SQLite and `/path/to/dir/runs/<id>/`.
+
+Pass `--json` and parse the single JSON envelope. Pass an explicit `--config` path to `start`; do not rely on path discovery.
+
+Omit `artifact_root` unless isolating files. Usual start without `artifact_root` stores the allocated absolute path in object `initial_input`. Pass a nonempty `artifact_root` only to isolate files to a caller-chosen absolute existing directory. `list` JSON includes optional `provider` (the start alias) and `artifact_root`; `show` and `history` JSON keys are unchanged.
 
 `--timeout-ms MILLISECONDS` is global and defaults to 30000 ms for each provider `describe` or `evaluate` call. Use an explicit timeout when provider latency may exceed that default.
 
@@ -30,6 +34,13 @@ loop-engine [--database DB] [--json] append [--record-id RECORD_ID] RUN_ID KIND 
 loop-engine [--database DB] [--json] event RUN_ID EVENT_ID
 loop-engine [--database DB] [--json] history RUN_ID
 loop-engine [--database DB] [--json] terminate RUN_ID
+```
+
+Usual-case `start` omits `--database` and `artifact_root`:
+
+```sh
+loop-engine --json --config /absolute/path/to/providers.toml \
+  start software-change @/tmp/profile.json "my run"
 ```
 
 Global options may appear before or after the operation; the timeout option is shown once above to keep the skeleton brief. `start` resolves the provider alias and returns the run ID in `result.run.id`; supply `--id` when the orchestrator owns run identity. Supply `--record-id` for an orchestrator-owned context-record identity. `append` accepts both `--record-id VALUE` and `--record-id=VALUE`; it accepts opaque `KIND` and `DATA_JSON` and does not change state.

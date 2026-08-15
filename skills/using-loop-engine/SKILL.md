@@ -13,9 +13,10 @@ Full semantics: [docs/agent-usage.md](../../docs/agent-usage.md). Requirements: 
 
 ## Deterministic setup
 
-- Pass an explicit `--database PATH` on every invocation and reuse it for the run's lifetime.
-- Pass `--json` on every invocation; parse only the single JSON envelope.
+- Omit `--database` unless isolating. When `--database` and database env vars are unset, the catalog is `$LOOP_ENGINE_HOME/loop.db` or `$LOOP_HOME/loop.db` if either home env is set, else `$XDG_DATA_HOME/loop-engine/loop.db` if `XDG_DATA_HOME` is set, else `$HOME/.local/share/loop-engine/loop.db`. `list` from any working directory reads that same file. Pass `--database /path/to/dir/loop.db` only to isolate SQLite and `/path/to/dir/runs/<id>/`.
+- Pass `--json` and parse the single JSON envelope.
 - Pass an explicit `--config PATH` (provider TOML) to `start`; do not rely on discovery.
+- Omit `artifact_root` unless isolating files. Usual start without `artifact_root` stores the allocated absolute path in object `initial_input`. Pass a nonempty `artifact_root` only to isolate files to a caller-chosen absolute existing directory. `list` JSON includes optional `provider` (the start alias) and `artifact_root`; `show` and `history` JSON keys are unchanged.
 - `--timeout-ms N` is global (default 30000 per provider `describe`/`evaluate` call); raise it for slow providers.
 
 Provider TOML uses an exact, case-sensitive alias:
@@ -38,6 +39,13 @@ loop-engine [--database DB] [--json] append [--record-id RECORD_ID] RUN_ID KIND 
 loop-engine [--database DB] [--json] event RUN_ID EVENT_ID
 loop-engine [--database DB] [--json] history RUN_ID
 loop-engine [--database DB] [--json] terminate RUN_ID
+```
+
+Usual-case `start` omits `--database` and `artifact_root`:
+
+```sh
+loop-engine --json --config /absolute/path/to/providers.toml \
+  start software-change @/tmp/profile.json "my run"
 ```
 
 `start` returns the run ID at `result.run.id`; supply `--id` when the orchestrator owns run identity. `append` accepts both `--record-id VALUE` and `--record-id=VALUE`; supplied IDs remain unchanged through result, `show`, and `history`. Append is opaque to core and never changes state.
