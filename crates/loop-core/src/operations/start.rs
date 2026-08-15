@@ -7,7 +7,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Caller-supplied values needed to create a run.
 ///
@@ -164,6 +164,20 @@ fn allocate_run_directory(
     catalog_root: &Path,
     run_id: &crate::RunId,
 ) -> std::result::Result<PathBuf, (String, String)> {
+    let mut components = Path::new(run_id.as_str()).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(_)), None) => {}
+        _ => {
+            return Err((
+                "run-directory-failed".to_owned(),
+                format!(
+                    "run id `{}` is not a single path component",
+                    run_id.as_str()
+                ),
+            ));
+        }
+    }
+
     let catalog_root = if catalog_root.is_relative() {
         let current_dir = std::env::current_dir().map_err(|error| {
             (

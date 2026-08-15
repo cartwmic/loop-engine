@@ -434,6 +434,55 @@ mod tests {
     }
 
     #[test]
+    fn start_rejects_run_id_that_is_not_a_single_path_component() {
+        let catalog = temp_catalog();
+        let outside = temp_catalog();
+        let absolute_escaped = outside.path().join("should-not-be-created");
+        let absolute_id = absolute_escaped.to_string_lossy().into_owned();
+        let escaped_parent = catalog.path().join("escaped");
+        let escaped_separator = catalog.path().join("runs").join("foo");
+
+        let cases = [
+            ("..", escaped_parent.as_path()),
+            ("../escaped", escaped_parent.as_path()),
+            (absolute_id.as_str(), absolute_escaped.as_path()),
+            ("foo/bar", escaped_separator.as_path()),
+        ];
+
+        for (run_id, escaped) in cases {
+            let resolver = FakeResolver::default();
+            let gateway = FakeGateway::default();
+            let persistence = FakePersistence::default();
+            let request = start::Request::new(
+                run_id,
+                "fake",
+                json!({"objective": "test"}),
+                None,
+                Timestamp::from_unix_millis(10),
+                catalog.path(),
+            );
+
+            let outcome = start::execute(request, &resolver, &gateway, &persistence);
+
+            assert!(outcome.is_error(), "run_id `{run_id}`");
+            assert_eq!(
+                outcome.issue().unwrap().code,
+                "run-directory-failed",
+                "run_id `{run_id}`"
+            );
+            assert!(
+                persistence.created.borrow().is_empty(),
+                "run_id `{run_id}` must not persist"
+            );
+            assert!(
+                !escaped.exists(),
+                "run_id `{run_id}` must not create `{}`",
+                escaped.display()
+            );
+        }
+    }
+
+    #[test]
     fn from_run_for_run_summary_sets_provider_and_artifact_root_none() {
         let run = Run::new(
             "run-1",
