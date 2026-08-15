@@ -26,7 +26,7 @@ DATA_ROOT="$HOME/.local/share/software-change-provider"
 software-change data-dump "$DATA_ROOT"
 ```
 
-The command creates `DATA_ROOT/crates/software-change-provider/data/...` with the configs, templates, reviewer protocol, calibration manifest, and fixtures embedded in the binary. It preserves those repository-relative paths so guidance citations resolve under `DATA_ROOT`; it refuses to overwrite an existing target file. Copy a selected profile from that tree to a run-specific file. Omit the placeholder `artifact_root` in the usual case so the engine allocates the durable directory; pass `artifact_root` only to isolate files to a caller-chosen absolute existing directory. Register the installed provider under an exact, case-sensitive alias:
+The command creates `DATA_ROOT/crates/software-change-provider/data/...` with the configs, templates, reviewer protocol, calibration manifest, and fixtures embedded in the binary. It preserves those repository-relative paths so guidance citations resolve under `DATA_ROOT`; it refuses to overwrite an existing target file. Copy a selected profile from that tree to a run-specific file. Omit `artifact_root` in the usual case so the engine allocates the durable directory; pass `artifact_root` only to isolate files to a caller-chosen absolute existing directory. Register the installed provider under an exact, case-sensitive alias:
 
 ```toml
 [providers.software-change]
@@ -72,7 +72,7 @@ cp "$DATA_ROOT/crates/software-change-provider/data/configs/high-rigor.json" /tm
   start software-change "@/tmp/software-change-high-rigor.json" "software change (high-rigor)"
 ```
 
-`start` returns the run ID at `result.run.id`. The CLI accepts `@FILE` JSON input as shown above. Once the run exists, `show` reveals the allocated (or caller) `artifact_root` inside object `initial_input`. Subject files use the fixed filenames expected by the selected schema: `intent.json`, `design.json`, `plan.json`, `implementation-report.json`, and `validation-report.json`. Pass `--database /path/to/dir/loop.db` only to isolate SQLite and `/path/to/dir/runs/<id>/`. Pass a nonempty `artifact_root` only to isolate files to a caller-chosen absolute existing directory.
+`start` returns the run ID at `result.run.id`. The CLI accepts `@FILE` JSON input as shown above. Once the run exists, `show` reveals the allocated (or caller) `artifact_root` inside object `initial_input`. `start` may insert reserved `artifact_root` into object `initial_input` when the caller did not supply a nonempty path; object schemas that deny unknown keys must accept that field to remain evaluable; the engine does not skip injection, strip unknown keys, or classify providers. Subject files use the fixed filenames expected by the selected schema: `intent.json`, `design.json`, `plan.json`, `implementation-report.json`, and `validation-report.json`. Pass `--database /path/to/dir/loop.db` only to isolate SQLite and `/path/to/dir/runs/<id>/`. Pass a nonempty `artifact_root` only to isolate files to a caller-chosen absolute existing directory.
 
 ## Validation
 
@@ -108,7 +108,7 @@ The packaged adapter does not read checkout provider data after `data-dump`. Nat
 
 ## Shipped data
 
-These are the shipped files consumed by provider tests, guidance, and review procedure. Config profiles are complete initial-input templates; copy one for a run and omit the placeholder `artifact_root` unless isolating files to a caller-chosen absolute existing directory.
+These are the shipped files consumed by provider tests, guidance, and review procedure. Config profiles are complete initial-input templates; copy one for a run and omit `artifact_root` unless isolating files to a caller-chosen absolute existing directory.
 
 ### Config profiles
 

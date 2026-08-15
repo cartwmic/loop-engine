@@ -22,7 +22,7 @@ cargo clippy -p research-provider --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
-Register `target/debug/research` under exact alias `research` with an absolute command path in uncommitted provider TOML. Copy the standard profile, replace placeholder `artifact_root` with an absolute existing directory, then `start`. Artifact filenames are fixed: `brief.json`, `sources.json`, `verification.json`, `report.json`.
+Register `target/debug/research` under exact alias `research` with an absolute command path in uncommitted provider TOML. Copy the standard profile; omit `artifact_root` in the usual case; the engine allocates the durable directory and records that absolute path in object `initial_input`; `show` reveals it; pass a nonempty `artifact_root` only to isolate files to a caller-chosen absolute existing directory; then `start`. Artifact filenames are fixed: `brief.json`, `sources.json`, `verification.json`, `report.json`.
 
 Topology: `scope → gather → verify → synthesize → end`, plus check-free owning-phase `revise*` edges. Checked `scoped` and `gathered` schema-check the current subject and revision links. Checked `verified` and `completed` then aggregate evidence. Check-free `revise` does not evaluate.
 

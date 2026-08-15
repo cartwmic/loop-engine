@@ -1,6 +1,5 @@
 {
   "config_version": "standard-4",
-  "artifact_root": "/abs/path/to/change/artifacts",
   "review_policies": {
     "intent": [
       {

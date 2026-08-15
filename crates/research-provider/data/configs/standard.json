@@ -1,6 +1,5 @@
 {
   "config_version": "research-1",
-  "artifact_root": "/abs/path/to/research/artifacts",
   "review_policies": {
     "verify": [
       {

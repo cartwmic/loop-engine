@@ -1,6 +1,5 @@
 {
   "config_version": "high-rigor-4",
-  "artifact_root": "/abs/path/to/change/artifacts",
   "review_policies": {
     "intent": [
       {

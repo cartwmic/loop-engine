@@ -147,6 +147,10 @@ fn markdown_files() -> Vec<(String, String)> {
 fn standard_profile_passes_production_config_validation() {
     let config = load_profile();
     assert_eq!(config["config_version"], "research-1");
+    assert!(
+        config.get("artifact_root").is_none(),
+        "shipped profile must omit artifact_root"
+    );
     research_provider::validate_config_for_tests(&config)
         .unwrap_or_else(|error| panic!("standard rejected by production validator: {error}"));
 

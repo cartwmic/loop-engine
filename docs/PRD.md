@@ -437,6 +437,8 @@ label
 workflow ID
 lifecycle
 current state
+provider identity
+durable artifact location when the run has one
 ```
 
 ### 6.7 Terminate

@@ -227,6 +227,10 @@ fn all_profiles_pass_production_config_validation_and_have_exact_subjects() {
             _ => unreachable!("unknown profile {profile}"),
         };
         assert_eq!(config["config_version"], expected_version);
+        assert!(
+            config.get("artifact_root").is_none(),
+            "{profile} shipped profile must omit artifact_root"
+        );
         software_change_provider::validate_config_for_tests(&config)
             .unwrap_or_else(|error| panic!("{profile} rejected by production validator: {error}"));
 

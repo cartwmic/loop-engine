@@ -34,7 +34,7 @@ python3 scripts/production-journey.py \
   --traversal-depth full
 ```
 
-Register `target/debug/software-change` under exact alias `software-change` with an absolute command path in uncommitted provider TOML. Copy a profile, replace placeholder `artifact_root` with an absolute existing directory, then `start`. Artifact filenames are fixed: `intent.json`, `design.json`, `plan.json`, `implementation-report.json`, `validation-report.json`.
+Register `target/debug/software-change` under exact alias `software-change` with an absolute command path in uncommitted provider TOML. Copy a profile; omit `artifact_root` in the usual case; the engine allocates the durable directory and records that absolute path in object `initial_input`; `show` reveals it; pass a nonempty `artifact_root` only to isolate files to a caller-chosen absolute existing directory; then `start`. Artifact filenames are fixed: `intent.json`, `design.json`, `plan.json`, `implementation-report.json`, `validation-report.json`.
 
 Topology: `explore → design → design-review → plan → plan-review → implement → implementation-review → validation → end`, plus check-free owning-phase `revise*` edges. Checked `*-ready` and approval/`passed` transitions schema-check the current subject before evidence aggregation. Check-free `revise` does not evaluate.
 

@@ -224,7 +224,7 @@ class Journey:
     def _validate_profile_shape(self, profile: Dict[str, Any], *, require_loaded: bool) -> None:
         if not require_loaded:
             return
-        required = {"config_version", "artifact_root", "review_policies", "artifact_schemas", "revision_links"}
+        required = {"config_version", "review_policies", "artifact_schemas", "revision_links"}
         missing = sorted(required.difference(profile))
         if missing:
             raise JourneyFailure(f"high-rigor profile is missing fields: {', '.join(missing)}")

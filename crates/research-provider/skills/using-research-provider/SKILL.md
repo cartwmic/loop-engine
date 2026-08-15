@@ -27,7 +27,7 @@ command = "/absolute/path/to/target/debug/research"
 args = []
 ```
 
-Copy `crates/research-provider/data/configs/standard.json` to a run-specific file. Omit the placeholder `artifact_root` in the usual case; the engine allocates the durable directory and records that absolute path in object `initial_input` (`show` reveals it). Pass `artifact_root` only to isolate files to a caller-chosen absolute existing directory. Then:
+Copy `crates/research-provider/data/configs/standard.json` to a run-specific file. Omit `artifact_root` in the usual case; the engine allocates the durable directory and records that absolute path in object `initial_input` (`show` reveals it). Pass `artifact_root` only to isolate files to a caller-chosen absolute existing directory. `start` may insert reserved `artifact_root` into object `initial_input` when the caller did not supply a nonempty path; object schemas that deny unknown keys must accept that field to remain evaluable; the engine does not skip injection, strip unknown keys, or classify providers. Then:
 
 ```sh
 loop-engine --json --config "$PROVIDER_CONFIG" \
