@@ -13,6 +13,7 @@ pub struct InitialInput {
     pub deterministic_policies: Vec<DeterministicPolicy>,
     pub semantic_policies: Vec<SemanticPolicy>,
     /// Reserved catalog key composed at start. Accepted and ignored; never a file root.
+    #[allow(dead_code)]
     #[serde(default)]
     pub artifact_root: Option<String>,
 }
