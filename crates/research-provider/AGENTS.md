@@ -22,6 +22,16 @@ cargo clippy -p research-provider --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
+Crate tests are not a substitute for the public-boundary journey. After any crate change, also run the repository source journey from the repo root (build `loop-engine` and `research` first):
+
+```sh
+python3 scripts/research-journey.py \
+  --mode source \
+  --engine target/debug/loop-engine \
+  --provider target/debug/research \
+  --profile crates/research-provider/data/configs/standard.json
+```
+
 Register `target/debug/research` under exact alias `research` with an absolute command path in uncommitted provider TOML. Copy the standard profile; omit `artifact_root` in the usual case; the engine allocates the durable directory and records that absolute path in object `initial_input`; `show` reveals it; pass a nonempty `artifact_root` only to isolate files to a caller-chosen absolute existing directory; then `start`. Artifact filenames are fixed: `brief.json`, `sources.json`, `verification.json`, `report.json`.
 
 Topology: `scope → gather → verify → synthesize → end`, plus check-free owning-phase `revise*` edges. Checked `scoped` and `gathered` schema-check the current subject and revision links. Checked `verified` and `completed` then aggregate evidence. Check-free `revise` does not evaluate.
@@ -36,6 +46,6 @@ Local markdown links in this crate's documents must resolve under this crate dir
 
 ## Completion and Handoff
 
-Crate work is complete when `cargo test -p research-provider` and `cargo clippy -p research-provider --all-targets -- -D warnings` pass, shipped configs/templates/protocol still match runtime behavior, and this crate's README/AGENTS.md remain accurate.
+Crate work is complete when `cargo test -p research-provider`, `cargo clippy -p research-provider --all-targets -- -D warnings`, and the source research journey pass, shipped configs/templates/protocol still match runtime behavior, and this crate's README/AGENTS.md remain accurate.
 
 Handoff the files changed, commands run, and residuals: unread locked artifacts, synthetic test evidence is not semantic quality, and round state lives outside the provider.

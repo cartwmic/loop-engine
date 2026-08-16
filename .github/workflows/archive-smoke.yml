@@ -79,7 +79,7 @@ jobs:
           test -z "$(ls -A "$smoke_cwd")"
           printf 'packaged smoke cwd outside checkout: %s (checkout: %s)\n' \
             "$(pwd -P)" "$checkout_root"
-          python3 "$GITHUB_WORKSPACE/scripts/production-journey.py" \
+          python3 "$GITHUB_WORKSPACE/scripts/software-change-journey.py" \
             --mode packaged \
             --engine "$engine" \
             --provider "$software_provider" \

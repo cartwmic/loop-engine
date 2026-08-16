@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the source and packaged production-boundary journey.
+"""Run the source and packaged software-change public-boundary journey.
 
 The runner is intentionally a process harness, not another workflow engine.  It
 uses one scenario contract for both adapters:
@@ -28,6 +28,9 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
+
+import work_slot_journey
+
 PROFILE_SUBPATH = Path("crates/software-change-provider/data/configs/high-rigor.json")
 FIXTURE_SUBPATH = Path(
     "crates/software-change-provider/data/calibration/fixtures"
@@ -57,6 +60,29 @@ SUCCESSOR_ROUTE_CASES = (
     ("validation", "revise-design", "design"),
     ("validation", "revise-intent", "explore"),
 )
+BOUND_SLOT_ID = "explore-intent"
+UNBOUND_INVOKE_SLOT_ID = "design-draft"
+SOFTWARE_CHANGE_SLOT_IDS = (
+    "explore-intent",
+    "design-draft",
+    "design-review",
+    "plan-draft",
+    "plan-review",
+    "implement",
+    "implementation-review",
+    "validate",
+)
+WORK_SLOT_PROOF = [
+    "frozen sparse work_slot_bindings in initial_input",
+    "show work_slots catalog snapshot",
+    "bound instruction redaction",
+    "unbound invoke rejection",
+    "event gated before succeeded invoke",
+    "dummy worker packet receipt",
+    "overlay succeeded then checked event",
+    "unbound states keep stored instructions",
+    "history invocation started and succeeded",
+]
 
 
 class JourneyFailure(RuntimeError):
@@ -93,6 +119,7 @@ class Journey:
         self.provider_config: Optional[Path] = None
         self.profile_path: Optional[Path] = None
         self.artifact_root: Optional[Path] = None
+        self.work_slot_bindings: Dict[str, Any] = {}
         self.run_id = "journey-production-run"
         self.state = "not-started"
 
@@ -160,7 +187,7 @@ class Journey:
     def run(self) -> Path:
         self.preflight()
         self.work_root.mkdir(parents=True, exist_ok=True)
-        self.run_dir = Path(tempfile.mkdtemp(prefix="production-journey-", dir=self.work_root))
+        self.run_dir = Path(tempfile.mkdtemp(prefix="software-change-journey-", dir=self.work_root))
         self.database = self.run_dir / "loop.sqlite"
         self.provider_config = self.run_dir / "providers.toml"
         self.profile_path = self.run_dir / "high-rigor.json"
@@ -180,6 +207,7 @@ class Journey:
         self._append_marker("journey-marker-separate", equals=False)
         self._append_marker("journey-marker-equals", equals=True)
         self._assert_marker_persistence()
+        self._prove_work_slots_at_start()
 
         successor_route_cases = 0
         if self.mode == "source" and self.depth == "full":
@@ -198,6 +226,7 @@ class Journey:
                     "database": str(self.database),
                     "artifact_root": str(self.artifact_root),
                     "successor_route_cases": successor_route_cases,
+                    "work_slot_proof": WORK_SLOT_PROOF,
                     "synthetic_evidence_scope": (
                         "Deterministic mechanics only; synthetic records are not semantic verdict quality."
                     ),
@@ -207,7 +236,7 @@ class Journey:
             + "\n",
             encoding="utf-8",
         )
-        print(f"production journey passed: mode={self.mode} depth={self.depth}")
+        print(f"software-change journey passed: mode={self.mode} depth={self.depth}")
         print(f"journey artifacts: {self.run_dir}")
         print("synthetic evidence scope: deterministic mechanics only; no semantic verdict claim")
         return result
@@ -282,6 +311,8 @@ class Journey:
         assert self.artifact_root is not None
         profile = dict(self.profile)
         profile["artifact_root"] = str(self.artifact_root)
+        self.work_slot_bindings = work_slot_journey.bindings_for([BOUND_SLOT_ID])
+        profile["work_slot_bindings"] = self.work_slot_bindings
         self.profile_path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
         # All five artifact files are the shipped good calibration shapes.  A
         # source full run intentionally starts without intent to force the
@@ -400,6 +431,48 @@ class Journey:
             self.run_id, operation, state=state, event=event, axis=axis
         )
 
+    def _engine_call(self, run_id: str, *, state: str) -> work_slot_journey.EngineCall:
+        def call(operation: Sequence[str]) -> Dict[str, Any]:
+            event = operation[0] if operation else "none"
+            return self._engine_for(run_id, operation, state=state, event=event)
+
+        return call
+
+    def _prove_work_slots_at_start(self) -> None:
+        assert self.artifact_root is not None
+        try:
+            work_slot_journey.prove_bound_visit(
+                self._engine_call(self.run_id, state="explore"),
+                run_id=self.run_id,
+                catalog=SOFTWARE_CHANGE_SLOT_IDS,
+                bindings=self.work_slot_bindings,
+                bound_slot_id=BOUND_SLOT_ID,
+                unbound_slot_id=UNBOUND_INVOKE_SLOT_ID,
+                gated_event="intent-ready",
+                artifact_root=self.artifact_root,
+                expected_state="explore",
+            )
+        except work_slot_journey.WorkSlotJourneyFailure as error:
+            raise JourneyFailure(str(error), state="explore", event="invoke") from error
+        self.state = "explore"
+
+    def _invoke_bound_slot(self, run_id: str, *, state: str) -> None:
+        try:
+            work_slot_journey.invoke_until_succeeded(
+                self._engine_call(run_id, state=state),
+                run_id,
+                BOUND_SLOT_ID,
+            )
+        except work_slot_journey.WorkSlotJourneyFailure as error:
+            raise JourneyFailure(str(error), state=state, event="invoke") from error
+
+    def _assert_unbound_design(self) -> None:
+        shown = self._assert_show("design", "unbound-instructions")
+        try:
+            work_slot_journey.assert_unbound_instructions(shown, "design.json")
+        except work_slot_journey.WorkSlotJourneyFailure as error:
+            raise JourneyFailure(str(error), state="design", event="show") from error
+
     def _start(self) -> None:
         self._start_run(self.run_id)
 
@@ -418,7 +491,7 @@ class Journey:
                 run_id,
                 "software-change",
                 "@" + str(self.profile_path),
-                "production journey",
+                "software-change journey",
             ],
             state="explore",
             event="start",
@@ -600,6 +673,7 @@ class Journey:
 
     def _prepare_successor_state(self, run_id: str, target: str) -> None:
         self._start_run(run_id)
+        self._invoke_bound_slot(run_id, state="explore")
         self._append_evidence_for(
             run_id, "intent", state="explore", record_prefix=f"{run_id}-"
         )
@@ -717,6 +791,7 @@ class Journey:
         self._expect_denial("intent-ready", "intent", "software-change-review-incomplete")
         self._append_evidence("intent")
         self._expect_allow("intent-ready", "design")
+        self._assert_unbound_design()
         if self.mode == "packaged":
             # Packaged smoke intentionally ends after one checked production
             # transition; the source adapter owns full graph traversal.
@@ -733,6 +808,7 @@ class Journey:
         self._expect_denial("intent-ready", "intent", "software-change-review-incomplete")
         self._append_evidence("intent")
         self._expect_allow("intent-ready", "design")
+        self._assert_unbound_design()
 
         # The design route checks every configured revision link.  Mutating the
         # copied shipped-shape link must deny deterministically before any
@@ -831,7 +907,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--traversal-depth",
         choices=("full", "checked-prefix"),
         required=True,
-        help="full source graph or checked production prefix",
+        help="full source graph or checked software-change prefix",
     )
     return parser.parse_args(argv)
 
@@ -839,7 +915,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 def self_test() -> int:
     """Prove unsupported adapter/depth pairs fail before touching work roots."""
     invalid_pairs = (("source", "checked-prefix"), ("packaged", "full"))
-    with tempfile.TemporaryDirectory(prefix="production-journey-self-test-") as temp:
+    with tempfile.TemporaryDirectory(prefix="software-change-journey-self-test-") as temp:
         root = Path(temp)
         executable = Path(sys.executable).resolve()
         for mode, depth in invalid_pairs:
@@ -867,7 +943,7 @@ def self_test() -> int:
                 raise JourneyFailure(
                     f"invalid pair mutated filesystem for {mode}/{depth}"
                 )
-    print("production journey interface self-test passed: invalid adapter/depth pairs rejected pre-mutation")
+    print("software-change journey interface self-test passed: invalid adapter/depth pairs rejected pre-mutation")
     return 0
 
 
@@ -881,13 +957,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
     except JourneyFailure as error:
         print(
-            "production journey failed: "
+            "software-change journey failed: "
             f"{error} (state={error.state}, event={error.event}, axis={error.axis})",
             file=sys.stderr,
         )
         return 1
     except (OSError, subprocess.SubprocessError) as error:
-        print(f"production journey failed before assertion: {error}", file=sys.stderr)
+        print(f"software-change journey failed before assertion: {error}", file=sys.stderr)
         return 1
 
 

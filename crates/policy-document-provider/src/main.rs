@@ -330,4 +330,32 @@ mod tests {
         );
         fs::remove_file(path).unwrap();
     }
+
+    #[test]
+    fn checked_passed_evaluate_parses_composed_object_with_work_slot_bindings() {
+        let path = target("# Title\n");
+        let mut req = request(
+            &path,
+            Transition::checked("deterministic-review", "passed", "semantic-review"),
+            Vec::new(),
+        );
+        req.initial_input["work_slot_bindings"] = json!({
+            "deterministic-review": {"command": "echo", "args": []}
+        });
+        let response = evaluation_response(&req).unwrap_or_else(|error| {
+            panic!(
+                "composed object with work_slot_bindings must parse; got evaluation error: {error}"
+            )
+        });
+        let result = response["result"].as_str().unwrap_or("");
+        assert!(
+            result == "allow" || result == "deny",
+            "expected allow or policy deny, got {response}"
+        );
+        assert_ne!(
+            response["feedback"]["code"], "invalid-initial-input",
+            "{response}"
+        );
+        fs::remove_file(path).unwrap();
+    }
 }

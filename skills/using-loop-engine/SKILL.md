@@ -87,7 +87,7 @@ Parse JSON even on nonzero exit. Treat only `completed` as success. Never infer 
 ## Rules
 
 - One logical mutating actor per run: serialize `append`, `event`, `invoke`, and `terminate` calls; never race them from parallel workers. Concurrent reads are fine. Context appended during an in-flight checked evaluation does not invalidate or reach that evaluation.
-- Production-boundary proof uses `scripts/production-journey.py`; source full mode drives separate engine processes and packaged checked-prefix mode consumes only provider data materialized by `data-dump`. Synthetic evidence proves deterministic mechanics, not semantic verdict quality.
+- Public-boundary proof uses `scripts/software-change-journey.py`; source full mode drives separate engine processes and packaged checked-prefix mode consumes only provider data materialized by `data-dump`. Policy-document and research journeys do the same for those providers. Each freezes a sparse dummy-worker `work_slot_bindings` entry and `invoke`s before the bound checked event. Synthetic evidence proves deterministic mechanics, not semantic verdict quality.
 - `initial_input` is immutable run configuration; never attempt to replace it. Frozen `work_slot_bindings` are part of that input.
 - Context records are immutable and append-only.
 - Provider association, workflow topology, and state instructions are snapshotted at `start`; changing TOML cannot redirect an existing run.

@@ -55,7 +55,7 @@ def main() -> int:
         "python3 scripts/assert-dist-plan.py --self-test",
         "python3 scripts/assert-dist-plan.py \"$RUNNER_TEMP/dist-plan.json\"",
         "python3 scripts/assert-release-gates.py",
-        "python3 scripts/production-journey.py --self-test",
+        "python3 scripts/software-change-journey.py --self-test",
         "python3 scripts/research-journey.py --self-test",
         "cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider",
         "--traversal-depth full",

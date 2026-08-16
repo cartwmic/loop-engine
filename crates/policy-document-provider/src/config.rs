@@ -16,6 +16,10 @@ pub struct InitialInput {
     #[allow(dead_code)]
     #[serde(default)]
     pub artifact_root: Option<String>,
+    /// Reserved engine key for frozen slot CLI bindings. Accepted and ignored.
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub work_slot_bindings: Option<Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -294,6 +298,19 @@ mod tests {
         value["not_a_reserved_key"] = Value::Bool(true);
         let err = InitialInput::parse(&value).unwrap_err();
         assert!(err.contains("unknown field"), "{err}");
+    }
+
+    #[test]
+    fn initial_input_accepts_reserved_work_slot_bindings_and_ignores_them() {
+        let mut value = base();
+        value["work_slot_bindings"] = serde_json::json!({
+            "deterministic-review": {"command": "echo", "args": []}
+        });
+        let parsed = InitialInput::parse(&value).unwrap();
+        assert!(parsed.work_slot_bindings.is_some());
+        assert_eq!(parsed.target.path, "/tmp/README.md");
+        value["work_slot_bindings"] = Value::String("opaque".into());
+        assert!(InitialInput::parse(&value).is_ok());
     }
 
     fn base() -> Value {

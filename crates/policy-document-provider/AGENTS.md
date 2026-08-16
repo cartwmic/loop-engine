@@ -19,7 +19,7 @@ cargo test -p policy-document-provider
 cargo fmt --all -- --check
 ```
 
-After provider protocol, profile, evidence, or skill-contract changes, also run both source journeys against shipped profile bytes from the repository root:
+Crate tests are not a substitute for the public-boundary journeys. After any crate change, also run both source journeys against shipped profile bytes from the repository root (build `loop-engine` and `policy-document` first):
 
 ```sh
 for mode in draft audit; do
@@ -45,6 +45,6 @@ Append one `review-evidence` record per semantic axis, bound to exact `target_id
 
 ## Completion and Handoff
 
-Crate work is complete when tests (and journeys, when required) pass, shipped data and the skill still match runtime behavior, and README/AGENTS.md in this crate remain accurate.
+Crate work is complete when tests and both source journeys pass, shipped data and the skill still match runtime behavior, and README/AGENTS.md in this crate remain accurate.
 
 Handoff the files changed, commands run, digest and run ID if a policy-document run was used, and any residual: the provider cannot lock target bytes across an engine commit, and synthetic journey passes do not prove semantic verdict quality.

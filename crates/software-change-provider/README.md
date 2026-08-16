@@ -79,12 +79,12 @@ cp "$DATA_ROOT/crates/software-change-provider/data/configs/high-rigor.json" /tm
 The repository-owned journey runner has one contract with two adapters:
 
 ```sh
-python3 scripts/production-journey.py \
+python3 scripts/software-change-journey.py \
   --mode source \
   --engine target/debug/loop-engine \
   --provider target/debug/software-change \
   --data-root "$PWD" \
-  --work-root "${TMPDIR:-/tmp}/loop-engine-production-journey" \
+  --work-root "${TMPDIR:-/tmp}/loop-engine-software-change-journey" \
   --profile crates/software-change-provider/data/configs/high-rigor.json \
   --traversal-depth full
 ```
@@ -94,7 +94,7 @@ Source full mode uses separate engine processes for every operation, explicit pr
 Packaged smoke accepts extracted `loop-engine` and `software-change` paths, calls `software-change data-dump` into an empty root, and uses only the dumped high-rigor profile and fixtures:
 
 ```sh
-python3 scripts/production-journey.py \
+python3 scripts/software-change-journey.py \
   --mode packaged \
   --engine /path/to/extracted/loop-engine \
   --provider /path/to/extracted/software-change \

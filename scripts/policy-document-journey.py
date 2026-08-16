@@ -9,7 +9,28 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
+
+import work_slot_journey
+
+BOUND_SLOT_ID = "semantic-review"
+UNBOUND_INVOKE_SLOT_ID = "deterministic-review"
+POLICY_DOCUMENT_SLOT_IDS = (
+    "deterministic-review",
+    "semantic-review",
+)
+WORK_SLOT_PROOF = [
+    "frozen sparse work_slot_bindings in initial_input",
+    "show work_slots catalog snapshot",
+    "prepare ready remains check-free and ungated",
+    "unbound deterministic-review keeps stored instructions",
+    "bound instruction redaction",
+    "unbound invoke rejection",
+    "event gated before succeeded invoke",
+    "dummy worker packet receipt",
+    "overlay succeeded then checked event",
+    "history invocation started and succeeded",
+]
 
 
 def call(engine: Path, database: Path, arguments: list[str]) -> dict[str, Any]:
@@ -26,6 +47,13 @@ def call(engine: Path, database: Path, arguments: list[str]) -> dict[str, Any]:
     if value.get("status") not in (None, "completed", "rejected"):
         raise RuntimeError(value)
     return value
+
+
+def engine_call_for(engine: Path, database: Path) -> work_slot_journey.EngineCall:
+    def call_engine(arguments: Sequence[str]) -> dict[str, Any]:
+        return call(engine, database, list(arguments))
+
+    return call_engine
 
 
 def expect_denial(response: dict[str, Any], code: str, phase: str) -> dict[str, Any]:
@@ -126,11 +154,17 @@ def main() -> int:
         profile = json.loads(profile_path.read_text(encoding="utf-8"))
         profile["mode"] = args.mode
         profile["target"]["path"] = str(target)
+        artifact_root = work / "artifacts"
+        artifact_root.mkdir()
+        profile["artifact_root"] = str(artifact_root)
+        work_slot_bindings = work_slot_journey.bindings_for([BOUND_SLOT_ID])
+        profile["work_slot_bindings"] = work_slot_bindings
         profile_path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
         axes = [item["id"] for item in profile["semantic_policies"]]
         profile_version = profile["profile_version"]
         target_id = profile["target"]["id"]
         run_id = f"policy-document-{args.mode}-journey"
+        engine_call = engine_call_for(engine, database)
 
         started = call(
             engine,
@@ -149,10 +183,18 @@ def main() -> int:
         assert started["status"] == "completed", started
         shown = show_state(engine, database, run_id, "prepare")
         assert shown["initial_input"]["mode"] == args.mode, shown
+        work_slot_journey.assert_catalog(shown, POLICY_DOCUMENT_SLOT_IDS)
+        work_slot_journey.assert_frozen_bindings(shown, work_slot_bindings)
+        work_slot_journey.assert_unbound_instructions(
+            shown, "Draft or revise target document"
+        )
 
         ready = call(engine, database, ["event", run_id, "ready"])
         assert ready["status"] == "completed", ready
-        show_state(engine, database, run_id, "deterministic-review")
+        deterministic_shown = show_state(engine, database, run_id, "deterministic-review")
+        work_slot_journey.assert_unbound_instructions(
+            deterministic_shown, "Run configured deterministic checks"
+        )
 
         deterministic = expect_denial(
             call(engine, database, ["event", run_id, "passed"]),
@@ -180,6 +222,17 @@ def main() -> int:
         moved = call(engine, database, ["event", run_id, "passed"])
         assert moved["status"] == "completed", moved
         show_state(engine, database, run_id, "semantic-review")
+        work_slot_journey.prove_bound_visit(
+            engine_call,
+            run_id=run_id,
+            catalog=POLICY_DOCUMENT_SLOT_IDS,
+            bindings=work_slot_bindings,
+            bound_slot_id=BOUND_SLOT_ID,
+            unbound_slot_id=UNBOUND_INVOKE_SLOT_ID,
+            gated_event="passed",
+            artifact_root=artifact_root,
+            expected_state="semantic-review",
+        )
 
         missing = expect_denial(
             call(engine, database, ["event", run_id, "passed"]),
@@ -261,6 +314,7 @@ def main() -> int:
                         "fresh-evidence success",
                         "fresh-process show persistence",
                         "terminal completion",
+                        *WORK_SLOT_PROOF,
                     ],
                 },
                 sort_keys=True,

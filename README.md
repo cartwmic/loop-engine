@@ -127,7 +127,7 @@ With `--json`, exit `0` is `completed`, `10` is `rejected` (follow feedback; not
 
 Supported publication matrix is exactly four applications (`loop-cli`, `software-change-provider`, `policy-document-provider`, `research-provider`) by two native targets (`aarch64-apple-darwin`, `x86_64-unknown-linux-gnu`). `dist plan` describes this matrix; it does not compile or run archives.
 
-Run baseline checks, generated-workflow validation, plan assertion, and full source-tree production journeys before release handoff:
+Run baseline checks, generated-workflow validation, plan assertion, and full source-tree public-boundary journeys before release handoff:
 
 ```sh
 cargo test --workspace
@@ -138,15 +138,15 @@ dist plan --output-format=json > /tmp/loop-engine-dist-plan.json
 python3 scripts/assert-dist-plan.py --self-test
 python3 scripts/assert-dist-plan.py /tmp/loop-engine-dist-plan.json
 python3 scripts/assert-release-gates.py
-python3 scripts/production-journey.py --self-test
+python3 scripts/software-change-journey.py --self-test
 python3 scripts/research-journey.py --self-test
 cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider
-python3 scripts/production-journey.py \
+python3 scripts/software-change-journey.py \
   --mode source \
   --engine target/debug/loop-engine \
   --provider target/debug/software-change \
   --data-root "$PWD" \
-  --work-root "${TMPDIR:-/tmp}/loop-engine-production-journey" \
+  --work-root "${TMPDIR:-/tmp}/loop-engine-software-change-journey" \
   --profile crates/software-change-provider/data/configs/high-rigor.json \
   --traversal-depth full
 for mode in draft audit; do
@@ -172,7 +172,7 @@ dist build --tag="$TAG" --artifacts=local --target=aarch64-apple-darwin
 
 Run packaged smoke with extracted `loop-engine`, `software-change`, `policy-document`, and `research` paths. Each provider must materialize embedded data, and all provider journeys must run outside checkout; policy-document covers both draft and audit modes, and the research packaged journey materializes embedded data via `data-dump` / `--mode packaged`. A macOS host build proves only macOS arm64; Linux x86_64 native build and archive smoke remain CI proof when no Linux host is available.
 
-Journey evidence records are synthetic and schema-conforming. They prove deterministic policy mechanics, routing, aggregation, and persistence; they do not prove semantic review quality.
+Journey evidence records are synthetic and schema-conforming. They prove deterministic policy mechanics, routing, aggregation, persistence, and sparse work-slot `invoke` via `scripts/dummy-work-slot-worker.py`; they do not prove semantic review quality.
 
 ### Publication path
 
@@ -190,4 +190,4 @@ Historical `v0.2.0`, `v0.2.1`, and `v0.2.2` tags remain immutable. `v0.2.2` was 
 
 ### Direct pushes to main
 
-Direct pushes to `main` run `.github/workflows/push-to-main.yml`. That read-only dispatcher checks out the pushed SHA, computes the pinned cargo-dist 0.32.0 plan, and calls reusable `preflight.yml`; preflight owns workspace tests, warning-denying clippy, formatting, generated-release checks, release assertions, and source production-journey proof. The dispatcher has no publication job. `.github/workflows/release.yml` remains cargo-dist-generated and dispatch-only.
+Direct pushes to `main` run `.github/workflows/push-to-main.yml`. That read-only dispatcher checks out the pushed SHA, computes the pinned cargo-dist 0.32.0 plan, and calls reusable `preflight.yml`; preflight owns workspace tests, warning-denying clippy, formatting, generated-release checks, release assertions, and source software-change-journey proof. The dispatcher has no publication job. `.github/workflows/release.yml` remains cargo-dist-generated and dispatch-only.

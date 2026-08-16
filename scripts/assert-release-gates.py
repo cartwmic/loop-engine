@@ -113,7 +113,7 @@ def main() -> int:
         fail("release.yml lost cargo-dist generated ownership")
     if "  workflow_dispatch:" not in workflow or re.search(r"^  push:", workflow, re.MULTILINE):
         fail("release workflow must be dispatch-only, without tag-push trigger")
-    if 'python3 "$GITHUB_WORKSPACE/scripts/production-journey.py"' not in archive_smoke:
+    if 'python3 "$GITHUB_WORKSPACE/scripts/software-change-journey.py"' not in archive_smoke:
         fail("archive smoke must invoke software-change runner through absolute GITHUB_WORKSPACE path")
     if 'python3 "$GITHUB_WORKSPACE/scripts/policy-document-journey.py"' not in archive_smoke:
         fail("archive smoke must invoke policy-document runner through absolute GITHUB_WORKSPACE path")

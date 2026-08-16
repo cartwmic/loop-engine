@@ -1,8 +1,9 @@
 //! Initial-input parsing and obligation-independent configuration validation.
 //!
 //! This module owns the provider's configuration namespace and subject
-//! metadata invariants.  It does not read `artifact_root` or know anything
-//! about transition routing; callers query the semantically keyed result.
+//! metadata invariants.  It does not read `artifact_root` or
+//! `work_slot_bindings`, and it knows nothing about transition routing;
+//! callers query the semantically keyed result.
 
 #![allow(dead_code)]
 
@@ -35,6 +36,7 @@ pub(crate) const SUBJECT_NAMES: &[&str] = &[
 const TOP_LEVEL_KEYS: &[&str] = &[
     "config_version",
     "artifact_root",
+    "work_slot_bindings",
     "review_policies",
     "artifact_schemas",
     "revision_links",
@@ -93,12 +95,13 @@ impl RevisionLink {
 ///
 /// Every collection is semantically keyed for downstream evaluation:
 /// schemas by subject, links by their `from` subject, and policy axes by gate
-/// then axis id.  `artifact_root` is retained as raw JSON and intentionally
-/// remains unexamined here.
+/// then axis id.  `artifact_root` and `work_slot_bindings` are retained as
+/// raw JSON and intentionally remain unexamined here.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ValidatedConfig {
     config_version: String,
     artifact_root: Option<Value>,
+    work_slot_bindings: Option<Value>,
     extra: Option<Value>,
     schemas_by_subject: BTreeMap<String, ValidatedSchema>,
     links_by_from: BTreeMap<String, Vec<RevisionLink>>,
@@ -115,6 +118,12 @@ impl ValidatedConfig {
     /// checks happen in this module.
     pub(crate) fn artifact_root(&self) -> Option<&Value> {
         self.artifact_root.as_ref()
+    }
+
+    /// Return raw caller input.  Slot identity, CLI shape, and binding
+    /// validity are engine concerns; this module does not inspect the value.
+    pub(crate) fn work_slot_bindings(&self) -> Option<&Value> {
+        self.work_slot_bindings.as_ref()
     }
 
     pub(crate) fn extra(&self) -> Option<&Value> {
@@ -512,9 +521,10 @@ impl fmt::Display for LinkSchemaViolation {
 
 /// Parse and fully meta-validate one initial-input value.
 ///
-/// `artifact_root` is copied without inspecting its type or contents.  The
-/// evaluation algorithm validates it only when a selected obligation needs a
-/// schema/link read.
+/// `artifact_root` and `work_slot_bindings` are copied without inspecting
+/// type or contents.  The evaluation algorithm validates `artifact_root` only
+/// when a selected obligation needs a schema/link read. Binding shape is an
+/// engine concern.
 pub(crate) fn parse_initial_input(
     initial_input: &Value,
 ) -> Result<ValidatedConfig, ConfigValidationError> {
@@ -592,6 +602,7 @@ pub(crate) fn parse_initial_input(
     Ok(ValidatedConfig {
         config_version,
         artifact_root: root.get("artifact_root").cloned(),
+        work_slot_bindings: root.get("work_slot_bindings").cloned(),
         extra: root.get("extra").cloned(),
         schemas_by_subject,
         links_by_from,
@@ -1141,8 +1152,27 @@ mod tests {
     fn explicitly_empty_policies_and_missing_artifact_root_validate_clean() {
         let parsed = parse_initial_input(&empty_config()).expect("zero-obligation config is valid");
         assert!(parsed.artifact_root().is_none());
+        assert!(parsed.work_slot_bindings().is_none());
         assert!(parsed.schemas_by_subject().is_empty());
         assert!(parsed.axes_by_gate().is_empty());
+    }
+
+    #[test]
+    fn reserved_work_slot_bindings_are_accepted_unread() {
+        let mut config = empty_config();
+        config["work_slot_bindings"] = json!(42);
+        let parsed = parse_initial_input(&config).expect("reserved key must not be unknown");
+        assert_eq!(parsed.work_slot_bindings(), Some(&json!(42)));
+        assert!(parsed.artifact_root().is_none());
+
+        config["work_slot_bindings"] = json!({
+            "explore-intent": {"command": "echo", "args": ["ok"]}
+        });
+        let parsed = parse_initial_input(&config).expect("object bindings must be unread");
+        assert_eq!(
+            parsed.work_slot_bindings(),
+            Some(&json!({"explore-intent": {"command": "echo", "args": ["ok"]}}))
+        );
     }
 
     #[test]

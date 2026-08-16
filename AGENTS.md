@@ -32,7 +32,43 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
-CI preflight also runs `dist generate --check`, `scripts/assert-dist-plan.py`, `scripts/assert-release-gates.py`, `scripts/assert-push-main-preflight.py`, `scripts/production-journey.py --self-test`, `scripts/research-journey.py --self-test`, a locked build of the four release packages, the software-change source journey (`--mode source --traversal-depth full` against high-rigor), both policy-document source journey modes, and the research source journey. Reproduce those when the change can affect release proof, journeys, or generated workflow.
+CI preflight also runs `dist generate --check`, `scripts/assert-dist-plan.py`, `scripts/assert-release-gates.py`, `scripts/assert-push-main-preflight.py`, `scripts/software-change-journey.py --self-test`, `scripts/research-journey.py --self-test`, a locked build of the four release packages, the software-change source journey (`--mode source --traversal-depth full` against high-rigor), both policy-document source journey modes, and the research source journey.
+
+Public-boundary Python journeys are required validation for every in-scope change. Workspace `cargo test` / clippy / fmt do not substitute for them. Build the four release packages, then run the journeys that cover the public boundary you touched; if that boundary is unclear, run all three source journeys.
+
+- Engine, CLI, core, integrations, shared `scripts/`, or `invoke` / work-slot behavior: all three source journeys.
+- `software-change` crate: `scripts/software-change-journey.py --mode source --traversal-depth full`.
+- `policy-document` crate: both `scripts/policy-document-journey.py` modes.
+- `research` crate: `scripts/research-journey.py --mode source`.
+- Journey-harness edits: that script's `--self-test` when it has one, plus the journeys it runs.
+
+```sh
+cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider
+python3 scripts/software-change-journey.py --self-test
+python3 scripts/research-journey.py --self-test
+python3 scripts/software-change-journey.py \
+  --mode source \
+  --engine target/debug/loop-engine \
+  --provider target/debug/software-change \
+  --data-root "$PWD" \
+  --work-root "${TMPDIR:-/tmp}/loop-engine-software-change-journey" \
+  --profile crates/software-change-provider/data/configs/high-rigor.json \
+  --traversal-depth full
+for mode in draft audit; do
+  python3 scripts/policy-document-journey.py \
+    --engine target/debug/loop-engine \
+    --provider target/debug/policy-document \
+    --profile crates/policy-document-provider/data/readme.json \
+    --mode "$mode"
+done
+python3 scripts/research-journey.py \
+  --mode source \
+  --engine target/debug/loop-engine \
+  --provider target/debug/research \
+  --profile crates/research-provider/data/configs/standard.json
+```
+
+Reproduce `dist generate --check` and the assert scripts when the change can affect release proof or generated workflow.
 
 Drive production runs with `loop-engine`. Pass `--json` and parse the single JSON envelope. Pass `--config` on `start` with uncommitted machine-local provider TOML. Omit `--database` unless isolating (`--database /path/to/dir/loop.db`); when `--database` and database env vars are unset, the catalog is `$LOOP_ENGINE_HOME/loop.db` or `$LOOP_HOME/loop.db` if either home env is set, else `$XDG_DATA_HOME/loop-engine/loop.db` if `XDG_DATA_HOME` is set, else `$HOME/.local/share/loop-engine/loop.db`. `list` from any working directory reads that same file. Omit `artifact_root` unless isolating files. Use exact aliases `software-change`, `policy-document`, and `research` and absolute `command` paths. Do not commit provider TOML, run databases, or secrets.
 
@@ -53,7 +89,7 @@ Synthetic journey evidence proves deterministic mechanics, routing, and persiste
 
 ## Completion and Handoff
 
-A change is done when in-scope behavior matches the accepted intent, authoritative docs for that behavior are current, and the checks required by the change have been run.
+A change is done when in-scope behavior matches the accepted intent, authoritative docs for that behavior are current, workspace baseline checks have been run, and the black-box Python journeys that cover the touched public boundary have passed.
 
 Handoff must include:
 

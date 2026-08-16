@@ -21,15 +21,15 @@ cargo test -p software-change-provider
 cargo fmt --all -- --check
 ```
 
-After provider protocol, config, evidence, or journey-contract changes, run the repository source journey from the repo root:
+Crate tests are not a substitute for the public-boundary journey. After any crate change, also run the repository source journey from the repo root (build `loop-engine` and `software-change` first):
 
 ```sh
-python3 scripts/production-journey.py \
+python3 scripts/software-change-journey.py \
   --mode source \
   --engine target/debug/loop-engine \
   --provider target/debug/software-change \
   --data-root "$PWD" \
-  --work-root "${TMPDIR:-/tmp}/loop-engine-production-journey" \
+  --work-root "${TMPDIR:-/tmp}/loop-engine-software-change-journey" \
   --profile crates/software-change-provider/data/configs/high-rigor.json \
   --traversal-depth full
 ```
@@ -50,6 +50,6 @@ Calibration: `data/calibration/PROCEDURE.md` and `manifest.json`. Fixtures use `
 
 ## Completion and Handoff
 
-Crate work is complete when crate tests (and journeys/calibration procedure, when required) pass, shipped configs/templates/protocol still match runtime behavior, and this crate's README/AGENTS.md remain accurate. Doc integration for a software-change run belongs in the repository's authoritative documents, not only in change-scoped artifacts.
+Crate work is complete when crate tests and the source software-change journey pass (and calibration procedure, when that procedure applies), shipped configs/templates/protocol still match runtime behavior, and this crate's README/AGENTS.md remain accurate. Doc integration for a software-change run belongs in the repository's authoritative documents, not only in change-scoped artifacts.
 
 Handoff the files changed, commands run, run ID and database path if a software-change run was used, coverage/revision identities, and residuals: unread locked artifacts, synthetic journey evidence is not semantic quality, and round state lives outside the provider.

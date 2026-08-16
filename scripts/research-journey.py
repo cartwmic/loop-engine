@@ -12,9 +12,29 @@ import tempfile
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
+import work_slot_journey
 
 DUMPED_PROFILE = "crates/research-provider/data/configs/standard.json"
 PACKAGED_PROFILE_NAME = "standard.json"
+BOUND_SLOT_ID = "scope"
+UNBOUND_INVOKE_SLOT_ID = "gather"
+RESEARCH_SLOT_IDS = (
+    "scope",
+    "gather",
+    "verify",
+    "synthesize",
+)
+WORK_SLOT_PROOF = [
+    "frozen sparse work_slot_bindings in initial_input",
+    "show work_slots catalog snapshot",
+    "bound instruction redaction",
+    "unbound invoke rejection",
+    "event gated before succeeded invoke",
+    "dummy worker packet receipt",
+    "overlay succeeded then checked event",
+    "unbound states keep stored instructions",
+    "history invocation started and succeeded",
+]
 
 
 class JourneyFailure(Exception):
@@ -204,6 +224,7 @@ class Journey:
         self.database: Optional[Path] = None
         self.artifacts: Optional[Path] = None
         self.profile_path: Optional[Path] = None
+        self.work_slot_bindings: dict[str, Any] = {}
         self.run_id = "research-journey"
 
     def preflight(self) -> None:
@@ -272,6 +293,8 @@ class Journey:
         shutil.copy2(self.profile_source, self.profile_path)
         profile = json.loads(self.profile_path.read_text(encoding="utf-8"))
         profile["artifact_root"] = str(self.artifacts)
+        self.work_slot_bindings = work_slot_journey.bindings_for([BOUND_SLOT_ID])
+        profile["work_slot_bindings"] = self.work_slot_bindings
         write_json(self.profile_path, profile)
         self.profile = profile
 
@@ -303,9 +326,37 @@ class Journey:
         if started.get("status") != "completed":
             raise JourneyFailure(f"start failed: {started}")
 
+    def _engine_call(self) -> work_slot_journey.EngineCall:
+        assert self.engine is not None and self.database is not None
+        engine = self.engine
+        database = self.database
+
+        def call_engine(arguments: Sequence[str]) -> dict[str, Any]:
+            return call(engine, database, list(arguments))
+
+        return call_engine
+
+    def _prove_work_slots_at_start(self) -> None:
+        assert self.artifacts is not None
+        try:
+            work_slot_journey.prove_bound_visit(
+                self._engine_call(),
+                run_id=self.run_id,
+                catalog=RESEARCH_SLOT_IDS,
+                bindings=self.work_slot_bindings,
+                bound_slot_id=BOUND_SLOT_ID,
+                unbound_slot_id=UNBOUND_INVOKE_SLOT_ID,
+                gated_event="scoped",
+                artifact_root=self.artifacts,
+                expected_state="scope",
+            )
+        except work_slot_journey.WorkSlotJourneyFailure as error:
+            raise JourneyFailure(str(error)) from error
+
     def _run_checked_prefix(self) -> list[str]:
         assert self.engine is not None and self.database is not None
         assert self.artifacts is not None
+        self._prove_work_slots_at_start()
         shown = show_state(self.engine, self.database, self.run_id, "scope")
         if "review_policies" not in shown.get("initial_input", {}):
             raise JourneyFailure("show did not project frozen review_policies")
@@ -323,11 +374,16 @@ class Journey:
         scoped = call(self.engine, self.database, ["event", self.run_id, "scoped"])
         if scoped.get("status") != "completed":
             raise JourneyFailure(f"scoped failed: {scoped}")
-        show_state(self.engine, self.database, self.run_id, "gather")
+        gather_shown = show_state(self.engine, self.database, self.run_id, "gather")
+        try:
+            work_slot_journey.assert_unbound_instructions(gather_shown, "sources.md")
+        except work_slot_journey.WorkSlotJourneyFailure as error:
+            raise JourneyFailure(str(error)) from error
         return [
             "frozen show policies and schemas before checked event",
             "schema denial before brief",
             "checked scoped progression",
+            *WORK_SLOT_PROOF,
         ]
 
     def _run_full_source(self) -> list[str]:
