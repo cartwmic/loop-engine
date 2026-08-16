@@ -254,6 +254,7 @@ fn invoke_overlay_overrun_is_not_already_running() {
             live_pid,
             Timestamp::from_unix_millis(now_millis() - 10_000),
             1,
+            String::new(),
         ))
         .expect("create overrun record");
 
@@ -273,6 +274,7 @@ fn invoke_happy_path_writes_worker_packet_without_command() {
     let directory = tempdir().expect("tempdir");
     let database = directory.path().join("loop.db");
     let packet_file = directory.path().join("packet.json");
+    let artifact_root = directory.path().to_string_lossy().into_owned();
     seed_run(
         &database,
         "run-happy",
@@ -285,7 +287,7 @@ fn invoke_happy_path_writes_worker_packet_without_command() {
                 packet_file.to_string_lossy().into_owned(),
             ],
         )),
-        "/tmp/artifacts",
+        &artifact_root,
         Some("subject-1"),
     );
 
@@ -295,23 +297,34 @@ fn invoke_happy_path_writes_worker_packet_without_command() {
     assert_eq!(parsed["status"], "completed");
     assert_eq!(parsed["result"]["slot_id"], "slot-1");
     assert!(parsed["result"].get("waiter_pid").is_none());
+    let capture_dir = parsed["result"]["capture_dir"]
+        .as_str()
+        .expect("capture_dir string")
+        .to_owned();
+    assert!(
+        capture_dir.starts_with(&format!("{artifact_root}/work-slot-captures/slot-1/")),
+        "capture_dir {capture_dir} should include invocation id under the slot"
+    );
+    assert!(Path::new(&capture_dir).is_dir());
 
     wait_until_terminal(&database, "run-happy", 1, Duration::from_secs(5));
     let captured = std::fs::read_to_string(&packet_file).expect("read worker packet file");
     let packet: Value = serde_json::from_str(&captured).expect("worker stdin json");
     let object = packet.as_object().expect("packet object");
-    assert_eq!(object.len(), 4);
+    assert_eq!(object.len(), 5);
     assert!(object.contains_key("run_id"));
     assert!(object.contains_key("slot_id"));
     assert!(object.contains_key("artifact_root"));
     assert!(object.contains_key("instruction_body"));
+    assert!(object.contains_key("capture_dir"));
     assert_eq!(
         packet,
         json!({
             "run_id": "run-happy",
             "slot_id": "slot-1",
-            "artifact_root": "/tmp/artifacts",
-            "instruction_body": "Begin the work"
+            "artifact_root": artifact_root,
+            "instruction_body": "Begin the work",
+            "capture_dir": capture_dir,
         })
     );
     assert!(

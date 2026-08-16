@@ -7,11 +7,27 @@ description: Use when running the research workflow through Loop Engine with the
 
 ## Overview
 
-`research` is Loop Engine's research reference provider. Search, fetch, and writing happen outside the provider. The binary never retrieves URLs, invokes a model, or judges claim truth. It validates artifact schemas and revision links, then aggregates externally supplied review-evidence at verify and synthesize. Per-run obligations are frozen in immutable `initial_input`.
+`research` is Loop Engine's research reference provider. Search, fetch, and writing happen outside the provider. The binary never retrieves URLs, invokes a model, or judges claim truth. It validates artifact schemas and revision links, then aggregates externally supplied review-evidence at verify and synthesize. `describe` and `evaluate` remain deterministic and do not invoke a model. Per-run obligations are frozen in immutable `initial_input`.
 
 Workflow: `scope → gather → verify → synthesize → end`.
 
-Drive engine CLI, JSON envelopes, and `show` / `append` / `event` with `skills/using-loop-engine/SKILL.md`. This skill is the research counterpart of `crates/software-change-provider/skills/using-software-change-provider/SKILL.md` and `crates/policy-document-provider/skills/using-policy-document-provider/SKILL.md`: same engine loop, different artifacts, gates, and primary work. Do not markdown-link outside this crate. Provider contract: `crates/research-provider/README.md`. Judging and adjudication: `crates/research-provider/data/reviewer-protocol.md`. Artifact shapes: `crates/research-provider/data/templates/`.
+## Required companion and engine driving minimum
+
+`using-loop-engine` (`skills/using-loop-engine/SKILL.md`) is a **required companion**. This skill does not replace it. The closed driving minimum below is what you cannot skip when this skill is loaded alone; load the companion for full engine semantics.
+
+**Run-state commands:** `start`, `list`, `show`, `append`, `event`, `history`, `terminate`, and `invoke`.
+
+**Non-run-state commands:** `fan-out` and `preview-bindings`. They do not start, advance, or record a run.
+
+**Envelopes:** `completed`, `rejected`, `error`, and `invalid-invocation`. Parse JSON even on nonzero exit. Treat only `completed` as success.
+
+**Bound versus unbound:** a catalog slot ID present in frozen `work_slot_bindings` is bound — `invoke` it; do not perform the stored work body. An absent key is unbound — perform the stored instructions yourself, then append and request the event.
+
+**Overlay meaning:** overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. You still triage worker output, append provider-shaped records, and request the shown event.
+
+**Lock-in-before-start:** do not call `start` until the user confirms (1) bind or not (which slot IDs), (2) exact `{command, args}` per bound slot, and (3) model identity in those frozen args (nested `--worker` / `--task-worker` count) or explicit unpinned-default acceptance. Bindings freeze and cannot be patched.
+
+Run `loop-engine preview-bindings` on the JSON you will freeze before `start`. This skill is the research counterpart of `crates/software-change-provider/skills/using-software-change-provider/SKILL.md` and `crates/policy-document-provider/skills/using-policy-document-provider/SKILL.md`: same engine loop, different artifacts, gates, and primary work. Do not markdown-link outside this crate. Provider contract: `crates/research-provider/README.md`. Judging and adjudication: `crates/research-provider/data/reviewer-protocol.md`. Artifact shapes: `crates/research-provider/data/templates/`.
 
 ## Setup
 
@@ -27,7 +43,7 @@ command = "/absolute/path/to/target/debug/research"
 args = []
 ```
 
-Copy `crates/research-provider/data/configs/standard.json` to a run-specific file. Shipped profiles have **no** `work_slot_bindings`. Cataloged slots are `scope`, `gather`, `verify`, and `synthesize`. Do not add bindings, and do not start, until the user confirms: (1) driver-performed (omit the key or `{}`) vs which slots to bind; (2) exact `{command, args}` if bound; (3) which models those CLIs will use, encoded in frozen args. Nested inner workers count. Do not call `start` while a bound model-bearing CLI has no model in argv unless the user has explicitly accepted that CLI's unpinned default. Bindings freeze and cannot be patched. Omit `artifact_root` in the usual case; the engine allocates the durable directory and records that absolute path in object `initial_input` (`show` reveals it). Pass `artifact_root` only to isolate files to a caller-chosen absolute existing directory. `start` may insert reserved `artifact_root` into object `initial_input` when the caller did not supply a nonempty path; object schemas that deny unknown keys must accept that field to remain evaluable; the engine does not skip injection, strip unknown keys, or classify providers. Then:
+Copy `crates/research-provider/data/configs/standard.json` to a run-specific file. Shipped profiles have **no** `work_slot_bindings`. Cataloged slots are `scope`, `gather`, `verify`, and `synthesize`. Do not add bindings, and do not start, until the user confirms: (1) driver-performed (omit the key or `{}`) vs which slots to bind; (2) exact `{command, args}` if bound; (3) which models those CLIs will use, encoded in frozen args. Nested inner workers count. Do not call `start` while a bound model-bearing CLI has no model in argv unless the user has explicitly accepted that CLI's unpinned default. Bindings freeze and cannot be patched. Run `loop-engine preview-bindings` on any `work_slot_bindings` JSON you will freeze. Omit `artifact_root` in the usual case; the engine allocates the durable directory and records that absolute path in object `initial_input` (`show` reveals it). Pass `artifact_root` only to isolate files to a caller-chosen absolute existing directory. `start` may insert reserved `artifact_root` into object `initial_input` when the caller did not supply a nonempty path; object schemas that deny unknown keys must accept that field to remain evaluable; the engine does not skip injection, strip unknown keys, or classify providers. Then:
 
 ```sh
 loop-engine --json --config "$PROVIDER_CONFIG" \
@@ -73,8 +89,8 @@ Verification-local `verification.json` corrections stay in verify: edit, recheck
 
 ## Per-gate loop
 
-1. `show` — read `current_state`, `current_state_instructions`, frozen `initial_input` (including `work_slot_bindings`, `review_policies`, `artifact_schemas`), `work_slots`, and `work_slot_invocations`.
-2. If this state is a **bound** slot, do not author the room yourself. `invoke` it, poll overlay until `succeeded` / `failed` / `overrun`, and on `overrun` invoke again. If **unbound**, author or revise the subject artifact. Material content changes require a revision bump — a bump retires standing verdicts for that subject; keeping the revision asserts the edit was immaterial.
+1. `show` — read `current_state`, `current_state_instructions`, frozen `initial_input` (including `work_slot_bindings`, `review_policies`, `artifact_schemas`), `work_slots`, and `work_slot_invocations` (`overlay_meaning`, `elapsed_ms`, `remaining_allowed_ms`, `capture_dir`, `inner_workers`).
+2. If this state is a **bound** slot, do not author the room yourself. `invoke` it, poll overlay until `succeeded` / `failed` / `overrun`, and on `overrun` invoke again. Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. Captures are at the named `capture_dir`. If **unbound**, author or revise the subject artifact. Material content changes require a revision bump — a bump retires standing verdicts for that subject; keeping the revision asserts the edit was immaterial.
 3. For unbound evidence gates, request the event once before commissioning review. Schema denial means fix the artifact and retry. Evidence denial after a valid shape means schema and links cleared — do not treat that denial as a review failure. Do not append review-evidence until schema and links have cleared; a later material shape fix would bump `revision` and retire the new verdicts. For a bound slot, `invoke` and reach overlay `succeeded` before requesting the checked event; do not request that event to “probe schema” while overlay is `running`, `failed`, or `overrun`.
 4. Then obtain the axis's `required_authors` count of distinct external judgments (default 1): fresh context, not the artifact's author, each judging only that axis using its `example_prompt`. Unbound: you commission those reviewers. Bound: `invoke` already ran the frozen CLI; read its output, then you still triage and append. Follow `crates/research-provider/data/reviewer-protocol.md`: triage candidates before append or mutation; append only accepted in-scope material failures or conforming passes.
 5. Append one `review-evidence` record per axis judgment:

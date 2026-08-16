@@ -24,7 +24,7 @@ pub(crate) struct WorkerCli {
     pub(crate) args: Vec<String>,
 }
 
-/// Bound-worker stdin packet.  Exactly the four engine invoke keys; no extras.
+/// Bound-worker stdin packet.  Exactly the five engine invoke keys; no extras.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct InvokePacket {
@@ -32,6 +32,7 @@ pub(crate) struct InvokePacket {
     pub(crate) slot_id: String,
     pub(crate) artifact_root: String,
     pub(crate) instruction_body: String,
+    pub(crate) capture_dir: String,
 }
 
 /// Collected `fan-out` flags after the command name.  Zero `--worker` entries
@@ -116,11 +117,11 @@ pub(crate) fn parse_worker_cli_json(raw: &str) -> Result<WorkerCli, ParseError> 
     })
 }
 
-/// Parse the four-key engine invoke packet from stdin JSON.
+/// Parse the five-key engine invoke packet from stdin JSON.
 pub(crate) fn parse_invoke_packet(raw: &str) -> Result<InvokePacket, ParseError> {
     serde_json::from_str(raw).map_err(|error| {
         ParseError::new(format!(
-            "invoke packet must be a JSON object with exactly `run_id`, `slot_id`, `artifact_root`, and `instruction_body`: {error}"
+            "invoke packet must be a JSON object with exactly `run_id`, `slot_id`, `artifact_root`, `instruction_body`, and `capture_dir`: {error}"
         ))
     })
 }
@@ -237,9 +238,14 @@ pub(crate) fn run_collector(
     match mode {
         FanOutMode::Bound { packet, workers } => {
             ensure_workers(&workers)?;
+            if packet.capture_dir.is_empty() {
+                return Err(CollectorError::Invalid(
+                    "invoke packet capture_dir must be a non-empty path".to_owned(),
+                ));
+            }
             let artifact_root = absolute_from_cwd(cwd, Path::new(&packet.artifact_root));
             let payload = bound_stdin_payload(&packet, &artifact_root);
-            let output_dir = artifact_root.join("fan-out").join(&packet.slot_id);
+            let output_dir = absolute_from_cwd(cwd, Path::new(&packet.capture_dir));
             collect_workers(&workers, payload.as_bytes(), &output_dir)
         }
         FanOutMode::AdHoc {
@@ -472,10 +478,35 @@ fn collect_workers(
         return Err(CollectorError::Failed(message.join("; ")));
     }
 
+    write_summary_json(output_dir, &results)?;
     Ok(FanOutSummary {
         output_dir: path_to_string(output_dir),
         workers: results,
     })
+}
+
+fn write_summary_json(
+    output_dir: &Path,
+    workers: &[FanOutWorkerResult],
+) -> Result<(), CollectorError> {
+    #[derive(Serialize)]
+    struct CaptureSummary<'a> {
+        workers: &'a [FanOutWorkerResult],
+    }
+    let path = output_dir.join("summary.json");
+    let bytes = serde_json::to_vec_pretty(&CaptureSummary { workers }).map_err(|error| {
+        CollectorError::Failed(format!(
+            "could not serialize capture summary `{}`: {error}",
+            path.display()
+        ))
+    })?;
+    fs::write(&path, bytes).map_err(|error| {
+        CollectorError::Failed(format!(
+            "could not write capture summary `{}`: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -496,7 +527,7 @@ mod tests {
     }
 
     fn valid_packet_json() -> &'static str {
-        r#"{"run_id":"run-1","slot_id":"slot-1","artifact_root":"/tmp/artifacts","instruction_body":"Do the work"}"#
+        r#"{"run_id":"run-1","slot_id":"slot-1","artifact_root":"/tmp/artifacts","instruction_body":"Do the work","capture_dir":"/tmp/captures/inv-1"}"#
     }
 
     fn cat_worker(receipt: &Path) -> WorkerCli {
@@ -587,24 +618,41 @@ mod tests {
         assert!(parse_worker_cli_json(r#"{"command":"echo","args":[1]}"#).is_err());
     }
 
+    fn capture_summary(output_dir: &str) -> serde_json::Value {
+        let path = Path::new(output_dir).join("summary.json");
+        assert!(
+            path.is_file(),
+            "expected summary.json at {}",
+            path.display()
+        );
+        serde_json::from_slice(&fs::read(&path).expect("read summary.json")).expect("summary json")
+    }
+
     #[test]
-    fn valid_invoke_packet_parses_four_string_keys() {
+    fn valid_invoke_packet_parses_five_string_keys() {
         let packet = parse_invoke_packet(valid_packet_json()).expect("valid packet");
         assert_eq!(packet.run_id, "run-1");
         assert_eq!(packet.slot_id, "slot-1");
         assert_eq!(packet.artifact_root, "/tmp/artifacts");
         assert_eq!(packet.instruction_body, "Do the work");
+        assert_eq!(packet.capture_dir, "/tmp/captures/inv-1");
     }
 
     #[test]
     fn invoke_packet_extra_key_fails() {
-        let raw = r#"{"run_id":"run-1","slot_id":"slot-1","artifact_root":"/tmp/artifacts","instruction_body":"Do the work","extra":"no"}"#;
+        let raw = r#"{"run_id":"run-1","slot_id":"slot-1","artifact_root":"/tmp/artifacts","instruction_body":"Do the work","capture_dir":"/tmp/captures/inv-1","extra":"no"}"#;
         assert!(parse_invoke_packet(raw).is_err());
     }
 
     #[test]
     fn invoke_packet_missing_key_fails() {
         let raw = r#"{"run_id":"run-1","slot_id":"slot-1","artifact_root":"/tmp/artifacts"}"#;
+        assert!(parse_invoke_packet(raw).is_err());
+    }
+
+    #[test]
+    fn invoke_packet_four_keys_without_capture_dir_fails() {
+        let raw = r#"{"run_id":"run-1","slot_id":"slot-1","artifact_root":"/tmp/artifacts","instruction_body":"Do the work"}"#;
         assert!(parse_invoke_packet(raw).is_err());
     }
 
@@ -690,6 +738,7 @@ mod tests {
             slot_id: "slot-1".to_owned(),
             artifact_root: "relative/root".to_owned(),
             instruction_body: "Do the work".to_owned(),
+            capture_dir: "/tmp/captures/inv-1".to_owned(),
         };
         let payload = bound_stdin_payload(&packet, Path::new("/tmp/artifacts"));
         assert_eq!(
@@ -708,6 +757,7 @@ mod tests {
             "slot_id": "slot-1",
             "artifact_root": directory.path().join("artifacts").to_string_lossy(),
             "instruction_body": "Do the work",
+            "capture_dir": directory.path().join("captures").join("inv-1").to_string_lossy(),
         })
         .to_string();
 
@@ -790,6 +840,10 @@ mod tests {
         assert_eq!(summary.workers[1].exit_code, 0);
         assert!(Path::new(&summary.workers[0].stdout_path).is_file());
         assert!(Path::new(&summary.workers[1].stderr_path).is_file());
+        let captured = capture_summary(&summary.output_dir);
+        assert_eq!(captured["workers"].as_array().expect("workers").len(), 2);
+        assert_eq!(captured["workers"][0]["exit_code"], 0);
+        assert_eq!(captured["workers"][1]["exit_code"], 0);
     }
 
     #[test]
@@ -813,17 +867,21 @@ mod tests {
         assert_eq!(summary.workers.len(), 1);
         assert_eq!(summary.workers[0].exit_code, 7);
         assert_eq!(summary.workers[0].command, "sh");
+        let captured = capture_summary(&summary.output_dir);
+        assert_eq!(captured["workers"][0]["exit_code"], 7);
     }
 
     #[test]
-    fn bound_mode_writes_outputs_under_artifact_root_and_resolves_relative_root() {
+    fn bound_mode_writes_outputs_under_capture_dir_and_resolves_relative_root() {
         let directory = tempdir().expect("tempdir");
         let receipt = directory.path().join("bound.stdin");
+        let capture_dir = directory.path().join("captures").join("inv-9");
         let packet = json!({
             "run_id": "run-9",
             "slot_id": "design-review",
             "artifact_root": "artifacts",
             "instruction_body": "Review the design",
+            "capture_dir": capture_dir.to_string_lossy(),
         })
         .to_string();
 
@@ -838,15 +896,26 @@ mod tests {
         .expect("bound collector");
 
         let expected_root = directory.path().join("artifacts");
-        let expected_dir = expected_root.join("fan-out").join("design-review");
-        assert_eq!(summary.output_dir, expected_dir.to_string_lossy());
+        assert_eq!(summary.output_dir, capture_dir.to_string_lossy());
         assert_eq!(
             summary.workers[0].stdout_path,
-            expected_dir.join("0").join("stdout").to_string_lossy()
+            capture_dir.join("0").join("stdout").to_string_lossy()
         );
         assert_eq!(
             summary.workers[0].stderr_path,
-            expected_dir.join("0").join("stderr").to_string_lossy()
+            capture_dir.join("0").join("stderr").to_string_lossy()
+        );
+        assert!(capture_dir.join("0").join("stdout").is_file());
+        let captured = capture_summary(&summary.output_dir);
+        assert_eq!(captured["workers"][0]["command"], "sh");
+        assert_eq!(captured["workers"][0]["exit_code"], 0);
+        assert_eq!(
+            captured["workers"][0]["stdout_path"],
+            capture_dir
+                .join("0")
+                .join("stdout")
+                .to_string_lossy()
+                .as_ref()
         );
         let recorded = fs::read_to_string(&receipt).expect("bound stdin");
         assert_eq!(
@@ -855,6 +924,64 @@ mod tests {
                 "Review the design\n\nrun_id: run-9\nslot_id: design-review\nartifact_root: {}\n",
                 expected_root.to_string_lossy()
             )
+        );
+    }
+
+    #[test]
+    fn bound_dummy_nonzero_exit_still_succeeds_and_writes_summary() {
+        let directory = tempdir().expect("tempdir");
+        let receipt = directory.path().join("nonzero.stdin");
+        let capture_dir = directory.path().join("captures").join("inv-7");
+        let packet = json!({
+            "run_id": "run-7",
+            "slot_id": "design-review",
+            "artifact_root": directory.path().join("artifacts").to_string_lossy(),
+            "instruction_body": "judge this",
+            "capture_dir": capture_dir.to_string_lossy(),
+        })
+        .to_string();
+
+        let summary = run_collector(
+            FanOutArgs {
+                workers: vec![exit_worker(&receipt, 7)],
+                instructions_path: None,
+            },
+            packet.as_bytes(),
+            directory.path(),
+        )
+        .expect("collector success despite worker nonzero");
+
+        assert_eq!(summary.workers.len(), 1);
+        assert_eq!(summary.workers[0].exit_code, 7);
+        assert!(capture_dir.join("0").join("stdout").is_file());
+        let captured = capture_summary(&summary.output_dir);
+        assert_eq!(captured["workers"][0]["exit_code"], 7);
+        assert_eq!(captured["workers"][0]["command"], "sh");
+    }
+
+    #[test]
+    fn empty_capture_dir_is_invalid_before_spawn() {
+        let directory = tempdir().expect("tempdir");
+        let packet = json!({
+            "run_id": "run-1",
+            "slot_id": "slot-1",
+            "artifact_root": directory.path().join("artifacts").to_string_lossy(),
+            "instruction_body": "Do the work",
+            "capture_dir": "",
+        })
+        .to_string();
+        let result = run_collector(
+            FanOutArgs {
+                workers: vec![cat_worker(&directory.path().join("unused.stdin"))],
+                instructions_path: None,
+            },
+            packet.as_bytes(),
+            directory.path(),
+        );
+        assert!(matches!(result, Err(CollectorError::Invalid(_))));
+        assert!(
+            !directory.path().join("unused.stdin").exists(),
+            "empty capture_dir must fail before spawning workers"
         );
     }
 

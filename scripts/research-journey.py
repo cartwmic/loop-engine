@@ -25,6 +25,7 @@ RESEARCH_SLOT_IDS = (
     "synthesize",
 )
 WORK_SLOT_PROOF = [
+    "copied shipped profile omitted review work_slot_bindings",
     "frozen sparse work_slot_bindings in initial_input",
     "show work_slots catalog snapshot",
     "bound instruction redaction",
@@ -292,6 +293,13 @@ class Journey:
         assert self.profile_source is not None
         shutil.copy2(self.profile_source, self.profile_path)
         profile = json.loads(self.profile_path.read_text(encoding="utf-8"))
+        try:
+            work_slot_journey.assert_no_review_bindings(
+                profile.get("work_slot_bindings"),
+                source=str(self.profile_source),
+            )
+        except work_slot_journey.WorkSlotJourneyFailure as error:
+            raise JourneyFailure(str(error)) from error
         profile["artifact_root"] = str(self.artifacts)
         self.work_slot_bindings = work_slot_journey.bindings_for([BOUND_SLOT_ID])
         profile["work_slot_bindings"] = self.work_slot_bindings

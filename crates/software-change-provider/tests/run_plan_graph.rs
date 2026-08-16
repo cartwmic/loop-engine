@@ -97,7 +97,23 @@ fn packet(run_id: &str, slot_id: &str, artifact_root: &str, body: &str) -> Value
         "slot_id": slot_id,
         "artifact_root": artifact_root,
         "instruction_body": body,
+        "capture_dir": capture_dir_for_root(Path::new(artifact_root)).to_string_lossy(),
     })
+}
+
+fn capture_dir_for_root(artifact_root: &Path) -> PathBuf {
+    artifact_root
+        .parent()
+        .map(|parent| parent.join("captures").join("inv-1"))
+        .unwrap_or_else(|| PathBuf::from("captures").join("inv-1"))
+}
+
+fn read_capture_summary(artifact_root: &Path) -> Value {
+    let path = capture_dir_for_root(artifact_root).join("summary.json");
+    serde_json::from_slice(
+        &fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display())),
+    )
+    .unwrap_or_else(|error| panic!("summary json {}: {error}", path.display()))
 }
 
 fn write_plan(artifact_root: &Path, plan: &Value) {
@@ -187,6 +203,17 @@ fn independent_tasks_overlap_under_concurrency_cap() {
         start_a < end_b && start_b < end_a,
         "independent tasks should overlap: a=[{start_a}, {end_a}] b=[{start_b}, {end_b}]"
     );
+    let capture_root = capture_dir_for_root(&artifact_root);
+    assert!(capture_root.join("a").join("stdout").is_file());
+    assert!(capture_root.join("b").join("stdout").is_file());
+    assert!(!artifact_root.join("run-plan-graph").exists());
+    let captured = read_capture_summary(&artifact_root);
+    let workers = captured["workers"].as_array().expect("workers");
+    assert_eq!(workers.len(), 2);
+    assert_eq!(workers[0]["command"], "python3");
+    assert_eq!(workers[1]["command"], "python3");
+    assert_eq!(workers[0]["exit_code"], 0);
+    assert_eq!(workers[1]["exit_code"], 0);
 }
 
 #[test]
@@ -334,9 +361,14 @@ fn task_worker_dummy_records_locked_stdin_layout() {
     );
 
     let recorded = fs::read_to_string(receipt_dir.join("task-a.stdin")).expect("recorded stdin");
-    let captured = fs::read_to_string(artifact_root.join("run-plan-graph/task-a/stdout"))
-        .expect("captured stdout");
+    let captured = fs::read_to_string(
+        capture_dir_for_root(&artifact_root)
+            .join("task-a")
+            .join("stdout"),
+    )
+    .expect("captured stdout");
     assert_eq!(recorded, captured);
+    assert!(!artifact_root.join("run-plan-graph").exists());
 
     let abs_root = artifact_root
         .canonicalize()
@@ -414,6 +446,11 @@ fn failing_sibling_is_reaped_before_runner_exits() {
         !pid_alive(pid),
         "slow sibling pid {pid} must be reaped before run-plan-graph exits"
     );
+    let captured = read_capture_summary(&artifact_root);
+    let workers = captured["workers"].as_array().expect("workers");
+    assert_eq!(workers.len(), 2);
+    assert_ne!(workers[0]["exit_code"], 0);
+    assert_eq!(workers[1]["exit_code"], 0);
 }
 
 #[test]
@@ -443,6 +480,14 @@ fn missing_implementation_report_after_successes_exits_nonzero() {
         "task should have succeeded"
     );
     assert!(!artifact_root.join("implementation-report.json").is_file());
+    let captured = read_capture_summary(&artifact_root);
+    let workers = captured["workers"].as_array().expect("workers");
+    assert_eq!(workers.len(), 1);
+    assert_eq!(workers[0]["exit_code"], 0);
+    assert!(capture_dir_for_root(&artifact_root)
+        .join("a")
+        .join("stdout")
+        .is_file());
 }
 
 #[test]

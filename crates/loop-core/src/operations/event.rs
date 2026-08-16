@@ -1139,6 +1139,8 @@ mod tests {
             status,
             None,
             None,
+            String::new(),
+            Vec::new(),
         )
     }
 

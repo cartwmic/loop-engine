@@ -61,14 +61,25 @@ fn exit_worker(receipt: &Path, code: i32) -> String {
     )
 }
 
-fn invoke_packet(artifact_root: &Path, instruction_body: &str) -> String {
+fn invoke_packet(artifact_root: &Path, capture_dir: &Path, instruction_body: &str) -> String {
     json!({
         "run_id": "run-1",
         "slot_id": "slot-1",
         "artifact_root": artifact_root.to_string_lossy(),
         "instruction_body": instruction_body,
+        "capture_dir": capture_dir.to_string_lossy(),
     })
     .to_string()
+}
+
+fn capture_summary(output_dir: &str) -> Value {
+    let path = Path::new(output_dir).join("summary.json");
+    assert!(
+        path.is_file(),
+        "expected summary.json at {}",
+        path.display()
+    );
+    serde_json::from_slice(&std::fs::read(&path).expect("read summary.json")).expect("summary json")
 }
 
 fn run_fan_out(cwd: &Path, args: &[&str], stdin: &[u8]) -> std::process::Output {
@@ -109,7 +120,11 @@ fn zero_workers_exit_2_in_bound_and_ad_hoc() {
     let directory = tempdir().expect("tempdir");
     let instructions = directory.path().join("instructions.txt");
     std::fs::write(&instructions, b"shared").expect("write instructions");
-    let packet = invoke_packet(&directory.path().join("artifacts"), "Do the work");
+    let packet = invoke_packet(
+        &directory.path().join("artifacts"),
+        &directory.path().join("captures").join("inv-1"),
+        "Do the work",
+    );
 
     let bound = run_fan_out(directory.path(), &["fan-out"], packet.as_bytes());
     assert_eq!(bound.status.code(), Some(2), "{bound:?}");
@@ -133,7 +148,11 @@ fn bound_packet_plus_instructions_is_rejected() {
     std::fs::write(&instructions, b"shared").expect("write instructions");
     let receipt = directory.path().join("unused.stdin");
     let worker = cat_worker(&receipt);
-    let packet = invoke_packet(&directory.path().join("artifacts"), "Do the work");
+    let packet = invoke_packet(
+        &directory.path().join("artifacts"),
+        &directory.path().join("captures").join("inv-1"),
+        "Do the work",
+    );
     let output = run_fan_out(
         directory.path(),
         &[
@@ -226,6 +245,10 @@ fn two_dummies_record_the_same_shared_stdin_and_are_reaped() {
     assert_eq!(workers[1]["exit_code"], 0);
     assert!(Path::new(workers[0]["stdout_path"].as_str().unwrap()).is_file());
     assert!(Path::new(workers[1]["stderr_path"].as_str().unwrap()).is_file());
+    let captured = capture_summary(output_dir);
+    assert_eq!(captured["workers"].as_array().expect("workers").len(), 2);
+    assert_eq!(captured["workers"][0]["exit_code"], 0);
+    assert_eq!(captured["workers"][1]["exit_code"], 0);
 }
 
 #[test]
@@ -262,15 +285,18 @@ fn dummy_nonzero_exit_still_yields_fan_out_exit_0_and_appears_in_summary() {
     assert_eq!(summary["workers"][0]["exit_code"], 7);
     assert_eq!(summary["workers"][0]["command"], "sh");
     assert_eq!(std::fs::read(&receipt).expect("receipt"), b"judge this");
+    let captured = capture_summary(summary["output_dir"].as_str().expect("output_dir"));
+    assert_eq!(captured["workers"][0]["exit_code"], 7);
 }
 
 #[test]
-fn bound_mode_records_locked_stdin_layout_under_artifact_root() {
+fn bound_mode_writes_under_capture_dir_and_records_locked_stdin() {
     let directory = tempdir().expect("tempdir");
     let artifact_root = directory.path().join("artifacts");
+    let capture_dir = directory.path().join("captures").join("inv-1");
     let receipt = directory.path().join("bound.stdin");
     let worker = cat_worker(&receipt);
-    let packet = invoke_packet(&artifact_root, "Review the design");
+    let packet = invoke_packet(&artifact_root, &capture_dir, "Review the design");
     let output = run_fan_out(
         directory.path(),
         &["fan-out", "--worker", &worker],
@@ -286,15 +312,39 @@ fn bound_mode_records_locked_stdin_layout_under_artifact_root() {
         expected
     );
     let summary = parse_summary(&output.stdout);
-    let output_dir = artifact_root.join("fan-out").join("slot-1");
     assert_eq!(
         summary["output_dir"].as_str().unwrap(),
-        output_dir.to_string_lossy()
+        capture_dir.to_string_lossy()
     );
     assert_eq!(
         summary["workers"][0]["stdout_path"].as_str().unwrap(),
-        output_dir.join("0").join("stdout").to_string_lossy()
+        capture_dir.join("0").join("stdout").to_string_lossy()
     );
+    assert!(capture_dir.join("0").join("stdout").is_file());
+    let captured = capture_summary(summary["output_dir"].as_str().expect("output_dir"));
+    assert_eq!(captured["workers"][0]["exit_code"], 0);
+    assert_eq!(captured["workers"][0]["command"], "sh");
+}
+
+#[test]
+fn bound_dummy_nonzero_exit_still_yields_fan_out_exit_0() {
+    let directory = tempdir().expect("tempdir");
+    let artifact_root = directory.path().join("artifacts");
+    let capture_dir = directory.path().join("captures").join("inv-7");
+    let receipt = directory.path().join("nonzero.stdin");
+    let worker = exit_worker(&receipt, 7);
+    let packet = invoke_packet(&artifact_root, &capture_dir, "judge this");
+    let output = run_fan_out(
+        directory.path(),
+        &["fan-out", "--worker", &worker],
+        packet.as_bytes(),
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let summary = parse_summary(&output.stdout);
+    assert_eq!(summary["workers"][0]["exit_code"], 7);
+    assert!(capture_dir.join("0").join("stdout").is_file());
+    let captured = capture_summary(summary["output_dir"].as_str().expect("output_dir"));
+    assert_eq!(captured["workers"][0]["exit_code"], 7);
 }
 
 #[test]

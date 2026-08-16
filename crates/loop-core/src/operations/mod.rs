@@ -585,6 +585,36 @@ mod tests {
     }
 
     #[test]
+    fn work_slot_bind_zero_worker_fan_out_argv_is_still_accepted() {
+        // Start does not parse fan-out argv. Zero --worker is a preview-bindings
+        // error, not a start rejection.
+        let catalog = temp_catalog();
+        let resolver = FakeResolver::default();
+        let gateway = gateway_with_explore_intent_slot();
+        let persistence = FakePersistence::default();
+        let bindings = json!({
+            "explore-intent": {
+                "command": "loop-engine",
+                "args": ["fan-out"]
+            }
+        });
+        let request = start::Request::new(
+            "run-1",
+            "fake",
+            json!({"objective": "test", "work_slot_bindings": bindings}),
+            None,
+            Timestamp::from_unix_millis(10),
+            catalog.path(),
+        );
+
+        let outcome = start::execute(request, &resolver, &gateway, &persistence);
+
+        assert!(outcome.is_completed());
+        let created = &persistence.created.borrow()[0];
+        assert_eq!(created.initial_input["work_slot_bindings"], bindings);
+    }
+
+    #[test]
     fn work_slot_bind_unknown_slot_id_is_rejected_without_creating_a_run() {
         // Start rejects: unknown slot id (not in the provider catalog snapshot for this workflow)
         let catalog = temp_catalog();

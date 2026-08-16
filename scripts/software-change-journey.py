@@ -84,11 +84,14 @@ WORK_SLOT_PROOF = [
     "history invocation started and succeeded",
 ]
 DUMMY_WORKER_PROOF = [
-    "PATH rewrite of shipped software-change/loop-engine names",
-    "sparse explore-intent overlay kept implement and review unbound",
-    "graph-runner dummy --task-worker",
-    "fan-out dummy --worker bound and ad hoc",
-    "zero-worker bound review invoke fails closed",
+    "copied shipped profiles omit review slots and keep implement bound to run-plan-graph",
+    "graph-runner dummy --task-worker capture_dir and inner exits",
+    "fan-out dummy --worker bound/ad hoc, capture_dir, inner nonzero collector 0",
+    "preview-bindings exits nonzero on zero-worker fan-out and creates no run",
+    "PATH stub pi default argv --print --no-skills --no-extensions without --no-context-files or --tools",
+    "bound fan-out show heartbeat overlay_meaning elapsed remaining capture_dir inner_workers",
+    "bound run-plan-graph inner workers in task order plus capture isolation",
+    "no live model",
 ]
 
 
@@ -898,12 +901,13 @@ class Journey:
         self._run_dummy_worker_proofs()
 
     def _run_dummy_worker_proofs(self) -> None:
-        """Prove graph-runner, fan-out, and zero-worker review invoke with dummy CLIs."""
+        """Prove heartbeat, capture isolation, preview fail-closed, and sandbox argv."""
         assert self.run_dir is not None
         assert self.profile_source is not None
         assert self.fixture_root is not None
         proof_root = self.run_dir / "dummy-worker-proofs"
         try:
+            work_slot_journey.prove_shipped_software_change_profiles(self.data_root)
             work_slot_journey.prove_graph_runner(
                 provider=self.provider,
                 work_dir=proof_root / "graph-runner",
@@ -912,12 +916,27 @@ class Journey:
                 engine=self.engine,
                 work_dir=proof_root / "fan-out",
             )
-            work_slot_journey.prove_zero_worker_review_invoke(
+            work_slot_journey.prove_preview_fail_closed(
+                engine=self.engine,
+                work_dir=proof_root / "preview-fail-closed",
+            )
+            work_slot_journey.prove_default_sandbox_argv(
+                provider=self.provider,
+                work_dir=proof_root / "default-sandbox-argv",
+            )
+            work_slot_journey.prove_bound_fan_out_heartbeat(
                 engine=self.engine,
                 provider=self.provider,
                 profile_source=self.profile_source,
                 fixture_root=self.fixture_root,
-                work_dir=proof_root / "zero-worker",
+                work_dir=proof_root / "bound-fan-out-heartbeat",
+            )
+            work_slot_journey.prove_bound_graph_runner_heartbeat(
+                engine=self.engine,
+                provider=self.provider,
+                profile_source=self.profile_source,
+                fixture_root=self.fixture_root,
+                work_dir=proof_root / "bound-graph-runner-heartbeat",
             )
         except work_slot_journey.WorkSlotJourneyFailure as error:
             raise JourneyFailure(
@@ -927,7 +946,8 @@ class Journey:
             ) from error
         self.dummy_worker_proof = list(DUMMY_WORKER_PROOF)
         print(
-            "dummy worker proofs passed: graph-runner, fan-out, zero-worker review invoke"
+            "dummy worker proofs passed: shipped profiles, graph-runner, fan-out, "
+            "preview-bindings fail-closed, default sandbox argv, bound heartbeats"
         )
 
     @staticmethod

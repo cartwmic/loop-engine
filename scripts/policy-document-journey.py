@@ -152,6 +152,10 @@ def main() -> int:
         profile_path = work / "readme.json"
         shutil.copy2(shipped_profile, profile_path)
         profile = json.loads(profile_path.read_text(encoding="utf-8"))
+        work_slot_journey.assert_no_review_bindings(
+            profile.get("work_slot_bindings"),
+            source=str(shipped_profile),
+        )
         profile["mode"] = args.mode
         profile["target"]["path"] = str(target)
         artifact_root = work / "artifacts"
@@ -314,6 +318,7 @@ def main() -> int:
                         "fresh-evidence success",
                         "fresh-process show persistence",
                         "terminal completion",
+                        "copied shipped profile omitted review work_slot_bindings",
                         *WORK_SLOT_PROOF,
                     ],
                 },

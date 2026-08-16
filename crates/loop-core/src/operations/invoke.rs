@@ -46,6 +46,7 @@ pub struct Result {
     pub slot_id: WorkSlotId,
     pub started_at: Timestamp,
     pub allowed_time_ms: u64,
+    pub capture_dir: String,
 }
 
 #[derive(Serialize)]
@@ -54,6 +55,7 @@ struct WorkerPacket {
     slot_id: String,
     artifact_root: String,
     instruction_body: String,
+    capture_dir: String,
 }
 
 #[derive(Serialize)]
@@ -65,7 +67,8 @@ struct WaiterEnvelope {
 
 /// Execute `invoke` through persistence and the work-slot process port.
 ///
-/// Rejection checks run before spawn. On accept, launch order is spawn waiter
+/// Rejection checks run before spawn. On accept, create `capture_dir` after
+/// admission and before waiter spawn. Launch order is then spawn waiter
 /// (no waitpid, no stdin yet), read pid, create the running invocation, then
 /// write the waiter envelope and detach. Invoke does not spawn the bound worker.
 pub fn execute<P, Proc>(
@@ -168,6 +171,21 @@ where
     };
 
     let artifact_root = artifact_root_from_input(&run.initial_input);
+    if artifact_root.is_empty() {
+        return OperationOutcome::error(
+            "capture-directory-failed",
+            "cannot allocate capture_dir because artifact_root is empty",
+        );
+    }
+    let capture_dir_path =
+        capture_dir_path(&artifact_root, &request.slot_id, &request.invocation_id);
+    let capture_dir = capture_dir_path.to_string_lossy().into_owned();
+    if let Err(error) = std::fs::create_dir_all(&capture_dir_path) {
+        return OperationOutcome::error(
+            "capture-directory-failed",
+            format!("could not create capture directory `{capture_dir}`: {error}"),
+        );
+    }
 
     let waiter = match process.spawn_wait_invocation(WaiterSpawnArgs::new(
         request.database.clone(),
@@ -188,6 +206,7 @@ where
         waiter.pid,
         now,
         allowed_time_ms,
+        capture_dir.clone(),
     );
     if let Err(error) = persistence.create_work_slot_invocation(create) {
         return persistence_error(error);
@@ -201,6 +220,7 @@ where
             slot_id: request.slot_id.as_str().to_owned(),
             artifact_root,
             instruction_body,
+            capture_dir: capture_dir.clone(),
         },
     };
     let envelope_json = match serde_json::to_vec(&envelope) {
@@ -221,6 +241,7 @@ where
         slot_id: request.slot_id,
         started_at: now,
         allowed_time_ms,
+        capture_dir,
     })
 }
 
@@ -251,6 +272,17 @@ fn artifact_root_from_input(initial_input: &Value) -> String {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_owned()
+}
+
+fn capture_dir_path(
+    artifact_root: &str,
+    slot_id: &WorkSlotId,
+    invocation_id: &InvocationId,
+) -> PathBuf {
+    PathBuf::from(artifact_root)
+        .join("work-slot-captures")
+        .join(slot_id.as_str())
+        .join(invocation_id.as_str())
 }
 
 fn process_error<T>(error: ProcessError) -> OperationOutcome<T> {
@@ -289,13 +321,22 @@ mod tests {
         .with_work_slots(vec![WorkSlot::new("slot-1", "start", "finish")])
     }
 
-    fn bound_input() -> Value {
+    fn bound_input(artifact_root: &str) -> Value {
         json!({
-            "artifact_root": "/tmp/artifacts",
+            "artifact_root": artifact_root,
             "work_slot_bindings": {
                 "slot-1": {"command": "echo", "args": ["hello"]}
             }
         })
+    }
+
+    fn expected_capture_dir(artifact_root: &str, slot_id: &str, invocation_id: &str) -> String {
+        PathBuf::from(artifact_root)
+            .join("work-slot-captures")
+            .join(slot_id)
+            .join(invocation_id)
+            .to_string_lossy()
+            .into_owned()
     }
 
     fn sample_run(initial_input: Value) -> Run {
@@ -336,6 +377,8 @@ mod tests {
             status,
             None,
             None,
+            String::new(),
+            Vec::new(),
         )
     }
 
@@ -484,6 +527,8 @@ mod tests {
                     None,
                     None,
                     None,
+                    request.capture_dir.clone(),
+                    Vec::new(),
                 ),
                 history: HistoryEntry::invocation_started(
                     2_u64.into(),
@@ -606,7 +651,7 @@ mod tests {
 
     #[test]
     fn unknown_slot_is_rejected_without_spawn() {
-        let (persistence, process, log) = harness(sample_run(bound_input()));
+        let (persistence, process, log) = harness(sample_run(bound_input("/tmp/artifacts")));
         let persistence = persistence.with_subject("slot-1", "visit-1");
         let request = Request::new("run-1", "missing-slot", "inv-1", "/tmp/loop.db");
 
@@ -660,7 +705,7 @@ mod tests {
 
     #[test]
     fn overlay_running_is_rejected_without_spawn() {
-        let (persistence, process, log) = harness(sample_run(bound_input()));
+        let (persistence, process, log) = harness(sample_run(bound_input("/tmp/artifacts")));
         let persistence = persistence
             .with_subject("slot-1", "visit-1")
             .with_invocations(vec![invocation("slot-1", 1_000, 5_000, None, 42)]);
@@ -683,7 +728,9 @@ mod tests {
 
     #[test]
     fn overlay_overrun_is_not_already_running_and_invoke_is_accepted() {
-        let (persistence, process, log) = harness(sample_run(bound_input()));
+        let artifacts = tempfile::tempdir().expect("temp artifact root");
+        let artifact_root = artifacts.path().to_string_lossy().into_owned();
+        let (persistence, process, log) = harness(sample_run(bound_input(&artifact_root)));
         let persistence = persistence
             .with_subject("slot-1", "visit-1")
             .with_invocations(vec![invocation("slot-1", 1_000, 5_000, None, 42)]);
@@ -708,7 +755,9 @@ mod tests {
             Some(WaiterWrittenStatus::Failed),
             Some(WaiterWrittenStatus::Succeeded),
         ] {
-            let (persistence, process, log) = harness(sample_run(bound_input()));
+            let artifacts = tempfile::tempdir().expect("temp artifact root");
+            let artifact_root = artifacts.path().to_string_lossy().into_owned();
+            let (persistence, process, log) = harness(sample_run(bound_input(&artifact_root)));
             let persistence = persistence
                 .with_subject("slot-1", "visit-1")
                 .with_invocations(vec![invocation("slot-1", 1_000, 5_000, status, 42)]);
@@ -730,7 +779,10 @@ mod tests {
 
     #[test]
     fn happy_path_creates_invocation_then_sends_envelope_without_waitpid() {
-        let (persistence, process, log) = harness(sample_run(bound_input()));
+        let artifacts = tempfile::tempdir().expect("temp artifact root");
+        let artifact_root = artifacts.path().to_string_lossy().into_owned();
+        let expected_dir = expected_capture_dir(&artifact_root, "slot-1", "inv-1");
+        let (persistence, process, log) = harness(sample_run(bound_input(&artifact_root)));
         let persistence = persistence.with_subject("slot-1", "visit-1");
         let now = Timestamp::from_unix_millis(1_000);
         let allowed_time_ms = 12_345;
@@ -749,6 +801,12 @@ mod tests {
         assert_eq!(result.slot_id.as_str(), "slot-1");
         assert_eq!(result.started_at, now);
         assert_eq!(result.allowed_time_ms, allowed_time_ms);
+        assert_eq!(result.capture_dir, expected_dir);
+        assert!(
+            PathBuf::from(&result.capture_dir).is_dir(),
+            "capture_dir should exist: {}",
+            result.capture_dir
+        );
         assert_eq!(&*log.borrow(), &["spawn", "create", "send"]);
         assert!(!process.waited.get());
         assert!(persistence.set_subject_calls.borrow().is_empty());
@@ -763,6 +821,7 @@ mod tests {
         assert_eq!(created[0].allowed_time_ms, allowed_time_ms);
         assert_eq!(created[0].waiter_pid, 4242);
         assert_eq!(created[0].started_at, now);
+        assert_eq!(created[0].capture_dir, expected_dir);
         assert_eq!(
             created[0].binding,
             WorkSlotBinding::new("echo", vec!["hello".to_owned()])
@@ -786,18 +845,131 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert_eq!(
             keys,
-            BTreeSet::from(["run_id", "slot_id", "artifact_root", "instruction_body"])
+            BTreeSet::from([
+                "run_id",
+                "slot_id",
+                "artifact_root",
+                "instruction_body",
+                "capture_dir",
+            ])
         );
         assert_eq!(packet["run_id"], "run-1");
         assert_eq!(packet["slot_id"], "slot-1");
-        assert_eq!(packet["artifact_root"], "/tmp/artifacts");
+        assert_eq!(packet["artifact_root"], artifact_root);
         assert_eq!(packet["instruction_body"], "Do the slot work");
+        assert_eq!(packet["capture_dir"], expected_dir);
         assert!(packet.get("command").is_none());
     }
 
     #[test]
+    fn empty_artifact_root_errors_before_spawn() {
+        let inputs = [
+            json!({
+                "work_slot_bindings": {
+                    "slot-1": {"command": "echo", "args": ["hello"]}
+                }
+            }),
+            json!({
+                "artifact_root": "",
+                "work_slot_bindings": {
+                    "slot-1": {"command": "echo", "args": ["hello"]}
+                }
+            }),
+        ];
+        for input in inputs {
+            let (persistence, process, log) = harness(sample_run(input));
+            let persistence = persistence.with_subject("slot-1", "visit-1");
+
+            let outcome = execute(
+                invoke_request(),
+                &persistence,
+                &process,
+                Timestamp::from_unix_millis(1_000),
+                30_000,
+            );
+
+            assert!(outcome.is_error(), "{outcome:?}");
+            assert_eq!(outcome.issue().unwrap().code, "capture-directory-failed");
+            assert!(process.spawn_args.borrow().is_empty());
+            assert!(persistence.created.borrow().is_empty());
+            assert!(log.borrow().is_empty());
+        }
+    }
+
+    #[test]
+    fn capture_dir_create_failure_errors_without_spawn() {
+        let artifacts = tempfile::tempdir().expect("temp artifact root");
+        let artifact_root = artifacts.path().to_string_lossy().into_owned();
+        let blocker = PathBuf::from(&artifact_root)
+            .join("work-slot-captures")
+            .join("slot-1");
+        std::fs::create_dir_all(blocker.parent().expect("parent")).expect("create parent");
+        std::fs::write(&blocker, b"not a directory").expect("write blocker file");
+
+        let (persistence, process, log) = harness(sample_run(bound_input(&artifact_root)));
+        let persistence = persistence.with_subject("slot-1", "visit-1");
+
+        let outcome = execute(
+            invoke_request(),
+            &persistence,
+            &process,
+            Timestamp::from_unix_millis(1_000),
+            30_000,
+        );
+
+        assert!(outcome.is_error(), "{outcome:?}");
+        assert_eq!(outcome.issue().unwrap().code, "capture-directory-failed");
+        assert!(process.spawn_args.borrow().is_empty());
+        assert!(persistence.created.borrow().is_empty());
+        assert!(log.borrow().is_empty());
+    }
+
+    #[test]
+    fn second_invoke_uses_a_distinct_capture_dir_and_leaves_the_first() {
+        let artifacts = tempfile::tempdir().expect("temp artifact root");
+        let artifact_root = artifacts.path().to_string_lossy().into_owned();
+        let first_dir = expected_capture_dir(&artifact_root, "slot-1", "inv-1");
+        let second_dir = expected_capture_dir(&artifact_root, "slot-1", "inv-2");
+        let (persistence, process, _log) = harness(sample_run(bound_input(&artifact_root)));
+        let persistence = persistence.with_subject("slot-1", "visit-1");
+
+        let first = execute(
+            Request::new("run-1", "slot-1", "inv-1", "/tmp/loop.db"),
+            &persistence,
+            &process,
+            Timestamp::from_unix_millis(1_000),
+            30_000,
+        );
+        assert!(first.is_completed(), "{first:?}");
+        let first_result = first.value().expect("first invoke");
+        assert_eq!(first_result.capture_dir, first_dir);
+        assert!(PathBuf::from(&first_dir).is_dir());
+        std::fs::write(PathBuf::from(&first_dir).join("marker.txt"), b"keep").expect("marker");
+
+        let second = execute(
+            Request::new("run-1", "slot-1", "inv-2", "/tmp/loop.db"),
+            &persistence,
+            &process,
+            Timestamp::from_unix_millis(2_000),
+            30_000,
+        );
+        assert!(second.is_completed(), "{second:?}");
+        let second_result = second.value().expect("second invoke");
+        assert_eq!(second_result.capture_dir, second_dir);
+        assert_ne!(second_result.capture_dir, first_result.capture_dir);
+        assert!(PathBuf::from(&second_dir).is_dir());
+        assert!(PathBuf::from(&first_dir).is_dir());
+        assert_eq!(
+            std::fs::read(PathBuf::from(&first_dir).join("marker.txt")).expect("read marker"),
+            b"keep"
+        );
+        assert_eq!(persistence.created.borrow()[0].capture_dir, first_dir);
+        assert_eq!(persistence.created.borrow()[1].capture_dir, second_dir);
+    }
+
+    #[test]
     fn missing_current_subject_is_rejected_without_spawn() {
-        let (persistence, process, log) = harness(sample_run(bound_input()));
+        let (persistence, process, log) = harness(sample_run(bound_input("/tmp/artifacts")));
 
         let outcome = execute(
             invoke_request(),

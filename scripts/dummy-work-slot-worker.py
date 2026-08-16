@@ -12,7 +12,7 @@ import json
 import sys
 from pathlib import Path
 
-REQUIRED_KEYS = ("run_id", "slot_id", "artifact_root", "instruction_body")
+REQUIRED_KEYS = ("run_id", "slot_id", "artifact_root", "instruction_body", "capture_dir")
 
 
 def main() -> int:

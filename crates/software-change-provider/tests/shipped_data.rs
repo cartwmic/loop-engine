@@ -282,6 +282,36 @@ fn all_profiles_pass_production_config_validation_and_have_exact_subjects() {
 }
 
 #[test]
+fn shipped_work_slot_bindings_bind_only_implement_to_run_plan_graph() {
+    for profile in PROFILES {
+        let config = load_profile(profile);
+        let bindings = object(&config["work_slot_bindings"], "work_slot_bindings");
+        let keys: BTreeSet<&str> = bindings.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            BTreeSet::from(["implement"]),
+            "{profile} work_slot_bindings keys"
+        );
+        let implement = object(&bindings["implement"], "implement");
+        assert_eq!(
+            string(&implement["command"], "implement.command"),
+            "software-change"
+        );
+        let args: Vec<&str> = array(&implement["args"], "implement.args")
+            .iter()
+            .map(|value| string(value, "implement.args item"))
+            .collect();
+        assert_eq!(args, vec!["run-plan-graph"]);
+        for slot in ["design-review", "plan-review", "implementation-review"] {
+            assert!(
+                !bindings.contains_key(slot),
+                "{profile} must omit review binding {slot}"
+            );
+        }
+    }
+}
+
+#[test]
 fn profiles_carry_exact_shipped_profile_mapping_and_author_counts() {
     let minimal = axis_map(&load_profile("minimal"));
     assert_eq!(

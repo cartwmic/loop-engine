@@ -7,7 +7,7 @@
 
 use crate::{
     ContextRecord, ContextRecordId, ControlRevision, DurableEvaluation, EvaluationFeedback,
-    EvaluationRequest, EvaluationResult, HistoryEntry, InvocationId, Lifecycle,
+    EvaluationRequest, EvaluationResult, HistoryEntry, InnerWorker, InvocationId, Lifecycle,
     ProviderAssociation, ProviderSelector, Run, RunId, StateId, Timestamp, Transition,
     WaiterWrittenStatus, WorkSlotBinding, WorkSlotId, WorkSlotInvocation, Workflow,
 };
@@ -411,6 +411,7 @@ pub struct CreateWorkSlotInvocationRequest {
     pub waiter_pid: u32,
     pub started_at: Timestamp,
     pub allowed_time_ms: u64,
+    pub capture_dir: String,
 }
 
 impl CreateWorkSlotInvocationRequest {
@@ -425,6 +426,7 @@ impl CreateWorkSlotInvocationRequest {
         waiter_pid: u32,
         started_at: Timestamp,
         allowed_time_ms: u64,
+        capture_dir: impl Into<String>,
     ) -> Self {
         Self {
             run_id: run_id.into(),
@@ -436,6 +438,7 @@ impl CreateWorkSlotInvocationRequest {
             waiter_pid,
             started_at,
             allowed_time_ms,
+            capture_dir: capture_dir.into(),
         }
     }
 }
@@ -460,6 +463,7 @@ pub struct CompleteWorkSlotInvocationRequest {
     pub status: WaiterWrittenStatus,
     pub exit_code: i32,
     pub completed_at: Timestamp,
+    pub inner_workers: Vec<InnerWorker>,
 }
 
 impl CompleteWorkSlotInvocationRequest {
@@ -469,6 +473,7 @@ impl CompleteWorkSlotInvocationRequest {
         status: WaiterWrittenStatus,
         exit_code: i32,
         completed_at: Timestamp,
+        inner_workers: Vec<InnerWorker>,
     ) -> Self {
         Self {
             run_id: run_id.into(),
@@ -476,6 +481,7 @@ impl CompleteWorkSlotInvocationRequest {
             status,
             exit_code,
             completed_at,
+            inner_workers,
         }
     }
 }

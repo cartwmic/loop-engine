@@ -12,10 +12,11 @@ use loop_core::{
     CompleteWorkSlotInvocationRequest, CompleteWorkSlotInvocationResult, ContextRecord,
     CreateRunRequest, CreateRunResult, CreateWorkSlotInvocationRequest,
     CreateWorkSlotInvocationResult, DurableEvaluation, DurableEvaluationResult, HistoryAction,
-    HistoryEntry, InvocationId, Lifecycle, Persistence, PersistenceConflict, PersistenceError,
-    PersistenceFailure, PersistenceRejection, RecordDenialRequest, RecordDenialResult, Run, RunId,
-    RunSummary, SemanticSequence, ShowData, StateId, TerminateRequest, TerminateResult, Timestamp,
-    TransitionHistoryOutcome, WaiterWrittenStatus, WorkSlotId, WorkSlotInvocation,
+    HistoryEntry, InnerWorker, InvocationId, Lifecycle, Persistence, PersistenceConflict,
+    PersistenceError, PersistenceFailure, PersistenceRejection, RecordDenialRequest,
+    RecordDenialResult, Run, RunId, RunSummary, SemanticSequence, ShowData, StateId,
+    TerminateRequest, TerminateResult, Timestamp, TransitionHistoryOutcome, WaiterWrittenStatus,
+    WorkSlotId, WorkSlotInvocation,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{de::DeserializeOwned, Serialize};
@@ -83,6 +84,8 @@ CREATE TABLE IF NOT EXISTS work_slot_invocations (
     status                       TEXT CHECK (status IS NULL OR status IN ('succeeded', 'failed')),
     exit_code                    INTEGER,
     completed_at                 INTEGER,
+    capture_dir                  TEXT NOT NULL DEFAULT '',
+    inner_workers_json           TEXT NOT NULL DEFAULT '[]',
     PRIMARY KEY (run_id, invocation_id),
     FOREIGN KEY (run_id) REFERENCES runs (id) ON DELETE CASCADE
 );
@@ -132,6 +135,7 @@ impl SqlitePersistence {
     pub fn from_connection(connection: Connection) -> Result<Self, PersistenceError> {
         configure_connection(&connection).map_err(sqlite_failure)?;
         ensure_run_catalog_columns(&connection)?;
+        ensure_work_slot_invocation_columns(&connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
         })
@@ -551,14 +555,17 @@ impl Persistence for SqlitePersistence {
                 None,
                 None,
                 None,
+                request.capture_dir.clone(),
+                Vec::new(),
             );
             transaction
                 .execute(
                     "INSERT INTO work_slot_invocations (
                         run_id, invocation_id, slot_id, binding_json,
                         instruction_digest, subject, waiter_pid, started_at,
-                        allowed_time_ms, status, exit_code, completed_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL, NULL)",
+                        allowed_time_ms, status, exit_code, completed_at,
+                        capture_dir, inner_workers_json
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL, NULL, ?10, ?11)",
                     params![
                         request.run_id.as_str(),
                         request.invocation_id.as_str(),
@@ -569,6 +576,8 @@ impl Persistence for SqlitePersistence {
                         to_sqlite_i64(u64::from(request.waiter_pid), "waiter pid")?,
                         request.started_at.as_unix_millis(),
                         to_sqlite_i64(request.allowed_time_ms, "allowed time ms")?,
+                        request.capture_dir,
+                        encode_json(&Vec::<InnerWorker>::new(), "inner workers")?,
                     ],
                 )
                 .map_err(sqlite_failure)?;
@@ -602,12 +611,13 @@ impl Persistence for SqlitePersistence {
             let changed = transaction
                 .execute(
                     "UPDATE work_slot_invocations
-                     SET status = ?1, exit_code = ?2, completed_at = ?3
-                     WHERE run_id = ?4 AND invocation_id = ?5 AND status IS NULL",
+                     SET status = ?1, exit_code = ?2, completed_at = ?3, inner_workers_json = ?4
+                     WHERE run_id = ?5 AND invocation_id = ?6 AND status IS NULL",
                     params![
                         waiter_status_name(request.status),
                         request.exit_code,
                         request.completed_at.as_unix_millis(),
+                        encode_json(&request.inner_workers, "inner workers")?,
                         request.run_id.as_str(),
                         request.invocation_id.as_str(),
                     ],
@@ -763,6 +773,39 @@ fn ensure_run_catalog_columns(connection: &Connection) -> Result<(), Persistence
             .map_err(sqlite_failure)?;
     }
     Ok(())
+}
+
+fn ensure_work_slot_invocation_columns(connection: &Connection) -> Result<(), PersistenceError> {
+    let columns = work_slot_invocation_table_columns(connection)?;
+    if !columns.iter().any(|name| name == "capture_dir") {
+        connection
+            .execute(
+                "ALTER TABLE work_slot_invocations ADD COLUMN capture_dir TEXT NOT NULL DEFAULT ''",
+                [],
+            )
+            .map_err(sqlite_failure)?;
+    }
+    if !columns.iter().any(|name| name == "inner_workers_json") {
+        connection
+            .execute(
+                "ALTER TABLE work_slot_invocations ADD COLUMN inner_workers_json TEXT NOT NULL DEFAULT '[]'",
+                [],
+            )
+            .map_err(sqlite_failure)?;
+    }
+    Ok(())
+}
+
+fn work_slot_invocation_table_columns(
+    connection: &Connection,
+) -> Result<Vec<String>, PersistenceError> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info('work_slot_invocations')")
+        .map_err(sqlite_failure)?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(sqlite_failure)?;
+    rows.map(|row| row.map_err(sqlite_failure)).collect()
 }
 
 fn run_table_columns(connection: &Connection) -> Result<Vec<String>, PersistenceError> {
@@ -1177,6 +1220,8 @@ fn decode_work_slot_invocation(
     status: Option<String>,
     exit_code: Option<i64>,
     completed_at: Option<i64>,
+    capture_dir: String,
+    inner_workers_json: String,
 ) -> Result<WorkSlotInvocation, PersistenceError> {
     let waiter_pid = u32::try_from(from_sqlite_u64(waiter_pid, "waiter pid")?).map_err(|_| {
         PersistenceError::failure(PersistenceFailure::new(
@@ -1208,6 +1253,8 @@ fn decode_work_slot_invocation(
         status,
         exit_code,
         completed_at.map(Timestamp::from_unix_millis),
+        capture_dir,
+        decode_json(&inner_workers_json, "inner workers")?,
     ))
 }
 
@@ -1223,6 +1270,8 @@ type InvocationRow = (
     Option<String>,
     Option<i64>,
     Option<i64>,
+    String,
+    String,
 );
 
 fn invocation_row_from_query(row: &rusqlite::Row<'_>) -> rusqlite::Result<InvocationRow> {
@@ -1238,6 +1287,8 @@ fn invocation_row_from_query(row: &rusqlite::Row<'_>) -> rusqlite::Result<Invoca
         row.get(8)?,
         row.get(9)?,
         row.get(10)?,
+        row.get(11)?,
+        row.get(12)?,
     ))
 }
 
@@ -1249,7 +1300,8 @@ fn load_one_work_slot_invocation(
     connection
         .query_row(
             "SELECT invocation_id, slot_id, binding_json, instruction_digest, subject,
-                    waiter_pid, started_at, allowed_time_ms, status, exit_code, completed_at
+                    waiter_pid, started_at, allowed_time_ms, status, exit_code, completed_at,
+                    capture_dir, inner_workers_json
              FROM work_slot_invocations
              WHERE run_id = ?1 AND invocation_id = ?2",
             params![run_id.as_str(), invocation_id.as_str()],
@@ -1270,6 +1322,8 @@ fn load_one_work_slot_invocation(
                 status,
                 exit_code,
                 completed_at,
+                capture_dir,
+                inner_workers_json,
             )| {
                 decode_work_slot_invocation(
                     invocation_id,
@@ -1283,6 +1337,8 @@ fn load_one_work_slot_invocation(
                     status,
                     exit_code,
                     completed_at,
+                    capture_dir,
+                    inner_workers_json,
                 )
             },
         )
@@ -1296,7 +1352,8 @@ fn read_work_slot_invocations(
     let mut statement = connection
         .prepare(
             "SELECT invocation_id, slot_id, binding_json, instruction_digest, subject,
-                    waiter_pid, started_at, allowed_time_ms, status, exit_code, completed_at
+                    waiter_pid, started_at, allowed_time_ms, status, exit_code, completed_at,
+                    capture_dir, inner_workers_json
              FROM work_slot_invocations
              WHERE run_id = ?1
              ORDER BY started_at ASC, invocation_id ASC",
@@ -1319,6 +1376,8 @@ fn read_work_slot_invocations(
             status,
             exit_code,
             completed_at,
+            capture_dir,
+            inner_workers_json,
         ) = row.map_err(sqlite_failure)?;
         decode_work_slot_invocation(
             invocation_id,
@@ -1332,6 +1391,8 @@ fn read_work_slot_invocations(
             status,
             exit_code,
             completed_at,
+            capture_dir,
+            inner_workers_json,
         )
     })
     .collect()
@@ -1339,4 +1400,162 @@ fn read_work_slot_invocations(
 
 fn sqlite_failure(error: impl std::fmt::Display) -> PersistenceError {
     PersistenceError::failure(PersistenceFailure::new("sqlite", error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use loop_core::{
+        InnerWorker, Lifecycle, ProviderAssociation, State, Transition, WaiterWrittenStatus,
+        WorkSlotBinding, Workflow,
+    };
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    fn workflow() -> Workflow {
+        Workflow::new(
+            "test-workflow",
+            "start",
+            vec![State::new("start", "Start", "Begin", false)],
+            vec![Transition::check_free("start", "finish", "start")],
+        )
+    }
+
+    fn create_run(id: &str) -> CreateRunRequest {
+        CreateRunRequest::new(
+            id,
+            Some(format!("label-{id}")),
+            workflow(),
+            ProviderAssociation::new(json!({"command": "/bin/test", "args": []})),
+            json!({"objective": "durable"}),
+            "start",
+            Lifecycle::Active,
+            Timestamp::from_unix_millis(100),
+            "test-provider",
+            Some("/allocated/run-dir".to_owned()),
+        )
+    }
+
+    #[test]
+    fn create_and_complete_roundtrip_stores_capture_dir_and_inner_workers() {
+        let adapter = SqlitePersistence::open_in_memory().expect("open in-memory sqlite");
+        adapter
+            .create_run(create_run("run-capture-roundtrip"))
+            .expect("create run");
+        let created = adapter
+            .create_work_slot_invocation(CreateWorkSlotInvocationRequest::new(
+                "run-capture-roundtrip",
+                "inv-1",
+                "slot-1",
+                WorkSlotBinding::new("/bin/sh", vec!["-c".to_owned(), "exit 0".to_owned()]),
+                "digest",
+                "subject-a",
+                1,
+                Timestamp::from_unix_millis(500),
+                1_000,
+                "/captures/slot-1/inv-1",
+            ))
+            .expect("create invocation");
+        assert_eq!(created.invocation.capture_dir, "/captures/slot-1/inv-1");
+        assert!(created.invocation.inner_workers.is_empty());
+        assert!(created.invocation.status.is_none());
+
+        let completed = adapter
+            .complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
+                "run-capture-roundtrip",
+                "inv-1",
+                WaiterWrittenStatus::Succeeded,
+                0,
+                Timestamp::from_unix_millis(900),
+                vec![InnerWorker::new("dummy", vec!["--fail".to_owned()], 7)],
+            ))
+            .expect("complete invocation");
+        assert_eq!(
+            completed.invocation.status,
+            Some(WaiterWrittenStatus::Succeeded)
+        );
+        assert_eq!(completed.invocation.exit_code, Some(0));
+        assert_eq!(completed.invocation.capture_dir, "/captures/slot-1/inv-1");
+        assert_eq!(completed.invocation.inner_workers.len(), 1);
+        assert_eq!(completed.invocation.inner_workers[0].command, "dummy");
+        assert_eq!(
+            completed.invocation.inner_workers[0].args,
+            vec!["--fail".to_owned()]
+        );
+        assert_eq!(completed.invocation.inner_workers[0].exit_code, 7);
+
+        let loaded = adapter
+            .load_work_slot_invocations(&"run-capture-roundtrip".into())
+            .expect("load invocations");
+        assert_eq!(loaded[0].capture_dir, "/captures/slot-1/inv-1");
+        assert_eq!(loaded[0].status, Some(WaiterWrittenStatus::Succeeded));
+        assert_eq!(loaded[0].exit_code, Some(0));
+        assert_eq!(loaded[0].inner_workers[0].exit_code, 7);
+    }
+
+    #[test]
+    fn opening_pre_change_schema_alters_and_writes_new_invocation() {
+        let directory = tempdir().expect("tempdir");
+        let path = directory.path().join("legacy-invocations.sqlite");
+        {
+            let connection = Connection::open(&path).expect("open legacy sqlite");
+            connection
+                .execute_batch(
+                    "CREATE TABLE runs (
+                        id                           TEXT PRIMARY KEY NOT NULL,
+                        label                        TEXT,
+                        workflow_id                  TEXT NOT NULL,
+                        workflow_json                TEXT NOT NULL,
+                        provider_association_json    TEXT NOT NULL,
+                        initial_input_json           TEXT NOT NULL,
+                        current_state                TEXT NOT NULL,
+                        lifecycle                    TEXT NOT NULL CHECK (lifecycle IN ('active', 'final', 'terminated')),
+                        control_revision             INTEGER NOT NULL CHECK (control_revision >= 0),
+                        last_sequence                INTEGER NOT NULL CHECK (last_sequence >= 1),
+                        created_at                   INTEGER NOT NULL
+                    );
+                    CREATE TABLE work_slot_invocations (
+                        run_id                       TEXT NOT NULL,
+                        invocation_id                TEXT NOT NULL,
+                        slot_id                      TEXT NOT NULL,
+                        binding_json                 TEXT NOT NULL,
+                        instruction_digest           TEXT NOT NULL,
+                        subject                      TEXT NOT NULL,
+                        waiter_pid                   INTEGER NOT NULL CHECK (waiter_pid >= 0),
+                        started_at                   INTEGER NOT NULL,
+                        allowed_time_ms              INTEGER NOT NULL CHECK (allowed_time_ms >= 0),
+                        status                       TEXT CHECK (status IS NULL OR status IN ('succeeded', 'failed')),
+                        exit_code                    INTEGER,
+                        completed_at                 INTEGER,
+                        PRIMARY KEY (run_id, invocation_id),
+                        FOREIGN KEY (run_id) REFERENCES runs (id) ON DELETE CASCADE
+                    );",
+                )
+                .expect("create pre-change schema");
+        }
+
+        let adapter = SqlitePersistence::open(&path).expect("open after alter");
+        adapter
+            .create_run(create_run("run-legacy-alter"))
+            .expect("create run after alter");
+        let created = adapter
+            .create_work_slot_invocation(CreateWorkSlotInvocationRequest::new(
+                "run-legacy-alter",
+                "inv-legacy",
+                "slot-1",
+                WorkSlotBinding::new("/bin/sh", vec!["-c".to_owned(), "exit 0".to_owned()]),
+                "digest",
+                "subject-a",
+                1,
+                Timestamp::from_unix_millis(500),
+                1_000,
+                "/captures/slot-1/inv-legacy",
+            ))
+            .expect("create invocation after alter");
+        assert_eq!(
+            created.invocation.capture_dir,
+            "/captures/slot-1/inv-legacy"
+        );
+        assert!(created.invocation.inner_workers.is_empty());
+    }
 }

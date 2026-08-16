@@ -363,7 +363,7 @@ Incomplete, ambiguous, or improvable work belongs in the workflow's initial stat
 
 If the initial state is final, the run is created final.
 
-When object initial input contains `work_slot_bindings`, the engine freezes a map from slot ID to `{command, args}`. Omitted key and `{}` both mean no bindings. Start rejects an unknown slot ID (not in the provider `describe` catalog snapshot for this workflow), unknown fields on a binding object, and non-object values. If the initial state is a work slot, the engine mints a **slot-visit** subject for that visit via set-current-subject.
+When object initial input contains `work_slot_bindings`, the engine freezes a map from slot ID to `{command, args}`. Omitted key and `{}` both mean no bindings. Start rejects an unknown slot ID (not in the provider `describe` catalog snapshot for this workflow), unknown fields on a binding object, and non-object values. Start does not parse `fan-out` or `run-plan-graph` argv. If the initial state is a work slot, the engine mints a **slot-visit** subject for that visit via set-current-subject.
 
 ### 6.2 Show
 
@@ -383,10 +383,10 @@ requestable events
 each event's target and whether it is checked
 latest durable evaluation for each checked transition that has been evaluated
 work_slots (catalog snapshot: id, state, event; no instruction body)
-work_slot_invocations (invocation_id, slot_id, binding snapshot, instruction_digest, subject, overlay status, started_at, allowed_time_ms, optional exit_code, optional completed_at)
+work_slot_invocations (invocation_id, slot_id, binding snapshot, instruction_digest, subject, overlay status, overlay_meaning, elapsed_ms, remaining_allowed_ms, capture_dir, inner_workers, started_at, allowed_time_ms, optional exit_code, optional completed_at)
 ```
 
-`work_slot_invocations.status` is the reader overlay result `running` | `succeeded` | `failed` | `overrun`, not a raw waiter-written row when overlay applies. `waiter_pid` is internal and is not in `show`. When the current state is a bound slot, `current_state_instructions` names the slot ID plus the frozen CLI binding `{command, args}` and that the legal start is `loop-engine invoke RUN_ID SLOT_ID`; it omits the stored work body. Do not redact to only the invoke CLI. Unbound current states keep the stored instruction body.
+`work_slot_invocations.status` is the reader overlay result `running` | `succeeded` | `failed` | `overrun`, not a raw waiter-written row when overlay applies. `waiter_pid` is internal and is not in `show`. Each invocation view also reports `overlay_meaning`, `elapsed_ms`, `remaining_allowed_ms`, `capture_dir`, and `inner_workers` (`command`, `args`, `exit_code` in argv or task order after the bound CLI finishes; empty while overlay is `running` or when no summary was copied). `show` does not spawn a provider and does not read capture files. Overlay meaning: succeeded means the bound CLI exited 0, not that the provider accepted the work; failed means the bound CLI exited nonzero or the waiter vanished; running means the waiter is alive and allowed time has not elapsed; overrun means allowed time elapsed while the waiter is alive and the driver invokes the same slot again. When the current state is a bound slot, `current_state_instructions` names the slot ID plus the frozen CLI binding `{command, args}` and that the legal start is `loop-engine invoke RUN_ID SLOT_ID`; it omits the stored work body. Bound-instruction triage order: overlay succeeded means the bound CLI exited 0, not that the provider accepted the work; captures are at the named capture directory on the invocation view and invoke result; the driver triages worker output, appends provider-shaped records, then requests the shown event; on overrun invoke the same slot again; on failed inspect stderr. Do not redact to only the invoke CLI. Unbound current states keep the stored instruction body.
 
 The projection is the **chronologically latest durable evaluation** for each exact checked transition. An `allow` supersedes any earlier `deny`, and a later `deny` likewise supersedes an earlier `allow`. When the latest result is `deny`, its actionable feedback is exposed.
 
@@ -484,11 +484,11 @@ loop-engine [--database DB] [--json] [--timeout-ms MS] invoke RUN_ID SLOT_ID
 
 `invoke` starts bound work-slot work. It is rejected for an unknown slot ID, an unbound slot (no frozen `work_slot_bindings` entry), or an overlay-`running` invocation (live waiter). Overlay `overrun`, `failed`, and `succeeded` are not already-running; overlay-`overrun` is terminal for retry and a later `invoke` of the same slot is accepted.
 
-On accept, the engine snapshots the frozen `{command, args}` binding, the stored instruction body, `instruction_digest`, and the current slot-visit subject (get-current-subject only; `invoke` does not mint). It creates a running engine-authored invocation record. `append` cannot write that table. `allowed_time_ms` equals the invoke/provider timeout (`--timeout-ms`, or the same timeout the provider path already uses). The waiter is the only writer of terminal `succeeded`/`failed` plus `exit_code`.
+On accept, the engine snapshots the frozen `{command, args}` binding, the stored instruction body, `instruction_digest`, and the current slot-visit subject (get-current-subject only; `invoke` does not mint). It allocates `capture_dir` as `{artifact_root}/work-slot-captures/{slot_id}/{invocation_id}`, creates that directory, stores it on the invocation record, and returns it on the invoke result. Empty `artifact_root` is an error before spawn. It creates a running engine-authored invocation record. `append` cannot write that table. `allowed_time_ms` equals the invoke/provider timeout (`--timeout-ms`, or the same timeout the provider path already uses). The waiter is the only writer of terminal `succeeded`/`failed` plus `exit_code`.
 
-The same `loop-engine` binary then starts hidden `wait-invocation` as a child `invoke` does not waitpid. That waiter is parent of the bound worker: it spawns `{command, args}`, waitpids the worker, writes terminal `succeeded` or `failed` plus `exit_code`, then exits. It is not a daemon and not a sibling of the worker. A vanished waiter with no terminal status is overlay-`failed`.
+The same `loop-engine` binary then starts hidden `wait-invocation` as a child `invoke` does not waitpid. That waiter is parent of the bound worker: it spawns `{command, args}`, waitpids the worker, writes terminal `succeeded` or `failed` plus `exit_code`, then exits. After waitpid, if `capture_dir/summary.json` is well-formed, the waiter also stores inner `command`/`args`/`exit_code` on the invocation; overlay remains the bound CLI process exit (0 → succeeded). Missing or malformed summary stores empty `inner_workers` and does not change overlay. The waiter is not a daemon and not a sibling of the worker. A vanished waiter with no terminal status is overlay-`failed`.
 
-The bound worker's stdin is exactly one JSON object with `run_id`, `slot_id`, `artifact_root`, and `instruction_body`. The packet is not passed on argv, environment, or a temp file. Waiter stdin is not the worker packet. Binding `{command, args}` remains the worker argv.
+The bound worker's stdin is exactly one JSON object with `run_id`, `slot_id`, `artifact_root`, `instruction_body`, and `capture_dir`. The packet is not passed on argv, environment, or a temp file. Waiter stdin is not the worker packet. Binding `{command, args}` remains the worker argv.
 
 Later `show`, `history`, `event`, and `invoke` read stored records. They may observe waiter liveness as `running` and apply recorded `allowed_time_ms` as `overrun`. They do not waitpid the original worker.
 
@@ -500,11 +500,21 @@ The `loop-engine` binary also exposes `fan-out`. It is **not** a ninth primary o
 loop-engine fan-out [--worker JSON]... [--instructions FILE]
 ```
 
-Workers come only from repeated `--worker` JSON objects `{command, args}`. Zero `--worker` entries fail closed. Bound mode: stdin is the existing invoke packet and `--instructions` is rejected. Ad hoc mode: `--instructions FILE` supplies the shared instructions and stdin is not a packet. Combining a valid invoke packet with `--instructions` is a parse error. The command starts one process per worker in parallel, writes per-worker stdout/stderr, reaps every worker it spawned before exit, and prints a JSON collector summary that is not a run-state envelope and not a provider evidence schema. It encodes no harness.
+Workers come only from repeated `--worker` JSON objects `{command, args}`. Zero `--worker` entries fail closed. Bound mode: stdin is the existing invoke packet (five keys including `capture_dir`) and `--instructions` is rejected. Bound mode honors `packet.capture_dir`: it writes per-worker stdout/stderr under `0/`, `1/`, … plus `summary.json` listing each inner worker's `command`, `args`, and `exit_code` in argv order before the collector exits, including when some inner exits are nonzero. Collector success remains independent of inner exit codes. Ad hoc mode: `--instructions FILE` supplies the shared instructions and stdin is not a packet. Combining a valid invoke packet with `--instructions` is a parse error. The command starts one process per worker in parallel, reaps every worker it spawned before exit, and prints a JSON collector summary that is not a run-state envelope and not a provider evidence schema. It encodes no harness.
 
-When a work slot is frozen to `loop-engine` args that begin with `fan-out`, the legal start remains `loop-engine invoke RUN_ID SLOT_ID`. `invoke` execs that frozen argv with the existing worker packet on stdin. Callers who want reviewers put `--worker` JSON objects in those frozen binding args at start; bindings cannot be patched mid-run. A stock binding with zero workers therefore fails closed on invoke. Recovery is terminate and start again with workers in the frozen args.
+When a work slot is frozen to `loop-engine` args that begin with `fan-out`, the legal start remains `loop-engine invoke RUN_ID SLOT_ID`. `invoke` execs that frozen argv with the existing worker packet on stdin. Callers who want reviewers put `--worker` JSON objects in those frozen binding args at start after `preview-bindings` and lock-in; bindings cannot be patched mid-run. A usable review binding is caller-supplied `--worker` objects frozen at `start` — not a stock zero-worker `fan-out` argv.
 
-`software-change run-plan-graph` is an argv command of the software-change provider binary (the shipped implement worker), not an engine operation.
+`software-change run-plan-graph` is an argv command of the software-change provider binary (the shipped implement worker), not an engine operation. Bound mode honors `packet.capture_dir` (per-task `{task_id}/` plus `summary.json`). When `--task-worker` is omitted, the default inner worker is `pi --print --no-skills --no-extensions`; it does not pass `--no-context-files` and does not pass `--tools`, so bash, edit, write, and AGENTS.md remain available.
+
+### Non-run-state CLI: `preview-bindings`
+
+The `loop-engine` binary also exposes `preview-bindings` beside `fan-out`. It is not a ninth primary operation: it does not start, advance, or record a run, and it does not open the run database.
+
+```text
+loop-engine preview-bindings [JSON|@FILE]
+```
+
+Omitted operand reads stdin; `@FILE` reads that path; otherwise the operand is inline JSON. Accepted JSON is a `work_slot_bindings` map or an object containing that key. It expands nested `--worker` and `--task-worker` JSON `{command, args}` objects, lists detected `--model` values, and warns on unpinned `pi`, PATH versus absolute command, missing shipped sandbox flags, and the 30-second invoke default. Warnings alone exit 0. It exits nonzero on malformed input and when any `fan-out` binding has zero `--worker` entries. `start` still does not parse `fan-out` argv; preview is the fail-closed check for that freeze.
 
 ## 7. Operation Outcomes
 
@@ -766,7 +776,7 @@ implementation-review (implementation-review, approved)
 validate (validation, passed)
 ```
 
-Shipped software-change profiles freeze `implement` to PATH command `software-change` with args `[run-plan-graph]`, and freeze `design-review`, `plan-review`, and `implementation-review` to PATH command `loop-engine` with args `[fan-out]` and no `--worker` entries. `validate` stays unbound. A usable review binding is that shipped fan-out argv plus caller-supplied `--worker` objects, frozen together at `start`. Policy-document and research shipped profiles stay unbound.
+Shipped software-change profiles freeze `implement` to PATH command `software-change` with args `[run-plan-graph]`, and omit `design-review`, `plan-review`, and `implementation-review` from `work_slot_bindings` (those rooms stay driver-performed). `validate` stays unbound. A usable review binding is caller-supplied `--worker` objects frozen at `start` after `preview-bindings` and lock-in. Documented review `pi` worker examples include `--print --no-skills --no-extensions --tools read,grep,find,ls` and must not pass `--no-context-files`. Policy-document and research shipped profiles stay unbound.
 
 The provider may inspect repository state, documents, tests, reviews, or other software-specific information. Core understands none of those concepts.
 
@@ -1105,26 +1115,26 @@ v0.1 is complete when the following are demonstrated end to end.
 ### 14.8 Operational Simplicity
 
 - Local operation requires no daemon or external infrastructure beyond Loop Engine's local durable state and configured provider integration. Hidden `wait-invocation` is a short-lived per-invocation waiter, not a background service.
-- The primary caller surface remains eight operations (`start`, `list`, `show`, `append`, `event`, `history`, `terminate`, `invoke`). Visible `fan-out` is a non-run-state CLI command, not a ninth operation.
+- The primary caller surface remains eight operations (`start`, `list`, `show`, `append`, `event`, `history`, `terminate`, `invoke`). Visible `fan-out` and `preview-bindings` are non-run-state CLI commands, not a ninth operation.
 - The semantic provider interface remains `describe` + `evaluate`.
 - Provider correctness does not depend on retained in-memory state from earlier invocations.
 
 ### 14.9 Work-Slot Delegation
 
-- A caller can inspect the frozen slot catalog (`work_slots`) and sparse `work_slot_bindings` from `show` / `initial_input` before work proceeds.
-- Omitted `work_slot_bindings` and `{}` both mean no bindings; unknown slot IDs, unknown binding fields, and non-object values are rejected at `start`.
-- When a slot is bound, `current_state_instructions` names the slot ID plus the frozen CLI binding `{command, args}` and that the legal start is `loop-engine invoke RUN_ID SLOT_ID`; it omits the stored work body.
-- `invoke` is the only legal start for bound work. The bound worker's stdin is exactly one JSON object with `run_id`, `slot_id`, `artifact_root`, and `instruction_body` (not argv, environment, or a temp file). Waiter stdin is not the worker packet.
-- Hidden `wait-invocation` is parent of the bound worker, waitpids it, writes terminal `succeeded`/`failed` plus `exit_code`, then exits. It is not a daemon. A vanished waiter with no terminal status is overlay-`failed`.
+- A caller can inspect the frozen slot catalog (`work_slots`) and sparse `work_slot_bindings` from `show` / `initial_input` before work proceeds. `preview-bindings` inspects that JSON before `start` without creating a run.
+- Omitted `work_slot_bindings` and `{}` both mean no bindings; unknown slot IDs, unknown binding fields, and non-object values are rejected at `start`. `start` does not parse `fan-out` or `run-plan-graph` argv. `preview-bindings` exits nonzero on a zero-worker `fan-out` freeze.
+- When a slot is bound, `current_state_instructions` names the slot ID plus the frozen CLI binding `{command, args}` and that the legal start is `loop-engine invoke RUN_ID SLOT_ID`; it omits the stored work body and states the bound-instruction triage order (overlay succeeded is bound CLI exit 0, not provider acceptance; captures are at the named directory; the driver triages, appends, then requests the shown event; on overrun invoke again; on failed inspect stderr).
+- `invoke` is the only legal start for bound work. On accept it allocates `capture_dir` as `{artifact_root}/work-slot-captures/{slot_id}/{invocation_id}`, creates that directory, stores it, and returns it. The bound worker's stdin is exactly one JSON object with `run_id`, `slot_id`, `artifact_root`, `instruction_body`, and `capture_dir` (not argv, environment, or a temp file). Waiter stdin is not the worker packet.
+- Hidden `wait-invocation` is parent of the bound worker, waitpids it, writes terminal `succeeded`/`failed` plus `exit_code`, then exits. After waitpid, a well-formed `capture_dir/summary.json` is copied as `inner_workers` (`command`, `args`, `exit_code` only); overlay remains the bound CLI process exit. It is not a daemon. A vanished waiter with no terminal status is overlay-`failed`.
 - Invocation records are engine-authored; `append` cannot write them. History records `invocation started {invocation_id}` and `invocation status changed {invocation_id, status}` for waiter-written `succeeded`/`failed` only.
-- `work_slot_invocations.status` is the reader overlay `running` | `succeeded` | `failed` | `overrun`. Overlay `overrun` is not a history action. `waiter_pid` is not in `show`.
+- `work_slot_invocations.status` is the reader overlay `running` | `succeeded` | `failed` | `overrun`. Each view also reports `overlay_meaning`, `elapsed_ms`, `remaining_allowed_ms`, `capture_dir`, and `inner_workers`. Overlay `overrun` is not a history action. `waiter_pid` is not in `show`. `show` does not spawn a provider and does not read capture files.
 - A bound checked edge is refused unless overlay status is `succeeded` matching slot ID, `instruction_digest`, and the current slot-visit subject. Overlay `running`, `failed`, and `overrun` do not satisfy. Check-free edges are ungated. `evaluate` never waits.
-- Overlay `overrun` is terminal for retry: a later `invoke` of the same slot is not already-running. Failed and overrun records remain inspectable and never count as success.
+- Overlay `overrun` is terminal for retry: a later `invoke` of the same slot is not already-running. Failed and overrun records remain inspectable and never count as success. Overlay succeeded remains the bound CLI exiting 0 even when stored `inner_workers` contain a nonzero `exit_code`.
 - When a slot has no binding, the driver may perform that job and no invocation record is required. When the binding set is empty, a run can still complete with the driver performing the work.
 - Policy-document has no work slot for `prepare` → `ready`. Software-change, policy-document, and research share the same binding, invoke, overlay, and gate contract; each only declares its catalog.
 - Slot-visit subjects are minted via set-current-subject on entry into a slot state, including `start` when the initial state is a slot. `invoke` snapshots via get-current-subject and does not mint. `instruction_digest` is SHA-256 of the stored instruction body UTF-8 bytes, lowercase hex.
-- Public-boundary journeys (`scripts/software-change-journey.py`, `scripts/policy-document-journey.py`, `scripts/research-journey.py`) freeze a sparse dummy-worker binding, invoke before the bound checked event, and prove catalog snapshot, instruction redaction, unbound-invoke rejection, pre-evaluate gate, worker-packet stdin, overlay `succeeded`, unbound stored instructions, and invocation history. Software-change journeys also prove graph-runner and fan-out behavior with dummy inner workers and do not call a live model.
-- Bound review slots frozen to `fan-out` still require `loop-engine invoke RUN_ID SLOT_ID`. Callers put `--worker` JSON objects in frozen binding args at start. Stock software-change review bindings with zero workers fail closed; recovery is terminate and start again.
+- Public-boundary journeys (`scripts/software-change-journey.py`, `scripts/policy-document-journey.py`, `scripts/research-journey.py`) freeze a sparse dummy-worker binding, invoke before the bound checked event, and prove catalog snapshot, instruction redaction, unbound-invoke rejection, pre-evaluate gate, worker-packet stdin, overlay `succeeded`, unbound stored instructions, and invocation history. Software-change journeys also prove graph-runner and fan-out behavior with dummy inner workers, `preview-bindings` nonzero on zero-worker `fan-out` JSON without creating a run, and do not call a live model.
+- Bound review slots frozen to `fan-out` still require `loop-engine invoke RUN_ID SLOT_ID`. A usable review binding is caller-supplied `--worker` objects frozen at `start` after `preview-bindings` and lock-in. Shipped software-change profiles omit `design-review`, `plan-review`, and `implementation-review`; `implement` remains bound to `run-plan-graph`. Default implement inner argv is `pi --print --no-skills --no-extensions` and must not pass `--no-context-files`.
 
 ## 15. Complexity Guardrails
 

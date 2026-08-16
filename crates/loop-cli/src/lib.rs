@@ -6,14 +6,15 @@
 //! and integration crates respectively.
 
 mod fan_out;
+mod preview_bindings;
 
 pub use fan_out::FanOutArgs;
 
 use loop_core::{
     self as core, AppendContextRequest, CompleteWorkSlotInvocationRequest, EventRequest,
-    HistoryRequest, InvocationId, InvokeRequest, OperationOutcome, Persistence, ProcessError,
-    ProviderResolutionError, RunId, ShowRequest, StartRequest, StartedWaiter, TerminateRunRequest,
-    Timestamp, WaiterSpawnArgs, WaiterWrittenStatus, WorkSlotProcess,
+    HistoryRequest, InnerWorker, InvocationId, InvokeRequest, OperationOutcome, Persistence,
+    ProcessError, ProviderResolutionError, RunId, ShowRequest, StartRequest, StartedWaiter,
+    TerminateRunRequest, Timestamp, WaiterSpawnArgs, WaiterWrittenStatus, WorkSlotProcess,
 };
 use loop_integrations::{
     ConfiguredProviderResolver, ProviderConfiguration, SqlitePersistence, SubprocessProviderGateway,
@@ -135,6 +136,10 @@ pub enum ParsedRequest {
     FanOut {
         options: CliOptions,
         args: FanOutArgs,
+    },
+    PreviewBindings {
+        options: CliOptions,
+        operand: Option<String>,
     },
 }
 
@@ -593,6 +598,33 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
         return parse_fan_out_request(options, fan_out_tokens);
     }
 
+    if command_name == "preview-bindings" {
+        if let Some(option) = fan_out_tokens.first() {
+            return Err(CliError::new(
+                "invalid-invocation",
+                format!("unknown option `{option}`"),
+            ));
+        }
+        reject_unrelated_options(
+            "preview-bindings",
+            provider,
+            input,
+            label,
+            start_id,
+            kind,
+            data,
+            record_id,
+            event,
+        )?;
+        if run_id.is_some() {
+            return Err(CliError::new(
+                "invalid-invocation",
+                "preview-bindings does not accept a run ID",
+            ));
+        }
+        return parse_preview_bindings_request(options, positionals);
+    }
+
     if let Some(option) = fan_out_tokens.first() {
         return Err(CliError::new(
             "invalid-invocation",
@@ -956,6 +988,9 @@ where
             invocation_id,
         } => execute_wait_invocation(options, run_id, invocation_id),
         ParsedRequest::FanOut { options, args } => execute_fan_out(options, args),
+        ParsedRequest::PreviewBindings { options, operand } => {
+            execute_preview_bindings(options, operand)
+        }
     }
 }
 
@@ -1014,6 +1049,53 @@ fn fan_out_failed(message: String) -> Execution {
         exit_code: EXIT_ERROR,
         stdout: String::new(),
         stderr: format!("fan-out error: {message}\n"),
+    }
+}
+
+fn parse_preview_bindings_request(
+    options: CliOptions,
+    mut positionals: Vec<String>,
+) -> Result<ParsedRequest, CliError> {
+    let operand = take_positional(&mut positionals);
+    ensure_no_positionals(&positionals, "preview-bindings")?;
+    Ok(ParsedRequest::PreviewBindings { options, operand })
+}
+
+fn execute_preview_bindings(options: CliOptions, operand: Option<String>) -> Execution {
+    let warn_default_timeout = options.provider_timeout.is_none();
+    let source = match preview_bindings::load_from_stdin_or_operand(operand.as_deref()) {
+        Ok(source) => source,
+        Err(error) => {
+            return render_invalid_invocation_with_format(
+                CliError::new("invalid-invocation", error.message),
+                options.output,
+            );
+        }
+    };
+    match preview_bindings::preview(&source, warn_default_timeout) {
+        Ok(report) => {
+            let exit_code = if report.errors.is_empty() {
+                EXIT_COMPLETED
+            } else {
+                EXIT_INVALID_INVOCATION
+            };
+            match serde_json::to_string(&report) {
+                Ok(stdout) => Execution {
+                    exit_code,
+                    stdout: format!("{stdout}\n"),
+                    stderr: String::new(),
+                },
+                Err(error) => Execution {
+                    exit_code: EXIT_ERROR,
+                    stdout: String::new(),
+                    stderr: format!("preview-bindings error: {error}\n"),
+                },
+            }
+        }
+        Err(error) => render_invalid_invocation_with_format(
+            CliError::new("invalid-invocation", error.message),
+            options.output,
+        ),
     }
 }
 
@@ -1130,6 +1212,7 @@ fn wait_for_worker_and_complete(
     } else {
         WaiterWrittenStatus::Failed
     };
+    let inner_workers = inner_workers_after_reap(persistence, &run_id, &invocation_id);
 
     persistence
         .complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
@@ -1138,9 +1221,48 @@ fn wait_for_worker_and_complete(
             written,
             exit_code,
             now_timestamp(),
+            inner_workers,
         ))
         .map_err(|error| CliError::new(error.code(), error.to_string()))?;
     Ok(())
+}
+
+fn inner_workers_after_reap(
+    persistence: &SqlitePersistence,
+    run_id: &RunId,
+    invocation_id: &InvocationId,
+) -> Vec<InnerWorker> {
+    let Ok(invocations) = persistence.load_work_slot_invocations(run_id) else {
+        return Vec::new();
+    };
+    let Some(invocation) = invocations
+        .into_iter()
+        .find(|invocation| invocation.invocation_id == *invocation_id)
+    else {
+        return Vec::new();
+    };
+    inner_workers_from_capture_dir(&invocation.capture_dir)
+}
+
+fn inner_workers_from_capture_dir(capture_dir: &str) -> Vec<InnerWorker> {
+    if capture_dir.is_empty() {
+        return Vec::new();
+    }
+    let bytes = match fs::read(Path::new(capture_dir).join("summary.json")) {
+        Ok(bytes) => bytes,
+        Err(_) => return Vec::new(),
+    };
+    parse_summary_inner_workers(&bytes).unwrap_or_default()
+}
+
+fn parse_summary_inner_workers(bytes: &[u8]) -> Option<Vec<InnerWorker>> {
+    #[derive(Deserialize)]
+    struct SummaryFile {
+        workers: Vec<InnerWorker>,
+    }
+    serde_json::from_slice::<SummaryFile>(bytes)
+        .ok()
+        .map(|summary| summary.workers)
 }
 
 struct CliWorkSlotProcess {
@@ -1709,6 +1831,7 @@ struct CliInvokeResult {
     slot_id: core::WorkSlotId,
     started_at: core::Timestamp,
     allowed_time_ms: u64,
+    capture_dir: String,
 }
 
 impl From<core::InvokeResult> for CliInvokeResult {
@@ -1718,6 +1841,7 @@ impl From<core::InvokeResult> for CliInvokeResult {
             slot_id: result.slot_id,
             started_at: result.started_at,
             allowed_time_ms: result.allowed_time_ms,
+            capture_dir: result.capture_dir,
         }
     }
 }
@@ -1983,9 +2107,39 @@ fn usage(command: Option<&str>) -> String {
                 + "  --instructions FILE      Shared instructions file for ad hoc mode.\n"
                 + "                           Bound mode reads the invoke packet from stdin instead.\n"
         }
-        _ => {
-            "Usage: loop-engine [options] <operation> [arguments]\n\nOperations:\n  start\n  list\n  show\n  append\n  event\n  history\n  terminate\n  invoke\n\nOther commands:\n  fan-out                    Start worker CLIs in parallel without opening a run\n                             --worker JSON          Worker object {command, args}; repeatable\n                             --instructions FILE    Shared instructions (ad hoc mode)\n\nGlobal options:\n  --json, -j                 Render machine-readable JSON\n  --database <path>          SQLite database path\n  --config <path>            Provider TOML configuration path\n  --timeout-ms <milliseconds> Provider operation timeout\n  --help, -h                 Show help\n  --version, -V              Show version\n"
+        Some("preview-bindings") => {
+            "Usage: loop-engine [options] preview-bindings [JSON|@FILE]\n\n"
                 .to_owned()
+                + "Inspect work_slot_bindings without starting a run or opening the database.\n"
+                + "Omitted operand reads stdin; @FILE reads that path; otherwise the operand is\n"
+                + "inline JSON. Accepted JSON is a work_slot_bindings map or an object containing\n"
+                + "that key. This is not a run-state operation.\n"
+        }
+        _ => {
+            "Usage: loop-engine [options] <operation> [arguments]\n\n"
+                .to_owned()
+                + "Operations:\n"
+                + "  start\n"
+                + "  list\n"
+                + "  show\n"
+                + "  append\n"
+                + "  event\n"
+                + "  history\n"
+                + "  terminate\n"
+                + "  invoke\n\n"
+                + "Other commands:\n"
+                + "  fan-out                    Start worker CLIs in parallel without opening a run\n"
+                + "                             --worker JSON          Worker object {command, args}; repeatable\n"
+                + "                             --instructions FILE    Shared instructions (ad hoc mode)\n"
+                + "  preview-bindings [JSON|@FILE]  Inspect work_slot_bindings without starting a run\n"
+                + "                             Omitted operand reads stdin; @FILE reads that path\n\n"
+                + "Global options:\n"
+                + "  --json, -j                 Render machine-readable JSON\n"
+                + "  --database <path>          SQLite database path\n"
+                + "  --config <path>            Provider TOML configuration path\n"
+                + "  --timeout-ms <milliseconds> Provider operation timeout\n"
+                + "  --help, -h                 Show help\n"
+                + "  --version, -V              Show version\n"
         }
     }
 }
@@ -2105,6 +2259,7 @@ mod tests {
             "terminate",
             "invoke",
             "fan-out",
+            "preview-bindings",
         ] {
             let command_help = execute([command, "--help"]);
             assert_eq!(command_help.exit_code, EXIT_COMPLETED);
@@ -2210,6 +2365,27 @@ mod tests {
             help.stdout
         );
         assert!(
+            help.stdout.contains("preview-bindings"),
+            "help must list preview-bindings: {}",
+            help.stdout
+        );
+        let (operations, other) = help
+            .stdout
+            .split_once("Other commands:")
+            .expect("help must have Other commands");
+        assert!(
+            operations.contains("Operations:"),
+            "help must list the eight operations: {operations}"
+        );
+        assert!(
+            !operations.contains("preview-bindings"),
+            "preview-bindings must not be a ninth primary operation: {operations}"
+        );
+        assert!(
+            other.contains("preview-bindings"),
+            "preview-bindings must be under Other commands: {other}"
+        );
+        assert!(
             help.stdout.contains("--worker"),
             "help must document --worker: {}",
             help.stdout
@@ -2234,6 +2410,11 @@ mod tests {
         assert!(fan_out_help.stdout.contains("--worker JSON"));
         assert!(fan_out_help.stdout.contains("--instructions FILE"));
         assert!(!fan_out_help.stdout.contains("wait-invocation"));
+        let preview_help = execute(["preview-bindings", "--help"]);
+        assert_eq!(preview_help.exit_code, EXIT_COMPLETED);
+        assert!(preview_help.stdout.contains("preview-bindings"));
+        assert!(preview_help.stdout.contains("[JSON|@FILE]"));
+        assert!(!preview_help.stdout.contains("wait-invocation"));
     }
 
     #[test]
@@ -2253,6 +2434,25 @@ mod tests {
         assert_eq!(args.workers.len(), 1);
         assert_eq!(args.workers[0].command, "echo");
         assert!(options.database.is_none());
+    }
+
+    #[test]
+    fn parser_preview_bindings_is_not_a_primary_command() {
+        let parsed = parse_args(["preview-bindings"]).expect("preview-bindings should parse");
+        let ParsedRequest::PreviewBindings { operand, options } = parsed else {
+            panic!("expected ParsedRequest::PreviewBindings, got {parsed:?}");
+        };
+        assert!(operand.is_none());
+        assert!(options.database.is_none());
+        assert!(options.provider_timeout.is_none());
+
+        let parsed = parse_args(["preview-bindings", "{}", "--timeout-ms", "60000"])
+            .expect("preview-bindings with timeout");
+        let ParsedRequest::PreviewBindings { operand, options } = parsed else {
+            panic!("expected ParsedRequest::PreviewBindings");
+        };
+        assert_eq!(operand.as_deref(), Some("{}"));
+        assert_eq!(options.provider_timeout, Some(Duration::from_millis(60000)));
     }
 
     #[test]

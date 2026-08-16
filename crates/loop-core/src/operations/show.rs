@@ -7,7 +7,7 @@
 
 use super::persistence_error;
 use crate::{
-    project_invocation_status, DurableEvaluation, EventId, InvocationId, Lifecycle,
+    project_invocation_status, DurableEvaluation, EventId, InnerWorker, InvocationId, Lifecycle,
     OperationOutcome, Persistence, ProjectedInvocationStatus, Run, RunId, ShowData, StateId,
     Timestamp, Transition, TransitionKind, WorkSlot, WorkSlotBinding, WorkSlotId,
     WorkSlotInvocation, WorkSlotProcess, WorkflowId,
@@ -105,21 +105,75 @@ pub struct WorkSlotInvocationView {
     pub allowed_time_ms: u64,
     pub exit_code: Option<i32>,
     pub completed_at: Option<Timestamp>,
+    pub overlay_meaning: String,
+    pub elapsed_ms: u64,
+    pub remaining_allowed_ms: u64,
+    pub capture_dir: String,
+    pub inner_workers: Vec<InnerWorker>,
+}
+
+const OVERLAY_MEANING_SUCCEEDED: &str =
+    "Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work.";
+const OVERLAY_MEANING_FAILED: &str =
+    "Overlay failed means the bound CLI exited nonzero or the waiter vanished.";
+const OVERLAY_MEANING_RUNNING: &str =
+    "Overlay running means the waiter is alive and allowed time has not elapsed.";
+const OVERLAY_MEANING_OVERRUN: &str =
+    "Overlay overrun means allowed time elapsed while the waiter is alive; invoke the same slot again.";
+
+fn overlay_meaning(status: ProjectedInvocationStatus) -> &'static str {
+    match status {
+        ProjectedInvocationStatus::Succeeded => OVERLAY_MEANING_SUCCEEDED,
+        ProjectedInvocationStatus::Failed => OVERLAY_MEANING_FAILED,
+        ProjectedInvocationStatus::Running => OVERLAY_MEANING_RUNNING,
+        ProjectedInvocationStatus::Overrun => OVERLAY_MEANING_OVERRUN,
+    }
+}
+
+fn invocation_elapsed_ms(record: &WorkSlotInvocation, now: Timestamp) -> u64 {
+    let end = record.completed_at.unwrap_or(now).as_unix_millis();
+    end.saturating_sub(record.started_at.as_unix_millis())
+        .max(0) as u64
+}
+
+fn remaining_allowed_ms(
+    status: ProjectedInvocationStatus,
+    allowed_time_ms: u64,
+    elapsed_ms: u64,
+) -> u64 {
+    if status == ProjectedInvocationStatus::Running {
+        allowed_time_ms.saturating_sub(elapsed_ms)
+    } else {
+        0
+    }
 }
 
 impl WorkSlotInvocationView {
     fn from_record(record: &WorkSlotInvocation, now: Timestamp, waiter_alive: bool) -> Self {
+        let status = project_invocation_status(record, now, waiter_alive);
+        let elapsed_ms = invocation_elapsed_ms(record, now);
+        let remaining_allowed_ms = remaining_allowed_ms(status, record.allowed_time_ms, elapsed_ms);
+        let inner_workers = if status == ProjectedInvocationStatus::Running {
+            Vec::new()
+        } else {
+            record.inner_workers.clone()
+        };
         Self {
             invocation_id: record.invocation_id.clone(),
             slot_id: record.slot_id.clone(),
             binding: record.binding.clone(),
             instruction_digest: record.instruction_digest.clone(),
             subject: record.subject.clone(),
-            status: project_invocation_status(record, now, waiter_alive),
+            status,
             started_at: record.started_at,
             allowed_time_ms: record.allowed_time_ms,
             exit_code: record.exit_code,
             completed_at: record.completed_at,
+            overlay_meaning: overlay_meaning(status).to_owned(),
+            elapsed_ms,
+            remaining_allowed_ms,
+            capture_dir: record.capture_dir.clone(),
+            inner_workers,
         }
     }
 }
@@ -222,7 +276,7 @@ fn current_state_instructions_for(run: &Run, stored: &str) -> String {
         Some((slot, binding)) => {
             let args = serde_json::to_string(&binding.args).unwrap_or_else(|_| "[]".to_owned());
             format!(
-                "Bound work slot `{slot_id}` is configured. Frozen worker CLI: command={command} args={args}. Legal start: loop-engine invoke {run_id} {slot_id}.",
+                "Bound work slot `{slot_id}` is configured. Frozen worker CLI: command={command} args={args}. Legal start: loop-engine invoke {run_id} {slot_id}. Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. Captures are at the named capture directory on the invocation view and invoke result. The driver triages worker output, appends provider-shaped records, then requests the shown event. On overrun invoke the same slot again. On failed inspect stderr.",
                 slot_id = slot.id,
                 command = binding.command,
                 run_id = run.id,
@@ -339,8 +393,8 @@ where
 mod tests {
     use super::*;
     use crate::{
-        ContextRecord, ControlRevision, EvaluationFeedback, ProviderAssociation, SemanticSequence,
-        State, Timestamp, TransitionKind, WaiterWrittenStatus, Workflow,
+        ContextRecord, ControlRevision, EvaluationFeedback, InnerWorker, ProviderAssociation,
+        SemanticSequence, State, Timestamp, TransitionKind, WaiterWrittenStatus, Workflow,
     };
     use serde_json::json;
 
@@ -447,6 +501,31 @@ mod tests {
         exit_code: Option<i32>,
         completed_at: Option<i64>,
     ) -> WorkSlotInvocation {
+        sample_invocation_with_capture(
+            invocation_id,
+            waiter_pid,
+            started_at,
+            allowed_time_ms,
+            status,
+            exit_code,
+            completed_at,
+            String::new(),
+            Vec::new(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn sample_invocation_with_capture(
+        invocation_id: &str,
+        waiter_pid: u32,
+        started_at: i64,
+        allowed_time_ms: u64,
+        status: Option<WaiterWrittenStatus>,
+        exit_code: Option<i32>,
+        completed_at: Option<i64>,
+        capture_dir: impl Into<String>,
+        inner_workers: Vec<InnerWorker>,
+    ) -> WorkSlotInvocation {
         WorkSlotInvocation::new(
             invocation_id,
             "slot-1",
@@ -459,6 +538,8 @@ mod tests {
             status,
             exit_code,
             completed_at.map(Timestamp::from_unix_millis),
+            capture_dir,
+            inner_workers,
         )
     }
 
@@ -706,6 +787,11 @@ mod tests {
         assert_eq!(view.allowed_time_ms, 5_000);
         assert_eq!(view.exit_code, Some(0));
         assert_eq!(view.completed_at, Some(Timestamp::from_unix_millis(2_000)));
+        assert_eq!(view.overlay_meaning, OVERLAY_MEANING_SUCCEEDED);
+        assert_eq!(view.elapsed_ms, 1_000);
+        assert_eq!(view.remaining_allowed_ms, 0);
+        assert_eq!(view.capture_dir, "");
+        assert!(view.inner_workers.is_empty());
 
         let json = serde_json::to_value(&projection).unwrap();
         let serialized = json.to_string();
@@ -720,10 +806,15 @@ mod tests {
         let mut expected = vec![
             "allowed_time_ms",
             "binding",
+            "capture_dir",
             "completed_at",
+            "elapsed_ms",
             "exit_code",
+            "inner_workers",
             "instruction_digest",
             "invocation_id",
+            "overlay_meaning",
+            "remaining_allowed_ms",
             "slot_id",
             "started_at",
             "status",
@@ -782,6 +873,19 @@ mod tests {
             projection.work_slot_invocations[3].status,
             ProjectedInvocationStatus::Running
         );
+        assert_eq!(
+            projection.work_slot_invocations[3].overlay_meaning,
+            OVERLAY_MEANING_RUNNING
+        );
+        assert_eq!(projection.work_slot_invocations[3].elapsed_ms, 5_000);
+        assert_eq!(
+            projection.work_slot_invocations[3].remaining_allowed_ms,
+            5_000
+        );
+        assert!(projection.work_slot_invocations[3].inner_workers.is_empty());
+        assert_eq!(projection.work_slot_invocations[0].remaining_allowed_ms, 0);
+        assert_eq!(projection.work_slot_invocations[1].remaining_allowed_ms, 0);
+        assert_eq!(projection.work_slot_invocations[2].remaining_allowed_ms, 0);
     }
 
     #[test]
@@ -805,8 +909,22 @@ mod tests {
         );
         assert_eq!(
             instructions,
-            "Bound work slot `slot-1` is configured. Frozen worker CLI: command=worker args=[\"--flag\",\"value\"]. Legal start: loop-engine invoke run-1 slot-1."
+            "Bound work slot `slot-1` is configured. Frozen worker CLI: command=worker args=[\"--flag\",\"value\"]. Legal start: loop-engine invoke run-1 slot-1. Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. Captures are at the named capture directory on the invocation view and invoke result. The driver triages worker output, appends provider-shaped records, then requests the shown event. On overrun invoke the same slot again. On failed inspect stderr."
         );
+        let triage = [
+            "Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work.",
+            "Captures are at the named capture directory on the invocation view and invoke result.",
+            "The driver triages worker output, appends provider-shaped records, then requests the shown event.",
+            "On overrun invoke the same slot again.",
+            "On failed inspect stderr.",
+        ];
+        let mut cursor = 0;
+        for sentence in triage {
+            let found = instructions[cursor..].find(sentence).unwrap_or_else(|| {
+                panic!("missing triage sentence `{sentence}` in `{instructions}`")
+            });
+            cursor += found + sentence.len();
+        }
         assert!(instructions.contains("slot-1"));
         assert!(instructions.contains("worker"));
         assert!(instructions.contains("[\"--flag\",\"value\"]"));
@@ -863,5 +981,87 @@ mod tests {
         assert!(!empty_projection
             .current_state_instructions
             .contains("loop-engine invoke"));
+    }
+
+    #[test]
+    fn succeeded_invocation_reports_heartbeat_and_inner_nonzero() {
+        let data = ShowData {
+            run: run_custom(
+                "start",
+                Lifecycle::Active,
+                slot_workflow("Do the work"),
+                bound_input(),
+            ),
+            context: vec![],
+            checked_evaluations: vec![],
+        };
+        let record = sample_invocation_with_capture(
+            "inv-1",
+            4242,
+            1_000,
+            5_000,
+            Some(WaiterWrittenStatus::Succeeded),
+            Some(0),
+            Some(2_500),
+            "/tmp/artifacts/work-slot-captures/slot-1/inv-1",
+            vec![InnerWorker::new("python3", vec!["worker.py".to_owned()], 7)],
+        );
+        let projection =
+            project_with_invocations(data, &[record], Timestamp::from_unix_millis(9_000), |_| {
+                false
+            })
+            .unwrap();
+        let view = &projection.work_slot_invocations[0];
+        assert_eq!(view.status, ProjectedInvocationStatus::Succeeded);
+        assert_eq!(view.overlay_meaning, OVERLAY_MEANING_SUCCEEDED);
+        assert_eq!(view.elapsed_ms, 1_500);
+        assert_eq!(view.remaining_allowed_ms, 0);
+        assert_eq!(
+            view.capture_dir,
+            "/tmp/artifacts/work-slot-captures/slot-1/inv-1"
+        );
+        assert_eq!(view.inner_workers.len(), 1);
+        assert_eq!(view.inner_workers[0].exit_code, 7);
+        assert_eq!(view.inner_workers[0].command, "python3");
+    }
+
+    #[test]
+    fn running_invocation_hides_stored_inner_workers_and_counts_remaining_time() {
+        let data = ShowData {
+            run: run_custom(
+                "start",
+                Lifecycle::Active,
+                slot_workflow("Do the work"),
+                bound_input(),
+            ),
+            context: vec![],
+            checked_evaluations: vec![],
+        };
+        let record = sample_invocation_with_capture(
+            "inv-running",
+            9,
+            1_000,
+            4_000,
+            None,
+            None,
+            None,
+            "/tmp/captures/inv-running",
+            vec![InnerWorker::new("python3", vec!["stale.py".to_owned()], 7)],
+        );
+        let projection =
+            project_with_invocations(data, &[record], Timestamp::from_unix_millis(3_500), |_| {
+                true
+            })
+            .unwrap();
+        let view = &projection.work_slot_invocations[0];
+        assert_eq!(view.status, ProjectedInvocationStatus::Running);
+        assert_eq!(view.overlay_meaning, OVERLAY_MEANING_RUNNING);
+        assert_eq!(view.elapsed_ms, 2_500);
+        assert_eq!(view.remaining_allowed_ms, 1_500);
+        assert_eq!(view.capture_dir, "/tmp/captures/inv-running");
+        assert!(
+            view.inner_workers.is_empty(),
+            "running overlay must not project stored inner_workers"
+        );
     }
 }

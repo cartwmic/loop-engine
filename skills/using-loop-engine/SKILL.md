@@ -1,13 +1,15 @@
 ---
 name: using-loop-engine
-description: Use when driving a durable Loop Engine workflow run from the CLI — confirming work-slot policy with the user before start, starting a run against a configured provider, inspecting or resuming a run, appending context records, requesting events, invoking bound work slots, terminating, interpreting completed/rejected/error outcomes, or fanning out worker CLIs without a run.
+description: Use when driving a durable Loop Engine workflow run from the CLI — confirming work-slot policy with the user before start, previewing bindings, starting a run against a configured provider, inspecting or resuming a run, appending context records, requesting events, invoking bound work slots, terminating, interpreting completed/rejected/error/invalid-invocation outcomes, or fanning out worker CLIs without a run.
 ---
 
 # Using Loop Engine
 
 ## Overview
 
-`loop-engine` owns durable run state, the stored workflow graph, and the progression decision. You perform the primary work externally; the engine never edits repositories, documents, or artifacts. Workflows come from external provider executables configured in TOML.
+`loop-engine` owns durable run state, the stored workflow graph, and the progression decision. You perform the primary work externally; the engine never edits repositories, documents, or artifacts. Workflows come from external provider executables configured in TOML. Provider `describe` and `evaluate` are deterministic and do not invoke a model.
+
+This skill is the engine source of truth. Reference provider skills embed a driving minimum and name this skill as a required companion; they do not replace it.
 
 Full semantics: [docs/agent-usage.md](../../docs/agent-usage.md). Requirements: [docs/PRD.md](../../docs/PRD.md).
 
@@ -42,7 +44,7 @@ loop-engine [--database DB] [--json] terminate RUN_ID
 loop-engine [--database DB] [--json] [--timeout-ms MS] invoke RUN_ID SLOT_ID
 ```
 
-`--help` also lists `fan-out` beside, and distinct from, these eight. It is not a ninth primary operation.
+`--help` also lists `fan-out` and `preview-bindings` under Other commands, beside and distinct from these eight. They are not a ninth primary operation.
 
 Usual-case `start` omits `--database` and `artifact_root`:
 
@@ -55,7 +57,7 @@ loop-engine --json --config /absolute/path/to/providers.toml \
 
 ## Lock work-slot policy before start
 
-Bindings freeze with `initial_input` and cannot be patched. Do not call `start` until the user has actively approved the work-slot policy for this run. Copying a provider profile is not approval: some shipped profiles already contain `work_slot_bindings`.
+Bindings freeze with `initial_input` and cannot be patched. Do not call `start` until the user has actively approved the work-slot policy for this run. Copying a provider profile is not approval: some shipped profiles already contain `work_slot_bindings`. Inspect the JSON with `preview-bindings` before that confirmation.
 
 Ask, show the exact JSON you will freeze, and wait for explicit confirmation of all three:
 
@@ -69,14 +71,21 @@ If the user declines bindings, delete `work_slot_bindings` or set it to `{}` in 
 
 ## Work-slot delegation
 
-Object `initial_input` may include reserved `work_slot_bindings`: slot ID → `{command, args}`. Omit or `{}` means none. `start` rejects unknown slot IDs, unknown fields, and non-object values.
+Object `initial_input` may include reserved `work_slot_bindings`: slot ID → `{command, args}`. Omit or `{}` means none. `start` rejects unknown slot IDs, unknown fields, and non-object values. `start` does not parse `fan-out` or `run-plan-graph` argv.
 
-`show` projects `work_slots` (catalog: id, state, event) and `work_slot_invocations`. Overlay status is `running` | `succeeded` | `failed` | `overrun`. Compare `current_state` to frozen bindings to decide the path:
+`show` projects `work_slots` (catalog: id, state, event) and `work_slot_invocations`. Overlay status is `running` | `succeeded` | `failed` | `overrun`. Each invocation view also reports `overlay_meaning`, `elapsed_ms`, `remaining_allowed_ms`, `capture_dir`, and `inner_workers` (`command`, `args`, `exit_code` in argv or task order after the bound CLI finishes; empty while overlay is `running` or when no summary was copied). `show` does not spawn a provider and does not read capture files. Overlay meaning:
+
+- succeeded: the bound CLI exited 0, not that the provider accepted the work
+- failed: the bound CLI exited nonzero or the waiter vanished
+- running: the waiter is alive and allowed time has not elapsed
+- overrun: allowed time elapsed while the waiter is alive; invoke the same slot again
+
+Compare `current_state` to frozen bindings to decide the path:
 
 - **Unbound** (cataloged or not, but absent from frozen bindings): `current_state_instructions` is the stored work body. Perform that work yourself. Then append and request the event.
-- **Bound** (slot ID present in frozen bindings): instructions name the slot, the frozen `{command, args}`, and that the legal start is `loop-engine invoke RUN_ID SLOT_ID`. They omit the stored work body. Do not perform that body, and do not exec the frozen command yourself. `invoke`, then poll `show` until overlay `succeeded`, `failed`, or `overrun`. On `overrun`, `invoke` the same slot again. Overlay `succeeded` means the bound CLI exited 0, not that the change is accepted. You still append provider-shaped evidence and request the shown event.
+- **Bound** (slot ID present in frozen bindings): instructions name the slot, the frozen `{command, args}`, and that the legal start is `loop-engine invoke RUN_ID SLOT_ID`. They omit the stored work body. Do not perform that body, and do not exec the frozen command yourself. `invoke`, then poll `show` until overlay `succeeded`, `failed`, or `overrun`. Bound-instruction triage order: overlay succeeded means the bound CLI exited 0, not that the provider accepted the work; captures are at the named capture directory on the invocation view and invoke result; the driver triages worker output, appends provider-shaped records, then requests the shown event; on overrun invoke the same slot again; on failed inspect stderr.
 
-`invoke RUN_ID SLOT_ID` starts the bound worker. Rejected for unknown, unbound, or overlay-`running` slots. Overlay `overrun` is terminal for retry — invoke the same slot again. The worker stdin JSON object is `run_id`, `slot_id`, `artifact_root`, and `instruction_body`. Hidden `wait-invocation` is parent of the worker; it is not a user command and not a daemon.
+`invoke RUN_ID SLOT_ID` starts the bound worker. Rejected for unknown, unbound, or overlay-`running` slots. Overlay `overrun` is terminal for retry — invoke the same slot again. On accept, the engine allocates `capture_dir` as `{artifact_root}/work-slot-captures/{slot_id}/{invocation_id}`, creates that directory, stores it, and returns it on the invoke result. The worker stdin JSON object is exactly `run_id`, `slot_id`, `artifact_root`, `instruction_body`, and `capture_dir`. Hidden `wait-invocation` is parent of the worker; it is not a user command and not a daemon. After waitpid, if `capture_dir/summary.json` is well-formed, the waiter copies inner `command`/`args`/`exit_code` onto the invocation; overlay remains the bound CLI process exit (0 → succeeded).
 
 `event`/`evaluate` never wait on a worker. A bound checked edge requires overlay `succeeded` matching slot ID, instruction digest, and the current slot-visit subject.
 
@@ -90,16 +99,42 @@ loop-engine fan-out [--worker JSON]... [--instructions FILE]
 
 Use `fan-out` **ad hoc** when you want parallel worker CLIs without a run: pass `--instructions FILE` and do not send an invoke packet on stdin. Workers come only from repeated `--worker` JSON objects `{command, args}`. Zero `--worker` entries fail closed.
 
-When a work slot is frozen to `loop-engine` args that begin with `fan-out`, the legal start remains `loop-engine invoke RUN_ID SLOT_ID`. Do not call `fan-out` yourself for that slot; `invoke` execs the frozen argv with the existing worker packet on stdin. Bound mode rejects `--instructions`. Callers who want reviewers put `--worker` JSON objects in those frozen binding args at `start`. Bindings cannot be patched mid-run. Stock software-change review bindings freeze `design-review`, `plan-review`, and `implementation-review` to `loop-engine fan-out` with zero `--worker` entries; invoke of those slots therefore fails closed. Recovery is terminate and start again with `--worker` objects in the frozen args.
+When a work slot is frozen to `loop-engine` args that begin with `fan-out`, the legal start remains `loop-engine invoke RUN_ID SLOT_ID`. Do not call `fan-out` yourself for that slot; `invoke` execs the frozen argv with the existing worker packet on stdin. Bound mode honors `packet.capture_dir` (writes per-worker `0/`, `1/`, … plus `summary.json` there) and rejects `--instructions`. Callers who want reviewers put `--worker` JSON objects in those frozen binding args at `start` after `preview-bindings` and lock-in. Bindings cannot be patched mid-run.
 
-`software-change run-plan-graph` is an argv command of the software-change provider binary — the shipped implement worker — not an engine operation.
+Shipped software-change profiles omit `design-review`, `plan-review`, and `implementation-review` from `work_slot_bindings` (those rooms stay driver-performed). `implement` remains bound to `software-change` args `[run-plan-graph]`. A usable review binding is caller-supplied `--worker` objects frozen at `start` after preview and lock-in — not a stock zero-worker `fan-out` argv.
+
+Documented review `pi` worker examples include `--print --no-skills --no-extensions --tools read,grep,find,ls` and must not pass `--no-context-files`. Example (every model-bearing worker names a model):
+
+```json
+"design-review": {
+  "command": "loop-engine",
+  "args": [
+    "fan-out",
+    "--worker", "{\"command\":\"pi\",\"args\":[\"--print\",\"--no-skills\",\"--no-extensions\",\"--tools\",\"read,grep,find,ls\",\"--model\",\"MODEL\"]}"
+  ]
+}
+```
+
+`software-change run-plan-graph` is an argv command of the software-change provider binary — the shipped implement worker — not an engine operation. Bound mode honors `packet.capture_dir` (per-task `{task_id}/` plus `summary.json`). When `--task-worker` is omitted, the default inner worker is `pi --print --no-skills --no-extensions`; it does not pass `--no-context-files` and does not pass `--tools`, so bash, edit, write, and AGENTS.md remain available.
+
+## Non-run-state command: preview-bindings
+
+`preview-bindings` does not start, advance, or record a run and does not open the run database.
+
+```text
+loop-engine preview-bindings [JSON|@FILE]
+```
+
+Omitted operand reads stdin; `@FILE` reads that path; otherwise the operand is inline JSON. Accepted JSON is a `work_slot_bindings` map or an object containing that key.
+
+It expands nested `--worker` and `--task-worker` JSON `{command, args}` objects, lists detected `--model` values, and warns on unpinned `pi`, PATH versus absolute command, missing shipped sandbox flags, and the 30-second invoke default. Warnings alone exit 0. It exits nonzero on malformed input and when any `fan-out` binding has zero `--worker` entries. `start` still does not parse `fan-out` argv; preview is the fail-closed check for that freeze.
 
 ## Canonical loop
 
 Repeat until `show` reports `final` or `terminated`:
 
-1. `show` — read `current_state` (a state ID) with its sibling fields `current_state_title` and `current_state_instructions`, immutable `initial_input` (including `work_slot_bindings` when present), `work_slots`, `work_slot_invocations`, ordered `context`, `requestable_events`, and `latest_evaluations` (includes latest checked-transition denial feedback).
-2. If the current state is a bound slot, `invoke` it and poll `show` until overlay status is `succeeded`, `failed`, or `overrun`; on overlay `overrun`, `invoke` again. Otherwise perform the instructed work externally.
+1. `show` — read `current_state` (a state ID) with its sibling fields `current_state_title` and `current_state_instructions`, immutable `initial_input` (including `work_slot_bindings` when present), `work_slots`, `work_slot_invocations` (heartbeat fields above), ordered `context`, `requestable_events`, and `latest_evaluations` (includes latest checked-transition denial feedback).
+2. If the current state is a bound slot, `invoke` it and poll `show` until overlay status is `succeeded`, `failed`, or `overrun`; on overlay `overrun`, `invoke` again. Follow the bound-instruction triage order. Otherwise perform the instructed work externally.
 3. `append` durable context for evidence, findings, decisions, or steering. Core assigns no meaning to `kind`/`data`; follow provider/state conventions. Checked evaluations receive `initial_input` plus all context in stable append order.
 4. Request exactly one event from `requestable_events`. Append any final handoff context before an event entering a final state.
 5. Inspect the envelope, then `show` again before the next event. On `rejected`, follow the feedback and continue work; on `error`, assume nothing advanced and re-read `show`.
@@ -120,7 +155,7 @@ Parse JSON even on nonzero exit. Treat only `completed` as success. Never infer 
 ## Rules
 
 - One logical mutating actor per run: serialize `append`, `event`, `invoke`, and `terminate` calls; never race them from parallel workers. Concurrent reads are fine. Context appended during an in-flight checked evaluation does not invalidate or reach that evaluation.
-- Public-boundary proof uses `scripts/software-change-journey.py`; source full mode drives separate engine processes and packaged checked-prefix mode consumes only provider data materialized by `data-dump`. Policy-document and research journeys do the same for those providers. Each freezes a sparse dummy-worker `work_slot_bindings` entry and `invoke`s before the bound checked event. The software-change source full journey also proves `run-plan-graph` and `fan-out` with dummy inner workers (no live model), including zero-worker bound review invoke failing closed. Synthetic evidence proves deterministic mechanics, not semantic verdict quality.
+- Public-boundary proof uses `scripts/software-change-journey.py`; source full mode drives separate engine processes and packaged checked-prefix mode consumes only provider data materialized by `data-dump`. Policy-document and research journeys do the same for those providers. Each freezes a sparse dummy-worker `work_slot_bindings` entry and `invoke`s before the bound checked event. The software-change source full journey also proves `run-plan-graph` and `fan-out` with dummy inner workers (no live model), including `preview-bindings` nonzero on zero-worker `fan-out` JSON without creating a run. Synthetic evidence proves deterministic mechanics, not semantic verdict quality.
 - `initial_input` is immutable run configuration; never attempt to replace it. Frozen `work_slot_bindings` are part of that input. Do not `start` until the user has approved the bindings JSON, including default-vs-custom argv and models encoded in those args — or an explicit unpinned-default acceptance for any model-bearing CLI that has no model in argv.
 - Context records are immutable and append-only.
 - Provider association, workflow topology, and state instructions are snapshotted at `start`; changing TOML cannot redirect an existing run.

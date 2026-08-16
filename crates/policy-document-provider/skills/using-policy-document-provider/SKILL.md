@@ -11,7 +11,23 @@ description: Use when drafting or auditing README.md, AGENTS.md, or another poli
 
 Workflow: `prepare → deterministic-review → semantic-review → end`. `ready` and both `revise` events are check-free. Both `passed` events are checked; final semantic approval reruns deterministic checks against current bytes before evaluating evidence. `mode` is frozen as `draft` or `audit`, but both modes use the same topology and checks.
 
-Drive engine commands and outcome handling with the [using-loop-engine skill](../../../../skills/using-loop-engine/SKILL.md). Provider contract: [README](../../README.md). Target constraints: [target guidance](../../data/target-guidance.md). Semantic evidence contract: [reviewer protocol](../../data/reviewer-protocol.md).
+## Required companion and engine driving minimum
+
+`using-loop-engine` (`skills/using-loop-engine/SKILL.md`) is a **required companion**. This skill does not replace it. The closed driving minimum below is what you cannot skip when this skill is loaded alone; load the companion for full engine semantics.
+
+**Run-state commands:** `start`, `list`, `show`, `append`, `event`, `history`, `terminate`, and `invoke`.
+
+**Non-run-state commands:** `fan-out` and `preview-bindings`. They do not start, advance, or record a run.
+
+**Envelopes:** `completed`, `rejected`, `error`, and `invalid-invocation`. Parse JSON even on nonzero exit. Treat only `completed` as success.
+
+**Bound versus unbound:** a catalog slot ID present in frozen `work_slot_bindings` is bound — `invoke` it; do not perform the stored work body. An absent key is unbound — perform the stored instructions yourself, then append and request the event.
+
+**Overlay meaning:** overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. You still triage worker output, append provider-shaped records, and request the shown event.
+
+**Lock-in-before-start:** do not call `start` until the user confirms (1) bind or not (which slot IDs), (2) exact `{command, args}` per bound slot, and (3) model identity in those frozen args (nested `--worker` / `--task-worker` count) or explicit unpinned-default acceptance. Bindings freeze and cannot be patched.
+
+Run `loop-engine preview-bindings` on the JSON you will freeze before `start`. `describe` and `evaluate` remain deterministic and do not invoke a model. Provider contract: [README](../../README.md). Target constraints: [target guidance](../../data/target-guidance.md). Semantic evidence contract: [reviewer protocol](../../data/reviewer-protocol.md).
 
 ## Setup
 
@@ -35,7 +51,7 @@ policy-document data-dump "$DATA_ROOT"
 
 Choose [readme.json](../../data/readme.json) or [agents.json](../../data/agents.json). Copy it to a run-specific file; set `mode` to `draft` or `audit`; replace `target.path` with the absolute target path. Keep shipped `target.id` and `profile_version` unchanged unless intentionally authoring a custom profile. Omit `artifact_root` in the usual case; the reserved key is accepted and ignored, and the provider is not required to write artifact files. Other unknown `initial_input` keys still fail.
 
-Shipped profiles have **no** `work_slot_bindings`. Cataloged slots are `deterministic-review` and `semantic-review`. Do not add bindings, and do not start, until the user confirms: (1) driver-performed (omit the key or `{}`) vs which slots to bind; (2) exact `{command, args}` if bound, rather than assuming a default; (3) which models those CLIs will use, encoded in frozen args. Nested inner workers count. Do not call `start` while a bound model-bearing CLI has no model in argv unless the user has explicitly accepted that CLI's unpinned default. Bindings freeze and cannot be patched.
+Shipped profiles have **no** `work_slot_bindings`. Cataloged slots are `deterministic-review` and `semantic-review`. Do not add bindings, and do not start, until the user confirms: (1) driver-performed (omit the key or `{}`) vs which slots to bind; (2) exact `{command, args}` if bound, rather than assuming a default; (3) which models those CLIs will use, encoded in frozen args. Nested inner workers count. Do not call `start` while a bound model-bearing CLI has no model in argv unless the user has explicitly accepted that CLI's unpinned default. Bindings freeze and cannot be patched. Run `loop-engine preview-bindings` on any `work_slot_bindings` JSON you will freeze.
 
 ```sh
 loop-engine --json --config "$PROVIDER_CONFIG" \
@@ -55,7 +71,7 @@ Heading aliases are case-insensitive; profiles do not require exact heading spel
 
 ## Run loop
 
-1. `show` and read current instructions plus immutable `initial_input` (including `work_slot_bindings` when present), `work_slots`, and `work_slot_invocations`, especially `mode`, target, profile version, deterministic policies, and semantic policies.
+1. `show` and read current instructions plus immutable `initial_input` (including `work_slot_bindings` when present), `work_slots`, and `work_slot_invocations` (`overlay_meaning`, `elapsed_ms`, `remaining_allowed_ms`, `capture_dir`, `inner_workers`), especially `mode`, target, profile version, deterministic policies, and semantic policies.
 2. In `prepare`, author or revise target externally. Request `ready` to enter deterministic review.
 3. In `deterministic-review`, if that slot is bound, `invoke` it and poll overlay until `succeeded` / `failed` / `overrun`; on `overrun` invoke again; overlay `succeeded` is worker exit 0, not provider acceptance. Request `passed` only after overlay `succeeded`, or immediately if unbound. On `policy-document-nonconforming`, fix every reported violation, request check-free `revise`, then repeat from `prepare`.
 4. After deterministic approval, compute lowercase SHA-256 over exact current bytes:

@@ -1,6 +1,6 @@
 ---
 name: using-software-change-provider
-description: Use when running the software-change workflow through Loop Engine with the software-change provider — confirming work-slot bindings and models with the user before start, selecting a config profile, authoring gate artifacts, invoking bound implement/review workers or performing unbound rooms, appending review-evidence records, and clearing checked transitions.
+description: Use when running the software-change workflow through Loop Engine with the software-change provider — confirming work-slot bindings and models with the user before start, selecting a config profile, authoring gate artifacts, invoking bound implement workers or performing unbound rooms, appending review-evidence records, and clearing checked transitions.
 ---
 
 # Using the software-change provider
@@ -9,9 +9,25 @@ description: Use when running the software-change workflow through Loop Engine w
 
 `software-change` is Loop Engine's reference provider, distributed standalone with its shipped data embedded (`software-change data-dump DIR` materializes it); a repo checkout remains the development path. Workflow: `explore → design → design-review → plan → plan-review → implement → implementation-review → validation → end`, with validation-report-local corrections staying in validation after edit/recheck for checked `passed`; from validation, nearest check-free `revise` is only for implementation-owned defects. Phase-named owning routes (`revise-intent`, `revise-design`, `revise-plan`) handle upstream defects from review states. Reviewer convergence contract requires candidate triage before append or mutation, focused external reconsideration for disputed candidates, comprehensive first review, bounded confirmation review, and a three-round circuit breaker that never waives known defects. Late findings still require current evidence, violated obligation, consequence, validation gap, and provenance (`newly exposed`, `fix-introduced`, or `previously overlooked`); prior visibility or overlook does not waive known material defects, while comprehensive-first and scope/materiality burdens block drip-feeding or unrelated reopening.
 
-The provider is deterministic only: it validates artifact schemas and revision links, then aggregates externally supplied review evidence. It never generates prompts, invokes a model, or judges findings. Bound workers, when frozen, are started by `loop-engine invoke`; you still triage outputs and append verdicts. Per-run obligations are frozen in immutable `initial_input`.
+The provider is deterministic only: it validates artifact schemas and revision links, then aggregates externally supplied review evidence. `describe` and `evaluate` never generate prompts, invoke a model, or judge findings. Bound workers, when frozen, are started by `loop-engine invoke`; you still triage outputs and append verdicts. Per-run obligations are frozen in immutable `initial_input`.
 
-Drive the engine itself with the [using-loop-engine skill](../../../../skills/using-loop-engine/SKILL.md). Provider contract details: [README](../../README.md); frozen requirements: [docs/prd.md](../../docs/prd.md).
+## Required companion and engine driving minimum
+
+`using-loop-engine` (`skills/using-loop-engine/SKILL.md`) is a **required companion**. This skill does not replace it. The closed driving minimum below is what you cannot skip when this skill is loaded alone; load the companion for full engine semantics.
+
+**Run-state commands:** `start`, `list`, `show`, `append`, `event`, `history`, `terminate`, and `invoke`.
+
+**Non-run-state commands:** `fan-out` and `preview-bindings`. They do not start, advance, or record a run.
+
+**Envelopes:** `completed`, `rejected`, `error`, and `invalid-invocation`. Parse JSON even on nonzero exit. Treat only `completed` as success.
+
+**Bound versus unbound:** a catalog slot ID present in frozen `work_slot_bindings` is bound — `invoke` it; do not perform the stored work body. An absent key is unbound — perform the stored instructions yourself, then append and request the event.
+
+**Overlay meaning:** overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. You still triage worker output, append provider-shaped records, and request the shown event.
+
+**Lock-in-before-start:** do not call `start` until the user confirms (1) bind or not (which slot IDs), (2) exact `{command, args}` per bound slot, and (3) model identity in those frozen args (nested `--worker` / `--task-worker` count) or explicit unpinned-default acceptance. Bindings freeze and cannot be patched.
+
+Run `loop-engine preview-bindings` on the JSON you will freeze before `start`. Provider contract details: [README](../../README.md); frozen requirements: [docs/prd.md](../../docs/prd.md).
 
 ## Setup
 
@@ -27,36 +43,36 @@ Pick a profile from [data/configs/](../../data/configs/) — `minimal.json` (val
 
 Cataloged slots: `explore-intent`, `design-draft`, `design-review`, `plan-draft`, `plan-review`, `implement`, `implementation-review`, `validate`. Bindings are sparse and freeze at `start`.
 
-Shipped profiles already freeze:
+Shipped profiles freeze:
 
 | Slot | Shipped `{command, args}` |
 |---|---|
-| `implement` | `software-change` `run-plan-graph` (inner worker defaults to `pi --print` unless `--task-worker JSON` is in the frozen args) |
-| `design-review`, `plan-review`, `implementation-review` | `loop-engine` `fan-out` with **zero** `--worker` entries |
+| `implement` | `software-change` `run-plan-graph` (inner worker defaults to `pi --print --no-skills --no-extensions` unless `--task-worker JSON` is in the frozen args; that default must not pass `--no-context-files` and does not pass `--tools`) |
+| `design-review`, `plan-review`, `implementation-review` | **omitted** (driver-performed) |
 | `validate` and the draft slots | unbound |
 
-Stock review `invoke` therefore fails closed (`fan-out requires at least one --worker`) until `--worker` objects are in the frozen args. Bindings cannot be patched mid-run. Keeping shipped `implement` without `--task-worker` leaves the inner `pi --print` model unpinned; that is not a confirmed model.
+A usable review binding is caller-supplied `--worker` objects frozen at `start` after `preview-bindings` and lock-in. Bindings cannot be patched mid-run. Keeping shipped `implement` without `--task-worker` leaves the inner `pi` model unpinned; that is not a confirmed model.
 
-Before `start`, show the exact `work_slot_bindings` JSON you will freeze and wait for the user to confirm all three:
+Before `start`, run `preview-bindings` on the exact `work_slot_bindings` JSON you will freeze, show that JSON, and wait for the user to confirm all three:
 
 1. **Use bound slots at all?** Keep the shipped map, keep a sparse subset, replace entries, or unbind everything (`{}` or delete the key). Keeping the shipped map is not model lock-in.
 2. **Keep shipped commands, or replace them?** Quote every bound `{command, args}`.
-3. **Which models, if any bound slot will invoke a model-bearing CLI?** Encode each model in frozen args. Nested inner workers count. For implement, add `--task-worker '{"command":"pi","args":["--print","--model","MODEL"]}'` (or another CLI plus its model flags). For review, add repeated `--worker` objects that each include a model flag. Do not call `start` while a bound slot will invoke a model-bearing CLI unless each model id is in those frozen args, or the user has explicitly accepted that CLI's unpinned default. Do not pick a model after `start`.
+3. **Which models, if any bound slot will invoke a model-bearing CLI?** Encode each model in frozen args. Nested inner workers count. For implement, add `--task-worker '{"command":"pi","args":["--print","--no-skills","--no-extensions","--model","MODEL"]}'` (or another CLI plus its model flags). For review, add repeated `--worker` objects that each include a model flag. Do not call `start` while a bound slot will invoke a model-bearing CLI unless each model id is in those frozen args, or the user has explicitly accepted that CLI's unpinned default. Do not pick a model after `start`.
 
-Usable review binding (same pattern for `plan-review` and `implementation-review`; every model-bearing worker names a model):
+Usable review binding (same pattern for `plan-review` and `implementation-review`; every model-bearing worker names a model; review `pi` examples include `--no-skills --no-extensions --tools read,grep,find,ls` and must not pass `--no-context-files`):
 
 ```json
 "design-review": {
   "command": "loop-engine",
   "args": [
     "fan-out",
-    "--worker", "{\"command\":\"pi\",\"args\":[\"--print\",\"--model\",\"MODEL\"]}",
+    "--worker", "{\"command\":\"pi\",\"args\":[\"--print\",\"--no-skills\",\"--no-extensions\",\"--tools\",\"read,grep,find,ls\",\"--model\",\"MODEL\"]}",
     "--worker", "{\"command\":\"claude\",\"args\":[\"-p\",\"--model\",\"MODEL\"]}"
   ]
 }
 ```
 
-Custom implement inner worker:
+Custom implement inner worker (must not pass `--no-context-files`; do not add `--tools` unless you intend to restrict implement tools):
 
 ```json
 "implement": {
@@ -64,7 +80,7 @@ Custom implement inner worker:
   "args": [
     "run-plan-graph",
     "--task-worker",
-    "{\"command\":\"pi\",\"args\":[\"--print\",\"--model\",\"MODEL\"]}"
+    "{\"command\":\"pi\",\"args\":[\"--print\",\"--no-skills\",\"--no-extensions\",\"--model\",\"MODEL\"]}"
   ]
 }
 ```
@@ -96,10 +112,10 @@ Pass `--database /path/to/dir/loop.db` only to isolate SQLite and `/path/to/dir/
 
 ## Per-gate loop
 
-1. `show` — read `current_state`, `current_state_instructions`, frozen `initial_input` (including `work_slot_bindings`, `review_policies`, `artifact_schemas`), `work_slots`, and `work_slot_invocations`.
-2. If this state is a **bound** slot, do not author the room yourself. `invoke` it (`loop-engine --json --timeout-ms N invoke RUN_ID SLOT_ID`; raise `N` above the 30s default), poll overlay until `succeeded` / `failed` / `overrun`, and on `overrun` invoke again. For bound `implement`, `software-change run-plan-graph` executes `plan.json` (up to 4 inner workers) and requires `implementation-report.json` before overlay `succeeded`. For bound review slots, `loop-engine fan-out` writes `artifact_root/fan-out/<slot-id>/<index>/{stdout,stderr}`; overlay `succeeded` means the collector finished, not that the review passed.
+1. `show` — read `current_state`, `current_state_instructions`, frozen `initial_input` (including `work_slot_bindings`, `review_policies`, `artifact_schemas`), `work_slots`, and `work_slot_invocations` (`overlay_meaning`, `elapsed_ms`, `remaining_allowed_ms`, `capture_dir`, `inner_workers`).
+2. If this state is a **bound** slot, do not author the room yourself. `invoke` it (`loop-engine --json --timeout-ms N invoke RUN_ID SLOT_ID`; raise `N` above the 30s default), poll overlay until `succeeded` / `failed` / `overrun`, and on `overrun` invoke again. Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. Captures are at the named `capture_dir` on the invocation view and invoke result. For bound `implement`, `software-change run-plan-graph` executes `plan.json` (up to 4 inner workers) and requires `implementation-report.json` before overlay `succeeded`. For a bound review slot frozen to `fan-out`, read `capture_dir` (`summary.json` and per-worker stdout/stderr); overlay `succeeded` means the collector finished, not that the review passed.
 3. If this state is **unbound**, author or revise the subject artifact in `artifact_root` using its template from [data/templates/](../../data/templates/). Material content changes require a revision bump — a bump retires all standing verdicts for that subject by design; keeping the revision asserts the edit was immaterial.
-4. For evidence gates, obtain the axis's configured `required_authors` count of distinct external judgments (default 1; high-rigor design-review and validation axes require 2): fresh context, not the artifact's author, each judging only that axis using its `example_prompt`. Follow [data/reviewer-protocol.md](../../data/reviewer-protocol.md). Unbound: you commission those reviewers. Bound review: read the fan-out captures, then you still triage and append; `fan-out` does not write records. Match worker count to `required_authors` when you freeze review `--worker` args.
+4. For evidence gates, obtain the axis's configured `required_authors` count of distinct external judgments (default 1; high-rigor design-review and validation axes require 2): fresh context, not the artifact's author, each judging only that axis using its `example_prompt`. Follow [data/reviewer-protocol.md](../../data/reviewer-protocol.md). Unbound: you commission those reviewers. Bound review: read the captures, then you still triage and append; `fan-out` does not write records. Match worker count to `required_authors` when you freeze review `--worker` args.
 5. Append one record per axis judgment — `kind` is `review-evidence`, `data` is the eight-field object:
 
 ```sh

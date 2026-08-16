@@ -1,6 +1,7 @@
 use loop_core::{
-    CreateRunRequest, CreateWorkSlotInvocationRequest, Lifecycle, Persistence, ProviderAssociation,
-    State, Timestamp, Transition, WaiterWrittenStatus, WorkSlotBinding, Workflow,
+    CreateRunRequest, CreateWorkSlotInvocationRequest, InnerWorker, Lifecycle, Persistence,
+    ProviderAssociation, State, Timestamp, Transition, WaiterWrittenStatus, WorkSlotBinding,
+    Workflow,
 };
 use loop_integrations::SqlitePersistence;
 use serde_json::{json, Value};
@@ -59,6 +60,15 @@ fn envelope(command: &str, args: Vec<Value>, packet: Value) -> Value {
 }
 
 fn seed_running_invocation(database: &Path, run_id: &str, invocation_id: &str) {
+    seed_running_invocation_with_capture(database, run_id, invocation_id, String::new());
+}
+
+fn seed_running_invocation_with_capture(
+    database: &Path,
+    run_id: &str,
+    invocation_id: &str,
+    capture_dir: impl Into<String>,
+) {
     let persistence = SqlitePersistence::open(database).expect("open sqlite");
     persistence
         .create_run(create_request(run_id))
@@ -74,20 +84,25 @@ fn seed_running_invocation(database: &Path, run_id: &str, invocation_id: &str) {
             1,
             Timestamp::from_unix_millis(500),
             1_000,
+            capture_dir,
         ))
         .expect("create running invocation");
 }
 
-fn load_invocation_status(
+fn load_invocation(
     database: &Path,
     run_id: &str,
-) -> (Option<WaiterWrittenStatus>, Option<i32>) {
+) -> (Option<WaiterWrittenStatus>, Option<i32>, Vec<InnerWorker>) {
     let persistence = SqlitePersistence::open(database).expect("reopen sqlite");
     let invocations = persistence
         .load_work_slot_invocations(&run_id.into())
         .expect("load invocations");
     assert_eq!(invocations.len(), 1);
-    (invocations[0].status, invocations[0].exit_code)
+    (
+        invocations[0].status,
+        invocations[0].exit_code,
+        invocations[0].inner_workers.clone(),
+    )
 }
 
 fn spawn_wait_invocation(
@@ -134,9 +149,10 @@ fn wait_invocation_worker_exit_0_stores_succeeded() {
         ),
     );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let (status, exit_code) = load_invocation_status(&database, "run-wait-ok");
+    let (status, exit_code, inner_workers) = load_invocation(&database, "run-wait-ok");
     assert_eq!(status, Some(WaiterWrittenStatus::Succeeded));
     assert_eq!(exit_code, Some(0));
+    assert!(inner_workers.is_empty());
 }
 
 #[test]
@@ -155,9 +171,10 @@ fn wait_invocation_worker_exit_7_stores_failed() {
         ),
     );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let (status, exit_code) = load_invocation_status(&database, "run-wait-fail");
+    let (status, exit_code, inner_workers) = load_invocation(&database, "run-wait-fail");
     assert_eq!(status, Some(WaiterWrittenStatus::Failed));
     assert_eq!(exit_code, Some(7));
+    assert!(inner_workers.is_empty());
 }
 
 #[test]
@@ -302,5 +319,133 @@ fn wait_invocation_unknown_primary_list_unchanged() {
     assert!(
         unknown_stderr.contains("start, list, show, append, event, history, terminate, or invoke"),
         "unknown primary list changed: {unknown_stderr}"
+    );
+}
+
+#[test]
+fn wait_invocation_copies_well_formed_summary_inner_workers() {
+    let directory = tempdir().expect("tempdir");
+    let database = directory.path().join("loop.db");
+    let capture_dir = directory.path().join("captures").join("inv-summary");
+    std::fs::create_dir_all(&capture_dir).expect("capture dir");
+    std::fs::write(
+        capture_dir.join("summary.json"),
+        serde_json::to_vec(&json!({
+            "workers": [
+                {
+                    "command": "python3",
+                    "args": ["a.py"],
+                    "exit_code": 0,
+                    "stdout_path": "/tmp/0/stdout"
+                },
+                {
+                    "command": "python3",
+                    "args": ["b.py"],
+                    "exit_code": 7,
+                    "stderr_path": "/tmp/1/stderr"
+                }
+            ]
+        }))
+        .expect("summary json"),
+    )
+    .expect("write summary.json");
+    seed_running_invocation_with_capture(
+        &database,
+        "run-wait-summary",
+        "inv-wait-summary",
+        capture_dir.to_string_lossy().into_owned(),
+    );
+    let output = spawn_wait_invocation(
+        &database,
+        "run-wait-summary",
+        "inv-wait-summary",
+        &envelope(
+            "sh",
+            vec![json!("-c"), json!("exit 0")],
+            worker_packet("run-wait-summary"),
+        ),
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let (status, exit_code, inner_workers) = load_invocation(&database, "run-wait-summary");
+    assert_eq!(status, Some(WaiterWrittenStatus::Succeeded));
+    assert_eq!(exit_code, Some(0));
+    assert_eq!(
+        inner_workers,
+        vec![
+            InnerWorker::new("python3", vec!["a.py".to_owned()], 0),
+            InnerWorker::new("python3", vec!["b.py".to_owned()], 7),
+        ]
+    );
+}
+
+#[test]
+fn wait_invocation_missing_summary_stores_empty_inner_workers() {
+    let directory = tempdir().expect("tempdir");
+    let database = directory.path().join("loop.db");
+    let capture_dir = directory.path().join("captures").join("inv-missing");
+    std::fs::create_dir_all(&capture_dir).expect("capture dir");
+    seed_running_invocation_with_capture(
+        &database,
+        "run-wait-missing",
+        "inv-wait-missing",
+        capture_dir.to_string_lossy().into_owned(),
+    );
+    let output = spawn_wait_invocation(
+        &database,
+        "run-wait-missing",
+        "inv-wait-missing",
+        &envelope(
+            "sh",
+            vec![json!("-c"), json!("exit 0")],
+            worker_packet("run-wait-missing"),
+        ),
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let (status, exit_code, inner_workers) = load_invocation(&database, "run-wait-missing");
+    assert_eq!(status, Some(WaiterWrittenStatus::Succeeded));
+    assert_eq!(exit_code, Some(0));
+    assert!(inner_workers.is_empty());
+}
+
+#[test]
+fn wait_invocation_malformed_summary_stores_empty_inner_workers_without_flipping_overlay() {
+    let directory = tempdir().expect("tempdir");
+    let database = directory.path().join("loop.db");
+    let capture_dir = directory.path().join("captures").join("inv-malformed");
+    std::fs::create_dir_all(&capture_dir).expect("capture dir");
+    std::fs::write(
+        capture_dir.join("summary.json"),
+        serde_json::to_vec(&json!({
+            "workers": [
+                {"command": "python3", "args": ["ok.py"], "exit_code": 0},
+                {"command": "python3", "args": []}
+            ]
+        }))
+        .expect("malformed summary json"),
+    )
+    .expect("write summary.json");
+    seed_running_invocation_with_capture(
+        &database,
+        "run-wait-malformed",
+        "inv-wait-malformed",
+        capture_dir.to_string_lossy().into_owned(),
+    );
+    let output = spawn_wait_invocation(
+        &database,
+        "run-wait-malformed",
+        "inv-wait-malformed",
+        &envelope(
+            "sh",
+            vec![json!("-c"), json!("exit 0")],
+            worker_packet("run-wait-malformed"),
+        ),
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let (status, exit_code, inner_workers) = load_invocation(&database, "run-wait-malformed");
+    assert_eq!(status, Some(WaiterWrittenStatus::Succeeded));
+    assert_eq!(exit_code, Some(0));
+    assert!(
+        inner_workers.is_empty(),
+        "one malformed worker must store empty inner_workers, got {inner_workers:?}"
     );
 }

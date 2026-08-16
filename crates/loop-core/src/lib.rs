@@ -15,7 +15,7 @@ pub use invocation::{instruction_digest, project_invocation_status};
 pub use model::{
     ContextRecord, ContextRecordId, ControlRevision, DurableEvaluation, DurableEvaluationResult,
     EvaluationFeedback, EvaluationRequest, EvaluationResult, EventId, HistoryAction, HistoryEntry,
-    InvocationId, JsonValue, Lifecycle, PriorEvaluation, ProjectedInvocationStatus,
+    InnerWorker, InvocationId, JsonValue, Lifecycle, PriorEvaluation, ProjectedInvocationStatus,
     ProviderAssociation, ProviderSelector, Run, RunId, SemanticSequence, State, StateId, Timestamp,
     Transition, TransitionHistoryOutcome, TransitionKind, WaiterWrittenStatus, WorkSlot,
     WorkSlotBinding, WorkSlotId, WorkSlotInvocation, Workflow, WorkflowId,

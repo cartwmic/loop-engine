@@ -23,6 +23,43 @@ PATH_LOOP_ENGINE = "loop-engine"
 SHIPPED_IMPLEMENT_ARGS = ["run-plan-graph"]
 SHIPPED_FAN_OUT_ARGS = ["fan-out"]
 SHIPPED_REVIEW_SLOT_IDS = ("design-review", "plan-review", "implementation-review")
+SHIPPED_PROFILE_RELATIVE = Path("crates/software-change-provider/data/configs")
+SHIPPED_PROFILE_NAMES = ("minimal.json", "standard.json", "high-rigor.json")
+SOFTWARE_CHANGE_FIXTURES = (
+    ("intent.json", "intent-good.json"),
+    ("design.json", "design-good.json"),
+    ("plan.json", "plan-good.json"),
+    ("implementation-report.json", "implementation-report-good.json"),
+    ("validation-report.json", "validation-report-good.json"),
+)
+SOFTWARE_CHANGE_GATE_SUBJECT = {
+    "intent": "intent.json",
+    "design-review": "design.json",
+    "plan-review": "plan.json",
+    "implementation-review": "implementation-report.json",
+    "validation": "validation-report.json",
+}
+SOFTWARE_CHANGE_ADVANCE_STEPS = (
+    ("explore", "intent", "intent-ready", "design"),
+    ("design", None, "design-ready", "design-review"),
+    ("design-review", "design-review", "approved", "plan"),
+    ("plan", None, "plan-ready", "plan-review"),
+    ("plan-review", "plan-review", "approved", "implement"),
+)
+PACKET_KEYS = frozenset(
+    {"run_id", "slot_id", "artifact_root", "instruction_body", "capture_dir"}
+)
+OVERLAY_MEANING_SUCCEEDED = (
+    "Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work."
+)
+DEFAULT_PI_SANDBOX_ARGS = ["--print", "--no-skills", "--no-extensions"]
+FORBIDDEN_PI_FLAGS = ("--no-context-files", "--tools")
+REVIEW_BINDING_SLOT_IDS = SHIPPED_REVIEW_SLOT_IDS + (
+    "semantic-review",
+    "deterministic-review",
+    "verify",
+    "synthesize",
+)
 
 EngineCall = Callable[[Sequence[str]], dict[str, Any]]
 
@@ -97,7 +134,12 @@ def assert_bound_redaction(
     expected = (
         f"Bound work slot `{slot_id}` is configured. "
         f"Frozen worker CLI: command={command} args={args_json}. "
-        f"Legal start: loop-engine invoke {run_id} {slot_id}."
+        f"Legal start: loop-engine invoke {run_id} {slot_id}. "
+        f"{OVERLAY_MEANING_SUCCEEDED} "
+        "Captures are at the named capture directory on the invocation view and invoke result. "
+        "The driver triages worker output, appends provider-shaped records, then requests the shown event. "
+        "On overrun invoke the same slot again. "
+        "On failed inspect stderr."
     )
     if text != expected:
         raise WorkSlotJourneyFailure(
@@ -127,6 +169,72 @@ def expect_rejection(response: Mapping[str, Any], code: str, *, action: str) -> 
         )
 
 
+def assert_inner_worker(worker: Mapping[str, Any]) -> None:
+    if not isinstance(worker, dict):
+        raise WorkSlotJourneyFailure(f"inner worker is not an object: {worker}")
+    if "label" in worker:
+        raise WorkSlotJourneyFailure(f"inner worker must not have a label field: {worker}")
+    command = worker.get("command")
+    args = worker.get("args")
+    exit_code = worker.get("exit_code")
+    if not isinstance(command, str) or not command:
+        raise WorkSlotJourneyFailure(f"inner worker omitted command: {worker}")
+    if not isinstance(args, list) or not all(isinstance(item, str) for item in args):
+        raise WorkSlotJourneyFailure(f"inner worker args must be a string list: {worker}")
+    if not isinstance(exit_code, int):
+        raise WorkSlotJourneyFailure(f"inner worker omitted int exit_code: {worker}")
+
+
+def assert_succeeded_heartbeat(match: Mapping[str, Any], *, slot_id: str) -> None:
+    if match.get("slot_id") != slot_id:
+        raise WorkSlotJourneyFailure(f"succeeded overlay has wrong slot: {match}")
+    if match.get("status") != "succeeded":
+        raise WorkSlotJourneyFailure(f"heartbeat status is not succeeded: {match}")
+    if match.get("overlay_meaning") != OVERLAY_MEANING_SUCCEEDED:
+        raise WorkSlotJourneyFailure(
+            f"overlay_meaning mismatch: {match.get('overlay_meaning')!r}"
+        )
+    elapsed = match.get("elapsed_ms")
+    remaining = match.get("remaining_allowed_ms")
+    if not isinstance(elapsed, int) or elapsed < 0:
+        raise WorkSlotJourneyFailure(f"elapsed_ms invalid: {elapsed!r}")
+    if remaining != 0:
+        raise WorkSlotJourneyFailure(
+            f"remaining_allowed_ms must be 0 after succeeded: {remaining!r}"
+        )
+    capture_dir = match.get("capture_dir")
+    if not isinstance(capture_dir, str) or not capture_dir:
+        raise WorkSlotJourneyFailure("succeeded overlay omitted capture_dir")
+    if not Path(capture_dir).is_dir():
+        raise WorkSlotJourneyFailure(f"capture_dir does not exist: {capture_dir}")
+    inner_workers = match.get("inner_workers")
+    if not isinstance(inner_workers, list):
+        raise WorkSlotJourneyFailure(f"inner_workers missing: {match}")
+    allowed = {"command", "args", "exit_code"}
+    for worker in inner_workers:
+        assert_inner_worker(worker)
+        extra = set(worker) - allowed
+        if extra:
+            raise WorkSlotJourneyFailure(
+                f"show inner_workers leaked extra fields {sorted(extra)}: {worker}"
+            )
+    if "waiter_pid" in match:
+        raise WorkSlotJourneyFailure("show leaked waiter_pid")
+
+
+def _assert_inner_exit_codes(
+    overlay: Mapping[str, Any], expected: Sequence[int]
+) -> None:
+    inner = overlay.get("inner_workers")
+    if not isinstance(inner, list):
+        raise WorkSlotJourneyFailure(f"overlay omitted inner_workers: {overlay}")
+    actual = [worker.get("exit_code") for worker in inner]
+    if actual != list(expected):
+        raise WorkSlotJourneyFailure(
+            f"inner_workers exit codes {actual} != {list(expected)}"
+        )
+
+
 def invoke_until_succeeded(
     engine_call: EngineCall,
     run_id: str,
@@ -143,6 +251,22 @@ def invoke_until_succeeded(
         raise WorkSlotJourneyFailure(f"invoke omitted invocation_id: {started}")
     if result.get("slot_id") != slot_id:
         raise WorkSlotJourneyFailure(f"invoke returned wrong slot_id: {started}")
+    invoke_capture = result.get("capture_dir")
+    if not isinstance(invoke_capture, str) or not invoke_capture:
+        raise WorkSlotJourneyFailure(f"invoke omitted capture_dir: {started}")
+    expected_capture = (
+        Path(invoke_capture).resolve()
+        if Path(invoke_capture).is_absolute()
+        else Path(invoke_capture)
+    )
+    if expected_capture.name != invocation_id:
+        raise WorkSlotJourneyFailure(
+            f"capture_dir must end with invocation_id {invocation_id}: {invoke_capture}"
+        )
+    if slot_id not in Path(invoke_capture).parts:
+        raise WorkSlotJourneyFailure(
+            f"capture_dir must include slot_id {slot_id}: {invoke_capture}"
+        )
 
     deadline = time.monotonic() + timeout_s
     last_status = None
@@ -169,8 +293,11 @@ def invoke_until_succeeded(
                 raise WorkSlotJourneyFailure("show leaked waiter_pid")
             last_status = match.get("status")
             if last_status == "succeeded":
-                if match.get("slot_id") != slot_id:
-                    raise WorkSlotJourneyFailure(f"succeeded overlay has wrong slot: {match}")
+                assert_succeeded_heartbeat(match, slot_id=slot_id)
+                if match.get("capture_dir") != invoke_capture:
+                    raise WorkSlotJourneyFailure(
+                        f"show capture_dir {match.get('capture_dir')!r} != invoke {invoke_capture!r}"
+                    )
                 return match
             if last_status in ("failed", "overrun"):
                 raise WorkSlotJourneyFailure(
@@ -200,7 +327,7 @@ def assert_packet_receipt(
         raise WorkSlotJourneyFailure(f"missing dummy worker receipt {path}: {error}") from error
     if not isinstance(packet, dict):
         raise WorkSlotJourneyFailure(f"receipt is not an object: {path}")
-    if set(packet) != {"run_id", "slot_id", "artifact_root", "instruction_body"}:
+    if set(packet) != PACKET_KEYS:
         raise WorkSlotJourneyFailure(f"receipt field set mismatch: {sorted(packet)}")
     if packet["run_id"] != run_id or packet["slot_id"] != slot_id:
         raise WorkSlotJourneyFailure(f"receipt identity mismatch: {packet}")
@@ -208,6 +335,11 @@ def assert_packet_receipt(
         raise WorkSlotJourneyFailure(
             f"receipt artifact_root {packet['artifact_root']!r} != {str(artifact_root)!r}"
         )
+    capture_dir = packet["capture_dir"]
+    if not isinstance(capture_dir, str) or not capture_dir:
+        raise WorkSlotJourneyFailure("receipt omitted capture_dir")
+    if not Path(capture_dir).is_dir():
+        raise WorkSlotJourneyFailure(f"receipt capture_dir does not exist: {capture_dir}")
     body = packet["instruction_body"]
     if not isinstance(body, str) or not body:
         raise WorkSlotJourneyFailure("receipt omitted instruction_body")
@@ -270,12 +402,16 @@ def prove_bound_visit(
     overlay = invoke_until_succeeded(
         engine_call, run_id, bound_slot_id, timeout_s=timeout_s
     )
-    assert_packet_receipt(
+    packet = assert_packet_receipt(
         artifact_root,
         run_id=run_id,
         slot_id=bound_slot_id,
         redacted_instructions=redacted,
     )
+    if packet.get("capture_dir") != overlay.get("capture_dir"):
+        raise WorkSlotJourneyFailure(
+            f"receipt capture_dir {packet.get('capture_dir')!r} != overlay {overlay.get('capture_dir')!r}"
+        )
     history = engine_call(["history", run_id])
     if history.get("status") != "completed":
         raise WorkSlotJourneyFailure(f"history failed: {history}")
@@ -351,6 +487,20 @@ def rewrite_path_commands(
     return rewritten
 
 
+def assert_no_review_bindings(bindings: Any, *, source: str) -> None:
+    if bindings is None:
+        return
+    if not isinstance(bindings, dict):
+        raise WorkSlotJourneyFailure(
+            f"{source} work_slot_bindings is not an object: {bindings!r}"
+        )
+    present = [slot_id for slot_id in REVIEW_BINDING_SLOT_IDS if slot_id in bindings]
+    if present:
+        raise WorkSlotJourneyFailure(
+            f"{source} unexpectedly bound review slots {present}"
+        )
+
+
 def assert_shipped_path_names(bindings: Mapping[str, Any]) -> None:
     implement = bindings.get("implement")
     if not isinstance(implement, dict):
@@ -358,11 +508,10 @@ def assert_shipped_path_names(bindings: Mapping[str, Any]) -> None:
     if implement.get("command") != PATH_SOFTWARE_CHANGE or implement.get("args") != SHIPPED_IMPLEMENT_ARGS:
         raise WorkSlotJourneyFailure(f"shipped implement binding mismatch: {implement}")
     for slot_id in SHIPPED_REVIEW_SLOT_IDS:
-        review = bindings.get(slot_id)
-        if not isinstance(review, dict):
-            raise WorkSlotJourneyFailure(f"shipped bindings omitted {slot_id}")
-        if review.get("command") != PATH_LOOP_ENGINE or review.get("args") != SHIPPED_FAN_OUT_ARGS:
-            raise WorkSlotJourneyFailure(f"shipped {slot_id} binding mismatch: {review}")
+        if slot_id in bindings:
+            raise WorkSlotJourneyFailure(
+                f"shipped bindings unexpectedly bound {slot_id}"
+            )
     if "validate" in bindings:
         raise WorkSlotJourneyFailure("shipped bindings unexpectedly bound validate")
 
@@ -383,14 +532,9 @@ def assert_rewritten_binaries(
             f"PATH rewrite must not change shipped implement args: {implement.get('args')}"
         )
     for slot_id in SHIPPED_REVIEW_SLOT_IDS:
-        review = bindings.get(slot_id)
-        if not isinstance(review, dict) or review.get("command") != str(engine):
+        if slot_id in bindings:
             raise WorkSlotJourneyFailure(
-                f"rewritten {slot_id} command {review} != {engine}"
-            )
-        if review.get("args") != SHIPPED_FAN_OUT_ARGS:
-            raise WorkSlotJourneyFailure(
-                f"PATH rewrite must not change shipped {slot_id} args: {review.get('args')}"
+                f"rewritten bindings unexpectedly bound {slot_id} (engine={engine})"
             )
 
 
@@ -539,6 +683,7 @@ def _run_binding(
     *,
     stdin: bytes,
     cwd: Path | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     command = binding.get("command")
     args = binding.get("args")
@@ -550,7 +695,30 @@ def _run_binding(
         capture_output=True,
         check=False,
         cwd=cwd,
+        env=None if env is None else dict(env),
     )
+
+
+def _write_pi_stub(directory: Path) -> Path:
+    """Write a PATH stub named pi that records argv and exits 0."""
+    directory.mkdir(parents=True, exist_ok=True)
+    stub = directory / "pi"
+    stub.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "import os\n"
+        "import sys\n"
+        "\n"
+        "log_dir = os.environ['PI_STUB_LOG_DIR']\n"
+        "os.makedirs(log_dir, exist_ok=True)\n"
+        "path = os.path.join(log_dir, f'{os.getpid()}.argv.json')\n"
+        "with open(path, 'w', encoding='utf-8') as handle:\n"
+        "    json.dump(sys.argv[1:], handle)\n"
+        "sys.stdin.buffer.read()\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    return stub
 
 
 def _invoke_packet(
@@ -559,6 +727,7 @@ def _invoke_packet(
     slot_id: str,
     artifact_root: Path,
     instruction_body: str,
+    capture_dir: Path,
 ) -> bytes:
     return json.dumps(
         {
@@ -566,9 +735,338 @@ def _invoke_packet(
             "slot_id": slot_id,
             "artifact_root": str(artifact_root),
             "instruction_body": instruction_body,
+            "capture_dir": str(capture_dir),
         },
         separators=(",", ":"),
     ).encode("utf-8")
+
+
+def _load_summary_workers(capture_dir: Path) -> list[dict[str, Any]]:
+    path = capture_dir / "summary.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise WorkSlotJourneyFailure(f"missing or invalid {path}: {error}") from error
+    if not isinstance(payload, dict):
+        raise WorkSlotJourneyFailure(f"summary.json is not an object: {path}")
+    workers = payload.get("workers")
+    if not isinstance(workers, list):
+        raise WorkSlotJourneyFailure(f"summary.json omitted workers array: {path}")
+    for worker in workers:
+        assert_inner_worker(worker)
+    return workers
+
+
+def _assert_capture_files(capture_dir: Path, worker_ids: Sequence[str]) -> None:
+    if not capture_dir.is_dir():
+        raise WorkSlotJourneyFailure(f"capture_dir does not exist: {capture_dir}")
+    _load_summary_workers(capture_dir)
+    for worker_id in worker_ids:
+        stdout = capture_dir / worker_id / "stdout"
+        stderr = capture_dir / worker_id / "stderr"
+        if not stdout.is_file():
+            raise WorkSlotJourneyFailure(f"missing capture stdout {stdout}")
+        if not stderr.is_file():
+            raise WorkSlotJourneyFailure(f"missing capture stderr {stderr}")
+
+
+def run_preview_bindings(
+    engine: Path,
+    payload: Mapping[str, Any] | str,
+    *,
+    database: Path | None = None,
+    extra: Sequence[str] = (),
+    cwd: Path | None = None,
+) -> tuple[int, dict[str, Any]]:
+    """Run preview-bindings. Does not require a database."""
+    operand = payload if isinstance(payload, str) else json.dumps(payload)
+    command = [str(engine), "--json", *extra]
+    if database is not None:
+        command.extend(["--database", str(database)])
+    command.extend(["preview-bindings", operand])
+    completed = subprocess.run(
+        command, text=True, capture_output=True, check=False, cwd=cwd
+    )
+    if not completed.stdout.strip():
+        raise WorkSlotJourneyFailure(
+            "preview-bindings returned no JSON "
+            f"(exit={completed.returncode}): {completed.stderr}"
+        )
+    try:
+        value = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise WorkSlotJourneyFailure(
+            f"preview-bindings returned non-JSON (exit={completed.returncode}): {error}"
+        ) from error
+    if not isinstance(value, dict):
+        raise WorkSlotJourneyFailure(f"preview-bindings response is not an object: {value}")
+    return completed.returncode, value
+
+
+def _json_stdout(completed: subprocess.CompletedProcess[bytes]) -> dict[str, Any]:
+    text = completed.stdout.decode("utf-8", "replace").strip()
+    if not text:
+        raise WorkSlotJourneyFailure(
+            "helper returned empty stdout "
+            f"(exit={completed.returncode}): "
+            f"{completed.stderr.decode('utf-8', 'replace')}"
+        )
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise WorkSlotJourneyFailure(
+            f"helper stdout is not JSON: {error}: {text[:500]}"
+        ) from error
+    if not isinstance(value, dict):
+        raise WorkSlotJourneyFailure(f"helper stdout is not an object: {value}")
+    return value
+
+
+def prove_shipped_software_change_profiles(data_root: Path) -> list[str]:
+    """Copied shipped profiles omit review slots and keep implement bound."""
+    names: list[str] = []
+    for name in SHIPPED_PROFILE_NAMES:
+        path = data_root / SHIPPED_PROFILE_RELATIVE / name
+        try:
+            profile = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise WorkSlotJourneyFailure(
+                f"could not read shipped profile {path}: {error}"
+            ) from error
+        if not isinstance(profile, dict):
+            raise WorkSlotJourneyFailure(f"shipped profile is not an object: {path}")
+        bindings = profile.get("work_slot_bindings")
+        if not isinstance(bindings, dict):
+            raise WorkSlotJourneyFailure(f"{path} omitted work_slot_bindings")
+        assert_shipped_path_names(bindings)
+        names.append(name)
+    return names
+
+
+def _copy_software_change_fixtures(fixture_root: Path, artifact_root: Path) -> None:
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    for subject, fixture in SOFTWARE_CHANGE_FIXTURES:
+        source = fixture_root / fixture
+        if not source.is_file():
+            raise WorkSlotJourneyFailure(f"missing software-change fixture {source}")
+        shutil.copy2(source, artifact_root / subject)
+
+
+def _append_synthetic_gate_evidence(
+    engine_call: EngineCall,
+    *,
+    run_id: str,
+    profile: Mapping[str, Any],
+    artifact_root: Path,
+    gate: str,
+    record_prefix: str = "",
+) -> None:
+    subject = SOFTWARE_CHANGE_GATE_SUBJECT[gate]
+    path = artifact_root / subject
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise WorkSlotJourneyFailure(f"could not read {path}: {error}") from error
+    revision = document.get("revision") if isinstance(document, dict) else None
+    if not isinstance(revision, str) or not revision:
+        raise WorkSlotJourneyFailure(f"{subject} omitted revision")
+    policies = profile.get("review_policies")
+    if not isinstance(policies, dict):
+        raise WorkSlotJourneyFailure("profile omitted review_policies")
+    axes = policies.get(gate)
+    if not isinstance(axes, list):
+        raise WorkSlotJourneyFailure(f"profile omitted {gate} review_policies")
+    config_version = profile.get("config_version")
+    if not isinstance(config_version, str) or not config_version:
+        raise WorkSlotJourneyFailure("profile omitted config_version")
+    for entry in axes:
+        if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
+            raise WorkSlotJourneyFailure(f"malformed {gate} axis: {entry}")
+        axis = entry["id"]
+        required_authors = int(entry.get("required_authors", 1))
+        for index, suffix in enumerate(("a", "b")):
+            if index >= max(2, required_authors):
+                break
+            record_id = f"{record_prefix}{gate}-{axis}-{suffix}"
+            data = {
+                "gate": gate,
+                "policy_id": axis,
+                "result": "pass",
+                "findings": "",
+                "author": {
+                    "name": f"synthetic-{gate}-{axis}-{suffix}",
+                    "kind": "script",
+                },
+                "subject": subject,
+                "subject_revision": revision,
+                "config_version": config_version,
+            }
+            appended = engine_call(
+                [
+                    "append",
+                    f"--record-id={record_id}",
+                    run_id,
+                    "review-evidence",
+                    json.dumps(data, separators=(",", ":")),
+                ]
+            )
+            if appended.get("status") != "completed":
+                raise WorkSlotJourneyFailure(
+                    f"{gate}/{axis} evidence append failed: {appended}"
+                )
+
+
+def _expect_event_state(
+    engine_call: EngineCall,
+    run_id: str,
+    event: str,
+    target: str,
+) -> None:
+    response = engine_call(["event", run_id, event])
+    if response.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"{event} failed: {response}")
+    current = ((response.get("result") or {}).get("run") or {}).get("current_state")
+    if current != target:
+        raise WorkSlotJourneyFailure(
+            f"{event} expected {target}, got {current}: {response}"
+        )
+
+
+def _advance_software_change_to(
+    engine_call: EngineCall,
+    *,
+    run_id: str,
+    profile: Mapping[str, Any],
+    artifact_root: Path,
+    target: str,
+) -> None:
+    shown = engine_call(["show", run_id])
+    if shown.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"show before advance failed: {shown}")
+    current = (shown.get("result") or {}).get("current_state")
+    if current != "explore":
+        raise WorkSlotJourneyFailure(
+            f"isolated run did not start in explore: {current}"
+        )
+    if target == "explore":
+        return
+    invoke_until_succeeded(engine_call, run_id, "explore-intent", timeout_s=20.0)
+    for current_state, gate, event, nxt in SOFTWARE_CHANGE_ADVANCE_STEPS:
+        if current_state == target:
+            return
+        if gate is not None:
+            _append_synthetic_gate_evidence(
+                engine_call,
+                run_id=run_id,
+                profile=profile,
+                artifact_root=artifact_root,
+                gate=gate,
+                record_prefix=f"{run_id}-",
+            )
+        _expect_event_state(engine_call, run_id, event, nxt)
+        if nxt == target:
+            shown = engine_call(["show", run_id])
+            if shown.get("status") != "completed":
+                raise WorkSlotJourneyFailure(
+                    f"show after advancing to {target} failed: {shown}"
+                )
+            landed = (shown.get("result") or {}).get("current_state")
+            if landed != target:
+                raise WorkSlotJourneyFailure(
+                    f"advance show expected {target}, got {landed}"
+                )
+            return
+    raise WorkSlotJourneyFailure(f"advance did not reach {target}")
+
+
+def _start_isolated_software_change(
+    *,
+    engine: Path,
+    provider: Path,
+    profile_source: Path,
+    fixture_root: Path,
+    work_dir: Path,
+    run_id: str,
+    extra_bindings: Mapping[str, Any],
+) -> tuple[EngineCall, Path, dict[str, Any]]:
+    work_dir.mkdir(parents=True, exist_ok=True)
+    artifact_root = work_dir / "artifacts"
+    _copy_software_change_fixtures(fixture_root, artifact_root)
+    try:
+        profile = json.loads(profile_source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise WorkSlotJourneyFailure(
+            f"could not read isolated profile {profile_source}: {error}"
+        ) from error
+    if not isinstance(profile, dict):
+        raise WorkSlotJourneyFailure("isolated profile is not an object")
+    profile = dict(profile)
+    profile["artifact_root"] = str(artifact_root)
+    profile["work_slot_bindings"] = {
+        **bindings_for(["explore-intent"]),
+        **dict(extra_bindings),
+    }
+    profile_path = work_dir / "profile.json"
+    profile_path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
+    database = work_dir / "loop.sqlite"
+    providers = work_dir / "providers.toml"
+    providers.write_text(
+        "[providers.software-change]\n"
+        f"command = {json.dumps(str(provider))}\n"
+        "args = []\n",
+        encoding="utf-8",
+    )
+
+    def engine_call(operation: Sequence[str]) -> dict[str, Any]:
+        return _engine_json(engine, database, operation)
+
+    started = _engine_json(
+        engine,
+        database,
+        [
+            "--config",
+            str(providers),
+            "--timeout-ms",
+            "30000",
+            "start",
+            "--id",
+            run_id,
+            "software-change",
+            "@" + str(profile_path),
+            "isolated work-slot proof",
+        ],
+    )
+    if started.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"isolated start failed: {started}")
+    return engine_call, artifact_root, profile
+
+
+def _assert_capture_isolation(
+    first: Mapping[str, Any],
+    second: Mapping[str, Any],
+    worker_ids: Sequence[str],
+) -> None:
+    first_dir = first.get("capture_dir")
+    second_dir = second.get("capture_dir")
+    if not isinstance(first_dir, str) or not isinstance(second_dir, str):
+        raise WorkSlotJourneyFailure("invoke overlay omitted capture_dir")
+    first_path = Path(first_dir)
+    second_path = Path(second_dir)
+    if first_path == second_path:
+        raise WorkSlotJourneyFailure(
+            f"second invoke reused capture_dir {first_dir}"
+        )
+    if first.get("invocation_id") == second.get("invocation_id"):
+        raise WorkSlotJourneyFailure(
+            f"second invoke reused invocation_id {first.get('invocation_id')}"
+        )
+    first_summary = first_path / "summary.json"
+    if not first_summary.is_file():
+        raise WorkSlotJourneyFailure(
+            f"first capture_dir was removed after retry: {first_path}"
+        )
+    _assert_capture_files(first_path, worker_ids)
+    _assert_capture_files(second_path, worker_ids)
 
 
 def _write_small_plan(artifact_root: Path) -> dict[str, Any]:
@@ -616,6 +1114,7 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
     """Prove run-plan-graph with dummy --task-worker. Never calls a live model."""
     work_dir.mkdir(parents=True, exist_ok=True)
     plan = small_plan_document()
+    task_ids = [task["id"] for task in plan["tasks"]]
     tasks_by_id = {task["id"]: task for task in plan["tasks"]}
     run_id = "graph-runner-proof"
     slot_id = "implement"
@@ -623,6 +1122,7 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
 
     success_root = work_dir / "success"
     success_receipts = success_root / "receipts"
+    success_capture = success_root / "captures" / "inv-success"
     _write_small_plan(success_root)
     (success_root / "implementation-report.json").write_text("{}\n", encoding="utf-8")
     success_binding = implement_graph_runner_binding(
@@ -644,12 +1144,19 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
             slot_id=slot_id,
             artifact_root=success_root,
             instruction_body=instruction_body,
+            capture_dir=success_capture,
         ),
     )
     if success.returncode != 0:
         raise WorkSlotJourneyFailure(
             "graph-runner success path exited "
             f"{success.returncode}: {success.stderr.decode('utf-8', 'replace')}"
+        )
+    _assert_capture_files(success_capture, task_ids)
+    success_workers = _load_summary_workers(success_capture)
+    if [worker.get("exit_code") for worker in success_workers] != [0, 0, 0]:
+        raise WorkSlotJourneyFailure(
+            f"success summary exit codes mismatch: {success_workers}"
         )
     for task in plan["tasks"]:
         _assert_task_receipt(
@@ -663,6 +1170,7 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
 
     missing_root = work_dir / "missing-report"
     missing_receipts = missing_root / "receipts"
+    missing_capture = missing_root / "captures" / "inv-missing"
     _write_small_plan(missing_root)
     missing = _run_binding(
         implement_graph_runner_binding(
@@ -674,12 +1182,14 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
             slot_id=slot_id,
             artifact_root=missing_root,
             instruction_body=instruction_body,
+            capture_dir=missing_capture,
         ),
     )
     if missing.returncode == 0:
         raise WorkSlotJourneyFailure(
             "graph-runner missing implementation-report.json unexpectedly exited 0"
         )
+    _assert_capture_files(missing_capture, task_ids)
     for task_id in ("alpha", "beta", "gamma"):
         if not (missing_receipts / f"{task_id}.stdin").is_file():
             raise WorkSlotJourneyFailure(
@@ -698,6 +1208,7 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
 
     reap_root = work_dir / "reap"
     reap_receipts = reap_root / "receipts"
+    reap_capture = reap_root / "captures" / "inv-reap"
     _write_small_plan(reap_root)
     reap = _run_binding(
         implement_graph_runner_binding(
@@ -711,6 +1222,7 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
             slot_id=slot_id,
             artifact_root=reap_root,
             instruction_body=instruction_body,
+            capture_dir=reap_capture,
         ),
     )
     if reap.returncode == 0:
@@ -743,6 +1255,15 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
         artifact_root=reap_root,
         instruction_body=instruction_body,
     )
+    reap_workers = _load_summary_workers(reap_capture)
+    reap_ids = ["alpha", "beta"]
+    _assert_capture_files(reap_capture, reap_ids)
+    if [worker.get("exit_code") for worker in reap_workers] != [1, 0]:
+        raise WorkSlotJourneyFailure(
+            f"reap summary must list alpha then beta exits: {reap_workers}"
+        )
+    if (reap_capture / "gamma").exists():
+        raise WorkSlotJourneyFailure("reap path captured unstarted dependent task")
 
     return [
         "PATH rewrite software-change -> built provider",
@@ -750,6 +1271,7 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
         "small plan two independent plus one dependent",
         "success path exits 0 when implementation-report.json exists",
         "dummy receipts match locked inner stdin layout",
+        "capture_dir summary.json and per-task stdout/stderr",
         "missing implementation-report.json exits nonzero",
         "failing sibling reaped before runner exits",
         "no live model",
@@ -763,6 +1285,7 @@ def prove_fan_out(*, engine: Path, work_dir: Path) -> list[str]:
     bound_root = work_dir / "bound"
     artifact_root = bound_root / "artifacts"
     artifact_root.mkdir(parents=True, exist_ok=True)
+    bound_capture = bound_root / "captures" / "inv-bound"
     receipt_a = bound_root / "a.stdin"
     receipt_b = bound_root / "b.stdin"
     run_id = "fan-out-bound-run"
@@ -790,6 +1313,7 @@ def prove_fan_out(*, engine: Path, work_dir: Path) -> list[str]:
             slot_id=slot_id,
             artifact_root=artifact_root,
             instruction_body=instruction_body,
+            capture_dir=bound_capture,
         ),
         cwd=bound_root,
     )
@@ -822,16 +1346,57 @@ def prove_fan_out(*, engine: Path, work_dir: Path) -> list[str]:
             raise WorkSlotJourneyFailure(
                 f"bound worker pid {pid} still alive after fan-out exit"
             )
-    output_dir = artifact_root / "fan-out" / slot_id
-    for index in ("0", "1"):
-        if not (output_dir / index / "stdout").is_file():
-            raise WorkSlotJourneyFailure(
-                f"missing bound stdout under {output_dir / index}"
-            )
-        if not (output_dir / index / "stderr").is_file():
-            raise WorkSlotJourneyFailure(
-                f"missing bound stderr under {output_dir / index}"
-            )
+    _assert_capture_files(bound_capture, ("0", "1"))
+    bound_workers = _load_summary_workers(bound_capture)
+    if [worker.get("exit_code") for worker in bound_workers] != [0, 0]:
+        raise WorkSlotJourneyFailure(
+            f"bound summary exit codes mismatch: {bound_workers}"
+        )
+    bound_summary = _json_stdout(bound)
+    if bound_summary.get("output_dir") != str(bound_capture):
+        raise WorkSlotJourneyFailure(
+            f"bound collector output_dir {bound_summary.get('output_dir')!r} "
+            f"!= capture_dir {bound_capture}"
+        )
+    legacy = artifact_root / "fan-out" / slot_id
+    if legacy.exists():
+        raise WorkSlotJourneyFailure(
+            f"bound fan-out still wrote the legacy path {legacy}"
+        )
+
+    fail_root = work_dir / "inner-nonzero"
+    fail_root.mkdir(parents=True, exist_ok=True)
+    fail_capture = fail_root / "captures" / "inv-fail"
+    fail_receipt = fail_root / "fail.stdin"
+    ok_receipt = fail_root / "ok.stdin"
+    fail = _run_binding(
+        fan_out_binding(
+            engine=engine,
+            workers=[
+                stdin_worker_cli(fail_receipt, ("--exit", "7")),
+                stdin_worker_cli(ok_receipt),
+            ],
+        ),
+        stdin=_invoke_packet(
+            run_id=run_id,
+            slot_id=slot_id,
+            artifact_root=fail_root / "artifacts",
+            instruction_body=instruction_body,
+            capture_dir=fail_capture,
+        ),
+        cwd=fail_root,
+    )
+    if fail.returncode != 0:
+        raise WorkSlotJourneyFailure(
+            "inner-nonzero collector exited "
+            f"{fail.returncode}: {fail.stderr.decode('utf-8', 'replace')}"
+        )
+    _assert_capture_files(fail_capture, ("0", "1"))
+    fail_workers = _load_summary_workers(fail_capture)
+    if [worker.get("exit_code") for worker in fail_workers] != [7, 0]:
+        raise WorkSlotJourneyFailure(
+            f"inner-nonzero summary must keep collector success with inner 7: {fail_workers}"
+        )
 
     adhoc_root = work_dir / "adhoc"
     adhoc_root.mkdir(parents=True, exist_ok=True)
@@ -868,13 +1433,20 @@ def prove_fan_out(*, engine: Path, work_dir: Path) -> list[str]:
             raise WorkSlotJourneyFailure(
                 f"ad hoc worker pid {pid} still alive after fan-out exit"
             )
+    adhoc_summary = _json_stdout(adhoc)
+    adhoc_dir = adhoc_summary.get("output_dir")
+    if not isinstance(adhoc_dir, str) or not adhoc_dir:
+        raise WorkSlotJourneyFailure(f"ad hoc collector omitted output_dir: {adhoc_summary}")
+    _assert_capture_files(Path(adhoc_dir), ("0", "1"))
 
     return [
         "PATH rewrite loop-engine -> built engine",
         "bound mode dummy workers record locked shared stdin",
         "ad hoc mode dummy workers record exact --instructions bytes",
         "fan-out reaps every worker before exit",
-        "bound outputs under {artifact_root}/fan-out/{slot_id}/",
+        "bound outputs under packet.capture_dir",
+        "inner nonzero exit with collector exit 0",
+        "ad hoc summary.json present",
         "no live model",
     ]
 
@@ -957,6 +1529,47 @@ def _engine_json(
     return value
 
 
+def prove_preview_fail_closed(*, engine: Path, work_dir: Path) -> list[str]:
+    """preview-bindings exits nonzero on zero-worker fan-out and creates no run."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    database = work_dir / "must-not-exist.sqlite"
+    payload = {"design-review": {"command": "loop-engine", "args": ["fan-out"]}}
+    before = {path.name for path in work_dir.iterdir()}
+    code, report = run_preview_bindings(
+        engine,
+        payload,
+        database=database,
+        cwd=work_dir,
+    )
+    if code == 0:
+        raise WorkSlotJourneyFailure(
+            f"preview-bindings zero-worker fan-out unexpectedly exited 0: {report}"
+        )
+    errors = report.get("errors")
+    rendered = json.dumps(report)
+    if not (
+        (isinstance(errors, list) and any("zero --worker" in str(item) for item in errors))
+        or "zero --worker" in rendered
+    ):
+        raise WorkSlotJourneyFailure(
+            f"preview-bindings zero-worker report omitted the fail-closed error: {report}"
+        )
+    if database.exists() or database.with_name(database.name + "-wal").exists():
+        raise WorkSlotJourneyFailure(
+            f"preview-bindings created a database at {database}"
+        )
+    created = {path.name for path in work_dir.iterdir()} - before
+    if created:
+        raise WorkSlotJourneyFailure(
+            f"preview-bindings created unexpected paths {sorted(created)}"
+        )
+    return [
+        "preview-bindings exits nonzero on zero-worker fan-out JSON",
+        "preview-bindings created no database or run directory",
+        "no live model",
+    ]
+
+
 def prove_zero_worker_review_invoke(
     *,
     engine: Path,
@@ -965,141 +1578,199 @@ def prove_zero_worker_review_invoke(
     fixture_root: Path,
     work_dir: Path,
 ) -> list[str]:
-    """Isolated engine run: bound review fan-out with zero --worker fails closed."""
+    """Zero-worker fan-out is fail-closed at preview-bindings, not after start."""
+    del provider, profile_source, fixture_root
+    return prove_preview_fail_closed(engine=engine, work_dir=work_dir)
+
+
+def prove_default_sandbox_argv(*, provider: Path, work_dir: Path) -> list[str]:
+    """PATH stub named pi records default sandbox argv. No live model."""
     work_dir.mkdir(parents=True, exist_ok=True)
     artifact_root = work_dir / "artifacts"
-    artifact_root.mkdir()
-    for subject, fixture in (
-        ("intent.json", "intent-good.json"),
-        ("design.json", "design-good.json"),
-        ("plan.json", "plan-good.json"),
-        ("implementation-report.json", "implementation-report-good.json"),
-        ("validation-report.json", "validation-report-good.json"),
-    ):
-        shutil.copy2(fixture_root / fixture, artifact_root / subject)
-
-    profile = json.loads(profile_source.read_text(encoding="utf-8"))
-    if not isinstance(profile, dict):
-        raise WorkSlotJourneyFailure("zero-worker profile is not an object")
-    profile["artifact_root"] = str(artifact_root)
-    explore = bindings_for(["explore-intent"])
-    review = fan_out_binding(engine=engine, workers=())
-    if review["args"] != SHIPPED_FAN_OUT_ARGS:
+    capture_dir = work_dir / "captures" / "inv-default-pi"
+    plan = _write_small_plan(artifact_root)
+    task_ids = [task["id"] for task in plan["tasks"]]
+    (artifact_root / "implementation-report.json").write_text("{}\n", encoding="utf-8")
+    stub_dir = work_dir / "bin"
+    log_dir = work_dir / "pi-argv"
+    stub = _write_pi_stub(stub_dir)
+    env = os.environ.copy()
+    env["PATH"] = str(stub_dir) + os.pathsep + env.get("PATH", "")
+    env["PI_STUB_LOG_DIR"] = str(log_dir)
+    which = shutil.which("pi", path=env["PATH"])
+    if which is None or Path(which).resolve() != stub.resolve():
         raise WorkSlotJourneyFailure(
-            f"zero-worker review args must stay [fan-out], got {review['args']}"
+            f"PATH stub pi was not the resolved pi: {which!r} vs {stub}"
         )
-    profile["work_slot_bindings"] = {
-        **explore,
-        "design-review": review,
-    }
-    profile_path = work_dir / "profile.json"
-    profile_path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
-
-    database = work_dir / "loop.sqlite"
-    providers = work_dir / "providers.toml"
-    providers.write_text(
-        "[providers.software-change]\n"
-        f"command = {json.dumps(str(provider))}\n"
-        "args = []\n",
-        encoding="utf-8",
+    completed = _run_binding(
+        {"command": str(provider), "args": list(SHIPPED_IMPLEMENT_ARGS)},
+        stdin=_invoke_packet(
+            run_id="default-sandbox-argv",
+            slot_id="implement",
+            artifact_root=artifact_root,
+            instruction_body="Use the default inner worker.",
+            capture_dir=capture_dir,
+        ),
+        cwd=work_dir,
+        env=env,
     )
-    run_id = "zero-worker-review-invoke"
-
-    def engine_call(operation: Sequence[str]) -> dict[str, Any]:
-        return _engine_json(engine, database, operation)
-
-    started = _engine_json(
-        engine,
-        database,
-        [
-            "--config",
-            str(providers),
-            "--timeout-ms",
-            "30000",
-            "start",
-            "--id",
-            run_id,
-            "software-change",
-            "@" + str(profile_path),
-            "zero-worker review invoke",
-        ],
-    )
-    if started.get("status") != "completed":
-        raise WorkSlotJourneyFailure(f"zero-worker start failed: {started}")
-
-    invoke_until_succeeded(engine_call, run_id, "explore-intent", timeout_s=15.0)
-
-    intent = json.loads((artifact_root / "intent.json").read_text(encoding="utf-8"))
-    revision = intent.get("revision")
-    if not isinstance(revision, str) or not revision:
-        raise WorkSlotJourneyFailure("intent fixture omitted revision")
-    axes = profile.get("review_policies", {}).get("intent")
-    if not isinstance(axes, list):
-        raise WorkSlotJourneyFailure("profile omitted intent review_policies")
-    for entry in axes:
-        if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
-            raise WorkSlotJourneyFailure(f"malformed intent axis: {entry}")
-        axis = entry["id"]
-        for suffix in ("a", "b"):
-            record_id = f"zero-worker-intent-{axis}-{suffix}"
-            data = {
-                "gate": "intent",
-                "policy_id": axis,
-                "result": "pass",
-                "findings": "",
-                "author": {
-                    "name": f"synthetic-intent-{axis}-{suffix}",
-                    "kind": "script",
-                },
-                "subject": "intent.json",
-                "subject_revision": revision,
-                "config_version": profile["config_version"],
-            }
-            appended = engine_call(
-                [
-                    "append",
-                    f"--record-id={record_id}",
-                    run_id,
-                    "review-evidence",
-                    json.dumps(data, separators=(",", ":")),
-                ]
+    if completed.returncode != 0:
+        raise WorkSlotJourneyFailure(
+            "default-sandbox run-plan-graph exited "
+            f"{completed.returncode}: {completed.stderr.decode('utf-8', 'replace')}"
+        )
+    logs = sorted(log_dir.glob("*.argv.json"))
+    if len(logs) != len(task_ids):
+        raise WorkSlotJourneyFailure(
+            f"PATH stub pi invocations {len(logs)} != tasks {len(task_ids)}"
+        )
+    for path in logs:
+        argv = json.loads(path.read_text(encoding="utf-8"))
+        if argv != DEFAULT_PI_SANDBOX_ARGS:
+            raise WorkSlotJourneyFailure(
+                f"PATH stub pi argv {argv} != {DEFAULT_PI_SANDBOX_ARGS}"
             )
-            if appended.get("status") != "completed":
+        for flag in FORBIDDEN_PI_FLAGS:
+            if flag in argv:
                 raise WorkSlotJourneyFailure(
-                    f"zero-worker evidence append failed: {appended}"
+                    f"PATH stub pi received forbidden flag {flag}: {argv}"
                 )
-
-    intent_ready = engine_call(["event", run_id, "intent-ready"])
-    if intent_ready.get("status") != "completed":
-        raise WorkSlotJourneyFailure(f"intent-ready failed: {intent_ready}")
-    design_ready = engine_call(["event", run_id, "design-ready"])
-    if design_ready.get("status") != "completed":
-        raise WorkSlotJourneyFailure(f"design-ready failed: {design_ready}")
-
-    shown = engine_call(["show", run_id])
-    if shown.get("status") != "completed":
-        raise WorkSlotJourneyFailure(f"show before zero-worker invoke failed: {shown}")
-    current = (shown.get("result") or {}).get("current_state")
-    if current != "design-review":
+    workers = _load_summary_workers(capture_dir)
+    if [worker.get("command") for worker in workers] != ["pi"] * len(task_ids):
+        raise WorkSlotJourneyFailure(f"summary command was not pi: {workers}")
+    if any(worker.get("args") != DEFAULT_PI_SANDBOX_ARGS for worker in workers):
         raise WorkSlotJourneyFailure(
-            f"expected design-review before zero-worker invoke, got {current}"
+            f"summary args were not sandbox defaults: {workers}"
         )
-
-    overlay = invoke_until_status(
-        engine_call,
-        run_id,
-        "design-review",
-        expected="failed",
-        timeout_s=15.0,
-    )
-    if overlay.get("status") == "succeeded":
-        raise WorkSlotJourneyFailure(
-            "zero-worker review invoke fail-opened with a succeeded overlay"
-        )
+    _assert_capture_files(capture_dir, task_ids)
     return [
-        "isolated engine run froze design-review to built loop-engine fan-out",
-        "zero --worker entries",
-        "invoke failed closed (failed overlay, not succeeded)",
+        "omitted --task-worker uses PATH stub pi",
+        "recorded argv [--print, --no-skills, --no-extensions]",
+        "did not receive --no-context-files or --tools",
+        "no live model",
+    ]
+
+
+def prove_bound_fan_out_heartbeat(
+    *,
+    engine: Path,
+    provider: Path,
+    profile_source: Path,
+    fixture_root: Path,
+    work_dir: Path,
+) -> list[str]:
+    """Bound fan-out invoke: show heartbeat, inner nonzero, capture isolation."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    run_id = "bound-fan-out-heartbeat"
+    extra = {
+        "design-review": fan_out_binding(
+            engine=engine,
+            workers=[
+                stdin_worker_cli(work_dir / "inner-fail.stdin", ("--exit", "7")),
+                stdin_worker_cli(work_dir / "inner-ok.stdin"),
+            ],
+        )
+    }
+    engine_call, artifact_root, profile = _start_isolated_software_change(
+        engine=engine,
+        provider=provider,
+        profile_source=profile_source,
+        fixture_root=fixture_root,
+        work_dir=work_dir / "run",
+        run_id=run_id,
+        extra_bindings=extra,
+    )
+    _advance_software_change_to(
+        engine_call,
+        run_id=run_id,
+        profile=profile,
+        artifact_root=artifact_root,
+        target="design-review",
+    )
+    first = invoke_until_succeeded(
+        engine_call, run_id, "design-review", timeout_s=20.0
+    )
+    _assert_inner_exit_codes(first, (7, 0))
+    _assert_capture_files(Path(first["capture_dir"]), ("0", "1"))
+    second = invoke_until_succeeded(
+        engine_call, run_id, "design-review", timeout_s=20.0
+    )
+    _assert_inner_exit_codes(second, (7, 0))
+    _assert_capture_isolation(first, second, ("0", "1"))
+    return [
+        "show heartbeat overlay_meaning elapsed_ms remaining_allowed_ms capture_dir inner_workers",
+        "inner nonzero with collector 0 yields overlay succeeded",
+        "second invoke uses a new invocation-id capture_dir and leaves the first intact",
+        "no live model",
+    ]
+
+
+def prove_bound_graph_runner_heartbeat(
+    *,
+    engine: Path,
+    provider: Path,
+    profile_source: Path,
+    fixture_root: Path,
+    work_dir: Path,
+) -> list[str]:
+    """Bound run-plan-graph invoke: inner workers in task order plus capture isolation."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    run_id = "bound-graph-runner-heartbeat"
+    extra = {
+        "implement": implement_graph_runner_binding(
+            provider=provider,
+            task_worker=stdin_worker_cli(work_dir / "task-receipts"),
+        )
+    }
+    engine_call, artifact_root, profile = _start_isolated_software_change(
+        engine=engine,
+        provider=provider,
+        profile_source=profile_source,
+        fixture_root=fixture_root,
+        work_dir=work_dir / "run",
+        run_id=run_id,
+        extra_bindings=extra,
+    )
+    _advance_software_change_to(
+        engine_call,
+        run_id=run_id,
+        profile=profile,
+        artifact_root=artifact_root,
+        target="implement",
+    )
+    plan = json.loads((artifact_root / "plan.json").read_text(encoding="utf-8"))
+    if not isinstance(plan, dict) or not isinstance(plan.get("tasks"), list):
+        raise WorkSlotJourneyFailure("isolated plan.json is not a plan document")
+    task_ids = [task["id"] for task in plan["tasks"] if isinstance(task, dict)]
+    if not task_ids or any(not isinstance(task_id, str) for task_id in task_ids):
+        raise WorkSlotJourneyFailure(f"isolated plan.json omitted task ids: {plan}")
+    first = invoke_until_succeeded(
+        engine_call, run_id, "implement", timeout_s=30.0
+    )
+    inner = first.get("inner_workers")
+    if not isinstance(inner, list) or len(inner) != len(task_ids):
+        raise WorkSlotJourneyFailure(
+            f"implement inner_workers length {inner} != plan tasks {task_ids}"
+        )
+    _assert_inner_exit_codes(first, [0] * len(task_ids))
+    _assert_capture_files(Path(first["capture_dir"]), task_ids)
+    for worker in inner:
+        if worker.get("command") != sys.executable:
+            raise WorkSlotJourneyFailure(
+                f"implement inner command was not dummy python: {worker}"
+            )
+        args = worker.get("args") or []
+        if not any("dummy-stdin-worker.py" in item for item in args):
+            raise WorkSlotJourneyFailure(
+                f"implement inner args omitted dummy worker: {worker}"
+            )
+    second = invoke_until_succeeded(
+        engine_call, run_id, "implement", timeout_s=30.0
+    )
+    _assert_capture_isolation(first, second, task_ids)
+    return [
+        "bound run-plan-graph show inner workers in plan task order",
+        "capture_dir isolation on implement retry",
         "no live model",
     ]
 
@@ -1108,20 +1779,61 @@ def self_test_helpers() -> None:
     """Unit-test PATH rewrite and dummy-stdin-worker without spawning the engine."""
     engine = Path("/tmp/built/loop-engine")
     provider = Path("/tmp/built/software-change")
-    shipped = {
-        "implement": {"command": PATH_SOFTWARE_CHANGE, "args": list(SHIPPED_IMPLEMENT_ARGS)},
-        "design-review": {"command": PATH_LOOP_ENGINE, "args": list(SHIPPED_FAN_OUT_ARGS)},
-        "plan-review": {"command": PATH_LOOP_ENGINE, "args": list(SHIPPED_FAN_OUT_ARGS)},
+    shipped_defaults = {
+        "implement": {
+            "command": PATH_SOFTWARE_CHANGE,
+            "args": list(SHIPPED_IMPLEMENT_ARGS),
+        },
+    }
+    assert_shipped_path_names(shipped_defaults)
+    rewritten_defaults = rewrite_path_commands(
+        shipped_defaults, engine=engine, provider=provider
+    )
+    assert_rewritten_binaries(
+        rewritten_defaults, engine=engine, provider=provider
+    )
+    assert_no_review_bindings(None, source="self-test-none")
+    assert_no_review_bindings({}, source="self-test-empty")
+
+    caller_supplied = {
+        "implement": {
+            "command": PATH_SOFTWARE_CHANGE,
+            "args": list(SHIPPED_IMPLEMENT_ARGS),
+        },
+        "design-review": {
+            "command": PATH_LOOP_ENGINE,
+            "args": list(SHIPPED_FAN_OUT_ARGS),
+        },
+        "plan-review": {
+            "command": PATH_LOOP_ENGINE,
+            "args": list(SHIPPED_FAN_OUT_ARGS),
+        },
         "implementation-review": {
             "command": PATH_LOOP_ENGINE,
             "args": list(SHIPPED_FAN_OUT_ARGS),
         },
         "explore-intent": {"command": sys.executable, "args": [str(WORKER_SCRIPT)]},
     }
-    assert_shipped_path_names(
-        {key: value for key, value in shipped.items() if key != "explore-intent"}
+    try:
+        assert_shipped_path_names(
+            {
+                key: value
+                for key, value in caller_supplied.items()
+                if key != "explore-intent"
+            }
+        )
+    except WorkSlotJourneyFailure as error:
+        if "unexpectedly bound" not in str(error):
+            raise WorkSlotJourneyFailure(
+                f"self-test: shipped check rejected reviews for the wrong reason: {error}"
+            ) from error
+    else:
+        raise WorkSlotJourneyFailure(
+            "self-test: shipped check accepted review slot bindings"
+        )
+    rewritten = rewrite_path_commands(
+        caller_supplied, engine=engine, provider=provider
     )
-    rewritten = rewrite_path_commands(shipped, engine=engine, provider=provider)
     if rewritten["implement"]["command"] != str(provider):
         raise WorkSlotJourneyFailure("self-test: implement PATH was not rewritten")
     if rewritten["design-review"]["command"] != str(engine):
@@ -1130,11 +1842,6 @@ def self_test_helpers() -> None:
         raise WorkSlotJourneyFailure("self-test: non-PATH command was rewritten")
     if rewritten["implement"]["args"] != SHIPPED_IMPLEMENT_ARGS:
         raise WorkSlotJourneyFailure("self-test: rewrite mutated implement args")
-    assert_rewritten_binaries(
-        {key: value for key, value in rewritten.items() if key != "explore-intent"},
-        engine=engine,
-        provider=provider,
-    )
 
     binding = implement_graph_runner_binding(
         provider=provider,
@@ -1188,3 +1895,13 @@ def self_test_helpers() -> None:
             )
         if receipt.read_bytes() != b"raw-bytes-not-a-model":
             raise WorkSlotJourneyFailure("self-test: dummy-stdin-worker did not record raw stdin")
+
+    if DEFAULT_PI_SANDBOX_ARGS != ["--print", "--no-skills", "--no-extensions"]:
+        raise WorkSlotJourneyFailure(
+            f"self-test: sandbox argv mismatch: {DEFAULT_PI_SANDBOX_ARGS}"
+        )
+    for flag in FORBIDDEN_PI_FLAGS:
+        if flag in DEFAULT_PI_SANDBOX_ARGS:
+            raise WorkSlotJourneyFailure(
+                f"self-test: sandbox argv contains forbidden {flag}"
+            )

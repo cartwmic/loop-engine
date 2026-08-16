@@ -358,10 +358,31 @@ pub enum ProjectedInvocationStatus {
     Overrun,
 }
 
+/// Inner worker identity and process exit copied from a helper `summary.json`.
+///
+/// Identity is `command` plus argv order. There is no label field.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct InnerWorker {
+    pub command: String,
+    pub args: Vec<String>,
+    pub exit_code: i32,
+}
+
+impl InnerWorker {
+    pub fn new(command: impl Into<String>, args: Vec<String>, exit_code: i32) -> Self {
+        Self {
+            command: command.into(),
+            args,
+            exit_code,
+        }
+    }
+}
+
 /// Engine-authored work-slot invocation record.
 ///
 /// `status` is the stored waiter-written status: `None` means not yet written.
 /// `waiter_pid` is internal (on the stored running record, not a user CLI flag).
+/// `inner_workers` is empty until waiter complete copies a well-formed summary.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WorkSlotInvocation {
     pub invocation_id: InvocationId,
@@ -375,6 +396,8 @@ pub struct WorkSlotInvocation {
     pub status: Option<WaiterWrittenStatus>,
     pub exit_code: Option<i32>,
     pub completed_at: Option<Timestamp>,
+    pub capture_dir: String,
+    pub inner_workers: Vec<InnerWorker>,
 }
 
 impl WorkSlotInvocation {
@@ -391,6 +414,8 @@ impl WorkSlotInvocation {
         status: Option<WaiterWrittenStatus>,
         exit_code: Option<i32>,
         completed_at: Option<Timestamp>,
+        capture_dir: impl Into<String>,
+        inner_workers: Vec<InnerWorker>,
     ) -> Self {
         Self {
             invocation_id: invocation_id.into(),
@@ -404,6 +429,8 @@ impl WorkSlotInvocation {
             status,
             exit_code,
             completed_at,
+            capture_dir: capture_dir.into(),
+            inner_workers,
         }
     }
 }

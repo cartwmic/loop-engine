@@ -64,6 +64,7 @@ fn invocation_create_request(run_id: &str, invocation_id: &str) -> CreateWorkSlo
         1,
         Timestamp::from_unix_millis(500),
         1_000,
+        String::new(),
     )
 }
 
@@ -629,6 +630,7 @@ fn waiter_terminal_write_succeeded_invocation() -> Result<(), Box<dyn std::error
             WaiterWrittenStatus::Succeeded,
             0,
             Timestamp::from_unix_millis(900),
+            Vec::new(),
         ))?;
     assert_eq!(
         completed.invocation.status,
@@ -664,6 +666,7 @@ fn waiter_terminal_write_failed_invocation() -> Result<(), Box<dyn std::error::E
             WaiterWrittenStatus::Failed,
             7,
             Timestamp::from_unix_millis(901),
+            Vec::new(),
         ))?;
     assert_eq!(
         completed.invocation.status,
@@ -698,6 +701,7 @@ fn second_invocation_terminal_write_conflicts_and_waiter_cannot_write_overrun(
         WaiterWrittenStatus::Succeeded,
         0,
         Timestamp::from_unix_millis(900),
+        Vec::new(),
     ))?;
     let error = adapter
         .complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
@@ -706,6 +710,7 @@ fn second_invocation_terminal_write_conflicts_and_waiter_cannot_write_overrun(
             WaiterWrittenStatus::Failed,
             1,
             Timestamp::from_unix_millis(901),
+            Vec::new(),
         ))
         .unwrap_err();
     assert!(matches!(
@@ -798,6 +803,7 @@ fn load_history_includes_invocation_actions_in_sequence_order(
         WaiterWrittenStatus::Succeeded,
         0,
         Timestamp::from_unix_millis(900),
+        Vec::new(),
     ))?;
     let history = adapter.load_history(&"run-invocation-history".into())?;
     assert_eq!(

@@ -1,6 +1,6 @@
 //! Argv and stdin contracts plus the DAG executor for `run-plan-graph`.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -15,7 +15,7 @@ use std::time::Duration;
 pub(crate) const MAX_CONCURRENCY: usize = 4;
 
 const DEFAULT_WORKER_COMMAND: &str = "pi";
-const DEFAULT_WORKER_ARG: &str = "--print";
+const DEFAULT_WORKER_ARGS: &[&str] = &["--print", "--no-skills", "--no-extensions"];
 
 /// Worker argv: JSON object with exactly string `command` and array-of-string `args`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -25,7 +25,7 @@ pub(crate) struct WorkerCli {
     pub(crate) args: Vec<String>,
 }
 
-/// Bound-worker stdin packet.  Exactly the four engine invoke keys; no extras.
+/// Bound-worker stdin packet.  Exactly the five engine invoke keys; no extras.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct InvokePacket {
@@ -33,6 +33,7 @@ pub(crate) struct InvokePacket {
     pub(crate) slot_id: String,
     pub(crate) artifact_root: String,
     pub(crate) instruction_body: String,
+    pub(crate) capture_dir: String,
 }
 
 /// Parse failure for worker JSON, invoke packets, or `run-plan-graph` argv.
@@ -87,11 +88,16 @@ impl fmt::Display for ExecuteError {
     }
 }
 
-/// Default inner worker when `--task-worker` is omitted: `pi --print`.
+/// Default inner worker when `--task-worker` is omitted:
+/// `pi --print --no-skills --no-extensions`.
+/// Does not pass `--no-context-files` or `--tools`.
 pub(crate) fn default_task_worker() -> WorkerCli {
     WorkerCli {
         command: DEFAULT_WORKER_COMMAND.to_owned(),
-        args: vec![DEFAULT_WORKER_ARG.to_owned()],
+        args: DEFAULT_WORKER_ARGS
+            .iter()
+            .map(|arg| (*arg).to_owned())
+            .collect(),
     }
 }
 
@@ -104,11 +110,11 @@ pub(crate) fn parse_worker_cli_json(raw: &str) -> Result<WorkerCli, ParseError> 
     })
 }
 
-/// Parse the four-key engine invoke packet from stdin JSON.
+/// Parse the five-key engine invoke packet from stdin JSON.
 pub(crate) fn parse_invoke_packet(raw: &str) -> Result<InvokePacket, ParseError> {
     serde_json::from_str(raw).map_err(|error| {
         ParseError::new(format!(
-            "invoke packet must be a JSON object with exactly `run_id`, `slot_id`, `artifact_root`, and `instruction_body`: {error}"
+            "invoke packet must be a JSON object with exactly `run_id`, `slot_id`, `artifact_root`, `instruction_body`, and `capture_dir`: {error}"
         ))
     })
 }
@@ -220,21 +226,38 @@ struct PlanGraph {
 struct RunningTask {
     id: String,
     child: Child,
+    stdout_path: PathBuf,
+    stderr_path: PathBuf,
+}
+
+struct ReapedWorker {
+    task_id: String,
+    command: String,
+    args: Vec<String>,
+    exit_code: i32,
+    stdout_path: String,
+    stderr_path: String,
 }
 
 fn execute_from_packet(worker: &WorkerCli, raw_packet: &str) -> Result<(), ExecuteError> {
     let packet =
         parse_invoke_packet(raw_packet).map_err(|error| ExecuteError::usage(error.to_string()))?;
-    let artifact_root = absolute_artifact_root(&packet.artifact_root)?;
+    if packet.capture_dir.is_empty() {
+        return Err(ExecuteError::usage(
+            "invoke packet capture_dir must be a non-empty path",
+        ));
+    }
+    let artifact_root = absolute_from_cwd(&packet.artifact_root)?;
+    let capture_root = absolute_from_cwd(&packet.capture_dir)?;
     let plan_path = artifact_root.join("plan.json");
     let plan_raw = fs::read_to_string(&plan_path).map_err(|error| {
         ExecuteError::failed(format!("could not read {}: {error}", plan_path.display()))
     })?;
     let plan = parse_plan(&plan_raw)?;
-    run_schedule(worker, &packet, &artifact_root, &plan)
+    run_schedule(worker, &packet, &artifact_root, &capture_root, &plan)
 }
 
-fn absolute_artifact_root(raw: &str) -> Result<PathBuf, ExecuteError> {
+fn absolute_from_cwd(raw: &str) -> Result<PathBuf, ExecuteError> {
     let path = PathBuf::from(raw);
     if path.is_absolute() {
         Ok(path)
@@ -351,22 +374,31 @@ fn run_schedule(
     worker: &WorkerCli,
     packet: &InvokePacket,
     artifact_root: &Path,
+    capture_root: &Path,
     plan: &PlanGraph,
 ) -> Result<(), ExecuteError> {
+    fs::create_dir_all(capture_root).map_err(|error| {
+        ExecuteError::failed(format!(
+            "could not create {}: {error}",
+            capture_root.display()
+        ))
+    })?;
     let mut pending: HashSet<String> = plan.order.iter().cloned().collect();
     let mut succeeded: HashSet<String> = HashSet::new();
     let mut running: Vec<RunningTask> = Vec::new();
+    let mut reaped: Vec<ReapedWorker> = Vec::new();
     let mut failed = false;
     let mut failure_message = String::from("inner task worker failed");
 
-    loop {
+    let result = loop {
         let mut index = 0;
         while index < running.len() {
             match running[index].child.try_wait() {
                 Ok(Some(status)) => {
                     let finished = running.swap_remove(index);
+                    let exit_code = status.code().unwrap_or(1);
                     if status.success() {
-                        succeeded.insert(finished.id);
+                        succeeded.insert(finished.id.clone());
                     } else {
                         failed = true;
                         failure_message = format!(
@@ -374,6 +406,14 @@ fn run_schedule(
                             finished.id
                         );
                     }
+                    reaped.push(ReapedWorker {
+                        task_id: finished.id,
+                        command: worker.command.clone(),
+                        args: worker.args.clone(),
+                        exit_code,
+                        stdout_path: path_to_string(&finished.stdout_path),
+                        stderr_path: path_to_string(&finished.stderr_path),
+                    });
                 }
                 Ok(None) => index += 1,
                 Err(error) => {
@@ -383,13 +423,21 @@ fn run_schedule(
                         "could not wait for inner task worker `{}`: {error}",
                         finished.id
                     );
+                    reaped.push(ReapedWorker {
+                        task_id: finished.id,
+                        command: worker.command.clone(),
+                        args: worker.args.clone(),
+                        exit_code: 1,
+                        stdout_path: path_to_string(&finished.stdout_path),
+                        stderr_path: path_to_string(&finished.stderr_path),
+                    });
                 }
             }
         }
 
         if failed {
             if running.is_empty() {
-                return Err(ExecuteError::failed(failure_message));
+                break Err(ExecuteError::failed(failure_message));
             }
             thread::sleep(Duration::from_millis(10));
             continue;
@@ -405,8 +453,8 @@ fn run_schedule(
                 .tasks
                 .get(&id)
                 .expect("runnable task exists in the plan");
-            match spawn_task(worker, packet, artifact_root, &id, task) {
-                Ok(child) => running.push(RunningTask { id, child }),
+            match spawn_task(worker, packet, artifact_root, capture_root, &id, task) {
+                Ok(job) => running.push(job),
                 Err(error) => {
                     failed = true;
                     failure_message = error.to_string();
@@ -417,25 +465,32 @@ fn run_schedule(
 
         if running.is_empty() {
             if failed {
-                return Err(ExecuteError::failed(failure_message));
+                break Err(ExecuteError::failed(failure_message));
             }
             if succeeded.len() == plan.order.len() {
                 let report = artifact_root.join("implementation-report.json");
                 if !report.is_file() {
-                    return Err(ExecuteError::failed(format!(
+                    break Err(ExecuteError::failed(format!(
                         "missing {} after all tasks succeeded",
                         report.display()
                     )));
                 }
-                return Ok(());
+                break Ok(());
             }
-            return Err(ExecuteError::failed(
+            break Err(ExecuteError::failed(
                 "no runnable plan tasks remain before the graph is complete".to_owned(),
             ));
         }
 
         thread::sleep(Duration::from_millis(10));
+    };
+
+    if let Err(error) = write_summary_json(capture_root, &plan.order, &reaped) {
+        if result.is_ok() {
+            return Err(error);
+        }
     }
+    result
 }
 
 fn next_runnable(
@@ -460,10 +515,11 @@ fn spawn_task(
     worker: &WorkerCli,
     packet: &InvokePacket,
     artifact_root: &Path,
+    capture_root: &Path,
     task_id: &str,
     task: &Value,
-) -> Result<Child, ExecuteError> {
-    let out_dir = task_capture_dir(artifact_root, task_id)?;
+) -> Result<RunningTask, ExecuteError> {
+    let out_dir = task_capture_dir(capture_root, task_id)?;
     fs::create_dir_all(&out_dir).map_err(|error| {
         ExecuteError::failed(format!("could not create {}: {error}", out_dir.display()))
     })?;
@@ -497,7 +553,12 @@ fn spawn_task(
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(stdin_text.as_bytes());
     }
-    Ok(child)
+    Ok(RunningTask {
+        id: task_id.to_owned(),
+        child,
+        stdout_path,
+        stderr_path,
+    })
 }
 
 fn is_safe_task_id(id: &str) -> bool {
@@ -526,22 +587,73 @@ fn lexical_path(path: &Path) -> PathBuf {
     out
 }
 
-fn task_capture_dir(artifact_root: &Path, task_id: &str) -> Result<PathBuf, ExecuteError> {
+fn task_capture_dir(capture_root: &Path, task_id: &str) -> Result<PathBuf, ExecuteError> {
     if !is_safe_task_id(task_id) {
         return Err(ExecuteError::failed(format!(
             "plan.json task id `{task_id}` is not a single path-safe component"
         )));
     }
-    let capture_root = artifact_root.join("run-plan-graph");
     let out_dir = capture_root.join(task_id);
-    let capture_root = lexical_path(&capture_root);
+    let capture_root = lexical_path(capture_root);
     let out_dir_lex = lexical_path(&out_dir);
     if !out_dir_lex.starts_with(&capture_root) {
         return Err(ExecuteError::failed(format!(
-            "task capture path for `{task_id}` escapes artifact_root"
+            "task capture path for `{task_id}` escapes capture_dir"
         )));
     }
     Ok(out_dir)
+}
+
+fn path_to_string(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+fn write_summary_json(
+    capture_root: &Path,
+    plan_order: &[String],
+    reaped: &[ReapedWorker],
+) -> Result<(), ExecuteError> {
+    #[derive(Serialize)]
+    struct CaptureWorker<'a> {
+        command: &'a str,
+        args: &'a [String],
+        exit_code: i32,
+        stdout_path: &'a str,
+        stderr_path: &'a str,
+    }
+    #[derive(Serialize)]
+    struct CaptureSummary<'a> {
+        workers: Vec<CaptureWorker<'a>>,
+    }
+    let workers = plan_order
+        .iter()
+        .filter_map(|id| {
+            reaped
+                .iter()
+                .find(|worker| worker.task_id == *id)
+                .map(|worker| CaptureWorker {
+                    command: &worker.command,
+                    args: &worker.args,
+                    exit_code: worker.exit_code,
+                    stdout_path: &worker.stdout_path,
+                    stderr_path: &worker.stderr_path,
+                })
+        })
+        .collect();
+    let path = capture_root.join("summary.json");
+    let bytes = serde_json::to_vec_pretty(&CaptureSummary { workers }).map_err(|error| {
+        ExecuteError::failed(format!(
+            "could not serialize capture summary {}: {error}",
+            path.display()
+        ))
+    })?;
+    fs::write(&path, bytes).map_err(|error| {
+        ExecuteError::failed(format!(
+            "could not write capture summary {}: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(())
 }
 
 fn inner_stdin(
@@ -571,7 +683,7 @@ mod tests {
     }
 
     fn valid_packet_json() -> &'static str {
-        r#"{"run_id":"run-1","slot_id":"slot-1","artifact_root":"/tmp/artifacts","instruction_body":"Do the work"}"#
+        r#"{"run_id":"run-1","slot_id":"slot-1","artifact_root":"/tmp/artifacts","instruction_body":"Do the work","capture_dir":"/tmp/captures/inv-1"}"#
     }
 
     #[test]
@@ -604,17 +716,18 @@ mod tests {
     }
 
     #[test]
-    fn valid_invoke_packet_parses_four_string_keys() {
+    fn valid_invoke_packet_parses_five_string_keys() {
         let packet = parse_invoke_packet(valid_packet_json()).expect("valid packet");
         assert_eq!(packet.run_id, "run-1");
         assert_eq!(packet.slot_id, "slot-1");
         assert_eq!(packet.artifact_root, "/tmp/artifacts");
         assert_eq!(packet.instruction_body, "Do the work");
+        assert_eq!(packet.capture_dir, "/tmp/captures/inv-1");
     }
 
     #[test]
     fn invoke_packet_extra_key_fails() {
-        let raw = r#"{"run_id":"run-1","slot_id":"slot-1","artifact_root":"/tmp/artifacts","instruction_body":"Do the work","extra":"no"}"#;
+        let raw = r#"{"run_id":"run-1","slot_id":"slot-1","artifact_root":"/tmp/artifacts","instruction_body":"Do the work","capture_dir":"/tmp/captures/inv-1","extra":"no"}"#;
         assert!(parse_invoke_packet(raw).is_err());
     }
 
@@ -625,11 +738,48 @@ mod tests {
     }
 
     #[test]
+    fn invoke_packet_four_keys_without_capture_dir_fails() {
+        let raw = r#"{"run_id":"run-1","slot_id":"slot-1","artifact_root":"/tmp/artifacts","instruction_body":"Do the work"}"#;
+        assert!(parse_invoke_packet(raw).is_err());
+    }
+
+    #[test]
     fn omitted_task_worker_yields_default_pi_print() {
         let worker = parse_run_plan_graph_args(&[] as &[&str]).expect("omitted --task-worker");
         assert_eq!(worker, default_task_worker());
         assert_eq!(worker.command, "pi");
-        assert_eq!(worker.args, vec!["--print".to_owned()]);
+        assert_eq!(
+            worker.args,
+            vec![
+                "--print".to_owned(),
+                "--no-skills".to_owned(),
+                "--no-extensions".to_owned(),
+            ]
+        );
+        assert!(!worker.args.iter().any(|arg| arg == "--no-context-files"));
+        assert!(!worker
+            .args
+            .iter()
+            .any(|arg| arg == "--tools" || arg.starts_with("--tools=")));
+    }
+
+    #[test]
+    fn default_task_worker_is_sandboxed_pi_print() {
+        let worker = default_task_worker();
+        assert_eq!(worker.command, "pi");
+        assert_eq!(
+            worker.args,
+            vec![
+                "--print".to_owned(),
+                "--no-skills".to_owned(),
+                "--no-extensions".to_owned(),
+            ]
+        );
+        assert!(!worker
+            .args
+            .iter()
+            .any(|arg| arg.contains("--no-context-files")));
+        assert!(!worker.args.iter().any(|arg| arg.contains("--tools")));
     }
 
     #[test]
