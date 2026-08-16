@@ -1,6 +1,6 @@
 ---
 name: using-research-provider
-description: Use when running the research workflow through Loop Engine with the research provider — scoping a question, gathering sources externally, commissioning adversarial review, synthesizing a cited conclusion, appending review-evidence, and clearing checked transitions.
+description: Use when running the research workflow through Loop Engine with the research provider — confirming work-slot bindings and models with the user before start, scoping a question, gathering sources externally, commissioning adversarial review or invoking bound slots, synthesizing a cited conclusion, appending review-evidence, and clearing checked transitions.
 ---
 
 # Using the research provider
@@ -27,7 +27,7 @@ command = "/absolute/path/to/target/debug/research"
 args = []
 ```
 
-Copy `crates/research-provider/data/configs/standard.json` to a run-specific file. Omit `artifact_root` in the usual case; the engine allocates the durable directory and records that absolute path in object `initial_input` (`show` reveals it). Pass `artifact_root` only to isolate files to a caller-chosen absolute existing directory. `start` may insert reserved `artifact_root` into object `initial_input` when the caller did not supply a nonempty path; object schemas that deny unknown keys must accept that field to remain evaluable; the engine does not skip injection, strip unknown keys, or classify providers. Then:
+Copy `crates/research-provider/data/configs/standard.json` to a run-specific file. Shipped profiles have **no** `work_slot_bindings`. Cataloged slots are `scope`, `gather`, `verify`, and `synthesize`. Do not add bindings, and do not start, until the user confirms: (1) driver-performed (omit the key or `{}`) vs which slots to bind; (2) exact `{command, args}` if bound; (3) which models those CLIs will use, encoded in frozen args. Nested inner workers count. Do not call `start` while a bound model-bearing CLI has no model in argv unless the user has explicitly accepted that CLI's unpinned default. Bindings freeze and cannot be patched. Omit `artifact_root` in the usual case; the engine allocates the durable directory and records that absolute path in object `initial_input` (`show` reveals it). Pass `artifact_root` only to isolate files to a caller-chosen absolute existing directory. `start` may insert reserved `artifact_root` into object `initial_input` when the caller did not supply a nonempty path; object schemas that deny unknown keys must accept that field to remain evaluable; the engine does not skip injection, strip unknown keys, or classify providers. Then:
 
 ```sh
 loop-engine --json --config "$PROVIDER_CONFIG" \
@@ -73,10 +73,10 @@ Verification-local `verification.json` corrections stay in verify: edit, recheck
 
 ## Per-gate loop
 
-1. `show` — read state instructions plus run-frozen `initial_input.review_policies` (each axis has `id`, `description`, `example_prompt`) and `initial_input.artifact_schemas`.
-2. Author or revise the subject artifact. Material content changes require a revision bump — a bump retires standing verdicts for that subject; keeping the revision asserts the edit was immaterial.
-3. For evidence gates, request the event once before commissioning review. Schema denial means fix the artifact and retry. Evidence denial after a valid shape means schema and links cleared — do not treat that denial as a review failure. Do not append review-evidence until schema and links have cleared; a later material shape fix would bump `revision` and retire the new verdicts.
-4. Then commission the axis's `required_authors` count of distinct external reviewers (default 1): fresh context, not the artifact's author, each judging only that axis using its `example_prompt`. Follow `crates/research-provider/data/reviewer-protocol.md`: triage candidates before append or mutation; append only accepted in-scope material failures or conforming passes.
+1. `show` — read `current_state`, `current_state_instructions`, frozen `initial_input` (including `work_slot_bindings`, `review_policies`, `artifact_schemas`), `work_slots`, and `work_slot_invocations`.
+2. If this state is a **bound** slot, do not author the room yourself. `invoke` it, poll overlay until `succeeded` / `failed` / `overrun`, and on `overrun` invoke again. If **unbound**, author or revise the subject artifact. Material content changes require a revision bump — a bump retires standing verdicts for that subject; keeping the revision asserts the edit was immaterial.
+3. For unbound evidence gates, request the event once before commissioning review. Schema denial means fix the artifact and retry. Evidence denial after a valid shape means schema and links cleared — do not treat that denial as a review failure. Do not append review-evidence until schema and links have cleared; a later material shape fix would bump `revision` and retire the new verdicts. For a bound slot, `invoke` and reach overlay `succeeded` before requesting the checked event; do not request that event to “probe schema” while overlay is `running`, `failed`, or `overrun`.
+4. Then obtain the axis's `required_authors` count of distinct external judgments (default 1): fresh context, not the artifact's author, each judging only that axis using its `example_prompt`. Unbound: you commission those reviewers. Bound: `invoke` already ran the frozen CLI; read its output, then you still triage and append. Follow `crates/research-provider/data/reviewer-protocol.md`: triage candidates before append or mutation; append only accepted in-scope material failures or conforming passes.
 5. Append one `review-evidence` record per axis judgment:
 
 ```sh

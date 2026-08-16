@@ -1,6 +1,6 @@
 ---
 name: using-loop-engine
-description: Use when driving a durable Loop Engine workflow run from the CLI — starting a run against a configured provider, inspecting or resuming a run, appending context records, requesting events, invoking bound work slots, terminating, interpreting completed/rejected/error outcomes, or fanning out worker CLIs without a run.
+description: Use when driving a durable Loop Engine workflow run from the CLI — confirming work-slot policy with the user before start, starting a run against a configured provider, inspecting or resuming a run, appending context records, requesting events, invoking bound work slots, terminating, interpreting completed/rejected/error outcomes, or fanning out worker CLIs without a run.
 ---
 
 # Using Loop Engine
@@ -53,11 +53,28 @@ loop-engine --json --config /absolute/path/to/providers.toml \
 
 `start` returns the run ID at `result.run.id`; supply `--id` when the orchestrator owns run identity. `append` accepts both `--record-id VALUE` and `--record-id=VALUE`; supplied IDs remain unchanged through result, `show`, and `history`. Append is opaque to core and never changes state.
 
+## Lock work-slot policy before start
+
+Bindings freeze with `initial_input` and cannot be patched. Do not call `start` until the user has actively approved the work-slot policy for this run. Copying a provider profile is not approval: some shipped profiles already contain `work_slot_bindings`.
+
+Ask, show the exact JSON you will freeze, and wait for explicit confirmation of all three:
+
+1. **Whether to bind any slots**, and if so which catalog slot IDs. Sparse map: a present key is a mandatory worker for that room; an absent key stays driver-performed. `{}` or omitting the key means no bindings.
+2. **Command and args per bound slot** — keep that provider's shipped default argv, or replace it. Quote the exact `{command, args}` for every bound slot.
+3. **Model identity per bound slot that will invoke a model-bearing CLI.** The engine freezes argv only. Encode the model in those frozen args (inner `--task-worker` JSON, repeated `--worker` JSON, or the worker CLI's own model flags). Nested inner workers count, not only the outer binding command. Do not choose a model after `start`.
+
+Do not call `start` while any bound slot will invoke a model-bearing CLI (`pi --print`, `claude -p`, `run-plan-graph`'s inner worker, or similar) unless each model identifier is present in those frozen args, or the user has explicitly accepted that CLI's unpinned default as the model policy. Keeping a shipped outer argv that does not name a model is not model lock-in.
+
+If the user declines bindings, delete `work_slot_bindings` or set it to `{}` in the run-specific input even when the shipped profile had defaults. A wrong freeze cannot be edited in place: terminate and start a new run.
+
 ## Work-slot delegation
 
 Object `initial_input` may include reserved `work_slot_bindings`: slot ID → `{command, args}`. Omit or `{}` means none. `start` rejects unknown slot IDs, unknown fields, and non-object values.
 
-`show` projects `work_slots` and `work_slot_invocations`. Overlay status is `running` | `succeeded` | `failed` | `overrun`. When the current state is bound, `current_state_instructions` names the slot ID plus the frozen CLI binding `{command, args}` and that the legal start is `loop-engine invoke RUN_ID SLOT_ID`; it omits the stored work body. Do not perform that body yourself.
+`show` projects `work_slots` (catalog: id, state, event) and `work_slot_invocations`. Overlay status is `running` | `succeeded` | `failed` | `overrun`. Compare `current_state` to frozen bindings to decide the path:
+
+- **Unbound** (cataloged or not, but absent from frozen bindings): `current_state_instructions` is the stored work body. Perform that work yourself. Then append and request the event.
+- **Bound** (slot ID present in frozen bindings): instructions name the slot, the frozen `{command, args}`, and that the legal start is `loop-engine invoke RUN_ID SLOT_ID`. They omit the stored work body. Do not perform that body, and do not exec the frozen command yourself. `invoke`, then poll `show` until overlay `succeeded`, `failed`, or `overrun`. On `overrun`, `invoke` the same slot again. Overlay `succeeded` means the bound CLI exited 0, not that the change is accepted. You still append provider-shaped evidence and request the shown event.
 
 `invoke RUN_ID SLOT_ID` starts the bound worker. Rejected for unknown, unbound, or overlay-`running` slots. Overlay `overrun` is terminal for retry — invoke the same slot again. The worker stdin JSON object is `run_id`, `slot_id`, `artifact_root`, and `instruction_body`. Hidden `wait-invocation` is parent of the worker; it is not a user command and not a daemon.
 
@@ -104,7 +121,7 @@ Parse JSON even on nonzero exit. Treat only `completed` as success. Never infer 
 
 - One logical mutating actor per run: serialize `append`, `event`, `invoke`, and `terminate` calls; never race them from parallel workers. Concurrent reads are fine. Context appended during an in-flight checked evaluation does not invalidate or reach that evaluation.
 - Public-boundary proof uses `scripts/software-change-journey.py`; source full mode drives separate engine processes and packaged checked-prefix mode consumes only provider data materialized by `data-dump`. Policy-document and research journeys do the same for those providers. Each freezes a sparse dummy-worker `work_slot_bindings` entry and `invoke`s before the bound checked event. The software-change source full journey also proves `run-plan-graph` and `fan-out` with dummy inner workers (no live model), including zero-worker bound review invoke failing closed. Synthetic evidence proves deterministic mechanics, not semantic verdict quality.
-- `initial_input` is immutable run configuration; never attempt to replace it. Frozen `work_slot_bindings` are part of that input.
+- `initial_input` is immutable run configuration; never attempt to replace it. Frozen `work_slot_bindings` are part of that input. Do not `start` until the user has approved the bindings JSON, including default-vs-custom argv and models encoded in those args — or an explicit unpinned-default acceptance for any model-bearing CLI that has no model in argv.
 - Context records are immutable and append-only.
 - Provider association, workflow topology, and state instructions are snapshotted at `start`; changing TOML cannot redirect an existing run.
 - `show` is provider-free — it never spawns the provider. A fresh agent resumes with only the run ID, the same database, and the external references named in initial input/context/instructions.

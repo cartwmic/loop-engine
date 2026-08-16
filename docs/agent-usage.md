@@ -52,6 +52,8 @@ Global options may appear before or after the operation; the timeout option is s
 
 Object `initial_input` may include reserved `work_slot_bindings`: a sparse map from catalog slot ID to `{command, args}`. Omit the key or pass `{}` for no bindings. `start` rejects unknown slot IDs, unknown binding fields, and non-object values. Bindings freeze with the run.
 
+Lock that map with the user **before** `start`. Copying a provider profile is not approval: some shipped profiles already contain bindings. Confirm whether any slots are bound, the exact `{command, args}` for each bound slot (shipped default vs replacement), and — when a bound CLI will invoke a model — which model identifiers are encoded in those frozen args. Nested inner workers (`--task-worker`, `--worker`) count. Do not call `start` while a bound model-bearing CLI has no model in argv unless the user has explicitly accepted that CLI's unpinned default. Sparse: present keys are mandatory workers; absent keys stay driver-performed. A wrong freeze cannot be patched; terminate and start a new run.
+
 `show` projects `work_slots` (catalog snapshot: id, state, event; no instruction body) and `work_slot_invocations` (including overlay status `running` | `succeeded` | `failed` | `overrun`). When the current state is a bound slot, `current_state_instructions` names the slot ID plus the frozen CLI binding `{command, args}` and that the legal start is `loop-engine invoke RUN_ID SLOT_ID`; it omits the stored work body. Unbound slots keep the stored instruction body and the driver-performed path.
 
 Start bound work with `invoke RUN_ID SLOT_ID`. It is rejected for an unknown slot, an unbound slot, or an overlay-`running` invocation. Overlay `overrun`, `failed`, and `succeeded` are not already-running. Overlay `overrun` is terminal for retry: invoke the same slot again. `event` and provider `evaluate` never wait on a worker.
@@ -106,7 +108,7 @@ At `start`, the provider alias resolves once to its configured `command` and ord
 ## Agent rules
 
 - One logical mutating actor per run: serialize `append`, `event`, `invoke`, and `terminate` calls; never race them from parallel workers. Concurrent reads are fine. Context appended during an in-flight checked evaluation does not invalidate or reach that evaluation.
-- Treat `initial_input` as immutable run configuration; never attempt to replace it. Frozen `work_slot_bindings` are part of that input.
+- Treat `initial_input` as immutable run configuration; never attempt to replace it. Frozen `work_slot_bindings` are part of that input. Confirm that map with the user before `start`, including models in frozen args or an explicit unpinned-default acceptance.
 - Treat context `kind` and `data` as opaque to Loop Engine core, but follow provider/state conventions for them; records are immutable and append-only.
 - Use unique stable `--id` and `--record-id` values whenever an orchestrator controls identity. Append accepts both `--record-id VALUE` and `--record-id=VALUE`; supplied IDs remain unchanged in append results, `show` context, and durable `history`.
 - Request only an event shown for the current state, and request one at a time.

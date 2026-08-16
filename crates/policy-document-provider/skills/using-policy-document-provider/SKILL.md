@@ -1,6 +1,6 @@
 ---
 name: using-policy-document-provider
-description: Use when drafting or auditing README.md, AGENTS.md, or another policy document through Loop Engine with the policy-document provider — selecting a profile, clearing deterministic checks, commissioning semantic review, appending digest-bound evidence, and finalizing the run.
+description: Use when drafting or auditing README.md, AGENTS.md, or another policy document through Loop Engine with the policy-document provider — confirming work-slot bindings with the user before start, selecting a profile, clearing deterministic checks, commissioning semantic review or invoking a bound review slot, appending digest-bound evidence, and finalizing the run.
 ---
 
 # Using the policy-document provider
@@ -35,6 +35,8 @@ policy-document data-dump "$DATA_ROOT"
 
 Choose [readme.json](../../data/readme.json) or [agents.json](../../data/agents.json). Copy it to a run-specific file; set `mode` to `draft` or `audit`; replace `target.path` with the absolute target path. Keep shipped `target.id` and `profile_version` unchanged unless intentionally authoring a custom profile. Omit `artifact_root` in the usual case; the reserved key is accepted and ignored, and the provider is not required to write artifact files. Other unknown `initial_input` keys still fail.
 
+Shipped profiles have **no** `work_slot_bindings`. Cataloged slots are `deterministic-review` and `semantic-review`. Do not add bindings, and do not start, until the user confirms: (1) driver-performed (omit the key or `{}`) vs which slots to bind; (2) exact `{command, args}` if bound, rather than assuming a default; (3) which models those CLIs will use, encoded in frozen args. Nested inner workers count. Do not call `start` while a bound model-bearing CLI has no model in argv unless the user has explicitly accepted that CLI's unpinned default. Bindings freeze and cannot be patched.
+
 ```sh
 loop-engine --json --config "$PROVIDER_CONFIG" \
   start policy-document @"$PROFILE" "document audit"
@@ -53,16 +55,16 @@ Heading aliases are case-insensitive; profiles do not require exact heading spel
 
 ## Run loop
 
-1. `show` and read current instructions plus immutable `initial_input`, especially `mode`, target, profile version, deterministic policies, and semantic policies.
+1. `show` and read current instructions plus immutable `initial_input` (including `work_slot_bindings` when present), `work_slots`, and `work_slot_invocations`, especially `mode`, target, profile version, deterministic policies, and semantic policies.
 2. In `prepare`, author or revise target externally. Request `ready` to enter deterministic review.
-3. In `deterministic-review`, request `passed`. On `policy-document-nonconforming`, fix every reported violation, request check-free `revise`, then repeat from `prepare`.
+3. In `deterministic-review`, if that slot is bound, `invoke` it and poll overlay until `succeeded` / `failed` / `overrun`; on `overrun` invoke again; overlay `succeeded` is worker exit 0, not provider acceptance. Request `passed` only after overlay `succeeded`, or immediately if unbound. On `policy-document-nonconforming`, fix every reported violation, request check-free `revise`, then repeat from `prepare`.
 4. After deterministic approval, compute lowercase SHA-256 over exact current bytes:
 
    ```sh
    TARGET_SHA256=$(shasum -a 256 "$TARGET" | awk '{print $1}')
    ```
 
-5. Commission external review for every frozen semantic policy. Give each reviewer current target bytes or path, policy `description`, `example_prompt`, and relevant project evidence. Reviewer judges one axis and returns `pass` or actionable `fail` findings.
+5. For semantic review: if `semantic-review` is bound, `invoke` it, poll overlay until `succeeded` / `failed` / `overrun`, on `overrun` invoke again, and read worker output; if unbound, commission external review yourself. Overlay `succeeded` is collector/worker exit 0, not that the review passed. Either way, cover every frozen semantic policy. Give each reviewer current target bytes or path, policy `description`, `example_prompt`, and relevant project evidence. Reviewer judges one axis and returns `pass` or actionable `fail` findings. You still triage and append; a bound worker does not write records.
 6. Append one `review-evidence` record per axis judgment, bound to exact target ID, digest, and profile version.
 7. Request semantic `passed`. On denial, use diagnostics to supersede malformed evidence with a later conforming record, address standing failures, or supply missing current passes. Any target byte change invalidates prior evidence: request `revise`, rerun deterministic review, recompute digest, and commission fresh semantic verdicts.
 
