@@ -9,19 +9,24 @@ pub mod append;
 pub mod evaluation;
 pub mod event;
 pub mod history;
+pub mod invoke;
 pub mod list;
 pub mod show;
 pub mod start;
 pub mod terminate;
 
+pub use crate::invocation::{instruction_digest, project_invocation_status};
+/// Start-facing catalog and frozen-binding contract types.
+pub use crate::{WorkSlot, WorkSlotBinding, WorkSlotId};
 pub use append::{execute as execute_append, Request as AppendRequest};
 pub use evaluation::{lineage_for_transition, request_from_snapshot};
 pub use event::{execute as execute_event, Request as EventRequest, Result as EventResult};
 pub use history::{execute as execute_history, Request as HistoryRequest};
+pub use invoke::{execute as execute_invoke, Request as InvokeRequest, Result as InvokeResult};
 pub use list::{execute as execute_list, Request as ListRequest};
 pub use show::{
     execute as execute_show, latest_evaluations, project as project_show, ProjectionError,
-    Request as ShowRequest, RequestableEvent, ShowProjection,
+    Request as ShowRequest, RequestableEvent, ShowProjection, WorkSlotInvocationView,
 };
 pub use start::{execute as execute_start, Request as StartRequest};
 pub use terminate::{execute as execute_terminate, Request as TerminateRunRequest};
@@ -79,7 +84,7 @@ mod tests {
         CreateRunRequest, CreateRunResult, HistoryAction, HistoryEntry, Lifecycle, Persistence,
         PersistenceFailure, PersistenceRejection, ProviderAssociation, ProviderGateway,
         ProviderResolver, Run, RunId, RunSummary, SemanticSequence, State, StateId,
-        TerminateRequest, TerminateResult, Timestamp, Transition, Workflow,
+        TerminateRequest, TerminateResult, Timestamp, Transition, WorkSlot, Workflow,
     };
     use serde_json::{json, Value};
     use std::cell::RefCell;
@@ -268,6 +273,44 @@ mod tests {
         fn load_show_data(&self, _run_id: &RunId) -> Result<crate::ShowData, PersistenceError> {
             unavailable()
         }
+
+        fn create_work_slot_invocation(
+            &self,
+            _request: crate::CreateWorkSlotInvocationRequest,
+        ) -> Result<crate::CreateWorkSlotInvocationResult, PersistenceError> {
+            unavailable()
+        }
+
+        fn complete_work_slot_invocation(
+            &self,
+            _request: crate::CompleteWorkSlotInvocationRequest,
+        ) -> Result<crate::CompleteWorkSlotInvocationResult, PersistenceError> {
+            unavailable()
+        }
+
+        fn get_current_slot_subject(
+            &self,
+            _run_id: &RunId,
+            _slot_id: &crate::WorkSlotId,
+        ) -> Result<Option<String>, PersistenceError> {
+            Ok(None)
+        }
+
+        fn set_current_slot_subject(
+            &self,
+            _run_id: &RunId,
+            _slot_id: &crate::WorkSlotId,
+            _subject: String,
+        ) -> Result<(), PersistenceError> {
+            Ok(())
+        }
+
+        fn load_work_slot_invocations(
+            &self,
+            _run_id: &RunId,
+        ) -> Result<Vec<crate::WorkSlotInvocation>, PersistenceError> {
+            Ok(Vec::new())
+        }
     }
 
     fn start_request(catalog_root: impl Into<PathBuf>) -> start::Request {
@@ -431,6 +474,248 @@ mod tests {
         assert_eq!(created.artifact_root.as_deref(), Some(allocated.as_str()));
         assert_eq!(created.provider, "fake");
         assert!(allocated_canonical(catalog.path(), "run-1").is_dir());
+    }
+
+    fn gateway_with_explore_intent_slot() -> FakeGateway {
+        FakeGateway {
+            described: Some(Ok(workflow(false).with_work_slots(vec![WorkSlot::new(
+                "explore-intent",
+                "explore",
+                "intent-ready",
+            )]))),
+            ..FakeGateway::default()
+        }
+    }
+
+    // Frozen initial_input key is `work_slot_bindings`: object map slot_id → {command, args}.
+    // Binding value type with exactly `{command, args}`. `command: String`. `args: Vec<String>` — the same argv list type loop-integrations already uses for process argument lists (`ProviderDefinition.args` / `ProviderInvocation.args`). `#[serde(deny_unknown_fields)]`.
+    // Omit the key OR `{}` both mean no bindings. Start must succeed in both cases (existing start tests omit the key and MUST keep passing).
+    // Start rejects: unknown slot id (not in the provider catalog snapshot for this workflow), unknown fields on a binding object, non-object values (the map itself or a binding value).
+
+    #[test]
+    fn work_slot_bind_omitted_key_succeeds() {
+        // Omit the key OR `{}` both mean no bindings. Start must succeed in both cases (existing start tests omit the key and MUST keep passing).
+        let catalog = temp_catalog();
+        let resolver = FakeResolver::default();
+        let gateway = gateway_with_explore_intent_slot();
+        let persistence = FakePersistence::default();
+        let request = start::Request::new(
+            "run-1",
+            "fake",
+            json!({"objective": "test"}),
+            None,
+            Timestamp::from_unix_millis(10),
+            catalog.path(),
+        );
+
+        let outcome = start::execute(request, &resolver, &gateway, &persistence);
+
+        assert!(outcome.is_completed());
+        let created = &persistence.created.borrow()[0];
+        assert!(created.initial_input.get("work_slot_bindings").is_none());
+    }
+
+    #[test]
+    fn work_slot_bind_empty_object_succeeds_and_keeps_empty_map() {
+        // Omit the key OR `{}` both mean no bindings. Start must succeed in both cases (existing start tests omit the key and MUST keep passing).
+        let catalog = temp_catalog();
+        let resolver = FakeResolver::default();
+        let gateway = gateway_with_explore_intent_slot();
+        let persistence = FakePersistence::default();
+        let request = start::Request::new(
+            "run-1",
+            "fake",
+            json!({"objective": "test", "work_slot_bindings": {}}),
+            None,
+            Timestamp::from_unix_millis(10),
+            catalog.path(),
+        );
+
+        let outcome = start::execute(request, &resolver, &gateway, &persistence);
+
+        assert!(outcome.is_completed());
+        let created = &persistence.created.borrow()[0];
+        let allocated = allocated_canonical_string(catalog.path(), "run-1");
+        assert_eq!(
+            created.initial_input.get("work_slot_bindings"),
+            Some(&json!({}))
+        );
+        assert_eq!(
+            created.initial_input.get("artifact_root"),
+            Some(&json!(allocated))
+        );
+    }
+
+    #[test]
+    fn work_slot_bind_valid_command_args_for_known_slot_is_frozen() {
+        // Binding value type with exactly `{command, args}`. `command: String`. `args: Vec<String>` — the same argv list type loop-integrations already uses for process argument lists (`ProviderDefinition.args` / `ProviderInvocation.args`). `#[serde(deny_unknown_fields)]`.
+        // Frozen initial_input key is `work_slot_bindings`: object map slot_id → {command, args}.
+        let catalog = temp_catalog();
+        let resolver = FakeResolver::default();
+        let gateway = gateway_with_explore_intent_slot();
+        let persistence = FakePersistence::default();
+        let bindings = json!({
+            "explore-intent": {
+                "command": "/usr/bin/explore",
+                "args": ["--intent", "ready"]
+            }
+        });
+        let request = start::Request::new(
+            "run-1",
+            "fake",
+            json!({"objective": "test", "work_slot_bindings": bindings}),
+            None,
+            Timestamp::from_unix_millis(10),
+            catalog.path(),
+        );
+
+        let outcome = start::execute(request, &resolver, &gateway, &persistence);
+
+        assert!(outcome.is_completed());
+        let created = &persistence.created.borrow()[0];
+        assert_eq!(created.initial_input["work_slot_bindings"], bindings);
+        assert_eq!(
+            created.initial_input["work_slot_bindings"]["explore-intent"]["command"],
+            json!("/usr/bin/explore")
+        );
+        assert_eq!(
+            created.initial_input["work_slot_bindings"]["explore-intent"]["args"],
+            json!(["--intent", "ready"])
+        );
+    }
+
+    #[test]
+    fn work_slot_bind_unknown_slot_id_is_rejected_without_creating_a_run() {
+        // Start rejects: unknown slot id (not in the provider catalog snapshot for this workflow)
+        let catalog = temp_catalog();
+        let resolver = FakeResolver::default();
+        let gateway = gateway_with_explore_intent_slot();
+        let persistence = FakePersistence::default();
+        let request = start::Request::new(
+            "run-1",
+            "fake",
+            json!({
+                "work_slot_bindings": {
+                    "not-a-slot": {"command": "echo", "args": []}
+                }
+            }),
+            None,
+            Timestamp::from_unix_millis(10),
+            catalog.path(),
+        );
+
+        let outcome = start::execute(request, &resolver, &gateway, &persistence);
+
+        assert!(outcome.is_rejected());
+        assert_eq!(outcome.issue().unwrap().code, "unknown-work-slot");
+        assert!(persistence.created.borrow().is_empty());
+    }
+
+    #[test]
+    fn work_slot_bind_extra_fields_on_binding_object_are_rejected() {
+        // Start rejects: unknown fields on a binding object
+        let catalog = temp_catalog();
+        let resolver = FakeResolver::default();
+        let gateway = gateway_with_explore_intent_slot();
+        let persistence = FakePersistence::default();
+        let request = start::Request::new(
+            "run-1",
+            "fake",
+            json!({
+                "work_slot_bindings": {
+                    "explore-intent": {
+                        "command": "echo",
+                        "args": [],
+                        "extra": true
+                    }
+                }
+            }),
+            None,
+            Timestamp::from_unix_millis(10),
+            catalog.path(),
+        );
+
+        let outcome = start::execute(request, &resolver, &gateway, &persistence);
+
+        assert!(outcome.is_rejected());
+        assert_eq!(outcome.issue().unwrap().code, "invalid-work-slot-binding");
+        assert!(persistence.created.borrow().is_empty());
+    }
+
+    #[test]
+    fn work_slot_bind_non_object_map_or_value_is_rejected() {
+        // Start rejects: non-object values (the map itself or a binding value).
+        let catalog = temp_catalog();
+        let resolver = FakeResolver::default();
+        let gateway = gateway_with_explore_intent_slot();
+        let persistence = FakePersistence::default();
+        let request = start::Request::new(
+            "run-1",
+            "fake",
+            json!({"work_slot_bindings": "not-an-object"}),
+            None,
+            Timestamp::from_unix_millis(10),
+            catalog.path(),
+        );
+
+        let outcome = start::execute(request, &resolver, &gateway, &persistence);
+
+        assert!(outcome.is_rejected());
+        assert_eq!(
+            outcome.issue().unwrap().code,
+            "work-slot-bindings-not-object"
+        );
+        assert!(persistence.created.borrow().is_empty());
+
+        let persistence = FakePersistence::default();
+        let request = start::Request::new(
+            "run-2",
+            "fake",
+            json!({
+                "work_slot_bindings": {
+                    "explore-intent": "not-an-object"
+                }
+            }),
+            None,
+            Timestamp::from_unix_millis(10),
+            catalog.path(),
+        );
+
+        let outcome = start::execute(request, &resolver, &gateway, &persistence);
+
+        assert!(outcome.is_rejected());
+        assert_eq!(outcome.issue().unwrap().code, "invalid-work-slot-binding");
+        assert!(persistence.created.borrow().is_empty());
+    }
+
+    #[test]
+    fn work_slot_bind_string_args_value_is_rejected() {
+        // args must be a JSON array of strings (the Vec<String> argv type); a string args value is rejected.
+        let catalog = temp_catalog();
+        let resolver = FakeResolver::default();
+        let gateway = gateway_with_explore_intent_slot();
+        let persistence = FakePersistence::default();
+        let request = start::Request::new(
+            "run-1",
+            "fake",
+            json!({
+                "work_slot_bindings": {
+                    "explore-intent": {
+                        "command": "echo",
+                        "args": "--oops"
+                    }
+                }
+            }),
+            None,
+            Timestamp::from_unix_millis(10),
+            catalog.path(),
+        );
+
+        let outcome = start::execute(request, &resolver, &gateway, &persistence);
+
+        assert!(outcome.is_rejected());
+        assert_eq!(outcome.issue().unwrap().code, "invalid-work-slot-binding");
+        assert!(persistence.created.borrow().is_empty());
     }
 
     #[test]

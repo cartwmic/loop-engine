@@ -16,7 +16,7 @@ When instructions conflict, use this order:
 2. [docs/PRD.md](docs/PRD.md), living engine product requirements.
 3. `crates/software-change-provider/docs/prd.md`, frozen software-change provider requirements.
 4. The relevant crate README and skill, for driving that provider.
-5. [docs/agent-usage.md](docs/agent-usage.md), for CLI forms, JSON envelopes, and the `show` / `append` / `event` loop.
+5. [docs/agent-usage.md](docs/agent-usage.md), for CLI forms, JSON envelopes, and the `show` / `append` / `event` / `invoke` loop.
 
 The engine owns durable run state and progression. Callers perform primary work externally. Providers `describe` topology and `evaluate` the exact transition the engine selected; they do not choose the next state, edit repositories, invoke reviewers, or judge semantic truth. Context `kind` and `data` are opaque to core; follow the active provider's record conventions.
 
@@ -41,7 +41,7 @@ loop-engine --json --config /absolute/path/to/providers.toml \
   start software-change @/tmp/profile.json "my run"
 ```
 
-Parse the single JSON envelope even on nonzero exit. Treat only `status: "completed"` as success. `rejected` (exit 10) is an understood denial — follow feedback and continue. `error` (exit 20) means nothing advanced; re-run `show`. Request events from the latest `show`, never states. Serialize `append`, `event`, and `terminate` per run.
+Parse the single JSON envelope even on nonzero exit. Treat only `status: "completed"` as success. `rejected` (exit 10) is an understood denial — follow feedback and continue. `error` (exit 20) means nothing advanced; re-run `show`. Request events from the latest `show`, never states. Serialize `append`, `event`, `invoke`, and `terminate` per run.
 
 `loop-engine`, `software-change`, and `research` accept `--help`/`-h` and `--version`/`-V` before stdin. `policy-document` does not: unsupported argv besides `data-dump DIR` is an error; describe/evaluate remain stdin JSON.
 

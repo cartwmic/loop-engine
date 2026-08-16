@@ -9,11 +9,13 @@
 use loop_core::{
     AppendContextRequest, AppendContextResult, CheckedEvaluationSnapshot,
     CheckedEvaluationSnapshotRequest, CommitTransitionRequest, CommitTransitionResult,
-    ContextRecord, CreateRunRequest, CreateRunResult, DurableEvaluation, DurableEvaluationResult,
-    HistoryAction, HistoryEntry, Lifecycle, Persistence, PersistenceConflict, PersistenceError,
+    CompleteWorkSlotInvocationRequest, CompleteWorkSlotInvocationResult, ContextRecord,
+    CreateRunRequest, CreateRunResult, CreateWorkSlotInvocationRequest,
+    CreateWorkSlotInvocationResult, DurableEvaluation, DurableEvaluationResult, HistoryAction,
+    HistoryEntry, InvocationId, Lifecycle, Persistence, PersistenceConflict, PersistenceError,
     PersistenceFailure, PersistenceRejection, RecordDenialRequest, RecordDenialResult, Run, RunId,
     RunSummary, SemanticSequence, ShowData, StateId, TerminateRequest, TerminateResult, Timestamp,
-    TransitionHistoryOutcome,
+    TransitionHistoryOutcome, WaiterWrittenStatus, WorkSlotId, WorkSlotInvocation,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{de::DeserializeOwned, Serialize};
@@ -67,6 +69,34 @@ CREATE INDEX IF NOT EXISTS context_records_by_run_sequence
     ON context_records (run_id, sequence);
 CREATE INDEX IF NOT EXISTS history_entries_by_run_sequence
     ON history_entries (run_id, sequence);
+
+CREATE TABLE IF NOT EXISTS work_slot_invocations (
+    run_id                       TEXT NOT NULL,
+    invocation_id                TEXT NOT NULL,
+    slot_id                      TEXT NOT NULL,
+    binding_json                 TEXT NOT NULL,
+    instruction_digest           TEXT NOT NULL,
+    subject                      TEXT NOT NULL,
+    waiter_pid                   INTEGER NOT NULL CHECK (waiter_pid >= 0),
+    started_at                   INTEGER NOT NULL,
+    allowed_time_ms              INTEGER NOT NULL CHECK (allowed_time_ms >= 0),
+    status                       TEXT CHECK (status IS NULL OR status IN ('succeeded', 'failed')),
+    exit_code                    INTEGER,
+    completed_at                 INTEGER,
+    PRIMARY KEY (run_id, invocation_id),
+    FOREIGN KEY (run_id) REFERENCES runs (id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS slot_subjects (
+    run_id                       TEXT NOT NULL,
+    slot_id                      TEXT NOT NULL,
+    subject                      TEXT NOT NULL,
+    PRIMARY KEY (run_id, slot_id),
+    FOREIGN KEY (run_id) REFERENCES runs (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS work_slot_invocations_by_run
+    ON work_slot_invocations (run_id, started_at, invocation_id);
 "#;
 
 /// A synchronous, file-backed SQLite implementation of [`Persistence`].
@@ -156,6 +186,7 @@ impl Persistence for SqlitePersistence {
                 )
                 .map_err(sqlite_failure)?;
             insert_history(&transaction, &request.id, &history)?;
+            upsert_slot_subjects(&transaction, &request.id, &request.slot_subjects)?;
 
             let run = Run::new(
                 request.id,
@@ -279,6 +310,7 @@ impl Persistence for SqlitePersistence {
                 )
                 .map_err(sqlite_failure)?;
             insert_history(&transaction, &request.run_id, &history)?;
+            upsert_slot_subjects(&transaction, &request.run_id, &request.slot_subjects)?;
             let run = load_required_run(&transaction, &request.run_id)?;
             Ok(CommitTransitionResult { run, history })
         })();
@@ -492,6 +524,216 @@ impl Persistence for SqlitePersistence {
         })();
         finish_transaction(transaction, result)
     }
+
+    fn create_work_slot_invocation(
+        &self,
+        request: CreateWorkSlotInvocationRequest,
+    ) -> Result<CreateWorkSlotInvocationResult, PersistenceError> {
+        let binding_json = encode_json(&request.binding, "work slot binding")?;
+        let mut connection = self.lock()?;
+        let transaction = begin_immediate(&mut connection)?;
+        let result = (|| {
+            let raw = load_raw_run(&transaction, &request.run_id)?
+                .ok_or_else(|| PersistenceError::not_found(request.run_id.clone()))?;
+            let run = decode_run(raw)?;
+            require_active(&run)?;
+
+            let sequence = next_sequence(run.last_sequence)?;
+            let invocation = WorkSlotInvocation::new(
+                request.invocation_id.clone(),
+                request.slot_id.clone(),
+                request.binding.clone(),
+                request.instruction_digest.clone(),
+                request.subject.clone(),
+                request.waiter_pid,
+                request.started_at,
+                request.allowed_time_ms,
+                None,
+                None,
+                None,
+            );
+            transaction
+                .execute(
+                    "INSERT INTO work_slot_invocations (
+                        run_id, invocation_id, slot_id, binding_json,
+                        instruction_digest, subject, waiter_pid, started_at,
+                        allowed_time_ms, status, exit_code, completed_at
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL, NULL)",
+                    params![
+                        request.run_id.as_str(),
+                        request.invocation_id.as_str(),
+                        request.slot_id.as_str(),
+                        binding_json,
+                        request.instruction_digest,
+                        request.subject,
+                        to_sqlite_i64(u64::from(request.waiter_pid), "waiter pid")?,
+                        request.started_at.as_unix_millis(),
+                        to_sqlite_i64(request.allowed_time_ms, "allowed time ms")?,
+                    ],
+                )
+                .map_err(sqlite_failure)?;
+
+            let history = HistoryEntry::invocation_started(
+                sequence,
+                request.started_at,
+                request.invocation_id.clone(),
+            );
+            insert_history(&transaction, &request.run_id, &history)?;
+            update_last_sequence(&transaction, &request.run_id, sequence)?;
+            Ok(CreateWorkSlotInvocationResult {
+                invocation,
+                history,
+            })
+        })();
+        finish_transaction(transaction, result)
+    }
+
+    fn complete_work_slot_invocation(
+        &self,
+        request: CompleteWorkSlotInvocationRequest,
+    ) -> Result<CompleteWorkSlotInvocationResult, PersistenceError> {
+        let mut connection = self.lock()?;
+        let transaction = begin_immediate(&mut connection)?;
+        let result = (|| {
+            let raw = load_raw_run(&transaction, &request.run_id)?
+                .ok_or_else(|| PersistenceError::not_found(request.run_id.clone()))?;
+            let run = decode_run(raw)?;
+
+            let changed = transaction
+                .execute(
+                    "UPDATE work_slot_invocations
+                     SET status = ?1, exit_code = ?2, completed_at = ?3
+                     WHERE run_id = ?4 AND invocation_id = ?5 AND status IS NULL",
+                    params![
+                        waiter_status_name(request.status),
+                        request.exit_code,
+                        request.completed_at.as_unix_millis(),
+                        request.run_id.as_str(),
+                        request.invocation_id.as_str(),
+                    ],
+                )
+                .map_err(sqlite_failure)?;
+            if changed != 1 {
+                return match load_one_work_slot_invocation(
+                    &transaction,
+                    &request.run_id,
+                    &request.invocation_id,
+                )? {
+                    Some(existing) if existing.status.is_some() => Err(PersistenceError::conflict(
+                        PersistenceConflict::InvocationAlreadyTerminal {
+                            invocation_id: request.invocation_id.clone(),
+                        },
+                    )),
+                    Some(_) | None => Err(PersistenceError::failure(PersistenceFailure::new(
+                        "invocation-not-found",
+                        format!(
+                            "invocation `{}` was not found on run `{}`",
+                            request.invocation_id, request.run_id
+                        ),
+                    ))),
+                };
+            }
+
+            let sequence = next_sequence(run.last_sequence)?;
+            let history = HistoryEntry::invocation_status_changed(
+                sequence,
+                request.completed_at,
+                request.invocation_id.clone(),
+                request.status,
+            );
+            insert_history(&transaction, &request.run_id, &history)?;
+            update_last_sequence(&transaction, &request.run_id, sequence)?;
+            let invocation = load_one_work_slot_invocation(
+                &transaction,
+                &request.run_id,
+                &request.invocation_id,
+            )?
+            .ok_or_else(|| {
+                PersistenceError::failure(PersistenceFailure::new(
+                    "invocation-not-found",
+                    format!(
+                        "invocation `{}` was not found on run `{}` after terminal write",
+                        request.invocation_id, request.run_id
+                    ),
+                ))
+            })?;
+            Ok(CompleteWorkSlotInvocationResult {
+                invocation,
+                history,
+            })
+        })();
+        finish_transaction(transaction, result)
+    }
+
+    fn get_current_slot_subject(
+        &self,
+        run_id: &RunId,
+        slot_id: &WorkSlotId,
+    ) -> Result<Option<String>, PersistenceError> {
+        let connection = self.lock()?;
+        let _ = load_required_run(&connection, run_id)?;
+        connection
+            .query_row(
+                "SELECT subject FROM slot_subjects WHERE run_id = ?1 AND slot_id = ?2",
+                params![run_id.as_str(), slot_id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(sqlite_failure)
+    }
+
+    fn set_current_slot_subject(
+        &self,
+        run_id: &RunId,
+        slot_id: &WorkSlotId,
+        subject: String,
+    ) -> Result<(), PersistenceError> {
+        let mut connection = self.lock()?;
+        let transaction = begin_immediate(&mut connection)?;
+        let result = (|| {
+            let _ = load_required_run(&transaction, run_id)?;
+            upsert_slot_subject(&transaction, run_id, slot_id, &subject)?;
+            Ok(())
+        })();
+        finish_transaction(transaction, result)
+    }
+
+    fn load_work_slot_invocations(
+        &self,
+        run_id: &RunId,
+    ) -> Result<Vec<WorkSlotInvocation>, PersistenceError> {
+        let connection = self.lock()?;
+        let _ = load_required_run(&connection, run_id)?;
+        read_work_slot_invocations(&connection, run_id)
+    }
+}
+
+fn upsert_slot_subjects(
+    transaction: &Transaction<'_>,
+    run_id: &RunId,
+    subjects: &[(WorkSlotId, String)],
+) -> Result<(), PersistenceError> {
+    for (slot_id, subject) in subjects {
+        upsert_slot_subject(transaction, run_id, slot_id, subject)?;
+    }
+    Ok(())
+}
+
+fn upsert_slot_subject(
+    transaction: &Transaction<'_>,
+    run_id: &RunId,
+    slot_id: &WorkSlotId,
+    subject: &str,
+) -> Result<(), PersistenceError> {
+    transaction
+        .execute(
+            "INSERT INTO slot_subjects (run_id, slot_id, subject)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT (run_id, slot_id) DO UPDATE SET subject = excluded.subject",
+            params![run_id.as_str(), slot_id.as_str(), subject],
+        )
+        .map_err(sqlite_failure)?;
+    Ok(())
 }
 
 fn configure_connection(connection: &Connection) -> rusqlite::Result<()> {
@@ -902,6 +1144,197 @@ fn from_sqlite_u64(value: i64, field: &str) -> Result<u64, PersistenceError> {
             format!("{field} is negative in SQLite"),
         ))
     })
+}
+
+fn waiter_status_name(status: WaiterWrittenStatus) -> &'static str {
+    match status {
+        WaiterWrittenStatus::Succeeded => "succeeded",
+        WaiterWrittenStatus::Failed => "failed",
+    }
+}
+
+fn parse_waiter_status(value: &str) -> Result<WaiterWrittenStatus, PersistenceError> {
+    match value {
+        "succeeded" => Ok(WaiterWrittenStatus::Succeeded),
+        "failed" => Ok(WaiterWrittenStatus::Failed),
+        _ => Err(PersistenceError::failure(PersistenceFailure::new(
+            "sqlite-invalid-invocation-status",
+            format!("unknown waiter-written status `{value}`"),
+        ))),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decode_work_slot_invocation(
+    invocation_id: String,
+    slot_id: String,
+    binding_json: String,
+    instruction_digest: String,
+    subject: String,
+    waiter_pid: i64,
+    started_at: i64,
+    allowed_time_ms: i64,
+    status: Option<String>,
+    exit_code: Option<i64>,
+    completed_at: Option<i64>,
+) -> Result<WorkSlotInvocation, PersistenceError> {
+    let waiter_pid = u32::try_from(from_sqlite_u64(waiter_pid, "waiter pid")?).map_err(|_| {
+        PersistenceError::failure(PersistenceFailure::new(
+            "sqlite-integer-overflow",
+            "waiter pid does not fit u32",
+        ))
+    })?;
+    let allowed_time_ms = from_sqlite_u64(allowed_time_ms, "allowed time ms")?;
+    let status = status.as_deref().map(parse_waiter_status).transpose()?;
+    let exit_code = exit_code
+        .map(|code| {
+            i32::try_from(code).map_err(|_| {
+                PersistenceError::failure(PersistenceFailure::new(
+                    "sqlite-integer-overflow",
+                    "exit code does not fit i32",
+                ))
+            })
+        })
+        .transpose()?;
+    Ok(WorkSlotInvocation::new(
+        InvocationId::new(invocation_id),
+        WorkSlotId::new(slot_id),
+        decode_json(&binding_json, "work slot binding")?,
+        instruction_digest,
+        subject,
+        waiter_pid,
+        Timestamp::from_unix_millis(started_at),
+        allowed_time_ms,
+        status,
+        exit_code,
+        completed_at.map(Timestamp::from_unix_millis),
+    ))
+}
+
+type InvocationRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    i64,
+    i64,
+    Option<String>,
+    Option<i64>,
+    Option<i64>,
+);
+
+fn invocation_row_from_query(row: &rusqlite::Row<'_>) -> rusqlite::Result<InvocationRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
+        row.get(9)?,
+        row.get(10)?,
+    ))
+}
+
+fn load_one_work_slot_invocation(
+    connection: &Connection,
+    run_id: &RunId,
+    invocation_id: &InvocationId,
+) -> Result<Option<WorkSlotInvocation>, PersistenceError> {
+    connection
+        .query_row(
+            "SELECT invocation_id, slot_id, binding_json, instruction_digest, subject,
+                    waiter_pid, started_at, allowed_time_ms, status, exit_code, completed_at
+             FROM work_slot_invocations
+             WHERE run_id = ?1 AND invocation_id = ?2",
+            params![run_id.as_str(), invocation_id.as_str()],
+            invocation_row_from_query,
+        )
+        .optional()
+        .map_err(sqlite_failure)?
+        .map(
+            |(
+                invocation_id,
+                slot_id,
+                binding_json,
+                instruction_digest,
+                subject,
+                waiter_pid,
+                started_at,
+                allowed_time_ms,
+                status,
+                exit_code,
+                completed_at,
+            )| {
+                decode_work_slot_invocation(
+                    invocation_id,
+                    slot_id,
+                    binding_json,
+                    instruction_digest,
+                    subject,
+                    waiter_pid,
+                    started_at,
+                    allowed_time_ms,
+                    status,
+                    exit_code,
+                    completed_at,
+                )
+            },
+        )
+        .transpose()
+}
+
+fn read_work_slot_invocations(
+    connection: &Connection,
+    run_id: &RunId,
+) -> Result<Vec<WorkSlotInvocation>, PersistenceError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT invocation_id, slot_id, binding_json, instruction_digest, subject,
+                    waiter_pid, started_at, allowed_time_ms, status, exit_code, completed_at
+             FROM work_slot_invocations
+             WHERE run_id = ?1
+             ORDER BY started_at ASC, invocation_id ASC",
+        )
+        .map_err(sqlite_failure)?;
+    let rows = statement
+        .query_map(params![run_id.as_str()], invocation_row_from_query)
+        .map_err(sqlite_failure)?;
+
+    rows.map(|row| {
+        let (
+            invocation_id,
+            slot_id,
+            binding_json,
+            instruction_digest,
+            subject,
+            waiter_pid,
+            started_at,
+            allowed_time_ms,
+            status,
+            exit_code,
+            completed_at,
+        ) = row.map_err(sqlite_failure)?;
+        decode_work_slot_invocation(
+            invocation_id,
+            slot_id,
+            binding_json,
+            instruction_digest,
+            subject,
+            waiter_pid,
+            started_at,
+            allowed_time_ms,
+            status,
+            exit_code,
+            completed_at,
+        )
+    })
+    .collect()
 }
 
 fn sqlite_failure(error: impl std::fmt::Display) -> PersistenceError {

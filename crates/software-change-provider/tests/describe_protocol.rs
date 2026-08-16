@@ -29,6 +29,72 @@ fn describe_matches_committed_snapshot_byte_for_byte() {
 }
 
 #[test]
+fn describe_work_slots_are_exactly_the_locked_checked_edges() {
+    let output = invoke(br#"{"operation":"describe"}"#);
+
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let workflow: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("describe JSON");
+    let actual: Vec<(String, String, String)> = workflow["work_slots"]
+        .as_array()
+        .expect("work_slots array")
+        .iter()
+        .map(|slot| {
+            (
+                slot["id"].as_str().expect("slot id").to_owned(),
+                slot["state"].as_str().expect("slot state").to_owned(),
+                slot["event"].as_str().expect("slot event").to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        actual,
+        vec![
+            (
+                "explore-intent".to_owned(),
+                "explore".to_owned(),
+                "intent-ready".to_owned(),
+            ),
+            (
+                "design-draft".to_owned(),
+                "design".to_owned(),
+                "design-ready".to_owned(),
+            ),
+            (
+                "design-review".to_owned(),
+                "design-review".to_owned(),
+                "approved".to_owned(),
+            ),
+            (
+                "plan-draft".to_owned(),
+                "plan".to_owned(),
+                "plan-ready".to_owned(),
+            ),
+            (
+                "plan-review".to_owned(),
+                "plan-review".to_owned(),
+                "approved".to_owned(),
+            ),
+            (
+                "implement".to_owned(),
+                "implement".to_owned(),
+                "implementation-ready".to_owned(),
+            ),
+            (
+                "implementation-review".to_owned(),
+                "implementation-review".to_owned(),
+                "approved".to_owned(),
+            ),
+            (
+                "validate".to_owned(),
+                "validation".to_owned(),
+                "passed".to_owned(),
+            ),
+        ]
+    );
+}
+
+#[test]
 fn unknown_operation_exits_with_protocol_error() {
     let output = invoke(br#"{"operation":"unknown"}"#);
 

@@ -7,8 +7,9 @@
 
 use crate::{
     ContextRecord, ContextRecordId, ControlRevision, DurableEvaluation, EvaluationFeedback,
-    EvaluationRequest, EvaluationResult, HistoryEntry, Lifecycle, ProviderAssociation,
-    ProviderSelector, Run, RunId, StateId, Timestamp, Transition, Workflow,
+    EvaluationRequest, EvaluationResult, HistoryEntry, InvocationId, Lifecycle,
+    ProviderAssociation, ProviderSelector, Run, RunId, StateId, Timestamp, Transition,
+    WaiterWrittenStatus, WorkSlotBinding, WorkSlotId, WorkSlotInvocation, Workflow,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -87,6 +88,9 @@ impl std::error::Error for ProviderResolutionError {}
 /// deny, or report unsupported; it cannot choose a target state or mutate a
 /// run through this port.
 pub trait ProviderGateway {
+    /// Snapshot the provider workflow, including the `work_slots` catalog
+    /// field (`id`, `state`, `event`) used by start to validate frozen
+    /// `work_slot_bindings`.
     fn describe(&self, provider: &ProviderAssociation) -> Result<Workflow, ProviderError>;
 
     fn evaluate(
@@ -188,6 +192,9 @@ pub struct CreateRunRequest {
     /// Recorded path from start composition. `None` only for migrated
     /// historical rows; new creates always pass `Some`.
     pub artifact_root: Option<String>,
+    /// Slot-visit subjects persisted in the same transaction as run creation.
+    /// Empty when the initial state is not a work slot.
+    pub slot_subjects: Vec<(WorkSlotId, String)>,
 }
 
 impl CreateRunRequest {
@@ -215,7 +222,13 @@ impl CreateRunRequest {
             created_at,
             provider: provider.into(),
             artifact_root,
+            slot_subjects: Vec::new(),
         }
+    }
+
+    pub fn with_slot_subjects(mut self, slot_subjects: Vec<(WorkSlotId, String)>) -> Self {
+        self.slot_subjects = slot_subjects;
+        self
     }
 }
 
@@ -284,6 +297,9 @@ pub struct CommitTransitionRequest {
     /// after verifying the existing revision/active/source preconditions; it
     /// must not derive lifecycle itself.
     pub resulting_lifecycle: Lifecycle,
+    /// Slot-visit subjects persisted in the same transaction as the committed
+    /// target state. Empty when the target is not a work slot.
+    pub slot_subjects: Vec<(WorkSlotId, String)>,
 }
 
 impl CommitTransitionRequest {
@@ -300,7 +316,13 @@ impl CommitTransitionRequest {
             expected_source_state: expected_source_state.into(),
             transition,
             resulting_lifecycle,
+            slot_subjects: Vec::new(),
         }
+    }
+
+    pub fn with_slot_subjects(mut self, slot_subjects: Vec<(WorkSlotId, String)>) -> Self {
+        self.slot_subjects = slot_subjects;
+        self
     }
 }
 
@@ -368,6 +390,100 @@ impl TerminateRequest {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TerminateResult {
     pub run: Run,
+    pub history: HistoryEntry,
+}
+
+/// Semantic input for creating a running work-slot invocation record.
+///
+/// Inserts stored status `None`. Atomically appends
+/// `HistoryAction::InvocationStarted` and increments `last_sequence` like
+/// `append_context`. Reject if run missing/not active. Do not change
+/// `control_revision`. `waiter_pid` is internal (on the stored running record,
+/// not a user CLI flag).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CreateWorkSlotInvocationRequest {
+    pub run_id: RunId,
+    pub invocation_id: InvocationId,
+    pub slot_id: WorkSlotId,
+    pub binding: WorkSlotBinding,
+    pub instruction_digest: String,
+    pub subject: String,
+    pub waiter_pid: u32,
+    pub started_at: Timestamp,
+    pub allowed_time_ms: u64,
+}
+
+impl CreateWorkSlotInvocationRequest {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        run_id: impl Into<RunId>,
+        invocation_id: impl Into<InvocationId>,
+        slot_id: impl Into<WorkSlotId>,
+        binding: WorkSlotBinding,
+        instruction_digest: impl Into<String>,
+        subject: impl Into<String>,
+        waiter_pid: u32,
+        started_at: Timestamp,
+        allowed_time_ms: u64,
+    ) -> Self {
+        Self {
+            run_id: run_id.into(),
+            invocation_id: invocation_id.into(),
+            slot_id: slot_id.into(),
+            binding,
+            instruction_digest: instruction_digest.into(),
+            subject: subject.into(),
+            waiter_pid,
+            started_at,
+            allowed_time_ms,
+        }
+    }
+}
+
+/// Result of creating a running work-slot invocation record.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CreateWorkSlotInvocationResult {
+    pub invocation: WorkSlotInvocation,
+    pub history: HistoryEntry,
+}
+
+/// Semantic input for a waiter terminal write.
+///
+/// CAS only if stored status is still `None`. Appends
+/// `HistoryAction::InvocationStatusChanged` with waiter-written status
+/// (`succeeded`/`failed` only). Conflict/reject if already terminal. Waiter
+/// does not write `overrun`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CompleteWorkSlotInvocationRequest {
+    pub run_id: RunId,
+    pub invocation_id: InvocationId,
+    pub status: WaiterWrittenStatus,
+    pub exit_code: i32,
+    pub completed_at: Timestamp,
+}
+
+impl CompleteWorkSlotInvocationRequest {
+    pub fn new(
+        run_id: impl Into<RunId>,
+        invocation_id: impl Into<InvocationId>,
+        status: WaiterWrittenStatus,
+        exit_code: i32,
+        completed_at: Timestamp,
+    ) -> Self {
+        Self {
+            run_id: run_id.into(),
+            invocation_id: invocation_id.into(),
+            status,
+            exit_code,
+            completed_at,
+        }
+    }
+}
+
+/// Result of a waiter terminal write.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CompleteWorkSlotInvocationResult {
+    pub invocation: WorkSlotInvocation,
     pub history: HistoryEntry,
 }
 
@@ -522,6 +638,43 @@ pub trait Persistence {
     /// provider.  Checked evaluations include transitions no longer
     /// requestable so core can preserve latest results across revision edges.
     fn load_show_data(&self, run_id: &RunId) -> Result<ShowData, PersistenceError>;
+
+    /// Create a running engine-authored invocation record (stored status
+    /// `None`) and append `HistoryAction::InvocationStarted`.
+    fn create_work_slot_invocation(
+        &self,
+        request: CreateWorkSlotInvocationRequest,
+    ) -> Result<CreateWorkSlotInvocationResult, PersistenceError>;
+
+    /// Waiter CAS write of terminal `succeeded`/`failed` plus `exit_code`.
+    /// Only if no waiter-written status yet. Appends
+    /// `HistoryAction::InvocationStatusChanged`.
+    fn complete_work_slot_invocation(
+        &self,
+        request: CompleteWorkSlotInvocationRequest,
+    ) -> Result<CompleteWorkSlotInvocationResult, PersistenceError>;
+
+    /// Load the current engine-minted subject for a slot, if any.
+    fn get_current_slot_subject(
+        &self,
+        run_id: &RunId,
+        slot_id: &WorkSlotId,
+    ) -> Result<Option<String>, PersistenceError>;
+
+    /// Replace the current engine-minted subject for a slot.
+    fn set_current_slot_subject(
+        &self,
+        run_id: &RunId,
+        slot_id: &WorkSlotId,
+        subject: String,
+    ) -> Result<(), PersistenceError>;
+
+    /// Load engine-authored invocation rows for a run. This is a read, not a
+    /// general update.
+    fn load_work_slot_invocations(
+        &self,
+        run_id: &RunId,
+    ) -> Result<Vec<WorkSlotInvocation>, PersistenceError>;
 }
 
 /// A semantic rejection produced while enforcing a persistence precondition.
@@ -573,6 +726,9 @@ pub enum PersistenceConflict {
         expected: Transition,
         observed_current_state: StateId,
     },
+    InvocationAlreadyTerminal {
+        invocation_id: InvocationId,
+    },
 }
 
 impl PersistenceConflict {
@@ -582,6 +738,7 @@ impl PersistenceConflict {
             Self::SourceStateMismatch { .. } => "source-state-conflict",
             Self::LifecycleMismatch { .. } => "lifecycle-conflict",
             Self::ExactTransitionUnavailable { .. } => "transition-stale",
+            Self::InvocationAlreadyTerminal { .. } => "invocation-already-terminal",
         }
     }
 }
@@ -608,6 +765,10 @@ impl fmt::Display for PersistenceConflict {
                 formatter,
                 "transition `{}` from `{}` is no longer available from `{observed_current_state}`",
                 expected.event, expected.source
+            ),
+            Self::InvocationAlreadyTerminal { invocation_id } => write!(
+                formatter,
+                "invocation `{invocation_id}` already has a waiter-written terminal status"
             ),
         }
     }
@@ -710,6 +871,89 @@ impl fmt::Display for PersistenceError {
 }
 
 impl std::error::Error for PersistenceError {}
+
+/// Arguments needed to exec `loop-engine wait-invocation` without writing stdin yet.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WaiterSpawnArgs {
+    pub database: std::path::PathBuf,
+    pub run_id: RunId,
+    pub invocation_id: InvocationId,
+}
+
+impl WaiterSpawnArgs {
+    pub fn new(
+        database: impl Into<std::path::PathBuf>,
+        run_id: impl Into<RunId>,
+        invocation_id: impl Into<InvocationId>,
+    ) -> Self {
+        Self {
+            database: database.into(),
+            run_id: run_id.into(),
+            invocation_id: invocation_id.into(),
+        }
+    }
+}
+
+/// A spawned waiter that has not yet received its envelope and has not been waited on.
+pub struct StartedWaiter<H> {
+    pub pid: u32,
+    pub handle: H,
+}
+
+impl<H> StartedWaiter<H> {
+    pub fn new(pid: u32, handle: H) -> Self {
+        Self { pid, handle }
+    }
+}
+
+/// Failure while spawning a waiter or writing its envelope.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProcessError {
+    pub code: String,
+    pub message: String,
+}
+
+impl ProcessError {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for ProcessError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}: {}", self.code, self.message)
+    }
+}
+
+impl std::error::Error for ProcessError {}
+
+/// Process port for work-slot waiter delegation.
+///
+/// Core must not call `std::process::Command` directly. Callers supply waiter
+/// liveness; spawn must not waitpid or write stdin until `send_envelope_and_detach`.
+pub trait WorkSlotProcess {
+    /// Implementation-owned handle that can receive the waiter envelope.
+    type Handle;
+
+    fn waiter_alive(&self, pid: u32) -> bool;
+
+    /// Spawn `loop-engine wait-invocation RUN_ID INVOCATION_ID` with piped stdin.
+    /// Do not waitpid. Do not write stdin yet.
+    fn spawn_wait_invocation(
+        &self,
+        args: WaiterSpawnArgs,
+    ) -> std::result::Result<StartedWaiter<Self::Handle>, ProcessError>;
+
+    /// Write envelope bytes to waiter stdin and detach (close stdin). Do not waitpid.
+    fn send_envelope_and_detach(
+        &self,
+        waiter: StartedWaiter<Self::Handle>,
+        envelope_json: &[u8],
+    ) -> std::result::Result<(), ProcessError>;
+}
 
 #[cfg(test)]
 mod tests {
@@ -843,6 +1087,44 @@ mod tests {
         }
 
         fn load_show_data(&self, _run_id: &RunId) -> Result<ShowData, PersistenceError> {
+            unavailable()
+        }
+
+        fn create_work_slot_invocation(
+            &self,
+            _request: CreateWorkSlotInvocationRequest,
+        ) -> Result<CreateWorkSlotInvocationResult, PersistenceError> {
+            unavailable()
+        }
+
+        fn complete_work_slot_invocation(
+            &self,
+            _request: CompleteWorkSlotInvocationRequest,
+        ) -> Result<CompleteWorkSlotInvocationResult, PersistenceError> {
+            unavailable()
+        }
+
+        fn get_current_slot_subject(
+            &self,
+            _run_id: &RunId,
+            _slot_id: &crate::WorkSlotId,
+        ) -> Result<Option<String>, PersistenceError> {
+            unavailable()
+        }
+
+        fn set_current_slot_subject(
+            &self,
+            _run_id: &RunId,
+            _slot_id: &crate::WorkSlotId,
+            _subject: String,
+        ) -> Result<(), PersistenceError> {
+            unavailable()
+        }
+
+        fn load_work_slot_invocations(
+            &self,
+            _run_id: &RunId,
+        ) -> Result<Vec<crate::WorkSlotInvocation>, PersistenceError> {
             unavailable()
         }
     }

@@ -7,18 +7,29 @@
 
 use super::{persistence_error, provider_error};
 use crate::{
-    request_from_snapshot, resolve_transition, CheckedEvaluationSnapshotRequest,
-    CommitTransitionRequest, CommitTransitionResult, EvaluationResult, EventId, Lifecycle,
-    OperationOutcome, OutcomeIssue, Persistence, ProviderGateway, RecordDenialRequest, RunId,
-    Transition, TransitionResolutionError,
+    instruction_digest, project_invocation_status, request_from_snapshot, resolve_transition,
+    CheckedEvaluationSnapshotRequest, CommitTransitionRequest, CommitTransitionResult,
+    EvaluationResult, EventId, Lifecycle, OperationOutcome, OutcomeIssue, Persistence,
+    ProjectedInvocationStatus, ProviderGateway, RecordDenialRequest, RunId, Timestamp, Transition,
+    TransitionResolutionError, WorkSlotId,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+const WORK_SLOT_BINDINGS_KEY: &str = "work_slot_bindings";
+const BOUND_SLOT_INVOCATION_REQUIRED: &str = "bound-slot-invocation-required";
+static VISIT_SUBJECT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Caller-supplied values for one event request.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Request {
     pub run_id: RunId,
     pub event: EventId,
+    /// Clock used to project invocation overlay status. Defaults to now in
+    /// [`Request::new`]; tests that need overrun control it with [`Request::with_now`].
+    #[serde(default = "current_timestamp")]
+    pub now: Timestamp,
 }
 
 impl Request {
@@ -26,7 +37,13 @@ impl Request {
         Self {
             run_id: run_id.into(),
             event: event.into(),
+            now: current_timestamp(),
         }
+    }
+
+    pub fn with_now(mut self, now: Timestamp) -> Self {
+        self.now = now;
+        self
     }
 
     pub fn event_id(&self) -> &EventId {
@@ -86,7 +103,7 @@ where
         return commit_check_free(&run, &transition, persistence);
     }
 
-    evaluate_checked(run, &transition, gateway, persistence)
+    evaluate_checked(run, &transition, gateway, persistence, request.now)
 }
 
 /// Execute `event` with ports first, which is convenient for composition
@@ -174,13 +191,15 @@ where
         Err(issue) => return OperationOutcome::error_with_issue(issue),
     };
 
+    let slot_subjects = slot_subjects_for_state(&run.workflow, &transition.target);
     let request = CommitTransitionRequest::new(
         run.id.clone(),
         run.control_revision,
         run.current_state.clone(),
         transition.clone(),
         resulting_lifecycle,
-    );
+    )
+    .with_slot_subjects(slot_subjects);
 
     match persistence.commit_transition(request) {
         Ok(result) => OperationOutcome::completed(result),
@@ -193,6 +212,7 @@ fn evaluate_checked<G, P>(
     transition: &Transition,
     gateway: &G,
     persistence: &P,
+    now: Timestamp,
 ) -> OperationOutcome<Result>
 where
     G: ProviderGateway + ?Sized,
@@ -204,6 +224,10 @@ where
         Ok(snapshot) => snapshot,
         Err(error) => return persistence_error(error),
     };
+
+    if let Some(rejected) = enforce_bound_slot_gate(&run, transition, persistence, now) {
+        return rejected;
+    }
 
     // The persistence contract returns the exact edge requested at the
     // snapshot boundary.  Keep the provider-facing request and subsequent
@@ -250,13 +274,15 @@ where
         Err(issue) => return OperationOutcome::error_with_issue(issue),
     };
 
+    let slot_subjects = slot_subjects_for_state(&snapshot.run.workflow, &transition.target);
     let request = CommitTransitionRequest::new(
         snapshot.run.id,
         snapshot.observed_control_revision,
         snapshot.run.current_state,
         transition.clone(),
         resulting_lifecycle,
-    );
+    )
+    .with_slot_subjects(slot_subjects);
 
     match persistence.commit_transition(request) {
         Ok(result) => OperationOutcome::completed(result),
@@ -287,15 +313,151 @@ where
     }
 }
 
+fn current_timestamp() -> Timestamp {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0);
+    Timestamp::from_unix_millis(millis)
+}
+
+#[cfg(unix)]
+fn waiter_pid_is_alive(pid: u32) -> bool {
+    extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+    unsafe { kill(pid as i32, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn waiter_pid_is_alive(pid: u32) -> bool {
+    let _ = pid;
+    false
+}
+
+fn overlay_status_label(status: ProjectedInvocationStatus) -> &'static str {
+    match status {
+        ProjectedInvocationStatus::Running => "running",
+        ProjectedInvocationStatus::Succeeded => "succeeded",
+        ProjectedInvocationStatus::Failed => "failed",
+        ProjectedInvocationStatus::Overrun => "overrun",
+    }
+}
+
+fn slot_is_bound(initial_input: &Value, slot_id: &WorkSlotId) -> bool {
+    initial_input
+        .as_object()
+        .and_then(|map| map.get(WORK_SLOT_BINDINGS_KEY))
+        .and_then(Value::as_object)
+        .is_some_and(|bindings| bindings.contains_key(slot_id.as_str()))
+}
+
+fn mint_visit_subject(slot_id: &WorkSlotId) -> String {
+    let millis = current_timestamp().as_unix_millis();
+    let suffix = VISIT_SUBJECT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("visit-{slot_id}-{millis}-{suffix}")
+}
+
+fn slot_subjects_for_state(
+    workflow: &crate::Workflow,
+    state_id: &crate::StateId,
+) -> Vec<(WorkSlotId, String)> {
+    workflow
+        .work_slots
+        .iter()
+        .filter(|slot| slot.state == *state_id)
+        .map(|slot| (slot.id.clone(), mint_visit_subject(&slot.id)))
+        .collect()
+}
+
+fn enforce_bound_slot_gate<P>(
+    run: &crate::Run,
+    transition: &Transition,
+    persistence: &P,
+    now: Timestamp,
+) -> Option<OperationOutcome<Result>>
+where
+    P: Persistence + ?Sized,
+{
+    let slot = run
+        .workflow
+        .work_slots
+        .iter()
+        .find(|slot| slot.state == run.current_state && slot.event == transition.event)?;
+    if !slot_is_bound(&run.initial_input, &slot.id) {
+        return None;
+    }
+
+    let expected_digest = match run
+        .workflow
+        .states
+        .iter()
+        .find(|state| state.id == slot.state)
+    {
+        Some(state) => instruction_digest(&state.instructions),
+        None => {
+            return Some(OperationOutcome::error(
+                "invalid-run",
+                format!(
+                    "work slot `{}` names state `{}` which is not in the workflow",
+                    slot.id, slot.state
+                ),
+            ));
+        }
+    };
+
+    let current_subject = match persistence.get_current_slot_subject(&run.id, &slot.id) {
+        Ok(subject) => subject,
+        Err(error) => return Some(persistence_error(error)),
+    };
+    let invocations = match persistence.load_work_slot_invocations(&run.id) {
+        Ok(invocations) => invocations,
+        Err(error) => return Some(persistence_error(error)),
+    };
+
+    let mut overlay_notes = Vec::new();
+    for record in &invocations {
+        let overlay =
+            project_invocation_status(record, now, waiter_pid_is_alive(record.waiter_pid));
+        if record.slot_id == slot.id {
+            overlay_notes.push(overlay_status_label(overlay));
+        }
+        let subject_matches = current_subject
+            .as_ref()
+            .is_some_and(|subject| subject == &record.subject);
+        if overlay == ProjectedInvocationStatus::Succeeded
+            && record.slot_id == slot.id
+            && record.instruction_digest == expected_digest
+            && subject_matches
+        {
+            return None;
+        }
+    }
+
+    let overlay_desc = if overlay_notes.is_empty() {
+        "none".to_owned()
+    } else {
+        overlay_notes.join(", ")
+    };
+    Some(OperationOutcome::rejected(
+        BOUND_SLOT_INVOCATION_REQUIRED,
+        format!(
+            "bound work slot `{}` requires a succeeded invocation matching slot id, instruction digest, and current visit subject; overlay was {overlay_desc}",
+            slot.id
+        ),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        AppendContextRequest, AppendContextResult, CheckedEvaluationSnapshot, ContextRecord,
-        ControlRevision, CreateRunRequest, CreateRunResult, DurableEvaluation, EvaluationFeedback,
-        HistoryEntry, PersistenceError, PersistenceFailure, ProviderAssociation, ProviderError,
-        Run, RunSummary, SemanticSequence, ShowData, State, StateId, TerminateRequest,
-        TerminateResult, Timestamp, Workflow,
+        instruction_digest, AppendContextRequest, AppendContextResult, CheckedEvaluationSnapshot,
+        ContextRecord, ControlRevision, CreateRunRequest, CreateRunResult, DurableEvaluation,
+        EvaluationFeedback, HistoryEntry, PersistenceError, PersistenceFailure,
+        ProviderAssociation, ProviderError, Run, RunSummary, SemanticSequence, ShowData, State,
+        StateId, TerminateRequest, TerminateResult, Timestamp, WaiterWrittenStatus, WorkSlot,
+        WorkSlotBinding, WorkSlotInvocation, Workflow,
     };
     use serde_json::json;
     use std::cell::RefCell;
@@ -388,6 +550,10 @@ mod tests {
         snapshot_requests: RefCell<Vec<CheckedEvaluationSnapshotRequest>>,
         commit_requests: RefCell<Vec<CommitTransitionRequest>>,
         denial_requests: RefCell<Vec<RecordDenialRequest>>,
+        invocations: RefCell<Vec<WorkSlotInvocation>>,
+        subjects: RefCell<std::collections::BTreeMap<String, String>>,
+        set_subject_calls: RefCell<Vec<(RunId, crate::WorkSlotId, String)>>,
+        set_subject_error: RefCell<Option<PersistenceError>>,
     }
 
     impl FakePersistence {
@@ -460,6 +626,28 @@ mod tests {
             &self,
             request: CommitTransitionRequest,
         ) -> std::result::Result<crate::CommitTransitionResult, PersistenceError> {
+            if !request.slot_subjects.is_empty() {
+                if let Some(error) = self.set_subject_error.borrow_mut().take() {
+                    for (slot_id, subject) in &request.slot_subjects {
+                        self.set_subject_calls.borrow_mut().push((
+                            request.run_id.clone(),
+                            slot_id.clone(),
+                            subject.clone(),
+                        ));
+                    }
+                    return Err(error);
+                }
+                for (slot_id, subject) in &request.slot_subjects {
+                    self.set_subject_calls.borrow_mut().push((
+                        request.run_id.clone(),
+                        slot_id.clone(),
+                        subject.clone(),
+                    ));
+                    self.subjects
+                        .borrow_mut()
+                        .insert(slot_id.as_str().to_owned(), subject.clone());
+                }
+            }
             self.commit_requests.borrow_mut().push(request);
             self.commit.borrow_mut().take().unwrap_or_else(failure)
         }
@@ -527,6 +715,56 @@ mod tests {
             _run_id: &RunId,
         ) -> std::result::Result<ShowData, PersistenceError> {
             failure()
+        }
+
+        fn create_work_slot_invocation(
+            &self,
+            _request: crate::CreateWorkSlotInvocationRequest,
+        ) -> std::result::Result<crate::CreateWorkSlotInvocationResult, PersistenceError> {
+            failure()
+        }
+
+        fn complete_work_slot_invocation(
+            &self,
+            _request: crate::CompleteWorkSlotInvocationRequest,
+        ) -> std::result::Result<crate::CompleteWorkSlotInvocationResult, PersistenceError>
+        {
+            failure()
+        }
+
+        fn get_current_slot_subject(
+            &self,
+            _run_id: &RunId,
+            slot_id: &crate::WorkSlotId,
+        ) -> std::result::Result<Option<String>, PersistenceError> {
+            Ok(self.subjects.borrow().get(slot_id.as_str()).cloned())
+        }
+
+        fn set_current_slot_subject(
+            &self,
+            run_id: &RunId,
+            slot_id: &crate::WorkSlotId,
+            subject: String,
+        ) -> std::result::Result<(), PersistenceError> {
+            self.set_subject_calls.borrow_mut().push((
+                run_id.clone(),
+                slot_id.clone(),
+                subject.clone(),
+            ));
+            if let Some(error) = self.set_subject_error.borrow_mut().take() {
+                return Err(error);
+            }
+            self.subjects
+                .borrow_mut()
+                .insert(slot_id.as_str().to_owned(), subject);
+            Ok(())
+        }
+
+        fn load_work_slot_invocations(
+            &self,
+            _run_id: &RunId,
+        ) -> std::result::Result<Vec<crate::WorkSlotInvocation>, PersistenceError> {
+            Ok(self.invocations.borrow().clone())
         }
     }
 
@@ -835,6 +1073,421 @@ mod tests {
         assert_eq!(
             persistence.commit_requests.borrow()[0].resulting_lifecycle,
             Lifecycle::Final
+        );
+    }
+
+    fn bound_input() -> serde_json::Value {
+        json!({
+            "objective": "test",
+            "work_slot_bindings": {
+                "slot-1": {"command": "echo", "args": ["ok"]}
+            }
+        })
+    }
+
+    fn slotted_workflow(slot_event: &str) -> Workflow {
+        workflow().with_work_slots(vec![WorkSlot::new("slot-1", "start", slot_event)])
+    }
+
+    fn slotted_run(workflow: Workflow, input: serde_json::Value) -> Run {
+        Run::new(
+            "run-1",
+            Some("test".to_owned()),
+            workflow,
+            ProviderAssociation::new(json!({"provider": "fake"})),
+            input,
+            "start",
+            Lifecycle::Active,
+            ControlRevision::from_u64(4),
+            SemanticSequence::new(8),
+            Timestamp::from_unix_millis(1),
+        )
+    }
+
+    fn start_instructions_digest() -> String {
+        instruction_digest("Do work")
+    }
+
+    fn alive_pid() -> u32 {
+        std::process::id()
+    }
+
+    fn dead_pid() -> u32 {
+        // A legal pid that is extremely unlikely to exist. Do not use
+        // `u32::MAX`: that casts to `-1`, and `kill(-1, 0)` broadcasts.
+        i32::MAX as u32
+    }
+
+    fn sample_invocation(
+        slot_id: &str,
+        digest: String,
+        subject: &str,
+        status: Option<WaiterWrittenStatus>,
+        waiter_pid: u32,
+        started_at: i64,
+        allowed_time_ms: u64,
+    ) -> WorkSlotInvocation {
+        WorkSlotInvocation::new(
+            "inv-1",
+            slot_id,
+            WorkSlotBinding::new("echo", vec!["ok".to_owned()]),
+            digest,
+            subject,
+            waiter_pid,
+            Timestamp::from_unix_millis(started_at),
+            allowed_time_ms,
+            status,
+            None,
+            None,
+        )
+    }
+
+    fn bound_checked_persistence(
+        invocations: Vec<WorkSlotInvocation>,
+        subject: Option<&str>,
+    ) -> FakePersistence {
+        let transition = Transition::checked("start", "approve", "done");
+        let current = slotted_run(slotted_workflow("approve"), bound_input());
+        let persistence = FakePersistence {
+            commit: RefCell::new(Some(Ok(successful_commit(
+                run(Lifecycle::Final, "done"),
+                transition.clone(),
+            )))),
+            invocations: RefCell::new(invocations),
+            ..FakePersistence::with_run_and_snapshot(current, transition)
+        };
+        if let Some(subject) = subject {
+            persistence
+                .subjects
+                .borrow_mut()
+                .insert("slot-1".to_owned(), subject.to_owned());
+        }
+        persistence
+    }
+
+    fn assert_gate_rejected(outcome: &OperationOutcome<Result>, gateway: &FakeGateway) {
+        assert!(outcome.is_rejected());
+        assert_eq!(
+            outcome.issue().unwrap().code,
+            BOUND_SLOT_INVOCATION_REQUIRED
+        );
+        assert!(gateway.requests.borrow().is_empty());
+    }
+
+    #[test]
+    fn work_slot_gate_overlay_succeeded_matching_id_digest_subject_allows_evaluate() {
+        let subject = "visit-slot-1-1";
+        let persistence = bound_checked_persistence(
+            vec![sample_invocation(
+                "slot-1",
+                start_instructions_digest(),
+                subject,
+                Some(WaiterWrittenStatus::Succeeded),
+                dead_pid(),
+                0,
+                1_000,
+            )],
+            Some(subject),
+        );
+        let gateway = FakeGateway::with_result(Ok(crate::EvaluationResult::Allow));
+
+        let outcome = execute(Request::new("run-1", "approve"), &gateway, &persistence);
+
+        assert!(outcome.is_completed());
+        assert_eq!(gateway.requests.borrow().len(), 1);
+        assert_eq!(persistence.commit_requests.borrow().len(), 1);
+    }
+
+    #[test]
+    fn work_slot_gate_overlay_running_rejects_without_evaluate() {
+        let subject = "visit-slot-1-1";
+        let persistence = bound_checked_persistence(
+            vec![sample_invocation(
+                "slot-1",
+                start_instructions_digest(),
+                subject,
+                None,
+                alive_pid(),
+                1_000,
+                10_000,
+            )],
+            Some(subject),
+        );
+        let gateway = FakeGateway::with_result(Ok(crate::EvaluationResult::Allow));
+
+        let outcome = execute(
+            Request::new("run-1", "approve").with_now(Timestamp::from_unix_millis(1_500)),
+            &gateway,
+            &persistence,
+        );
+
+        assert_gate_rejected(&outcome, &gateway);
+        assert!(outcome.issue().unwrap().message.contains("running"));
+        assert!(persistence.commit_requests.borrow().is_empty());
+    }
+
+    #[test]
+    fn work_slot_gate_overlay_failed_rejects_without_evaluate() {
+        let subject = "visit-slot-1-1";
+        let persistence = bound_checked_persistence(
+            vec![sample_invocation(
+                "slot-1",
+                start_instructions_digest(),
+                subject,
+                Some(WaiterWrittenStatus::Failed),
+                dead_pid(),
+                0,
+                1_000,
+            )],
+            Some(subject),
+        );
+        let gateway = FakeGateway::with_result(Ok(crate::EvaluationResult::Allow));
+
+        let outcome = execute(Request::new("run-1", "approve"), &gateway, &persistence);
+
+        assert_gate_rejected(&outcome, &gateway);
+        assert!(outcome.issue().unwrap().message.contains("failed"));
+        assert!(persistence.commit_requests.borrow().is_empty());
+    }
+
+    #[test]
+    fn work_slot_gate_projected_overrun_rejects_without_evaluate() {
+        let subject = "visit-slot-1-1";
+        let persistence = bound_checked_persistence(
+            vec![sample_invocation(
+                "slot-1",
+                start_instructions_digest(),
+                subject,
+                None,
+                alive_pid(),
+                1_000,
+                5_000,
+            )],
+            Some(subject),
+        );
+        let gateway = FakeGateway::with_result(Ok(crate::EvaluationResult::Allow));
+
+        let outcome = execute(
+            Request::new("run-1", "approve").with_now(Timestamp::from_unix_millis(6_000)),
+            &gateway,
+            &persistence,
+        );
+
+        assert_gate_rejected(&outcome, &gateway);
+        assert!(outcome.issue().unwrap().message.contains("overrun"));
+        assert!(persistence.commit_requests.borrow().is_empty());
+    }
+
+    #[test]
+    fn work_slot_gate_mismatched_slot_id_rejects() {
+        let subject = "visit-slot-1-1";
+        let persistence = bound_checked_persistence(
+            vec![sample_invocation(
+                "other-slot",
+                start_instructions_digest(),
+                subject,
+                Some(WaiterWrittenStatus::Succeeded),
+                dead_pid(),
+                0,
+                1_000,
+            )],
+            Some(subject),
+        );
+        let gateway = FakeGateway::with_result(Ok(crate::EvaluationResult::Allow));
+
+        let outcome = execute(Request::new("run-1", "approve"), &gateway, &persistence);
+
+        assert_gate_rejected(&outcome, &gateway);
+        assert!(persistence.commit_requests.borrow().is_empty());
+    }
+
+    #[test]
+    fn work_slot_gate_mismatched_digest_rejects() {
+        let subject = "visit-slot-1-1";
+        let persistence = bound_checked_persistence(
+            vec![sample_invocation(
+                "slot-1",
+                instruction_digest("different instructions"),
+                subject,
+                Some(WaiterWrittenStatus::Succeeded),
+                dead_pid(),
+                0,
+                1_000,
+            )],
+            Some(subject),
+        );
+        let gateway = FakeGateway::with_result(Ok(crate::EvaluationResult::Allow));
+
+        let outcome = execute(Request::new("run-1", "approve"), &gateway, &persistence);
+
+        assert_gate_rejected(&outcome, &gateway);
+        assert!(persistence.commit_requests.borrow().is_empty());
+    }
+
+    #[test]
+    fn work_slot_gate_mismatched_subject_new_visit_rejects() {
+        let persistence = bound_checked_persistence(
+            vec![sample_invocation(
+                "slot-1",
+                start_instructions_digest(),
+                "visit-old",
+                Some(WaiterWrittenStatus::Succeeded),
+                dead_pid(),
+                0,
+                1_000,
+            )],
+            Some("visit-new"),
+        );
+        let gateway = FakeGateway::with_result(Ok(crate::EvaluationResult::Allow));
+
+        let outcome = execute(Request::new("run-1", "approve"), &gateway, &persistence);
+
+        assert_gate_rejected(&outcome, &gateway);
+        assert!(persistence.commit_requests.borrow().is_empty());
+    }
+
+    #[test]
+    fn work_slot_gate_check_free_edge_proceeds_without_invocation() {
+        let current = slotted_run(slotted_workflow("finish"), bound_input());
+        let transition = Transition::check_free("start", "finish", "done");
+        let persistence = FakePersistence {
+            commit: RefCell::new(Some(Ok(successful_commit(
+                run(Lifecycle::Final, "done"),
+                transition,
+            )))),
+            ..FakePersistence::with_run(current)
+        };
+        let gateway = FakeGateway::with_result(Ok(crate::EvaluationResult::Allow));
+
+        let outcome = execute(Request::new("run-1", "finish"), &gateway, &persistence);
+
+        assert!(outcome.is_completed());
+        assert!(gateway.requests.borrow().is_empty());
+        assert_eq!(persistence.commit_requests.borrow().len(), 1);
+    }
+
+    #[test]
+    fn work_slot_gate_unbound_checked_slot_proceeds_without_invocation() {
+        let transition = Transition::checked("start", "approve", "done");
+        let current = slotted_run(slotted_workflow("approve"), json!({"objective": "test"}));
+        let persistence = FakePersistence {
+            commit: RefCell::new(Some(Ok(successful_commit(
+                run(Lifecycle::Final, "done"),
+                transition.clone(),
+            )))),
+            ..FakePersistence::with_run_and_snapshot(current, transition)
+        };
+        let gateway = FakeGateway::with_result(Ok(crate::EvaluationResult::Allow));
+
+        let outcome = execute(Request::new("run-1", "approve"), &gateway, &persistence);
+
+        assert!(outcome.is_completed());
+        assert_eq!(gateway.requests.borrow().len(), 1);
+        assert_eq!(persistence.commit_requests.borrow().len(), 1);
+    }
+
+    #[test]
+    fn work_slot_gate_digest_match_uses_instruction_digest_helper() {
+        let subject = "visit-slot-1-1";
+        let expected = instruction_digest("Do work");
+        assert_eq!(expected, start_instructions_digest());
+        let persistence = bound_checked_persistence(
+            vec![sample_invocation(
+                "slot-1",
+                expected,
+                subject,
+                Some(WaiterWrittenStatus::Succeeded),
+                dead_pid(),
+                0,
+                1_000,
+            )],
+            Some(subject),
+        );
+        let gateway = FakeGateway::with_result(Ok(crate::EvaluationResult::Allow));
+
+        let outcome = execute(Request::new("run-1", "approve"), &gateway, &persistence);
+
+        assert!(outcome.is_completed());
+        assert_eq!(gateway.requests.borrow().len(), 1);
+    }
+
+    #[test]
+    fn work_slot_gate_subject_reminted_on_later_entry_old_subject_not_current() {
+        let transition = Transition::checked("start", "self", "start");
+        let current = slotted_run(slotted_workflow("approve"), bound_input());
+        let persistence = FakePersistence {
+            commit: RefCell::new(Some(Ok(successful_commit(
+                current.clone(),
+                transition.clone(),
+            )))),
+            ..FakePersistence::with_run_and_snapshot(current, transition)
+        };
+        persistence
+            .subjects
+            .borrow_mut()
+            .insert("slot-1".to_owned(), "visit-old".to_owned());
+        let gateway = FakeGateway::with_result(Ok(crate::EvaluationResult::Allow));
+
+        let outcome = execute(Request::new("run-1", "self"), &gateway, &persistence);
+
+        assert!(outcome.is_completed());
+        assert_eq!(gateway.requests.borrow().len(), 1);
+        let calls = persistence.set_subject_calls.borrow();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1.as_str(), "slot-1");
+        assert_ne!(calls[0].2, "visit-old");
+        assert!(calls[0].2.starts_with("visit-slot-1-"));
+        assert_eq!(
+            persistence
+                .subjects
+                .borrow()
+                .get("slot-1")
+                .map(String::as_str),
+            Some(calls[0].2.as_str())
+        );
+        assert_ne!(
+            persistence
+                .subjects
+                .borrow()
+                .get("slot-1")
+                .map(String::as_str),
+            Some("visit-old")
+        );
+    }
+
+    #[test]
+    fn work_slot_subject_mint_failure_does_not_commit_transition() {
+        let transition = Transition::checked("start", "self", "start");
+        let current = slotted_run(slotted_workflow("approve"), bound_input());
+        let persistence = FakePersistence {
+            commit: RefCell::new(Some(Ok(successful_commit(
+                current.clone(),
+                transition.clone(),
+            )))),
+            set_subject_error: RefCell::new(Some(PersistenceError::failure(
+                PersistenceFailure::new("fake", "could not store visit subject"),
+            ))),
+            ..FakePersistence::with_run_and_snapshot(current, transition)
+        };
+        persistence
+            .subjects
+            .borrow_mut()
+            .insert("slot-1".to_owned(), "visit-old".to_owned());
+        let gateway = FakeGateway::with_result(Ok(crate::EvaluationResult::Allow));
+
+        let outcome = execute(Request::new("run-1", "self"), &gateway, &persistence);
+
+        assert!(outcome.is_error());
+        assert_eq!(outcome.issue().unwrap().code, "persistence-failure");
+        assert!(persistence.commit_requests.borrow().is_empty());
+        assert!(persistence.commit.borrow().is_some());
+        assert_eq!(
+            persistence
+                .subjects
+                .borrow()
+                .get("slot-1")
+                .map(String::as_str),
+            Some("visit-old")
         );
     }
 }

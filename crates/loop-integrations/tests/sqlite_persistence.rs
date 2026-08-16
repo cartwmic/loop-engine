@@ -1,9 +1,10 @@
 use loop_core::{
     AppendContextRequest, CheckedEvaluationSnapshotRequest, CommitTransitionRequest,
-    CreateRunRequest, EvaluationFeedback, HistoryAction, Lifecycle, Persistence,
-    PersistenceConflict, PersistenceError, PersistenceRejection, ProviderAssociation,
-    RecordDenialRequest, RunSummary, State, TerminateRequest, Timestamp, Transition,
-    TransitionHistoryOutcome, Workflow,
+    CompleteWorkSlotInvocationRequest, CreateRunRequest, CreateWorkSlotInvocationRequest,
+    EvaluationFeedback, HistoryAction, Lifecycle, Persistence, PersistenceConflict,
+    PersistenceError, PersistenceRejection, ProviderAssociation, RecordDenialRequest, RunSummary,
+    State, TerminateRequest, Timestamp, Transition, TransitionHistoryOutcome, WaiterWrittenStatus,
+    WorkSlotBinding, WorkSlotId, Workflow,
 };
 use loop_integrations::SqlitePersistence;
 use rusqlite::Connection;
@@ -50,6 +51,30 @@ fn append_request(run_id: &str, record_id: &str, created_at: i64) -> AppendConte
         json!({"record": record_id}),
         Timestamp::from_unix_millis(created_at),
     )
+}
+
+fn invocation_create_request(run_id: &str, invocation_id: &str) -> CreateWorkSlotInvocationRequest {
+    CreateWorkSlotInvocationRequest::new(
+        run_id,
+        invocation_id,
+        "slot-1",
+        WorkSlotBinding::new("/bin/sh", vec!["-c".to_owned(), "exit 0".to_owned()]),
+        "digest",
+        "subject-a",
+        1,
+        Timestamp::from_unix_millis(500),
+        1_000,
+    )
+}
+
+fn assert_waiter_written_status_has_no_overrun(status: WaiterWrittenStatus) {
+    match status {
+        WaiterWrittenStatus::Succeeded | WaiterWrittenStatus::Failed => {}
+    }
+    assert!(
+        !format!("{status:?}").contains("Overrun"),
+        "WaiterWrittenStatus must not include Overrun: {status:?}"
+    );
 }
 
 fn checked_start_transition(event: &str, target: &str) -> Transition {
@@ -557,5 +582,246 @@ fn opening_legacy_catalog_adds_nullable_provider_and_artifact_root_columns(
         names.iter().any(|name| name == "artifact_root"),
         "artifact_root column missing after open: {names:?}"
     );
+    Ok(())
+}
+
+#[test]
+fn create_running_work_slot_invocation_record() -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = SqlitePersistence::open_in_memory()?;
+    adapter.create_run(create_request("run-invocation-create"))?;
+    let created = adapter.create_work_slot_invocation(invocation_create_request(
+        "run-invocation-create",
+        "inv-running",
+    ))?;
+    assert!(created.invocation.status.is_none());
+    assert!(created.invocation.exit_code.is_none());
+    assert!(created.invocation.completed_at.is_none());
+    assert!(matches!(
+        created.history.action,
+        HistoryAction::InvocationStarted { .. }
+    ));
+
+    let loaded = adapter.load_work_slot_invocations(&"run-invocation-create".into())?;
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].invocation_id.as_str(), "inv-running");
+    assert!(loaded[0].status.is_none());
+    assert!(matches!(
+        created.history.action,
+        HistoryAction::InvocationStarted {
+            ref invocation_id
+        } if invocation_id.as_str() == "inv-running"
+    ));
+    Ok(())
+}
+
+#[test]
+fn waiter_terminal_write_succeeded_invocation() -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = SqlitePersistence::open_in_memory()?;
+    adapter.create_run(create_request("run-invocation-succeeded"))?;
+    adapter.create_work_slot_invocation(invocation_create_request(
+        "run-invocation-succeeded",
+        "inv-succeeded",
+    ))?;
+    let completed =
+        adapter.complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
+            "run-invocation-succeeded",
+            "inv-succeeded",
+            WaiterWrittenStatus::Succeeded,
+            0,
+            Timestamp::from_unix_millis(900),
+        ))?;
+    assert_eq!(
+        completed.invocation.status,
+        Some(WaiterWrittenStatus::Succeeded)
+    );
+    assert_eq!(completed.invocation.exit_code, Some(0));
+    assert_eq!(
+        completed.invocation.completed_at,
+        Some(Timestamp::from_unix_millis(900))
+    );
+    assert!(matches!(
+        completed.history.action,
+        HistoryAction::InvocationStatusChanged {
+            status: WaiterWrittenStatus::Succeeded,
+            ..
+        }
+    ));
+    Ok(())
+}
+
+#[test]
+fn waiter_terminal_write_failed_invocation() -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = SqlitePersistence::open_in_memory()?;
+    adapter.create_run(create_request("run-invocation-failed"))?;
+    adapter.create_work_slot_invocation(invocation_create_request(
+        "run-invocation-failed",
+        "inv-failed",
+    ))?;
+    let completed =
+        adapter.complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
+            "run-invocation-failed",
+            "inv-failed",
+            WaiterWrittenStatus::Failed,
+            7,
+            Timestamp::from_unix_millis(901),
+        ))?;
+    assert_eq!(
+        completed.invocation.status,
+        Some(WaiterWrittenStatus::Failed)
+    );
+    assert_eq!(completed.invocation.exit_code, Some(7));
+    assert!(matches!(
+        completed.history.action,
+        HistoryAction::InvocationStatusChanged {
+            status: WaiterWrittenStatus::Failed,
+            ..
+        }
+    ));
+    Ok(())
+}
+
+#[test]
+fn second_invocation_terminal_write_conflicts_and_waiter_cannot_write_overrun(
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert_waiter_written_status_has_no_overrun(WaiterWrittenStatus::Succeeded);
+    assert_waiter_written_status_has_no_overrun(WaiterWrittenStatus::Failed);
+
+    let adapter = SqlitePersistence::open_in_memory()?;
+    adapter.create_run(create_request("run-invocation-conflict"))?;
+    adapter.create_work_slot_invocation(invocation_create_request(
+        "run-invocation-conflict",
+        "inv-conflict",
+    ))?;
+    adapter.complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
+        "run-invocation-conflict",
+        "inv-conflict",
+        WaiterWrittenStatus::Succeeded,
+        0,
+        Timestamp::from_unix_millis(900),
+    ))?;
+    let error = adapter
+        .complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
+            "run-invocation-conflict",
+            "inv-conflict",
+            WaiterWrittenStatus::Failed,
+            1,
+            Timestamp::from_unix_millis(901),
+        ))
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        PersistenceError::Conflict(PersistenceConflict::InvocationAlreadyTerminal { .. })
+    ));
+    let loaded = adapter.load_work_slot_invocations(&"run-invocation-conflict".into())?;
+    assert_eq!(loaded[0].status, Some(WaiterWrittenStatus::Succeeded));
+    assert_eq!(loaded[0].exit_code, Some(0));
+    Ok(())
+}
+
+#[test]
+fn append_context_does_not_create_invocation_rows() -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = SqlitePersistence::open_in_memory()?;
+    adapter.create_run(create_request("run-invocation-append"))?;
+    adapter.append_context(append_request("run-invocation-append", "ctx-1", 200))?;
+    let invocations = adapter.load_work_slot_invocations(&"run-invocation-append".into())?;
+    assert!(invocations.is_empty());
+    Ok(())
+}
+
+#[test]
+fn get_and_set_current_slot_subject_replace_on_set_for_invocation_slot(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = SqlitePersistence::open_in_memory()?;
+    adapter.create_run(create_request("run-invocation-subject"))?;
+    let slot_id = WorkSlotId::new("slot-1");
+    let run_id = "run-invocation-subject".into();
+    assert_eq!(adapter.get_current_slot_subject(&run_id, &slot_id)?, None);
+    adapter.set_current_slot_subject(&run_id, &slot_id, "first".to_owned())?;
+    assert_eq!(
+        adapter.get_current_slot_subject(&run_id, &slot_id)?,
+        Some("first".to_owned())
+    );
+    adapter.set_current_slot_subject(&run_id, &slot_id, "second".to_owned())?;
+    assert_eq!(
+        adapter.get_current_slot_subject(&run_id, &slot_id)?,
+        Some("second".to_owned())
+    );
+    Ok(())
+}
+
+#[test]
+fn create_run_and_commit_transition_persist_slot_subjects_atomically(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = SqlitePersistence::open_in_memory()?;
+    let slot_id = WorkSlotId::new("slot-1");
+    let created = adapter.create_run(
+        create_request("run-slot-atomic")
+            .with_slot_subjects(vec![(slot_id.clone(), "visit-start".to_owned())]),
+    )?;
+    assert_eq!(created.run.id.as_str(), "run-slot-atomic");
+    assert_eq!(
+        adapter.get_current_slot_subject(&created.run.id, &slot_id)?,
+        Some("visit-start".to_owned())
+    );
+
+    let committed = adapter.commit_transition(
+        CommitTransitionRequest::new(
+            created.run.id.clone(),
+            created.run.control_revision,
+            created.run.current_state.clone(),
+            Transition::checked("start", "retry", "start"),
+            Lifecycle::Active,
+        )
+        .with_slot_subjects(vec![(slot_id.clone(), "visit-next".to_owned())]),
+    )?;
+    assert_eq!(committed.run.current_state.as_str(), "start");
+    assert_eq!(
+        adapter.get_current_slot_subject(&created.run.id, &slot_id)?,
+        Some("visit-next".to_owned())
+    );
+    Ok(())
+}
+
+#[test]
+fn load_history_includes_invocation_actions_in_sequence_order(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = SqlitePersistence::open_in_memory()?;
+    adapter.create_run(create_request("run-invocation-history"))?;
+    adapter.append_context(append_request("run-invocation-history", "ctx-1", 200))?;
+    adapter.create_work_slot_invocation(invocation_create_request(
+        "run-invocation-history",
+        "inv-history",
+    ))?;
+    adapter.complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
+        "run-invocation-history",
+        "inv-history",
+        WaiterWrittenStatus::Succeeded,
+        0,
+        Timestamp::from_unix_millis(900),
+    ))?;
+    let history = adapter.load_history(&"run-invocation-history".into())?;
+    assert_eq!(
+        history
+            .iter()
+            .map(|entry| entry.sequence.as_u64())
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3, 4]
+    );
+    assert!(matches!(history[0].action, HistoryAction::RunCreated));
+    assert!(matches!(
+        history[1].action,
+        HistoryAction::ContextAppended { .. }
+    ));
+    assert!(matches!(
+        history[2].action,
+        HistoryAction::InvocationStarted { .. }
+    ));
+    assert!(matches!(
+        history[3].action,
+        HistoryAction::InvocationStatusChanged {
+            status: WaiterWrittenStatus::Succeeded,
+            ..
+        }
+    ));
     Ok(())
 }

@@ -219,6 +219,7 @@ dependencies = [
  "loop-integrations",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -227,6 +228,7 @@ version = "0.7.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 

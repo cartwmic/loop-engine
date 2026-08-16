@@ -1,0 +1,815 @@
+//! `invoke` work-slot delegation.
+
+use super::persistence_error;
+use crate::{
+    instruction_digest, project_invocation_status, CreateWorkSlotInvocationRequest, InvocationId,
+    OperationOutcome, Persistence, ProcessError, ProjectedInvocationStatus, RunId, Timestamp,
+    WaiterSpawnArgs, WorkSlotBinding, WorkSlotId, WorkSlotProcess,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::path::PathBuf;
+
+const WORK_SLOT_BINDINGS_KEY: &str = "work_slot_bindings";
+
+/// Caller-supplied values needed to invoke a bound work slot.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Request {
+    pub run_id: RunId,
+    pub slot_id: WorkSlotId,
+    pub invocation_id: InvocationId,
+    pub database: PathBuf,
+}
+
+impl Request {
+    pub fn new(
+        run_id: impl Into<RunId>,
+        slot_id: impl Into<WorkSlotId>,
+        invocation_id: impl Into<InvocationId>,
+        database: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            run_id: run_id.into(),
+            slot_id: slot_id.into(),
+            invocation_id: invocation_id.into(),
+            database: database.into(),
+        }
+    }
+}
+
+/// Successful `invoke` data returned to the composition root.
+///
+/// `waiter_pid` is internal and is not part of this caller-facing result.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Result {
+    pub invocation_id: InvocationId,
+    pub slot_id: WorkSlotId,
+    pub started_at: Timestamp,
+    pub allowed_time_ms: u64,
+}
+
+#[derive(Serialize)]
+struct WorkerPacket {
+    run_id: String,
+    slot_id: String,
+    artifact_root: String,
+    instruction_body: String,
+}
+
+#[derive(Serialize)]
+struct WaiterEnvelope {
+    command: String,
+    args: Vec<String>,
+    worker_packet: WorkerPacket,
+}
+
+/// Execute `invoke` through persistence and the work-slot process port.
+///
+/// Rejection checks run before spawn. On accept, launch order is spawn waiter
+/// (no waitpid, no stdin yet), read pid, create the running invocation, then
+/// write the waiter envelope and detach. Invoke does not spawn the bound worker.
+pub fn execute<P, Proc>(
+    request: Request,
+    persistence: &P,
+    process: &Proc,
+    now: Timestamp,
+    allowed_time_ms: u64,
+) -> OperationOutcome<Result>
+where
+    P: Persistence + ?Sized,
+    Proc: WorkSlotProcess + ?Sized,
+{
+    let run = match persistence.load_authoritative_run(&request.run_id) {
+        Ok(run) => run,
+        Err(error) => return persistence_error(error),
+    };
+
+    let Some(slot) = run
+        .workflow
+        .work_slots
+        .iter()
+        .find(|slot| slot.id == request.slot_id)
+    else {
+        return OperationOutcome::rejected(
+            "unknown-work-slot",
+            format!(
+                "work slot `{}` is not in the workflow catalog for run `{}`",
+                request.slot_id, request.run_id
+            ),
+        );
+    };
+
+    let Some(binding) = bound_worker(&run.initial_input, &request.slot_id) else {
+        return OperationOutcome::rejected(
+            "unbound-work-slot",
+            format!(
+                "work slot `{}` has no frozen work_slot_bindings entry",
+                request.slot_id
+            ),
+        );
+    };
+    let binding = match binding {
+        Ok(binding) => binding,
+        Err(message) => {
+            return OperationOutcome::rejected("invalid-work-slot-binding", message);
+        }
+    };
+
+    let invocations = match persistence.load_work_slot_invocations(&request.run_id) {
+        Ok(invocations) => invocations,
+        Err(error) => return persistence_error(error),
+    };
+    for record in invocations
+        .iter()
+        .filter(|record| record.slot_id == request.slot_id)
+    {
+        let projected =
+            project_invocation_status(record, now, process.waiter_alive(record.waiter_pid));
+        if projected == ProjectedInvocationStatus::Running {
+            return OperationOutcome::rejected(
+                "work-slot-already-running",
+                format!(
+                    "work slot `{}` already has a running invocation",
+                    request.slot_id
+                ),
+            );
+        }
+    }
+
+    let Some(state) = run
+        .workflow
+        .states
+        .iter()
+        .find(|state| state.id == slot.state)
+    else {
+        return OperationOutcome::error(
+            "invalid-run",
+            format!(
+                "work slot `{}` names state `{}` which is not in the workflow",
+                request.slot_id, slot.state
+            ),
+        );
+    };
+    let instruction_body = state.instructions.clone();
+    let digest = instruction_digest(&instruction_body);
+
+    let subject = match persistence.get_current_slot_subject(&request.run_id, &request.slot_id) {
+        Ok(Some(subject)) => subject,
+        Ok(None) => {
+            return OperationOutcome::rejected(
+                "no-current-visit-subject",
+                format!(
+                    "work slot `{}` has no current visit subject",
+                    request.slot_id
+                ),
+            );
+        }
+        Err(error) => return persistence_error(error),
+    };
+
+    let artifact_root = artifact_root_from_input(&run.initial_input);
+
+    let waiter = match process.spawn_wait_invocation(WaiterSpawnArgs::new(
+        request.database.clone(),
+        request.run_id.clone(),
+        request.invocation_id.clone(),
+    )) {
+        Ok(waiter) => waiter,
+        Err(error) => return process_error(error),
+    };
+
+    let create = CreateWorkSlotInvocationRequest::new(
+        request.run_id.clone(),
+        request.invocation_id.clone(),
+        request.slot_id.clone(),
+        binding.clone(),
+        digest,
+        subject,
+        waiter.pid,
+        now,
+        allowed_time_ms,
+    );
+    if let Err(error) = persistence.create_work_slot_invocation(create) {
+        return persistence_error(error);
+    }
+
+    let envelope = WaiterEnvelope {
+        command: binding.command,
+        args: binding.args,
+        worker_packet: WorkerPacket {
+            run_id: request.run_id.as_str().to_owned(),
+            slot_id: request.slot_id.as_str().to_owned(),
+            artifact_root,
+            instruction_body,
+        },
+    };
+    let envelope_json = match serde_json::to_vec(&envelope) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return OperationOutcome::error(
+                "waiter-envelope-serialization-failed",
+                format!("could not serialize waiter envelope: {error}"),
+            );
+        }
+    };
+    if let Err(error) = process.send_envelope_and_detach(waiter, &envelope_json) {
+        return process_error(error);
+    }
+
+    OperationOutcome::completed(Result {
+        invocation_id: request.invocation_id,
+        slot_id: request.slot_id,
+        started_at: now,
+        allowed_time_ms,
+    })
+}
+
+fn bound_worker(
+    initial_input: &Value,
+    slot_id: &WorkSlotId,
+) -> Option<std::result::Result<WorkSlotBinding, String>> {
+    let Value::Object(map) = initial_input else {
+        return None;
+    };
+    let bindings_value = map.get(WORK_SLOT_BINDINGS_KEY)?;
+    let Value::Object(bindings) = bindings_value else {
+        return None;
+    };
+    let binding = bindings.get(slot_id.as_str())?;
+    Some(
+        serde_json::from_value::<WorkSlotBinding>(binding.clone()).map_err(|error| {
+            format!(
+                "work_slot_bindings[{slot_id}] must be an object with exactly {{command, args}}: {error}"
+            )
+        }),
+    )
+}
+
+fn artifact_root_from_input(initial_input: &Value) -> String {
+    initial_input
+        .get("artifact_root")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned()
+}
+
+fn process_error<T>(error: ProcessError) -> OperationOutcome<T> {
+    OperationOutcome::error_with_issue(crate::OutcomeIssue::new(error.code, error.message))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        AppendContextRequest, AppendContextResult, CheckedEvaluationSnapshot,
+        CheckedEvaluationSnapshotRequest, CommitTransitionRequest, CommitTransitionResult,
+        CompleteWorkSlotInvocationRequest, CompleteWorkSlotInvocationResult, ContextRecord,
+        CreateRunRequest, CreateRunResult, CreateWorkSlotInvocationResult, HistoryEntry, Lifecycle,
+        PersistenceError, PersistenceFailure, ProviderAssociation, RecordDenialRequest,
+        RecordDenialResult, Run, RunSummary, ShowData, StartedWaiter, State, TerminateRequest,
+        TerminateResult, Transition, WaiterWrittenStatus, WorkSlot, WorkSlotInvocation, Workflow,
+    };
+    use serde_json::json;
+    use std::cell::{Cell, RefCell};
+    use std::collections::{BTreeSet, HashMap};
+    use std::rc::Rc;
+
+    type CallLog = Rc<RefCell<Vec<&'static str>>>;
+
+    fn workflow() -> Workflow {
+        Workflow::new(
+            "workflow",
+            "start",
+            vec![
+                State::new("start", "Start", "Do the slot work", false),
+                State::new("done", "Done", "Finished", true),
+            ],
+            vec![Transition::check_free("start", "finish", "done")],
+        )
+        .with_work_slots(vec![WorkSlot::new("slot-1", "start", "finish")])
+    }
+
+    fn bound_input() -> Value {
+        json!({
+            "artifact_root": "/tmp/artifacts",
+            "work_slot_bindings": {
+                "slot-1": {"command": "echo", "args": ["hello"]}
+            }
+        })
+    }
+
+    fn sample_run(initial_input: Value) -> Run {
+        Run::new(
+            "run-1",
+            None,
+            workflow(),
+            ProviderAssociation::new(json!({"provider": "fake"})),
+            initial_input,
+            "start",
+            Lifecycle::Active,
+            0_u64.into(),
+            1_u64.into(),
+            Timestamp::from_unix_millis(10),
+        )
+    }
+
+    fn invoke_request() -> Request {
+        Request::new("run-1", "slot-1", "inv-1", "/tmp/loop.db")
+    }
+
+    fn invocation(
+        slot_id: &str,
+        started_at: i64,
+        allowed_time_ms: u64,
+        status: Option<WaiterWrittenStatus>,
+        waiter_pid: u32,
+    ) -> WorkSlotInvocation {
+        WorkSlotInvocation::new(
+            "inv-existing",
+            slot_id,
+            WorkSlotBinding::new("echo", vec!["hello".to_owned()]),
+            "digest",
+            "subject-existing",
+            waiter_pid,
+            Timestamp::from_unix_millis(started_at),
+            allowed_time_ms,
+            status,
+            None,
+            None,
+        )
+    }
+
+    fn unavailable<T>() -> std::result::Result<T, PersistenceError> {
+        Err(PersistenceError::failure(PersistenceFailure::new(
+            "fake-failure",
+            "fake persistence failure",
+        )))
+    }
+
+    struct FakePersistence {
+        run: RefCell<std::result::Result<Run, PersistenceError>>,
+        invocations: RefCell<Vec<WorkSlotInvocation>>,
+        created: RefCell<Vec<CreateWorkSlotInvocationRequest>>,
+        subjects: RefCell<HashMap<(String, String), String>>,
+        set_subject_calls: RefCell<Vec<(String, String, String)>>,
+        log: CallLog,
+    }
+
+    impl FakePersistence {
+        fn new(run: Run, log: CallLog) -> Self {
+            Self {
+                run: RefCell::new(Ok(run)),
+                invocations: RefCell::new(Vec::new()),
+                created: RefCell::new(Vec::new()),
+                subjects: RefCell::new(HashMap::new()),
+                set_subject_calls: RefCell::new(Vec::new()),
+                log,
+            }
+        }
+
+        fn with_subject(self, slot_id: &str, subject: &str) -> Self {
+            self.subjects
+                .borrow_mut()
+                .insert(("run-1".to_owned(), slot_id.to_owned()), subject.to_owned());
+            self
+        }
+
+        fn with_invocations(self, invocations: Vec<WorkSlotInvocation>) -> Self {
+            *self.invocations.borrow_mut() = invocations;
+            self
+        }
+    }
+
+    impl Persistence for FakePersistence {
+        fn create_run(
+            &self,
+            _request: CreateRunRequest,
+        ) -> std::result::Result<CreateRunResult, PersistenceError> {
+            unavailable()
+        }
+
+        fn append_context(
+            &self,
+            _request: AppendContextRequest,
+        ) -> std::result::Result<AppendContextResult, PersistenceError> {
+            unavailable()
+        }
+
+        fn commit_transition(
+            &self,
+            _request: CommitTransitionRequest,
+        ) -> std::result::Result<CommitTransitionResult, PersistenceError> {
+            unavailable()
+        }
+
+        fn record_denial(
+            &self,
+            _request: RecordDenialRequest,
+        ) -> std::result::Result<RecordDenialResult, PersistenceError> {
+            unavailable()
+        }
+
+        fn terminate(
+            &self,
+            _request: TerminateRequest,
+        ) -> std::result::Result<TerminateResult, PersistenceError> {
+            unavailable()
+        }
+
+        fn load_authoritative_run(
+            &self,
+            _run_id: &RunId,
+        ) -> std::result::Result<Run, PersistenceError> {
+            match &*self.run.borrow() {
+                Ok(run) => Ok(run.clone()),
+                Err(error) => Err(error.clone()),
+            }
+        }
+
+        fn list_runs(&self) -> std::result::Result<Vec<RunSummary>, PersistenceError> {
+            unavailable()
+        }
+
+        fn load_context_records(
+            &self,
+            _run_id: &RunId,
+        ) -> std::result::Result<Vec<ContextRecord>, PersistenceError> {
+            unavailable()
+        }
+
+        fn load_history(
+            &self,
+            _run_id: &RunId,
+        ) -> std::result::Result<Vec<HistoryEntry>, PersistenceError> {
+            unavailable()
+        }
+
+        fn load_checked_evaluations(
+            &self,
+            _run_id: &RunId,
+        ) -> std::result::Result<Vec<crate::DurableEvaluation>, PersistenceError> {
+            unavailable()
+        }
+
+        fn load_checked_evaluation_snapshot(
+            &self,
+            _request: CheckedEvaluationSnapshotRequest,
+        ) -> std::result::Result<CheckedEvaluationSnapshot, PersistenceError> {
+            unavailable()
+        }
+
+        fn load_show_data(
+            &self,
+            _run_id: &RunId,
+        ) -> std::result::Result<ShowData, PersistenceError> {
+            unavailable()
+        }
+
+        fn create_work_slot_invocation(
+            &self,
+            request: CreateWorkSlotInvocationRequest,
+        ) -> std::result::Result<CreateWorkSlotInvocationResult, PersistenceError> {
+            self.log.borrow_mut().push("create");
+            self.created.borrow_mut().push(request.clone());
+            Ok(CreateWorkSlotInvocationResult {
+                invocation: WorkSlotInvocation::new(
+                    request.invocation_id.clone(),
+                    request.slot_id.clone(),
+                    request.binding.clone(),
+                    request.instruction_digest.clone(),
+                    request.subject.clone(),
+                    request.waiter_pid,
+                    request.started_at,
+                    request.allowed_time_ms,
+                    None,
+                    None,
+                    None,
+                ),
+                history: HistoryEntry::invocation_started(
+                    2_u64.into(),
+                    request.started_at,
+                    request.invocation_id,
+                ),
+            })
+        }
+
+        fn complete_work_slot_invocation(
+            &self,
+            _request: CompleteWorkSlotInvocationRequest,
+        ) -> std::result::Result<CompleteWorkSlotInvocationResult, PersistenceError> {
+            unavailable()
+        }
+
+        fn get_current_slot_subject(
+            &self,
+            run_id: &RunId,
+            slot_id: &WorkSlotId,
+        ) -> std::result::Result<Option<String>, PersistenceError> {
+            Ok(self
+                .subjects
+                .borrow()
+                .get(&(run_id.as_str().to_owned(), slot_id.as_str().to_owned()))
+                .cloned())
+        }
+
+        fn set_current_slot_subject(
+            &self,
+            run_id: &RunId,
+            slot_id: &WorkSlotId,
+            subject: String,
+        ) -> std::result::Result<(), PersistenceError> {
+            self.set_subject_calls.borrow_mut().push((
+                run_id.as_str().to_owned(),
+                slot_id.as_str().to_owned(),
+                subject.clone(),
+            ));
+            self.subjects.borrow_mut().insert(
+                (run_id.as_str().to_owned(), slot_id.as_str().to_owned()),
+                subject,
+            );
+            Ok(())
+        }
+
+        fn load_work_slot_invocations(
+            &self,
+            _run_id: &RunId,
+        ) -> std::result::Result<Vec<WorkSlotInvocation>, PersistenceError> {
+            Ok(self.invocations.borrow().clone())
+        }
+    }
+
+    struct FakeProcess {
+        log: CallLog,
+        spawn_args: RefCell<Vec<WaiterSpawnArgs>>,
+        envelopes: RefCell<Vec<Vec<u8>>>,
+        next_pid: Cell<u32>,
+        alive: RefCell<HashMap<u32, bool>>,
+        default_alive: bool,
+        waited: Cell<bool>,
+    }
+
+    impl FakeProcess {
+        fn new(log: CallLog) -> Self {
+            Self {
+                log,
+                spawn_args: RefCell::new(Vec::new()),
+                envelopes: RefCell::new(Vec::new()),
+                next_pid: Cell::new(4242),
+                alive: RefCell::new(HashMap::new()),
+                default_alive: true,
+                waited: Cell::new(false),
+            }
+        }
+
+        fn set_alive(&self, pid: u32, alive: bool) {
+            self.alive.borrow_mut().insert(pid, alive);
+        }
+    }
+
+    impl WorkSlotProcess for FakeProcess {
+        type Handle = ();
+
+        fn waiter_alive(&self, pid: u32) -> bool {
+            self.alive
+                .borrow()
+                .get(&pid)
+                .copied()
+                .unwrap_or(self.default_alive)
+        }
+
+        fn spawn_wait_invocation(
+            &self,
+            args: WaiterSpawnArgs,
+        ) -> std::result::Result<StartedWaiter<()>, ProcessError> {
+            self.log.borrow_mut().push("spawn");
+            self.spawn_args.borrow_mut().push(args);
+            Ok(StartedWaiter::new(self.next_pid.get(), ()))
+        }
+
+        fn send_envelope_and_detach(
+            &self,
+            _waiter: StartedWaiter<()>,
+            envelope_json: &[u8],
+        ) -> std::result::Result<(), ProcessError> {
+            self.log.borrow_mut().push("send");
+            self.envelopes.borrow_mut().push(envelope_json.to_vec());
+            Ok(())
+        }
+    }
+
+    fn harness(run: Run) -> (FakePersistence, FakeProcess, CallLog) {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let persistence = FakePersistence::new(run, log.clone());
+        let process = FakeProcess::new(log.clone());
+        (persistence, process, log)
+    }
+
+    #[test]
+    fn unknown_slot_is_rejected_without_spawn() {
+        let (persistence, process, log) = harness(sample_run(bound_input()));
+        let persistence = persistence.with_subject("slot-1", "visit-1");
+        let request = Request::new("run-1", "missing-slot", "inv-1", "/tmp/loop.db");
+
+        let outcome = execute(
+            request,
+            &persistence,
+            &process,
+            Timestamp::from_unix_millis(1_000),
+            30_000,
+        );
+
+        assert!(outcome.is_rejected());
+        assert_eq!(outcome.issue().unwrap().code, "unknown-work-slot");
+        assert!(process.spawn_args.borrow().is_empty());
+        assert!(persistence.created.borrow().is_empty());
+        assert!(log.borrow().is_empty());
+        assert!(!process.waited.get());
+    }
+
+    #[test]
+    fn unbound_missing_empty_or_omitted_slot_is_rejected_without_spawn() {
+        let inputs = [
+            json!({"artifact_root": "/tmp/artifacts"}),
+            json!({"artifact_root": "/tmp/artifacts", "work_slot_bindings": {}}),
+            json!({
+                "artifact_root": "/tmp/artifacts",
+                "work_slot_bindings": {
+                    "other-slot": {"command": "echo", "args": []}
+                }
+            }),
+        ];
+        for input in inputs {
+            let (persistence, process, log) = harness(sample_run(input));
+            let persistence = persistence.with_subject("slot-1", "visit-1");
+
+            let outcome = execute(
+                invoke_request(),
+                &persistence,
+                &process,
+                Timestamp::from_unix_millis(1_000),
+                30_000,
+            );
+
+            assert!(outcome.is_rejected(), "{outcome:?}");
+            assert_eq!(outcome.issue().unwrap().code, "unbound-work-slot");
+            assert!(process.spawn_args.borrow().is_empty());
+            assert!(persistence.created.borrow().is_empty());
+            assert!(log.borrow().is_empty());
+        }
+    }
+
+    #[test]
+    fn overlay_running_is_rejected_without_spawn() {
+        let (persistence, process, log) = harness(sample_run(bound_input()));
+        let persistence = persistence
+            .with_subject("slot-1", "visit-1")
+            .with_invocations(vec![invocation("slot-1", 1_000, 5_000, None, 42)]);
+        process.set_alive(42, true);
+
+        let outcome = execute(
+            invoke_request(),
+            &persistence,
+            &process,
+            Timestamp::from_unix_millis(2_000),
+            30_000,
+        );
+
+        assert!(outcome.is_rejected());
+        assert_eq!(outcome.issue().unwrap().code, "work-slot-already-running");
+        assert!(process.spawn_args.borrow().is_empty());
+        assert!(persistence.created.borrow().is_empty());
+        assert!(log.borrow().is_empty());
+    }
+
+    #[test]
+    fn overlay_overrun_is_not_already_running_and_invoke_is_accepted() {
+        let (persistence, process, log) = harness(sample_run(bound_input()));
+        let persistence = persistence
+            .with_subject("slot-1", "visit-1")
+            .with_invocations(vec![invocation("slot-1", 1_000, 5_000, None, 42)]);
+        process.set_alive(42, true);
+
+        let outcome = execute(
+            invoke_request(),
+            &persistence,
+            &process,
+            Timestamp::from_unix_millis(6_000),
+            30_000,
+        );
+
+        assert!(outcome.is_completed(), "{outcome:?}");
+        assert_eq!(&*log.borrow(), &["spawn", "create", "send"]);
+        assert!(!process.waited.get());
+    }
+
+    #[test]
+    fn overlay_failed_and_succeeded_are_not_already_running() {
+        for status in [
+            Some(WaiterWrittenStatus::Failed),
+            Some(WaiterWrittenStatus::Succeeded),
+        ] {
+            let (persistence, process, log) = harness(sample_run(bound_input()));
+            let persistence = persistence
+                .with_subject("slot-1", "visit-1")
+                .with_invocations(vec![invocation("slot-1", 1_000, 5_000, status, 42)]);
+            process.set_alive(42, true);
+
+            let outcome = execute(
+                invoke_request(),
+                &persistence,
+                &process,
+                Timestamp::from_unix_millis(2_000),
+                30_000,
+            );
+
+            assert!(outcome.is_completed(), "{status:?} {outcome:?}");
+            assert_eq!(&*log.borrow(), &["spawn", "create", "send"]);
+            assert!(!process.waited.get());
+        }
+    }
+
+    #[test]
+    fn happy_path_creates_invocation_then_sends_envelope_without_waitpid() {
+        let (persistence, process, log) = harness(sample_run(bound_input()));
+        let persistence = persistence.with_subject("slot-1", "visit-1");
+        let now = Timestamp::from_unix_millis(1_000);
+        let allowed_time_ms = 12_345;
+
+        let outcome = execute(
+            invoke_request(),
+            &persistence,
+            &process,
+            now,
+            allowed_time_ms,
+        );
+
+        assert!(outcome.is_completed(), "{outcome:?}");
+        let result = outcome.value().expect("completed invoke");
+        assert_eq!(result.invocation_id.as_str(), "inv-1");
+        assert_eq!(result.slot_id.as_str(), "slot-1");
+        assert_eq!(result.started_at, now);
+        assert_eq!(result.allowed_time_ms, allowed_time_ms);
+        assert_eq!(&*log.borrow(), &["spawn", "create", "send"]);
+        assert!(!process.waited.get());
+        assert!(persistence.set_subject_calls.borrow().is_empty());
+
+        let created = persistence.created.borrow();
+        assert_eq!(created.len(), 1);
+        assert_eq!(
+            created[0].instruction_digest,
+            instruction_digest("Do the slot work")
+        );
+        assert_eq!(created[0].subject, "visit-1");
+        assert_eq!(created[0].allowed_time_ms, allowed_time_ms);
+        assert_eq!(created[0].waiter_pid, 4242);
+        assert_eq!(created[0].started_at, now);
+        assert_eq!(
+            created[0].binding,
+            WorkSlotBinding::new("echo", vec!["hello".to_owned()])
+        );
+
+        let spawn = &process.spawn_args.borrow()[0];
+        assert_eq!(spawn.run_id.as_str(), "run-1");
+        assert_eq!(spawn.invocation_id.as_str(), "inv-1");
+        assert_eq!(spawn.database, PathBuf::from("/tmp/loop.db"));
+
+        let envelope: Value =
+            serde_json::from_slice(&process.envelopes.borrow()[0]).expect("envelope json");
+        assert_eq!(envelope["command"], "echo");
+        assert_eq!(envelope["args"], json!(["hello"]));
+        let packet = envelope["worker_packet"]
+            .as_object()
+            .expect("worker_packet object");
+        let keys = packet
+            .keys()
+            .map(|key| key.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            keys,
+            BTreeSet::from(["run_id", "slot_id", "artifact_root", "instruction_body"])
+        );
+        assert_eq!(packet["run_id"], "run-1");
+        assert_eq!(packet["slot_id"], "slot-1");
+        assert_eq!(packet["artifact_root"], "/tmp/artifacts");
+        assert_eq!(packet["instruction_body"], "Do the slot work");
+        assert!(packet.get("command").is_none());
+    }
+
+    #[test]
+    fn missing_current_subject_is_rejected_without_spawn() {
+        let (persistence, process, log) = harness(sample_run(bound_input()));
+
+        let outcome = execute(
+            invoke_request(),
+            &persistence,
+            &process,
+            Timestamp::from_unix_millis(1_000),
+            30_000,
+        );
+
+        assert!(outcome.is_rejected());
+        assert_eq!(outcome.issue().unwrap().code, "no-current-visit-subject");
+        assert!(process.spawn_args.borrow().is_empty());
+        assert!(log.borrow().is_empty());
+    }
+}

@@ -6,19 +6,21 @@
 //! and integration crates respectively.
 
 use loop_core::{
-    self as core, AppendContextRequest, EventRequest, HistoryRequest, OperationOutcome,
-    ProviderResolutionError, RunId, ShowRequest, StartRequest, TerminateRunRequest, Timestamp,
+    self as core, AppendContextRequest, CompleteWorkSlotInvocationRequest, EventRequest,
+    HistoryRequest, InvocationId, InvokeRequest, OperationOutcome, Persistence, ProcessError,
+    ProviderResolutionError, RunId, ShowRequest, StartRequest, StartedWaiter, TerminateRunRequest,
+    Timestamp, WaiterSpawnArgs, WaiterWrittenStatus, WorkSlotProcess,
 };
 use loop_integrations::{
     ConfiguredProviderResolver, ProviderConfiguration, SqlitePersistence, SubprocessProviderGateway,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fmt;
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process;
+use std::process::{self, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -63,7 +65,7 @@ impl Default for CliOptions {
     }
 }
 
-/// The seven and only seven primary CLI operations.
+/// The eight primary CLI operations.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PrimaryCommand {
     Start(StartArgs),
@@ -73,6 +75,7 @@ pub enum PrimaryCommand {
     Event { run_id: RunId, event: String },
     History(RunId),
     Terminate(RunId),
+    Invoke { run_id: RunId, slot_id: String },
 }
 
 impl PrimaryCommand {
@@ -85,6 +88,7 @@ impl PrimaryCommand {
             Self::Event { .. } => "event",
             Self::History(_) => "history",
             Self::Terminate(_) => "terminate",
+            Self::Invoke { .. } => "invoke",
         }
     }
 }
@@ -118,6 +122,11 @@ pub enum ParsedRequest {
     Operation {
         options: CliOptions,
         command: PrimaryCommand,
+    },
+    WaitInvocation {
+        options: CliOptions,
+        run_id: RunId,
+        invocation_id: InvocationId,
     },
 }
 
@@ -522,9 +531,13 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
     let command_name = command_name.ok_or_else(|| {
         CliError::new(
             "invalid-invocation",
-            "a primary operation is required (start, list, show, append, event, history, or terminate)",
+            "a primary operation is required (start, list, show, append, event, history, terminate, or invoke)",
         )
     })?;
+
+    if command_name == "wait-invocation" {
+        return parse_wait_invocation(options, positionals);
+    }
 
     let command = parse_primary_command(
         &command_name,
@@ -747,10 +760,32 @@ fn parse_primary_command(
             )?;
             Ok(PrimaryCommand::Terminate(run.into()))
         }
+        "invoke" => {
+            let run = run_id.or_else(|| take_positional(&mut positionals));
+            let run = required(run, "run ID")?;
+            let slot = take_positional(&mut positionals);
+            let slot = required(slot, "slot ID")?;
+            ensure_no_positionals(&positionals, name)?;
+            reject_unrelated_options(
+                name,
+                provider,
+                input,
+                label,
+                start_id,
+                kind,
+                data,
+                record_id,
+                event,
+            )?;
+            Ok(PrimaryCommand::Invoke {
+                run_id: run.into(),
+                slot_id: slot,
+            })
+        }
         _ => Err(CliError::new(
             "invalid-operation",
             format!(
-                "unknown operation `{name}`; expected start, list, show, append, event, history, or terminate"
+                "unknown operation `{name}`; expected start, list, show, append, event, history, terminate, or invoke"
             ),
         )),
     }
@@ -854,6 +889,221 @@ where
             stderr: String::new(),
         },
         ParsedRequest::Operation { options, command } => execute_operation(options, command),
+        ParsedRequest::WaitInvocation {
+            options,
+            run_id,
+            invocation_id,
+        } => execute_wait_invocation(options, run_id, invocation_id),
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct WaiterEnvelope {
+    command: String,
+    args: Vec<String>,
+    worker_packet: Value,
+}
+
+fn parse_wait_invocation(
+    options: CliOptions,
+    mut positionals: Vec<String>,
+) -> Result<ParsedRequest, CliError> {
+    let run_id = required(take_positional(&mut positionals), "run ID")?;
+    let invocation_id = required(take_positional(&mut positionals), "invocation ID")?;
+    ensure_no_positionals(&positionals, "wait-invocation")?;
+    Ok(ParsedRequest::WaitInvocation {
+        options,
+        run_id: run_id.into(),
+        invocation_id: invocation_id.into(),
+    })
+}
+
+fn execute_wait_invocation(
+    options: CliOptions,
+    run_id: RunId,
+    invocation_id: InvocationId,
+) -> Execution {
+    let output = options.output;
+    let paths = match resolve_paths(&options) {
+        Ok(paths) => paths,
+        Err(error) => return render_operation_error("wait-invocation", output, error),
+    };
+    let persistence = match open_persistence(&paths.database) {
+        Ok(persistence) => persistence,
+        Err(error) => return render_operation_error("wait-invocation", output, error),
+    };
+    let envelope = match read_waiter_envelope() {
+        Ok(envelope) => envelope,
+        Err(error) => return render_invalid_invocation_with_format(error, output),
+    };
+    match wait_for_worker_and_complete(&persistence, run_id, invocation_id, envelope) {
+        Ok(()) => Execution {
+            exit_code: EXIT_COMPLETED,
+            stdout: String::new(),
+            stderr: String::new(),
+        },
+        Err(error) => {
+            if error.code == "invalid-invocation" || error.code == "invalid-json-input" {
+                render_invalid_invocation_with_format(error, output)
+            } else {
+                render_operation_error("wait-invocation", output, error)
+            }
+        }
+    }
+}
+
+fn read_waiter_envelope() -> Result<WaiterEnvelope, CliError> {
+    let mut input = String::new();
+    io::stdin().read_to_string(&mut input).map_err(|error| {
+        CliError::new(
+            "input-read-failed",
+            format!("could not read waiter envelope from stdin: {error}"),
+        )
+    })?;
+    serde_json::from_str(&input).map_err(|error| {
+        CliError::new(
+            "invalid-json-input",
+            format!("waiter envelope is not valid JSON: {error}"),
+        )
+    })
+}
+
+fn wait_for_worker_and_complete(
+    persistence: &SqlitePersistence,
+    run_id: RunId,
+    invocation_id: InvocationId,
+    envelope: WaiterEnvelope,
+) -> Result<(), CliError> {
+    let mut child = Command::new(&envelope.command)
+        .args(&envelope.args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| {
+            CliError::new(
+                "worker-spawn-failed",
+                format!("could not spawn waiter worker: {error}"),
+            )
+        })?;
+
+    let packet = serde_json::to_vec(&envelope.worker_packet).map_err(|error| {
+        CliError::new(
+            "worker-packet-serialization-failed",
+            format!("could not serialize worker packet: {error}"),
+        )
+    })?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        if let Err(error) = stdin.write_all(&packet) {
+            if error.kind() != io::ErrorKind::BrokenPipe {
+                return Err(CliError::new(
+                    "worker-stdin-write-failed",
+                    format!("could not write worker packet to stdin: {error}"),
+                ));
+            }
+        }
+    }
+
+    let status = child.wait().map_err(|error| {
+        CliError::new(
+            "worker-wait-failed",
+            format!("could not wait for waiter worker: {error}"),
+        )
+    })?;
+    let exit_code = status.code().unwrap_or(1);
+    let written = if status.success() {
+        WaiterWrittenStatus::Succeeded
+    } else {
+        WaiterWrittenStatus::Failed
+    };
+
+    persistence
+        .complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
+            run_id,
+            invocation_id,
+            written,
+            exit_code,
+            now_timestamp(),
+        ))
+        .map_err(|error| CliError::new(error.code(), error.to_string()))?;
+    Ok(())
+}
+
+struct CliWorkSlotProcess {
+    binary: PathBuf,
+}
+
+struct CliWaiterHandle {
+    child: process::Child,
+}
+
+#[cfg(unix)]
+mod unix_signal {
+    extern "C" {
+        pub fn kill(pid: i32, sig: i32) -> i32;
+    }
+}
+
+impl WorkSlotProcess for CliWorkSlotProcess {
+    type Handle = CliWaiterHandle;
+
+    fn waiter_alive(&self, pid: u32) -> bool {
+        #[cfg(unix)]
+        {
+            unsafe { unix_signal::kill(pid as i32, 0) == 0 }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = pid;
+            false
+        }
+    }
+
+    fn spawn_wait_invocation(
+        &self,
+        args: WaiterSpawnArgs,
+    ) -> std::result::Result<StartedWaiter<CliWaiterHandle>, ProcessError> {
+        let database = args.database.to_str().ok_or_else(|| {
+            ProcessError::new("invalid-database-path", "database path is not valid UTF-8")
+        })?;
+        let child = Command::new(&self.binary)
+            .args([
+                "--database",
+                database,
+                "wait-invocation",
+                args.run_id.as_str(),
+                args.invocation_id.as_str(),
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| {
+                ProcessError::new(
+                    "waiter-spawn-failed",
+                    format!("could not spawn wait-invocation: {error}"),
+                )
+            })?;
+        Ok(StartedWaiter::new(child.id(), CliWaiterHandle { child }))
+    }
+
+    fn send_envelope_and_detach(
+        &self,
+        mut waiter: StartedWaiter<CliWaiterHandle>,
+        envelope_json: &[u8],
+    ) -> std::result::Result<(), ProcessError> {
+        if let Some(mut stdin) = waiter.handle.child.stdin.take() {
+            if let Err(error) = stdin.write_all(envelope_json) {
+                if error.kind() != io::ErrorKind::BrokenPipe {
+                    return Err(ProcessError::new(
+                        "waiter-stdin-write-failed",
+                        format!("could not write waiter envelope to stdin: {error}"),
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -909,8 +1159,26 @@ fn execute_operation(options: CliOptions, command: PrimaryCommand) -> Execution 
             render_operation(operation, output, &outcome)
         }
         PrimaryCommand::Show(run_id) => {
-            let outcome = core::execute_show(ShowRequest::new(run_id), &persistence)
-                .map(CliShowProjection::from);
+            let binary = match std::env::current_exe() {
+                Ok(binary) => binary,
+                Err(error) => {
+                    return render_operation_error(
+                        operation,
+                        output,
+                        CliError::new(
+                            "current-executable-unavailable",
+                            format!("could not resolve current executable: {error}"),
+                        ),
+                    );
+                }
+            };
+            let outcome = core::execute_show(
+                ShowRequest::new(run_id),
+                &persistence,
+                &CliWorkSlotProcess { binary },
+                now_timestamp(),
+            )
+            .map(CliShowProjection::from);
             render_operation(operation, output, &outcome)
         }
         PrimaryCommand::Append(args) => {
@@ -944,6 +1212,34 @@ fn execute_operation(options: CliOptions, command: PrimaryCommand) -> Execution 
         PrimaryCommand::Terminate(run_id) => {
             let outcome = core::execute_terminate(TerminateRunRequest::new(run_id), &persistence)
                 .map(CliTerminateResult::from);
+            render_operation(operation, output, &outcome)
+        }
+        PrimaryCommand::Invoke { run_id, slot_id } => {
+            let binary = match std::env::current_exe() {
+                Ok(binary) => binary,
+                Err(error) => {
+                    return render_operation_error(
+                        operation,
+                        output,
+                        CliError::new(
+                            "waiter-spawn-failed",
+                            format!("could not resolve current executable: {error}"),
+                        ),
+                    );
+                }
+            };
+            let process = CliWorkSlotProcess { binary };
+            let allowed_time_ms = timeout.as_millis().min(u64::MAX as u128) as u64;
+            let request =
+                InvokeRequest::new(run_id, slot_id, new_invocation_id(), paths.database.clone());
+            let outcome = core::execute_invoke(
+                request,
+                &persistence,
+                &process,
+                now_timestamp(),
+                allowed_time_ms,
+            )
+            .map(CliInvokeResult::from);
             render_operation(operation, output, &outcome)
         }
     }
@@ -1199,6 +1495,10 @@ fn new_context_id() -> String {
     unique_token("context")
 }
 
+fn new_invocation_id() -> InvocationId {
+    unique_token("invocation").into()
+}
+
 /// Caller-visible run data.  Core's `Run` also carries persistence control
 /// metadata; those fields are deliberately not represented by this CLI DTO.
 #[derive(Clone, Debug, Serialize)]
@@ -1291,6 +1591,25 @@ impl From<core::TerminateResult> for CliTerminateResult {
 }
 
 #[derive(Clone, Debug, Serialize)]
+struct CliInvokeResult {
+    invocation_id: core::InvocationId,
+    slot_id: core::WorkSlotId,
+    started_at: core::Timestamp,
+    allowed_time_ms: u64,
+}
+
+impl From<core::InvokeResult> for CliInvokeResult {
+    fn from(result: core::InvokeResult) -> Self {
+        Self {
+            invocation_id: result.invocation_id,
+            slot_id: result.slot_id,
+            started_at: result.started_at,
+            allowed_time_ms: result.allowed_time_ms,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct CliRunSummary {
     id: core::RunId,
     label: Option<String>,
@@ -1328,6 +1647,8 @@ struct CliShowProjection {
     context: Vec<core::ContextRecord>,
     requestable_events: Vec<core::RequestableEvent>,
     latest_evaluations: Vec<core::DurableEvaluation>,
+    work_slots: Vec<core::WorkSlot>,
+    work_slot_invocations: Vec<core::operations::WorkSlotInvocationView>,
 }
 
 impl From<core::ShowProjection> for CliShowProjection {
@@ -1344,6 +1665,8 @@ impl From<core::ShowProjection> for CliShowProjection {
             context: projection.context,
             requestable_events: projection.requestable_events,
             latest_evaluations: projection.latest_evaluations,
+            work_slots: projection.work_slots,
+            work_slot_invocations: projection.work_slot_invocations,
         }
     }
 }
@@ -1534,9 +1857,10 @@ fn usage(command: Option<&str>) -> String {
         Some("show") => "Usage: loop-engine [options] show <run-id>\n".to_owned(),
         Some("history") => "Usage: loop-engine [options] history <run-id>\n".to_owned(),
         Some("terminate") => "Usage: loop-engine [options] terminate <run-id>\n".to_owned(),
+        Some("invoke") => "Usage: loop-engine [options] invoke <run-id> <slot-id>\n".to_owned(),
         Some("list") => "Usage: loop-engine [options] list\n".to_owned(),
         _ => {
-            "Usage: loop-engine [options] <operation> [arguments]\n\nOperations:\n  start\n  list\n  show\n  append\n  event\n  history\n  terminate\n\nGlobal options:\n  --json, -j                 Render machine-readable JSON\n  --database <path>          SQLite database path\n  --config <path>            Provider TOML configuration path\n  --timeout-ms <milliseconds> Provider operation timeout\n  --help, -h                 Show help\n  --version, -V              Show version\n"
+            "Usage: loop-engine [options] <operation> [arguments]\n\nOperations:\n  start\n  list\n  show\n  append\n  event\n  history\n  terminate\n  invoke\n\nGlobal options:\n  --json, -j                 Render machine-readable JSON\n  --database <path>          SQLite database path\n  --config <path>            Provider TOML configuration path\n  --timeout-ms <milliseconds> Provider operation timeout\n  --help, -h                 Show help\n  --version, -V              Show version\n"
                 .to_owned()
         }
     }
@@ -1606,7 +1930,7 @@ mod tests {
     }
 
     #[test]
-    fn parser_exposes_exactly_the_seven_primary_operations() {
+    fn parser_exposes_exactly_the_eight_primary_operations() {
         let inputs = [
             vec!["start", "provider", "{}"],
             vec!["list"],
@@ -1615,6 +1939,7 @@ mod tests {
             vec!["event", "run-1", "finish"],
             vec!["history", "run-1"],
             vec!["terminate", "run-1"],
+            vec!["invoke", "run-1", "slot-1"],
         ];
 
         let names = inputs
@@ -1633,7 +1958,8 @@ mod tests {
                 "append",
                 "event",
                 "history",
-                "terminate"
+                "terminate",
+                "invoke"
             ]
         );
     }
@@ -1653,6 +1979,7 @@ mod tests {
             "event",
             "history",
             "terminate",
+            "invoke",
         ] {
             let command_help = execute([command, "--help"]);
             assert_eq!(command_help.exit_code, EXIT_COMPLETED);
@@ -1686,6 +2013,81 @@ mod tests {
         assert_eq!(options.database, Some(PathBuf::from("/tmp/loop.db")));
         assert_eq!(options.provider_timeout, Some(Duration::from_millis(17)));
         assert!(matches!(command, PrimaryCommand::Start(_)));
+    }
+
+    #[test]
+    fn invoke_run_slot_parses() {
+        let parsed = parse_args(["invoke", "run-1", "slot-1"]).expect("invoke should parse");
+        let ParsedRequest::Operation {
+            command: PrimaryCommand::Invoke { run_id, slot_id },
+            options,
+        } = parsed
+        else {
+            panic!("expected invoke operation");
+        };
+        assert_eq!(run_id.as_str(), "run-1");
+        assert_eq!(slot_id, "slot-1");
+        assert_eq!(options.output, OutputFormat::Human);
+        assert!(options.database.is_none());
+        assert!(options.provider_timeout.is_none());
+    }
+
+    #[test]
+    fn invoke_missing_args_is_invalid_invocation() {
+        let missing_both = parse_args(["invoke"]).expect_err("invoke requires run and slot");
+        assert_eq!(missing_both.code, "invalid-invocation");
+        let missing_slot = parse_args(["invoke", "run-1"]).expect_err("invoke requires a slot ID");
+        assert_eq!(missing_slot.code, "invalid-invocation");
+        let extra = parse_args(["invoke", "run-1", "slot-1", "extra"])
+            .expect_err("invoke rejects extra positionals");
+        assert_eq!(extra.code, "invalid-invocation");
+    }
+
+    #[test]
+    fn invoke_accepts_global_timeout_database_json_before_operation() {
+        let parsed = parse_args([
+            "--json",
+            "--database",
+            "/tmp/loop.db",
+            "--timeout-ms",
+            "12345",
+            "invoke",
+            "run-1",
+            "slot-1",
+        ])
+        .expect("globals before invoke should parse");
+        let ParsedRequest::Operation {
+            options,
+            command: PrimaryCommand::Invoke { run_id, slot_id },
+        } = parsed
+        else {
+            panic!("expected invoke operation");
+        };
+        assert_eq!(options.output, OutputFormat::Json);
+        assert_eq!(options.database, Some(PathBuf::from("/tmp/loop.db")));
+        assert_eq!(options.provider_timeout, Some(Duration::from_millis(12345)));
+        assert_eq!(run_id.as_str(), "run-1");
+        assert_eq!(slot_id, "slot-1");
+    }
+
+    #[test]
+    fn help_lists_invoke_as_public_operation_and_hides_wait_invocation() {
+        let help = execute(["--help"]);
+        assert_eq!(help.exit_code, EXIT_COMPLETED);
+        assert!(
+            help.stdout.contains("invoke"),
+            "help must list invoke: {}",
+            help.stdout
+        );
+        assert!(
+            !help.stdout.contains("wait-invocation"),
+            "help must not mention hidden wait-invocation: {}",
+            help.stdout
+        );
+        let invoke_help = execute(["invoke", "--help"]);
+        assert_eq!(invoke_help.exit_code, EXIT_COMPLETED);
+        assert!(invoke_help.stdout.contains("invoke"));
+        assert!(!invoke_help.stdout.contains("wait-invocation"));
     }
 
     #[test]

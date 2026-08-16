@@ -87,12 +87,22 @@ string_identifier!(
     EventId
 );
 string_identifier!(
+    /// Stable identity of a work slot in a provider catalog.
+    ///
+    /// Slot identity is a string slot_id. Use the existing `string_identifier!` newtype pattern: `WorkSlotId`.
+    WorkSlotId
+);
+string_identifier!(
     /// Stable identity of a durable workflow run.
     RunId
 );
 string_identifier!(
     /// Stable identity of an appended context record.
     ContextRecordId
+);
+string_identifier!(
+    /// Stable identity of an engine-authored work-slot invocation.
+    InvocationId
 );
 
 /// Monotonic ordering assigned to successful semantic actions in one run.
@@ -284,13 +294,132 @@ impl Transition {
     }
 }
 
+/// Catalog entry type `WorkSlot` with exactly: `id` (WorkSlotId), `state` (StateId), `event` (EventId). No instruction body.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WorkSlot {
+    pub id: WorkSlotId,
+    pub state: StateId,
+    pub event: EventId,
+}
+
+impl WorkSlot {
+    pub fn new(
+        id: impl Into<WorkSlotId>,
+        state: impl Into<StateId>,
+        event: impl Into<EventId>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            state: state.into(),
+            event: event.into(),
+        }
+    }
+}
+
+/// Binding value type with exactly `{command, args}`. `command: String`. `args: Vec<String>` — the same argv list type loop-integrations already uses for process argument lists (`ProviderDefinition.args` / `ProviderInvocation.args`). `#[serde(deny_unknown_fields)]`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkSlotBinding {
+    pub command: String,
+    pub args: Vec<String>,
+}
+
+impl WorkSlotBinding {
+    pub fn new(command: impl Into<String>, args: Vec<String>) -> Self {
+        Self {
+            command: command.into(),
+            args,
+        }
+    }
+}
+
+/// Waiter-written terminal status. Stored values are ONLY `succeeded` and
+/// `failed`. Overrun is projected by the reader overlay and is NOT stored.
+/// The waiter does not write `overrun`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WaiterWrittenStatus {
+    Succeeded,
+    Failed,
+}
+
+/// Reader-overlay projection of an invocation. Overrun is NOT stored.
+///
+/// Stored waiter-written statuses are ONLY `succeeded` and `failed`.
+/// `running` means the waiter is still alive. Overlay-overrun is terminal
+/// for retry: invoke MUST NOT reject as already-running. If waiter pid is
+/// gone and no terminal status was written, project `failed` (crash residual).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProjectedInvocationStatus {
+    Running,
+    Succeeded,
+    Failed,
+    Overrun,
+}
+
+/// Engine-authored work-slot invocation record.
+///
+/// `status` is the stored waiter-written status: `None` means not yet written.
+/// `waiter_pid` is internal (on the stored running record, not a user CLI flag).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WorkSlotInvocation {
+    pub invocation_id: InvocationId,
+    pub slot_id: WorkSlotId,
+    pub binding: WorkSlotBinding,
+    pub instruction_digest: String,
+    pub subject: String,
+    pub waiter_pid: u32,
+    pub started_at: Timestamp,
+    pub allowed_time_ms: u64,
+    pub status: Option<WaiterWrittenStatus>,
+    pub exit_code: Option<i32>,
+    pub completed_at: Option<Timestamp>,
+}
+
+impl WorkSlotInvocation {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        invocation_id: impl Into<InvocationId>,
+        slot_id: impl Into<WorkSlotId>,
+        binding: WorkSlotBinding,
+        instruction_digest: impl Into<String>,
+        subject: impl Into<String>,
+        waiter_pid: u32,
+        started_at: Timestamp,
+        allowed_time_ms: u64,
+        status: Option<WaiterWrittenStatus>,
+        exit_code: Option<i32>,
+        completed_at: Option<Timestamp>,
+    ) -> Self {
+        Self {
+            invocation_id: invocation_id.into(),
+            slot_id: slot_id.into(),
+            binding,
+            instruction_digest: instruction_digest.into(),
+            subject: subject.into(),
+            waiter_pid,
+            started_at,
+            allowed_time_ms,
+            status,
+            exit_code,
+            completed_at,
+        }
+    }
+}
+
 /// A complete, provider-described workflow graph.
+///
+/// `work_slots` is declared only on describe as a field of the snapshotted
+/// workflow. The catalog is not supplied in caller initial_input.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Workflow {
     pub id: WorkflowId,
     pub initial_state: StateId,
     pub states: Vec<State>,
     pub transitions: Vec<Transition>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub work_slots: Vec<WorkSlot>,
 }
 
 impl Workflow {
@@ -305,7 +434,13 @@ impl Workflow {
             initial_state: initial_state.into(),
             states,
             transitions,
+            work_slots: Vec::new(),
         }
+    }
+
+    pub fn with_work_slots(mut self, slots: Vec<WorkSlot>) -> Self {
+        self.work_slots = slots;
+        self
     }
 }
 
@@ -712,6 +847,13 @@ pub enum HistoryAction {
         outcome: TransitionHistoryOutcome,
     },
     Terminated,
+    InvocationStarted {
+        invocation_id: InvocationId,
+    },
+    InvocationStatusChanged {
+        invocation_id: InvocationId,
+        status: WaiterWrittenStatus,
+    },
 }
 
 /// One ordered semantic history entry.
@@ -767,6 +909,36 @@ impl HistoryEntry {
 
     pub fn terminated(sequence: SemanticSequence, occurred_at: Timestamp) -> Self {
         Self::new(sequence, occurred_at, HistoryAction::Terminated)
+    }
+
+    pub fn invocation_started(
+        sequence: SemanticSequence,
+        occurred_at: Timestamp,
+        invocation_id: impl Into<InvocationId>,
+    ) -> Self {
+        Self::new(
+            sequence,
+            occurred_at,
+            HistoryAction::InvocationStarted {
+                invocation_id: invocation_id.into(),
+            },
+        )
+    }
+
+    pub fn invocation_status_changed(
+        sequence: SemanticSequence,
+        occurred_at: Timestamp,
+        invocation_id: impl Into<InvocationId>,
+        status: WaiterWrittenStatus,
+    ) -> Self {
+        Self::new(
+            sequence,
+            occurred_at,
+            HistoryAction::InvocationStatusChanged {
+                invocation_id: invocation_id.into(),
+                status,
+            },
+        )
     }
 }
 
@@ -845,6 +1017,8 @@ mod tests {
             decoded.provider_association.as_json()["args"],
             json!(["--stable"])
         );
+        let encoded_workflow = serde_json::to_value(&run.workflow).unwrap();
+        assert!(encoded_workflow.get("work_slots").is_none());
     }
 
     #[test]
@@ -910,5 +1084,43 @@ mod tests {
 
         assert!(original.same_lineage(&same_lineage));
         assert!(!original.same_lineage(&different_event));
+    }
+
+    #[test]
+    fn invocation_started_and_invocation_status_changed_history_action_serde_round_trip() {
+        let started = HistoryAction::InvocationStarted {
+            invocation_id: InvocationId::new("inv-1"),
+        };
+        let encoded_started = serde_json::to_value(&started).unwrap();
+        assert_eq!(encoded_started["kind"], "invocation_started");
+        assert_eq!(encoded_started["invocation_id"], "inv-1");
+        assert_eq!(
+            serde_json::from_value::<HistoryAction>(encoded_started).unwrap(),
+            started
+        );
+
+        let changed = HistoryAction::InvocationStatusChanged {
+            invocation_id: InvocationId::new("inv-1"),
+            status: WaiterWrittenStatus::Succeeded,
+        };
+        let encoded_changed = serde_json::to_value(&changed).unwrap();
+        assert_eq!(encoded_changed["kind"], "invocation_status_changed");
+        assert_eq!(encoded_changed["invocation_id"], "inv-1");
+        assert_eq!(encoded_changed["status"], "succeeded");
+        assert_eq!(
+            serde_json::from_value::<HistoryAction>(encoded_changed).unwrap(),
+            changed
+        );
+
+        let failed = HistoryAction::InvocationStatusChanged {
+            invocation_id: InvocationId::new("inv-2"),
+            status: WaiterWrittenStatus::Failed,
+        };
+        let encoded_failed = serde_json::to_value(&failed).unwrap();
+        assert_eq!(encoded_failed["status"], "failed");
+        assert_eq!(
+            serde_json::from_value::<HistoryAction>(encoded_failed).unwrap(),
+            failed
+        );
     }
 }

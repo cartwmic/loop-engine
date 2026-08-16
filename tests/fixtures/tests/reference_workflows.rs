@@ -89,10 +89,43 @@ impl Composition {
     }
 
     fn show(&self, run_id: &str) -> ShowProjection {
+        struct ShowProcess;
+
+        impl core::WorkSlotProcess for ShowProcess {
+            type Handle = ();
+
+            fn waiter_alive(&self, _pid: u32) -> bool {
+                false
+            }
+
+            fn spawn_wait_invocation(
+                &self,
+                _args: core::WaiterSpawnArgs,
+            ) -> std::result::Result<core::StartedWaiter<()>, core::ProcessError> {
+                Err(core::ProcessError::new(
+                    "unsupported",
+                    "show helper does not spawn waiters",
+                ))
+            }
+
+            fn send_envelope_and_detach(
+                &self,
+                _waiter: core::StartedWaiter<()>,
+                _envelope_json: &[u8],
+            ) -> std::result::Result<(), core::ProcessError> {
+                Err(core::ProcessError::new(
+                    "unsupported",
+                    "show helper does not spawn waiters",
+                ))
+            }
+        }
+
         let persistence = self.persistence();
         require_completed(core::execute_show(
             core::ShowRequest::new(RunId::from(run_id)),
             &persistence,
+            &ShowProcess,
+            Timestamp::from_unix_millis(1),
         ))
     }
 

@@ -1,4 +1,4 @@
-use loop_core::{State, Transition, Workflow};
+use loop_core::{State, Transition, WorkSlot, Workflow};
 pub fn workflow() -> Workflow {
     Workflow::new("policy-document", "prepare", vec![
         State::new("prepare", "Prepare", "Draft or revise target document. Frozen mode and policy obligations are available in initial input.", false),
@@ -11,6 +11,9 @@ pub fn workflow() -> Workflow {
         Transition::check_free("deterministic-review", "revise", "prepare"),
         Transition::checked("semantic-review", "passed", "end"),
         Transition::check_free("semantic-review", "revise", "prepare"),
+    ]).with_work_slots(vec![
+        WorkSlot::new("deterministic-review", "deterministic-review", "passed"),
+        WorkSlot::new("semantic-review", "semantic-review", "passed"),
     ])
 }
 
@@ -79,5 +82,26 @@ mod tests {
         );
         assert!(value.states[0].instructions.contains("mode"));
         assert!(value.states[2].instructions.contains("external"));
+    }
+
+    #[test]
+    fn describe_work_slots_are_exactly_the_locked_checked_edges() {
+        let value = workflow();
+        let slots: Vec<(&str, &str, &str)> = value
+            .work_slots
+            .iter()
+            .map(|slot| (slot.id.as_str(), slot.state.as_str(), slot.event.as_str()))
+            .collect();
+        assert_eq!(
+            slots,
+            vec![
+                ("deterministic-review", "deterministic-review", "passed"),
+                ("semantic-review", "semantic-review", "passed"),
+            ]
+        );
+        assert!(value
+            .work_slots
+            .iter()
+            .all(|slot| slot.event.as_str() != "ready" && slot.state.as_str() != "prepare"));
     }
 }

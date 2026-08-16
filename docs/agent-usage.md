@@ -10,7 +10,7 @@ Pass `--json` and parse the single JSON envelope. Pass an explicit `--config` pa
 
 Omit `artifact_root` unless isolating files. Usual start without `artifact_root` stores the allocated absolute path in object `initial_input`. `start` may insert reserved `artifact_root` into object `initial_input` when the caller did not supply a nonempty path; object schemas that deny unknown keys must accept that field to remain evaluable; the engine does not skip injection, strip unknown keys, or classify providers. Pass a nonempty `artifact_root` only to isolate files to a caller-chosen absolute existing directory. `list` JSON includes optional `provider` (the start alias) and `artifact_root`; `show` and `history` JSON keys are unchanged.
 
-`--timeout-ms MILLISECONDS` is global and defaults to 30000 ms for each provider `describe` or `evaluate` call. Use an explicit timeout when provider latency may exceed that default.
+`--timeout-ms MILLISECONDS` is global and defaults to 30000 ms for each provider `describe` or `evaluate` call, and for `invoke` as the invocation's `allowed_time_ms`. Use an explicit timeout when provider latency or bound-worker runtime may exceed that default.
 
 Provider TOML uses an exact, case-sensitive alias and a command invocation:
 
@@ -24,7 +24,7 @@ args = []
 
 ## Command skeleton
 
-Use the canonical executable name and these seven primary forms:
+Use the canonical executable name and these eight primary forms:
 
 ```text
 loop-engine [--database DB] [--config CONFIG] [--json] [--timeout-ms MILLISECONDS] start [--id RUN_ID] PROVIDER INITIAL_JSON [LABEL]
@@ -34,6 +34,7 @@ loop-engine [--database DB] [--json] append [--record-id RECORD_ID] RUN_ID KIND 
 loop-engine [--database DB] [--json] event RUN_ID EVENT_ID
 loop-engine [--database DB] [--json] history RUN_ID
 loop-engine [--database DB] [--json] terminate RUN_ID
+loop-engine [--database DB] [--json] [--timeout-ms MILLISECONDS] invoke RUN_ID SLOT_ID
 ```
 
 Usual-case `start` omits `--database` and `artifact_root`:
@@ -45,12 +46,24 @@ loop-engine --json --config /absolute/path/to/providers.toml \
 
 Global options may appear before or after the operation; the timeout option is shown once above to keep the skeleton brief. `start` resolves the provider alias and returns the run ID in `result.run.id`; supply `--id` when the orchestrator owns run identity. Supply `--record-id` for an orchestrator-owned context-record identity. `append` accepts both `--record-id VALUE` and `--record-id=VALUE`; it accepts opaque `KIND` and `DATA_JSON` and does not change state.
 
+## Work-slot delegation
+
+Object `initial_input` may include reserved `work_slot_bindings`: a sparse map from catalog slot ID to `{command, args}`. Omit the key or pass `{}` for no bindings. `start` rejects unknown slot IDs, unknown binding fields, and non-object values. Bindings freeze with the run.
+
+`show` projects `work_slots` (catalog snapshot: id, state, event; no instruction body) and `work_slot_invocations` (including overlay status `running` | `succeeded` | `failed` | `overrun`). When the current state is a bound slot, `current_state_instructions` names the slot ID plus the frozen CLI binding `{command, args}` and that the legal start is `loop-engine invoke RUN_ID SLOT_ID`; it omits the stored work body. Unbound slots keep the stored instruction body and the driver-performed path.
+
+Start bound work with `invoke RUN_ID SLOT_ID`. It is rejected for an unknown slot, an unbound slot, or an overlay-`running` invocation. Overlay `overrun`, `failed`, and `succeeded` are not already-running. Overlay `overrun` is terminal for retry: invoke the same slot again. `event` and provider `evaluate` never wait on a worker.
+
+The bound worker's stdin is exactly one JSON object with `run_id`, `slot_id`, `artifact_root`, and `instruction_body`. The packet is not on argv, environment, or a temp file. Hidden `wait-invocation` is parent of that worker, waitpids it, and writes terminal `succeeded`/`failed`; it is not a user command and not a daemon. A vanished waiter with no terminal status is overlay-`failed`.
+
+A bound checked edge advances only after overlay `succeeded` matching slot ID, instruction digest, and the current slot-visit subject. Overlay `running`/`failed`/`overrun` do not satisfy. Check-free edges are ungated.
+
 ## Canonical loop
 
 For an active run, repeat this exact handoff loop:
 
-1. Run `show`; inspect `current_state`, its title and instructions, immutable `initial_input`, ordered `context`, `requestable_events`, and `latest_evaluations` (including latest checked-transition denial feedback).
-2. Perform the instructed work externally. Do not expect the engine to edit the repository, document, or other external work.
+1. Run `show`; inspect `current_state`, its title and instructions, immutable `initial_input` (including `work_slot_bindings` when present), `work_slots`, `work_slot_invocations`, ordered `context`, `requestable_events`, and `latest_evaluations` (including latest checked-transition denial feedback).
+2. If the current state is a bound slot, `invoke` that slot and poll `show` until overlay status is `succeeded`, `failed`, or `overrun`; do not perform the stored work body. On overlay `overrun`, `invoke` the same slot again. Otherwise perform the instructed work externally. Do not expect the engine to edit the repository, document, or other external work.
 3. Append durable context for useful evidence, findings, decisions, or steering. Context is opaque to Loop Engine core, not necessarily to the provider or workflow; follow provider/state conventions for `kind` and `data`. Core assigns no truth, provenance, approval, or supersession meaning. Every checked evaluation receives immutable `initial_input` and all accumulated context in stable append order.
 4. Select one event from `requestable_events` and request exactly that `event`. Append any final handoff context before requesting an event that enters a final state.
 5. Inspect the JSON status, then run `show` again before selecting another event. On `rejected`, follow its feedback and continue work; on `error`, do not assume anything advanced and re-read `show` (use `history` when auditing).
@@ -66,7 +79,7 @@ With `--json`, an operation returns one envelope. A successful operation include
 {"status":"invalid-invocation","code":"invalid-invocation","message":"missing required event ID"}
 ```
 
-Exit codes map to `0` completed, `10` rejected, `20` error, and `2` invalid invocation. Parse the JSON even on a nonzero exit. Treat only `completed` as operation success. Never infer state advancement from `rejected` or `error`; re-run `show` against the same database. A checked-transition provider denial is `rejected` and exposes durable actionable feedback. Provider failure or `unsupported` is `error` and does not authorize progression. `history` includes checked-transition denials, not every read, invocation, provider failure, or diagnostic; other rejections, such as unavailable events or terminal mutations, are absent.
+Exit codes map to `0` completed, `10` rejected, `20` error, and `2` invalid invocation. Parse the JSON even on a nonzero exit. Treat only `completed` as operation success. Never infer state advancement from `rejected` or `error`; re-run `show` against the same database. A checked-transition provider denial is `rejected` and exposes durable actionable feedback. Provider failure or `unsupported` is `error` and does not authorize progression. `history` includes checked-transition denials and work-slot invocation started/status-changed actions, not every read, provider failure, overlay `overrun`, or diagnostic; other rejections, such as unavailable events or terminal mutations, are absent.
 
 ## Handoff and provider boundary
 
@@ -76,13 +89,14 @@ At `start`, the provider alias resolves once to its configured `command` and ord
 
 ## Agent rules
 
-- Treat `initial_input` as immutable run configuration; never attempt to replace it.
+- One logical mutating actor per run: serialize `append`, `event`, `invoke`, and `terminate` calls; never race them from parallel workers. Concurrent reads are fine. Context appended during an in-flight checked evaluation does not invalidate or reach that evaluation.
+- Treat `initial_input` as immutable run configuration; never attempt to replace it. Frozen `work_slot_bindings` are part of that input.
 - Treat context `kind` and `data` as opaque to Loop Engine core, but follow provider/state conventions for them; records are immutable and append-only.
 - Use unique stable `--id` and `--record-id` values whenever an orchestrator controls identity. Append accepts both `--record-id VALUE` and `--record-id=VALUE`; supplied IDs remain unchanged in append results, `show` context, and durable `history`.
 - Request only an event shown for the current state, and request one at a time.
 - Follow rejection feedback; append corrected evidence or steering before retrying the shown event.
 - Do not progress final or terminated runs; `show` exposes no requestable events there.
-- Use `history` for a semantic audit of creation, appends, transitions, checked-transition denials, and termination; other rejections (such as unavailable events or terminal mutations) are absent, and history is not an exhaustive execution trace.
+- Use `history` for a semantic audit of creation, appends, transitions, checked-transition denials, work-slot invocation started/status-changed actions, and termination; other rejections (such as unavailable events or terminal mutations) are absent, overlay `overrun` is not a history action, and history is not an exhaustive execution trace.
 
 ## Executable proof boundaries
 

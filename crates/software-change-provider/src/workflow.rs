@@ -1,6 +1,6 @@
 //! Static software-change workflow topology and authoring guidance.
 
-use loop_core::{State, Transition, Workflow};
+use loop_core::{State, Transition, WorkSlot, Workflow};
 
 /// Return fixed software-change topology and input-independent guidance.
 ///
@@ -98,4 +98,18 @@ pub(crate) fn software_change_workflow() -> Workflow {
             Transition::check_free("validation", "revise-intent", "explore"),
         ],
     )
+    .with_work_slots(vec![
+        WorkSlot::new("explore-intent", "explore", "intent-ready"),
+        WorkSlot::new("design-draft", "design", "design-ready"),
+        WorkSlot::new("design-review", "design-review", "approved"),
+        WorkSlot::new("plan-draft", "plan", "plan-ready"),
+        WorkSlot::new("plan-review", "plan-review", "approved"),
+        WorkSlot::new("implement", "implement", "implementation-ready"),
+        WorkSlot::new(
+            "implementation-review",
+            "implementation-review",
+            "approved",
+        ),
+        WorkSlot::new("validate", "validation", "passed"),
+    ])
 }

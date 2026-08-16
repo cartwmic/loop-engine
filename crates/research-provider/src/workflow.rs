@@ -1,6 +1,6 @@
 //! Static research workflow topology and authoring guidance.
 
-use loop_core::{State, Transition, Workflow};
+use loop_core::{State, Transition, WorkSlot, Workflow};
 
 /// Return fixed research topology and input-independent guidance.
 ///
@@ -55,6 +55,12 @@ pub(crate) fn research_workflow() -> Workflow {
             Transition::check_free("synthesize", "revise-brief", "scope"),
         ],
     )
+    .with_work_slots(vec![
+        WorkSlot::new("scope", "scope", "scoped"),
+        WorkSlot::new("gather", "gather", "gathered"),
+        WorkSlot::new("verify", "verify", "verified"),
+        WorkSlot::new("synthesize", "synthesize", "completed"),
+    ])
 }
 
 #[cfg(test)]

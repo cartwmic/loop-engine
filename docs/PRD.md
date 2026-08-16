@@ -127,6 +127,16 @@ target state
 checked or check-free
 ```
 
+A workflow may also declare **work slots**: provider-named jobs attached to checked edges. The catalog snapshot consumed by the engine is:
+
+```text
+slot ID
+state
+event
+```
+
+Catalog entries do not include instruction bodies. A slot ID is unique within a workflow and names an existing state plus a checked event from that state. Unbound slots (cataloged but absent from frozen `work_slot_bindings`) do not change progression rules.
+
 For a given state, an event ID identifies at most one transition.
 
 Workflow validation establishes **structural interpretability**, not workflow quality. A valid workflow definition has unique state IDs; its initial state names a defined state; every transition source and target names a defined state; each source-state/event pair selects at most one transition; and final states have no outgoing transitions. Cycles, unreachable states, non-final sink states, and workflows with no final state are permitted. v0.1 does not perform reachability, eventual-termination, graph-quality, or workflow-specific input/admission analysis as part of workflow-definition validation.
@@ -240,7 +250,11 @@ context-record append
 defined transition committed
 defined checked transition denied
 explicit termination
+invocation started {invocation_id}
+invocation status changed {invocation_id, status}
 ```
+
+Invocation status in history is waiter-written `succeeded` or `failed` only. Overlay `overrun` is a reader projection on `show` (`work_slot_invocations.status`) and is not a history action. `invoke` rejections (unknown slot, unbound slot, already-running) and waiter/worker spawn failures remain operation results, not semantic history.
 
 A transition history entry exposes the relevant:
 
@@ -314,7 +328,7 @@ The following are product invariants:
 
 ## 6. User-Facing Operations
 
-The semantic v0.1 surface contains at most seven primary operations. Exact CLI spelling remains evolvable during v0.x.
+The semantic v0.1 surface contains eight primary operations. Exact CLI spelling remains evolvable during v0.x.
 
 | Operation | Purpose |
 |---|---|
@@ -325,6 +339,7 @@ The semantic v0.1 surface contains at most seven primary operations. Exact CLI s
 | `event` | Request workflow progress |
 | `history` | Inspect semantic run history |
 | `terminate` | Explicitly close an active run |
+| `invoke` | Start a bound work-slot worker |
 
 ### 6.1 Start
 
@@ -348,6 +363,8 @@ Incomplete, ambiguous, or improvable work belongs in the workflow's initial stat
 
 If the initial state is final, the run is created final.
 
+When object initial input contains `work_slot_bindings`, the engine freezes a map from slot ID to `{command, args}`. Omitted key and `{}` both mean no bindings. Start rejects an unknown slot ID (not in the provider `describe` catalog snapshot for this workflow), unknown fields on a binding object, and non-object values. If the initial state is a work slot, the engine mints a **slot-visit** subject for that visit via set-current-subject.
+
 ### 6.2 Show
 
 `show` is the primary resumption and actor interface.
@@ -365,7 +382,11 @@ all context records in durable append order
 requestable events
 each event's target and whether it is checked
 latest durable evaluation for each checked transition that has been evaluated
+work_slots (catalog snapshot: id, state, event; no instruction body)
+work_slot_invocations (invocation_id, slot_id, binding snapshot, instruction_digest, subject, overlay status, started_at, allowed_time_ms, optional exit_code, optional completed_at)
 ```
+
+`work_slot_invocations.status` is the reader overlay result `running` | `succeeded` | `failed` | `overrun`, not a raw waiter-written row when overlay applies. `waiter_pid` is internal and is not in `show`. When the current state is a bound slot, `current_state_instructions` names the slot ID plus the frozen CLI binding `{command, args}` and that the legal start is `loop-engine invoke RUN_ID SLOT_ID`; it omits the stored work body. Do not redact to only the invoke CLI. Unbound current states keep the stored instruction body.
 
 The projection is the **chronologically latest durable evaluation** for each exact checked transition. An `allow` supersedes any earlier `deny`, and a later `deny` likewise supersedes an earlier `allow`. When the latest result is `deny`, its actionable feedback is exposed.
 
@@ -389,7 +410,8 @@ Appending:
 - creates one semantic history entry;
 - preserves stable append ordering;
 - does not change workflow state;
-- does not invoke the provider.
+- does not invoke the provider;
+- cannot create or alter engine-authored invocation records.
 
 Only active runs accept context records.
 
@@ -409,13 +431,14 @@ For a matching transition, the engine:
 
 1. loads the authoritative active run;
 2. resolves the exact transition from the stored workflow;
-3. for a check-free transition, atomically commits the target state and one aggregate history entry without invoking the provider;
-4. for a checked transition, constructs the evaluation request and asks the provider to evaluate that exact transition;
-5. after the provider returns `allow` or `deny`, verifies that the run is still active and remains in the source state against which evaluation began;
-6. if that state/lifecycle check fails, treats the evaluation as stale, returns an error, and records no semantic history or evaluation lineage from the stale result;
-7. on a non-stale `allow`, atomically commits the target state and one aggregate history entry;
-8. on a non-stale `deny`, preserves state and atomically records one aggregate denied-transition history entry containing the feedback;
-9. on `unsupported` or operational failure, preserves state and returns an error without adding semantic run history.
+3. if the edge is a **bound** work slot (present in frozen `work_slot_bindings`), requires an overlay-`succeeded` invocation matching slot ID, `instruction_digest` (SHA-256 of the stored instruction body UTF-8 bytes, lowercase hex), and the current **slot-visit** subject from get-current-subject; overlay `running`, `failed`, or `overrun` do not allow the edge; this gate runs before provider `evaluate` and never waits; check-free edges are ungated;
+4. for a check-free transition, atomically commits the target state and one aggregate history entry without invoking the provider;
+5. for a checked transition, constructs the evaluation request and asks the provider to evaluate that exact transition;
+6. after the provider returns `allow` or `deny`, verifies that the run is still active and remains in the source state against which evaluation began;
+7. if that state/lifecycle check fails, treats the evaluation as stale, returns an error, and records no semantic history or evaluation lineage from the stale result;
+8. on a non-stale `allow`, atomically commits the target state and one aggregate history entry, and mints a new slot-visit subject via set-current-subject when the target is a work slot (replace);
+9. on a non-stale `deny`, preserves state and atomically records one aggregate denied-transition history entry containing the feedback;
+10. on `unsupported` or operational failure, preserves state and returns an error without adding semantic run history.
 
 v0.1 does **not** invalidate an in-flight evaluation merely because context records or evaluation history changed concurrently. The supported usage model assumes one logical mutating actor.
 
@@ -423,7 +446,7 @@ v0.1 does **not** invalidate an in-flight evaluation merely because context reco
 
 `history` returns the ordered semantic history of the run.
 
-It exists for understanding progression, prior review decisions, context additions, and termination.
+It exists for understanding progression, prior review decisions, context additions, termination, and work-slot invocation started/status-changed actions. Overlay `overrun` is not a history action.
 
 It is not required for normal continuation and is not an operational trace.
 
@@ -451,6 +474,24 @@ A terminal `terminate` request is rejected and creates no semantic history.
 
 A terminated run cannot reopen in v0.1.
 
+### 6.8 Invoke
+
+Conceptually:
+
+```text
+loop-engine [--database DB] [--json] [--timeout-ms MS] invoke RUN_ID SLOT_ID
+```
+
+`invoke` starts bound work-slot work. It is rejected for an unknown slot ID, an unbound slot (no frozen `work_slot_bindings` entry), or an overlay-`running` invocation (live waiter). Overlay `overrun`, `failed`, and `succeeded` are not already-running; overlay-`overrun` is terminal for retry and a later `invoke` of the same slot is accepted.
+
+On accept, the engine snapshots the frozen `{command, args}` binding, the stored instruction body, `instruction_digest`, and the current slot-visit subject (get-current-subject only; `invoke` does not mint). It creates a running engine-authored invocation record. `append` cannot write that table. `allowed_time_ms` equals the invoke/provider timeout (`--timeout-ms`, or the same timeout the provider path already uses). The waiter is the only writer of terminal `succeeded`/`failed` plus `exit_code`.
+
+The same `loop-engine` binary then starts hidden `wait-invocation` as a child `invoke` does not waitpid. That waiter is parent of the bound worker: it spawns `{command, args}`, waitpids the worker, writes terminal `succeeded` or `failed` plus `exit_code`, then exits. It is not a daemon and not a sibling of the worker. A vanished waiter with no terminal status is overlay-`failed`.
+
+The bound worker's stdin is exactly one JSON object with `run_id`, `slot_id`, `artifact_root`, and `instruction_body`. The packet is not passed on argv, environment, or a temp file. Waiter stdin is not the worker packet. Binding `{command, args}` remains the worker argv.
+
+Later `show`, `history`, `event`, and `invoke` read stored records. They may observe waiter liveness as `running` and apply recorded `allowed_time_ms` as `overrun`. They do not waitpid the original worker.
+
 ## 7. Operation Outcomes
 
 Every dispatched semantic operation has one of three outcomes.
@@ -469,6 +510,8 @@ Examples:
 no transition exists for the requested event from the current state
 provider denied a checked transition
 mutation requested against a terminal run
+invoke of an unknown, unbound, or overlay-running slot
+bound checked event without overlay-succeeded invocation
 ```
 
 ### `error`
@@ -511,9 +554,10 @@ workflow ID
 initial state
 states
 transitions
+work_slots (optional catalog: id, state, event)
 ```
 
-The engine validates the definition before creating a run according to the structural-validity requirements in Section 4.1.
+The engine validates the definition before creating a run according to the structural-validity requirements in Section 4.1. Work-slot catalogs are snapshotted with the workflow; instruction bodies stay on states, not on catalog entries.
 
 In v0.1, workflow topology is **run-input-independent**: an individual run's initial input or context does not change the workflow definition produced for its provider association. Run-specific information influences the work and provider evaluation, not the workflow topology returned by `describe`.
 
@@ -695,6 +739,19 @@ validation
 end [final]
 ```
 
+Checked-edge work slots for this workflow:
+
+```text
+explore-intent (explore, intent-ready)
+design-draft (design, design-ready)
+design-review (design-review, approved)
+plan-draft (plan, plan-ready)
+plan-review (plan-review, approved)
+implement (implement, implementation-ready)
+implementation-review (implementation-review, approved)
+validate (validation, passed)
+```
+
 The provider may inspect repository state, documents, tests, reviews, or other software-specific information. Core understands none of those concepts.
 
 Review-state routing is explicit in this reference graph: external review operators select the phase owning an accepted material defect through `revise-intent`, `revise-design`, or `revise-plan`; validation-report-local defects stay in validation: edit and recheck `validation-report.json`, then retry checked `passed`; from validation, nearest `revise` is only for implementation-owned defects. Candidate reviewer output is triaged before append or artifact mutation, and disputed candidates use focused external reconsideration. A late finding requires current evidence, violated in-scope obligation, concrete consequence, validation gap, and provenance as newly exposed, fix-introduced, or previously overlooked; prior visibility or reviewer overlook does not waive known materiality. Comprehensive-first review still bars drip-feeding, and unrelated reopening must meet independent scope/materiality burden. A default three-round circuit breaker changes review method only and never waives a known defect. These are provider/operator conventions, not Loop Engine core policy or a review subsystem.
@@ -799,6 +856,15 @@ semantic-review
 end [final]
 ```
 
+Checked-edge work slots for this workflow:
+
+```text
+deterministic-review (deterministic-review, passed)
+semantic-review (semantic-review, passed)
+```
+
+There is no work slot for `prepare` → `ready`; that edge is check-free.
+
 `prepare` instructs the actor to draft the target or revise the existing target.
 
 `deterministic-review` validates mechanically testable policies such as:
@@ -869,6 +935,15 @@ synthesize
 end [final]
 ```
 
+Checked-edge work slots for this workflow:
+
+```text
+scope (scope, scoped)
+gather (gather, gathered)
+verify (verify, verified)
+synthesize (synthesize, completed)
+```
+
 Provider evaluation validates artifact schemas and revision links for `brief.json`, `sources.json`, `verification.json`, and `report.json`, then aggregates external `review-evidence` at verify and synthesize. It does not fetch the web, invoke models, or judge semantic truth. Search, fetch, and writing stay with callers.
 
 In the shipped standard profile, checked `verified` requires independent evidence for `claim-grounded` and `adversarial`; checked `completed` requires independent evidence for `cited-conclusion` and `scope-faithful`. Checked `scoped` and `gathered` are schema and revision-link only.
@@ -885,6 +960,7 @@ A generic agent integration should normally require only:
 show
 append
 event
+invoke
 ```
 
 Conceptually:
@@ -893,7 +969,13 @@ Conceptually:
 context = show(run)
 
 while context.lifecycle == active:
-    perform current state's instructions
+    if the current state is a bound work slot:
+        invoke the named slot
+        poll show until work_slot_invocations overlay status is succeeded,
+          failed, or overrun; do not perform the stored work body
+        on overlay overrun, invoke the same slot again
+    else:
+        perform current state's instructions
     append durable context when useful
     request an available event
 
@@ -902,6 +984,8 @@ while context.lifecycle == active:
 
     context = show(run)
 ```
+
+`event` and provider `evaluate` never wait on a worker. Hidden `wait-invocation` is not a harness command.
 
 A harness may retain additional private conversational context, but correct workflow continuation must not depend on it.
 
@@ -994,7 +1078,7 @@ v0.1 is complete when the following are demonstrated end to end.
 
 ### 14.7 Research Workflow
 
-- An operator can start a research run through Loop Engine using `start` / `show` / `append` / `event`.
+- An operator can start a research run through Loop Engine using `start` / `show` / `append` / `event`, and `invoke` when a slot is bound.
 - Topology covers scope, gather, adversarial verify, and synthesize.
 - Checked transitions refuse until artifacts satisfy declared structure and independent evidence satisfies declared review obligations at verify and synthesize.
 - Local blackbox tests exercise at least one checked denial and a successful completion.
@@ -1004,10 +1088,25 @@ v0.1 is complete when the following are demonstrated end to end.
 
 ### 14.8 Operational Simplicity
 
-- Local operation requires no daemon or external infrastructure beyond Loop Engine's local durable state and configured provider integration.
-- The primary caller surface remains seven or fewer operations.
+- Local operation requires no daemon or external infrastructure beyond Loop Engine's local durable state and configured provider integration. Hidden `wait-invocation` is a short-lived per-invocation waiter, not a background service.
+- The primary caller surface remains eight operations (`start`, `list`, `show`, `append`, `event`, `history`, `terminate`, `invoke`).
 - The semantic provider interface remains `describe` + `evaluate`.
 - Provider correctness does not depend on retained in-memory state from earlier invocations.
+
+### 14.9 Work-Slot Delegation
+
+- A caller can inspect the frozen slot catalog (`work_slots`) and sparse `work_slot_bindings` from `show` / `initial_input` before work proceeds.
+- Omitted `work_slot_bindings` and `{}` both mean no bindings; unknown slot IDs, unknown binding fields, and non-object values are rejected at `start`.
+- When a slot is bound, `current_state_instructions` names the slot ID plus the frozen CLI binding `{command, args}` and that the legal start is `loop-engine invoke RUN_ID SLOT_ID`; it omits the stored work body.
+- `invoke` is the only legal start for bound work. The bound worker's stdin is exactly one JSON object with `run_id`, `slot_id`, `artifact_root`, and `instruction_body` (not argv, environment, or a temp file). Waiter stdin is not the worker packet.
+- Hidden `wait-invocation` is parent of the bound worker, waitpids it, writes terminal `succeeded`/`failed` plus `exit_code`, then exits. It is not a daemon. A vanished waiter with no terminal status is overlay-`failed`.
+- Invocation records are engine-authored; `append` cannot write them. History records `invocation started {invocation_id}` and `invocation status changed {invocation_id, status}` for waiter-written `succeeded`/`failed` only.
+- `work_slot_invocations.status` is the reader overlay `running` | `succeeded` | `failed` | `overrun`. Overlay `overrun` is not a history action. `waiter_pid` is not in `show`.
+- A bound checked edge is refused unless overlay status is `succeeded` matching slot ID, `instruction_digest`, and the current slot-visit subject. Overlay `running`, `failed`, and `overrun` do not satisfy. Check-free edges are ungated. `evaluate` never waits.
+- Overlay `overrun` is terminal for retry: a later `invoke` of the same slot is not already-running. Failed and overrun records remain inspectable and never count as success.
+- When a slot has no binding, the driver may perform that job and no invocation record is required. When the binding set is empty, a run can still complete with the driver performing the work.
+- Policy-document has no work slot for `prepare` → `ready`. Software-change, policy-document, and research share the same binding, invoke, overlay, and gate contract; each only declares its catalog.
+- Slot-visit subjects are minted via set-current-subject on entry into a slot state, including `start` when the initial state is a slot. `invoke` snapshots via get-current-subject and does not mint. `instruction_digest` is SHA-256 of the stored instruction body UTF-8 bytes, lowercase hex.
 
 ## 15. Complexity Guardrails
 
@@ -1015,7 +1114,7 @@ v0.1 deliberately targets:
 
 ```text
 provider semantic operations: 2
-primary caller operations:    ≤ 7
+primary caller operations:    8
 active states per run:        1
 background services:          0
 automatic retries:            0

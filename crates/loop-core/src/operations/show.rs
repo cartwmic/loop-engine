@@ -7,12 +7,16 @@
 
 use super::persistence_error;
 use crate::{
-    DurableEvaluation, EventId, Lifecycle, OperationOutcome, Persistence, RunId, ShowData, StateId,
-    Transition, TransitionKind, WorkflowId,
+    project_invocation_status, DurableEvaluation, EventId, InvocationId, Lifecycle,
+    OperationOutcome, Persistence, ProjectedInvocationStatus, Run, RunId, ShowData, StateId,
+    Timestamp, Transition, TransitionKind, WorkSlot, WorkSlotBinding, WorkSlotId,
+    WorkSlotInvocation, WorkSlotProcess, WorkflowId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
+
+const WORK_SLOT_BINDINGS_KEY: &str = "work_slot_bindings";
 
 /// Caller-supplied run identity for a `show` read.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -88,6 +92,38 @@ impl fmt::Display for ProjectionError {
 
 impl std::error::Error for ProjectionError {}
 
+/// Overlay view of one work-slot invocation.  `waiter_pid` is never included.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WorkSlotInvocationView {
+    pub invocation_id: InvocationId,
+    pub slot_id: WorkSlotId,
+    pub binding: WorkSlotBinding,
+    pub instruction_digest: String,
+    pub subject: String,
+    pub status: ProjectedInvocationStatus,
+    pub started_at: Timestamp,
+    pub allowed_time_ms: u64,
+    pub exit_code: Option<i32>,
+    pub completed_at: Option<Timestamp>,
+}
+
+impl WorkSlotInvocationView {
+    fn from_record(record: &WorkSlotInvocation, now: Timestamp, waiter_alive: bool) -> Self {
+        Self {
+            invocation_id: record.invocation_id.clone(),
+            slot_id: record.slot_id.clone(),
+            binding: record.binding.clone(),
+            instruction_digest: record.instruction_digest.clone(),
+            subject: record.subject.clone(),
+            status: project_invocation_status(record, now, waiter_alive),
+            started_at: record.started_at,
+            allowed_time_ms: record.allowed_time_ms,
+            exit_code: record.exit_code,
+            completed_at: record.completed_at,
+        }
+    }
+}
+
 /// Complete provider-free continuation projection returned by `show`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ShowProjection {
@@ -106,6 +142,10 @@ pub struct ShowProjection {
     /// sequence.  This intentionally includes transitions that are no longer
     /// requestable from the current state.
     pub latest_evaluations: Vec<DurableEvaluation>,
+    /// Catalog snapshot from `run.workflow.work_slots` (`id`, `state`, `event`).
+    pub work_slots: Vec<WorkSlot>,
+    /// Overlay-projected invocations.  Never includes `waiter_pid`.
+    pub work_slot_invocations: Vec<WorkSlotInvocationView>,
 }
 
 impl ShowProjection {
@@ -156,8 +196,54 @@ pub fn latest_evaluations(evaluations: &[DurableEvaluation]) -> Vec<DurableEvalu
     latest
 }
 
+fn bound_slot_for_current_state(run: &Run) -> Option<(&WorkSlot, WorkSlotBinding)> {
+    let Value::Object(map) = &run.initial_input else {
+        return None;
+    };
+    let Some(Value::Object(bindings)) = map.get(WORK_SLOT_BINDINGS_KEY) else {
+        return None;
+    };
+    for slot in &run.workflow.work_slots {
+        if slot.state != run.current_state {
+            continue;
+        }
+        let Some(value) = bindings.get(slot.id.as_str()) else {
+            continue;
+        };
+        let binding = serde_json::from_value::<WorkSlotBinding>(value.clone())
+            .unwrap_or_else(|_| WorkSlotBinding::new(String::new(), Vec::new()));
+        return Some((slot, binding));
+    }
+    None
+}
+
+fn current_state_instructions_for(run: &Run, stored: &str) -> String {
+    match bound_slot_for_current_state(run) {
+        Some((slot, binding)) => {
+            let args = serde_json::to_string(&binding.args).unwrap_or_else(|_| "[]".to_owned());
+            format!(
+                "Bound work slot `{slot_id}` is configured. Frozen worker CLI: command={command} args={args}. Legal start: loop-engine invoke {run_id} {slot_id}.",
+                slot_id = slot.id,
+                command = binding.command,
+                run_id = run.id,
+            )
+        }
+        None => stored.to_owned(),
+    }
+}
+
 /// Project durable show data into the complete continuation view.
 pub fn project(data: ShowData) -> std::result::Result<ShowProjection, ProjectionError> {
+    project_with_invocations(data, &[], Timestamp::from_unix_millis(0), |_| false)
+}
+
+/// Project show data with work-slot invocation overlay.
+pub fn project_with_invocations(
+    data: ShowData,
+    invocations: &[WorkSlotInvocation],
+    now: Timestamp,
+    waiter_alive: impl Fn(u32) -> bool,
+) -> std::result::Result<ShowProjection, ProjectionError> {
     let current_state = data
         .run
         .workflow
@@ -183,6 +269,16 @@ pub fn project(data: ShowData) -> std::result::Result<ShowProjection, Projection
             .collect()
     };
 
+    let current_state_instructions =
+        current_state_instructions_for(&data.run, &current_state.instructions);
+    let work_slots = data.run.workflow.work_slots.clone();
+    let work_slot_invocations = invocations
+        .iter()
+        .map(|record| {
+            WorkSlotInvocationView::from_record(record, now, waiter_alive(record.waiter_pid))
+        })
+        .collect();
+
     Ok(ShowProjection {
         run_id: data.run.id,
         label: data.run.label,
@@ -190,45 +286,61 @@ pub fn project(data: ShowData) -> std::result::Result<ShowProjection, Projection
         lifecycle: data.run.lifecycle,
         current_state: data.run.current_state,
         current_state_title: current_state.title.clone(),
-        current_state_instructions: current_state.instructions.clone(),
+        current_state_instructions,
         initial_input: data.run.initial_input,
         context,
         requestable_events,
         latest_evaluations: latest_evaluations(&data.checked_evaluations),
+        work_slots,
+        work_slot_invocations,
     })
 }
 
-/// Execute a provider-free `show` read.
-pub fn execute<P>(request: Request, persistence: &P) -> OperationOutcome<ShowProjection>
+/// Execute a provider-free `show` read, overlaying work-slot invocations.
+pub fn execute<P, Proc>(
+    request: Request,
+    persistence: &P,
+    process: &Proc,
+    now: Timestamp,
+) -> OperationOutcome<ShowProjection>
 where
     P: Persistence + ?Sized,
+    Proc: WorkSlotProcess + ?Sized,
 {
-    match persistence.load_show_data(&request.run_id) {
-        Ok(data) => match project(data) {
-            Ok(projection) => OperationOutcome::completed(projection),
-            Err(error) => OperationOutcome::error(error.code(), error.to_string()),
-        },
-        Err(error) => persistence_error(error),
+    let data = match persistence.load_show_data(&request.run_id) {
+        Ok(data) => data,
+        Err(error) => return persistence_error(error),
+    };
+    let invocations = match persistence.load_work_slot_invocations(&request.run_id) {
+        Ok(invocations) => invocations,
+        Err(error) => return persistence_error(error),
+    };
+    match project_with_invocations(data, &invocations, now, |pid| process.waiter_alive(pid)) {
+        Ok(projection) => OperationOutcome::completed(projection),
+        Err(error) => OperationOutcome::error(error.code(), error.to_string()),
     }
 }
 
 /// Execute `show` with persistence first.
-pub fn execute_with_persistence<P>(
+pub fn execute_with_persistence<P, Proc>(
     persistence: &P,
     request: Request,
+    process: &Proc,
+    now: Timestamp,
 ) -> OperationOutcome<ShowProjection>
 where
     P: Persistence + ?Sized,
+    Proc: WorkSlotProcess + ?Sized,
 {
-    execute(request, persistence)
+    execute(request, persistence, process, now)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        ContextRecord, ControlRevision, EvaluationFeedback, ProviderAssociation, Run,
-        SemanticSequence, State, Timestamp, TransitionKind, Workflow,
+        ContextRecord, ControlRevision, EvaluationFeedback, ProviderAssociation, SemanticSequence,
+        State, Timestamp, TransitionKind, WaiterWrittenStatus, Workflow,
     };
     use serde_json::json;
 
@@ -253,12 +365,26 @@ mod tests {
     }
 
     fn run(current_state: &str, lifecycle: Lifecycle) -> Run {
+        run_custom(
+            current_state,
+            lifecycle,
+            workflow(),
+            json!({"objective": "ship safely"}),
+        )
+    }
+
+    fn run_custom(
+        current_state: &str,
+        lifecycle: Lifecycle,
+        workflow: Workflow,
+        initial_input: Value,
+    ) -> Run {
         Run::new(
             "run-1",
             Some("show me".to_owned()),
-            workflow(),
+            workflow,
             ProviderAssociation::new(json!({"provider": "fake"})),
-            json!({"objective": "ship safely"}),
+            initial_input,
             current_state,
             lifecycle,
             ControlRevision::from_u64(3),
@@ -288,6 +414,52 @@ mod tests {
             context,
             checked_evaluations,
         }
+    }
+
+    fn slot_workflow(instructions: &str) -> Workflow {
+        Workflow::new(
+            "workflow",
+            "start",
+            vec![
+                State::new("start", "Start", instructions, false),
+                State::new("done", "Done", "Finished", true),
+            ],
+            vec![Transition::checked("start", "submit", "done")],
+        )
+        .with_work_slots(vec![WorkSlot::new("slot-1", "start", "submit")])
+    }
+
+    fn bound_input() -> Value {
+        json!({
+            "objective": "ship safely",
+            "work_slot_bindings": {
+                "slot-1": {"command": "worker", "args": ["--flag", "value"]}
+            }
+        })
+    }
+
+    fn sample_invocation(
+        invocation_id: &str,
+        waiter_pid: u32,
+        started_at: i64,
+        allowed_time_ms: u64,
+        status: Option<WaiterWrittenStatus>,
+        exit_code: Option<i32>,
+        completed_at: Option<i64>,
+    ) -> WorkSlotInvocation {
+        WorkSlotInvocation::new(
+            invocation_id,
+            "slot-1",
+            WorkSlotBinding::new("worker", vec!["--flag".to_owned(), "value".to_owned()]),
+            "abc123digest",
+            "subject-1",
+            waiter_pid,
+            Timestamp::from_unix_millis(started_at),
+            allowed_time_ms,
+            status,
+            exit_code,
+            completed_at.map(Timestamp::from_unix_millis),
+        )
     }
 
     #[test]
@@ -458,5 +630,238 @@ mod tests {
             projection.initial_input,
             json!({"objective": "ship safely"})
         );
+        assert!(projection.work_slots.is_empty());
+        assert!(projection.work_slot_invocations.is_empty());
+    }
+
+    #[test]
+    fn work_slots_catalog_snapshot_has_id_state_event_only() {
+        let data = ShowData {
+            run: run_custom(
+                "start",
+                Lifecycle::Active,
+                slot_workflow("Do the work"),
+                json!({"objective": "ship safely"}),
+            ),
+            context: vec![],
+            checked_evaluations: vec![],
+        };
+        let projection = project(data).unwrap();
+
+        assert_eq!(
+            projection.work_slots,
+            vec![WorkSlot::new("slot-1", "start", "submit")]
+        );
+        let json = serde_json::to_value(&projection.work_slots[0]).unwrap();
+        let object = json.as_object().expect("work slot object");
+        assert_eq!(object.len(), 3);
+        assert_eq!(object.get("id"), Some(&json!("slot-1")));
+        assert_eq!(object.get("state"), Some(&json!("start")));
+        assert_eq!(object.get("event"), Some(&json!("submit")));
+        assert!(!object.contains_key("instructions"));
+        assert!(!object.contains_key("instruction_body"));
+        assert!(!object.contains_key("body"));
+        assert!(!object.contains_key("instruction"));
+    }
+
+    #[test]
+    fn work_slot_invocations_field_set_omits_waiter_pid() {
+        let data = ShowData {
+            run: run_custom(
+                "start",
+                Lifecycle::Active,
+                slot_workflow("Do the work"),
+                bound_input(),
+            ),
+            context: vec![],
+            checked_evaluations: vec![],
+        };
+        let record = sample_invocation(
+            "inv-1",
+            4242,
+            1_000,
+            5_000,
+            Some(WaiterWrittenStatus::Succeeded),
+            Some(0),
+            Some(2_000),
+        );
+        let projection =
+            project_with_invocations(data, &[record], Timestamp::from_unix_millis(3_000), |_| {
+                true
+            })
+            .unwrap();
+
+        assert_eq!(projection.work_slot_invocations.len(), 1);
+        let view = &projection.work_slot_invocations[0];
+        assert_eq!(view.invocation_id.as_str(), "inv-1");
+        assert_eq!(view.slot_id.as_str(), "slot-1");
+        assert_eq!(
+            view.binding,
+            WorkSlotBinding::new("worker", vec!["--flag".to_owned(), "value".to_owned()])
+        );
+        assert_eq!(view.instruction_digest, "abc123digest");
+        assert_eq!(view.subject, "subject-1");
+        assert_eq!(view.status, ProjectedInvocationStatus::Succeeded);
+        assert_eq!(view.started_at, Timestamp::from_unix_millis(1_000));
+        assert_eq!(view.allowed_time_ms, 5_000);
+        assert_eq!(view.exit_code, Some(0));
+        assert_eq!(view.completed_at, Some(Timestamp::from_unix_millis(2_000)));
+
+        let json = serde_json::to_value(&projection).unwrap();
+        let serialized = json.to_string();
+        assert!(
+            !serialized.contains("waiter_pid"),
+            "show projection JSON must not contain waiter_pid: {serialized}"
+        );
+        let invocation = &json["work_slot_invocations"][0];
+        let object = invocation.as_object().expect("invocation object");
+        let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        let mut expected = vec![
+            "allowed_time_ms",
+            "binding",
+            "completed_at",
+            "exit_code",
+            "instruction_digest",
+            "invocation_id",
+            "slot_id",
+            "started_at",
+            "status",
+            "subject",
+        ];
+        expected.sort_unstable();
+        assert_eq!(keys, expected);
+        assert!(!object.contains_key("waiter_pid"));
+        assert_eq!(object.get("invocation_id"), Some(&json!("inv-1")));
+        assert_eq!(object.get("slot_id"), Some(&json!("slot-1")));
+        assert_eq!(object.get("status"), Some(&json!("succeeded")));
+    }
+
+    #[test]
+    fn work_slot_invocations_status_is_overlay() {
+        let data = ShowData {
+            run: run_custom(
+                "start",
+                Lifecycle::Active,
+                slot_workflow("Do the work"),
+                bound_input(),
+            ),
+            context: vec![],
+            checked_evaluations: vec![],
+        };
+        let invocations = vec![
+            sample_invocation(
+                "inv-succeeded",
+                1,
+                0,
+                1_000,
+                Some(WaiterWrittenStatus::Succeeded),
+                Some(0),
+                Some(10),
+            ),
+            sample_invocation("inv-vanished", 2, 0, 10_000, None, None, None),
+            sample_invocation("inv-overrun", 3, 0, 1_000, None, None, None),
+            sample_invocation("inv-running", 4, 0, 10_000, None, None, None),
+        ];
+        let now = Timestamp::from_unix_millis(5_000);
+        let projection = project_with_invocations(data, &invocations, now, |pid| pid != 2).unwrap();
+
+        assert_eq!(
+            projection.work_slot_invocations[0].status,
+            ProjectedInvocationStatus::Succeeded
+        );
+        assert_eq!(
+            projection.work_slot_invocations[1].status,
+            ProjectedInvocationStatus::Failed
+        );
+        assert_eq!(
+            projection.work_slot_invocations[2].status,
+            ProjectedInvocationStatus::Overrun
+        );
+        assert_eq!(
+            projection.work_slot_invocations[3].status,
+            ProjectedInvocationStatus::Running
+        );
+    }
+
+    #[test]
+    fn bound_work_slot_current_state_redacts_body_and_names_invoke_cli() {
+        let data = ShowData {
+            run: run_custom(
+                "start",
+                Lifecycle::Active,
+                slot_workflow("SECRET BODY"),
+                bound_input(),
+            ),
+            context: vec![],
+            checked_evaluations: vec![],
+        };
+        let projection = project(data).unwrap();
+        let instructions = &projection.current_state_instructions;
+
+        assert!(
+            !instructions.contains("SECRET BODY"),
+            "bound slot must omit stored work body, got: {instructions}"
+        );
+        assert_eq!(
+            instructions,
+            "Bound work slot `slot-1` is configured. Frozen worker CLI: command=worker args=[\"--flag\",\"value\"]. Legal start: loop-engine invoke run-1 slot-1."
+        );
+        assert!(instructions.contains("slot-1"));
+        assert!(instructions.contains("worker"));
+        assert!(instructions.contains("[\"--flag\",\"value\"]"));
+        assert!(instructions.contains("loop-engine invoke run-1 slot-1"));
+    }
+
+    #[test]
+    fn work_slot_unbound_current_state_keeps_stored_instructions_without_invoke_cli() {
+        let projection = project(show_data("start", Lifecycle::Active, vec![], vec![])).unwrap();
+
+        assert_eq!(projection.current_state_instructions, "Do the work");
+        assert!(!projection
+            .current_state_instructions
+            .contains("loop-engine invoke"));
+        assert!(!projection
+            .current_state_instructions
+            .contains("Bound work slot"));
+    }
+
+    #[test]
+    fn work_slot_current_state_without_binding_is_unbound_and_not_redacted() {
+        let data = ShowData {
+            run: run_custom(
+                "start",
+                Lifecycle::Active,
+                slot_workflow("SECRET BODY"),
+                json!({"objective": "ship safely"}),
+            ),
+            context: vec![],
+            checked_evaluations: vec![],
+        };
+        let projection = project(data).unwrap();
+
+        assert_eq!(projection.current_state_instructions, "SECRET BODY");
+        assert!(!projection
+            .current_state_instructions
+            .contains("loop-engine invoke"));
+        assert!(!projection
+            .current_state_instructions
+            .contains("Bound work slot"));
+
+        let empty_bindings = ShowData {
+            run: run_custom(
+                "start",
+                Lifecycle::Active,
+                slot_workflow("SECRET BODY"),
+                json!({"objective": "ship safely", "work_slot_bindings": {}}),
+            ),
+            context: vec![],
+            checked_evaluations: vec![],
+        };
+        let empty_projection = project(empty_bindings).unwrap();
+        assert_eq!(empty_projection.current_state_instructions, "SECRET BODY");
+        assert!(!empty_projection
+            .current_state_instructions
+            .contains("loop-engine invoke"));
     }
 }
