@@ -8,10 +8,12 @@ mod config;
 mod evidence;
 mod gates;
 mod protocol;
+mod run_plan_graph;
 mod schema;
 mod workflow;
 
 use protocol::{DescribeRequest, EvaluateRequest};
+use run_plan_graph::{parse_run_plan_graph_args, MAX_CONCURRENCY};
 use serde::Serialize;
 use serde_json::Value;
 use std::io::{self, Read, Write};
@@ -50,6 +52,29 @@ fn run() -> i32 {
                 Err(error) => {
                     eprintln!("data-dump failed: {error}");
                     1
+                }
+            };
+        }
+        Some(command) if command == "run-plan-graph" => {
+            let rest = match args
+                .map(|token| token.into_string())
+                .collect::<Result<Vec<String>, _>>()
+            {
+                Ok(rest) => rest,
+                Err(_) => {
+                    eprintln!(
+                        "run-plan-graph arguments must be valid UTF-8; usage: software-change run-plan-graph [--task-worker JSON]"
+                    );
+                    return 2;
+                }
+            };
+            return match parse_run_plan_graph_args(&rest) {
+                Ok(worker) => run_plan_graph::execute(&worker),
+                Err(error) => {
+                    eprintln!(
+                        "{error}; usage: software-change run-plan-graph [--task-worker JSON]"
+                    );
+                    2
                 }
             };
         }
@@ -96,7 +121,7 @@ fn run_protocol() -> i32 {
 
 fn provider_help() -> i32 {
     println!(
-        "software-change\n\nUsage:\n  software-change < stdin\n  software-change data-dump DIR\n  software-change --help | -h\n  software-change --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nData:\n  data-dump  materialize embedded provider data under DIR"
+        "software-change\n\nUsage:\n  software-change < stdin\n  software-change data-dump DIR\n  software-change run-plan-graph [--task-worker JSON]\n  software-change --help | -h\n  software-change --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nData:\n  data-dump  materialize embedded provider data under DIR\n\nPlan graph:\n  run-plan-graph  execute plan.json by dependency_graph; inner-worker concurrency cap {MAX_CONCURRENCY}"
     );
     0
 }

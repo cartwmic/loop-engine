@@ -5,6 +5,10 @@
 //! core operation outcome.  Workflow and provider policy remain in the core
 //! and integration crates respectively.
 
+mod fan_out;
+
+pub use fan_out::FanOutArgs;
+
 use loop_core::{
     self as core, AppendContextRequest, CompleteWorkSlotInvocationRequest, EventRequest,
     HistoryRequest, InvocationId, InvokeRequest, OperationOutcome, Persistence, ProcessError,
@@ -18,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fmt;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -128,6 +132,10 @@ pub enum ParsedRequest {
         run_id: RunId,
         invocation_id: InvocationId,
     },
+    FanOut {
+        options: CliOptions,
+        args: FanOutArgs,
+    },
 }
 
 /// A parser/composition error with a stable actionable code.
@@ -195,6 +203,7 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
     let mut data = None;
     let mut record_id = None;
     let mut event = None;
+    let mut fan_out_tokens = Vec::new();
 
     let mut index = 0;
     while index < args.len() {
@@ -501,6 +510,40 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
                     index += 1;
                     continue;
                 }
+                "--worker" => {
+                    let value = next_option_value(args, &mut index, token)?;
+                    fan_out_tokens.push("--worker".to_owned());
+                    fan_out_tokens.push(value);
+                    continue;
+                }
+                value if value.starts_with("--worker=") => {
+                    fan_out_tokens.push("--worker".to_owned());
+                    fan_out_tokens.push(
+                        value
+                            .strip_prefix("--worker=")
+                            .expect("checked prefix")
+                            .to_owned(),
+                    );
+                    index += 1;
+                    continue;
+                }
+                "--instructions" => {
+                    let value = next_option_value(args, &mut index, token)?;
+                    fan_out_tokens.push("--instructions".to_owned());
+                    fan_out_tokens.push(value);
+                    continue;
+                }
+                value if value.starts_with("--instructions=") => {
+                    fan_out_tokens.push("--instructions".to_owned());
+                    fan_out_tokens.push(
+                        value
+                            .strip_prefix("--instructions=")
+                            .expect("checked prefix")
+                            .to_owned(),
+                    );
+                    index += 1;
+                    continue;
+                }
                 value if value.starts_with('-') => {
                     return Err(CliError::new(
                         "invalid-invocation",
@@ -536,7 +579,25 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
     })?;
 
     if command_name == "wait-invocation" {
+        if let Some(option) = fan_out_tokens.first() {
+            return Err(CliError::new(
+                "invalid-invocation",
+                format!("unknown option `{option}`"),
+            ));
+        }
         return parse_wait_invocation(options, positionals);
+    }
+
+    if command_name == "fan-out" {
+        fan_out_tokens.extend(positionals);
+        return parse_fan_out_request(options, fan_out_tokens);
+    }
+
+    if let Some(option) = fan_out_tokens.first() {
+        return Err(CliError::new(
+            "invalid-invocation",
+            format!("unknown option `{option}`"),
+        ));
     }
 
     let command = parse_primary_command(
@@ -894,6 +955,7 @@ where
             run_id,
             invocation_id,
         } => execute_wait_invocation(options, run_id, invocation_id),
+        ParsedRequest::FanOut { options, args } => execute_fan_out(options, args),
     }
 }
 
@@ -902,6 +964,57 @@ struct WaiterEnvelope {
     command: String,
     args: Vec<String>,
     worker_packet: Value,
+}
+
+fn parse_fan_out_request(
+    options: CliOptions,
+    tokens: Vec<String>,
+) -> Result<ParsedRequest, CliError> {
+    let args = fan_out::parse_fan_out_args(&tokens)
+        .map_err(|error| CliError::new("invalid-invocation", error.to_string()))?;
+    Ok(ParsedRequest::FanOut { options, args })
+}
+
+fn execute_fan_out(options: CliOptions, args: FanOutArgs) -> Execution {
+    let output = options.output;
+    let stdin_bytes = if fan_out::drain_stdin(io::stdin().is_terminal()) {
+        let mut stdin_bytes = Vec::new();
+        if let Err(error) = io::stdin().read_to_end(&mut stdin_bytes) {
+            return fan_out_failed(format!("could not read stdin: {error}"));
+        }
+        stdin_bytes
+    } else {
+        Vec::new()
+    };
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(error) => {
+            return fan_out_failed(format!("could not determine current directory: {error}"))
+        }
+    };
+    match fan_out::run_collector(args, &stdin_bytes, &cwd) {
+        Ok(summary) => match serde_json::to_string(&summary) {
+            Ok(stdout) => Execution {
+                exit_code: EXIT_COMPLETED,
+                stdout: format!("{stdout}\n"),
+                stderr: String::new(),
+            },
+            Err(error) => fan_out_failed(format!("could not serialize fan-out summary: {error}")),
+        },
+        Err(fan_out::CollectorError::Invalid(message)) => render_invalid_invocation_with_format(
+            CliError::new("invalid-invocation", message),
+            output,
+        ),
+        Err(fan_out::CollectorError::Failed(message)) => fan_out_failed(message),
+    }
+}
+
+fn fan_out_failed(message: String) -> Execution {
+    Execution {
+        exit_code: EXIT_ERROR,
+        stdout: String::new(),
+        stderr: format!("fan-out error: {message}\n"),
+    }
 }
 
 fn parse_wait_invocation(
@@ -1859,8 +1972,19 @@ fn usage(command: Option<&str>) -> String {
         Some("terminate") => "Usage: loop-engine [options] terminate <run-id>\n".to_owned(),
         Some("invoke") => "Usage: loop-engine [options] invoke <run-id> <slot-id>\n".to_owned(),
         Some("list") => "Usage: loop-engine [options] list\n".to_owned(),
+        Some("fan-out") => {
+            "Usage: loop-engine [options] fan-out [--worker JSON]... [--instructions FILE]\n\n"
+                .to_owned()
+                + "Start one process per --worker in parallel, write per-worker stdout and stderr,\n"
+                + "reap every worker, and print a JSON collector summary. This is not a run-state\n"
+                + "operation and does not open the run database.\n\n"
+                + "Options:\n"
+                + "  --worker JSON            Worker CLI object {command, args}; repeatable\n"
+                + "  --instructions FILE      Shared instructions file for ad hoc mode.\n"
+                + "                           Bound mode reads the invoke packet from stdin instead.\n"
+        }
         _ => {
-            "Usage: loop-engine [options] <operation> [arguments]\n\nOperations:\n  start\n  list\n  show\n  append\n  event\n  history\n  terminate\n  invoke\n\nGlobal options:\n  --json, -j                 Render machine-readable JSON\n  --database <path>          SQLite database path\n  --config <path>            Provider TOML configuration path\n  --timeout-ms <milliseconds> Provider operation timeout\n  --help, -h                 Show help\n  --version, -V              Show version\n"
+            "Usage: loop-engine [options] <operation> [arguments]\n\nOperations:\n  start\n  list\n  show\n  append\n  event\n  history\n  terminate\n  invoke\n\nOther commands:\n  fan-out                    Start worker CLIs in parallel without opening a run\n                             --worker JSON          Worker object {command, args}; repeatable\n                             --instructions FILE    Shared instructions (ad hoc mode)\n\nGlobal options:\n  --json, -j                 Render machine-readable JSON\n  --database <path>          SQLite database path\n  --config <path>            Provider TOML configuration path\n  --timeout-ms <milliseconds> Provider operation timeout\n  --help, -h                 Show help\n  --version, -V              Show version\n"
                 .to_owned()
         }
     }
@@ -1980,6 +2104,7 @@ mod tests {
             "history",
             "terminate",
             "invoke",
+            "fan-out",
         ] {
             let command_help = execute([command, "--help"]);
             assert_eq!(command_help.exit_code, EXIT_COMPLETED);
@@ -2080,6 +2205,21 @@ mod tests {
             help.stdout
         );
         assert!(
+            help.stdout.contains("fan-out"),
+            "help must list fan-out: {}",
+            help.stdout
+        );
+        assert!(
+            help.stdout.contains("--worker"),
+            "help must document --worker: {}",
+            help.stdout
+        );
+        assert!(
+            help.stdout.contains("--instructions"),
+            "help must document --instructions: {}",
+            help.stdout
+        );
+        assert!(
             !help.stdout.contains("wait-invocation"),
             "help must not mention hidden wait-invocation: {}",
             help.stdout
@@ -2088,6 +2228,31 @@ mod tests {
         assert_eq!(invoke_help.exit_code, EXIT_COMPLETED);
         assert!(invoke_help.stdout.contains("invoke"));
         assert!(!invoke_help.stdout.contains("wait-invocation"));
+        let fan_out_help = execute(["fan-out", "--help"]);
+        assert_eq!(fan_out_help.exit_code, EXIT_COMPLETED);
+        assert!(fan_out_help.stdout.contains("fan-out"));
+        assert!(fan_out_help.stdout.contains("--worker JSON"));
+        assert!(fan_out_help.stdout.contains("--instructions FILE"));
+        assert!(!fan_out_help.stdout.contains("wait-invocation"));
+    }
+
+    #[test]
+    fn parser_fan_out_is_not_a_primary_command() {
+        let parsed = parse_args(["fan-out"]).expect("fan-out should parse");
+        let ParsedRequest::FanOut { args, .. } = parsed else {
+            panic!("expected ParsedRequest::FanOut, got {parsed:?}");
+        };
+        assert!(args.workers.is_empty());
+        assert!(args.instructions_path.is_none());
+
+        let worker = r#"{"command":"echo","args":[]}"#;
+        let parsed = parse_args(["fan-out", "--worker", worker]).expect("fan-out with worker");
+        let ParsedRequest::FanOut { args, options } = parsed else {
+            panic!("expected ParsedRequest::FanOut");
+        };
+        assert_eq!(args.workers.len(), 1);
+        assert_eq!(args.workers[0].command, "echo");
+        assert!(options.database.is_none());
     }
 
     #[test]

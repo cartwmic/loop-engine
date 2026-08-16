@@ -83,6 +83,13 @@ WORK_SLOT_PROOF = [
     "unbound states keep stored instructions",
     "history invocation started and succeeded",
 ]
+DUMMY_WORKER_PROOF = [
+    "PATH rewrite of shipped software-change/loop-engine names",
+    "sparse explore-intent overlay kept implement and review unbound",
+    "graph-runner dummy --task-worker",
+    "fan-out dummy --worker bound and ad hoc",
+    "zero-worker bound review invoke fails closed",
+]
 
 
 class JourneyFailure(RuntimeError):
@@ -120,6 +127,7 @@ class Journey:
         self.profile_path: Optional[Path] = None
         self.artifact_root: Optional[Path] = None
         self.work_slot_bindings: Dict[str, Any] = {}
+        self.dummy_worker_proof: List[str] = []
         self.run_id = "journey-production-run"
         self.state = "not-started"
 
@@ -227,6 +235,7 @@ class Journey:
                     "artifact_root": str(self.artifact_root),
                     "successor_route_cases": successor_route_cases,
                     "work_slot_proof": WORK_SLOT_PROOF,
+                    "dummy_worker_proof": self.dummy_worker_proof,
                     "synthetic_evidence_scope": (
                         "Deterministic mechanics only; synthetic records are not semantic verdict quality."
                     ),
@@ -311,6 +320,21 @@ class Journey:
         assert self.artifact_root is not None
         profile = dict(self.profile)
         profile["artifact_root"] = str(self.artifact_root)
+        shipped = profile.get("work_slot_bindings")
+        if not isinstance(shipped, dict):
+            raise JourneyFailure("shipped high-rigor profile omitted work_slot_bindings")
+        try:
+            work_slot_journey.assert_shipped_path_names(shipped)
+            rewritten = work_slot_journey.rewrite_path_commands(
+                shipped, engine=self.engine, provider=self.provider
+            )
+            work_slot_journey.assert_rewritten_binaries(
+                rewritten, engine=self.engine, provider=self.provider
+            )
+        except work_slot_journey.WorkSlotJourneyFailure as error:
+            raise JourneyFailure(str(error), state="explore", event="start") from error
+        # Keep the existing sparse dummy overlay: only explore-intent is bound so
+        # implement and review slots stay unbound on this full-journey start.
         self.work_slot_bindings = work_slot_journey.bindings_for([BOUND_SLOT_ID])
         profile["work_slot_bindings"] = self.work_slot_bindings
         self.profile_path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
@@ -871,6 +895,40 @@ class Journey:
             raise JourneyFailure("history omitted expected denial lineage", state=self.state, event="history")
 
         self._run_successor_route_proof()
+        self._run_dummy_worker_proofs()
+
+    def _run_dummy_worker_proofs(self) -> None:
+        """Prove graph-runner, fan-out, and zero-worker review invoke with dummy CLIs."""
+        assert self.run_dir is not None
+        assert self.profile_source is not None
+        assert self.fixture_root is not None
+        proof_root = self.run_dir / "dummy-worker-proofs"
+        try:
+            work_slot_journey.prove_graph_runner(
+                provider=self.provider,
+                work_dir=proof_root / "graph-runner",
+            )
+            work_slot_journey.prove_fan_out(
+                engine=self.engine,
+                work_dir=proof_root / "fan-out",
+            )
+            work_slot_journey.prove_zero_worker_review_invoke(
+                engine=self.engine,
+                provider=self.provider,
+                profile_source=self.profile_source,
+                fixture_root=self.fixture_root,
+                work_dir=proof_root / "zero-worker",
+            )
+        except work_slot_journey.WorkSlotJourneyFailure as error:
+            raise JourneyFailure(
+                str(error),
+                state="end",
+                event="dummy-worker-proofs",
+            ) from error
+        self.dummy_worker_proof = list(DUMMY_WORKER_PROOF)
+        print(
+            "dummy worker proofs passed: graph-runner, fan-out, zero-worker review invoke"
+        )
 
     @staticmethod
     def _expect_status(
@@ -943,7 +1001,13 @@ def self_test() -> int:
                 raise JourneyFailure(
                     f"invalid pair mutated filesystem for {mode}/{depth}"
                 )
-    print("software-change journey interface self-test passed: invalid adapter/depth pairs rejected pre-mutation")
+    try:
+        work_slot_journey.self_test_helpers()
+    except work_slot_journey.WorkSlotJourneyFailure as error:
+        raise JourneyFailure(f"work-slot helper self-test failed: {error}") from error
+    print(
+        "software-change journey interface self-test passed: invalid adapter/depth pairs rejected pre-mutation; dummy-worker helpers checked"
+    )
     return 0
 
 

@@ -37,6 +37,8 @@ loop-engine [--database DB] [--json] terminate RUN_ID
 loop-engine [--database DB] [--json] [--timeout-ms MILLISECONDS] invoke RUN_ID SLOT_ID
 ```
 
+`--help` also lists `fan-out` beside, and distinct from, these eight. It is not a ninth primary operation.
+
 Usual-case `start` omits `--database` and `artifact_root`:
 
 ```sh
@@ -57,6 +59,20 @@ Start bound work with `invoke RUN_ID SLOT_ID`. It is rejected for an unknown slo
 The bound worker's stdin is exactly one JSON object with `run_id`, `slot_id`, `artifact_root`, and `instruction_body`. The packet is not on argv, environment, or a temp file. Hidden `wait-invocation` is parent of that worker, waitpids it, and writes terminal `succeeded`/`failed`; it is not a user command and not a daemon. A vanished waiter with no terminal status is overlay-`failed`.
 
 A bound checked edge advances only after overlay `succeeded` matching slot ID, instruction digest, and the current slot-visit subject. Overlay `running`/`failed`/`overrun` do not satisfy. Check-free edges are ungated.
+
+## Non-run-state command: fan-out
+
+`fan-out` does not start, advance, or record a run and does not open the run database.
+
+```text
+loop-engine fan-out [--worker JSON]... [--instructions FILE]
+```
+
+Use `fan-out` **ad hoc** when you want parallel worker CLIs without a run: pass `--instructions FILE` and do not send an invoke packet on stdin. Workers come only from repeated `--worker` JSON objects `{command, args}`. Zero `--worker` entries fail closed.
+
+When a work slot is frozen to `loop-engine` args that begin with `fan-out`, the legal start remains `loop-engine invoke RUN_ID SLOT_ID`. Do not call `fan-out` yourself for that slot; `invoke` execs the frozen argv with the existing worker packet on stdin. Bound mode rejects `--instructions`. Callers who want reviewers put `--worker` JSON objects in those frozen binding args at `start`. Bindings cannot be patched mid-run. Stock software-change review bindings freeze `design-review`, `plan-review`, and `implementation-review` to `loop-engine fan-out` with zero `--worker` entries; invoke of those slots therefore fails closed. Recovery is terminate and start again with `--worker` objects in the frozen args.
+
+`software-change run-plan-graph` is an argv command of the software-change provider binary — the shipped implement worker — not an engine operation.
 
 ## Canonical loop
 
@@ -104,7 +120,7 @@ Repository checks name boundaries they actually cross:
 
 - component tests cover parser, core, SQLite, provider schema/evidence, and protocol behavior;
 - composed tests combine engine operations, SQLite, and provider subprocesses below CLI process boundary;
-- `scripts/software-change-journey.py --mode source --traversal-depth full` drives separate `loop-engine` processes through provider TOML, SQLite, production `software-change` process, copied high-rigor artifacts, sparse dummy-worker `work_slot_bindings`, `invoke` before the bound checked event, deterministic denials, evidence aggregation, and terminal state;
+- `scripts/software-change-journey.py --mode source --traversal-depth full` drives separate `loop-engine` processes through provider TOML, SQLite, production `software-change` process, copied high-rigor artifacts, sparse dummy-worker `work_slot_bindings`, `invoke` before the bound checked event, deterministic denials, evidence aggregation, and terminal state. It also proves `software-change run-plan-graph` and `loop-engine fan-out` with dummy inner workers (no live model), including zero-worker bound review invoke failing closed;
 - `scripts/software-change-journey.py --mode packaged --traversal-depth checked-prefix` consumes extracted binaries, calls `data-dump`, and runs release-critical checked transition from dumped data only, including the same sparse binding/`invoke` proof;
 - `scripts/policy-document-journey.py` drives draft and audit modes through provider TOML, SQLite, production `policy-document` process, a sparse dummy-worker binding on `semantic-review`, ungated `prepare` → `ready`, and deterministic/semantic denials;
 - `scripts/research-journey.py --mode source` drives separate `loop-engine` processes through provider TOML, SQLite, production `research` process, copied standard profile, sparse dummy-worker `work_slot_bindings`, `invoke` before `scoped`, schema/evidence denials, and terminal state;

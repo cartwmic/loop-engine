@@ -362,6 +362,24 @@
     {"from": "implementation-report.json", "field": "plan_revision", "to": "plan.json"},
     {"from": "validation-report.json", "field": "intent_revision", "to": "intent.json"}
   ],
+  "work_slot_bindings": {
+    "implement": {
+      "command": "software-change",
+      "args": ["run-plan-graph"]
+    },
+    "design-review": {
+      "command": "loop-engine",
+      "args": ["fan-out"]
+    },
+    "plan-review": {
+      "command": "loop-engine",
+      "args": ["fan-out"]
+    },
+    "implementation-review": {
+      "command": "loop-engine",
+      "args": ["fan-out"]
+    }
+  },
   "extra": {
     "profile": "standard",
     "template_root": "crates/software-change-provider/data/templates"

@@ -38,6 +38,8 @@ fn help_flags_return_conventional_stdout_without_reading_protocol() {
         assert!(help.contains("describe"));
         assert!(help.contains("evaluate"));
         assert!(help.contains("data-dump"));
+        assert!(help.contains("run-plan-graph"));
+        assert!(help.contains('4'));
     }
 }
 

@@ -3,7 +3,7 @@
 **Status:** Living
 **Target:** v0.1
 **Compatibility:** Clean-slate successor; no v1 compatibility requirement
-**Amended:** 2026-08-10
+**Amended:** 2026-08-16
 
 ## 1. Product
 
@@ -492,6 +492,20 @@ The bound worker's stdin is exactly one JSON object with `run_id`, `slot_id`, `a
 
 Later `show`, `history`, `event`, and `invoke` read stored records. They may observe waiter liveness as `running` and apply recorded `allowed_time_ms` as `overrun`. They do not waitpid the original worker.
 
+### Non-run-state CLI: `fan-out`
+
+The `loop-engine` binary also exposes `fan-out`. It is **not** a ninth primary operation: it does not start, advance, or record a run, and it does not open the run database. `--help` lists it beside, and distinct from, the eight run-state operations.
+
+```text
+loop-engine fan-out [--worker JSON]... [--instructions FILE]
+```
+
+Workers come only from repeated `--worker` JSON objects `{command, args}`. Zero `--worker` entries fail closed. Bound mode: stdin is the existing invoke packet and `--instructions` is rejected. Ad hoc mode: `--instructions FILE` supplies the shared instructions and stdin is not a packet. Combining a valid invoke packet with `--instructions` is a parse error. The command starts one process per worker in parallel, writes per-worker stdout/stderr, reaps every worker it spawned before exit, and prints a JSON collector summary that is not a run-state envelope and not a provider evidence schema. It encodes no harness.
+
+When a work slot is frozen to `loop-engine` args that begin with `fan-out`, the legal start remains `loop-engine invoke RUN_ID SLOT_ID`. `invoke` execs that frozen argv with the existing worker packet on stdin. Callers who want reviewers put `--worker` JSON objects in those frozen binding args at start; bindings cannot be patched mid-run. A stock binding with zero workers therefore fails closed on invoke. Recovery is terminate and start again with workers in the frozen args.
+
+`software-change run-plan-graph` is an argv command of the software-change provider binary (the shipped implement worker), not an engine operation.
+
 ## 7. Operation Outcomes
 
 Every dispatched semantic operation has one of three outcomes.
@@ -751,6 +765,8 @@ implement (implement, implementation-ready)
 implementation-review (implementation-review, approved)
 validate (validation, passed)
 ```
+
+Shipped software-change profiles freeze `implement` to PATH command `software-change` with args `[run-plan-graph]`, and freeze `design-review`, `plan-review`, and `implementation-review` to PATH command `loop-engine` with args `[fan-out]` and no `--worker` entries. `validate` stays unbound. A usable review binding is that shipped fan-out argv plus caller-supplied `--worker` objects, frozen together at `start`. Policy-document and research shipped profiles stay unbound.
 
 The provider may inspect repository state, documents, tests, reviews, or other software-specific information. Core understands none of those concepts.
 
@@ -1089,7 +1105,7 @@ v0.1 is complete when the following are demonstrated end to end.
 ### 14.8 Operational Simplicity
 
 - Local operation requires no daemon or external infrastructure beyond Loop Engine's local durable state and configured provider integration. Hidden `wait-invocation` is a short-lived per-invocation waiter, not a background service.
-- The primary caller surface remains eight operations (`start`, `list`, `show`, `append`, `event`, `history`, `terminate`, `invoke`).
+- The primary caller surface remains eight operations (`start`, `list`, `show`, `append`, `event`, `history`, `terminate`, `invoke`). Visible `fan-out` is a non-run-state CLI command, not a ninth operation.
 - The semantic provider interface remains `describe` + `evaluate`.
 - Provider correctness does not depend on retained in-memory state from earlier invocations.
 
@@ -1107,7 +1123,8 @@ v0.1 is complete when the following are demonstrated end to end.
 - When a slot has no binding, the driver may perform that job and no invocation record is required. When the binding set is empty, a run can still complete with the driver performing the work.
 - Policy-document has no work slot for `prepare` → `ready`. Software-change, policy-document, and research share the same binding, invoke, overlay, and gate contract; each only declares its catalog.
 - Slot-visit subjects are minted via set-current-subject on entry into a slot state, including `start` when the initial state is a slot. `invoke` snapshots via get-current-subject and does not mint. `instruction_digest` is SHA-256 of the stored instruction body UTF-8 bytes, lowercase hex.
-- Public-boundary journeys (`scripts/software-change-journey.py`, `scripts/policy-document-journey.py`, `scripts/research-journey.py`) freeze a sparse dummy-worker binding, invoke before the bound checked event, and prove catalog snapshot, instruction redaction, unbound-invoke rejection, pre-evaluate gate, worker-packet stdin, overlay `succeeded`, unbound stored instructions, and invocation history.
+- Public-boundary journeys (`scripts/software-change-journey.py`, `scripts/policy-document-journey.py`, `scripts/research-journey.py`) freeze a sparse dummy-worker binding, invoke before the bound checked event, and prove catalog snapshot, instruction redaction, unbound-invoke rejection, pre-evaluate gate, worker-packet stdin, overlay `succeeded`, unbound stored instructions, and invocation history. Software-change journeys also prove graph-runner and fan-out behavior with dummy inner workers and do not call a live model.
+- Bound review slots frozen to `fan-out` still require `loop-engine invoke RUN_ID SLOT_ID`. Callers put `--worker` JSON objects in frozen binding args at start. Stock software-change review bindings with zero workers fail closed; recovery is terminate and start again.
 
 ## 15. Complexity Guardrails
 

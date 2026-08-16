@@ -1,6 +1,6 @@
 ---
 name: using-loop-engine
-description: Use when driving a durable Loop Engine workflow run from the CLI — starting a run against a configured provider, inspecting or resuming a run, appending context records, requesting events, invoking bound work slots, terminating, or interpreting completed/rejected/error outcomes.
+description: Use when driving a durable Loop Engine workflow run from the CLI — starting a run against a configured provider, inspecting or resuming a run, appending context records, requesting events, invoking bound work slots, terminating, interpreting completed/rejected/error outcomes, or fanning out worker CLIs without a run.
 ---
 
 # Using Loop Engine
@@ -42,6 +42,8 @@ loop-engine [--database DB] [--json] terminate RUN_ID
 loop-engine [--database DB] [--json] [--timeout-ms MS] invoke RUN_ID SLOT_ID
 ```
 
+`--help` also lists `fan-out` beside, and distinct from, these eight. It is not a ninth primary operation.
+
 Usual-case `start` omits `--database` and `artifact_root`:
 
 ```sh
@@ -60,6 +62,20 @@ Object `initial_input` may include reserved `work_slot_bindings`: slot ID → `{
 `invoke RUN_ID SLOT_ID` starts the bound worker. Rejected for unknown, unbound, or overlay-`running` slots. Overlay `overrun` is terminal for retry — invoke the same slot again. The worker stdin JSON object is `run_id`, `slot_id`, `artifact_root`, and `instruction_body`. Hidden `wait-invocation` is parent of the worker; it is not a user command and not a daemon.
 
 `event`/`evaluate` never wait on a worker. A bound checked edge requires overlay `succeeded` matching slot ID, instruction digest, and the current slot-visit subject.
+
+## Non-run-state command: fan-out
+
+`fan-out` does not start, advance, or record a run and does not open the run database.
+
+```text
+loop-engine fan-out [--worker JSON]... [--instructions FILE]
+```
+
+Use `fan-out` **ad hoc** when you want parallel worker CLIs without a run: pass `--instructions FILE` and do not send an invoke packet on stdin. Workers come only from repeated `--worker` JSON objects `{command, args}`. Zero `--worker` entries fail closed.
+
+When a work slot is frozen to `loop-engine` args that begin with `fan-out`, the legal start remains `loop-engine invoke RUN_ID SLOT_ID`. Do not call `fan-out` yourself for that slot; `invoke` execs the frozen argv with the existing worker packet on stdin. Bound mode rejects `--instructions`. Callers who want reviewers put `--worker` JSON objects in those frozen binding args at `start`. Bindings cannot be patched mid-run. Stock software-change review bindings freeze `design-review`, `plan-review`, and `implementation-review` to `loop-engine fan-out` with zero `--worker` entries; invoke of those slots therefore fails closed. Recovery is terminate and start again with `--worker` objects in the frozen args.
+
+`software-change run-plan-graph` is an argv command of the software-change provider binary — the shipped implement worker — not an engine operation.
 
 ## Canonical loop
 
@@ -87,7 +103,7 @@ Parse JSON even on nonzero exit. Treat only `completed` as success. Never infer 
 ## Rules
 
 - One logical mutating actor per run: serialize `append`, `event`, `invoke`, and `terminate` calls; never race them from parallel workers. Concurrent reads are fine. Context appended during an in-flight checked evaluation does not invalidate or reach that evaluation.
-- Public-boundary proof uses `scripts/software-change-journey.py`; source full mode drives separate engine processes and packaged checked-prefix mode consumes only provider data materialized by `data-dump`. Policy-document and research journeys do the same for those providers. Each freezes a sparse dummy-worker `work_slot_bindings` entry and `invoke`s before the bound checked event. Synthetic evidence proves deterministic mechanics, not semantic verdict quality.
+- Public-boundary proof uses `scripts/software-change-journey.py`; source full mode drives separate engine processes and packaged checked-prefix mode consumes only provider data materialized by `data-dump`. Policy-document and research journeys do the same for those providers. Each freezes a sparse dummy-worker `work_slot_bindings` entry and `invoke`s before the bound checked event. The software-change source full journey also proves `run-plan-graph` and `fan-out` with dummy inner workers (no live model), including zero-worker bound review invoke failing closed. Synthetic evidence proves deterministic mechanics, not semantic verdict quality.
 - `initial_input` is immutable run configuration; never attempt to replace it. Frozen `work_slot_bindings` are part of that input.
 - Context records are immutable and append-only.
 - Provider association, workflow topology, and state instructions are snapshotted at `start`; changing TOML cannot redirect an existing run.
