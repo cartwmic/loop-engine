@@ -84,10 +84,12 @@ WORK_SLOT_PROOF = [
     "history invocation started and succeeded",
 ]
 DUMMY_WORKER_PROOF = [
-    "copied shipped profiles omit review slots and keep implement bound to run-plan-graph",
+    "copied shipped profiles omit work_slot_bindings so implement and reviews are unbound",
     "graph-runner dummy --task-worker capture_dir and inner exits",
     "fan-out dummy --worker bound/ad hoc, capture_dir, inner nonzero collector 0",
     "preview-bindings exits nonzero on zero-worker fan-out and creates no run",
+    "preview-bindings warns when pi has --no-extensions and no -e",
+    "opt-in dummy implement/review bindings may include -e args",
     "PATH stub pi default argv --print --no-skills --no-extensions without --no-context-files or --tools",
     "bound fan-out show heartbeat overlay_meaning elapsed remaining capture_dir inner_workers",
     "bound run-plan-graph inner workers in task order plus capture isolation",
@@ -269,9 +271,9 @@ class Journey:
         missing = sorted(required.difference(profile))
         if missing:
             raise JourneyFailure(f"high-rigor profile is missing fields: {', '.join(missing)}")
-        if profile.get("config_version") != "high-rigor-4":
+        if profile.get("config_version") != "high-rigor-5":
             raise JourneyFailure(
-                f"journey requires high-rigor-4, got {profile.get('config_version')!r}"
+                f"journey requires high-rigor-5, got {profile.get('config_version')!r}"
             )
         schemas = profile.get("artifact_schemas")
         if not isinstance(schemas, dict) or set(schemas) != set(SUBJECTS):
@@ -324,16 +326,8 @@ class Journey:
         profile = dict(self.profile)
         profile["artifact_root"] = str(self.artifact_root)
         shipped = profile.get("work_slot_bindings")
-        if not isinstance(shipped, dict):
-            raise JourneyFailure("shipped high-rigor profile omitted work_slot_bindings")
         try:
             work_slot_journey.assert_shipped_path_names(shipped)
-            rewritten = work_slot_journey.rewrite_path_commands(
-                shipped, engine=self.engine, provider=self.provider
-            )
-            work_slot_journey.assert_rewritten_binaries(
-                rewritten, engine=self.engine, provider=self.provider
-            )
         except work_slot_journey.WorkSlotJourneyFailure as error:
             raise JourneyFailure(str(error), state="explore", event="start") from error
         # Keep the existing sparse dummy overlay: only explore-intent is bound so
@@ -920,6 +914,10 @@ class Journey:
                 engine=self.engine,
                 work_dir=proof_root / "preview-fail-closed",
             )
+            work_slot_journey.prove_preview_pi_extension_warnings(
+                engine=self.engine,
+                work_dir=proof_root / "preview-pi-extension-warnings",
+            )
             work_slot_journey.prove_default_sandbox_argv(
                 provider=self.provider,
                 work_dir=proof_root / "default-sandbox-argv",
@@ -947,7 +945,7 @@ class Journey:
         self.dummy_worker_proof = list(DUMMY_WORKER_PROOF)
         print(
             "dummy worker proofs passed: shipped profiles, graph-runner, fan-out, "
-            "preview-bindings fail-closed, default sandbox argv, bound heartbeats"
+            "preview-bindings fail-closed, missing -e warning, default sandbox argv, bound heartbeats"
         )
 
     @staticmethod

@@ -57,17 +57,17 @@ loop-engine --json --config /absolute/path/to/providers.toml \
 
 ## Lock work-slot policy before start
 
-Bindings freeze with `initial_input` and cannot be patched. Do not call `start` until the user has actively approved the work-slot policy for this run. Copying a provider profile is not approval: some shipped profiles already contain `work_slot_bindings`. Inspect the JSON with `preview-bindings` before that confirmation.
+Bindings freeze with `initial_input` and cannot be patched. Do not call `start` until the user has actively approved the work-slot policy for this run. Copying a provider profile is not approval. Shipped software-change, policy-document, and research profiles omit `work_slot_bindings` (or `{}`). Bound slots are opt-in: copy a skill template into the per-run profile JSON after replacing placeholders. Inspect the JSON with `preview-bindings` before that confirmation.
 
 Ask, show the exact JSON you will freeze, and wait for explicit confirmation of all three:
 
 1. **Whether to bind any slots**, and if so which catalog slot IDs. Sparse map: a present key is a mandatory worker for that room; an absent key stays driver-performed. `{}` or omitting the key means no bindings.
-2. **Command and args per bound slot** — keep that provider's shipped default argv, or replace it. Quote the exact `{command, args}` for every bound slot.
+2. **Command and args per bound slot** — copy a skill template (fill `CURSOR_EXTENSION_PATH`, `CLAUDE_BRIDGE_EXTENSION_PATH`, and `MODEL` in the per-run JSON, not in the skill file), or write custom argv. Quote the exact `{command, args}` for every bound slot.
 3. **Model identity per bound slot that will invoke a model-bearing CLI.** The engine freezes argv only. Encode the model in those frozen args (inner `--task-worker` JSON, repeated `--worker` JSON, or the worker CLI's own model flags). Nested inner workers count, not only the outer binding command. Do not choose a model after `start`.
 
-Do not call `start` while any bound slot will invoke a model-bearing CLI (`pi --print`, `claude -p`, `run-plan-graph`'s inner worker, or similar) unless each model identifier is present in those frozen args, or the user has explicitly accepted that CLI's unpinned default as the model policy. Keeping a shipped outer argv that does not name a model is not model lock-in.
+Do not call `start` while any bound slot will invoke a model-bearing CLI (`pi --print`, `claude -p`, `run-plan-graph`'s inner worker, or similar) unless each model identifier is present in those frozen args, or the user has explicitly accepted that CLI's unpinned default as the model policy. An outer argv that does not name a model is not model lock-in.
 
-If the user declines bindings, delete `work_slot_bindings` or set it to `{}` in the run-specific input even when the shipped profile had defaults. A wrong freeze cannot be edited in place: terminate and start a new run.
+If the user declines bindings, omit `work_slot_bindings` or set it to `{}`. A wrong freeze cannot be edited in place: terminate and start a new run.
 
 ## Work-slot delegation
 
@@ -101,21 +101,36 @@ Use `fan-out` **ad hoc** when you want parallel worker CLIs without a run: pass 
 
 When a work slot is frozen to `loop-engine` args that begin with `fan-out`, the legal start remains `loop-engine invoke RUN_ID SLOT_ID`. Do not call `fan-out` yourself for that slot; `invoke` execs the frozen argv with the existing worker packet on stdin. Bound mode honors `packet.capture_dir` (writes per-worker `0/`, `1/`, … plus `summary.json` there) and rejects `--instructions`. Callers who want reviewers put `--worker` JSON objects in those frozen binding args at `start` after `preview-bindings` and lock-in. Bindings cannot be patched mid-run.
 
-Shipped software-change profiles omit `design-review`, `plan-review`, and `implementation-review` from `work_slot_bindings` (those rooms stay driver-performed). `implement` remains bound to `software-change` args `[run-plan-graph]`. A usable review binding is caller-supplied `--worker` objects frozen at `start` after preview and lock-in — not a stock zero-worker `fan-out` argv.
+Shipped software-change profiles omit `work_slot_bindings` (or `{}`), so `implement`, `design-review`, `plan-review`, and `implementation-review` stay driver-performed. Bound workers are opt-in. A usable review binding is caller-supplied `--worker` objects frozen at `start` after preview and lock-in — not a stock zero-worker `fan-out` argv.
 
-Documented review `pi` worker examples include `--print --no-skills --no-extensions --tools read,grep,find,ls` and must not pass `--no-context-files`. Example (every model-bearing worker names a model):
+Copy-paste templates into the **per-run** profile JSON after replacing `CURSOR_EXTENSION_PATH`, `CLAUDE_BRIDGE_EXTENSION_PATH`, and `MODEL`. Do not put machine-local paths in the skill file. Pi examples keep `--no-skills --no-extensions` and add explicit `-e` so cursor-provider and claude-bridge load. Review `pi` workers include `--tools read,grep,find,ls` and must not pass `--no-context-files`. Implement examples do not add `--tools`. `preview-bindings` warns when a pi worker has `--no-extensions` and no `-e`; missing `--no-extensions` is not a required warning.
+
+Opt-in review example (every model-bearing worker names a model):
 
 ```json
 "design-review": {
   "command": "loop-engine",
   "args": [
     "fan-out",
-    "--worker", "{\"command\":\"pi\",\"args\":[\"--print\",\"--no-skills\",\"--no-extensions\",\"--tools\",\"read,grep,find,ls\",\"--model\",\"MODEL\"]}"
+    "--worker", "{\"command\":\"pi\",\"args\":[\"--print\",\"--no-skills\",\"--no-extensions\",\"-e\",\"CURSOR_EXTENSION_PATH\",\"-e\",\"CLAUDE_BRIDGE_EXTENSION_PATH\",\"--tools\",\"read,grep,find,ls\",\"--model\",\"MODEL\"]}"
   ]
 }
 ```
 
-`software-change run-plan-graph` is an argv command of the software-change provider binary — the shipped implement worker — not an engine operation. Bound mode honors `packet.capture_dir` (per-task `{task_id}/` plus `summary.json`). When `--task-worker` is omitted, the default inner worker is `pi --print --no-skills --no-extensions`; it does not pass `--no-context-files` and does not pass `--tools`, so bash, edit, write, and AGENTS.md remain available.
+Opt-in implement example:
+
+```json
+"implement": {
+  "command": "software-change",
+  "args": [
+    "run-plan-graph",
+    "--task-worker",
+    "{\"command\":\"pi\",\"args\":[\"--print\",\"--no-skills\",\"--no-extensions\",\"-e\",\"CURSOR_EXTENSION_PATH\",\"-e\",\"CLAUDE_BRIDGE_EXTENSION_PATH\",\"--model\",\"MODEL\"]}"
+  ]
+}
+```
+
+`software-change run-plan-graph` is an argv command of the software-change provider binary — not an engine operation. Bound mode honors `packet.capture_dir` (per-task `{task_id}/` plus `summary.json`). When `--task-worker` is omitted, the default inner worker is `pi --print --no-skills --no-extensions`; it does not pass `--no-context-files` and does not pass `--tools`, so bash, edit, write, and AGENTS.md remain available. That omitted-`--task-worker` fallback does not add `-e` paths.
 
 ## Non-run-state command: preview-bindings
 
@@ -127,7 +142,7 @@ loop-engine preview-bindings [JSON|@FILE]
 
 Omitted operand reads stdin; `@FILE` reads that path; otherwise the operand is inline JSON. Accepted JSON is a `work_slot_bindings` map or an object containing that key.
 
-It expands nested `--worker` and `--task-worker` JSON `{command, args}` objects, lists detected `--model` values, and warns on unpinned `pi`, PATH versus absolute command, missing shipped sandbox flags, and the 30-second invoke default. Warnings alone exit 0. It exits nonzero on malformed input and when any `fan-out` binding has zero `--worker` entries. `start` still does not parse `fan-out` argv; preview is the fail-closed check for that freeze.
+It expands nested `--worker` and `--task-worker` JSON `{command, args}` objects, lists detected `--model` values, and warns on unpinned `pi`, PATH versus absolute command, missing `--no-skills`, `--no-extensions` without `-e`, and the 30-second invoke default. Missing `--no-extensions` is not a required warning. Warnings alone exit 0. It exits nonzero on malformed input and when any `fan-out` binding has zero `--worker` entries. `start` still does not parse `fan-out` argv; preview is the fail-closed check for that freeze.
 
 ## Canonical loop
 

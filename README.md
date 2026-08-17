@@ -119,6 +119,8 @@ loop-engine --json --config /absolute/path/to/providers.toml \
 
 `start` initial input and `append` data accept JSON inline, `@FILE`, or `-` (stdin). `start` returns the run ID at `result.run.id`. Reuse the same catalog and run ID for every later operation. `show` is provider-free.
 
+Shipped software-change, policy-document, and research profiles omit `work_slot_bindings` (or `{}`), so implement and review slots stay driver-performed. Bound workers are opt-in skill templates: keep `--no-skills --no-extensions`, add `-e CURSOR_EXTENSION_PATH -e CLAUDE_BRIDGE_EXTENSION_PATH`, name `--model MODEL`, and fill those placeholders in the per-run profile JSON. `loop-engine preview-bindings` warns when a pi worker has `--no-extensions` and no `-e`. When `--task-worker` is omitted, the default inner worker is `pi --print --no-skills --no-extensions`. Details: [docs/agent-usage.md](docs/agent-usage.md) and the shipped skills.
+
 With `--json`, exit `0` is `completed`, `10` is `rejected` (follow feedback; nothing is inferred as advancement), `20` is `error` (re-read `show`), and `2` is `invalid-invocation`. Full envelope and handoff rules: [docs/agent-usage.md](docs/agent-usage.md).
 
 `loop-engine --help` and `--version` work before any operation. `software-change --help`/`-h` and `research --help`/`-h` describe `describe`, `evaluate`, and `data-dump`; `--version`/`-V` prints the Cargo package version. `policy-document` accepts `data-dump DIR` on argv and otherwise reads one JSON request on stdin; it does not implement `--help` or `--version`. Historical v0.2.2 release installers predate the software-change CLI flags.

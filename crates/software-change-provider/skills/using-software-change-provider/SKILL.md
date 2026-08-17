@@ -37,42 +37,43 @@ cargo build -p loop-cli -p software-change-provider
 
 Register `target/debug/software-change` under alias `software-change` (absolute `command` path) in an uncommitted machine-local `providers.toml`.
 
-Pick a profile from [data/configs/](../../data/configs/) — `minimal.json` (validation gate only), `standard.json` (intent, design-review, validation axes), or `high-rigor.json` (all axes; two distinct reviewers on design-review and validation axes). Copy it to a run-specific file. Do not `start` that copy until the user has approved the work-slot policy below: shipped profiles already contain `work_slot_bindings`. Omit `artifact_root` in the usual case; the engine allocates the durable directory and records that absolute path in object `initial_input` (`show` reveals it). Pass `artifact_root` only to isolate files to a caller-chosen absolute existing directory. `start` may insert reserved `artifact_root` into object `initial_input` when the caller did not supply a nonempty path; object schemas that deny unknown keys must accept that field to remain evaluable; the engine does not skip injection, strip unknown keys, or classify providers.
+Pick a profile from [data/configs/](../../data/configs/) — `minimal.json` (validation gate only), `standard.json` (intent, design-review, validation axes), or `high-rigor.json` (all axes; two distinct reviewers on design-review and validation axes). Copy it to a run-specific file. Shipped profiles omit `work_slot_bindings`. Do not `start` that copy until the user has approved the work-slot policy below. Omit `artifact_root` in the usual case; the engine allocates the durable directory and records that absolute path in object `initial_input` (`show` reveals it). Pass `artifact_root` only to isolate files to a caller-chosen absolute existing directory. `start` may insert reserved `artifact_root` into object `initial_input` when the caller did not supply a nonempty path; object schemas that deny unknown keys must accept that field to remain evaluable; the engine does not skip injection, strip unknown keys, or classify providers.
 
 ## Work-slot policy (confirm before start)
 
 Cataloged slots: `explore-intent`, `design-draft`, `design-review`, `plan-draft`, `plan-review`, `implement`, `implementation-review`, `validate`. Bindings are sparse and freeze at `start`.
 
-Shipped profiles freeze:
+Shipped profiles omit `work_slot_bindings` (or `{}`). `implement`, `design-review`, `plan-review`, `implementation-review`, and `validate` stay driver-performed until the caller adds a map. Bound workers are opt-in.
 
-| Slot | Shipped `{command, args}` |
+| Slot | Shipped binding |
 |---|---|
-| `implement` | `software-change` `run-plan-graph` (inner worker defaults to `pi --print --no-skills --no-extensions` unless `--task-worker JSON` is in the frozen args; that default must not pass `--no-context-files` and does not pass `--tools`) |
+| `implement` | **omitted** (driver-performed) |
 | `design-review`, `plan-review`, `implementation-review` | **omitted** (driver-performed) |
 | `validate` and the draft slots | unbound |
 
-A usable review binding is caller-supplied `--worker` objects frozen at `start` after `preview-bindings` and lock-in. Bindings cannot be patched mid-run. Keeping shipped `implement` without `--task-worker` leaves the inner `pi` model unpinned; that is not a confirmed model.
+Copy-paste templates below into the **per-run** profile JSON after replacing `CURSOR_EXTENSION_PATH`, `CLAUDE_BRIDGE_EXTENSION_PATH`, and `MODEL`. Do not put machine-local paths in the skill file. Keep `--no-skills --no-extensions` and add explicit `-e` so cursor-provider and claude-bridge load while MCP and other host extensions stay off. Review `pi` examples include `--tools read,grep,find,ls` and must not pass `--no-context-files`. Implement examples do not add `--tools`. When `--task-worker` is omitted, `run-plan-graph` still defaults to `pi --print --no-skills --no-extensions` with no `-e` and no `--model`; that fallback is fail-closed.
+
+A usable review binding is caller-supplied `--worker` objects frozen at `start` after `preview-bindings` and lock-in. Bindings cannot be patched mid-run.
 
 Before `start`, run `preview-bindings` on the exact `work_slot_bindings` JSON you will freeze, show that JSON, and wait for the user to confirm all three:
 
-1. **Use bound slots at all?** Keep the shipped map, keep a sparse subset, replace entries, or unbind everything (`{}` or delete the key). Keeping the shipped map is not model lock-in.
-2. **Keep shipped commands, or replace them?** Quote every bound `{command, args}`.
-3. **Which models, if any bound slot will invoke a model-bearing CLI?** Encode each model in frozen args. Nested inner workers count. For implement, add `--task-worker '{"command":"pi","args":["--print","--no-skills","--no-extensions","--model","MODEL"]}'` (or another CLI plus its model flags). For review, add repeated `--worker` objects that each include a model flag. Do not call `start` while a bound slot will invoke a model-bearing CLI unless each model id is in those frozen args, or the user has explicitly accepted that CLI's unpinned default. Do not pick a model after `start`.
+1. **Use bound slots at all?** Shipped profiles are unbound. Keep them unbound (`{}` or omit the key), or add a sparse map from the templates. Copying a profile is not model lock-in.
+2. **Exact `{command, args}`?** Quote every bound entry after filling placeholders.
+3. **Which models?** Encode each model in frozen args. Nested inner workers count. Do not call `start` while a bound slot will invoke a model-bearing CLI unless each model id is in those frozen args, or the user has explicitly accepted that CLI's unpinned default. Do not pick a model after `start`.
 
-Usable review binding (same pattern for `plan-review` and `implementation-review`; every model-bearing worker names a model; review `pi` examples include `--no-skills --no-extensions --tools read,grep,find,ls` and must not pass `--no-context-files`):
+Opt-in review binding (same pattern for `plan-review` and `implementation-review`; every model-bearing worker names a model):
 
 ```json
 "design-review": {
   "command": "loop-engine",
   "args": [
     "fan-out",
-    "--worker", "{\"command\":\"pi\",\"args\":[\"--print\",\"--no-skills\",\"--no-extensions\",\"--tools\",\"read,grep,find,ls\",\"--model\",\"MODEL\"]}",
-    "--worker", "{\"command\":\"claude\",\"args\":[\"-p\",\"--model\",\"MODEL\"]}"
+    "--worker", "{\"command\":\"pi\",\"args\":[\"--print\",\"--no-skills\",\"--no-extensions\",\"-e\",\"CURSOR_EXTENSION_PATH\",\"-e\",\"CLAUDE_BRIDGE_EXTENSION_PATH\",\"--tools\",\"read,grep,find,ls\",\"--model\",\"MODEL\"]}"
   ]
 }
 ```
 
-Custom implement inner worker (must not pass `--no-context-files`; do not add `--tools` unless you intend to restrict implement tools):
+Opt-in implement inner worker (must not pass `--no-context-files`; do not add `--tools` unless you intend to restrict implement tools):
 
 ```json
 "implement": {
@@ -80,12 +81,12 @@ Custom implement inner worker (must not pass `--no-context-files`; do not add `-
   "args": [
     "run-plan-graph",
     "--task-worker",
-    "{\"command\":\"pi\",\"args\":[\"--print\",\"--no-skills\",\"--no-extensions\",\"--model\",\"MODEL\"]}"
+    "{\"command\":\"pi\",\"args\":[\"--print\",\"--no-skills\",\"--no-extensions\",\"-e\",\"CURSOR_EXTENSION_PATH\",\"-e\",\"CLAUDE_BRIDGE_EXTENSION_PATH\",\"--model\",\"MODEL\"]}"
   ]
 }
 ```
 
-Driver-performed run: set `"work_slot_bindings": {}` even though the shipped profile had defaults.
+Driver-performed run: omit `work_slot_bindings` or set `"work_slot_bindings": {}`.
 
 Only after that approval:
 
@@ -131,7 +132,7 @@ loop-engine --json append "$RUN_ID" review-evidence @verdict.json
   "author": {"name": "reviewer-sol", "kind": "agent"},
   "subject": "design.json",
   "subject_revision": "3",
-  "config_version": "standard-4"
+  "config_version": "standard-5"
 }
 ```
 

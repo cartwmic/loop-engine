@@ -52,7 +52,7 @@ Global options may appear before or after the operation; the timeout option is s
 
 Object `initial_input` may include reserved `work_slot_bindings`: a sparse map from catalog slot ID to `{command, args}`. Omit the key or pass `{}` for no bindings. `start` rejects unknown slot IDs, unknown binding fields, and non-object values. `start` does not parse `fan-out` or `run-plan-graph` argv. Bindings freeze with the run.
 
-Lock that map with the user **before** `start`. Copying a provider profile is not approval: some shipped profiles already contain bindings. Inspect the JSON with `preview-bindings` before that confirmation. Confirm whether any slots are bound, the exact `{command, args}` for each bound slot (shipped default vs replacement), and — when a bound CLI will invoke a model — which model identifiers are encoded in those frozen args. Nested inner workers (`--task-worker`, `--worker`) count. Do not call `start` while a bound model-bearing CLI has no model in argv unless the user has explicitly accepted that CLI's unpinned default. Sparse: present keys are mandatory workers; absent keys stay driver-performed. A wrong freeze cannot be patched; terminate and start a new run.
+Lock that map with the user **before** `start`. Copying a provider profile is not approval. Shipped software-change, policy-document, and research profiles omit `work_slot_bindings` (or `{}`). Bound slots are opt-in: copy a skill template into the per-run profile JSON after replacing `CURSOR_EXTENSION_PATH`, `CLAUDE_BRIDGE_EXTENSION_PATH`, and `MODEL`. Inspect the JSON with `preview-bindings` before that confirmation. Confirm whether any slots are bound, the exact `{command, args}` for each bound slot, and — when a bound CLI will invoke a model — which model identifiers are encoded in those frozen args. Nested inner workers (`--task-worker`, `--worker`) count. Do not call `start` while a bound model-bearing CLI has no model in argv unless the user has explicitly accepted that CLI's unpinned default. Sparse: present keys are mandatory workers; absent keys stay driver-performed. A wrong freeze cannot be patched; terminate and start a new run.
 
 `show` projects `work_slots` (catalog snapshot: id, state, event; no instruction body) and `work_slot_invocations` (including overlay status `running` | `succeeded` | `failed` | `overrun`). Each invocation view also reports `overlay_meaning`, `elapsed_ms`, `remaining_allowed_ms`, `capture_dir`, and `inner_workers` (`command`, `args`, `exit_code` in argv or task order after the bound CLI finishes; empty while overlay is `running` or when no summary was copied). `show` does not spawn a provider and does not read capture files. Overlay meaning: succeeded means the bound CLI exited 0, not that the provider accepted the work; failed means the bound CLI exited nonzero or the waiter vanished; running means the waiter is alive and allowed time has not elapsed; overrun means allowed time elapsed while the waiter is alive and the driver invokes the same slot again. When the current state is a bound slot, `current_state_instructions` names the slot ID plus the frozen CLI binding `{command, args}` and that the legal start is `loop-engine invoke RUN_ID SLOT_ID`; it omits the stored work body. Bound-instruction triage order: overlay succeeded means the bound CLI exited 0, not that the provider accepted the work; captures are at the named capture directory on the invocation view and invoke result; the driver triages worker output, appends provider-shaped records, then requests the shown event; on overrun invoke the same slot again; on failed inspect stderr. Unbound slots keep the stored instruction body and the driver-performed path.
 
@@ -74,11 +74,36 @@ Use `fan-out` **ad hoc** when you want parallel worker CLIs without a run: pass 
 
 When a work slot is frozen to `loop-engine` args that begin with `fan-out`, the legal start remains `loop-engine invoke RUN_ID SLOT_ID`. Do not call `fan-out` yourself for that slot; `invoke` execs the frozen argv with the existing worker packet on stdin. Bound mode honors `packet.capture_dir` (writes per-worker `0/`, `1/`, … plus `summary.json` there) and rejects `--instructions`. Callers who want reviewers put `--worker` JSON objects in those frozen binding args at `start` after `preview-bindings` and lock-in. Bindings cannot be patched mid-run.
 
-Shipped software-change profiles omit `design-review`, `plan-review`, and `implementation-review` from `work_slot_bindings` (those rooms stay driver-performed). `implement` remains bound to `software-change` args `[run-plan-graph]`. A usable review binding is caller-supplied `--worker` objects frozen at `start` after preview and lock-in — not a stock zero-worker `fan-out` argv.
+Shipped software-change profiles omit `work_slot_bindings` (or `{}`), so `implement`, `design-review`, `plan-review`, and `implementation-review` stay driver-performed. Bound workers are opt-in. A usable review binding is caller-supplied `--worker` objects frozen at `start` after preview and lock-in — not a stock zero-worker `fan-out` argv.
 
-Documented review `pi` worker examples include `--print --no-skills --no-extensions --tools read,grep,find,ls` and must not pass `--no-context-files`.
+Copy-paste templates into the **per-run** profile JSON after replacing `CURSOR_EXTENSION_PATH`, `CLAUDE_BRIDGE_EXTENSION_PATH`, and `MODEL`. Do not put machine-local paths in skill files. Pi examples keep `--no-skills --no-extensions` and add explicit `-e` so cursor-provider and claude-bridge load. Review `pi` workers include `--tools read,grep,find,ls` and must not pass `--no-context-files`. Implement examples do not add `--tools`. `preview-bindings` warns when a pi worker has `--no-extensions` and no `-e`; missing `--no-extensions` is not a required warning.
 
-`software-change run-plan-graph` is an argv command of the software-change provider binary — the shipped implement worker — not an engine operation. Bound mode honors `packet.capture_dir` (per-task `{task_id}/` plus `summary.json`). When `--task-worker` is omitted, the default inner worker is `pi --print --no-skills --no-extensions`; it does not pass `--no-context-files` and does not pass `--tools`, so bash, edit, write, and AGENTS.md remain available.
+Opt-in review example (every model-bearing worker names a model):
+
+```json
+"design-review": {
+  "command": "loop-engine",
+  "args": [
+    "fan-out",
+    "--worker", "{\"command\":\"pi\",\"args\":[\"--print\",\"--no-skills\",\"--no-extensions\",\"-e\",\"CURSOR_EXTENSION_PATH\",\"-e\",\"CLAUDE_BRIDGE_EXTENSION_PATH\",\"--tools\",\"read,grep,find,ls\",\"--model\",\"MODEL\"]}"
+  ]
+}
+```
+
+Opt-in implement example:
+
+```json
+"implement": {
+  "command": "software-change",
+  "args": [
+    "run-plan-graph",
+    "--task-worker",
+    "{\"command\":\"pi\",\"args\":[\"--print\",\"--no-skills\",\"--no-extensions\",\"-e\",\"CURSOR_EXTENSION_PATH\",\"-e\",\"CLAUDE_BRIDGE_EXTENSION_PATH\",\"--model\",\"MODEL\"]}"
+  ]
+}
+```
+
+`software-change run-plan-graph` is an argv command of the software-change provider binary — not an engine operation. Bound mode honors `packet.capture_dir` (per-task `{task_id}/` plus `summary.json`). When `--task-worker` is omitted, the default inner worker is `pi --print --no-skills --no-extensions`; it does not pass `--no-context-files` and does not pass `--tools`, so bash, edit, write, and AGENTS.md remain available. That omitted-`--task-worker` fallback does not add `-e` paths.
 
 ## Non-run-state command: preview-bindings
 
@@ -88,7 +113,7 @@ Documented review `pi` worker examples include `--print --no-skills --no-extensi
 loop-engine preview-bindings [JSON|@FILE]
 ```
 
-Omitted operand reads stdin; `@FILE` reads that path; otherwise the operand is inline JSON. Accepted JSON is a `work_slot_bindings` map or an object containing that key. It expands nested `--worker` and `--task-worker` JSON `{command, args}` objects, lists detected `--model` values, and warns on unpinned `pi`, PATH versus absolute command, missing shipped sandbox flags, and the 30-second invoke default. Warnings alone exit 0. It exits nonzero on malformed input and when any `fan-out` binding has zero `--worker` entries. `start` still does not parse `fan-out` argv; preview is the fail-closed check for that freeze.
+Omitted operand reads stdin; `@FILE` reads that path; otherwise the operand is inline JSON. Accepted JSON is a `work_slot_bindings` map or an object containing that key. It expands nested `--worker` and `--task-worker` JSON `{command, args}` objects, lists detected `--model` values, and warns on unpinned `pi`, PATH versus absolute command, missing `--no-skills`, `--no-extensions` without `-e`, and the 30-second invoke default. Missing `--no-extensions` is not a required warning. Warnings alone exit 0. It exits nonzero on malformed input and when any `fan-out` binding has zero `--worker` entries. `start` still does not parse `fan-out` argv; preview is the fail-closed check for that freeze.
 
 ## Canonical loop
 
@@ -136,7 +161,7 @@ Repository checks name boundaries they actually cross:
 
 - component tests cover parser, core, SQLite, provider schema/evidence, and protocol behavior;
 - composed tests combine engine operations, SQLite, and provider subprocesses below CLI process boundary;
-- `scripts/software-change-journey.py --mode source --traversal-depth full` drives separate `loop-engine` processes through provider TOML, SQLite, production `software-change` process, copied high-rigor artifacts, sparse dummy-worker `work_slot_bindings`, `invoke` before the bound checked event, deterministic denials, evidence aggregation, and terminal state. It also proves `software-change run-plan-graph` and `loop-engine fan-out` with dummy inner workers (no live model), including `preview-bindings` nonzero on zero-worker `fan-out` JSON without creating a run;
+- `scripts/software-change-journey.py --mode source --traversal-depth full` drives separate `loop-engine` processes through provider TOML, SQLite, production `software-change` process, copied high-rigor artifacts, sparse dummy-worker `work_slot_bindings`, `invoke` before the bound checked event, deterministic denials, evidence aggregation, and terminal state. It also proves unbound shipped profiles, `software-change run-plan-graph` and `loop-engine fan-out` with dummy inner workers (no live model), `preview-bindings` nonzero on zero-worker `fan-out` JSON without creating a run, and `preview-bindings` warning when pi has `--no-extensions` and no `-e`;
 - `scripts/software-change-journey.py --mode packaged --traversal-depth checked-prefix` consumes extracted binaries, calls `data-dump`, and runs release-critical checked transition from dumped data only, including the same sparse binding/`invoke` proof;
 - `scripts/policy-document-journey.py` drives draft and audit modes through provider TOML, SQLite, production `policy-document` process, a sparse dummy-worker binding on `semantic-review`, ungated `prepare` → `ready`, and deterministic/semantic denials;
 - `scripts/research-journey.py --mode source` drives separate `loop-engine` processes through provider TOML, SQLite, production `research` process, copied standard profile, sparse dummy-worker `work_slot_bindings`, `invoke` before `scoped`, schema/evidence denials, and terminal state;

@@ -23,6 +23,13 @@ PATH_LOOP_ENGINE = "loop-engine"
 SHIPPED_IMPLEMENT_ARGS = ["run-plan-graph"]
 SHIPPED_FAN_OUT_ARGS = ["fan-out"]
 SHIPPED_REVIEW_SLOT_IDS = ("design-review", "plan-review", "implementation-review")
+SHIPPED_UNBOUND_SLOT_IDS = (
+    "implement",
+    "design-review",
+    "plan-review",
+    "implementation-review",
+    "validate",
+)
 SHIPPED_PROFILE_RELATIVE = Path("crates/software-change-provider/data/configs")
 SHIPPED_PROFILE_NAMES = ("minimal.json", "standard.json", "high-rigor.json")
 SOFTWARE_CHANGE_FIXTURES = (
@@ -54,6 +61,7 @@ OVERLAY_MEANING_SUCCEEDED = (
 )
 DEFAULT_PI_SANDBOX_ARGS = ["--print", "--no-skills", "--no-extensions"]
 FORBIDDEN_PI_FLAGS = ("--no-context-files", "--tools")
+PI_NO_EXTENSIONS_WITHOUT_E = "has --no-extensions and no -e"
 REVIEW_BINDING_SLOT_IDS = SHIPPED_REVIEW_SLOT_IDS + (
     "semantic-review",
     "deterministic-review",
@@ -501,19 +509,23 @@ def assert_no_review_bindings(bindings: Any, *, source: str) -> None:
         )
 
 
-def assert_shipped_path_names(bindings: Mapping[str, Any]) -> None:
-    implement = bindings.get("implement")
-    if not isinstance(implement, dict):
-        raise WorkSlotJourneyFailure("shipped bindings omitted implement")
-    if implement.get("command") != PATH_SOFTWARE_CHANGE or implement.get("args") != SHIPPED_IMPLEMENT_ARGS:
-        raise WorkSlotJourneyFailure(f"shipped implement binding mismatch: {implement}")
-    for slot_id in SHIPPED_REVIEW_SLOT_IDS:
-        if slot_id in bindings:
-            raise WorkSlotJourneyFailure(
-                f"shipped bindings unexpectedly bound {slot_id}"
-            )
-    if "validate" in bindings:
-        raise WorkSlotJourneyFailure("shipped bindings unexpectedly bound validate")
+def assert_shipped_path_names(bindings: Mapping[str, Any] | None) -> None:
+    if bindings is None:
+        return
+    if not isinstance(bindings, dict):
+        raise WorkSlotJourneyFailure(
+            f"shipped work_slot_bindings must be omitted or an object, got {bindings!r}"
+        )
+    present = [slot_id for slot_id in SHIPPED_UNBOUND_SLOT_IDS if slot_id in bindings]
+    if present:
+        raise WorkSlotJourneyFailure(
+            f"shipped bindings unexpectedly bound {present}"
+        )
+    extra = sorted(str(key) for key in bindings.keys())
+    if extra:
+        raise WorkSlotJourneyFailure(
+            f"shipped work_slot_bindings must be omitted or empty, got keys {extra}"
+        )
 
 
 def assert_rewritten_binaries(
@@ -823,7 +835,7 @@ def _json_stdout(completed: subprocess.CompletedProcess[bytes]) -> dict[str, Any
 
 
 def prove_shipped_software_change_profiles(data_root: Path) -> list[str]:
-    """Copied shipped profiles omit review slots and keep implement bound."""
+    """Copied shipped profiles omit work_slot_bindings so implement and reviews are unbound."""
     names: list[str] = []
     for name in SHIPPED_PROFILE_NAMES:
         path = data_root / SHIPPED_PROFILE_RELATIVE / name
@@ -836,8 +848,10 @@ def prove_shipped_software_change_profiles(data_root: Path) -> list[str]:
         if not isinstance(profile, dict):
             raise WorkSlotJourneyFailure(f"shipped profile is not an object: {path}")
         bindings = profile.get("work_slot_bindings")
-        if not isinstance(bindings, dict):
-            raise WorkSlotJourneyFailure(f"{path} omitted work_slot_bindings")
+        if bindings is not None and not isinstance(bindings, dict):
+            raise WorkSlotJourneyFailure(
+                f"{path} work_slot_bindings must be omitted or an object: {bindings!r}"
+            )
         assert_shipped_path_names(bindings)
         names.append(name)
     return names
@@ -1570,6 +1584,151 @@ def prove_preview_fail_closed(*, engine: Path, work_dir: Path) -> list[str]:
     ]
 
 
+def _preview_warning_text(report: Mapping[str, Any]) -> str:
+    warnings = report.get("warnings")
+    if isinstance(warnings, list):
+        return "\n".join(str(item) for item in warnings)
+    return json.dumps(report)
+
+
+def _fan_out_pi_binding(args: Sequence[str]) -> dict[str, Any]:
+    return {
+        "design-review": {
+            "command": PATH_LOOP_ENGINE,
+            "args": [
+                "fan-out",
+                "--worker",
+                json.dumps({"command": "pi", "args": list(args)}),
+            ],
+        }
+    }
+
+
+def prove_preview_pi_extension_warnings(*, engine: Path, work_dir: Path) -> list[str]:
+    """preview-bindings warns on --no-extensions without -e; missing --no-extensions is not required."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    missing_e = _fan_out_pi_binding(
+        [
+            "--print",
+            "--no-skills",
+            "--no-extensions",
+            "--tools",
+            "read,grep,find,ls",
+            "--model",
+            "x",
+        ]
+    )
+    with_e = _fan_out_pi_binding(
+        [
+            "--print",
+            "--no-skills",
+            "--no-extensions",
+            "-e",
+            "/tmp/cursor",
+            "-e",
+            "/tmp/claude-bridge",
+            "--tools",
+            "read,grep,find,ls",
+            "--model",
+            "x",
+        ]
+    )
+    without_no_extensions = _fan_out_pi_binding(
+        [
+            "--print",
+            "--no-skills",
+            "--tools",
+            "read,grep,find,ls",
+            "--model",
+            "x",
+        ]
+    )
+    implement_with_e = {
+        "implement": {
+            "command": PATH_SOFTWARE_CHANGE,
+            "args": [
+                "run-plan-graph",
+                "--task-worker",
+                json.dumps(
+                    {
+                        "command": "pi",
+                        "args": [
+                            "--print",
+                            "--no-skills",
+                            "--no-extensions",
+                            "-e",
+                            "/tmp/cursor",
+                            "-e",
+                            "/tmp/claude-bridge",
+                            "--model",
+                            "x",
+                        ],
+                    }
+                ),
+            ],
+        }
+    }
+
+    code, report = run_preview_bindings(engine, missing_e, cwd=work_dir)
+    if code != 0:
+        raise WorkSlotJourneyFailure(
+            f"preview-bindings missing -e unexpectedly exited {code}: {report}"
+        )
+    missing_text = _preview_warning_text(report)
+    if PI_NO_EXTENSIONS_WITHOUT_E not in missing_text:
+        raise WorkSlotJourneyFailure(
+            f"preview-bindings omitted missing-`-e` warning: {report}"
+        )
+
+    code, report = run_preview_bindings(engine, with_e, cwd=work_dir)
+    if code != 0:
+        raise WorkSlotJourneyFailure(
+            f"preview-bindings with -e unexpectedly exited {code}: {report}"
+        )
+    with_e_text = _preview_warning_text(report)
+    if PI_NO_EXTENSIONS_WITHOUT_E in with_e_text:
+        raise WorkSlotJourneyFailure(
+            f"preview-bindings warned missing -e despite -e args: {report}"
+        )
+    if "lacks --no-extensions" in with_e_text:
+        raise WorkSlotJourneyFailure(
+            f"preview-bindings warned about missing --no-extensions: {report}"
+        )
+
+    code, report = run_preview_bindings(engine, without_no_extensions, cwd=work_dir)
+    if code != 0:
+        raise WorkSlotJourneyFailure(
+            f"preview-bindings without --no-extensions unexpectedly exited {code}: {report}"
+        )
+    omitted_text = _preview_warning_text(report)
+    if PI_NO_EXTENSIONS_WITHOUT_E in omitted_text:
+        raise WorkSlotJourneyFailure(
+            f"preview-bindings warned missing -e when --no-extensions was absent: {report}"
+        )
+    if "lacks --no-extensions" in omitted_text:
+        raise WorkSlotJourneyFailure(
+            f"missing --no-extensions was treated as a required warning: {report}"
+        )
+
+    code, report = run_preview_bindings(engine, implement_with_e, cwd=work_dir)
+    if code != 0:
+        raise WorkSlotJourneyFailure(
+            f"preview-bindings opt-in implement with -e exited {code}: {report}"
+        )
+    implement_text = _preview_warning_text(report)
+    if PI_NO_EXTENSIONS_WITHOUT_E in implement_text:
+        raise WorkSlotJourneyFailure(
+            f"opt-in implement with -e still warned missing -e: {report}"
+        )
+
+    return [
+        "preview-bindings warns when pi has --no-extensions and no -e",
+        "preview-bindings does not require a missing --no-extensions warning",
+        "opt-in dummy implement/review bindings may include -e args",
+        "no live model",
+    ]
+
+
 def prove_zero_worker_review_invoke(
     *,
     engine: Path,
@@ -1779,15 +1938,34 @@ def self_test_helpers() -> None:
     """Unit-test PATH rewrite and dummy-stdin-worker without spawning the engine."""
     engine = Path("/tmp/built/loop-engine")
     provider = Path("/tmp/built/software-change")
-    shipped_defaults = {
+    assert_shipped_path_names(None)
+    assert_shipped_path_names({})
+    try:
+        assert_shipped_path_names(
+            {
+                "implement": {
+                    "command": PATH_SOFTWARE_CHANGE,
+                    "args": list(SHIPPED_IMPLEMENT_ARGS),
+                },
+            }
+        )
+    except WorkSlotJourneyFailure as error:
+        if "unexpectedly bound" not in str(error):
+            raise WorkSlotJourneyFailure(
+                f"self-test: shipped check rejected implement for the wrong reason: {error}"
+            ) from error
+    else:
+        raise WorkSlotJourneyFailure(
+            "self-test: shipped check accepted implement binding"
+        )
+    opt_in_implement = {
         "implement": {
             "command": PATH_SOFTWARE_CHANGE,
             "args": list(SHIPPED_IMPLEMENT_ARGS),
         },
     }
-    assert_shipped_path_names(shipped_defaults)
     rewritten_defaults = rewrite_path_commands(
-        shipped_defaults, engine=engine, provider=provider
+        opt_in_implement, engine=engine, provider=provider
     )
     assert_rewritten_binaries(
         rewritten_defaults, engine=engine, provider=provider

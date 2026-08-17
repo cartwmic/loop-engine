@@ -35,9 +35,9 @@ fn read_data(relative: &str) -> Vec<u8> {
 
 fn profile_name(config_version: &str) -> &'static str {
     match config_version {
-        "minimal-3" => "minimal",
-        "standard-4" => "standard",
-        "high-rigor-4" => "high-rigor",
+        "minimal-4" => "minimal",
+        "standard-5" => "standard",
+        "high-rigor-5" => "high-rigor",
         other => panic!("unknown shipped config version {other}"),
     }
 }
@@ -1316,11 +1316,11 @@ fn canonical_request_json_has_exact_fields_and_no_trailing_newline() {
         "docs-integrated",
         "validation-report.json",
         "r15",
-        "standard-4",
+        "standard-5",
     );
     assert_eq!(
         request,
-        br#"{"gate":"validation","policy_id":"docs-integrated","subject":"validation-report.json","subject_revision":"r15","config_version":"standard-4"}"#
+        br#"{"gate":"validation","policy_id":"docs-integrated","subject":"validation-report.json","subject_revision":"r15","config_version":"standard-5"}"#
     );
     assert_ne!(request.last(), Some(&b'\n'));
 }

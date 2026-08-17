@@ -221,9 +221,9 @@ fn all_profiles_pass_production_config_validation_and_have_exact_subjects() {
     for profile in PROFILES {
         let config = load_profile(profile);
         let expected_version = match *profile {
-            "minimal" => "minimal-3",
-            "standard" => "standard-4",
-            "high-rigor" => "high-rigor-4",
+            "minimal" => "minimal-4",
+            "standard" => "standard-5",
+            "high-rigor" => "high-rigor-5",
             _ => unreachable!("unknown profile {profile}"),
         };
         assert_eq!(config["config_version"], expected_version);
@@ -282,32 +282,34 @@ fn all_profiles_pass_production_config_validation_and_have_exact_subjects() {
 }
 
 #[test]
-fn shipped_work_slot_bindings_bind_only_implement_to_run_plan_graph() {
+fn shipped_work_slot_bindings_are_unbound() {
     for profile in PROFILES {
         let config = load_profile(profile);
-        let bindings = object(&config["work_slot_bindings"], "work_slot_bindings");
-        let keys: BTreeSet<&str> = bindings.keys().map(String::as_str).collect();
-        assert_eq!(
-            keys,
-            BTreeSet::from(["implement"]),
-            "{profile} work_slot_bindings keys"
-        );
-        let implement = object(&bindings["implement"], "implement");
-        assert_eq!(
-            string(&implement["command"], "implement.command"),
-            "software-change"
-        );
-        let args: Vec<&str> = array(&implement["args"], "implement.args")
-            .iter()
-            .map(|value| string(value, "implement.args item"))
-            .collect();
-        assert_eq!(args, vec!["run-plan-graph"]);
-        for slot in ["design-review", "plan-review", "implementation-review"] {
+        let bindings = match config.get("work_slot_bindings") {
+            None => continue,
+            Some(Value::Object(map)) if map.is_empty() => continue,
+            Some(Value::Object(map)) => map,
+            Some(other) => {
+                panic!("{profile} work_slot_bindings must be omitted or an object, got {other}")
+            }
+        };
+        for slot in [
+            "implement",
+            "design-review",
+            "plan-review",
+            "implementation-review",
+            "validate",
+        ] {
             assert!(
                 !bindings.contains_key(slot),
-                "{profile} must omit review binding {slot}"
+                "{profile} must leave {slot} unbound"
             );
         }
+        assert!(
+            bindings.is_empty(),
+            "{profile} work_slot_bindings must be omitted or empty, got keys {:?}",
+            bindings.keys().collect::<Vec<_>>()
+        );
     }
 }
 

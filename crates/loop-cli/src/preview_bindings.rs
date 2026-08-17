@@ -3,7 +3,8 @@
 //! `preview-bindings` expands nested `--worker` / `--task-worker` JSON with the
 //! same `{command, args}` parse as `fan-out`, lists `--model` values, and warns
 //! on inspectable risks. It opens no database. Zero-worker fan-out is an error;
-//! warnings alone are not.
+//! warnings alone are not. A pi worker with `--no-extensions`/`-ne` and no
+//! `-e`/`--extension` is a warning; missing `--no-extensions` is not.
 
 use crate::fan_out::{parse_worker_cli_json, WorkerCli};
 use serde::Serialize;
@@ -15,6 +16,9 @@ use std::path::Path;
 
 pub(crate) const DEFAULT_INVOKE_TIMEOUT_WARNING: &str =
     "invoke allowed_time_ms defaults to 30000 unless the caller passes --timeout-ms";
+
+/// Substring of the warning when a pi worker has `--no-extensions`/`-ne` and no `-e`/`--extension`.
+pub(crate) const PI_NO_EXTENSIONS_WITHOUT_E: &str = "has --no-extensions and no -e";
 
 const REVIEW_TOOLS: [&str; 4] = ["find", "grep", "ls", "read"];
 
@@ -270,10 +274,13 @@ fn inspect_command(
             format!("command `{command}` is pi and args have no --model"),
         );
     }
-    if !has_token(args, "--no-skills") || !has_token(args, "--no-extensions") {
+    if !has_bool_flag(args, "--no-skills", "-ns") {
+        push_unique(warnings, format!("pi worker `{command}` lacks --no-skills"));
+    }
+    if has_bool_flag(args, "--no-extensions", "-ne") && !has_extension_flag(args) {
         push_unique(
             warnings,
-            format!("pi worker `{command}` lacks --no-skills or --no-extensions"),
+            format!("pi worker `{command}` {PI_NO_EXTENSIONS_WITHOUT_E}"),
         );
     }
     if under_fan_out && !tools_is_review_readonly(args) {
@@ -335,6 +342,16 @@ fn models_in_argv(args: &[String]) -> Vec<String> {
 fn has_token(args: &[String], flag: &str) -> bool {
     args.iter()
         .any(|token| token == flag || token.starts_with(&format!("{flag}=")))
+}
+
+fn has_bool_flag(args: &[String], long: &str, short: &str) -> bool {
+    args.iter()
+        .any(|token| token == long || token == short || token.starts_with(&format!("{long}=")))
+}
+
+fn has_extension_flag(args: &[String]) -> bool {
+    args.iter()
+        .any(|token| token == "-e" || token == "--extension" || token.starts_with("--extension="))
 }
 
 fn tools_is_review_readonly(args: &[String]) -> bool {
@@ -651,5 +668,94 @@ mod tests {
     fn extra_operand_is_invalid_invocation() {
         let result = execute(["preview-bindings", "{}", "extra"]);
         assert_eq!(result.exit_code, EXIT_INVALID_INVOCATION);
+    }
+
+    fn joined_warnings(report: &PreviewReport) -> String {
+        report.warnings.join("\n")
+    }
+
+    #[test]
+    fn pi_no_extensions_without_e_warns() {
+        let operand = json!({
+            "implement": {
+                "command": "pi",
+                "args": ["--print", "--no-skills", "--no-extensions"]
+            }
+        })
+        .to_string();
+        let report = preview(&operand, false).expect("preview");
+        let joined = joined_warnings(&report);
+        assert!(joined.contains(PI_NO_EXTENSIONS_WITHOUT_E), "{joined}");
+    }
+
+    #[test]
+    fn pi_no_extensions_with_e_does_not_warn_missing_e_or_missing_no_extensions() {
+        let operand = json!({
+            "implement": {
+                "command": "pi",
+                "args": [
+                    "--print",
+                    "--no-skills",
+                    "--no-extensions",
+                    "-e",
+                    "/tmp/cursor",
+                    "-e",
+                    "/tmp/claude-bridge",
+                    "--model",
+                    "x"
+                ]
+            }
+        })
+        .to_string();
+        let report = preview(&operand, false).expect("preview");
+        let joined = joined_warnings(&report);
+        assert!(!joined.contains(PI_NO_EXTENSIONS_WITHOUT_E), "{joined}");
+        assert!(!joined.contains("lacks --no-extensions"), "{joined}");
+        assert!(!joined.contains("no --model"), "{joined}");
+    }
+
+    #[test]
+    fn pi_without_no_extensions_does_not_warn_about_missing_no_extensions() {
+        let operand = json!({
+            "implement": {
+                "command": "pi",
+                "args": ["--print", "--no-skills", "--model", "x"]
+            }
+        })
+        .to_string();
+        let report = preview(&operand, false).expect("preview");
+        let joined = joined_warnings(&report);
+        assert!(!joined.contains("lacks --no-extensions"), "{joined}");
+        assert!(!joined.contains(PI_NO_EXTENSIONS_WITHOUT_E), "{joined}");
+        assert!(!joined.contains("lacks --no-skills"), "{joined}");
+    }
+
+    #[test]
+    fn fan_out_pi_no_extensions_without_e_exits_0_and_warns() {
+        let worker = worker_json(
+            "pi",
+            &[
+                "--print",
+                "--no-skills",
+                "--no-extensions",
+                "--tools",
+                "read,grep,find,ls",
+                "--model",
+                "x",
+            ],
+        );
+        let operand = json!({"design-review": fan_out_binding(&[worker])}).to_string();
+        let result = execute(["preview-bindings", &operand]);
+        assert_eq!(result.exit_code, EXIT_COMPLETED, "{}", result.stderr);
+        let report: Value =
+            serde_json::from_str(result.stdout.trim()).expect("preview JSON report");
+        let joined = report["warnings"]
+            .as_array()
+            .expect("warnings")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(joined.contains(PI_NO_EXTENSIONS_WITHOUT_E), "{joined}");
     }
 }

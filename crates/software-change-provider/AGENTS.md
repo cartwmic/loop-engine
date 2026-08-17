@@ -12,7 +12,7 @@ Frozen requirements this crate's acceptance suite traces to (R1–R27, A1–A15,
 
 Per-run obligations are frozen in immutable `initial_input` (`review_policies`, `artifact_schemas`, `config_version`, `artifact_root`). `show` is the durable handoff; changing a source profile does not change an existing run. No policy, schema, prompt, or artifact shape is baked into provider code — those arrive in config data.
 
-Shipped profile versions currently in-tree: `minimal-3`, `standard-4`, `high-rigor-4`. Evidence `config_version` must match the run's frozen value, not whatever file is currently shipped.
+Shipped profile versions currently in-tree: `minimal-4`, `standard-5`, `high-rigor-5`. Evidence `config_version` must match the run's frozen value, not whatever file is currently shipped. Shipped profiles omit `work_slot_bindings`; bound workers are opt-in skill templates.
 
 ## Workflow
 

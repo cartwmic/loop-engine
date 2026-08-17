@@ -1,5 +1,5 @@
 {
-  "config_version": "minimal-3",
+  "config_version": "minimal-4",
   "review_policies": {
     "intent": [],
     "design-review": [],
@@ -614,12 +614,6 @@
       "to": "intent.json"
     }
   ],
-  "work_slot_bindings": {
-    "implement": {
-      "command": "software-change",
-      "args": ["run-plan-graph"]
-    }
-  },
   "extra": {
     "profile": "minimal",
     "template_root": "crates/software-change-provider/data/templates"

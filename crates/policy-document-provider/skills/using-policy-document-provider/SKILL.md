@@ -51,7 +51,25 @@ policy-document data-dump "$DATA_ROOT"
 
 Choose [readme.json](../../data/readme.json) or [agents.json](../../data/agents.json). Copy it to a run-specific file; set `mode` to `draft` or `audit`; replace `target.path` with the absolute target path. Keep shipped `target.id` and `profile_version` unchanged unless intentionally authoring a custom profile. Omit `artifact_root` in the usual case; the reserved key is accepted and ignored, and the provider is not required to write artifact files. Other unknown `initial_input` keys still fail.
 
-Shipped profiles have **no** `work_slot_bindings`. Cataloged slots are `deterministic-review` and `semantic-review`. Do not add bindings, and do not start, until the user confirms: (1) driver-performed (omit the key or `{}`) vs which slots to bind; (2) exact `{command, args}` if bound, rather than assuming a default; (3) which models those CLIs will use, encoded in frozen args. Nested inner workers count. Do not call `start` while a bound model-bearing CLI has no model in argv unless the user has explicitly accepted that CLI's unpinned default. Bindings freeze and cannot be patched. Run `loop-engine preview-bindings` on any `work_slot_bindings` JSON you will freeze.
+Shipped profiles omit `work_slot_bindings` (or `{}`). Cataloged slots are `deterministic-review` and `semantic-review`; both stay driver-performed until the caller adds a map. Bound workers are opt-in.
+
+Copy-paste templates below into the **per-run** profile JSON after replacing `CURSOR_EXTENSION_PATH`, `CLAUDE_BRIDGE_EXTENSION_PATH`, and `MODEL`. Do not put machine-local paths in the skill file. Keep `--no-skills --no-extensions` and add explicit `-e` so cursor-provider and claude-bridge load. Review `pi` examples include `--tools read,grep,find,ls` and must not pass `--no-context-files`. `preview-bindings` warns when a pi worker has `--no-extensions` and no `-e`; missing `--no-extensions` is not a required warning.
+
+Do not add bindings, and do not start, until the user confirms: (1) driver-performed (omit the key or `{}`) vs which slots to bind; (2) exact `{command, args}` if bound, after filling placeholders; (3) which models those CLIs will use, encoded in frozen args. Nested inner workers count. Do not call `start` while a bound model-bearing CLI has no model in argv unless the user has explicitly accepted that CLI's unpinned default. Bindings freeze and cannot be patched. Run `loop-engine preview-bindings` on any `work_slot_bindings` JSON you will freeze.
+
+Opt-in review binding (same pattern for `deterministic-review`; every model-bearing worker names a model):
+
+```json
+"semantic-review": {
+  "command": "loop-engine",
+  "args": [
+    "fan-out",
+    "--worker", "{\"command\":\"pi\",\"args\":[\"--print\",\"--no-skills\",\"--no-extensions\",\"-e\",\"CURSOR_EXTENSION_PATH\",\"-e\",\"CLAUDE_BRIDGE_EXTENSION_PATH\",\"--tools\",\"read,grep,find,ls\",\"--model\",\"MODEL\"]}"
+  ]
+}
+```
+
+Driver-performed run: omit `work_slot_bindings` or set `"work_slot_bindings": {}`.
 
 ```sh
 loop-engine --json --config "$PROVIDER_CONFIG" \

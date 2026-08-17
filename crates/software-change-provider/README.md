@@ -54,7 +54,7 @@ ENGINE=target/debug/loop-engine
 PROVIDER_CONFIG="/absolute/path/to/your/providers.toml"
 ```
 
-Copy each selected profile to a run-specific file. For installed binaries after `data-dump`, source profiles from `$DATA_ROOT`; for checkout development, set `DATA_ROOT="$PWD"` first. Omit `artifact_root` from that copy in the usual case so the engine allocates the durable directory. Shipped profiles contain `work_slot_bindings`; confirm that map with the user and run `loop-engine preview-bindings` before `start`. Then run the matching command:
+Copy each selected profile to a run-specific file. For installed binaries after `data-dump`, source profiles from `$DATA_ROOT`; for checkout development, set `DATA_ROOT="$PWD"` first. Omit `artifact_root` from that copy in the usual case so the engine allocates the durable directory. Shipped profiles omit `work_slot_bindings`. Bound workers are opt-in: copy a skill template into the per-run file after replacing placeholders, confirm that map with the user, and run `loop-engine preview-bindings` before `start`. Then run the matching command:
 
 ```sh
 DATA_ROOT="$HOME/.local/share/software-change-provider"
@@ -118,7 +118,7 @@ These are the shipped files consumed by provider tests, guidance, and review pro
 
 The profiles configure the same five policy gates: `intent` (`explore → design`), `design-review`, `plan-review`, `implementation-review`, and `validation`. `minimal` keeps only `validation`/`intent-delivered`; `standard` supplies the standard intent, design-review, and validation axes; `high-rigor` supplies all shipped axes and requires two distinct reviewers for design-review and validation axes.
 
-Shipped profiles freeze `implement` to `software-change` args `[run-plan-graph]` (inner worker defaults to `pi --print --no-skills --no-extensions`; that default must not pass `--no-context-files` and does not pass `--tools`). They omit `design-review`, `plan-review`, and `implementation-review` from `work_slot_bindings` (those rooms stay driver-performed). A usable review binding is caller-supplied `--worker` objects frozen at `start` after `loop-engine preview-bindings` and lock-in. Copying a profile is not model lock-in.
+Shipped profiles omit `work_slot_bindings` (or `{}`), so `implement`, `design-review`, `plan-review`, and `implementation-review` stay driver-performed. Bound workers are opt-in skill templates: keep `--no-skills --no-extensions`, add `-e CURSOR_EXTENSION_PATH -e CLAUDE_BRIDGE_EXTENSION_PATH`, name `--model MODEL`, fill those placeholders in the per-run profile JSON, and run `loop-engine preview-bindings` before `start`. Review `pi` examples also include `--tools read,grep,find,ls` and must not pass `--no-context-files`. When `--task-worker` is omitted, `run-plan-graph` still defaults to `pi --print --no-skills --no-extensions` with no `-e` and no `--model`; that fallback must not pass `--no-context-files` and does not pass `--tools`. Copying a profile is not model lock-in.
 
 ### Artifact templates
 

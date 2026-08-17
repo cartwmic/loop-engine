@@ -43,7 +43,34 @@ command = "/absolute/path/to/target/debug/research"
 args = []
 ```
 
-Copy `crates/research-provider/data/configs/standard.json` to a run-specific file. Shipped profiles have **no** `work_slot_bindings`. Cataloged slots are `scope`, `gather`, `verify`, and `synthesize`. Do not add bindings, and do not start, until the user confirms: (1) driver-performed (omit the key or `{}`) vs which slots to bind; (2) exact `{command, args}` if bound; (3) which models those CLIs will use, encoded in frozen args. Nested inner workers count. Do not call `start` while a bound model-bearing CLI has no model in argv unless the user has explicitly accepted that CLI's unpinned default. Bindings freeze and cannot be patched. Run `loop-engine preview-bindings` on any `work_slot_bindings` JSON you will freeze. Omit `artifact_root` in the usual case; the engine allocates the durable directory and records that absolute path in object `initial_input` (`show` reveals it). Pass `artifact_root` only to isolate files to a caller-chosen absolute existing directory. `start` may insert reserved `artifact_root` into object `initial_input` when the caller did not supply a nonempty path; object schemas that deny unknown keys must accept that field to remain evaluable; the engine does not skip injection, strip unknown keys, or classify providers. Then:
+Copy `crates/research-provider/data/configs/standard.json` to a run-specific file. Shipped profiles omit `work_slot_bindings` (or `{}`). Cataloged slots are `scope`, `gather`, `verify`, and `synthesize`; all stay driver-performed until the caller adds a map. Bound workers are opt-in.
+
+Copy-paste templates below into the **per-run** profile JSON after replacing `CURSOR_EXTENSION_PATH`, `CLAUDE_BRIDGE_EXTENSION_PATH`, and `MODEL`. Do not put machine-local paths in the skill file. Keep `--no-skills --no-extensions` and add explicit `-e` so cursor-provider and claude-bridge load. Review `pi` examples include `--tools read,grep,find,ls` and must not pass `--no-context-files`. Authoring slots (`scope`, `gather`) do not add `--tools`. `preview-bindings` warns when a pi worker has `--no-extensions` and no `-e`; missing `--no-extensions` is not a required warning.
+
+Do not add bindings, and do not start, until the user confirms: (1) driver-performed (omit the key or `{}`) vs which slots to bind; (2) exact `{command, args}` if bound, after filling placeholders; (3) which models those CLIs will use, encoded in frozen args. Nested inner workers count. Do not call `start` while a bound model-bearing CLI has no model in argv unless the user has explicitly accepted that CLI's unpinned default. Bindings freeze and cannot be patched. Run `loop-engine preview-bindings` on any `work_slot_bindings` JSON you will freeze.
+
+Opt-in review binding (same pattern for `synthesize`; every model-bearing worker names a model):
+
+```json
+"verify": {
+  "command": "loop-engine",
+  "args": [
+    "fan-out",
+    "--worker", "{\"command\":\"pi\",\"args\":[\"--print\",\"--no-skills\",\"--no-extensions\",\"-e\",\"CURSOR_EXTENSION_PATH\",\"-e\",\"CLAUDE_BRIDGE_EXTENSION_PATH\",\"--tools\",\"read,grep,find,ls\",\"--model\",\"MODEL\"]}"
+  ]
+}
+```
+
+Opt-in authoring worker (must not pass `--no-context-files`; do not add `--tools` unless you intend to restrict tools; same pattern for `scope`):
+
+```json
+"gather": {
+  "command": "pi",
+  "args": ["--print", "--no-skills", "--no-extensions", "-e", "CURSOR_EXTENSION_PATH", "-e", "CLAUDE_BRIDGE_EXTENSION_PATH", "--model", "MODEL"]
+}
+```
+
+Driver-performed run: omit `work_slot_bindings` or set `"work_slot_bindings": {}`. Omit `artifact_root` in the usual case; the engine allocates the durable directory and records that absolute path in object `initial_input` (`show` reveals it). Pass `artifact_root` only to isolate files to a caller-chosen absolute existing directory. `start` may insert reserved `artifact_root` into object `initial_input` when the caller did not supply a nonempty path; object schemas that deny unknown keys must accept that field to remain evaluable; the engine does not skip injection, strip unknown keys, or classify providers. Then:
 
 ```sh
 loop-engine --json --config "$PROVIDER_CONFIG" \

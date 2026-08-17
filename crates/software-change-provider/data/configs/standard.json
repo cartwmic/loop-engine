@@ -1,5 +1,5 @@
 {
-  "config_version": "standard-4",
+  "config_version": "standard-5",
   "review_policies": {
     "intent": [
       {
@@ -362,12 +362,6 @@
     {"from": "implementation-report.json", "field": "plan_revision", "to": "plan.json"},
     {"from": "validation-report.json", "field": "intent_revision", "to": "intent.json"}
   ],
-  "work_slot_bindings": {
-    "implement": {
-      "command": "software-change",
-      "args": ["run-plan-graph"]
-    }
-  },
   "extra": {
     "profile": "standard",
     "template_root": "crates/software-change-provider/data/templates"

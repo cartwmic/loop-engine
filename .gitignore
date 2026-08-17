@@ -5,3 +5,4 @@ __pycache__/
 *.pyc
 
 .loop-engine/
+fan-out-adhoc/

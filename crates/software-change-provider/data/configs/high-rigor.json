@@ -1,5 +1,5 @@
 {
-  "config_version": "high-rigor-4",
+  "config_version": "high-rigor-5",
   "review_policies": {
     "intent": [
       {
@@ -737,12 +737,6 @@
       "to": "intent.json"
     }
   ],
-  "work_slot_bindings": {
-    "implement": {
-      "command": "software-change",
-      "args": ["run-plan-graph"]
-    }
-  },
   "extra": {
     "profile": "high-rigor",
     "template_root": "crates/software-change-provider/data/templates"
