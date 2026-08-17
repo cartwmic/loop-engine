@@ -4,11 +4,11 @@
     "gate": "validation",
     "axis": "intent-delivered",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "minimal-4",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "cfddf3fa6ba6f689984b24eac97cb175f47ef9e299fa03cbeae71aeb1bdc1a96"
   },
   {
@@ -16,11 +16,11 @@
     "gate": "validation",
     "axis": "intent-delivered",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "minimal-4",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "79a3bc3e9175ad3f6e5e1ee39ea8c55c76caa1b3b5dd3d0639b6292680046821"
   },
   {
@@ -28,11 +28,11 @@
     "gate": "intent",
     "axis": "solution-agnostic",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "standard-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "4dcdc07d4d955ea030e27ffe3084f54f86dbf9aba811ae7655c42a629658a113"
   },
   {
@@ -40,11 +40,11 @@
     "gate": "intent",
     "axis": "solution-agnostic",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "standard-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "8c68882155467e57e448d3a1649bc9db697d393e21484739eb030e6d98668ea5"
   },
   {
@@ -52,11 +52,11 @@
     "gate": "intent",
     "axis": "outside-verifiable",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "standard-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "dfc6951f00ce85dc55d97e527bc2b2ed7fa71b4f745cfeb607f0d18406510685"
   },
   {
@@ -64,11 +64,11 @@
     "gate": "intent",
     "axis": "outside-verifiable",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "standard-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "28c559fc6109650d3fc7ef9e94e0b6ad549ba9c388707800b8c062caee6e84e2"
   },
   {
@@ -76,11 +76,11 @@
     "gate": "intent",
     "axis": "scope-fenced",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "standard-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "636966ce5e03e17253a732c4ab38e4763f4d50dc9cf0a0fd71d43aade38d40de"
   },
   {
@@ -88,11 +88,11 @@
     "gate": "intent",
     "axis": "scope-fenced",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "standard-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "d411c485014776474154f460524b5b1f3a4979023217481998d5ab1dd1453997"
   },
   {
@@ -100,11 +100,11 @@
     "gate": "intent",
     "axis": "constraints-are-limits",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "standard-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "97b8871e9608ce9f51fe5ac2ef6de00e91885426e04340862e892d6c5c53eb49"
   },
   {
@@ -112,11 +112,11 @@
     "gate": "intent",
     "axis": "constraints-are-limits",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "standard-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "4980a05fe0f0877f9811fdbcdb4447b520a550cc656efa9c6c8da8874b405172"
   },
   {
@@ -124,11 +124,11 @@
     "gate": "intent",
     "axis": "problem-grounded",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "standard-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "3bc1ed2e198c108e37e90b4e986ecc2b4754d5f6311cc402045fbfeb88d6971a"
   },
   {
@@ -136,11 +136,11 @@
     "gate": "intent",
     "axis": "problem-grounded",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "standard-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "caee9364e83cf89f2b701b49fe4b092755bf5f893f424bba43d4b52a8a43a97f"
   },
   {
@@ -148,11 +148,11 @@
     "gate": "design-review",
     "axis": "intent-faithful",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "standard-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "807a5034531c7a2d85a94169854cec61b9977ba7f411a53f1f72d6866fc02cfe"
   },
   {
@@ -160,11 +160,11 @@
     "gate": "design-review",
     "axis": "intent-faithful",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "standard-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "86c3d8dadbcbb7c9870141aa08a7fbad3ff2b929b5ade8cc7e100c29a3821767"
   },
   {
@@ -172,11 +172,11 @@
     "gate": "design-review",
     "axis": "acceptance-covered",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "standard-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "e83837e87cd9123d986463838d15ed40ae277a31ed23d3c312398d50bcbf2999"
   },
   {
@@ -184,11 +184,11 @@
     "gate": "design-review",
     "axis": "acceptance-covered",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "standard-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "397396dd6e90ed4c912a05256c86b90b5c07f3cf853cf4ff893309f0f12a7e46"
   },
   {
@@ -196,11 +196,11 @@
     "gate": "design-review",
     "axis": "structural-not-procedural",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "standard-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "031302ad72f002b8678517fcb8d14458f09c3d60cbb702edc76928b0906ab4d5"
   },
   {
@@ -208,11 +208,11 @@
     "gate": "design-review",
     "axis": "structural-not-procedural",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "standard-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "277b40c78393e42b63fdd8addd42a0d112359df107a0cce8825465e1e3c8fe33"
   },
   {
@@ -220,11 +220,11 @@
     "gate": "validation",
     "axis": "intent-delivered",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "standard-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "8b726e29a2bbb9f3e8c9280eecc50f8833a14456b6e5280373d3ef4bd61c4d72"
   },
   {
@@ -232,11 +232,11 @@
     "gate": "validation",
     "axis": "intent-delivered",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "standard-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "18be15b82ad63f095271cbbab85cf261c0be1b844e906e4816750a35d40d745c"
   },
   {
@@ -244,11 +244,11 @@
     "gate": "validation",
     "axis": "docs-integrated",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "standard-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "44e03d2ea800a39d1f30a8da6ec800fc69d58f262c05a7da86c7d747d44c3fde"
   },
   {
@@ -256,11 +256,11 @@
     "gate": "validation",
     "axis": "docs-integrated",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "standard-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "c9284ba3b8c12a3ee01ef7f222b2c796ce4402df60fe52dcf46071e3c678c771"
   },
   {
@@ -268,11 +268,11 @@
     "gate": "intent",
     "axis": "solution-agnostic",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "274f9b95b7077069394551cfa13bb8b95ee29de2fe9b74de51350ce38593a7a3"
   },
   {
@@ -280,11 +280,11 @@
     "gate": "intent",
     "axis": "solution-agnostic",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "b9f20a634182d37e376c4cc06ac0b8cc2f9e5b500e44acedfe16752991bd20ec"
   },
   {
@@ -292,11 +292,11 @@
     "gate": "intent",
     "axis": "outside-verifiable",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "df6b9925a5f964eb6120d58285520a48a8ebe5bf52d0c73e165fa915768b996b"
   },
   {
@@ -304,11 +304,11 @@
     "gate": "intent",
     "axis": "outside-verifiable",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "86641ae96e069edb2128c0a1cbdd6dc1b73646955d222319a9d0d69629c38a77"
   },
   {
@@ -316,11 +316,11 @@
     "gate": "intent",
     "axis": "scope-fenced",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "5af1677667ede2fbf848c49ba802bc72e2a93725543994c27de98890b32c7966"
   },
   {
@@ -328,11 +328,11 @@
     "gate": "intent",
     "axis": "scope-fenced",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "cb7be3a17e05a742e36c04b851985a86e1d56b0f8b77863d31c0a84f6ba94cef"
   },
   {
@@ -340,11 +340,11 @@
     "gate": "intent",
     "axis": "constraints-are-limits",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "d2476eb35231fbb18a1d4492faefe021ccee5013e22ba57c018c30d70450ac5c"
   },
   {
@@ -352,11 +352,11 @@
     "gate": "intent",
     "axis": "constraints-are-limits",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "1ef7525f922f2bf33b47d773392ec2ad1b03c07adb9a0b95624e9eaf5cc260f5"
   },
   {
@@ -364,11 +364,11 @@
     "gate": "intent",
     "axis": "problem-grounded",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "e97d7ea9ae9fd91401b640d31335679ff0a4f9ce81c3a5a19fb16953723fa69d"
   },
   {
@@ -376,11 +376,11 @@
     "gate": "intent",
     "axis": "problem-grounded",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "d153b59a6244405cce9b2c867ad509ca74332a87a676ef4a201fdd7aeddf1343"
   },
   {
@@ -388,11 +388,11 @@
     "gate": "design-review",
     "axis": "intent-faithful",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "75e0af1ebf8e654c9087c38ba72cb043a230f891eea370a73f7b57a336dd58bc"
   },
   {
@@ -400,11 +400,11 @@
     "gate": "design-review",
     "axis": "intent-faithful",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "c06c163988d08df5041b28f2ba2cde62811c70bd8c713123b5a4edb166e3e2bf"
   },
   {
@@ -412,11 +412,11 @@
     "gate": "design-review",
     "axis": "acceptance-covered",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "b51d7fc1e76898decdc3dd7f2c7ec25ebfec0c6fcbf328d4ad7b27d9a5f09f60"
   },
   {
@@ -424,11 +424,11 @@
     "gate": "design-review",
     "axis": "acceptance-covered",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "5d4681c9286fd4def18840419e50b8663df42fdae7c02fd3b2276daea113b89f"
   },
   {
@@ -436,11 +436,11 @@
     "gate": "design-review",
     "axis": "structural-not-procedural",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "3999da2db8c8ce0ab4c9d685f124fd4de8201b7b6ddd575fea0bf00ed30e3b49"
   },
   {
@@ -448,11 +448,11 @@
     "gate": "design-review",
     "axis": "structural-not-procedural",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "35c4212b699ba03198f8161bc52d7cd314418f62f1ba1329282561e64e3e27b1"
   },
   {
@@ -460,11 +460,11 @@
     "gate": "design-review",
     "axis": "decisions-justified",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "de98da2965e6ac69c91f612dad29acd3f52ee94512f072915f863181df3a55d0"
   },
   {
@@ -472,11 +472,11 @@
     "gate": "design-review",
     "axis": "decisions-justified",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "e2465d140da0993a58837dd9e9eafef28d2b0e7b1fbcadcca72345112bdd9c72"
   },
   {
@@ -484,11 +484,11 @@
     "gate": "design-review",
     "axis": "risk-honest",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "c56987e0564810380f8d57c37b8e9f14db27bfc365bb3cc195d7816ad422dc9f"
   },
   {
@@ -496,11 +496,11 @@
     "gate": "design-review",
     "axis": "risk-honest",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "7b0a3ff5dccd299d5eeaf74f38e2b3b9343777c88d6842339835b77c8ee7dda4"
   },
   {
@@ -508,11 +508,11 @@
     "gate": "plan-review",
     "axis": "task-sized",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "128e6b4f13d0d252f13b6b94f4462079698bdfdd2cd9065972d9c8bbab388709"
   },
   {
@@ -520,11 +520,11 @@
     "gate": "plan-review",
     "axis": "task-sized",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "3f60db6c6865d58b23e12387b23d58ba9f3ffd3dc226258396287daff1828e12"
   },
   {
@@ -532,11 +532,11 @@
     "gate": "plan-review",
     "axis": "context-sufficient",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "59780962ccfb2883e0553905dfad30ca1218bb33e06bc431c7ea23cfe34435b3"
   },
   {
@@ -544,11 +544,11 @@
     "gate": "plan-review",
     "axis": "context-sufficient",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "00a9a36818e5c445100304edc47b970894b7de8480338110b582b59df6811a3c"
   },
   {
@@ -556,11 +556,11 @@
     "gate": "plan-review",
     "axis": "done-observable",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "706f3a467db39c18941e75a2716b10f6fb7e7386ae244c8e105e60d0fc698e29"
   },
   {
@@ -568,11 +568,11 @@
     "gate": "plan-review",
     "axis": "done-observable",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "7330a805f90ae84963bc38be4defc277386ee9011960f293708f680064d31c56"
   },
   {
@@ -580,11 +580,11 @@
     "gate": "plan-review",
     "axis": "decision-free",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "07f3892a8a2673c3e3cc033739a038d14e7a73a8afd7a1249aa81b44c7ec5875"
   },
   {
@@ -592,11 +592,11 @@
     "gate": "plan-review",
     "axis": "decision-free",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "4950dbbcddceae9c1127cecb9c7f8e864375f0c7361a5557181d739e56de8b2b"
   },
   {
@@ -604,11 +604,11 @@
     "gate": "plan-review",
     "axis": "design-faithful",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "d7e9bb4ff4c11415ec2682048e98e966581f6c18484e2feba8db4d1c27a03f51"
   },
   {
@@ -616,11 +616,11 @@
     "gate": "plan-review",
     "axis": "design-faithful",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "73990c63226fba228da04d86f728948d9a9e820319d6533ee010824def572482"
   },
   {
@@ -628,11 +628,11 @@
     "gate": "plan-review",
     "axis": "dependencies-honest",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "0f1aaf045e869a10c8303c5e71bea34b591718f0b2ec829af9aff202c582b17b"
   },
   {
@@ -640,11 +640,11 @@
     "gate": "plan-review",
     "axis": "dependencies-honest",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "d6084d89f77c30beb3fe422b2b847419eada7130f5784dfef986fb459f5387a9"
   },
   {
@@ -652,11 +652,11 @@
     "gate": "implementation-review",
     "axis": "tasks-actually-done",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "aea42b37bbebf42adbae51ccb1f90a1d9c4d5b6f1398aebacb36a6f3b2877cfd"
   },
   {
@@ -664,11 +664,11 @@
     "gate": "implementation-review",
     "axis": "tasks-actually-done",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "f84ce3b4501449f91bffc2141f6c32f668a29c5806f4828459ff3411ca751617"
   },
   {
@@ -676,11 +676,11 @@
     "gate": "implementation-review",
     "axis": "no-scope-creep",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "ee4b86234969e3923eb9766671ac99147f2ec5cb0766995664d14a13d440dbdc"
   },
   {
@@ -688,11 +688,11 @@
     "gate": "implementation-review",
     "axis": "no-scope-creep",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "26d7fb4dee399e2a10ff15b12a2588f80d0bf098510bc14c94667d92adf01c5a"
   },
   {
@@ -700,11 +700,11 @@
     "gate": "implementation-review",
     "axis": "design-faithful-final",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "644adbc4e161525ea58bf7820c3d052d8a4fab59deb633428caf39e0ffe2f745"
   },
   {
@@ -712,11 +712,11 @@
     "gate": "implementation-review",
     "axis": "design-faithful-final",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "ecb2dd42734912e74567bec99cdaae00dd692c0e4424b26c6881f530aff98919"
   },
   {
@@ -724,11 +724,11 @@
     "gate": "validation",
     "axis": "intent-delivered",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "5792f53c86f25dbfbc7766b855c53d55b9e0ad170adb0fb4e1304620ec1576c5"
   },
   {
@@ -736,11 +736,11 @@
     "gate": "validation",
     "axis": "intent-delivered",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "5086c0f8cf9d8d356d0cccf35d3853980c56d485475c4890c4ca8f67e07b920f"
   },
   {
@@ -748,11 +748,11 @@
     "gate": "validation",
     "axis": "docs-integrated",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "604e4c36454efc36808cc871c0517db8cbbbe3992ca5a987364fef1baf934414"
   },
   {
@@ -760,11 +760,11 @@
     "gate": "validation",
     "axis": "docs-integrated",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "5d80ad0f4087379902c0677d6a779a21ef2546f10eeb986766b176463b0d31c5"
   },
   {
@@ -772,11 +772,11 @@
     "gate": "validation",
     "axis": "requirement-proof-mapping",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "346b72803cfc4fe765e000968d0457a1adfbb2bb828ea22eab2e2444a28f3563"
   },
   {
@@ -784,11 +784,11 @@
     "gate": "validation",
     "axis": "requirement-proof-mapping",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "2ca2a9bd7d781577e6dd10a7ac45bc471e18835f9b6c9afcd0b22b1ef2c62c3c"
   },
   {
@@ -796,11 +796,11 @@
     "gate": "design-review",
     "axis": "mechanism-forced",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "standard-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "73ad4401e7ed3482de4a4098cccf5cd6930199ee126e09d42204b99d0dbe92ef"
   },
   {
@@ -808,11 +808,11 @@
     "gate": "design-review",
     "axis": "mechanism-forced",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "standard-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "0e699b3e8fd836ff9110f4a5301fc18dd99213c097d00bc8f20bcdcc3bf27d4b"
   },
   {
@@ -820,11 +820,11 @@
     "gate": "design-review",
     "axis": "mechanism-forced",
     "expected": "pass",
-    "observed": "pending",
+    "observed": "pass",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "413a18bc7b1a33afdafdc2bea8bdf22cd9f4467df1fd3317a9f5d401e77799a1"
   },
   {
@@ -832,11 +832,11 @@
     "gate": "design-review",
     "axis": "mechanism-forced",
     "expected": "fail",
-    "observed": "pending",
+    "observed": "fail",
     "config_version": "high-rigor-5",
     "model": "openai-codex/gpt-5.6-sol",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "attested_by": "",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "attested_by": "cartwmic",
     "input_sha256": "df944f44f30c49db93c720038a35f14eb3b17e2b08a873f956fd5166f356f41d"
   }
 ]
