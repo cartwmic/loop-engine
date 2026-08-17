@@ -26,7 +26,7 @@ DATA_ROOT="$HOME/.local/share/software-change-provider"
 software-change data-dump "$DATA_ROOT"
 ```
 
-The command creates `DATA_ROOT/crates/software-change-provider/data/...` with the configs, templates, reviewer protocol, calibration manifest, and fixtures embedded in the binary. It preserves those repository-relative paths so guidance citations resolve under `DATA_ROOT`; it refuses to overwrite an existing target file. Copy a selected profile from that tree to a run-specific file. Omit `artifact_root` in the usual case so the engine allocates the durable directory; pass `artifact_root` only to isolate files to a caller-chosen absolute existing directory. Register the installed provider under an exact, case-sensitive alias:
+The command creates `DATA_ROOT/crates/software-change-provider/data/...` with the configs, templates, reviewer protocol, calibration manifest, and fixtures embedded in the binary. It preserves those repository-relative paths so guidance citations resolve under `DATA_ROOT`; it refuses to overwrite an existing target file. Copy a selected profile from that tree to a run-specific file. The engine allocates the durable directory and records that absolute path in object `initial_input`; `show` reveals it. Register the installed provider under an exact, case-sensitive alias:
 
 ```toml
 [providers.software-change]
@@ -54,7 +54,7 @@ ENGINE=target/debug/loop-engine
 PROVIDER_CONFIG="/absolute/path/to/your/providers.toml"
 ```
 
-Copy each selected profile to a run-specific file. For installed binaries after `data-dump`, source profiles from `$DATA_ROOT`; for checkout development, set `DATA_ROOT="$PWD"` first. Omit `artifact_root` from that copy in the usual case so the engine allocates the durable directory. Shipped profiles omit `work_slot_bindings`. Bound workers are opt-in: copy a skill template into the per-run file after replacing placeholders, confirm that map with the user, and run `loop-engine preview-bindings` before `start`. Then run the matching command:
+Copy each selected profile to a run-specific file. For installed binaries after `data-dump`, source profiles from `$DATA_ROOT`; for checkout development, set `DATA_ROOT="$PWD"` first. When the human did not explicitly ask to isolate in that session, omit `--database` and omit `artifact_root`. That start stores the run in the user-level catalog and uses an engine-owned per-run artifact directory. This is the production start, not a usual-case option beside a prudent isolate alternative. Existing start examples that already omit both flags remain examples of this required start. Independent runs sharing the user-level catalog do not clobber each other, because each run already receives an engine-owned per-run artifact directory. Occupancy of the catalog by other runs, and fear of affecting those runs, are not reasons to pass `--database` or a nonempty `artifact_root`. An agent must not pass `--database` or a nonempty `artifact_root` unless the human explicitly asked to isolate in that session. Isolation is not a self-chosen precaution. `--database /path/to/dir/loop.db` isolates SQLite and `/path/to/dir/runs/<id>/`. A nonempty `artifact_root` isolates files to a caller-chosen absolute existing directory. Do not treat a prior session's isolation preference as standing authority. Shipped profiles omit `work_slot_bindings`. Bound workers are opt-in: copy a skill template into the per-run file after replacing placeholders, confirm that map with the user, and run `loop-engine preview-bindings` before `start`. Then run the matching command:
 
 ```sh
 DATA_ROOT="$HOME/.local/share/software-change-provider"
@@ -72,7 +72,7 @@ cp "$DATA_ROOT/crates/software-change-provider/data/configs/high-rigor.json" /tm
   start software-change "@/tmp/software-change-high-rigor.json" "software change (high-rigor)"
 ```
 
-`start` returns the run ID at `result.run.id`. The CLI accepts `@FILE` JSON input as shown above. Once the run exists, `show` reveals the allocated (or caller) `artifact_root` inside object `initial_input`. `start` may insert reserved `artifact_root` into object `initial_input` when the caller did not supply a nonempty path; object schemas that deny unknown keys must accept that field to remain evaluable; the engine does not skip injection, strip unknown keys, or classify providers. Subject files use the fixed filenames expected by the selected schema: `intent.json`, `design.json`, `plan.json`, `implementation-report.json`, and `validation-report.json`. Pass `--database /path/to/dir/loop.db` only to isolate SQLite and `/path/to/dir/runs/<id>/`. Pass a nonempty `artifact_root` only to isolate files to a caller-chosen absolute existing directory.
+`start` returns the run ID at `result.run.id`. The CLI accepts `@FILE` JSON input as shown above. Once the run exists, `show` reveals the allocated (or caller) `artifact_root` inside object `initial_input`. `start` may insert reserved `artifact_root` into object `initial_input` when the caller did not supply a nonempty path; object schemas that deny unknown keys must accept that field to remain evaluable; the engine does not skip injection, strip unknown keys, or classify providers. Subject files use the fixed filenames expected by the selected schema: `intent.json`, `design.json`, `plan.json`, `implementation-report.json`, and `validation-report.json`.
 
 ## Validation
 
@@ -89,7 +89,7 @@ python3 scripts/software-change-journey.py \
   --traversal-depth full
 ```
 
-Source full mode uses separate engine processes for every operation, explicit provider TOML, a fresh SQLite file, and the checkout's shipped profile/fixtures. It proves schema and evidence mechanics, revision-link denial, aggregation, transitions, persisted context, and terminal state. Its synthetic conforming evidence is shape/routing test data only; it does not establish semantic review quality.
+Source full mode uses separate engine processes for every operation, explicit provider TOML, a fresh SQLite file, and the checkout's shipped profile/fixtures. Those journey commands are harness examples, distinct from the production start; do not copy isolation flags from them into production start. It proves schema and evidence mechanics, revision-link denial, aggregation, transitions, persisted context, and terminal state. Its synthetic conforming evidence is shape/routing test data only; it does not establish semantic review quality.
 
 Packaged smoke accepts extracted `loop-engine` and `software-change` paths, calls `software-change data-dump` into an empty root, and uses only the dumped high-rigor profile and fixtures:
 
@@ -108,7 +108,7 @@ The packaged adapter does not read checkout provider data after `data-dump`. Nat
 
 ## Shipped data
 
-These are the shipped files consumed by provider tests, guidance, and review procedure. Config profiles are complete initial-input templates; copy one for a run and omit `artifact_root` unless isolating files to a caller-chosen absolute existing directory.
+These are the shipped files consumed by provider tests, guidance, and review procedure. Config profiles are complete initial-input templates; copy one for a run.
 
 ### Config profiles
 

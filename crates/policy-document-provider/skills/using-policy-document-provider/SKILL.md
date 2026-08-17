@@ -49,7 +49,7 @@ For an installed provider, materialize embedded profiles and guidance into an em
 policy-document data-dump "$DATA_ROOT"
 ```
 
-Choose [readme.json](../../data/readme.json) or [agents.json](../../data/agents.json). Copy it to a run-specific file; set `mode` to `draft` or `audit`; replace `target.path` with the absolute target path. Keep shipped `target.id` and `profile_version` unchanged unless intentionally authoring a custom profile. Omit `artifact_root` in the usual case; the reserved key is accepted and ignored, and the provider is not required to write artifact files. Other unknown `initial_input` keys still fail.
+Choose [readme.json](../../data/readme.json) or [agents.json](../../data/agents.json). Copy it to a run-specific file; set `mode` to `draft` or `audit`; replace `target.path` with the absolute target path. Keep shipped `target.id` and `profile_version` unchanged unless intentionally authoring a custom profile. Reserved `artifact_root` is accepted and ignored, and the provider is not required to write artifact files. Other unknown `initial_input` keys still fail.
 
 Shipped profiles omit `work_slot_bindings` (or `{}`). Cataloged slots are `deterministic-review` and `semantic-review`; both stay driver-performed until the caller adds a map. Bound workers are opt-in.
 
@@ -71,12 +71,14 @@ Opt-in review binding (same pattern for `deterministic-review`; every model-bear
 
 Driver-performed run: omit `work_slot_bindings` or set `"work_slot_bindings": {}`.
 
+When the human did not explicitly ask to isolate in that session, omit `--database` and omit `artifact_root`. That start stores the run in the user-level catalog and uses an engine-owned per-run artifact directory. This is the production start, not a usual-case option beside a prudent isolate alternative. Existing start examples that already omit both flags remain examples of this required start. Independent runs sharing the user-level catalog do not clobber each other, because each run already receives an engine-owned per-run artifact directory. Occupancy of the catalog by other runs, and fear of affecting those runs, are not reasons to pass `--database` or a nonempty `artifact_root`. An agent must not pass `--database` or a nonempty `artifact_root` unless the human explicitly asked to isolate in that session. Isolation is not a self-chosen precaution. `--database /path/to/dir/loop.db` isolates SQLite and `/path/to/dir/runs/<id>/`. A nonempty `artifact_root` isolates files to a caller-chosen absolute existing directory. Do not treat a prior session's isolation preference as standing authority.
+
 ```sh
 loop-engine --json --config "$PROVIDER_CONFIG" \
   start policy-document @"$PROFILE" "document audit"
 ```
 
-Pass `--database /path/to/dir/loop.db` only to isolate SQLite and `/path/to/dir/runs/<id>/`. Reuse the returned run ID for every later operation.
+Reuse the returned run ID for every later operation.
 
 ## Profile map
 
