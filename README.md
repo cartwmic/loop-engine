@@ -2,9 +2,43 @@
 
 ## Overview
 
-Loop Engine is a durable workflow CLI. It stores run state in SQLite and coordinates external workflow-provider executables; primary work stays outside the engine.
+Loop Engine is a **pull-based gated state machine** for work performed outside the engine. A driver — human, agent, or script — reads current state, does the work, appends evidence, and requests an event. The engine accepts or rejects. It does not run the work, schedule the next job, or choose the next state.
+
+The everyday analog is a **strict issue tracker**: `show` is the ticket (where you are, which transitions are legal, how a fresh actor resumes); `event` is a transition you request rather than a status you type. Unlike GitHub Issues, the caller cannot set state, a checked edge cannot fire without provider `allow`, and a deny survives a new session and a more fluent model.
+
+The engine owns durable progression. The caller owns execution. Humans and agents use the same commands, evidence, and gates.
+
+```text
+show → perform work externally → append evidence → request an event → accept or reject → repeat
+```
 
 Current release is v0.12.0 (`MIT OR Apache-2.0`). The living product requirements are [docs/PRD.md](docs/PRD.md). Agent CLI semantics are [docs/agent-usage.md](docs/agent-usage.md). Checkout operating rules for agents are [AGENTS.md](AGENTS.md).
+
+### Why not a workflow engine, Temporal, or an FSM library
+
+DAG and job orchestrators (Airflow, Dagu, and kin) **push**: the runtime fires the next ready node, owns workers, retries, and queues. Loop Engine **waits to be asked**. Cycles and revise edges are normal topology, not a DAG to flatten. A job DAG still belongs **inside** a work slot (for example a plan of CLI workers). It does not replace the run.
+
+**Temporal** is the closest durable-workflow cousin, and still the wrong shape. Temporal **runs your workflow function**: the runtime replays history, schedules activities, and resumes the orchestration after sleeps, signals, and worker polls. Activity workers pull jobs the workflow has already decided to run. Routing lives in code the runtime executes. Loop Engine never runs a workflow function. A driver pulls `show` and requests an event; the provider only `allow`s, `deny`s, or returns `unsupported` for that exact edge. Temporal is durable *execution* of orchestration. Loop Engine is durable *progression authority* for work it does not perform. Use Temporal (or Dagu) where a slot needs a push DAG of workers. Do not encode `approved` vs `revise` as Temporal control flow — that puts routing back in the thing that did the work.
+
+Typical state-machine libraries **push events into** a machine (`send`) and assume something else is driving. Loop Engine is the driver protocol: one primary read (`show`) is enough for a new actor to resume without the last conversation.
+
+Issue trackers share the pull shape and none of the kernel. Anyone with write can relabel a ticket. Loop Engine will not.
+
+### Why the constraints
+
+The gates are not there because a model is too dumb to follow a checklist. They are there because a capable model is a **bad witness of its own completeness**, and because a run is not one model.
+
+A strong LLM will follow a process in a single sitting if you ask. It will also, when tired, steered, or incentivized to ship, declare the work done and produce fluent evidence that looks like review. Capability makes that easier, not harder: better models skip ceremony more fluently and justify the skip better.
+
+Three properties the checklist-plus-model story usually erases:
+
+1. **It is not one actor.** The next session, model, or compacted context does not have the last conversation. `show` and durable denies exist for the ensemble over days.
+2. **Routing is the failure.** The dangerous move is picking `approved` instead of `revise`, or treating “the worker exited 0” as “the work is good.” A model that understands the graph will still choose the convenient edge. Callers cannot set state. Providers cannot route. They only `allow`, `deny`, or `unsupported` the exact event the engine selected.
+3. **Evidence is not judgment.** The kernel does not decide whether a design is wise. It decides whether frozen obligations and review records permit the event. The same process that did the work must not be the thing that makes the edge true.
+
+If a human is on every transition, a ticket plus discipline can be enough, and this kernel is a tax. The constraints pay off for **multi-session or lightly attended agent driving**: frozen topology and bindings, checked `allow`/`deny` that stick, and a handoff that does not depend on chat.
+
+### Start here
 
 - Operators installing or invoking binaries: [Getting Started](#getting-started) and [Usage](#usage).
 - Agents running a workflow: [docs/agent-usage.md](docs/agent-usage.md) plus the provider README and skill.
