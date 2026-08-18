@@ -35,6 +35,8 @@ def archive_pairs(release: Dict[str, Any]) -> Set[tuple[str, str]]:
         fail("each release must expose string artifact names")
     pairs: Set[tuple[str, str]] = set()
     for artifact in artifacts:
+        if "dagu" in artifact.lower():
+            fail(f"dist plan must not list a dagu artifact: {artifact!r}")
         if not artifact.endswith(".tar.xz"):
             continue
         match = ARCHIVE_RE.fullmatch(artifact)
@@ -61,6 +63,13 @@ def self_test() -> int:
             raise
     else:
         fail("self-test accepted duplicate archive artifact")
+    try:
+        archive_pairs({"artifacts": ["dagu-x86_64-unknown-linux-gnu.tar.xz"]})
+    except SystemExit as error:
+        if "dagu artifact" not in str(error):
+            raise
+    else:
+        fail("self-test accepted a dagu archive artifact")
     print("cargo-dist plan assertion self-test passed: duplicate archive rejected")
     return 0
 

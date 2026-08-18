@@ -115,6 +115,20 @@ def main() -> int:
         fail("release workflow must be dispatch-only, without tag-push trigger")
     if 'python3 "$GITHUB_WORKSPACE/scripts/software-change-journey.py"' not in archive_smoke:
         fail("archive smoke must invoke software-change runner through absolute GITHUB_WORKSPACE path")
+    if "version=2.14.0" not in archive_smoke or "github.com/dagu-org/dagu/releases/download/v${version}/" not in archive_smoke:
+        fail("archive smoke must install operator-provided dagu 2.14.0")
+    if "echo \"$bin\" >> \"$GITHUB_PATH\"" not in archive_smoke:
+        fail("archive smoke must put dagu on PATH")
+    if "$RUNNER_TEMP/dagu-bin" not in archive_smoke:
+        fail("archive smoke must install dagu into RUNNER_TEMP, not dist artifacts")
+    if "continue-on-error" in archive_smoke:
+        fail("archive smoke must not skip a missing dagu")
+    dagu_at = archive_smoke.find("Install operator-provided dagu")
+    journey_at = archive_smoke.find('python3 "$GITHUB_WORKSPACE/scripts/software-change-journey.py"')
+    if dagu_at < 0 or journey_at < 0 or dagu_at > journey_at:
+        fail("archive smoke must install dagu onto PATH before journeys")
+    if "dagu_${version}_darwin_arm64.tar.gz" not in archive_smoke or "dagu_${version}_linux_amd64.tar.gz" not in archive_smoke:
+        fail("archive smoke must install platform dagu archives for macos-arm64 and linux-amd64")
     if 'python3 "$GITHUB_WORKSPACE/scripts/policy-document-journey.py"' not in archive_smoke:
         fail("archive smoke must invoke policy-document runner through absolute GITHUB_WORKSPACE path")
     if 'python3 "$GITHUB_WORKSPACE/scripts/research-journey.py"' not in archive_smoke:

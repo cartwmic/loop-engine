@@ -6,7 +6,10 @@
 //! Zero-worker fan-out is an error;
 //! warnings alone are not. A pi worker with `--no-extensions`/`-ne` and no
 //! `-e`/`--extension` is a warning; missing `--no-extensions` is not.
+//! It also reports a `dagu` PATH check (minimum 2.14.0): ok with resolved path
+//! and version, or a warning naming the path or that PATH lookup found nothing.
 
+use crate::dagu::{self, MINIMUM_DAGU_VERSION};
 use crate::fan_out::{parse_worker_cli_json, WorkerCli};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -44,6 +47,18 @@ pub(crate) struct PreviewReport {
     pub(crate) warnings: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) errors: Vec<String>,
+    pub(crate) dagu: DaguCheck,
+}
+
+/// PATH `dagu` gate shared with execute: ok with path and version, or not.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct DaguCheck {
+    pub(crate) ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) version: Option<String>,
+    pub(crate) required: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -154,12 +169,35 @@ pub(crate) fn preview(
         push_unique(&mut warnings, DEFAULT_INVOKE_TIMEOUT_WARNING.to_owned());
     }
 
+    let dagu = dagu_check(&mut warnings);
+
     Ok(PreviewReport {
         bindings,
         models,
         warnings,
         errors,
+        dagu,
     })
+}
+
+fn dagu_check(warnings: &mut Vec<String>) -> DaguCheck {
+    match dagu::resolve_dagu_with_version() {
+        Ok(resolved) => DaguCheck {
+            ok: true,
+            path: Some(resolved.path.display().to_string()),
+            version: Some(resolved.version),
+            required: MINIMUM_DAGU_VERSION.to_owned(),
+        },
+        Err(error) => {
+            push_unique(warnings, error.to_string());
+            DaguCheck {
+                ok: false,
+                path: error.path().map(|path| path.display().to_string()),
+                version: None,
+                required: MINIMUM_DAGU_VERSION.to_owned(),
+            }
+        }
+    }
 }
 
 fn bindings_map(value: Value) -> Result<Map<String, Value>, PreviewError> {
@@ -883,5 +921,26 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(joined.contains(PI_NO_EXTENSIONS_WITHOUT_E), "{joined}");
+    }
+
+    #[test]
+    fn preview_report_includes_dagu_check() {
+        let operand = json!({"explore": {"command": "/bin/echo", "args": []}}).to_string();
+        let report = preview(&operand, false).expect("preview");
+        assert_eq!(report.dagu.required, "2.14.0");
+        if report.dagu.ok {
+            assert!(report.dagu.path.is_some(), "ok dagu check names the path");
+            assert!(
+                report.dagu.version.is_some(),
+                "ok dagu check names the version"
+            );
+        } else {
+            let joined = joined_warnings(&report);
+            assert!(joined.contains("2.14.0"), "{joined}");
+            assert!(
+                joined.contains("PATH lookup found nothing") || report.dagu.path.is_some(),
+                "{joined}"
+            );
+        }
     }
 }

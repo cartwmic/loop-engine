@@ -104,6 +104,7 @@ DUMMY_WORKER_PROOF = [
     "bound fan-out show heartbeat overlay_meaning elapsed remaining capture_dir inner_workers",
     "contracted fan-out exit-0 conformance summary and failed-overlay capture persistence",
     "bound run-plan-graph inner workers in task order plus capture isolation",
+    "dummy plan-graph summarizer writes implementation-report.json; ordinary dummy tasks do not",
     "no live model",
 ]
 

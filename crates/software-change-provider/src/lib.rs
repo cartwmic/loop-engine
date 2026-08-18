@@ -1,13 +1,17 @@
-//! Small library surface used by shipped-data acceptance tests.
+//! Small library surface used by shipped-data acceptance tests and locator writers.
 //!
-//! Provider execution remains owned by the binary.  This library exposes only
-//! config meta-validation so tests can validate shipped initial-input files
-//! through the production validator instead of duplicating its rules.
+//! Provider execution remains owned by the binary.  This library exposes config
+//! meta-validation so tests can validate shipped initial-input files through the
+//! production validator, plus the duplicated PATH `dagu` resolver and locator
+//! writers used by `run-plan-graph` tests. The crate does not vendor or ship dagu.
 
 mod config;
+mod dagu;
 mod schema;
 
 pub mod embedded_data;
+
+pub use dagu::{names_for_capture_root, resolve_dagu, write_locator, DaguError, DaguLocator};
 
 /// Validate one shipped initial-input template with production config rules.
 #[doc(hidden)]

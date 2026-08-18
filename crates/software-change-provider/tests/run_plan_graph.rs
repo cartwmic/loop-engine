@@ -4,6 +4,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
+use std::time::{Duration, Instant};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -101,6 +103,22 @@ fn packet(run_id: &str, slot_id: &str, artifact_root: &str, body: &str) -> Value
     })
 }
 
+fn packet_with_capture(
+    run_id: &str,
+    slot_id: &str,
+    artifact_root: &str,
+    body: &str,
+    capture_dir: &Path,
+) -> Value {
+    json!({
+        "run_id": run_id,
+        "slot_id": slot_id,
+        "artifact_root": artifact_root,
+        "instruction_body": body,
+        "capture_dir": capture_dir.to_string_lossy(),
+    })
+}
+
 fn capture_dir_for_root(artifact_root: &Path) -> PathBuf {
     artifact_root
         .parent()
@@ -109,7 +127,11 @@ fn capture_dir_for_root(artifact_root: &Path) -> PathBuf {
 }
 
 fn read_capture_summary(artifact_root: &Path) -> Value {
-    let path = capture_dir_for_root(artifact_root).join("summary.json");
+    read_summary_at(&capture_dir_for_root(artifact_root))
+}
+
+fn read_summary_at(capture_root: &Path) -> Value {
+    let path = capture_root.join("summary.json");
     serde_json::from_slice(
         &fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display())),
     )
@@ -117,9 +139,13 @@ fn read_capture_summary(artifact_root: &Path) -> Value {
 }
 
 fn write_plan(artifact_root: &Path, plan: &Value) {
+    let mut plan = plan.clone();
+    if plan.get("revision").is_none() {
+        plan["revision"] = json!("1");
+    }
     fs::write(
         artifact_root.join("plan.json"),
-        serde_json::to_vec_pretty(plan).expect("plan JSON"),
+        serde_json::to_vec_pretty(&plan).expect("plan JSON"),
     )
     .expect("write plan.json");
 }
@@ -152,6 +178,52 @@ fn fixture(label: &str) -> (TestDir, PathBuf, PathBuf) {
     fs::create_dir_all(&artifact_root).expect("artifact root");
     fs::create_dir_all(&receipt_dir).expect("receipt dir");
     (dir, artifact_root, receipt_dir)
+}
+
+fn emitted_yaml(capture_root: &Path) -> String {
+    let dags = capture_root.join("dagu-home").join("dags");
+    let entry = fs::read_dir(&dags)
+        .unwrap_or_else(|error| panic!("read {}: {error}", dags.display()))
+        .flatten()
+        .find(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == "yaml" || ext == "yml")
+        })
+        .unwrap_or_else(|| panic!("missing DAG yaml in {}", dags.display()));
+    fs::read_to_string(entry.path()).expect("read yaml")
+}
+
+fn valid_leftover_report(plan_revision: &str) -> Value {
+    json!({
+        "revision": "9",
+        "author": {"name": "leftover", "kind": "agent"},
+        "plan_revision": plan_revision,
+        "coverage": {
+            "commit": "leftover",
+            "documents": [{"path": "plan.json", "revision": plan_revision}]
+        },
+        "summary": "planted leftover must not satisfy",
+        "changed_surface": ["leftover"],
+        "validation": ["leftover"]
+    })
+}
+
+fn max_overlap(intervals: &[(f64, f64)]) -> usize {
+    let mut events: Vec<(f64, i32)> = Vec::with_capacity(intervals.len() * 2);
+    for (start, end) in intervals {
+        events.push((*start, 1));
+        events.push((*end, -1));
+    }
+    events.sort_by(|left, right| left.0.total_cmp(&right.0).then(left.1.cmp(&right.1)));
+    let mut current = 0i32;
+    let mut max = 0usize;
+    for (_, delta) in events {
+        current += delta;
+        max = max.max(current as usize);
+    }
+    max
 }
 
 #[test]
@@ -214,6 +286,63 @@ fn independent_tasks_overlap_under_concurrency_cap() {
     assert_eq!(workers[1]["command"], "python3");
     assert_eq!(workers[0]["exit_code"], 0);
     assert_eq!(workers[1]["exit_code"], 0);
+    let yaml = emitted_yaml(&capture_root);
+    assert!(yaml.contains("max_active_steps: 4"), "{yaml}");
+    assert!(!yaml.contains("continue_on"), "{yaml}");
+    assert!(!yaml.contains("retry_policy"), "{yaml}");
+}
+
+#[test]
+fn five_independent_tasks_never_exceed_cap_four() {
+    let (_dir, artifact_root, receipt_dir) = fixture("cap-four");
+    write_plan(
+        &artifact_root,
+        &json!({
+            "tasks": [
+                {"id": "t1"},
+                {"id": "t2"},
+                {"id": "t3"},
+                {"id": "t4"},
+                {"id": "t5"}
+            ],
+            "dependency_graph": []
+        }),
+    );
+    let worker = task_worker(&receipt_dir, &["--sleep", "0.45", "--write-report"]);
+    let output = invoke_graph(
+        &worker,
+        &packet(
+            "run-1",
+            "implement",
+            &artifact_root.to_string_lossy(),
+            "Do the work",
+        ),
+        None,
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let intervals: Vec<(f64, f64)> = (1..=5)
+        .map(|index| {
+            let id = format!("t{index}");
+            (
+                read_f64(&receipt_dir.join(format!("{id}.start"))),
+                read_f64(&receipt_dir.join(format!("{id}.end"))),
+            )
+        })
+        .collect();
+    let overlap = max_overlap(&intervals);
+    assert!(
+        overlap <= 4,
+        "5 independent dummy sleeps must not exceed 4 concurrent, got {overlap}: {intervals:?}"
+    );
+    assert!(
+        overlap >= 2,
+        "independent tasks should overlap: {intervals:?}"
+    );
 }
 
 #[test]
@@ -283,6 +412,10 @@ fn unknown_edge_and_cycle_exit_nonzero_before_spawn() {
     assert_ne!(unknown.status.code(), Some(0));
     assert!(!spawn_marker.exists(), "unknown edge must not spawn");
     assert!(!artifact_root.join("run-plan-graph").exists());
+    assert!(!capture_dir_for_root(&artifact_root)
+        .join("a")
+        .join("stdout")
+        .exists());
     assert!(receipt_dir.read_dir().expect("receipts").next().is_none());
 
     let (_cycle_dir, cycle_root, cycle_receipts) = fixture("cycle");
@@ -318,6 +451,10 @@ fn unknown_edge_and_cycle_exit_nonzero_before_spawn() {
     assert_ne!(cycle.status.code(), Some(0));
     assert!(!cycle_marker.exists(), "cycle must not spawn");
     assert!(!cycle_root.join("run-plan-graph").exists());
+    assert!(!capture_dir_for_root(&cycle_root)
+        .join("a")
+        .join("stdout")
+        .exists());
     assert!(cycle_receipts
         .read_dir()
         .expect("receipts")
@@ -369,44 +506,34 @@ fn task_worker_dummy_records_locked_stdin_layout() {
     .expect("captured stdout");
     assert_eq!(recorded, captured);
     assert!(!artifact_root.join("run-plan-graph").exists());
-
-    let abs_root = artifact_root
-        .canonicalize()
-        .unwrap_or(artifact_root.clone());
-    let prefix = format!(
-        "run_id: run-1\nslot_id: implement\nartifact_root: {}\n\n## instruction_body\nImplement the plan.\n\n## task\n",
-        abs_root.display()
+    assert!(
+        !recorded.contains("instruction_body"),
+        "location JSON must not include instruction_body:\n{recorded}"
     );
-    let prefix_display = format!(
-        "run_id: run-1\nslot_id: implement\nartifact_root: {}\n\n## instruction_body\nImplement the plan.\n\n## task\n",
-        artifact_root.display()
+    assert!(
+        !recorded.contains("Implement the plan."),
+        "duty must be the task object only:\n{recorded}"
     );
-    let used_prefix = if recorded.starts_with(&prefix) {
-        prefix
-    } else if recorded.starts_with(&prefix_display) {
-        prefix_display
-    } else {
-        panic!(
-            "stdin layout prefix mismatch.\nrecorded:\n{recorded}\nexpected one of:\n{prefix}\n{prefix_display}"
-        );
-    };
-    let task_raw = recorded
-        .strip_prefix(&used_prefix)
-        .expect("task section")
-        .trim();
-    let parsed: Value = serde_json::from_str(task_raw).expect("task JSON");
-    assert_eq!(parsed, task);
 
-    let artifact_line = recorded
-        .lines()
-        .find(|line| line.starts_with("artifact_root: "))
-        .expect("artifact_root line");
-    let recorded_root = PathBuf::from(artifact_line.trim_start_matches("artifact_root: "));
+    let (location_raw, rest) = recorded
+        .split_once("\n---\n\n")
+        .expect("compact location JSON plus duty separator");
+    let location: Value = serde_json::from_str(location_raw).expect("location JSON");
+    let keys: Vec<&str> = location
+        .as_object()
+        .expect("location object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(keys, vec!["artifact_root"]);
+    let recorded_root = PathBuf::from(location["artifact_root"].as_str().expect("artifact_root"));
     assert!(
         recorded_root.is_absolute(),
         "artifact_root must be absolute, got {}",
         recorded_root.display()
     );
+    let parsed: Value = serde_json::from_str(rest).expect("task JSON");
+    assert_eq!(parsed, task);
 }
 
 #[test]
@@ -446,11 +573,50 @@ fn failing_sibling_is_reaped_before_runner_exits() {
         !pid_alive(pid),
         "slow sibling pid {pid} must be reaped before run-plan-graph exits"
     );
+    let capture_root = capture_dir_for_root(&artifact_root);
+    assert!(!capture_root.join("summarizer").join("stdout").exists());
     let captured = read_capture_summary(&artifact_root);
     let workers = captured["workers"].as_array().expect("workers");
     assert_eq!(workers.len(), 2);
     assert_ne!(workers[0]["exit_code"], 0);
     assert_eq!(workers[1]["exit_code"], 0);
+    assert_eq!(workers[0]["command"], "python3");
+    assert!(workers[0]["args"].is_array());
+    assert!(Path::new(workers[0]["stdout_path"].as_str().expect("stdout")).is_file());
+    assert!(Path::new(workers[0]["stderr_path"].as_str().expect("stderr")).is_file());
+}
+
+#[test]
+fn failing_task_prevents_downstream_receipt() {
+    let (_dir, artifact_root, receipt_dir) = fixture("downstream");
+    write_plan(
+        &artifact_root,
+        &json!({
+            "tasks": [{"id": "fail"}, {"id": "down"}],
+            "dependency_graph": [{"from": "fail", "to": "down"}]
+        }),
+    );
+    let worker = task_worker(&receipt_dir, &["--fail-task", "fail"]);
+    let output = invoke_graph(
+        &worker,
+        &packet(
+            "run-1",
+            "implement",
+            &artifact_root.to_string_lossy(),
+            "Do the work",
+        ),
+        None,
+    );
+    assert_ne!(output.status.code(), Some(0));
+    assert!(receipt_dir.join("fail.end").exists());
+    assert!(
+        !receipt_dir.join("down.start").exists(),
+        "downstream task must not start after a failed predecessor"
+    );
+    assert!(!capture_dir_for_root(&artifact_root)
+        .join("down")
+        .join("stdout")
+        .exists());
 }
 
 #[test]
@@ -491,6 +657,319 @@ fn missing_implementation_report_after_successes_exits_nonzero() {
 }
 
 #[test]
+fn leftover_report_is_deleted_and_does_not_satisfy() {
+    let (_dir, artifact_root, receipt_dir) = fixture("leftover");
+    write_plan(
+        &artifact_root,
+        &json!({
+            "tasks": [{"id": "a"}],
+            "dependency_graph": []
+        }),
+    );
+    let leftover = valid_leftover_report("1");
+    fs::write(
+        artifact_root.join("implementation-report.json"),
+        serde_json::to_vec_pretty(&leftover).expect("leftover JSON"),
+    )
+    .expect("plant leftover report");
+    let worker = task_worker(&receipt_dir, &[]);
+    let output = invoke_graph(
+        &worker,
+        &packet(
+            "run-1",
+            "implement",
+            &artifact_root.to_string_lossy(),
+            "Do the work",
+        ),
+        None,
+    );
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "planted leftover must not satisfy; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(receipt_dir.join("a.end").exists());
+    if artifact_root.join("implementation-report.json").is_file() {
+        let current: Value = serde_json::from_slice(
+            &fs::read(artifact_root.join("implementation-report.json")).expect("read leftover"),
+        )
+        .expect("leftover json");
+        assert_ne!(
+            current, leftover,
+            "start-of-run delete must drop the planted file"
+        );
+    }
+}
+
+#[test]
+fn summarizer_dummy_writes_matching_report_and_exits_zero() {
+    let (_dir, artifact_root, receipt_dir) = fixture("summarizer-ok");
+    write_plan(
+        &artifact_root,
+        &json!({
+            "revision": "7",
+            "tasks": [{"id": "a"}],
+            "dependency_graph": []
+        }),
+    );
+    let worker = task_worker(&receipt_dir, &["--write-report"]);
+    let output = invoke_graph(
+        &worker,
+        &packet(
+            "run-1",
+            "implement",
+            &artifact_root.to_string_lossy(),
+            "Do the work",
+        ),
+        None,
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(
+        &fs::read(artifact_root.join("implementation-report.json")).expect("report"),
+    )
+    .expect("report json");
+    assert_eq!(report["plan_revision"], "7");
+    assert!(capture_dir_for_root(&artifact_root)
+        .join("summarizer")
+        .join("stdout")
+        .is_file());
+    let summarizer_stdin =
+        fs::read_to_string(receipt_dir.join("summarizer.stdin")).expect("summarizer stdin");
+    let (location_raw, assignment) = summarizer_stdin
+        .split_once("\n---\n\n")
+        .expect("summarizer compact location plus assignment");
+    let location: Value = serde_json::from_str(location_raw).expect("summarizer location JSON");
+    let keys: Vec<&str> = location
+        .as_object()
+        .expect("location object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(keys, vec!["artifact_root", "capture_dir", "plan_path"]);
+    assert!(Path::new(location["artifact_root"].as_str().expect("artifact_root")).is_absolute());
+    assert!(Path::new(location["capture_dir"].as_str().expect("capture_dir")).is_absolute());
+    assert!(location["plan_path"]
+        .as_str()
+        .expect("plan_path")
+        .ends_with("plan.json"));
+    assert_eq!(
+        assignment,
+        "Write artifact_root/implementation-report.json for this invocation only. You are the sole writer of that filename. plan_revision must equal the revision of the plan.json at plan_path. Do not concatenate worker stdout. Do not append review-evidence. Ordinary plan tasks must not write that filename."
+    );
+}
+
+#[test]
+fn failing_task_writes_summary_without_summarizer() {
+    let (_dir, artifact_root, receipt_dir) = fixture("fail-summary");
+    write_plan(
+        &artifact_root,
+        &json!({
+            "tasks": [{"id": "boom"}],
+            "dependency_graph": []
+        }),
+    );
+    let worker = task_worker(&receipt_dir, &["--fail-task", "boom"]);
+    let output = invoke_graph(
+        &worker,
+        &packet(
+            "run-1",
+            "implement",
+            &artifact_root.to_string_lossy(),
+            "Do the work",
+        ),
+        None,
+    );
+    assert_ne!(output.status.code(), Some(0));
+    let capture_root = capture_dir_for_root(&artifact_root);
+    assert!(
+        !capture_root.join("summarizer").join("stdout").exists(),
+        "summarizer must not start after a task failure"
+    );
+    let captured = read_summary_at(&capture_root);
+    let workers = captured["workers"].as_array().expect("workers");
+    assert_eq!(workers.len(), 1);
+    assert_eq!(workers[0]["command"], "python3");
+    assert!(workers[0]["args"].is_array());
+    assert_ne!(workers[0]["exit_code"], 0);
+    let stdout = PathBuf::from(workers[0]["stdout_path"].as_str().expect("stdout_path"));
+    let stderr = PathBuf::from(workers[0]["stderr_path"].as_str().expect("stderr_path"));
+    assert!(stdout.is_file(), "{}", stdout.display());
+    assert!(stderr.is_file(), "{}", stderr.display());
+}
+
+#[test]
+fn summarizer_killed_still_writes_summary_for_plan_tasks() {
+    let (_dir, artifact_root, receipt_dir) = fixture("summarizer-kill");
+    write_plan(
+        &artifact_root,
+        &json!({
+            "tasks": [{"id": "a"}, {"id": "b"}],
+            "dependency_graph": []
+        }),
+    );
+    let worker = task_worker(&receipt_dir, &["--summarizer-kill"]);
+    let output = invoke_graph(
+        &worker,
+        &packet(
+            "run-1",
+            "implement",
+            &artifact_root.to_string_lossy(),
+            "Do the work",
+        ),
+        None,
+    );
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "killed summarizer must be nonzero; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(receipt_dir.join("a.end").exists());
+    assert!(receipt_dir.join("b.end").exists());
+    assert!(!artifact_root.join("implementation-report.json").is_file());
+    let captured = read_capture_summary(&artifact_root);
+    let workers = captured["workers"].as_array().expect("workers");
+    assert_eq!(workers.len(), 2);
+    assert_eq!(workers[0]["exit_code"], 0);
+    assert_eq!(workers[1]["exit_code"], 0);
+    assert_eq!(workers[0]["command"], "python3");
+    assert!(Path::new(workers[0]["stdout_path"].as_str().expect("stdout")).is_file());
+    assert!(Path::new(workers[1]["stderr_path"].as_str().expect("stderr")).is_file());
+}
+
+#[test]
+fn live_locator_exists_and_second_capture_dir_is_isolated() {
+    let dir = TestDir::new("live-locator");
+    let artifact_root = dir.path().join("artifacts");
+    let receipt_dir = dir.path().join("receipts");
+    let first_capture = dir.path().join("captures").join("inv-live-one");
+    let second_capture = dir.path().join("captures").join("inv-live-two");
+    fs::create_dir_all(&artifact_root).expect("artifact root");
+    fs::create_dir_all(&receipt_dir).expect("receipt dir");
+    write_plan(
+        &artifact_root,
+        &json!({
+            "tasks": [{"id": "long"}],
+            "dependency_graph": []
+        }),
+    );
+    let worker = task_worker(&receipt_dir, &["--sleep", "1.2", "--write-report"]);
+    let packet = packet_with_capture(
+        "run-1",
+        "implement",
+        &artifact_root.to_string_lossy(),
+        "Do the work",
+        &first_capture,
+    );
+    let mut child = Command::new(bin())
+        .args(["run-plan-graph", "--task-worker", &worker])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn live run-plan-graph");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(&serde_json::to_vec(&packet).expect("packet"))
+        .expect("write packet");
+
+    let locator_path = first_capture.join("dagu-locator.json");
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < deadline {
+        if locator_path.is_file() && first_capture.join("long").join("stdout").is_file() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        child.try_wait().expect("try_wait").is_none(),
+        "locator must be observed while the overlay-equivalent process is still running"
+    );
+    let locator: Value = serde_json::from_slice(&fs::read(&locator_path).expect("read locator"))
+        .expect("locator json");
+    let object = locator.as_object().expect("locator object");
+    assert_eq!(object.len(), 3);
+    assert!(object.contains_key("dagu_home"));
+    assert!(object.contains_key("dag_name"));
+    assert!(object.contains_key("run_name"));
+    let dagu_home = locator["dagu_home"].as_str().expect("dagu_home");
+    let dag_name = locator["dag_name"].as_str().expect("dag_name");
+    let run_name = locator["run_name"].as_str().expect("run_name");
+    assert!(!dagu_home.is_empty());
+    assert!(!dag_name.is_empty());
+    assert!(!run_name.is_empty());
+    assert!(Path::new(dagu_home).is_absolute());
+    assert_eq!(
+        Path::new(dagu_home),
+        fs::canonicalize(first_capture.join("dagu-home")).expect("canonicalize first home")
+    );
+    assert_eq!(dag_name, "plan-graph-inv-live-one");
+
+    let output = child.wait_with_output().expect("wait live");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let first_locator_after = fs::read(&locator_path).expect("reread first locator");
+    let first_long_stdout =
+        fs::read(first_capture.join("long").join("stdout")).expect("first stdout");
+
+    let second = invoke_graph(
+        &worker,
+        &packet_with_capture(
+            "run-2",
+            "implement",
+            &artifact_root.to_string_lossy(),
+            "Do the work",
+            &second_capture,
+        ),
+        None,
+    );
+    assert_eq!(
+        second.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let second_locator: Value = serde_json::from_slice(
+        &fs::read(second_capture.join("dagu-locator.json")).expect("second locator"),
+    )
+    .expect("second locator json");
+    assert_eq!(
+        second_locator["dag_name"]
+            .as_str()
+            .expect("second dag_name"),
+        "plan-graph-inv-live-two"
+    );
+    assert_ne!(
+        second_locator["dag_name"], locator["dag_name"],
+        "second capture_dir must not reuse dag_name"
+    );
+    assert_ne!(
+        second_locator["dagu_home"], locator["dagu_home"],
+        "second invocation must use a fresh isolated home"
+    );
+    assert_eq!(
+        fs::read(&locator_path).expect("first locator remains"),
+        first_locator_after
+    );
+    assert_eq!(
+        fs::read(first_capture.join("long").join("stdout")).expect("first stdout remains"),
+        first_long_stdout
+    );
+}
+
+#[test]
 fn describe_and_evaluate_stdin_protocol_does_not_reach_the_executor() {
     let describe = invoke_protocol(br#"{"operation":"describe"}"#);
     assert_eq!(describe.status.code(), Some(0));
@@ -521,6 +1000,39 @@ fn leftover_args_after_run_plan_graph_flags_are_errors() {
         .expect("run leftover args");
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("leftover"));
+}
+
+#[test]
+fn default_task_worker_is_pi_print_without_tools_or_no_context_files() {
+    let source =
+        fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/run_plan_graph.rs"))
+            .expect("read run_plan_graph.rs");
+    assert!(
+        source.contains("const DEFAULT_WORKER_COMMAND: &str = \"pi\";"),
+        "default --task-worker command must remain pi"
+    );
+    assert!(
+        source.contains(
+            "const DEFAULT_WORKER_ARGS: &[&str] = &[\"--print\", \"--no-skills\", \"--no-extensions\"];"
+        ),
+        "default --task-worker args must remain --print --no-skills --no-extensions"
+    );
+
+    let help = Command::new(bin()).args(["--help"]).output().expect("help");
+    let text = String::from_utf8_lossy(&help.stdout);
+    assert!(text.contains("--task-worker"), "{text}");
+    assert!(
+        !text.contains("--no-context-files"),
+        "help must not advertise --no-context-files: {text}"
+    );
+    assert!(
+        !text.contains("--max-concurrency"),
+        "help must not advertise --max-concurrency: {text}"
+    );
+    assert!(
+        !text.contains("stdin-exec"),
+        "help must keep stdin-exec hidden: {text}"
+    );
 }
 
 #[test]
@@ -595,7 +1107,7 @@ fn path_escaping_task_id_exits_nonzero_without_writing_outside_artifact_root() {
     assert!(receipt_dir.read_dir().expect("receipts").next().is_none());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("path-safe") || stderr.contains("escapes"),
+        stderr.contains("path-safe") || stderr.contains("escapes") || stderr.contains("Dagu-safe"),
         "{stderr}"
     );
 }

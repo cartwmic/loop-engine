@@ -25,6 +25,18 @@ jobs:
           set -euo pipefail
           curl --proto '=https' --tlsv1.2 -LsSf \
             https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh
+      - name: Install operator-provided dagu
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=2.14.0
+          url="https://github.com/dagu-org/dagu/releases/download/v${version}/dagu_${version}_linux_amd64.tar.gz"
+          bin="$RUNNER_TEMP/dagu-bin"
+          mkdir -p "$bin"
+          curl -fsSL "$url" | tar -xz -C "$bin" dagu
+          chmod +x "$bin/dagu"
+          echo "$bin" >> "$GITHUB_PATH"
+          "$bin/dagu" version
       - name: Assert release plan matrix
         shell: bash
         env:

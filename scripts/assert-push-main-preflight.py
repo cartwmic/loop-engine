@@ -71,6 +71,18 @@ def main() -> int:
         fail(f"reusable preflight lost required gate(s): {missing}")
     if re.search(r"^    if:", preflight, re.MULTILINE):
         fail("reusable preflight must not be independently skippable")
+    if "version=2.14.0" not in preflight or "github.com/dagu-org/dagu/releases/download/v${version}/" not in preflight:
+        fail("reusable preflight must install operator-provided dagu 2.14.0")
+    if "echo \"$bin\" >> \"$GITHUB_PATH\"" not in preflight:
+        fail("reusable preflight must put dagu on PATH")
+    dagu_at = preflight.find("Install operator-provided dagu")
+    cargo_at = preflight.find("cargo test --workspace")
+    if dagu_at < 0 or cargo_at < 0 or dagu_at > cargo_at:
+        fail("reusable preflight must install dagu onto PATH before cargo test")
+    if "continue-on-error" in preflight:
+        fail("reusable preflight must not skip a missing dagu")
+    if "$RUNNER_TEMP/dagu-bin" not in preflight:
+        fail("reusable preflight must install dagu into RUNNER_TEMP, not dist artifacts")
 
     print("push-main preflight ok: pushed SHA plan -> unchanged read-only reusable preflight")
     return 0

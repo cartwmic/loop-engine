@@ -34,14 +34,16 @@ fn output_worker(
     preamble: Option<&str>,
     required: &[&str],
 ) -> String {
+    let stdout_file = receipt.with_extension("stdout-fixture");
+    std::fs::write(&stdout_file, stdout).expect("stdout fixture");
     contracted_worker_json(
         "sh",
         &[
             "-c",
-            &format!("cat > \"$1\"; printf %s \"$2\"; exit {exit_code}"),
+            &format!("cat > \"$1\"; cat \"$2\"; exit {exit_code}"),
             "_",
             receipt.to_str().expect("utf-8 receipt"),
-            stdout,
+            stdout_file.to_str().expect("utf-8 stdout fixture"),
         ],
         preamble,
         required,
@@ -383,10 +385,11 @@ fn bound_mode_writes_under_capture_dir_and_records_locked_stdin() {
         packet.as_bytes(),
     );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let expected = format!(
-        "Review the design\n\nrun_id: run-1\nslot_id: slot-1\nartifact_root: {}\n",
-        artifact_root.to_string_lossy()
-    );
+    let expected = serde_json::to_string(&serde_json::json!({
+        "artifact_root": artifact_root.to_string_lossy(),
+    }))
+    .expect("compact json")
+        + "\n";
     assert_eq!(
         std::fs::read_to_string(&receipt).expect("bound stdin"),
         expected
@@ -407,7 +410,7 @@ fn bound_mode_writes_under_capture_dir_and_records_locked_stdin() {
 }
 
 #[test]
-fn bound_preamble_has_exact_context_separator_legacy_body_and_trailer_order() {
+fn bound_preamble_has_exact_context_separator_and_no_instruction_body() {
     let directory = tempdir().expect("tempdir");
     let artifact_root = directory.path().join("artifact-\"quoted\\tail");
     let capture_dir = directory.path().join("captures").join("inv-framed");
@@ -429,13 +432,13 @@ fn bound_preamble_has_exact_context_separator_legacy_body_and_trailer_order() {
     assert_eq!(output.status.code(), Some(0), "{output:?}");
 
     let context = json!({"artifact_root": artifact_root.to_string_lossy()}).to_string();
-    let legacy = format!(
-        "Review the design\n\nrun_id: run-1\nslot_id: slot-1\nartifact_root: {}\n",
-        artifact_root.to_string_lossy()
-    );
-    let expected = format!("{preamble}\n{context}\n---\n\n{legacy}");
+    let expected = format!("{preamble}\n{context}\n---\n\n");
     let recorded = std::fs::read(&receipt).expect("framed stdin");
     assert_eq!(recorded, expected.as_bytes());
+    let recorded_text = String::from_utf8_lossy(&recorded);
+    assert!(!recorded_text.contains("instruction_body"));
+    assert!(!recorded_text.contains("Review the design"));
+    assert!(!recorded_text.contains("run_id:"));
     let context_value: Value = serde_json::from_str(&context).expect("context JSON");
     assert_eq!(context_value.as_object().expect("context object").len(), 1);
     assert!(context_value.get("artifact_root").is_some());
@@ -469,10 +472,11 @@ fn output_schema_only_preserves_bound_stdin_and_reports_conformance() {
         packet.as_bytes(),
     );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let expected = format!(
-        "judge this\n\nrun_id: run-1\nslot_id: slot-1\nartifact_root: {}\n",
-        artifact_root.to_string_lossy()
-    );
+    let expected = serde_json::to_string(&json!({
+        "artifact_root": artifact_root.to_string_lossy(),
+    }))
+    .expect("compact json")
+        + "\n";
     assert_eq!(std::fs::read(&receipt).expect("stdin"), expected.as_bytes());
     let summary = parse_summary(&output.stdout);
     assert_eq!(summary["workers"][0]["status"], "succeeded");
@@ -630,6 +634,8 @@ fn help_lists_fan_out_and_hides_wait_invocation() {
     assert!(stdout.contains("--worker"), "{stdout}");
     assert!(stdout.contains("--instructions"), "{stdout}");
     assert!(!stdout.contains("wait-invocation"), "{stdout}");
+    assert!(!stdout.contains("stdin-exec"), "{stdout}");
+    assert!(!stdout.contains("fan-out-join"), "{stdout}");
     for operation in [
         "start",
         "list",
@@ -684,11 +690,14 @@ fn deferred_readers_with_large_payload_start_in_parallel() {
     }
     thread::sleep(Duration::from_millis(150));
     let both_started = pid_a.is_file() && pid_b.is_file();
+    let overlapping_live = both_started
+        && pid_is_alive(std::fs::read_to_string(&pid_a).expect("pid a").trim())
+        && pid_is_alive(std::fs::read_to_string(&pid_b).expect("pid b").trim());
     let output = handle.join().expect("fan-out thread");
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert!(
-        both_started,
-        "both workers must start before either finishes reading a 2MiB payload"
+        overlapping_live,
+        "both workers must start concurrently with overlapping live pids before either finishes reading a 2MiB payload"
     );
     assert_eq!(std::fs::read(&receipt_a).expect("read a"), payload);
     assert_eq!(std::fs::read(&receipt_b).expect("read b"), payload);
@@ -703,20 +712,40 @@ fn ad_hoc_with_terminal_stdin_does_not_wait_for_eof() {
     std::fs::write(
         &script,
         r#"
-import os, sys, time
-bin, instructions = sys.argv[1], sys.argv[2]
-worker = sys.argv[3]
+import os, select, signal, sys, time
+signal.alarm(12)
+bin, instructions, worker, cwd = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+os.chdir(cwd)
 pid, fd = os.forkpty()
 if pid == 0:
     os.execv(bin, [bin, "fan-out", "--instructions", instructions, "--worker", worker])
-deadline = time.time() + 3
+deadline = time.time() + 8
 while time.time() < deadline:
+    r, _, _ = select.select([fd], [], [], 0.05)
+    if r:
+        try:
+            os.read(fd, 4096)
+        except OSError:
+            pass
     wpid, status = os.waitpid(pid, os.WNOHANG)
     if wpid == pid:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
         raise SystemExit(0 if os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0 else 1)
-    time.sleep(0.05)
 try:
-    os.kill(pid, 9)
+    os.close(fd)
+except OSError:
+    pass
+try:
+    os.killpg(pid, 9)
+except OSError:
+    try:
+        os.kill(pid, 9)
+    except OSError:
+        pass
+try:
     os.waitpid(pid, 0)
 except OSError:
     pass
@@ -731,6 +760,7 @@ raise SystemExit(2)
             env!("CARGO_BIN_EXE_loop-engine"),
             instructions.to_str().expect("utf-8 instructions"),
             &worker,
+            directory.path().to_str().expect("utf-8 cwd"),
         ])
         .output()
         .expect("run pty helper");
@@ -741,4 +771,305 @@ raise SystemExit(2)
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn spawn_fan_out(cwd: &Path, args: &[&str], stdin: &[u8]) -> std::process::Child {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+        .current_dir(cwd)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn loop-engine fan-out");
+    {
+        let mut handle = child.stdin.take().expect("fan-out stdin");
+        handle.write_all(stdin).expect("write fan-out stdin");
+    }
+    child
+}
+
+fn read_locator(capture_dir: &Path) -> Value {
+    let path = capture_dir.join("dagu-locator.json");
+    serde_json::from_slice(
+        &std::fs::read(&path)
+            .unwrap_or_else(|error| panic!("read locator {}: {error}", path.display())),
+    )
+    .expect("locator json")
+}
+
+fn emitted_yaml(capture_dir: &Path) -> String {
+    let locator = read_locator(capture_dir);
+    let home = Path::new(locator["dagu_home"].as_str().expect("dagu_home"));
+    let name = locator["dag_name"].as_str().expect("dag_name");
+    std::fs::read_to_string(home.join("dags").join(format!("{name}.yaml"))).expect("emitted yaml")
+}
+
+fn wait_for_file(path: &Path, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if path.is_file() {
+            if std::fs::metadata(path)
+                .map(|meta| meta.len() > 0)
+                .unwrap_or(false)
+            {
+                return true;
+            }
+            if path.extension().is_none() && path.file_name().is_some() {
+                // locator may be a small JSON object; existence is enough
+                if path.file_name() == Some(std::ffi::OsStr::new("dagu-locator.json")) {
+                    return true;
+                }
+            }
+        }
+        if path.is_file() && path.ends_with("dagu-locator.json") {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    path.is_file()
+}
+
+fn kill_direct_children(parent: u32) {
+    let output = Command::new("pgrep")
+        .args(["-P", &parent.to_string(), "dagu"])
+        .output()
+        .expect("pgrep children");
+    for pid in String::from_utf8_lossy(&output.stdout).lines() {
+        let pid = pid.trim();
+        if pid.is_empty() {
+            continue;
+        }
+        let _ = Command::new("kill").args(["-9", pid]).status();
+    }
+}
+
+#[test]
+fn locator_exists_during_live_worker_and_yaml_omits_retry_and_continue() {
+    let directory = tempdir().expect("tempdir");
+    let artifact_root = directory.path().join("artifacts");
+    let capture_dir = directory.path().join("captures").join("inv-live");
+    let worker = worker_json("sh", &["-c", "echo started; sleep 2; exit 0"]);
+    let packet = invoke_packet(&artifact_root, &capture_dir, "live");
+    let child = spawn_fan_out(
+        directory.path(),
+        &["fan-out", "--worker", &worker],
+        packet.as_bytes(),
+    );
+    let locator_path = capture_dir.join("dagu-locator.json");
+    let stdout_path = capture_dir.join("0").join("stdout");
+    assert!(
+        wait_for_file(&locator_path, Duration::from_secs(15)),
+        "locator missing: {}",
+        locator_path.display()
+    );
+    let locator = read_locator(&capture_dir);
+    assert!(locator["dagu_home"]
+        .as_str()
+        .unwrap()
+        .ends_with("dagu-home"));
+    assert!(locator["dag_name"].as_str().unwrap().starts_with("fanout-"));
+    assert_eq!(locator["dag_name"], locator["run_name"]);
+    assert_eq!(locator.as_object().expect("object").len(), 3);
+    assert!(
+        wait_for_file(&stdout_path, Duration::from_secs(15)),
+        "stdout missing while overlay-equivalent worker is live"
+    );
+    let output = child.wait_with_output().expect("wait fan-out");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let yaml = emitted_yaml(&capture_dir);
+    assert!(yaml.contains("type: graph"), "{yaml}");
+    assert!(!yaml.contains("continue_on"), "{yaml}");
+    assert!(!yaml.contains("retry_policy"), "{yaml}");
+    assert!(!yaml.contains("max_active_steps"), "{yaml}");
+}
+
+#[test]
+fn second_adhoc_dir_does_not_reuse_dag_name() {
+    let directory = tempdir().expect("tempdir");
+    let instructions = directory.path().join("instructions.txt");
+    std::fs::write(&instructions, b"shared").expect("instructions");
+    let worker = worker_json("true", &[]);
+    let first = run_fan_out(
+        directory.path(),
+        &[
+            "fan-out",
+            "--instructions",
+            instructions.to_str().expect("utf-8"),
+            "--worker",
+            &worker,
+        ],
+        b"",
+    );
+    assert_eq!(first.status.code(), Some(0), "{first:?}");
+    let first_summary = parse_summary(&first.stdout);
+    let first_dir = first_summary["output_dir"].as_str().expect("output_dir");
+    let first_locator = read_locator(Path::new(first_dir));
+    let second = run_fan_out(
+        directory.path(),
+        &[
+            "fan-out",
+            "--instructions",
+            instructions.to_str().expect("utf-8"),
+            "--worker",
+            &worker,
+        ],
+        b"",
+    );
+    assert_eq!(second.status.code(), Some(0), "{second:?}");
+    let second_summary = parse_summary(&second.stdout);
+    let second_dir = second_summary["output_dir"].as_str().expect("output_dir");
+    assert_ne!(first_dir, second_dir);
+    let second_locator = read_locator(Path::new(second_dir));
+    assert_ne!(first_locator["dag_name"], second_locator["dag_name"]);
+    assert_ne!(first_locator["dagu_home"], second_locator["dagu_home"]);
+    let previous_home = Path::new(first_locator["dagu_home"].as_str().unwrap());
+    let reused = previous_home.join("dags").join(format!(
+        "{}.yaml",
+        second_locator["dag_name"].as_str().unwrap()
+    ));
+    assert!(
+        !reused.is_file(),
+        "second dag_name reused under previous dagu-home: {}",
+        reused.display()
+    );
+}
+
+#[test]
+fn killed_graph_before_join_still_writes_summary() {
+    let directory = tempdir().expect("tempdir");
+    let artifact_root = directory.path().join("artifacts");
+    let capture_dir = directory.path().join("captures").join("inv-killed");
+    let worker = worker_json("sh", &["-c", "echo started; sleep 12; exit 3"]);
+    let packet = invoke_packet(&artifact_root, &capture_dir, "kill-me");
+    let child = spawn_fan_out(
+        directory.path(),
+        &["fan-out", "--worker", &worker],
+        packet.as_bytes(),
+    );
+    let parent = child.id();
+    let stdout_path = capture_dir.join("0").join("stdout");
+    let stderr_path = capture_dir.join("0").join("stderr");
+    assert!(
+        wait_for_file(&stdout_path, Duration::from_secs(20)),
+        "worker stdout never appeared"
+    );
+    assert!(capture_dir.join("dagu-locator.json").is_file());
+    kill_direct_children(parent);
+    let output = child.wait_with_output().expect("wait killed graph");
+    assert_ne!(output.status.code(), Some(0), "{output:?}");
+    let captured = capture_summary(capture_dir.to_str().expect("utf-8"));
+    let workers = captured["workers"].as_array().expect("workers");
+    assert!(!workers.is_empty(), "{captured}");
+    assert_eq!(workers[0]["command"], "sh");
+    assert!(workers[0]["args"].is_array());
+    assert!(workers[0]["exit_code"].is_number(), "{captured}");
+    assert_eq!(
+        workers[0]["stdout_path"].as_str().unwrap(),
+        stdout_path.to_string_lossy()
+    );
+    assert_eq!(
+        workers[0]["stderr_path"].as_str().unwrap(),
+        stderr_path.to_string_lossy()
+    );
+    assert!(stdout_path.is_file());
+    assert!(stderr_path.is_file());
+}
+
+#[test]
+fn missing_join_helper_still_writes_summary_for_started_workers() {
+    let directory = tempdir().expect("tempdir");
+    let artifact_root = directory.path().join("artifacts");
+    let capture_dir = directory.path().join("captures").join("inv-no-join");
+    let worker = worker_json("sh", &["-c", "echo started; exit 0"]);
+    let packet = invoke_packet(&artifact_root, &capture_dir, "no-join");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+        .current_dir(directory.path())
+        .args(["fan-out", "--worker", &worker])
+        .env(
+            "LOOP_ENGINE_FAN_OUT_JOIN_COMMAND",
+            "/nonexistent/loop-engine-fan-out-join",
+        )
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn fan-out");
+    {
+        let mut handle = child.stdin.take().expect("stdin");
+        handle.write_all(packet.as_bytes()).expect("write packet");
+    }
+    let output = child.wait_with_output().expect("wait fan-out");
+    assert_ne!(output.status.code(), Some(0), "{output:?}");
+    let stdout_path = capture_dir.join("0").join("stdout");
+    let stderr_path = capture_dir.join("0").join("stderr");
+    assert!(stdout_path.is_file(), "started stdout must exist");
+    assert!(stderr_path.is_file(), "started stderr must exist");
+    let captured = capture_summary(capture_dir.to_str().expect("utf-8"));
+    assert_eq!(captured["workers"][0]["command"], "sh");
+    assert_eq!(captured["workers"][0]["exit_code"], 0);
+    assert_eq!(
+        captured["workers"][0]["stdout_path"].as_str().unwrap(),
+        stdout_path.to_string_lossy()
+    );
+    assert_eq!(
+        captured["workers"][0]["stderr_path"].as_str().unwrap(),
+        stderr_path.to_string_lossy()
+    );
+}
+
+#[test]
+fn spawn_failure_writes_summary_for_started_workers_and_exits_nonzero() {
+    let directory = tempdir().expect("tempdir");
+    let instructions = directory.path().join("instructions.txt");
+    std::fs::write(&instructions, b"payload").expect("instructions");
+    let receipt = directory.path().join("started.stdin");
+    let started = cat_worker(&receipt);
+    let missing = worker_json(
+        directory
+            .path()
+            .join("no-such-worker-binary")
+            .to_str()
+            .expect("utf-8"),
+        &[],
+    );
+    let output = run_fan_out(
+        directory.path(),
+        &[
+            "fan-out",
+            "--instructions",
+            instructions.to_str().expect("utf-8"),
+            "--worker",
+            &started,
+            "--worker",
+            &missing,
+        ],
+        b"",
+    );
+    assert_ne!(output.status.code(), Some(0), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("fan-out error") || stderr.contains("dagu"),
+        "{stderr}"
+    );
+    let adhoc = directory.path().join("fan-out-adhoc");
+    let mut captures = Vec::new();
+    if adhoc.is_dir() {
+        for entry in std::fs::read_dir(&adhoc).expect("adhoc dir") {
+            let path = entry.expect("entry").path();
+            if path.join("summary.json").is_file() {
+                captures.push(path);
+            }
+        }
+    }
+    assert_eq!(
+        captures.len(),
+        1,
+        "expected one ad-hoc capture with summary"
+    );
+    let captured = capture_summary(captures[0].to_str().expect("utf-8"));
+    let workers = captured["workers"].as_array().expect("workers");
+    assert!(!workers.is_empty(), "{captured}");
+    assert_eq!(workers[0]["command"], "sh");
+    assert!(captures[0].join("0").join("stdout").is_file());
 }

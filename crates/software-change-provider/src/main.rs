@@ -5,6 +5,7 @@
 
 mod artifacts;
 mod config;
+mod dagu;
 mod evidence;
 mod gates;
 mod protocol;
@@ -15,9 +16,15 @@ mod workflow;
 use protocol::{DescribeRequest, EvaluateRequest};
 use run_plan_graph::{parse_run_plan_graph_args, MAX_CONCURRENCY};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
+use std::fs;
 use std::io::{self, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::{self, Command, Stdio};
+
+const STDIN_EXEC_USAGE: &str =
+    "usage: software-change stdin-exec --stdin-file ABS --exit-mode sidecar|propagate [--sidecar-file ABS] -- COMMAND [ARG]...";
+const EXIT_STDIN_EXEC_ERROR: i32 = 20;
 
 fn main() {
     std::process::exit(run());
@@ -69,11 +76,36 @@ fn run() -> i32 {
                 }
             };
             return match parse_run_plan_graph_args(&rest) {
-                Ok(worker) => run_plan_graph::execute(&worker),
+                Ok(worker) => {
+                    if let Err(error) = dagu::resolve_dagu() {
+                        eprintln!("{error}");
+                        return 1;
+                    }
+                    run_plan_graph::execute(&worker)
+                }
                 Err(error) => {
                     eprintln!(
                         "{error}; usage: software-change run-plan-graph [--task-worker JSON]"
                     );
+                    2
+                }
+            };
+        }
+        Some(command) if command == "stdin-exec" => {
+            let rest = match args
+                .map(|token| token.into_string())
+                .collect::<Result<Vec<String>, _>>()
+            {
+                Ok(rest) => rest,
+                Err(_) => {
+                    eprintln!("stdin-exec arguments must be valid UTF-8; {STDIN_EXEC_USAGE}");
+                    return 2;
+                }
+            };
+            return match parse_stdin_exec_args(&rest) {
+                Ok(parsed) => execute_stdin_exec(parsed),
+                Err(error) => {
+                    eprintln!("{error}; {STDIN_EXEC_USAGE}");
                     2
                 }
             };
@@ -121,7 +153,7 @@ fn run_protocol() -> i32 {
 
 fn provider_help() -> i32 {
     println!(
-        "software-change\n\nUsage:\n  software-change < stdin\n  software-change data-dump DIR\n  software-change run-plan-graph [--task-worker JSON]\n  software-change --help | -h\n  software-change --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nData:\n  data-dump  materialize embedded provider data under DIR\n\nPlan graph:\n  run-plan-graph  execute plan.json by dependency_graph; inner-worker concurrency cap {MAX_CONCURRENCY}"
+        "software-change\n\nUsage:\n  software-change < stdin\n  software-change data-dump DIR\n  software-change run-plan-graph [--task-worker JSON]\n  software-change --help | -h\n  software-change --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nData:\n  data-dump  materialize embedded provider data under DIR\n\nPlan graph:\n  run-plan-graph  execute plan.json as a Dagu type:graph (max_active_steps {MAX_CONCURRENCY}) with a mandatory summarizer"
     );
     0
 }
@@ -129,6 +161,209 @@ fn provider_help() -> i32 {
 fn data_dump_usage(message: &str) -> i32 {
     eprintln!("{message}; usage: software-change data-dump DIR");
     2
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StdinExecExitMode {
+    Sidecar,
+    Propagate,
+}
+
+struct StdinExecArgs {
+    stdin_file: PathBuf,
+    exit_mode: StdinExecExitMode,
+    sidecar_file: Option<PathBuf>,
+    command: String,
+    args: Vec<String>,
+}
+
+fn parse_stdin_exec_args(args: &[String]) -> Result<StdinExecArgs, String> {
+    let mut stdin_file = None;
+    let mut exit_mode = None;
+    let mut sidecar_file = None;
+    let mut command = Vec::new();
+    let mut after_options = false;
+    let mut index = 0;
+    while index < args.len() {
+        let token = &args[index];
+        if !after_options && token == "--" {
+            after_options = true;
+            index += 1;
+            continue;
+        }
+        if !after_options {
+            if let Some(value) = take_option_value(args, &mut index, token, "--stdin-file")? {
+                stdin_file = Some(value);
+                continue;
+            }
+            if let Some(value) = take_option_value(args, &mut index, token, "--exit-mode")? {
+                exit_mode = Some(value);
+                continue;
+            }
+            if let Some(value) = take_option_value(args, &mut index, token, "--sidecar-file")? {
+                sidecar_file = Some(value);
+                continue;
+            }
+            if token.starts_with('-') {
+                return Err(format!("unknown option `{token}`"));
+            }
+        }
+        command.push(token.clone());
+        index += 1;
+    }
+
+    let stdin_file = stdin_file.ok_or_else(|| "missing --stdin-file path".to_owned())?;
+    let exit_mode_raw = exit_mode.ok_or_else(|| "missing --exit-mode".to_owned())?;
+    let exit_mode = match exit_mode_raw.as_str() {
+        "sidecar" => StdinExecExitMode::Sidecar,
+        "propagate" => StdinExecExitMode::Propagate,
+        other => {
+            return Err(format!(
+                "unknown --exit-mode `{other}`; expected sidecar or propagate"
+            ))
+        }
+    };
+    match exit_mode {
+        StdinExecExitMode::Sidecar => {
+            if sidecar_file.is_none() {
+                return Err("sidecar mode requires --sidecar-file".to_owned());
+            }
+        }
+        StdinExecExitMode::Propagate => {
+            if sidecar_file.is_some() {
+                return Err("--sidecar-file is rejected in propagate mode".to_owned());
+            }
+        }
+    }
+    let mut command = command.into_iter();
+    let program = command.next().ok_or_else(|| "missing COMMAND".to_owned())?;
+    Ok(StdinExecArgs {
+        stdin_file: PathBuf::from(stdin_file),
+        exit_mode,
+        sidecar_file: sidecar_file.map(PathBuf::from),
+        command: program,
+        args: command.collect(),
+    })
+}
+
+fn take_option_value(
+    args: &[String],
+    index: &mut usize,
+    token: &str,
+    name: &str,
+) -> Result<Option<String>, String> {
+    if token == name {
+        let value = args
+            .get(*index + 1)
+            .ok_or_else(|| format!("missing value for {name}"))?;
+        *index += 2;
+        return Ok(Some(value.clone()));
+    }
+    let prefix = format!("{name}=");
+    if let Some(value) = token.strip_prefix(&prefix) {
+        *index += 1;
+        return Ok(Some(value.to_owned()));
+    }
+    Ok(None)
+}
+
+fn execute_stdin_exec(args: StdinExecArgs) -> i32 {
+    let stdin = match fs::File::open(&args.stdin_file) {
+        Ok(file) => file,
+        Err(error) => {
+            return stdin_exec_failed(
+                format!(
+                    "could not open --stdin-file {}: {error}",
+                    args.stdin_file.display()
+                ),
+                EXIT_STDIN_EXEC_ERROR,
+            )
+        }
+    };
+    let mut child = match Command::new(&args.command)
+        .args(&args.args)
+        .stdin(Stdio::from(stdin))
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            return stdin_exec_failed(
+                format!("could not spawn `{}`: {error}", args.command),
+                EXIT_STDIN_EXEC_ERROR,
+            )
+        }
+    };
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(error) => {
+            return stdin_exec_failed(
+                format!("could not wait for `{}`: {error}", args.command),
+                EXIT_STDIN_EXEC_ERROR,
+            )
+        }
+    };
+    let exit_code = inner_waitpid_as_i32(status);
+    match args.exit_mode {
+        StdinExecExitMode::Sidecar => {
+            let Some(sidecar_file) = args.sidecar_file.as_ref() else {
+                return stdin_exec_failed("sidecar mode requires --sidecar-file".to_owned(), 2);
+            };
+            if let Some(parent) = sidecar_file.parent() {
+                if !parent.as_os_str().is_empty() {
+                    if let Err(error) = fs::create_dir_all(parent) {
+                        return stdin_exec_failed(
+                            format!(
+                                "could not create sidecar directory {}: {error}",
+                                parent.display()
+                            ),
+                            EXIT_STDIN_EXEC_ERROR,
+                        );
+                    }
+                }
+            }
+            let body = match serde_json::to_vec(&json!({ "exit_code": exit_code })) {
+                Ok(body) => body,
+                Err(error) => {
+                    return stdin_exec_failed(
+                        format!("could not serialize sidecar JSON: {error}"),
+                        EXIT_STDIN_EXEC_ERROR,
+                    )
+                }
+            };
+            if let Err(error) = fs::write(sidecar_file, body) {
+                return stdin_exec_failed(
+                    format!(
+                        "could not write sidecar {}: {error}",
+                        sidecar_file.display()
+                    ),
+                    EXIT_STDIN_EXEC_ERROR,
+                );
+            }
+            0
+        }
+        StdinExecExitMode::Propagate => exit_code,
+    }
+}
+
+fn inner_waitpid_as_i32(status: process::ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return signal;
+        }
+    }
+    1
+}
+
+fn stdin_exec_failed(message: String, exit_code: i32) -> i32 {
+    eprintln!("stdin-exec error: {message}");
+    exit_code
 }
 
 fn describe(request: Value) -> i32 {

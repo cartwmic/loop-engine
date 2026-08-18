@@ -5,9 +5,11 @@
 //! core operation outcome.  Workflow and provider policy remain in the core
 //! and integration crates respectively.
 
+mod dagu;
 mod fan_out;
 mod preview_bindings;
 
+pub use dagu::{names_for_capture_root, resolve_dagu, write_locator, DaguError, DaguLocator};
 pub use fan_out::FanOutArgs;
 
 use loop_core::{
@@ -38,6 +40,23 @@ pub const EXIT_REJECTED: i32 = 10;
 pub const EXIT_ERROR: i32 = 20;
 /// Exit status for malformed CLI syntax or input.
 pub const EXIT_INVALID_INVOCATION: i32 = 2;
+
+/// Exit mode for the hidden `stdin-exec` helper.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StdinExecExitMode {
+    Sidecar,
+    Propagate,
+}
+
+/// Parsed values for hidden `loop-engine stdin-exec`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StdinExecArgs {
+    pub stdin_file: PathBuf,
+    pub exit_mode: StdinExecExitMode,
+    pub sidecar_file: Option<PathBuf>,
+    pub command: String,
+    pub args: Vec<String>,
+}
 
 const DEFAULT_PROVIDER_TIMEOUT: Duration = Duration::from_secs(30);
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -133,9 +152,15 @@ pub enum ParsedRequest {
         run_id: RunId,
         invocation_id: InvocationId,
     },
+    StdinExec {
+        args: StdinExecArgs,
+    },
     FanOut {
         options: CliOptions,
         args: FanOutArgs,
+    },
+    FanOutJoin {
+        capture_dir: PathBuf,
     },
     PreviewBindings {
         options: CliOptions,
@@ -209,6 +234,10 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
     let mut record_id = None;
     let mut event = None;
     let mut fan_out_tokens = Vec::new();
+    let mut stdin_file = None;
+    let mut exit_mode = None;
+    let mut sidecar_file = None;
+    let mut capture_dir = None;
 
     let mut index = 0;
     while index < args.len() {
@@ -549,6 +578,62 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
                     index += 1;
                     continue;
                 }
+                "--stdin-file" => {
+                    stdin_file = Some(next_option_value(args, &mut index, token)?);
+                    continue;
+                }
+                value if value.starts_with("--stdin-file=") => {
+                    stdin_file = Some(
+                        value
+                            .strip_prefix("--stdin-file=")
+                            .expect("checked prefix")
+                            .to_owned(),
+                    );
+                    index += 1;
+                    continue;
+                }
+                "--exit-mode" => {
+                    exit_mode = Some(next_option_value(args, &mut index, token)?);
+                    continue;
+                }
+                value if value.starts_with("--exit-mode=") => {
+                    exit_mode = Some(
+                        value
+                            .strip_prefix("--exit-mode=")
+                            .expect("checked prefix")
+                            .to_owned(),
+                    );
+                    index += 1;
+                    continue;
+                }
+                "--sidecar-file" => {
+                    sidecar_file = Some(next_option_value(args, &mut index, token)?);
+                    continue;
+                }
+                value if value.starts_with("--sidecar-file=") => {
+                    sidecar_file = Some(
+                        value
+                            .strip_prefix("--sidecar-file=")
+                            .expect("checked prefix")
+                            .to_owned(),
+                    );
+                    index += 1;
+                    continue;
+                }
+                "--capture-dir" => {
+                    capture_dir = Some(next_option_value(args, &mut index, token)?);
+                    continue;
+                }
+                value if value.starts_with("--capture-dir=") => {
+                    capture_dir = Some(
+                        value
+                            .strip_prefix("--capture-dir=")
+                            .expect("checked prefix")
+                            .to_owned(),
+                    );
+                    index += 1;
+                    continue;
+                }
                 value if value.starts_with('-') => {
                     return Err(CliError::new(
                         "invalid-invocation",
@@ -590,10 +675,36 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
                 format!("unknown option `{option}`"),
             ));
         }
+        reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
+        reject_capture_dir_option(&capture_dir)?;
         return parse_wait_invocation(options, positionals);
     }
 
+    if command_name == "stdin-exec" {
+        if let Some(option) = fan_out_tokens.first() {
+            return Err(CliError::new(
+                "invalid-invocation",
+                format!("unknown option `{option}`"),
+            ));
+        }
+        reject_capture_dir_option(&capture_dir)?;
+        return parse_stdin_exec(stdin_file, exit_mode, sidecar_file, positionals);
+    }
+
+    if command_name == "fan-out-join" {
+        if let Some(option) = fan_out_tokens.first() {
+            return Err(CliError::new(
+                "invalid-invocation",
+                format!("unknown option `{option}`"),
+            ));
+        }
+        reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
+        return parse_fan_out_join(capture_dir, positionals);
+    }
+
     if command_name == "fan-out" {
+        reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
+        reject_capture_dir_option(&capture_dir)?;
         fan_out_tokens.extend(positionals);
         return parse_fan_out_request(options, fan_out_tokens);
     }
@@ -605,6 +716,8 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
                 format!("unknown option `{option}`"),
             ));
         }
+        reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
+        reject_capture_dir_option(&capture_dir)?;
         reject_unrelated_options(
             "preview-bindings",
             provider,
@@ -631,6 +744,8 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
             format!("unknown option `{option}`"),
         ));
     }
+    reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
+    reject_capture_dir_option(&capture_dir)?;
 
     let command = parse_primary_command(
         &command_name,
@@ -940,6 +1055,42 @@ fn reject_unrelated_options(
     Ok(())
 }
 
+fn reject_capture_dir_option(capture_dir: &Option<String>) -> Result<(), CliError> {
+    if capture_dir.is_some() {
+        return Err(CliError::new(
+            "invalid-invocation",
+            "unknown option `--capture-dir`",
+        ));
+    }
+    Ok(())
+}
+
+fn reject_stdin_exec_options(
+    stdin_file: &Option<String>,
+    exit_mode: &Option<String>,
+    sidecar_file: &Option<String>,
+) -> Result<(), CliError> {
+    if stdin_file.is_some() {
+        return Err(CliError::new(
+            "invalid-invocation",
+            "unknown option `--stdin-file`",
+        ));
+    }
+    if exit_mode.is_some() {
+        return Err(CliError::new(
+            "invalid-invocation",
+            "unknown option `--exit-mode`",
+        ));
+    }
+    if sidecar_file.is_some() {
+        return Err(CliError::new(
+            "invalid-invocation",
+            "unknown option `--sidecar-file`",
+        ));
+    }
+    Ok(())
+}
+
 /// Execute one parsed or raw CLI invocation and capture its rendered output.
 pub fn execute<I, S>(args: I) -> Execution
 where
@@ -987,7 +1138,9 @@ where
             run_id,
             invocation_id,
         } => execute_wait_invocation(options, run_id, invocation_id),
+        ParsedRequest::StdinExec { args } => execute_stdin_exec(args),
         ParsedRequest::FanOut { options, args } => execute_fan_out(options, args),
+        ParsedRequest::FanOutJoin { capture_dir } => execute_fan_out_join(capture_dir),
         ParsedRequest::PreviewBindings { options, operand } => {
             execute_preview_bindings(options, operand)
         }
@@ -999,6 +1152,37 @@ struct WaiterEnvelope {
     command: String,
     args: Vec<String>,
     worker_packet: Value,
+}
+
+fn parse_fan_out_join(
+    capture_dir: Option<String>,
+    positionals: Vec<String>,
+) -> Result<ParsedRequest, CliError> {
+    let capture_dir = required(capture_dir, "--capture-dir path")?;
+    ensure_no_positionals(&positionals, "fan-out-join")?;
+    Ok(ParsedRequest::FanOutJoin {
+        capture_dir: PathBuf::from(capture_dir),
+    })
+}
+
+fn execute_fan_out_join(capture_dir: PathBuf) -> Execution {
+    match fan_out::run_fan_out_join(&capture_dir) {
+        Ok(()) => Execution {
+            exit_code: EXIT_COMPLETED,
+            stdout: String::new(),
+            stderr: String::new(),
+        },
+        Err(fan_out::CollectorError::Invalid(message)) => Execution {
+            exit_code: EXIT_INVALID_INVOCATION,
+            stdout: String::new(),
+            stderr: format!("fan-out-join error: {message}\n"),
+        },
+        Err(fan_out::CollectorError::Failed(message)) => Execution {
+            exit_code: EXIT_ERROR,
+            stdout: String::new(),
+            stderr: format!("fan-out-join error: {message}\n"),
+        },
+    }
 }
 
 fn parse_fan_out_request(
@@ -1096,6 +1280,167 @@ fn execute_preview_bindings(options: CliOptions, operand: Option<String>) -> Exe
             CliError::new("invalid-invocation", error.message),
             options.output,
         ),
+    }
+}
+
+fn parse_stdin_exec(
+    stdin_file: Option<String>,
+    exit_mode: Option<String>,
+    sidecar_file: Option<String>,
+    mut positionals: Vec<String>,
+) -> Result<ParsedRequest, CliError> {
+    let stdin_file = required(stdin_file, "--stdin-file path")?;
+    let exit_mode_raw = required(exit_mode, "--exit-mode")?;
+    let exit_mode = match exit_mode_raw.as_str() {
+        "sidecar" => StdinExecExitMode::Sidecar,
+        "propagate" => StdinExecExitMode::Propagate,
+        other => {
+            return Err(CliError::new(
+                "invalid-invocation",
+                format!("unknown --exit-mode `{other}`; expected sidecar or propagate"),
+            ))
+        }
+    };
+    match exit_mode {
+        StdinExecExitMode::Sidecar => {
+            if sidecar_file.is_none() {
+                return Err(CliError::new(
+                    "invalid-invocation",
+                    "sidecar mode requires --sidecar-file",
+                ));
+            }
+        }
+        StdinExecExitMode::Propagate => {
+            if sidecar_file.is_some() {
+                return Err(CliError::new(
+                    "invalid-invocation",
+                    "--sidecar-file is rejected in propagate mode",
+                ));
+            }
+        }
+    }
+    let command = required(take_positional(&mut positionals), "COMMAND")?;
+    Ok(ParsedRequest::StdinExec {
+        args: StdinExecArgs {
+            stdin_file: PathBuf::from(stdin_file),
+            exit_mode,
+            sidecar_file: sidecar_file.map(PathBuf::from),
+            command,
+            args: positionals,
+        },
+    })
+}
+
+fn execute_stdin_exec(args: StdinExecArgs) -> Execution {
+    let stdin = match fs::File::open(&args.stdin_file) {
+        Ok(file) => file,
+        Err(error) => {
+            return stdin_exec_failed(
+                format!(
+                    "could not open --stdin-file {}: {error}",
+                    args.stdin_file.display()
+                ),
+                EXIT_ERROR,
+            )
+        }
+    };
+    let mut child = match Command::new(&args.command)
+        .args(&args.args)
+        .stdin(Stdio::from(stdin))
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            return stdin_exec_failed(
+                format!("could not spawn `{}`: {error}", args.command),
+                EXIT_ERROR,
+            )
+        }
+    };
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(error) => {
+            return stdin_exec_failed(
+                format!("could not wait for `{}`: {error}", args.command),
+                EXIT_ERROR,
+            )
+        }
+    };
+    let exit_code = inner_waitpid_as_i32(status);
+    match args.exit_mode {
+        StdinExecExitMode::Sidecar => {
+            let Some(sidecar_file) = args.sidecar_file.as_ref() else {
+                return stdin_exec_failed(
+                    "sidecar mode requires --sidecar-file".to_owned(),
+                    EXIT_INVALID_INVOCATION,
+                );
+            };
+            if let Some(parent) = sidecar_file.parent() {
+                if !parent.as_os_str().is_empty() {
+                    if let Err(error) = fs::create_dir_all(parent) {
+                        return stdin_exec_failed(
+                            format!(
+                                "could not create sidecar directory {}: {error}",
+                                parent.display()
+                            ),
+                            EXIT_ERROR,
+                        );
+                    }
+                }
+            }
+            let body = match serde_json::to_vec(&json!({ "exit_code": exit_code })) {
+                Ok(body) => body,
+                Err(error) => {
+                    return stdin_exec_failed(
+                        format!("could not serialize sidecar JSON: {error}"),
+                        EXIT_ERROR,
+                    )
+                }
+            };
+            if let Err(error) = fs::write(sidecar_file, body) {
+                return stdin_exec_failed(
+                    format!(
+                        "could not write sidecar {}: {error}",
+                        sidecar_file.display()
+                    ),
+                    EXIT_ERROR,
+                );
+            }
+            Execution {
+                exit_code: EXIT_COMPLETED,
+                stdout: String::new(),
+                stderr: String::new(),
+            }
+        }
+        StdinExecExitMode::Propagate => Execution {
+            exit_code,
+            stdout: String::new(),
+            stderr: String::new(),
+        },
+    }
+}
+
+fn inner_waitpid_as_i32(status: process::ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return signal;
+        }
+    }
+    1
+}
+
+fn stdin_exec_failed(message: String, exit_code: i32) -> Execution {
+    Execution {
+        exit_code,
+        stdout: String::new(),
+        stderr: format!("stdin-exec error: {message}\n"),
     }
 }
 
@@ -2099,9 +2444,11 @@ fn usage(command: Option<&str>) -> String {
         Some("fan-out") => {
             "Usage: loop-engine [options] fan-out [--worker JSON]... [--instructions FILE]\n\n"
                 .to_owned()
-                + "Start one process per --worker in parallel, write per-worker stdout and stderr,\n"
-                + "reap every worker, and print a JSON collector summary. This is not a run-state\n"
-                + "operation and does not open the run database.\n\n"
+                + "Start one process per --worker concurrently as a local Dagu type:graph under\n"
+                + "an isolated home in the capture directory. Per-step progress is dagu status /\n"
+                + "dagu history against capture_dir/dagu-locator.json. A mechanical join writes\n"
+                + "summary.json. This is not a run-state operation and does not open the run\n"
+                + "database. Callers do not supply Dagu YAML.\n\n"
                 + "Options:\n"
                 + "  --worker JSON            Strict nested worker object with command, args, and\n"
                 + "                           optional preamble and output_schema; repeatable\n"
@@ -2114,7 +2461,9 @@ fn usage(command: Option<&str>) -> String {
                 + "Inspect work_slot_bindings without starting a run or opening the database.\n"
                 + "Omitted operand reads stdin; @FILE reads that path; otherwise the operand is\n"
                 + "inline JSON. Accepted JSON is a work_slot_bindings map or an object containing\n"
-                + "that key. This is not a run-state operation.\n"
+                + "that key. Reports a dagu PATH check (minimum 2.14.0) as ok with path and\n"
+                + "version, or as a warning; warnings alone still exit 0. This is not a run-state\n"
+                + "operation.\n"
         }
         _ => {
             "Usage: loop-engine [options] <operation> [arguments]\n\n"
@@ -2129,7 +2478,7 @@ fn usage(command: Option<&str>) -> String {
                 + "  terminate\n"
                 + "  invoke\n\n"
                 + "Other commands:\n"
-                + "  fan-out                    Start worker CLIs in parallel without opening a run\n"
+                + "  fan-out                    Run worker CLIs concurrently via a local Dagu graph\n"
                 + "                             --worker JSON          Nested worker contract; repeatable\n"
                 + "                             --instructions FILE    Shared instructions (ad hoc mode)\n"
                 + "  preview-bindings [JSON|@FILE]  Inspect work_slot_bindings without starting a run\n"
@@ -2143,6 +2492,39 @@ fn usage(command: Option<&str>) -> String {
                 + "  --version, -V              Show version\n"
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+fn help_lists_fan_out_and_hides_wait_invocation() {
+    let help = execute(["--help"]);
+    assert_eq!(help.exit_code, EXIT_COMPLETED);
+    assert!(
+        help.stdout.contains("fan-out"),
+        "help must list fan-out: {}",
+        help.stdout
+    );
+    assert!(
+        !help.stdout.contains("wait-invocation"),
+        "help must not mention hidden wait-invocation: {}",
+        help.stdout
+    );
+    assert!(
+        !help.stdout.contains("stdin-exec"),
+        "help must not mention hidden stdin-exec: {}",
+        help.stdout
+    );
+    assert!(
+        !help.stdout.contains("fan-out-join"),
+        "help must not mention hidden fan-out-join: {}",
+        help.stdout
+    );
+    let fan_out_help = execute(["fan-out", "--help"]);
+    assert_eq!(fan_out_help.exit_code, EXIT_COMPLETED);
+    assert!(fan_out_help.stdout.contains("fan-out"));
+    assert!(!fan_out_help.stdout.contains("wait-invocation"));
+    assert!(!fan_out_help.stdout.contains("stdin-exec"));
+    assert!(!fan_out_help.stdout.contains("fan-out-join"));
 }
 
 #[cfg(test)]
@@ -2401,21 +2783,32 @@ mod tests {
             "help must not mention hidden wait-invocation: {}",
             help.stdout
         );
+        assert!(
+            !help.stdout.contains("stdin-exec"),
+            "help must not mention hidden stdin-exec: {}",
+            help.stdout
+        );
         let invoke_help = execute(["invoke", "--help"]);
         assert_eq!(invoke_help.exit_code, EXIT_COMPLETED);
         assert!(invoke_help.stdout.contains("invoke"));
         assert!(!invoke_help.stdout.contains("wait-invocation"));
+        assert!(!invoke_help.stdout.contains("stdin-exec"));
+        assert!(!invoke_help.stdout.contains("fan-out-join"));
         let fan_out_help = execute(["fan-out", "--help"]);
         assert_eq!(fan_out_help.exit_code, EXIT_COMPLETED);
         assert!(fan_out_help.stdout.contains("fan-out"));
         assert!(fan_out_help.stdout.contains("--worker JSON"));
         assert!(fan_out_help.stdout.contains("--instructions FILE"));
         assert!(!fan_out_help.stdout.contains("wait-invocation"));
+        assert!(!fan_out_help.stdout.contains("stdin-exec"));
+        assert!(!fan_out_help.stdout.contains("fan-out-join"));
         let preview_help = execute(["preview-bindings", "--help"]);
         assert_eq!(preview_help.exit_code, EXIT_COMPLETED);
         assert!(preview_help.stdout.contains("preview-bindings"));
         assert!(preview_help.stdout.contains("[JSON|@FILE]"));
         assert!(!preview_help.stdout.contains("wait-invocation"));
+        assert!(!preview_help.stdout.contains("stdin-exec"));
+        assert!(!preview_help.stdout.contains("fan-out-join"));
     }
 
     #[test]

@@ -60,6 +60,8 @@ OVERLAY_MEANING_SUCCEEDED = (
     "Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work."
 )
 BOUND_PREAMBLE_SEPARATOR = b"---\n\n"
+GRAPH_STDIN_SEPARATOR = "\n---\n\n"
+SUMMARIZER_ASSIGNMENT_PREFIX = "Write artifact_root/implementation-report.json"
 OVERLAY_MEANING_FAILED = (
     "Overlay failed means the bound CLI exited nonzero or the waiter vanished."
 )
@@ -582,15 +584,25 @@ def contracted_stdin_worker_cli(
     return cli
 
 
+def compact_artifact_root_stdin(artifact_root: Path | str) -> bytes:
+    return (
+        json.dumps({"artifact_root": str(artifact_root)}, separators=(",", ":")).encode(
+            "utf-8"
+        )
+        + b"\n"
+    )
+
+
 def assert_bound_preamble_stdin(
     raw: bytes,
     *,
     preamble: str,
     artifact_root: Path,
-    run_id: str,
-    slot_id: str,
+    run_id: str | None = None,
+    slot_id: str | None = None,
 ) -> None:
-    """Assert bound opted-in stdin: preamble + one-key context + separator + legacy body."""
+    """Assert bound opted-in stdin: preamble + one-key context + separator and no instruction_body."""
+    del run_id, slot_id
     preamble_bytes = preamble.encode("utf-8")
     if not preamble_bytes.endswith(b"\n"):
         preamble_bytes += b"\n"
@@ -623,9 +635,7 @@ def assert_bound_preamble_stdin(
         raise WorkSlotJourneyFailure(
             f"artifact_root context keys {list(parsed_context)} != ['artifact_root']"
         )
-    expected_context = json.dumps(
-        {"artifact_root": str(artifact_root)}, separators=(",", ":")
-    ).encode("utf-8") + b"\n"
+    expected_context = compact_artifact_root_stdin(artifact_root)
     if context_bytes != expected_context:
         raise WorkSlotJourneyFailure(
             "artifact_root context bytes were not compact one-key JSON: "
@@ -641,16 +651,13 @@ def assert_bound_preamble_stdin(
             f"artifact_root context included capture_dir or duplicate identity: {parsed_context}"
         )
     body = rest[separator_at + len(BOUND_PREAMBLE_SEPARATOR) :]
-    if BOUND_PREAMBLE_SEPARATOR in body:
-        raise WorkSlotJourneyFailure("legacy body/trailer unexpectedly contains the separator")
-    trailer = (
-        f"run_id: {run_id}\n"
-        f"slot_id: {slot_id}\n"
-        f"artifact_root: {artifact_root}\n"
-    ).encode("utf-8")
-    if not body.endswith(trailer):
+    if body:
         raise WorkSlotJourneyFailure(
-            f"legacy body/trailer mismatch: expected suffix {trailer!r} in {body!r}"
+            f"bound contracted stdin dumped extra bytes after separator: {body!r}"
+        )
+    if b"instruction_body" in raw:
+        raise WorkSlotJourneyFailure(
+            f"bound contracted stdin dumped instruction_body: {raw!r}"
         )
 
 
@@ -703,6 +710,7 @@ def fan_out_binding(
 def small_plan_document() -> dict[str, Any]:
     """Two independent tasks plus one dependent task. Not the calibration fixture."""
     return {
+        "revision": "1",
         "tasks": [
             {
                 "id": "alpha",
@@ -728,39 +736,46 @@ def small_plan_document() -> dict[str, Any]:
 
 
 def parse_graph_runner_stdin(text: str) -> dict[str, Any]:
-    prefix = "run_id: "
-    if not text.startswith(prefix):
-        raise WorkSlotJourneyFailure(f"inner stdin missing run_id line: {text!r}")
-    try:
-        header, rest = text.split("\n\n## instruction_body\n", 1)
-        instruction_body, task_raw = rest.split("\n\n## task\n", 1)
-    except ValueError as error:
+    if GRAPH_STDIN_SEPARATOR not in text:
         raise WorkSlotJourneyFailure(
-            f"inner stdin is not the locked layout: {text!r}"
-        ) from error
-    fields: dict[str, str] = {}
-    for line in header.splitlines():
-        key, sep, value = line.partition(": ")
-        if not sep:
-            raise WorkSlotJourneyFailure(f"inner stdin header line missing ': ': {line!r}")
-        fields[key] = value
-    if set(fields) != {"run_id", "slot_id", "artifact_root"}:
-        raise WorkSlotJourneyFailure(f"inner stdin header keys mismatch: {fields}")
-    task_json = task_raw.strip()
+            f"inner stdin omitted compact location/duty separator: {text!r}"
+        )
+    raw_location, rest = text.split(GRAPH_STDIN_SEPARATOR, 1)
     try:
-        task = json.loads(task_json)
+        location = json.loads(raw_location)
+    except json.JSONDecodeError as error:
+        raise WorkSlotJourneyFailure(
+            f"inner stdin location is not JSON: {raw_location!r}"
+        ) from error
+    if not isinstance(location, dict):
+        raise WorkSlotJourneyFailure(
+            f"inner stdin location is not an object: {location!r}"
+        )
+    if rest.startswith(SUMMARIZER_ASSIGNMENT_PREFIX):
+        raise WorkSlotJourneyFailure(
+            f"task receipt contained summarizer assignment: {text!r}"
+        )
+    if set(location.keys()) != {"artifact_root"}:
+        raise WorkSlotJourneyFailure(
+            f"task stdin location keys {sorted(location)} != ['artifact_root']"
+        )
+    if "instruction_body" in text.split(GRAPH_STDIN_SEPARATOR, 1)[0]:
+        raise WorkSlotJourneyFailure(
+            f"inner stdin dumped instruction_body: {text!r}"
+        )
+    try:
+        task = json.loads(rest)
     except json.JSONDecodeError as error:
         raise WorkSlotJourneyFailure(f"inner stdin task is not JSON: {error}") from error
-    artifact_root = fields["artifact_root"]
-    if not Path(artifact_root).is_absolute():
+    if not isinstance(task, dict):
+        raise WorkSlotJourneyFailure(f"inner stdin task is not an object: {task!r}")
+    artifact_root = location["artifact_root"]
+    if not isinstance(artifact_root, str) or not Path(artifact_root).is_absolute():
         raise WorkSlotJourneyFailure(
             f"inner stdin artifact_root is not absolute: {artifact_root!r}"
         )
     return {
-        "run_id": fields["run_id"],
-        "slot_id": fields["slot_id"],
         "artifact_root": artifact_root,
-        "instruction_body": instruction_body,
         "task": task,
     }
 
@@ -802,7 +817,11 @@ def _run_binding(
 
 
 def _write_pi_stub(directory: Path) -> Path:
-    """Write a PATH stub named pi that records argv and exits 0."""
+    """Write a PATH stub named pi that records argv and exits 0.
+
+    When stdin is the summarizer assignment, write a schema-shaped
+    implementation-report.json. Ordinary task stdin never writes that file.
+    """
     directory.mkdir(parents=True, exist_ok=True)
     stub = directory / "pi"
     stub.write_text(
@@ -810,13 +829,53 @@ def _write_pi_stub(directory: Path) -> Path:
         "import json\n"
         "import os\n"
         "import sys\n"
+        "from pathlib import Path\n"
         "\n"
-        "log_dir = os.environ['PI_STUB_LOG_DIR']\n"
+        "log_dir = os.environ.get('PI_STUB_LOG_DIR')\n"
+        "if not log_dir:\n"
+        "    log_dir = str(Path(__file__).resolve().parent.parent / 'pi-argv')\n"
         "os.makedirs(log_dir, exist_ok=True)\n"
         "path = os.path.join(log_dir, f'{os.getpid()}.argv.json')\n"
         "with open(path, 'w', encoding='utf-8') as handle:\n"
         "    json.dump(sys.argv[1:], handle)\n"
-        "sys.stdin.buffer.read()\n",
+        "raw = sys.stdin.read()\n"
+        "sep = '\\n---\\n\\n'\n"
+        "if sep not in raw:\n"
+        "    sys.exit(0)\n"
+        "location_raw, rest = raw.split(sep, 1)\n"
+        "if not rest.startswith('Write artifact_root/implementation-report.json'):\n"
+        "    sys.exit(0)\n"
+        "try:\n"
+        "    location = json.loads(location_raw)\n"
+        "except json.JSONDecodeError:\n"
+        "    sys.exit(0)\n"
+        "artifact_root = location.get('artifact_root') if isinstance(location, dict) else None\n"
+        "plan_path = location.get('plan_path') if isinstance(location, dict) else None\n"
+        "revision = ''\n"
+        "if isinstance(plan_path, str) and plan_path:\n"
+        "    try:\n"
+        "        plan = json.loads(Path(plan_path).read_text(encoding='utf-8'))\n"
+        "    except (OSError, json.JSONDecodeError):\n"
+        "        plan = {}\n"
+        "    found = plan.get('revision') if isinstance(plan, dict) else None\n"
+        "    if isinstance(found, str) and found:\n"
+        "        revision = found\n"
+        "if isinstance(artifact_root, str) and artifact_root:\n"
+        "    report = {\n"
+        "        'revision': '1',\n"
+        "        'author': {'name': 'pi-stub', 'kind': 'script'},\n"
+        "        'plan_revision': revision,\n"
+        "        'coverage': {\n"
+        "            'commit': 'dummy',\n"
+        "            'documents': [{'path': 'plan.json', 'revision': revision or 'none'}],\n"
+        "        },\n"
+        "        'summary': 'pi stub summarizer wrote this report',\n"
+        "        'changed_surface': ['dummy'],\n"
+        "        'validation': ['dummy'],\n"
+        "    }\n"
+        "    Path(artifact_root, 'implementation-report.json').write_text(\n"
+        "        json.dumps(report) + '\\n', encoding='utf-8'\n"
+        "    )\n",
         encoding="utf-8",
     )
     stub.chmod(0o755)
@@ -1182,14 +1241,42 @@ def _write_small_plan(artifact_root: Path) -> dict[str, Any]:
     return plan
 
 
+def _assert_dummy_report(artifact_root: Path, plan_revision: str) -> None:
+    path = artifact_root / "implementation-report.json"
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise WorkSlotJourneyFailure(
+            f"dummy summarizer did not write valid {path}: {error}"
+        ) from error
+    if not isinstance(report, dict):
+        raise WorkSlotJourneyFailure(f"implementation-report.json is not an object: {path}")
+    required = (
+        "revision",
+        "author",
+        "plan_revision",
+        "coverage",
+        "summary",
+        "changed_surface",
+        "validation",
+    )
+    missing = [key for key in required if key not in report]
+    if missing:
+        raise WorkSlotJourneyFailure(
+            f"implementation-report.json omitted {missing}: {report}"
+        )
+    if report.get("plan_revision") != plan_revision:
+        raise WorkSlotJourneyFailure(
+            f"implementation-report.json plan_revision {report.get('plan_revision')!r} "
+            f"!= {plan_revision!r}"
+        )
+
+
 def _assert_task_receipt(
     receipt_dir: Path,
     task: Mapping[str, Any],
     *,
-    run_id: str,
-    slot_id: str,
     artifact_root: Path,
-    instruction_body: str,
 ) -> None:
     task_id = task["id"]
     path = receipt_dir / f"{task_id}.stdin"
@@ -1198,19 +1285,17 @@ def _assert_task_receipt(
     except OSError as error:
         raise WorkSlotJourneyFailure(f"missing graph-runner receipt {path}: {error}") from error
     parsed = parse_graph_runner_stdin(recorded)
-    if parsed["run_id"] != run_id or parsed["slot_id"] != slot_id:
-        raise WorkSlotJourneyFailure(f"receipt identity mismatch for {task_id}: {parsed}")
     if parsed["artifact_root"] != str(artifact_root):
         raise WorkSlotJourneyFailure(
             f"receipt artifact_root {parsed['artifact_root']!r} != {str(artifact_root)!r}"
         )
-    if parsed["instruction_body"] != instruction_body:
-        raise WorkSlotJourneyFailure(
-            f"receipt instruction_body mismatch for {task_id}: {parsed['instruction_body']!r}"
-        )
     if parsed["task"] != task:
         raise WorkSlotJourneyFailure(
             f"receipt task record mismatch for {task_id}: {parsed['task']}"
+        )
+    if "instruction_body" in recorded.split(GRAPH_STDIN_SEPARATOR, 1)[0]:
+        raise WorkSlotJourneyFailure(
+            f"task {task_id} stdin dumped instruction_body"
         )
 
 
@@ -1223,12 +1308,14 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
     run_id = "graph-runner-proof"
     slot_id = "implement"
     instruction_body = "Implement the small fixture plan."
+    plan_revision = str(plan["revision"])
 
     success_root = work_dir / "success"
     success_receipts = success_root / "receipts"
     success_capture = success_root / "captures" / "inv-success"
     _write_small_plan(success_root)
-    (success_root / "implementation-report.json").write_text("{}\n", encoding="utf-8")
+    leftover = success_root / "implementation-report.json"
+    leftover.write_text("{}\n", encoding="utf-8")
     success_binding = implement_graph_runner_binding(
         provider=provider,
         task_worker=stdin_worker_cli(success_receipts),
@@ -1266,11 +1353,27 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
         _assert_task_receipt(
             success_receipts,
             task,
-            run_id=run_id,
-            slot_id=slot_id,
             artifact_root=success_root,
-            instruction_body=instruction_body,
         )
+    summarizer_receipt = success_receipts / "summarizer.stdin"
+    if not summarizer_receipt.is_file():
+        raise WorkSlotJourneyFailure("success path omitted summarizer stdin receipt")
+    summarizer_text = summarizer_receipt.read_text(encoding="utf-8")
+    if SUMMARIZER_ASSIGNMENT_PREFIX not in summarizer_text:
+        raise WorkSlotJourneyFailure(
+            f"summarizer receipt omitted assignment: {summarizer_text!r}"
+        )
+    if leftover.read_text(encoding="utf-8") == "{}\n":
+        raise WorkSlotJourneyFailure("leftover empty report still satisfied overlay success")
+    _assert_dummy_report(success_root, plan_revision)
+
+    _assert_capture_files(success_capture, ("summarizer",))
+    success_workers = _load_summary_workers(success_capture)
+    if any(worker.get("command") == "summarizer" for worker in success_workers):
+        raise WorkSlotJourneyFailure(
+            f"success summary included summarizer: {success_workers}"
+        )
+
 
     missing_root = work_dir / "missing-report"
     missing_receipts = missing_root / "receipts"
@@ -1279,7 +1382,7 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
     missing = _run_binding(
         implement_graph_runner_binding(
             provider=provider,
-            task_worker=stdin_worker_cli(missing_receipts),
+            task_worker=stdin_worker_cli(missing_receipts, ("--no-report",)),
         ),
         stdin=_invoke_packet(
             run_id=run_id,
@@ -1302,13 +1405,14 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
         _assert_task_receipt(
             missing_receipts,
             tasks_by_id[task_id],
-            run_id=run_id,
-            slot_id=slot_id,
             artifact_root=missing_root,
-            instruction_body=instruction_body,
         )
     if (missing_root / "implementation-report.json").is_file():
         raise WorkSlotJourneyFailure("missing-report path found a report file")
+    if not (missing_receipts / "summarizer.stdin").is_file():
+        raise WorkSlotJourneyFailure(
+            "missing-report path did not run summarizer before failing the report gate"
+        )
 
     reap_root = work_dir / "reap"
     reap_receipts = reap_root / "receipts"
@@ -1343,21 +1447,17 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
         )
     if (reap_receipts / "gamma.stdin").exists():
         raise WorkSlotJourneyFailure("dependent task started after a sibling failed")
+    if (reap_receipts / "summarizer.stdin").exists():
+        raise WorkSlotJourneyFailure("summarizer started after a sibling failed")
     _assert_task_receipt(
         reap_receipts,
         tasks_by_id["alpha"],
-        run_id=run_id,
-        slot_id=slot_id,
         artifact_root=reap_root,
-        instruction_body=instruction_body,
     )
     _assert_task_receipt(
         reap_receipts,
         tasks_by_id["beta"],
-        run_id=run_id,
-        slot_id=slot_id,
         artifact_root=reap_root,
-        instruction_body=instruction_body,
     )
     reap_workers = _load_summary_workers(reap_capture)
     reap_ids = ["alpha", "beta"]
@@ -1366,15 +1466,22 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
         raise WorkSlotJourneyFailure(
             f"reap summary must list alpha then beta exits: {reap_workers}"
         )
-    if (reap_capture / "gamma").exists():
-        raise WorkSlotJourneyFailure("reap path captured unstarted dependent task")
+    if (reap_capture / "gamma" / "stdout").exists():
+        raise WorkSlotJourneyFailure("reap path captured unstarted dependent task stdout")
+    summary_paths = [str(worker.get("stdout_path") or "") for worker in reap_workers]
+    if any(path.endswith("/gamma/stdout") or path.endswith("gamma/stdout") for path in summary_paths):
+        raise WorkSlotJourneyFailure(f"reap summary listed unstarted gamma: {reap_workers}")
+    if (reap_capture / "summarizer" / "stdout").exists():
+        raise WorkSlotJourneyFailure("summarizer stdout exists after a sibling failed")
+    if (reap_root / "implementation-report.json").is_file():
+        raise WorkSlotJourneyFailure("ordinary failing tasks wrote implementation-report.json")
 
     return [
         "PATH rewrite software-change -> built provider",
         "implement args [run-plan-graph, --task-worker, dummy-json]",
         "small plan two independent plus one dependent",
-        "success path exits 0 when implementation-report.json exists",
-        "dummy receipts match locked inner stdin layout",
+        "success path exits 0 when summarizer writes implementation-report.json",
+        "dummy receipts match compact artifact_root stdin layout",
         "capture_dir summary.json and per-task stdout/stderr",
         "missing implementation-report.json exits nonzero",
         "failing sibling reaped before runner exits",
@@ -1426,17 +1533,16 @@ def prove_fan_out(*, engine: Path, work_dir: Path) -> list[str]:
             "bound fan-out exited "
             f"{bound.returncode}: {bound.stderr.decode('utf-8', 'replace')}"
         )
-    expected_bound = (
-        f"{instruction_body}\n\n"
-        f"run_id: {run_id}\n"
-        f"slot_id: {slot_id}\n"
-        f"artifact_root: {artifact_root}\n"
-    ).encode("utf-8")
+    expected_bound = compact_artifact_root_stdin(artifact_root)
     recorded_a = receipt_a.read_bytes()
     recorded_b = receipt_b.read_bytes()
     if recorded_a != expected_bound or recorded_b != expected_bound:
         raise WorkSlotJourneyFailure(
             f"bound fan-out stdin mismatch: {recorded_a!r} / {recorded_b!r}"
+        )
+    if b"instruction_body" in recorded_a:
+        raise WorkSlotJourneyFailure(
+            f"bound fan-out dumped instruction_body: {recorded_a!r}"
         )
     if recorded_a != recorded_b:
         raise WorkSlotJourneyFailure("bound workers recorded different stdin")
@@ -1545,7 +1651,7 @@ def prove_fan_out(*, engine: Path, work_dir: Path) -> list[str]:
 
     return [
         "PATH rewrite loop-engine -> built engine",
-        "bound mode dummy workers record locked shared stdin",
+        "bound mode dummy workers record compact artifact_root stdin",
         "ad hoc mode dummy workers record exact --instructions bytes",
         "fan-out reaps every worker before exit",
         "bound outputs under packet.capture_dir",
@@ -1839,7 +1945,8 @@ def prove_default_sandbox_argv(*, provider: Path, work_dir: Path) -> list[str]:
     capture_dir = work_dir / "captures" / "inv-default-pi"
     plan = _write_small_plan(artifact_root)
     task_ids = [task["id"] for task in plan["tasks"]]
-    (artifact_root / "implementation-report.json").write_text("{}\n", encoding="utf-8")
+    leftover = artifact_root / "implementation-report.json"
+    leftover.write_text("{}\n", encoding="utf-8")
     stub_dir = work_dir / "bin"
     log_dir = work_dir / "pi-argv"
     stub = _write_pi_stub(stub_dir)
@@ -1869,10 +1976,14 @@ def prove_default_sandbox_argv(*, provider: Path, work_dir: Path) -> list[str]:
             f"{completed.returncode}: {completed.stderr.decode('utf-8', 'replace')}"
         )
     logs = sorted(log_dir.glob("*.argv.json"))
-    if len(logs) != len(task_ids):
+    expected_invocations = len(task_ids) + 1  # plan tasks plus summarizer
+    if len(logs) != expected_invocations:
         raise WorkSlotJourneyFailure(
-            f"PATH stub pi invocations {len(logs)} != tasks {len(task_ids)}"
+            f"PATH stub pi invocations {len(logs)} != tasks+summarizer {expected_invocations}"
         )
+    _assert_dummy_report(artifact_root, str(plan["revision"]))
+    if leftover.read_text(encoding="utf-8") == "{}\n":
+        raise WorkSlotJourneyFailure("default-sandbox leftover empty report still present")
     for path in logs:
         argv = json.loads(path.read_text(encoding="utf-8"))
         if argv != DEFAULT_PI_SANDBOX_ARGS:
@@ -1980,7 +2091,7 @@ def prove_bound_contracted_fan_out_failure(
         },
         separators=(",", ":"),
     )
-    refusal = "I refuse to produce the contracted review judgment.\n"
+    refusal = "I refuse to produce the contracted review judgment."
     extra = {
         slot_id: fan_out_binding(
             engine=engine,
@@ -2158,7 +2269,7 @@ def prove_bound_graph_runner_heartbeat(
     if not task_ids or any(not isinstance(task_id, str) for task_id in task_ids):
         raise WorkSlotJourneyFailure(f"isolated plan.json omitted task ids: {plan}")
     first = invoke_until_succeeded(
-        engine_call, run_id, "implement", timeout_s=30.0
+        engine_call, run_id, "implement", timeout_s=45.0
     )
     inner = first.get("inner_workers")
     if not isinstance(inner, list) or len(inner) != len(task_ids):
@@ -2167,6 +2278,36 @@ def prove_bound_graph_runner_heartbeat(
         )
     _assert_inner_exit_codes(first, [0] * len(task_ids))
     _assert_capture_files(Path(first["capture_dir"]), task_ids)
+    _assert_capture_files(Path(first["capture_dir"]), ("summarizer",))
+    plan_revision = plan.get("revision")
+    if not isinstance(plan_revision, str) or not plan_revision:
+        raise WorkSlotJourneyFailure(f"isolated plan.json omitted revision: {plan}")
+    _assert_dummy_report(artifact_root, plan_revision)
+    report = json.loads((artifact_root / "implementation-report.json").read_text(encoding="utf-8"))
+    author = report.get("author") if isinstance(report, dict) else None
+    if not isinstance(author, dict) or author.get("name") != "dummy-stdin-worker":
+        raise WorkSlotJourneyFailure(
+            f"bound dummy summarizer did not author implementation-report.json: {author}"
+        )
+    receipts = work_dir / "task-receipts"
+    for task_id in task_ids:
+        path = receipts / f"{task_id}.stdin"
+        if not path.is_file():
+            raise WorkSlotJourneyFailure(f"bound dummy omitted task receipt {path}")
+        recorded = path.read_text(encoding="utf-8")
+        if SUMMARIZER_ASSIGNMENT_PREFIX in recorded:
+            raise WorkSlotJourneyFailure(
+                f"ordinary dummy task {task_id} received summarizer assignment"
+            )
+        if "instruction_body" in recorded.split(GRAPH_STDIN_SEPARATOR, 1)[0]:
+            raise WorkSlotJourneyFailure(
+                f"ordinary dummy task {task_id} stdin dumped instruction_body"
+            )
+    summarizer_receipt = receipts / "summarizer.stdin"
+    if not summarizer_receipt.is_file():
+        raise WorkSlotJourneyFailure("bound dummy omitted summarizer stdin receipt")
+    if SUMMARIZER_ASSIGNMENT_PREFIX not in summarizer_receipt.read_text(encoding="utf-8"):
+        raise WorkSlotJourneyFailure("bound dummy summarizer receipt omitted assignment")
     for worker in inner:
         if worker.get("command") != sys.executable:
             raise WorkSlotJourneyFailure(
@@ -2178,12 +2319,13 @@ def prove_bound_graph_runner_heartbeat(
                 f"implement inner args omitted dummy worker: {worker}"
             )
     second = invoke_until_succeeded(
-        engine_call, run_id, "implement", timeout_s=30.0
+        engine_call, run_id, "implement", timeout_s=45.0
     )
     _assert_capture_isolation(first, second, task_ids)
     return [
         "bound run-plan-graph show inner workers in plan task order",
         "capture_dir isolation on implement retry",
+        "dummy summarizer writes implementation-report.json; ordinary dummy tasks do not",
         "no live model",
     ]
 
@@ -2294,17 +2436,25 @@ def self_test_helpers() -> None:
         raise WorkSlotJourneyFailure(f"self-test: zero-worker binding mismatch: {zero}")
 
     layout = (
-        "run_id: run-1\n"
-        "slot_id: implement\n"
-        "artifact_root: /tmp/artifacts\n"
-        "\n## instruction_body\n"
-        "Do the work\n"
-        "\n## task\n"
-        '{"id":"alpha"}\n'
+        '{"artifact_root":"/tmp/artifacts"}\n'
+        "---\n\n"
+        '{"id":"alpha"}'
     )
     parsed = parse_graph_runner_stdin(layout)
-    if parsed["task"] != {"id": "alpha"} or parsed["instruction_body"] != "Do the work":
+    if parsed["task"] != {"id": "alpha"} or parsed["artifact_root"] != "/tmp/artifacts":
         raise WorkSlotJourneyFailure(f"self-test: stdin layout parse mismatch: {parsed}")
+    try:
+        parse_graph_runner_stdin(
+            '{"artifact_root":"/tmp/artifacts"}\n---\n\n'
+            "Write artifact_root/implementation-report.json for this invocation only."
+        )
+    except WorkSlotJourneyFailure as error:
+        if "summarizer" not in str(error):
+            raise WorkSlotJourneyFailure(
+                f"self-test: summarizer stdin failed for the wrong reason: {error}"
+            ) from error
+    else:
+        raise WorkSlotJourneyFailure("self-test: summarizer stdin parsed as a task")
 
     with tempfile.TemporaryDirectory(prefix="dummy-stdin-worker-self-test-") as temp:
         receipt = Path(temp) / "raw.stdin"
@@ -2349,17 +2499,81 @@ def self_test_helpers() -> None:
             raise WorkSlotJourneyFailure(
                 "self-test: dummy-stdin-worker --stdout did not record stdin"
             )
+        receipts = Path(temp) / "graph-receipts"
+        receipts.mkdir()
+        artifacts = Path(temp) / "artifacts"
+        artifacts.mkdir()
+        (artifacts / "plan.json").write_text(
+            '{"revision":"7","tasks":[],"dependency_graph":[]}\n', encoding="utf-8"
+        )
+        task_stdin = (
+            '{"artifact_root":"' + str(artifacts) + '"}\n---\n\n'
+            '{"id":"alpha","objective":"Independent A"}'
+        ).encode("utf-8")
+        task_run = subprocess.run(
+            [sys.executable, str(STDIN_WORKER_SCRIPT), "--receipt", str(receipts)],
+            input=task_stdin,
+            capture_output=True,
+            check=False,
+        )
+        if task_run.returncode != 0:
+            raise WorkSlotJourneyFailure(
+                f"self-test: dummy task worker exited {task_run.returncode}"
+            )
+        if (artifacts / "implementation-report.json").exists():
+            raise WorkSlotJourneyFailure(
+                "self-test: ordinary dummy task wrote implementation-report.json"
+            )
+        if not (receipts / "alpha.stdin").is_file():
+            raise WorkSlotJourneyFailure("self-test: dummy task did not write alpha.stdin")
+        summarizer_stdin = (
+            '{"artifact_root":"' + str(artifacts) + '","capture_dir":"'
+            + str(temp) + '","plan_path":"' + str(artifacts / "plan.json")
+            + '"}\n---\n\n'
+            "Write artifact_root/implementation-report.json for this invocation only. "
+            "You are the sole writer of that filename."
+        ).encode("utf-8")
+        summarizer_run = subprocess.run(
+            [sys.executable, str(STDIN_WORKER_SCRIPT), "--receipt", str(receipts)],
+            input=summarizer_stdin,
+            capture_output=True,
+            check=False,
+        )
+        if summarizer_run.returncode != 0:
+            raise WorkSlotJourneyFailure(
+                f"self-test: dummy summarizer exited {summarizer_run.returncode}"
+            )
+        _assert_dummy_report(artifacts, "7")
+        skipped = Path(temp) / "skipped-artifacts"
+        skipped.mkdir()
+        (skipped / "plan.json").write_text(
+            '{"revision":"7","tasks":[],"dependency_graph":[]}\n', encoding="utf-8"
+        )
+        skipped_run = subprocess.run(
+            [
+                sys.executable,
+                str(STDIN_WORKER_SCRIPT),
+                "--receipt",
+                str(Path(temp) / "skipped-receipts"),
+                "--no-report",
+            ],
+            input=summarizer_stdin.replace(str(artifacts).encode(), str(skipped).encode()),
+            capture_output=True,
+            check=False,
+        )
+        if skipped_run.returncode != 0:
+            raise WorkSlotJourneyFailure(
+                f"self-test: dummy summarizer --no-report exited {skipped_run.returncode}"
+            )
+        if (skipped / "implementation-report.json").exists():
+            raise WorkSlotJourneyFailure(
+                "self-test: dummy summarizer --no-report still wrote the report"
+            )
 
     preamble = "Read-only reviewer. Return only the contracted judgment."
     artifact_root = Path("/tmp/artifacts")
-    body = (
-        "Judge the assigned axis.\n\n"
-        "run_id: run-1\n"
-        "slot_id: design-review\n"
-        f"artifact_root: {artifact_root}\n"
-    )
     context = b'{"artifact_root":"/tmp/artifacts"}\n'
-    raw = preamble.encode("utf-8") + b"\n" + context + BOUND_PREAMBLE_SEPARATOR + body.encode("utf-8")
+    raw = preamble.encode("utf-8") + b"\n" + context + BOUND_PREAMBLE_SEPARATOR
     assert_bound_preamble_stdin(
         raw,
         preamble=preamble,
@@ -2367,12 +2581,27 @@ def self_test_helpers() -> None:
         run_id="run-1",
         slot_id="design-review",
     )
+    dumped = raw + b"instruction_body dump\n"
+    try:
+        assert_bound_preamble_stdin(
+            dumped,
+            preamble=preamble,
+            artifact_root=artifact_root,
+            run_id="run-1",
+            slot_id="design-review",
+        )
+    except WorkSlotJourneyFailure as error:
+        if "instruction_body" not in str(error) and "extra bytes" not in str(error):
+            raise WorkSlotJourneyFailure(
+                f"self-test: instruction_body dump failed for the wrong reason: {error}"
+            ) from error
+    else:
+        raise WorkSlotJourneyFailure("self-test: instruction_body dump unexpectedly accepted")
     duplicate = (
         preamble.encode("utf-8")
         + b"\n"
         + b'{"artifact_root":"/tmp/artifacts","capture_dir":"/tmp/cap"}\n'
         + BOUND_PREAMBLE_SEPARATOR
-        + body.encode("utf-8")
     )
     try:
         assert_bound_preamble_stdin(

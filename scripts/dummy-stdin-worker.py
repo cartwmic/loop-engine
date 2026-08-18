@@ -2,10 +2,14 @@
 """Dummy stdin recorder for graph-runner and fan-out proofs.
 
 Records raw stdin bytes to ``--receipt PATH``. Default exit 0; ``--exit N``
-for failure cases. When stdin contains a run-plan-graph task section and
-PATH has no file suffix (or is a directory), writes ``{task_id}.stdin``
+for failure cases. When stdin contains a compact run-plan-graph task payload
+and PATH has no file suffix (or is a directory), writes ``{task_id}.stdin``
 inside that directory so one ``--task-worker`` CLI can record every task.
-Does not call a model.
+
+Detects the summarizer assignment after the compact location JSON separator.
+Only that summarizer invocation may write ``artifact_root/implementation-report.json``;
+ordinary dummy tasks never write that file. Pass ``--no-report`` to skip the
+summarizer write (missing-report proofs). Does not call a model.
 """
 
 from __future__ import annotations
@@ -18,17 +22,32 @@ import time
 from pathlib import Path
 
 
-def parse_task_id(stdin: str) -> str | None:
-    marker = "## task"
-    if marker not in stdin:
-        return None
-    _, raw = stdin.split(marker, 1)
-    raw = raw.lstrip("\n")
+SEPARATOR = "\n---\n\n"
+SUMMARIZER_PREFIX = "Write artifact_root/implementation-report.json"
+REPORT_FILE = "implementation-report.json"
+
+
+def split_stdin(stdin: str) -> tuple[dict[str, object], str, bool]:
+    if SEPARATOR not in stdin:
+        return {}, stdin, False
+    raw_location, rest = stdin.split(SEPARATOR, 1)
     try:
-        task = json.loads(raw)
+        location = json.loads(raw_location.strip())
+        if not isinstance(location, dict):
+            location = {}
+    except json.JSONDecodeError:
+        location = {}
+    return location, rest, rest.startswith(SUMMARIZER_PREFIX)
+
+
+def parse_task_id(rest: str, is_summarizer: bool) -> str | None:
+    if is_summarizer:
+        return "summarizer"
+    try:
+        task = json.loads(rest)
     except json.JSONDecodeError:
         return None
-    task_id = task.get("id")
+    task_id = task.get("id") if isinstance(task, dict) else None
     if isinstance(task_id, str) and task_id:
         return task_id
     return None
@@ -44,6 +63,37 @@ def receipt_destination(receipt: Path, task_id: str | None) -> Path:
         return receipt / name
     receipt.parent.mkdir(parents=True, exist_ok=True)
     return receipt
+
+
+def write_valid_report(location: dict[str, object]) -> None:
+    artifact_root = location.get("artifact_root")
+    plan_path = location.get("plan_path")
+    if not isinstance(artifact_root, str) or not artifact_root:
+        return
+    revision = ""
+    resolved_plan = plan_path if isinstance(plan_path, str) and plan_path else str(
+        Path(artifact_root) / "plan.json"
+    )
+    try:
+        plan = json.loads(Path(resolved_plan).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        plan = {}
+    found = plan.get("revision") if isinstance(plan, dict) else None
+    if isinstance(found, str) and found:
+        revision = found
+    report = {
+        "revision": "1",
+        "author": {"name": "dummy-stdin-worker", "kind": "script"},
+        "plan_revision": revision,
+        "coverage": {
+            "commit": "dummy",
+            "documents": [{"path": "plan.json", "revision": revision or "none"}],
+        },
+        "summary": "dummy summarizer wrote this report",
+        "changed_surface": ["dummy"],
+        "validation": ["dummy"],
+    }
+    Path(artifact_root, REPORT_FILE).write_text(json.dumps(report) + "\n", encoding="utf-8")
 
 
 def main() -> int:
@@ -76,11 +126,17 @@ def main() -> int:
         default=None,
         help="Write this exact string to stdout after recording stdin",
     )
+    parser.add_argument(
+        "--no-report",
+        action="store_true",
+        help="Do not write implementation-report.json even when this process is the summarizer",
+    )
     args = parser.parse_args()
 
     raw = sys.stdin.buffer.read()
     text = raw.decode("utf-8", errors="replace")
-    task_id = parse_task_id(text)
+    location, rest, is_summarizer = split_stdin(text)
+    task_id = parse_task_id(rest, is_summarizer)
     dest = receipt_destination(Path(args.receipt), task_id)
     dest.write_bytes(raw)
     dest.with_name(dest.name + ".pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
@@ -94,7 +150,10 @@ def main() -> int:
         sys.stdout.write(args.stdout)
         sys.stdout.flush()
 
-    if args.fail_task and task_id == args.fail_task:
+    if is_summarizer and not args.no_report:
+        write_valid_report(location)
+
+    if not is_summarizer and args.fail_task and task_id == args.fail_task:
         return 1
     return args.exit_code
 

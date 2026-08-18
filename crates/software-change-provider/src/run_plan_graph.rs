@@ -1,21 +1,35 @@
-//! Argv and stdin contracts plus the DAG executor for `run-plan-graph`.
+//! Argv and stdin contracts plus the Dagu-backed executor for `run-plan-graph`.
 
+use crate::dagu::{names_for_capture_root, resolve_dagu, write_locator};
+use crate::schema::{self, CheckResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::fs;
+use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::thread;
-use std::time::Duration;
+use std::process::{Command, Output, Stdio};
 
 /// Hard cap on concurrent inner-worker processes for `run-plan-graph`.
+/// Emitted as Dagu `max_active_steps`.
 pub(crate) const MAX_CONCURRENCY: usize = 4;
 
 const DEFAULT_WORKER_COMMAND: &str = "pi";
 const DEFAULT_WORKER_ARGS: &[&str] = &["--print", "--no-skills", "--no-extensions"];
+const SUMMARIZER_STEP: &str = "summarizer";
+const REPORT_FILE: &str = "implementation-report.json";
+const SUMMARY_FILE: &str = "summary.json";
+const REQUIRED_REPORT_KEYS: &[&str] = &[
+    "revision",
+    "author",
+    "plan_revision",
+    "coverage",
+    "summary",
+    "changed_surface",
+    "validation",
+];
+const SUMMARIZER_ASSIGNMENT: &str = "Write artifact_root/implementation-report.json for this invocation only. You are the sole writer of that filename. plan_revision must equal the revision of the plan.json at plan_path. Do not concatenate worker stdout. Do not append review-evidence. Ordinary plan tasks must not write that filename.";
 
 /// Worker argv: JSON object with exactly string `command` and array-of-string `args`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -189,7 +203,7 @@ fn option_value<'a>(
     Ok(value)
 }
 
-/// Read the invoke packet from stdin, schedule `plan.json`, and reap every spawned worker.
+/// Read the invoke packet from stdin, schedule `plan.json`, and waitpid Dagu.
 pub(crate) fn execute(worker: &WorkerCli) -> i32 {
     let mut input = String::new();
     if let Err(error) = io::stdin().read_to_string(&mut input) {
@@ -207,6 +221,8 @@ pub(crate) fn execute(worker: &WorkerCli) -> i32 {
 
 #[derive(Deserialize)]
 struct PlanDocument {
+    #[serde(default)]
+    revision: Option<String>,
     tasks: Vec<Value>,
     dependency_graph: Vec<DependencyEdge>,
 }
@@ -218,30 +234,56 @@ struct DependencyEdge {
 }
 
 struct PlanGraph {
+    revision: String,
     order: Vec<String>,
     tasks: HashMap<String, Value>,
     predecessors: HashMap<String, HashSet<String>>,
 }
 
-struct RunningTask {
-    id: String,
-    child: Child,
-    stdout_path: PathBuf,
-    stderr_path: PathBuf,
-}
-
-struct ReapedWorker {
-    task_id: String,
-    command: String,
-    args: Vec<String>,
-    exit_code: i32,
+struct PreparedStep {
+    name: String,
+    stdin_path: String,
     stdout_path: String,
     stderr_path: String,
+    depends: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct CaptureWorker<'a> {
+    command: &'a str,
+    args: &'a [String],
+    exit_code: i32,
+    stdout_path: &'a str,
+    stderr_path: &'a str,
+}
+
+#[derive(Serialize)]
+struct CaptureSummary<'a> {
+    workers: Vec<CaptureWorker<'a>>,
+}
+
+#[derive(Serialize)]
+struct ArtifactRootContext<'a> {
+    artifact_root: &'a str,
+}
+
+#[derive(Serialize)]
+struct SummarizerLocation<'a> {
+    artifact_root: &'a str,
+    capture_dir: &'a str,
+    plan_path: &'a str,
+}
+
+#[derive(Clone, Copy)]
+struct StepOutcome {
+    started: bool,
+    exit_code: Option<i32>,
 }
 
 fn execute_from_packet(worker: &WorkerCli, raw_packet: &str) -> Result<(), ExecuteError> {
     let packet =
         parse_invoke_packet(raw_packet).map_err(|error| ExecuteError::usage(error.to_string()))?;
+    let _ = (&packet.run_id, &packet.slot_id, &packet.instruction_body);
     if packet.capture_dir.is_empty() {
         return Err(ExecuteError::usage(
             "invoke packet capture_dir must be a non-empty path",
@@ -249,12 +291,33 @@ fn execute_from_packet(worker: &WorkerCli, raw_packet: &str) -> Result<(), Execu
     }
     let artifact_root = absolute_from_cwd(&packet.artifact_root)?;
     let capture_root = absolute_from_cwd(&packet.capture_dir)?;
+    delete_stale_report(&artifact_root)?;
     let plan_path = artifact_root.join("plan.json");
     let plan_raw = fs::read_to_string(&plan_path).map_err(|error| {
         ExecuteError::failed(format!("could not read {}: {error}", plan_path.display()))
     })?;
     let plan = parse_plan(&plan_raw)?;
-    run_schedule(worker, &packet, &artifact_root, &capture_root, &plan)
+    let dagu = resolve_dagu().map_err(|error| ExecuteError::failed(error.to_string()))?;
+    run_dagu_graph(
+        worker,
+        &dagu,
+        &artifact_root,
+        &plan_path,
+        &capture_root,
+        &plan,
+    )
+}
+
+fn delete_stale_report(artifact_root: &Path) -> Result<(), ExecuteError> {
+    let report = artifact_root.join(REPORT_FILE);
+    match fs::remove_file(&report) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(ExecuteError::failed(format!(
+            "could not delete leftover {}: {error}",
+            report.display()
+        ))),
+    }
 }
 
 fn absolute_from_cwd(raw: &str) -> Result<PathBuf, ExecuteError> {
@@ -283,6 +346,16 @@ fn parse_plan(raw: &str) -> Result<PlanGraph, ExecuteError> {
             .filter(|id| !id.is_empty())
             .ok_or_else(|| ExecuteError::failed("plan.json task is missing a string `id`"))?
             .to_owned();
+        if id == SUMMARIZER_STEP {
+            return Err(ExecuteError::failed(
+                "plan.json task id `summarizer` collides with the summarizer step",
+            ));
+        }
+        if !is_dagu_safe_task_id(&id) {
+            return Err(ExecuteError::failed(format!(
+                "plan.json task id `{id}` is not Dagu-safe [A-Za-z0-9_-]"
+            )));
+        }
         if !is_safe_task_id(&id) {
             return Err(ExecuteError::failed(format!(
                 "plan.json task id `{id}` is not a single path-safe component"
@@ -332,6 +405,7 @@ fn parse_plan(raw: &str) -> Result<PlanGraph, ExecuteError> {
     }
 
     Ok(PlanGraph {
+        revision: document.revision.unwrap_or_default(),
         order,
         tasks,
         predecessors,
@@ -370,10 +444,11 @@ fn has_cycle(order: &[String], successors: &HashMap<String, Vec<String>>) -> boo
         .any(|id| visit(id, successors, &mut visiting, &mut visited))
 }
 
-fn run_schedule(
+fn run_dagu_graph(
     worker: &WorkerCli,
-    packet: &InvokePacket,
+    dagu: &Path,
     artifact_root: &Path,
+    plan_path: &Path,
     capture_root: &Path,
     plan: &PlanGraph,
 ) -> Result<(), ExecuteError> {
@@ -383,182 +458,467 @@ fn run_schedule(
             capture_root.display()
         ))
     })?;
-    let mut pending: HashSet<String> = plan.order.iter().cloned().collect();
-    let mut succeeded: HashSet<String> = HashSet::new();
-    let mut running: Vec<RunningTask> = Vec::new();
-    let mut reaped: Vec<ReapedWorker> = Vec::new();
-    let mut failed = false;
-    let mut failure_message = String::from("inner task worker failed");
+    let (dag_name, run_name) = names_for_capture_root(capture_root)
+        .map_err(|error| ExecuteError::failed(error.to_string()))?;
+    let locator = write_locator(capture_root, &dag_name, &run_name)
+        .map_err(|error| ExecuteError::failed(error.to_string()))?;
+    let home = PathBuf::from(&locator.dagu_home);
+    write_isolated_home_files(&home)?;
+    let software_change = software_change_exe()?;
+    let software_change = path_to_string(&software_change);
 
-    let result = loop {
-        let mut index = 0;
-        while index < running.len() {
-            match running[index].child.try_wait() {
-                Ok(Some(status)) => {
-                    let finished = running.swap_remove(index);
-                    let exit_code = status.code().unwrap_or(1);
-                    if status.success() {
-                        succeeded.insert(finished.id.clone());
-                    } else {
-                        failed = true;
-                        failure_message = format!(
-                            "inner task worker for `{}` exited unsuccessfully",
-                            finished.id
-                        );
-                    }
-                    reaped.push(ReapedWorker {
-                        task_id: finished.id,
-                        command: worker.command.clone(),
-                        args: worker.args.clone(),
-                        exit_code,
-                        stdout_path: path_to_string(&finished.stdout_path),
-                        stderr_path: path_to_string(&finished.stderr_path),
-                    });
-                }
-                Ok(None) => index += 1,
-                Err(error) => {
-                    let finished = running.swap_remove(index);
-                    failed = true;
-                    failure_message = format!(
-                        "could not wait for inner task worker `{}`: {error}",
-                        finished.id
-                    );
-                    reaped.push(ReapedWorker {
-                        task_id: finished.id,
-                        command: worker.command.clone(),
-                        args: worker.args.clone(),
-                        exit_code: 1,
-                        stdout_path: path_to_string(&finished.stdout_path),
-                        stderr_path: path_to_string(&finished.stderr_path),
-                    });
-                }
-            }
-        }
+    let mut steps = Vec::new();
+    for id in &plan.order {
+        let out_dir = task_capture_dir(capture_root, id)?;
+        fs::create_dir_all(&out_dir).map_err(|error| {
+            ExecuteError::failed(format!("could not create {}: {error}", out_dir.display()))
+        })?;
+        let task = plan.tasks.get(id).expect("plan order id exists in tasks");
+        let stdin_path = out_dir.join("stdin");
+        let stdin_text = task_stdin(artifact_root, task)?;
+        fs::write(&stdin_path, stdin_text).map_err(|error| {
+            ExecuteError::failed(format!("could not write {}: {error}", stdin_path.display()))
+        })?;
+        let mut depends: Vec<String> = plan
+            .predecessors
+            .get(id)
+            .map(|preds| {
+                plan.order
+                    .iter()
+                    .filter(|pred| preds.contains(*pred))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        depends.sort();
+        steps.push(PreparedStep {
+            name: id.clone(),
+            stdin_path: path_to_string(&stdin_path),
+            stdout_path: path_to_string(&out_dir.join("stdout")),
+            stderr_path: path_to_string(&out_dir.join("stderr")),
+            depends,
+        });
+    }
 
-        if failed {
-            if running.is_empty() {
-                break Err(ExecuteError::failed(failure_message));
-            }
-            thread::sleep(Duration::from_millis(10));
-            continue;
-        }
-
-        while running.len() < MAX_CONCURRENCY {
-            let Some(id) = next_runnable(&plan.order, &pending, &succeeded, &plan.predecessors)
-            else {
-                break;
-            };
-            pending.remove(&id);
-            let task = plan
-                .tasks
-                .get(&id)
-                .expect("runnable task exists in the plan");
-            match spawn_task(worker, packet, artifact_root, capture_root, &id, task) {
-                Ok(job) => running.push(job),
-                Err(error) => {
-                    failed = true;
-                    failure_message = error.to_string();
-                    break;
-                }
-            }
-        }
-
-        if running.is_empty() {
-            if failed {
-                break Err(ExecuteError::failed(failure_message));
-            }
-            if succeeded.len() == plan.order.len() {
-                let report = artifact_root.join("implementation-report.json");
-                if !report.is_file() {
-                    break Err(ExecuteError::failed(format!(
-                        "missing {} after all tasks succeeded",
-                        report.display()
-                    )));
-                }
-                break Ok(());
-            }
-            break Err(ExecuteError::failed(
-                "no runnable plan tasks remain before the graph is complete".to_owned(),
-            ));
-        }
-
-        thread::sleep(Duration::from_millis(10));
+    let summarizer_dir = task_capture_dir(capture_root, SUMMARIZER_STEP)?;
+    fs::create_dir_all(&summarizer_dir).map_err(|error| {
+        ExecuteError::failed(format!(
+            "could not create {}: {error}",
+            summarizer_dir.display()
+        ))
+    })?;
+    let summarizer_stdin_path = summarizer_dir.join("stdin");
+    let summarizer_stdin = summarizer_stdin(artifact_root, capture_root, plan_path)?;
+    fs::write(&summarizer_stdin_path, summarizer_stdin).map_err(|error| {
+        ExecuteError::failed(format!(
+            "could not write {}: {error}",
+            summarizer_stdin_path.display()
+        ))
+    })?;
+    let summarizer = PreparedStep {
+        name: SUMMARIZER_STEP.to_owned(),
+        stdin_path: path_to_string(&summarizer_stdin_path),
+        stdout_path: path_to_string(&summarizer_dir.join("stdout")),
+        stderr_path: path_to_string(&summarizer_dir.join("stderr")),
+        depends: plan.order.clone(),
     };
 
-    if let Err(error) = write_summary_json(capture_root, &plan.order, &reaped) {
-        if result.is_ok() {
+    let yaml = emit_graph_yaml(&dag_name, &software_change, worker, &steps, &summarizer);
+    let dags_dir = home.join("dags");
+    fs::create_dir_all(&dags_dir).map_err(|error| {
+        ExecuteError::failed(format!("could not create {}: {error}", dags_dir.display()))
+    })?;
+    let yaml_path = dags_dir.join(format!("{dag_name}.yaml"));
+    fs::write(&yaml_path, yaml).map_err(|error| {
+        ExecuteError::failed(format!("could not write {}: {error}", yaml_path.display()))
+    })?;
+
+    run_dagu_cli(
+        dagu,
+        &[
+            "validate",
+            "--dagu-home",
+            &locator.dagu_home,
+            &path_to_string(&yaml_path),
+        ],
+        false,
+    )?;
+
+    let start_result = run_dagu_cli(
+        dagu,
+        &[
+            "start",
+            "--quiet",
+            "--dagu-home",
+            &locator.dagu_home,
+            "--name",
+            &dag_name,
+            "--run-id",
+            &run_name,
+            &path_to_string(&yaml_path),
+        ],
+        true,
+    );
+    let start_ok = start_result.is_ok();
+    let outcomes = step_outcomes(&home);
+
+    let summary_error = write_plan_summary(capture_root, worker, plan, &steps, &outcomes);
+    let summarizer_ok = summarizer_succeeded(&outcomes, capture_root, start_ok);
+    let report_error = if summarizer_ok {
+        validate_fresh_report(artifact_root, &plan.revision)
+    } else {
+        Err(ExecuteError::failed(
+            "summarizer step did not exit 0".to_owned(),
+        ))
+    };
+
+    if let Err(error) = summary_error {
+        if start_ok && report_error.is_ok() {
             return Err(error);
         }
     }
-    result
+    start_result?;
+    report_error
 }
 
-fn next_runnable(
-    order: &[String],
-    pending: &HashSet<String>,
-    succeeded: &HashSet<String>,
-    predecessors: &HashMap<String, HashSet<String>>,
-) -> Option<String> {
-    order.iter().find_map(|id| {
-        if !pending.contains(id) {
-            return None;
+fn summarizer_succeeded(
+    outcomes: &HashMap<String, StepOutcome>,
+    capture_root: &Path,
+    start_ok: bool,
+) -> bool {
+    if let Some(outcome) = outcomes.get(SUMMARIZER_STEP) {
+        return outcome.exit_code == Some(0);
+    }
+    start_ok && capture_root.join(SUMMARIZER_STEP).join("stdout").is_file()
+}
+
+fn write_plan_summary(
+    capture_root: &Path,
+    worker: &WorkerCli,
+    plan: &PlanGraph,
+    steps: &[PreparedStep],
+    outcomes: &HashMap<String, StepOutcome>,
+) -> Result<(), ExecuteError> {
+    let mut workers = Vec::new();
+    for (id, step) in plan.order.iter().zip(steps.iter()) {
+        let stdout_path = Path::new(&step.stdout_path);
+        let stderr_path = Path::new(&step.stderr_path);
+        let outcome = outcomes.get(id).copied();
+        let started = stdout_path.is_file()
+            || stderr_path.is_file()
+            || outcome.map(|item| item.started).unwrap_or(false);
+        if !started {
+            continue;
         }
-        let ready = predecessors
-            .get(id)
-            .map(|preds| preds.iter().all(|pred| succeeded.contains(pred)))
-            .unwrap_or(true);
-        ready.then(|| id.clone())
+        if let Some(parent) = stdout_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if !stdout_path.exists() {
+            let _ = fs::write(stdout_path, b"");
+        }
+        if !stderr_path.exists() {
+            let _ = fs::write(stderr_path, b"");
+        }
+        let exit_code = outcome.and_then(|item| item.exit_code).unwrap_or(1);
+        workers.push(CaptureWorker {
+            command: &worker.command,
+            args: &worker.args,
+            exit_code,
+            stdout_path: &step.stdout_path,
+            stderr_path: &step.stderr_path,
+        });
+    }
+    let path = capture_root.join(SUMMARY_FILE);
+    let bytes = serde_json::to_vec_pretty(&CaptureSummary { workers }).map_err(|error| {
+        ExecuteError::failed(format!(
+            "could not serialize capture summary {}: {error}",
+            path.display()
+        ))
+    })?;
+    fs::write(&path, bytes).map_err(|error| {
+        ExecuteError::failed(format!(
+            "could not write capture summary {}: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(())
+}
+
+fn validate_fresh_report(artifact_root: &Path, plan_revision: &str) -> Result<(), ExecuteError> {
+    let report_path = artifact_root.join(REPORT_FILE);
+    let raw = fs::read(&report_path).map_err(|error| {
+        ExecuteError::failed(format!(
+            "missing {} after summarizer succeeded: {error}",
+            report_path.display()
+        ))
+    })?;
+    let value: Value = serde_json::from_slice(&raw).map_err(|error| {
+        ExecuteError::failed(format!(
+            "{} is not valid JSON: {error}",
+            report_path.display()
+        ))
+    })?;
+    match load_frozen_report_schema(artifact_root) {
+        Some(schema) => match schema::check(&schema, &value) {
+            CheckResult::Valid => {}
+            CheckResult::SchemaInvalid(_) => required_keys_valid(&value)?,
+            CheckResult::InstanceInvalid(report) => {
+                return Err(ExecuteError::failed(format!(
+                    "{} failed schema validation: {}",
+                    report_path.display(),
+                    report
+                        .violations()
+                        .iter()
+                        .map(|item| item.to_string())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                )))
+            }
+        },
+        None => required_keys_valid(&value)?,
+    }
+    let reported = value
+        .get("plan_revision")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if reported != plan_revision {
+        return Err(ExecuteError::failed(format!(
+            "{} plan_revision `{reported}` does not match plan.json revision `{plan_revision}`",
+            report_path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn load_frozen_report_schema(artifact_root: &Path) -> Option<Value> {
+    for name in ["artifact_schemas.json", "initial_input.json"] {
+        let path = artifact_root.join(name);
+        let Ok(bytes) = fs::read(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+            continue;
+        };
+        if let Some(schema) = extract_report_schema(&value) {
+            return Some(schema);
+        }
+    }
+    None
+}
+
+fn extract_report_schema(value: &Value) -> Option<Value> {
+    value.get(REPORT_FILE).cloned().or_else(|| {
+        value
+            .get("artifact_schemas")
+            .and_then(|schemas| schemas.get(REPORT_FILE).cloned())
     })
 }
 
-fn spawn_task(
-    worker: &WorkerCli,
-    packet: &InvokePacket,
-    artifact_root: &Path,
-    capture_root: &Path,
-    task_id: &str,
-    task: &Value,
-) -> Result<RunningTask, ExecuteError> {
-    let out_dir = task_capture_dir(capture_root, task_id)?;
-    fs::create_dir_all(&out_dir).map_err(|error| {
-        ExecuteError::failed(format!("could not create {}: {error}", out_dir.display()))
-    })?;
-    let stdout_path = out_dir.join("stdout");
-    let stderr_path = out_dir.join("stderr");
-    let stdout = File::create(&stdout_path).map_err(|error| {
+fn required_keys_valid(value: &Value) -> Result<(), ExecuteError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| ExecuteError::failed(format!("{REPORT_FILE} must be a JSON object")))?;
+    for key in REQUIRED_REPORT_KEYS {
+        if !object.contains_key(*key) {
+            return Err(ExecuteError::failed(format!(
+                "{REPORT_FILE} is missing required key `{key}`"
+            )));
+        }
+        if is_empty_required_value(&object[*key]) {
+            return Err(ExecuteError::failed(format!(
+                "{REPORT_FILE} required key `{key}` is empty"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn is_empty_required_value(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text.is_empty(),
+        Value::Array(items) => items.is_empty(),
+        Value::Object(object) => object.is_empty(),
+        Value::Null => true,
+        _ => false,
+    }
+}
+
+fn write_isolated_home_files(home: &Path) -> Result<(), ExecuteError> {
+    let base = home.join("base.yaml");
+    fs::write(&base, "type: graph\n").map_err(|error| {
         ExecuteError::failed(format!(
-            "could not create {}: {error}",
-            stdout_path.display()
+            "could not write isolated dagu base.yaml `{}`: {error}",
+            base.display()
         ))
     })?;
-    let stderr = File::create(&stderr_path).map_err(|error| {
+    let config = home.join("config.yaml");
+    fs::write(&config, "auth:\n  mode: none\n").map_err(|error| {
         ExecuteError::failed(format!(
-            "could not create {}: {error}",
-            stderr_path.display()
+            "could not write isolated dagu config.yaml `{}`: {error}",
+            config.display()
         ))
     })?;
-    let stdin_text = inner_stdin(packet, artifact_root, task)?;
-    let mut child = Command::new(&worker.command)
-        .args(&worker.args)
-        .stdin(Stdio::piped())
-        .stdout(stdout)
-        .stderr(stderr)
-        .spawn()
+    Ok(())
+}
+
+fn software_change_exe() -> Result<PathBuf, ExecuteError> {
+    let path = std::env::current_exe().map_err(|error| {
+        ExecuteError::failed(format!(
+            "could not resolve software-change executable: {error}"
+        ))
+    })?;
+    Ok(fs::canonicalize(&path).unwrap_or(path))
+}
+
+fn run_dagu_cli(dagu: &Path, args: &[&str], allow_nonzero: bool) -> Result<(), ExecuteError> {
+    let output = Command::new(dagu)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
         .map_err(|error| {
             ExecuteError::failed(format!(
-                "could not spawn inner task worker `{}` for `{task_id}`: {error}",
-                worker.command
+                "could not run `{} {}`: {error}",
+                dagu.display(),
+                args.join(" ")
             ))
         })?;
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(stdin_text.as_bytes());
+    if output.status.success() {
+        return Ok(());
     }
-    Ok(RunningTask {
-        id: task_id.to_owned(),
-        child,
-        stdout_path,
-        stderr_path,
+    let detail = dagu_failure_detail(&output);
+    let verb = args.first().copied().unwrap_or("command");
+    if allow_nonzero {
+        return Err(ExecuteError::failed(format!(
+            "dagu {verb} did not complete successfully{detail}"
+        )));
+    }
+    Err(ExecuteError::failed(format!("dagu {verb} failed{detail}")))
+}
+
+fn dagu_failure_detail(output: &Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let message = stderr.trim();
+    if !message.is_empty() {
+        return format!(": {message}");
+    }
+    let message = stdout.trim();
+    if !message.is_empty() {
+        return format!(": {message}");
+    }
+    if let Some(code) = output.status.code() {
+        format!(" (exit {code})")
+    } else {
+        " (terminated by signal)".to_owned()
+    }
+}
+
+fn emit_graph_yaml(
+    dag_name: &str,
+    software_change: &str,
+    worker: &WorkerCli,
+    steps: &[PreparedStep],
+    summarizer: &PreparedStep,
+) -> String {
+    let _ = dag_name;
+    let mut yaml = String::from("type: graph\nmax_active_steps: ");
+    yaml.push_str(&MAX_CONCURRENCY.to_string());
+    yaml.push_str("\nsteps:\n");
+    for step in steps.iter().chain(std::iter::once(summarizer)) {
+        yaml.push_str("  - name: ");
+        yaml.push_str(&yaml_double_quoted(&step.name));
+        yaml.push('\n');
+        yaml.push_str("    action: exec\n");
+        if !step.depends.is_empty() {
+            yaml.push_str("    depends:\n");
+            for dep in &step.depends {
+                yaml.push_str("      - ");
+                yaml.push_str(&yaml_double_quoted(dep));
+                yaml.push('\n');
+            }
+        }
+        yaml.push_str("    with:\n");
+        yaml.push_str("      command: ");
+        yaml.push_str(&yaml_double_quoted(software_change));
+        yaml.push('\n');
+        yaml.push_str("      args:\n");
+        let mut args = vec![
+            "stdin-exec".to_owned(),
+            "--exit-mode".to_owned(),
+            "propagate".to_owned(),
+            "--stdin-file".to_owned(),
+            step.stdin_path.clone(),
+            "--".to_owned(),
+            worker.command.clone(),
+        ];
+        args.extend(worker.args.iter().cloned());
+        for arg in args {
+            yaml.push_str("        - ");
+            yaml.push_str(&yaml_double_quoted(&arg));
+            yaml.push('\n');
+        }
+        yaml.push_str("    stdout: ");
+        yaml.push_str(&yaml_double_quoted(&step.stdout_path));
+        yaml.push('\n');
+        yaml.push_str("    stderr: ");
+        yaml.push_str(&yaml_double_quoted(&step.stderr_path));
+        yaml.push('\n');
+    }
+    yaml
+}
+
+fn yaml_double_quoted(value: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn task_stdin(artifact_root: &Path, task: &Value) -> Result<String, ExecuteError> {
+    let location = serde_json::to_string(&ArtifactRootContext {
+        artifact_root: &path_to_string(artifact_root),
     })
+    .map_err(|error| ExecuteError::failed(format!("could not serialize location JSON: {error}")))?;
+    let task_json = serde_json::to_string(task).map_err(|error| {
+        ExecuteError::failed(format!("could not serialize task record: {error}"))
+    })?;
+    Ok(format!("{location}\n---\n\n{task_json}"))
+}
+
+fn summarizer_stdin(
+    artifact_root: &Path,
+    capture_root: &Path,
+    plan_path: &Path,
+) -> Result<String, ExecuteError> {
+    let location = serde_json::to_string(&SummarizerLocation {
+        artifact_root: &path_to_string(artifact_root),
+        capture_dir: &path_to_string(capture_root),
+        plan_path: &path_to_string(plan_path),
+    })
+    .map_err(|error| {
+        ExecuteError::failed(format!(
+            "could not serialize summarizer location JSON: {error}"
+        ))
+    })?;
+    Ok(format!("{location}\n---\n\n{SUMMARIZER_ASSIGNMENT}"))
+}
+
+fn is_dagu_safe_task_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 fn is_safe_task_id(id: &str) -> bool {
@@ -588,6 +948,11 @@ fn lexical_path(path: &Path) -> PathBuf {
 }
 
 fn task_capture_dir(capture_root: &Path, task_id: &str) -> Result<PathBuf, ExecuteError> {
+    if task_id != SUMMARIZER_STEP && !is_dagu_safe_task_id(task_id) {
+        return Err(ExecuteError::failed(format!(
+            "plan.json task id `{task_id}` is not Dagu-safe [A-Za-z0-9_-]"
+        )));
+    }
     if !is_safe_task_id(task_id) {
         return Err(ExecuteError::failed(format!(
             "plan.json task id `{task_id}` is not a single path-safe component"
@@ -608,70 +973,85 @@ fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn write_summary_json(
-    capture_root: &Path,
-    plan_order: &[String],
-    reaped: &[ReapedWorker],
-) -> Result<(), ExecuteError> {
-    #[derive(Serialize)]
-    struct CaptureWorker<'a> {
-        command: &'a str,
-        args: &'a [String],
-        exit_code: i32,
-        stdout_path: &'a str,
-        stderr_path: &'a str,
+fn step_outcomes(dagu_home: &Path) -> HashMap<String, StepOutcome> {
+    let Some(status_path) = latest_status_jsonl(dagu_home) else {
+        return HashMap::new();
+    };
+    let Ok(raw) = fs::read_to_string(&status_path) else {
+        return HashMap::new();
+    };
+    let Some(line) = raw.lines().rev().find(|line| !line.trim().is_empty()) else {
+        return HashMap::new();
+    };
+    let Ok(value) = serde_json::from_str::<Value>(line) else {
+        return HashMap::new();
+    };
+    let Some(nodes) = value.get("nodes").and_then(Value::as_array) else {
+        return HashMap::new();
+    };
+    let mut outcomes = HashMap::new();
+    for node in nodes {
+        let name = node
+            .get("step")
+            .and_then(|step| step.get("name"))
+            .and_then(Value::as_str)
+            .or_else(|| node.get("name").and_then(Value::as_str));
+        let Some(name) = name else {
+            continue;
+        };
+        outcomes.insert(name.to_owned(), outcome_from_node(node));
     }
-    #[derive(Serialize)]
-    struct CaptureSummary<'a> {
-        workers: Vec<CaptureWorker<'a>>,
-    }
-    let workers = plan_order
-        .iter()
-        .filter_map(|id| {
-            reaped
-                .iter()
-                .find(|worker| worker.task_id == *id)
-                .map(|worker| CaptureWorker {
-                    command: &worker.command,
-                    args: &worker.args,
-                    exit_code: worker.exit_code,
-                    stdout_path: &worker.stdout_path,
-                    stderr_path: &worker.stderr_path,
-                })
-        })
-        .collect();
-    let path = capture_root.join("summary.json");
-    let bytes = serde_json::to_vec_pretty(&CaptureSummary { workers }).map_err(|error| {
-        ExecuteError::failed(format!(
-            "could not serialize capture summary {}: {error}",
-            path.display()
-        ))
-    })?;
-    fs::write(&path, bytes).map_err(|error| {
-        ExecuteError::failed(format!(
-            "could not write capture summary {}: {error}",
-            path.display()
-        ))
-    })?;
-    Ok(())
+    outcomes
 }
 
-fn inner_stdin(
-    packet: &InvokePacket,
-    artifact_root: &Path,
-    task: &Value,
-) -> Result<String, ExecuteError> {
-    let task_json = serde_json::to_string(task).map_err(|error| {
-        ExecuteError::failed(format!("could not serialize task record: {error}"))
-    })?;
-    Ok(format!(
-        "run_id: {}\nslot_id: {}\nartifact_root: {}\n\n## instruction_body\n{}\n\n## task\n{}\n",
-        packet.run_id,
-        packet.slot_id,
-        artifact_root.display(),
-        packet.instruction_body,
-        task_json
-    ))
+fn outcome_from_node(node: &Value) -> StepOutcome {
+    let status = node.get("status").and_then(Value::as_u64).unwrap_or(0);
+    let started_at = node.get("startedAt").and_then(Value::as_str).unwrap_or("");
+    let error = node.get("error").and_then(Value::as_str).unwrap_or("");
+    let started = status == 2 || status == 4 || !started_at.is_empty();
+    let exit_code = match status {
+        4 => Some(0),
+        2 => Some(parse_exit_status(error).unwrap_or(1)),
+        _ => None,
+    };
+    StepOutcome { started, exit_code }
+}
+
+fn parse_exit_status(error: &str) -> Option<i32> {
+    let marker = "exit status ";
+    let rest = error.split(marker).nth(1)?;
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        None
+    } else {
+        digits.parse().ok()
+    }
+}
+
+fn latest_status_jsonl(dagu_home: &Path) -> Option<PathBuf> {
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    let mut stack = vec![dagu_home.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.file_name().is_some_and(|name| name == "status.jsonl") {
+                let Ok(mtime) = entry.metadata().and_then(|meta| meta.modified()) else {
+                    continue;
+                };
+                if best.as_ref().is_none_or(|(time, _)| mtime >= *time) {
+                    best = Some((mtime, path));
+                }
+            }
+        }
+    }
+    best.map(|(_, path)| path)
 }
 
 #[cfg(test)]
@@ -813,14 +1193,72 @@ mod tests {
     }
 
     #[test]
-    fn task_ids_must_be_single_path_components() {
+    fn task_ids_must_be_dagu_safe_single_path_components() {
+        assert!(is_dagu_safe_task_id("cli-argv-contracts"));
+        assert!(is_dagu_safe_task_id("a"));
         assert!(is_safe_task_id("cli-argv-contracts"));
-        assert!(is_safe_task_id("a"));
+        assert!(!is_dagu_safe_task_id("../../escaped"));
+        assert!(!is_dagu_safe_task_id("foo/bar"));
+        assert!(!is_dagu_safe_task_id("task.with.dots"));
         assert!(!is_safe_task_id("../../escaped"));
         assert!(!is_safe_task_id("foo/bar"));
         assert!(!is_safe_task_id(".."));
         assert!(!is_safe_task_id("."));
         assert!(!is_safe_task_id(""));
         assert!(!is_safe_task_id("foo\\bar"));
+    }
+
+    #[test]
+    fn emitted_yaml_has_max_active_steps_and_no_continue_on() {
+        let worker = WorkerCli {
+            command: "python3".to_owned(),
+            args: vec!["worker.py".to_owned()],
+        };
+        let task = PreparedStep {
+            name: "task-a".to_owned(),
+            stdin_path: "/tmp/cap/task-a/stdin".to_owned(),
+            stdout_path: "/tmp/cap/task-a/stdout".to_owned(),
+            stderr_path: "/tmp/cap/task-a/stderr".to_owned(),
+            depends: Vec::new(),
+        };
+        let summarizer = PreparedStep {
+            name: "summarizer".to_owned(),
+            stdin_path: "/tmp/cap/summarizer/stdin".to_owned(),
+            stdout_path: "/tmp/cap/summarizer/stdout".to_owned(),
+            stderr_path: "/tmp/cap/summarizer/stderr".to_owned(),
+            depends: vec!["task-a".to_owned()],
+        };
+        let yaml = emit_graph_yaml(
+            "plan-graph-inv-1",
+            "/abs/software-change",
+            &worker,
+            &[task],
+            &summarizer,
+        );
+        assert!(yaml.starts_with("type: graph\n"), "{yaml}");
+        assert!(yaml.contains("max_active_steps: 4"), "{yaml}");
+        assert!(yaml.contains("action: exec"), "{yaml}");
+        assert!(yaml.contains("name: \"task-a\""), "{yaml}");
+        assert!(yaml.contains("name: \"summarizer\""), "{yaml}");
+        assert!(yaml.contains("stdin-exec"), "{yaml}");
+        assert!(yaml.contains("--exit-mode"), "{yaml}");
+        assert!(yaml.contains("propagate"), "{yaml}");
+        assert!(!yaml.contains("continue_on"), "{yaml}");
+        assert!(!yaml.contains("retry_policy"), "{yaml}");
+        assert!(!yaml.contains("instruction_body"), "{yaml}");
+    }
+
+    #[test]
+    fn parse_plan_rejects_unknown_ids_cycles_and_summarizer_collision() {
+        let unknown = parse_plan(
+            r#"{"tasks":[{"id":"a"}],"dependency_graph":[{"from":"a","to":"missing"}]}"#,
+        );
+        assert!(unknown.is_err());
+        let cycle = parse_plan(
+            r#"{"tasks":[{"id":"a"},{"id":"b"}],"dependency_graph":[{"from":"a","to":"b"},{"from":"b","to":"a"}]}"#,
+        );
+        assert!(cycle.is_err());
+        let collision = parse_plan(r#"{"tasks":[{"id":"summarizer"}],"dependency_graph":[]}"#);
+        assert!(collision.is_err());
     }
 }

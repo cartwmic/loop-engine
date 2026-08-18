@@ -35,6 +35,23 @@ jobs:
           set -euo pipefail
           printf '%s' "$DIST_PLAN" > "$RUNNER_TEMP/dist-plan.json"
           python3 scripts/assert-dist-plan.py "$RUNNER_TEMP/dist-plan.json"
+      - name: Install operator-provided dagu
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=2.14.0
+          case '${{ matrix.target }}' in
+            aarch64-apple-darwin) asset="dagu_${version}_darwin_arm64.tar.gz" ;;
+            x86_64-unknown-linux-gnu) asset="dagu_${version}_linux_amd64.tar.gz" ;;
+            *) echo "unsupported target ${{ matrix.target }} for dagu"; exit 1 ;;
+          esac
+          url="https://github.com/dagu-org/dagu/releases/download/v${version}/${asset}"
+          bin="$RUNNER_TEMP/dagu-bin"
+          mkdir -p "$bin"
+          curl -fsSL "$url" | tar -xz -C "$bin" dagu
+          chmod +x "$bin/dagu"
+          echo "$bin" >> "$GITHUB_PATH"
+          "$bin/dagu" version
       - name: Download native archives
         uses: actions/download-artifact@v8
         with:

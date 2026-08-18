@@ -1,25 +1,27 @@
-//! Argv, stdin contracts, and process collector for `fan-out`.
+//! Argv, stdin contracts, and Dagu-backed runtime for `fan-out`.
 //!
-//! Workers come only from repeated `--worker` JSON objects.  The collector
-//! does not open a database, encode a harness, or emit a run-state envelope.
+//! Workers come only from repeated `--worker` JSON objects. Callers never
+//! supply Dagu YAML. The facade does not open a database, encode a harness,
+//! or emit a run-state envelope.
 
+use crate::dagu::{names_for_capture_root, resolve_dagu, write_locator};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 use std::fmt;
-use std::fs::{self, File};
-use std::io::{self, Write};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 static NEXT_ADHOC: AtomicU64 = AtomicU64::new(1);
+const JOIN_COMMAND_OVERRIDE: &str = "LOOP_ENGINE_FAN_OUT_JOIN_COMMAND";
+const SPEC_FILE: &str = "fan-out-spec.json";
+const SUMMARY_FILE: &str = "summary.json";
 
 /// Nested fan-out worker argv and optional, caller-supplied contracts.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct WorkerCli {
     pub(crate) command: String,
@@ -110,7 +112,7 @@ pub(crate) struct FanOutSummary {
 }
 
 /// One reaped worker in `--worker` order.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct FanOutWorkerResult {
     pub(crate) command: String,
     pub(crate) args: Vec<String>,
@@ -124,11 +126,39 @@ pub(crate) struct FanOutWorkerResult {
 }
 
 /// Mechanical outcome for a worker that declared an output contract.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum ContractStatus {
     Succeeded,
     Failed,
+}
+
+/// Durable per-invocation spec consumed by join and the facade fallback.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct FanOutSpec {
+    workers: Vec<FanOutSpecWorker>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct FanOutSpecWorker {
+    command: String,
+    args: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_schema: Option<OutputSchema>,
+    stdin_path: String,
+    stdout_path: String,
+    stderr_path: String,
+    sidecar_path: String,
+}
+
+#[derive(Deserialize)]
+struct SidecarFile {
+    exit_code: i32,
+}
+
+#[derive(Serialize)]
+struct CaptureSummary<'a> {
+    workers: &'a [FanOutWorkerResult],
 }
 
 /// Parse one nested worker CLI JSON object and validate its exact output shape.
@@ -276,8 +306,8 @@ pub(crate) fn drain_stdin(is_terminal: bool) -> bool {
     !is_terminal
 }
 
-/// Run the fan-out collector: detect mode, spawn every worker in parallel,
-/// reap each child, and return the JSON summary payload.
+/// Run Dagu-backed fan-out: emit an isolated type:graph, waitpid `dagu start`,
+/// and return the JSON summary payload.
 pub(crate) fn run_collector(
     parsed_args: FanOutArgs,
     stdin_bytes: &[u8],
@@ -292,20 +322,24 @@ pub(crate) fn run_collector(
                     "invoke packet capture_dir must be a non-empty path".to_owned(),
                 ));
             }
+            let dagu = resolve_dagu().map_err(|error| CollectorError::Failed(error.to_string()))?;
+            let engine = loop_engine_exe()?;
             let artifact_root = absolute_from_cwd(cwd, Path::new(&packet.artifact_root));
-            let base_payload = bound_stdin_payload(&packet, &artifact_root);
+            let artifact_root = path_to_string(&artifact_root);
             let payloads = workers
                 .iter()
-                .map(|worker| bound_worker_payload(worker, &packet, base_payload.as_bytes()))
+                .map(|worker| bound_worker_payload(worker, &artifact_root))
                 .collect::<Vec<_>>();
             let output_dir = absolute_from_cwd(cwd, Path::new(&packet.capture_dir));
-            collect_workers(&workers, &payloads, &output_dir)
+            run_dagu_graph(&dagu, &engine, &workers, &payloads, &output_dir)
         }
         FanOutMode::AdHoc {
             instructions_path,
             workers,
         } => {
             ensure_workers(&workers)?;
+            let dagu = resolve_dagu().map_err(|error| CollectorError::Failed(error.to_string()))?;
+            let engine = loop_engine_exe()?;
             let instructions_path = absolute_from_cwd(cwd, &instructions_path);
             let base_payload = fs::read(&instructions_path).map_err(|error| {
                 CollectorError::Invalid(format!(
@@ -319,9 +353,17 @@ pub(crate) fn run_collector(
                 .collect::<Vec<_>>();
             let unique = unique_adhoc_id();
             let output_dir = cwd.join("fan-out-adhoc").join(unique);
-            collect_workers(&workers, &payloads, &output_dir)
+            run_dagu_graph(&dagu, &engine, &workers, &payloads, &output_dir)
         }
     }
+}
+
+/// Hidden `fan-out-join --capture-dir ABS`: write `summary.json` from spec and
+/// sidecars. Invokes no model and does not append review-evidence.
+pub(crate) fn run_fan_out_join(capture_dir: &Path) -> Result<(), CollectorError> {
+    let spec = read_spec(capture_dir)?;
+    let workers = summary_from_spec(&spec, false)?;
+    write_summary_json(capture_dir, &workers)
 }
 
 fn strip_option(token: &str, option: &str) -> Option<Option<String>> {
@@ -359,37 +401,25 @@ fn ensure_workers(workers: &[WorkerCli]) -> Result<(), CollectorError> {
     Ok(())
 }
 
-fn bound_stdin_payload(packet: &InvokePacket, artifact_root: &Path) -> String {
-    let mut body = packet.instruction_body.clone();
-    if !body.ends_with('\n') {
-        body.push('\n');
-    }
-    body.push('\n');
-    body.push_str("run_id: ");
-    body.push_str(&packet.run_id);
-    body.push('\n');
-    body.push_str("slot_id: ");
-    body.push_str(&packet.slot_id);
-    body.push('\n');
-    body.push_str("artifact_root: ");
-    body.push_str(&artifact_root.to_string_lossy());
-    body.push('\n');
-    body
-}
-
-fn bound_worker_payload(worker: &WorkerCli, packet: &InvokePacket, base: &[u8]) -> Vec<u8> {
-    let Some(preamble) = &worker.preamble else {
-        return base.to_vec();
-    };
+fn compact_artifact_root_json(artifact_root: &str) -> Vec<u8> {
     #[derive(Serialize)]
     struct ArtifactRootContext<'a> {
         artifact_root: &'a str,
     }
-    let context = serde_json::to_vec(&ArtifactRootContext {
-        artifact_root: &packet.artifact_root,
-    })
-    .expect("serializing one string field cannot fail");
-    compose_preamble_payload(preamble, Some(&context), base)
+    serde_json::to_vec(&ArtifactRootContext { artifact_root })
+        .expect("serializing one string field cannot fail")
+}
+
+fn bound_worker_payload(worker: &WorkerCli, artifact_root: &str) -> Vec<u8> {
+    let location = compact_artifact_root_json(artifact_root);
+    match &worker.preamble {
+        Some(preamble) => compose_preamble_payload(preamble, Some(&location), b""),
+        None => {
+            let mut payload = location;
+            payload.push(b'\n');
+            payload
+        }
+    }
 }
 
 fn ad_hoc_worker_payload(worker: &WorkerCli, base: &[u8]) -> Vec<u8> {
@@ -437,7 +467,15 @@ fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn collect_workers(
+fn loop_engine_exe() -> Result<PathBuf, CollectorError> {
+    std::env::current_exe().map_err(|error| {
+        CollectorError::Failed(format!("could not resolve loop-engine executable: {error}"))
+    })
+}
+
+fn run_dagu_graph(
+    dagu: &Path,
+    engine: &Path,
     workers: &[WorkerCli],
     payloads: &[Vec<u8>],
     output_dir: &Path,
@@ -449,150 +487,98 @@ fn collect_workers(
             output_dir.display()
         ))
     })?;
+    let output_dir = absolute_from_cwd(
+        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        output_dir,
+    );
+    let (dag_name, run_name) = names_for_capture_root(&output_dir)
+        .map_err(|error| CollectorError::Failed(error.to_string()))?;
+    let locator = write_locator(&output_dir, &dag_name, &run_name)
+        .map_err(|error| CollectorError::Failed(error.to_string()))?;
+    let home = PathBuf::from(&locator.dagu_home);
+    write_isolated_home_files(&home)?;
+    let engine = fs::canonicalize(engine).unwrap_or_else(|_| engine.to_path_buf());
+    let engine_str = path_to_string(&engine);
 
-    struct Spawned {
-        command: String,
-        args: Vec<String>,
-        output_schema: Option<OutputSchema>,
-        child: std::process::Child,
-        stdout_path: PathBuf,
-        stderr_path: PathBuf,
-    }
-
-    let mut spawned = Vec::new();
-    let mut stdin_handles = Vec::new();
-    let mut spawn_errors = Vec::new();
-
+    let mut spec_workers = Vec::new();
     for (index, worker) in workers.iter().enumerate() {
         let worker_dir = output_dir.join(index.to_string());
-        if let Err(error) = fs::create_dir_all(&worker_dir) {
-            spawn_errors.push(format!(
+        fs::create_dir_all(&worker_dir).map_err(|error| {
+            CollectorError::Failed(format!(
                 "could not create worker output directory `{}`: {error}",
                 worker_dir.display()
-            ));
-            continue;
-        }
-        let stdout_path = worker_dir.join("stdout");
-        let stderr_path = worker_dir.join("stderr");
-        let stdout_file = match File::create(&stdout_path) {
-            Ok(file) => file,
-            Err(error) => {
-                spawn_errors.push(format!(
-                    "could not create stdout file `{}`: {error}",
-                    stdout_path.display()
-                ));
-                continue;
-            }
-        };
-        let stderr_file = match File::create(&stderr_path) {
-            Ok(file) => file,
-            Err(error) => {
-                spawn_errors.push(format!(
-                    "could not create stderr file `{}`: {error}",
-                    stderr_path.display()
-                ));
-                continue;
-            }
-        };
-
-        match Command::new(&worker.command)
-            .args(&worker.args)
-            .stdin(Stdio::piped())
-            .stdout(stdout_file)
-            .stderr(stderr_file)
-            .spawn()
-        {
-            Ok(mut child) => {
-                let stdin = child.stdin.take();
-                spawned.push(Spawned {
-                    command: worker.command.clone(),
-                    args: worker.args.clone(),
-                    output_schema: worker.output_schema.clone(),
-                    child,
-                    stdout_path,
-                    stderr_path,
-                });
-                if let Some(stdin) = stdin {
-                    stdin_handles.push((
-                        worker.command.clone(),
-                        stdin,
-                        Arc::<[u8]>::from(payloads[index].clone()),
-                    ));
-                }
-            }
-            Err(error) => {
-                spawn_errors.push(format!(
-                    "could not spawn worker `{}`: {error}",
-                    worker.command
-                ));
-            }
-        }
+            ))
+        })?;
+        let stdin_path = worker_dir.join("stdin");
+        fs::write(&stdin_path, &payloads[index]).map_err(|error| {
+            CollectorError::Failed(format!(
+                "could not write worker stdin `{}`: {error}",
+                stdin_path.display()
+            ))
+        })?;
+        spec_workers.push(FanOutSpecWorker {
+            command: worker.command.clone(),
+            args: worker.args.clone(),
+            output_schema: worker.output_schema.clone(),
+            stdin_path: path_to_string(&stdin_path),
+            stdout_path: path_to_string(&worker_dir.join("stdout")),
+            stderr_path: path_to_string(&worker_dir.join("stderr")),
+            sidecar_path: path_to_string(&worker_dir.join("inner_exit.json")),
+        });
     }
+    let spec = FanOutSpec {
+        workers: spec_workers,
+    };
+    write_spec(&output_dir, &spec)?;
 
-    // Spawn every child before writing stdin, then write in parallel so a
-    // slow or deferred reader cannot serialize launch or deadlock a peer.
-    let mut writers = Vec::new();
-    for (command, mut stdin, payload) in stdin_handles {
-        writers.push(thread::spawn(move || {
-            let result = stdin.write_all(&payload);
-            drop(stdin);
-            (command, result)
-        }));
-    }
-    for handle in writers {
-        match handle.join() {
-            Ok((command, Err(error))) if error.kind() != io::ErrorKind::BrokenPipe => {
-                spawn_errors.push(format!(
-                    "could not write stdin to worker `{command}`: {error}"
-                ));
-            }
-            Ok(_) => {}
-            Err(_) => spawn_errors.push("fan-out stdin writer thread panicked".to_owned()),
-        }
-    }
+    let yaml = emit_graph_yaml(&dag_name, &engine_str, &output_dir, &spec);
+    let dags_dir = home.join("dags");
+    fs::create_dir_all(&dags_dir).map_err(|error| {
+        CollectorError::Failed(format!(
+            "could not create dagu dags directory `{}`: {error}",
+            dags_dir.display()
+        ))
+    })?;
+    let yaml_path = dags_dir.join(format!("{dag_name}.yaml"));
+    fs::write(&yaml_path, yaml).map_err(|error| {
+        CollectorError::Failed(format!(
+            "could not write fan-out DAG `{}`: {error}",
+            yaml_path.display()
+        ))
+    })?;
 
-    let mut results = Vec::new();
-    let mut wait_errors = Vec::new();
-    let mut conformance_failed = false;
-    for mut job in spawned {
-        match job.child.wait() {
-            Ok(status) => {
-                let (contract_status, conformance_error) = match &job.output_schema {
-                    Some(schema) => match evaluate_output_conformance(&job.stdout_path, schema) {
-                        Ok(()) => (Some(ContractStatus::Succeeded), None),
-                        Err(error) => {
-                            conformance_failed = true;
-                            (Some(ContractStatus::Failed), Some(error))
-                        }
-                    },
-                    None => (None, None),
-                };
-                results.push(FanOutWorkerResult {
-                    command: job.command,
-                    args: job.args,
-                    exit_code: status.code().unwrap_or(1),
-                    stdout_path: path_to_string(&job.stdout_path),
-                    stderr_path: path_to_string(&job.stderr_path),
-                    status: contract_status,
-                    conformance_error,
-                });
-            }
-            Err(error) => {
-                wait_errors.push(format!(
-                    "could not wait for worker `{}`: {error}",
-                    job.command
-                ));
-            }
-        }
-    }
+    run_dagu_cli(
+        dagu,
+        &[
+            "validate",
+            "--dagu-home",
+            &locator.dagu_home,
+            &path_to_string(&yaml_path),
+        ],
+        false,
+    )?;
 
-    if !spawn_errors.is_empty() || !wait_errors.is_empty() {
-        let mut message = spawn_errors;
-        message.extend(wait_errors);
-        return Err(CollectorError::Failed(message.join("; ")));
-    }
+    let start_result = run_dagu_cli(
+        dagu,
+        &[
+            "start",
+            "--quiet",
+            "--dagu-home",
+            &locator.dagu_home,
+            "--name",
+            &dag_name,
+            "--run-id",
+            &run_name,
+            &path_to_string(&yaml_path),
+        ],
+        true,
+    );
 
-    write_summary_json(output_dir, &results)?;
+    let workers = ensure_summary(&output_dir, &spec)?;
+    let conformance_failed = workers
+        .iter()
+        .any(|worker| matches!(worker.status, Some(ContractStatus::Failed)));
+    start_result?;
     if conformance_failed {
         return Err(CollectorError::Failed(
             "one or more workers did not satisfy their declared output_schema; inspect summary.json"
@@ -600,9 +586,292 @@ fn collect_workers(
         ));
     }
     Ok(FanOutSummary {
-        output_dir: path_to_string(output_dir),
-        workers: results,
+        output_dir: path_to_string(&output_dir),
+        workers,
     })
+}
+
+fn run_dagu_cli(dagu: &Path, args: &[&str], allow_nonzero: bool) -> Result<(), CollectorError> {
+    let output = Command::new(dagu)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| {
+            CollectorError::Failed(format!(
+                "could not run `{} {}`: {error}",
+                dagu.display(),
+                args.join(" ")
+            ))
+        })?;
+    if output.status.success() {
+        return Ok(());
+    }
+    if allow_nonzero {
+        let detail = dagu_failure_detail(&output);
+        return Err(CollectorError::Failed(format!(
+            "dagu {} did not complete successfully{detail}",
+            args.first().copied().unwrap_or("command")
+        )));
+    }
+    let detail = dagu_failure_detail(&output);
+    Err(CollectorError::Failed(format!(
+        "dagu {} failed{detail}",
+        args.first().copied().unwrap_or("command")
+    )))
+}
+
+fn dagu_failure_detail(output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let message = stderr.trim();
+    if !message.is_empty() {
+        return format!(": {message}");
+    }
+    let message = stdout.trim();
+    if !message.is_empty() {
+        return format!(": {message}");
+    }
+    if let Some(code) = output.status.code() {
+        format!(" (exit {code})")
+    } else {
+        " (terminated by signal)".to_owned()
+    }
+}
+
+fn emit_graph_yaml(
+    _dag_name: &str,
+    engine: &str,
+    capture_root: &Path,
+    spec: &FanOutSpec,
+) -> String {
+    let join_command = std::env::var_os(JOIN_COMMAND_OVERRIDE)
+        .map(|value| path_to_string(&PathBuf::from(value)))
+        .unwrap_or_else(|| engine.to_owned());
+    let capture_dir = path_to_string(capture_root);
+    let mut yaml = String::from("type: graph\nsteps:\n");
+    let mut worker_names = Vec::new();
+    for (index, worker) in spec.workers.iter().enumerate() {
+        let name = format!("w{index}");
+        worker_names.push(name.clone());
+        yaml.push_str("  - name: ");
+        yaml.push_str(&yaml_double_quoted(&name));
+        yaml.push('\n');
+        yaml.push_str("    action: exec\n");
+        yaml.push_str("    with:\n");
+        yaml.push_str("      command: ");
+        yaml.push_str(&yaml_double_quoted(engine));
+        yaml.push('\n');
+        yaml.push_str("      args:\n");
+        let mut args = vec![
+            "stdin-exec".to_owned(),
+            "--stdin-file".to_owned(),
+            worker.stdin_path.clone(),
+            "--exit-mode".to_owned(),
+            "sidecar".to_owned(),
+            "--sidecar-file".to_owned(),
+            worker.sidecar_path.clone(),
+            "--".to_owned(),
+            worker.command.clone(),
+        ];
+        args.extend(worker.args.iter().cloned());
+        for arg in args {
+            yaml.push_str("        - ");
+            yaml.push_str(&yaml_double_quoted(&arg));
+            yaml.push('\n');
+        }
+        yaml.push_str("    stdout: ");
+        yaml.push_str(&yaml_double_quoted(&worker.stdout_path));
+        yaml.push('\n');
+        yaml.push_str("    stderr: ");
+        yaml.push_str(&yaml_double_quoted(&worker.stderr_path));
+        yaml.push('\n');
+    }
+    yaml.push_str("  - name: ");
+    yaml.push_str(&yaml_double_quoted("join"));
+    yaml.push('\n');
+    yaml.push_str("    action: exec\n");
+    yaml.push_str("    depends:\n");
+    for name in &worker_names {
+        yaml.push_str("      - ");
+        yaml.push_str(&yaml_double_quoted(name));
+        yaml.push('\n');
+    }
+    yaml.push_str("    with:\n");
+    yaml.push_str("      command: ");
+    yaml.push_str(&yaml_double_quoted(&join_command));
+    yaml.push('\n');
+    yaml.push_str("      args:\n");
+    yaml.push_str("        - ");
+    yaml.push_str(&yaml_double_quoted("fan-out-join"));
+    yaml.push('\n');
+    yaml.push_str("        - ");
+    yaml.push_str(&yaml_double_quoted("--capture-dir"));
+    yaml.push('\n');
+    yaml.push_str("        - ");
+    yaml.push_str(&yaml_double_quoted(&capture_dir));
+    yaml.push('\n');
+    yaml
+}
+
+fn yaml_double_quoted(value: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn write_isolated_home_files(home: &Path) -> Result<(), CollectorError> {
+    let base = home.join("base.yaml");
+    fs::write(&base, "type: graph\n").map_err(|error| {
+        CollectorError::Failed(format!(
+            "could not write isolated dagu base.yaml `{}`: {error}",
+            base.display()
+        ))
+    })?;
+    let config = home.join("config.yaml");
+    fs::write(&config, "auth:\n  mode: none\n").map_err(|error| {
+        CollectorError::Failed(format!(
+            "could not write isolated dagu config.yaml `{}`: {error}",
+            config.display()
+        ))
+    })
+}
+
+fn write_spec(output_dir: &Path, spec: &FanOutSpec) -> Result<(), CollectorError> {
+    let path = output_dir.join(SPEC_FILE);
+    let bytes = serde_json::to_vec_pretty(spec).map_err(|error| {
+        CollectorError::Failed(format!(
+            "could not serialize fan-out spec `{}`: {error}",
+            path.display()
+        ))
+    })?;
+    fs::write(&path, bytes).map_err(|error| {
+        CollectorError::Failed(format!(
+            "could not write fan-out spec `{}`: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(())
+}
+
+fn read_spec(output_dir: &Path) -> Result<FanOutSpec, CollectorError> {
+    let path = output_dir.join(SPEC_FILE);
+    let bytes = fs::read(&path).map_err(|error| {
+        CollectorError::Failed(format!(
+            "could not read fan-out spec `{}`: {error}",
+            path.display()
+        ))
+    })?;
+    serde_json::from_slice(&bytes).map_err(|error| {
+        CollectorError::Failed(format!(
+            "could not parse fan-out spec `{}`: {error}",
+            path.display()
+        ))
+    })
+}
+
+fn ensure_summary(
+    output_dir: &Path,
+    spec: &FanOutSpec,
+) -> Result<Vec<FanOutWorkerResult>, CollectorError> {
+    let existing = read_summary_workers(output_dir);
+    if let Some(workers) = existing {
+        if summary_covers_started(spec, &workers) {
+            return Ok(workers);
+        }
+    }
+    let workers = summary_from_spec(spec, true)?;
+    write_summary_json(output_dir, &workers)?;
+    Ok(workers)
+}
+
+fn read_summary_workers(output_dir: &Path) -> Option<Vec<FanOutWorkerResult>> {
+    let path = output_dir.join(SUMMARY_FILE);
+    let bytes = fs::read(path).ok()?;
+    #[derive(Deserialize)]
+    struct Loaded {
+        workers: Vec<FanOutWorkerResult>,
+    }
+    serde_json::from_slice::<Loaded>(&bytes)
+        .ok()
+        .map(|loaded| loaded.workers)
+}
+
+fn summary_covers_started(spec: &FanOutSpec, workers: &[FanOutWorkerResult]) -> bool {
+    let started = spec
+        .workers
+        .iter()
+        .filter(|worker| worker_started(worker))
+        .count();
+    if started == 0 {
+        return !workers.is_empty() || spec.workers.is_empty();
+    }
+    workers.len() >= started
+}
+
+fn worker_started(worker: &FanOutSpecWorker) -> bool {
+    Path::new(&worker.stdout_path).is_file()
+        || Path::new(&worker.stderr_path).is_file()
+        || Path::new(&worker.sidecar_path).is_file()
+}
+
+fn summary_from_spec(
+    spec: &FanOutSpec,
+    started_only: bool,
+) -> Result<Vec<FanOutWorkerResult>, CollectorError> {
+    let mut results = Vec::new();
+    for worker in &spec.workers {
+        if started_only && !worker_started(worker) {
+            continue;
+        }
+        let exit_code = read_sidecar_exit(&worker.sidecar_path).unwrap_or(1);
+        let stdout_path = Path::new(&worker.stdout_path);
+        if let Some(parent) = stdout_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if !stdout_path.exists() {
+            let _ = fs::write(stdout_path, b"");
+        }
+        let stderr_path = Path::new(&worker.stderr_path);
+        if !stderr_path.exists() {
+            let _ = fs::write(stderr_path, b"");
+        }
+        let (status, conformance_error) = match &worker.output_schema {
+            Some(schema) => match evaluate_output_conformance(stdout_path, schema) {
+                Ok(()) => (Some(ContractStatus::Succeeded), None),
+                Err(error) => (Some(ContractStatus::Failed), Some(error)),
+            },
+            None => (None, None),
+        };
+        results.push(FanOutWorkerResult {
+            command: worker.command.clone(),
+            args: worker.args.clone(),
+            exit_code,
+            stdout_path: worker.stdout_path.clone(),
+            stderr_path: worker.stderr_path.clone(),
+            status,
+            conformance_error,
+        });
+    }
+    Ok(results)
+}
+
+fn read_sidecar_exit(path: &str) -> Option<i32> {
+    let bytes = fs::read(path).ok()?;
+    serde_json::from_slice::<SidecarFile>(&bytes)
+        .ok()
+        .map(|sidecar| sidecar.exit_code)
 }
 
 fn evaluate_output_conformance(stdout_path: &Path, schema: &OutputSchema) -> Result<(), String> {
@@ -669,11 +938,7 @@ fn write_summary_json(
     output_dir: &Path,
     workers: &[FanOutWorkerResult],
 ) -> Result<(), CollectorError> {
-    #[derive(Serialize)]
-    struct CaptureSummary<'a> {
-        workers: &'a [FanOutWorkerResult],
-    }
-    let path = output_dir.join("summary.json");
+    let path = output_dir.join(SUMMARY_FILE);
     let bytes = serde_json::to_vec_pretty(&CaptureSummary { workers }).map_err(|error| {
         CollectorError::Failed(format!(
             "could not serialize capture summary `{}`: {error}",
@@ -693,9 +958,6 @@ fn write_summary_json(
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::process::Command;
-    use std::thread;
-    use std::time::{Duration, Instant};
     use tempfile::tempdir;
 
     fn valid_worker_json() -> &'static str {
@@ -708,73 +970,6 @@ mod tests {
 
     fn valid_packet_json() -> &'static str {
         r#"{"run_id":"run-1","slot_id":"slot-1","artifact_root":"/tmp/artifacts","instruction_body":"Do the work","capture_dir":"/tmp/captures/inv-1"}"#
-    }
-
-    fn cat_worker(receipt: &Path) -> WorkerCli {
-        WorkerCli {
-            command: "sh".to_owned(),
-            args: vec![
-                "-c".to_owned(),
-                "cat > \"$1\"".to_owned(),
-                "_".to_owned(),
-                receipt.to_string_lossy().into_owned(),
-            ],
-            preamble: None,
-            output_schema: None,
-        }
-    }
-
-    fn sleep_worker(receipt: &Path, pid_path: &Path, done_path: &Path) -> WorkerCli {
-        WorkerCli {
-            command: "sh".to_owned(),
-            args: vec![
-                "-c".to_owned(),
-                "cat > \"$1\"; echo $$ > \"$2\"; sleep 0.2; echo done > \"$3\"".to_owned(),
-                "_".to_owned(),
-                receipt.to_string_lossy().into_owned(),
-                pid_path.to_string_lossy().into_owned(),
-                done_path.to_string_lossy().into_owned(),
-            ],
-            preamble: None,
-            output_schema: None,
-        }
-    }
-
-    fn delay_then_read_worker(receipt: &Path, pid_path: &Path) -> WorkerCli {
-        WorkerCli {
-            command: "sh".to_owned(),
-            args: vec![
-                "-c".to_owned(),
-                "echo $$ > \"$1\"; sleep 0.4; cat > \"$2\"".to_owned(),
-                "_".to_owned(),
-                pid_path.to_string_lossy().into_owned(),
-                receipt.to_string_lossy().into_owned(),
-            ],
-            preamble: None,
-            output_schema: None,
-        }
-    }
-
-    fn exit_worker(receipt: &Path, code: i32) -> WorkerCli {
-        WorkerCli {
-            command: "sh".to_owned(),
-            args: vec![
-                "-c".to_owned(),
-                format!("cat > \"$1\"; exit {code}"),
-                "_".to_owned(),
-                receipt.to_string_lossy().into_owned(),
-            ],
-            preamble: None,
-            output_schema: None,
-        }
-    }
-
-    fn pid_is_alive(pid: &str) -> bool {
-        Command::new("kill")
-            .args(["-0", pid])
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false)
     }
 
     #[test]
@@ -833,16 +1028,6 @@ mod tests {
     #[test]
     fn worker_json_non_string_args_entry_fails() {
         assert!(parse_worker_cli_json(r#"{"command":"echo","args":[1]}"#).is_err());
-    }
-
-    fn capture_summary(output_dir: &str) -> serde_json::Value {
-        let path = Path::new(output_dir).join("summary.json");
-        assert!(
-            path.is_file(),
-            "expected summary.json at {}",
-            path.display()
-        );
-        serde_json::from_slice(&fs::read(&path).expect("read summary.json")).expect("summary json")
     }
 
     #[test]
@@ -949,40 +1134,40 @@ mod tests {
     }
 
     #[test]
-    fn bound_stdin_layout_is_instruction_body_blank_line_then_fields() {
-        let packet = InvokePacket {
-            run_id: "run-1".to_owned(),
-            slot_id: "slot-1".to_owned(),
-            artifact_root: "relative/root".to_owned(),
-            instruction_body: "Do the work".to_owned(),
-            capture_dir: "/tmp/captures/inv-1".to_owned(),
+    fn bound_stdin_without_preamble_is_compact_artifact_root_json() {
+        let worker = WorkerCli {
+            command: "echo".to_owned(),
+            args: Vec::new(),
+            preamble: None,
+            output_schema: None,
         };
-        let payload = bound_stdin_payload(&packet, Path::new("/tmp/artifacts"));
         assert_eq!(
-            payload,
-            "Do the work\n\nrun_id: run-1\nslot_id: slot-1\nartifact_root: /tmp/artifacts\n"
+            bound_worker_payload(&worker, "/tmp/artifacts"),
+            b"{\"artifact_root\":\"/tmp/artifacts\"}\n"
+        );
+        let schema_only = WorkerCli {
+            output_schema: Some(OutputSchema {
+                required: vec!["result".to_owned()],
+            }),
+            ..worker
+        };
+        assert_eq!(
+            bound_worker_payload(&schema_only, "/absolute/root"),
+            b"{\"artifact_root\":\"/absolute/root\"}\n"
         );
     }
 
     #[test]
     fn opted_in_payloads_have_exact_bound_and_ad_hoc_framing() {
-        let packet = InvokePacket {
-            run_id: "run-1".to_owned(),
-            slot_id: "slot-1".to_owned(),
-            artifact_root: "quoted/\"root\\tail".to_owned(),
-            instruction_body: "Do the work".to_owned(),
-            capture_dir: "/tmp/captures/inv-1".to_owned(),
-        };
         let worker = WorkerCli {
             command: "echo".to_owned(),
             args: Vec::new(),
             preamble: Some("role".to_owned()),
             output_schema: None,
         };
-        let base = bound_stdin_payload(&packet, Path::new("/absolute/root"));
         assert_eq!(
-            bound_worker_payload(&worker, &packet, base.as_bytes()),
-            b"role\n{\"artifact_root\":\"quoted/\\\"root\\\\tail\"}\n---\n\nDo the work\n\nrun_id: run-1\nslot_id: slot-1\nartifact_root: /absolute/root\n"
+            bound_worker_payload(&worker, "quoted/\"root\\tail"),
+            b"role\n{\"artifact_root\":\"quoted/\\\"root\\\\tail\"}\n---\n\n"
         );
         assert_eq!(
             ad_hoc_worker_payload(&worker, b"instructions-without-lf"),
@@ -1004,10 +1189,6 @@ mod tests {
             }),
             ..worker
         };
-        assert_eq!(
-            bound_worker_payload(&schema_only, &packet, base.as_bytes()),
-            base.as_bytes()
-        );
         assert_eq!(ad_hoc_worker_payload(&schema_only, b"body"), b"body");
     }
 
@@ -1085,288 +1266,63 @@ mod tests {
     }
 
     #[test]
-    fn two_dummies_record_the_same_shared_stdin_and_are_reaped() {
-        let directory = tempdir().expect("tempdir");
-        let instructions = directory.path().join("instructions.bin");
-        let shared = b"shared-bytes-without-trailer";
-        fs::write(&instructions, shared).expect("write instructions");
-        let receipt_a = directory.path().join("a.stdin");
-        let receipt_b = directory.path().join("b.stdin");
-        let pid_a = directory.path().join("a.pid");
-        let pid_b = directory.path().join("b.pid");
-        let done_a = directory.path().join("a.done");
-        let done_b = directory.path().join("b.done");
-
-        let summary = run_collector(
-            FanOutArgs {
-                workers: vec![
-                    sleep_worker(&receipt_a, &pid_a, &done_a),
-                    sleep_worker(&receipt_b, &pid_b, &done_b),
-                ],
-                instructions_path: Some(instructions),
-            },
-            b"not a packet",
-            directory.path(),
-        )
-        .expect("collector success");
-
-        assert_eq!(fs::read(&receipt_a).expect("read a"), shared);
-        assert_eq!(fs::read(&receipt_b).expect("read b"), shared);
-        assert_eq!(
-            fs::read(&receipt_a).expect("read a"),
-            fs::read(&receipt_b).expect("read b")
+    fn emitted_yaml_is_type_graph_without_continue_on_or_retry() {
+        let spec = FanOutSpec {
+            workers: vec![FanOutSpecWorker {
+                command: "echo".to_owned(),
+                args: vec!["hi".to_owned()],
+                output_schema: None,
+                stdin_path: "/tmp/stdin".to_owned(),
+                stdout_path: "/tmp/0/stdout".to_owned(),
+                stderr_path: "/tmp/0/stderr".to_owned(),
+                sidecar_path: "/tmp/0/inner_exit.json".to_owned(),
+            }],
+        };
+        let yaml = emit_graph_yaml(
+            "fanout-inv-1",
+            "/abs/loop-engine",
+            Path::new("/tmp/cap"),
+            &spec,
         );
-        assert!(
-            done_a.is_file(),
-            "worker A must finish before collector returns"
-        );
-        assert!(
-            done_b.is_file(),
-            "worker B must finish before collector returns"
-        );
-        let pid_a = fs::read_to_string(&pid_a).expect("pid a");
-        let pid_b = fs::read_to_string(&pid_b).expect("pid b");
-        assert!(
-            !pid_is_alive(pid_a.trim()),
-            "worker A must be reaped: {}",
-            pid_a.trim()
-        );
-        assert!(
-            !pid_is_alive(pid_b.trim()),
-            "worker B must be reaped: {}",
-            pid_b.trim()
-        );
-        assert!(summary.output_dir.contains("fan-out-adhoc"));
-        assert_eq!(summary.workers.len(), 2);
-        assert_eq!(summary.workers[0].exit_code, 0);
-        assert_eq!(summary.workers[1].exit_code, 0);
-        assert!(Path::new(&summary.workers[0].stdout_path).is_file());
-        assert!(Path::new(&summary.workers[1].stderr_path).is_file());
-        let captured = capture_summary(&summary.output_dir);
-        assert_eq!(captured["workers"].as_array().expect("workers").len(), 2);
-        assert_eq!(captured["workers"][0]["exit_code"], 0);
-        assert_eq!(captured["workers"][1]["exit_code"], 0);
+        assert!(yaml.starts_with("type: graph\n"), "{yaml}");
+        assert!(yaml.contains("action: exec"), "{yaml}");
+        assert!(yaml.contains("name: \"w0\""), "{yaml}");
+        assert!(yaml.contains("name: \"join\""), "{yaml}");
+        assert!(yaml.contains("stdin-exec"), "{yaml}");
+        assert!(yaml.contains("fan-out-join"), "{yaml}");
+        assert!(!yaml.contains("continue_on"), "{yaml}");
+        assert!(!yaml.contains("retry_policy"), "{yaml}");
+        assert!(!yaml.contains("max_active_steps"), "{yaml}");
+        assert!(!yaml.contains("instruction_body"), "{yaml}");
     }
 
     #[test]
-    fn dummy_nonzero_exit_still_succeeds_and_appears_in_summary() {
+    fn fallback_writes_summary_from_spec_and_sidecars() {
         let directory = tempdir().expect("tempdir");
-        let instructions = directory.path().join("instructions.txt");
-        fs::write(&instructions, b"judge this").expect("write instructions");
-        let receipt = directory.path().join("nonzero.stdin");
-
-        let summary = run_collector(
-            FanOutArgs {
-                workers: vec![exit_worker(&receipt, 7)],
-                instructions_path: Some(instructions),
-            },
-            b"",
-            directory.path(),
-        )
-        .expect("collector success despite worker nonzero");
-
-        assert_eq!(fs::read(&receipt).expect("read receipt"), b"judge this");
-        assert_eq!(summary.workers.len(), 1);
-        assert_eq!(summary.workers[0].exit_code, 7);
-        assert_eq!(summary.workers[0].command, "sh");
-        let captured = capture_summary(&summary.output_dir);
-        assert_eq!(captured["workers"][0]["exit_code"], 7);
-    }
-
-    #[test]
-    fn bound_mode_writes_outputs_under_capture_dir_and_resolves_relative_root() {
-        let directory = tempdir().expect("tempdir");
-        let receipt = directory.path().join("bound.stdin");
-        let capture_dir = directory.path().join("captures").join("inv-9");
-        let packet = json!({
-            "run_id": "run-9",
-            "slot_id": "design-review",
-            "artifact_root": "artifacts",
-            "instruction_body": "Review the design",
-            "capture_dir": capture_dir.to_string_lossy(),
-        })
-        .to_string();
-
-        let summary = run_collector(
-            FanOutArgs {
-                workers: vec![cat_worker(&receipt)],
-                instructions_path: None,
-            },
-            packet.as_bytes(),
-            directory.path(),
-        )
-        .expect("bound collector");
-
-        let expected_root = directory.path().join("artifacts");
-        assert_eq!(summary.output_dir, capture_dir.to_string_lossy());
-        assert_eq!(
-            summary.workers[0].stdout_path,
-            capture_dir.join("0").join("stdout").to_string_lossy()
-        );
-        assert_eq!(
-            summary.workers[0].stderr_path,
-            capture_dir.join("0").join("stderr").to_string_lossy()
-        );
-        assert!(capture_dir.join("0").join("stdout").is_file());
-        let captured = capture_summary(&summary.output_dir);
-        assert_eq!(captured["workers"][0]["command"], "sh");
-        assert_eq!(captured["workers"][0]["exit_code"], 0);
-        assert_eq!(
-            captured["workers"][0]["stdout_path"],
-            capture_dir
-                .join("0")
-                .join("stdout")
-                .to_string_lossy()
-                .as_ref()
-        );
-        let recorded = fs::read_to_string(&receipt).expect("bound stdin");
-        assert_eq!(
-            recorded,
-            format!(
-                "Review the design\n\nrun_id: run-9\nslot_id: design-review\nartifact_root: {}\n",
-                expected_root.to_string_lossy()
-            )
-        );
-    }
-
-    #[test]
-    fn bound_dummy_nonzero_exit_still_succeeds_and_writes_summary() {
-        let directory = tempdir().expect("tempdir");
-        let receipt = directory.path().join("nonzero.stdin");
-        let capture_dir = directory.path().join("captures").join("inv-7");
-        let packet = json!({
-            "run_id": "run-7",
-            "slot_id": "design-review",
-            "artifact_root": directory.path().join("artifacts").to_string_lossy(),
-            "instruction_body": "judge this",
-            "capture_dir": capture_dir.to_string_lossy(),
-        })
-        .to_string();
-
-        let summary = run_collector(
-            FanOutArgs {
-                workers: vec![exit_worker(&receipt, 7)],
-                instructions_path: None,
-            },
-            packet.as_bytes(),
-            directory.path(),
-        )
-        .expect("collector success despite worker nonzero");
-
-        assert_eq!(summary.workers.len(), 1);
-        assert_eq!(summary.workers[0].exit_code, 7);
-        assert!(capture_dir.join("0").join("stdout").is_file());
-        let captured = capture_summary(&summary.output_dir);
-        assert_eq!(captured["workers"][0]["exit_code"], 7);
-        assert_eq!(captured["workers"][0]["command"], "sh");
-    }
-
-    #[test]
-    fn empty_capture_dir_is_invalid_before_spawn() {
-        let directory = tempdir().expect("tempdir");
-        let packet = json!({
-            "run_id": "run-1",
-            "slot_id": "slot-1",
-            "artifact_root": directory.path().join("artifacts").to_string_lossy(),
-            "instruction_body": "Do the work",
-            "capture_dir": "",
-        })
-        .to_string();
-        let result = run_collector(
-            FanOutArgs {
-                workers: vec![cat_worker(&directory.path().join("unused.stdin"))],
-                instructions_path: None,
-            },
-            packet.as_bytes(),
-            directory.path(),
-        );
-        assert!(matches!(result, Err(CollectorError::Invalid(_))));
-        assert!(
-            !directory.path().join("unused.stdin").exists(),
-            "empty capture_dir must fail before spawning workers"
-        );
-    }
-
-    #[test]
-    fn spawn_failure_is_a_collector_failure_after_reaping_started_workers() {
-        let directory = tempdir().expect("tempdir");
-        let instructions = directory.path().join("instructions.txt");
-        fs::write(&instructions, b"payload").expect("write instructions");
-        let receipt = directory.path().join("started.stdin");
-        let pid_path = directory.path().join("started.pid");
-        let done_path = directory.path().join("started.done");
-
-        let result = run_collector(
-            FanOutArgs {
-                workers: vec![
-                    sleep_worker(&receipt, &pid_path, &done_path),
-                    WorkerCli {
-                        command: directory
-                            .path()
-                            .join("no-such-worker-binary")
-                            .to_string_lossy()
-                            .into_owned(),
-                        args: vec![],
-                        preamble: None,
-                        output_schema: None,
-                    },
-                ],
-                instructions_path: Some(instructions),
-            },
-            b"",
-            directory.path(),
-        );
-        assert!(matches!(result, Err(CollectorError::Failed(_))));
-        assert!(done_path.is_file(), "started sibling must be reaped");
-        let pid = fs::read_to_string(&pid_path).expect("pid");
-        assert!(!pid_is_alive(pid.trim()), "started sibling must not remain");
-    }
-
-    #[test]
-    fn deferred_readers_with_large_payload_start_in_parallel() {
-        let directory = tempdir().expect("tempdir");
-        let instructions = directory.path().join("instructions.bin");
-        let payload = vec![b'x'; 2 * 1024 * 1024];
-        fs::write(&instructions, &payload).expect("write instructions");
-        let receipt_a = directory.path().join("a.stdin");
-        let receipt_b = directory.path().join("b.stdin");
-        let pid_a = directory.path().join("a.pid");
-        let pid_b = directory.path().join("b.pid");
-        let workers = vec![
-            delay_then_read_worker(&receipt_a, &pid_a),
-            delay_then_read_worker(&receipt_b, &pid_b),
-        ];
-        let work_dir = directory.path().to_path_buf();
-
-        let handle = thread::spawn(move || {
-            run_collector(
-                FanOutArgs {
-                    workers,
-                    instructions_path: Some(instructions),
-                },
-                b"not a packet",
-                &work_dir,
-            )
-        });
-
-        let first_pid_deadline = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < first_pid_deadline && !(pid_a.is_file() || pid_b.is_file()) {
-            thread::sleep(Duration::from_millis(10));
-        }
-        thread::sleep(Duration::from_millis(150));
-        let both_started = pid_a.is_file() && pid_b.is_file();
-        let summary = handle
-            .join()
-            .expect("collector thread")
-            .expect("collector success");
-        assert!(
-            both_started,
-            "both workers must start before either finishes reading a 2MiB payload"
-        );
-        assert_eq!(fs::read(&receipt_a).expect("read a"), payload);
-        assert_eq!(fs::read(&receipt_b).expect("read b"), payload);
-        assert_eq!(summary.workers.len(), 2);
-        assert_eq!(summary.workers[0].exit_code, 0);
-        assert_eq!(summary.workers[1].exit_code, 0);
+        let worker_dir = directory.path().join("0");
+        fs::create_dir_all(&worker_dir).expect("worker dir");
+        let stdout = worker_dir.join("stdout");
+        let stderr = worker_dir.join("stderr");
+        let sidecar = worker_dir.join("inner_exit.json");
+        fs::write(&stdout, b"out").expect("stdout");
+        fs::write(&stderr, b"").expect("stderr");
+        fs::write(&sidecar, br#"{"exit_code":3}"#).expect("sidecar");
+        let spec = FanOutSpec {
+            workers: vec![FanOutSpecWorker {
+                command: "sh".to_owned(),
+                args: vec!["-c".to_owned(), "exit 3".to_owned()],
+                output_schema: None,
+                stdin_path: path_to_string(&worker_dir.join("stdin")),
+                stdout_path: path_to_string(&stdout),
+                stderr_path: path_to_string(&stderr),
+                sidecar_path: path_to_string(&sidecar),
+            }],
+        };
+        write_spec(directory.path(), &spec).expect("spec");
+        let workers = ensure_summary(directory.path(), &spec).expect("summary");
+        assert_eq!(workers.len(), 1);
+        assert_eq!(workers[0].exit_code, 3);
+        assert_eq!(workers[0].command, "sh");
+        assert!(directory.path().join(SUMMARY_FILE).is_file());
     }
 }
