@@ -4,7 +4,7 @@
 
 Loop Engine is a durable workflow CLI. It stores run state in SQLite and coordinates external workflow-provider executables; primary work stays outside the engine.
 
-Current release is v0.11.0 (`MIT OR Apache-2.0`). The living product requirements are [docs/PRD.md](docs/PRD.md). Agent CLI semantics are [docs/agent-usage.md](docs/agent-usage.md). Checkout operating rules for agents are [AGENTS.md](AGENTS.md).
+Current release is v0.12.0 (`MIT OR Apache-2.0`). The living product requirements are [docs/PRD.md](docs/PRD.md). Agent CLI semantics are [docs/agent-usage.md](docs/agent-usage.md). Checkout operating rules for agents are [AGENTS.md](AGENTS.md).
 
 - Operators installing or invoking binaries: [Getting Started](#getting-started) and [Usage](#usage).
 - Agents running a workflow: [docs/agent-usage.md](docs/agent-usage.md) plus the provider README and skill.
@@ -36,7 +36,7 @@ Each archive has a matching `.sha256` file; release `sha256.sum` provides the un
 Generated cargo-dist installers choose platform automatically:
 
 ```sh
-VERSION=v0.11.0
+VERSION=v0.12.0
 curl --proto '=https' --tlsv1.2 -LsSf \
   "https://github.com/cartwmic/loop-engine/releases/download/$VERSION/loop-cli-installer.sh" | sh
 curl --proto '=https' --tlsv1.2 -LsSf \
@@ -50,10 +50,10 @@ curl --proto '=https' --tlsv1.2 -LsSf \
 With [mise](https://mise.jdx.dev/), manage `loop-engine` as one tool and use separate provider installers. Do not add multiple executable selections for the same GitHub repository to one mise config: mise canonicalizes them to one tool entry, so binaries would be missing.
 
 ```sh
-mise use --global 'github:cartwmic/loop-engine[exe=loop-engine]@v0.11.0'
+mise use --global 'github:cartwmic/loop-engine[exe=loop-engine]@v0.12.0'
 for app in software-change-provider policy-document-provider research-provider; do
   curl --proto '=https' --tlsv1.2 -LsSf \
-    "https://github.com/cartwmic/loop-engine/releases/download/v0.11.0/$app-installer.sh" | sh
+    "https://github.com/cartwmic/loop-engine/releases/download/v0.12.0/$app-installer.sh" | sh
 done
 ```
 
