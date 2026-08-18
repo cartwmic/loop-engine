@@ -2103,7 +2103,8 @@ fn usage(command: Option<&str>) -> String {
                 + "reap every worker, and print a JSON collector summary. This is not a run-state\n"
                 + "operation and does not open the run database.\n\n"
                 + "Options:\n"
-                + "  --worker JSON            Worker CLI object {command, args}; repeatable\n"
+                + "  --worker JSON            Strict nested worker object with command, args, and\n"
+                + "                           optional preamble and output_schema; repeatable\n"
                 + "  --instructions FILE      Shared instructions file for ad hoc mode.\n"
                 + "                           Bound mode reads the invoke packet from stdin instead.\n"
         }
@@ -2129,7 +2130,7 @@ fn usage(command: Option<&str>) -> String {
                 + "  invoke\n\n"
                 + "Other commands:\n"
                 + "  fan-out                    Start worker CLIs in parallel without opening a run\n"
-                + "                             --worker JSON          Worker object {command, args}; repeatable\n"
+                + "                             --worker JSON          Nested worker contract; repeatable\n"
                 + "                             --instructions FILE    Shared instructions (ad hoc mode)\n"
                 + "  preview-bindings [JSON|@FILE]  Inspect work_slot_bindings without starting a run\n"
                 + "                             Omitted operand reads stdin; @FILE reads that path\n\n"

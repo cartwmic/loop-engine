@@ -1,13 +1,14 @@
 //! Inspect `work_slot_bindings` without starting a run.
 //!
-//! `preview-bindings` expands nested `--worker` / `--task-worker` JSON with the
-//! same `{command, args}` parse as `fan-out`, lists `--model` values, and warns
-//! on inspectable risks. It opens no database. Zero-worker fan-out is an error;
+//! `preview-bindings` keeps outer bindings and `--task-worker` strict
+//! `{command,args}`, expands the extended nested fan-out `--worker` contract,
+//! lists `--model` values, and warns on inspectable risks. It opens no database.
+//! Zero-worker fan-out is an error;
 //! warnings alone are not. A pi worker with `--no-extensions`/`-ne` and no
 //! `-e`/`--extension` is a warning; missing `--no-extensions` is not.
 
 use crate::fan_out::{parse_worker_cli_json, WorkerCli};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 use std::fs;
@@ -58,6 +59,9 @@ pub(crate) struct SlotPreview {
 pub(crate) struct PreviewWorker {
     pub(crate) command: String,
     pub(crate) args: Vec<String>,
+    pub(crate) has_preamble: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) output_schema: Option<crate::fan_out::OutputSchema>,
 }
 
 impl From<WorkerCli> for PreviewWorker {
@@ -65,8 +69,18 @@ impl From<WorkerCli> for PreviewWorker {
         Self {
             command: worker.command,
             args: worker.args,
+            has_preamble: worker.preamble.is_some(),
+            output_schema: worker.output_schema,
         }
     }
+}
+
+/// Outer work-slot bindings remain exactly `{command,args}`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct BindingCli {
+    command: String,
+    args: Vec<String>,
 }
 
 /// Load the JSON operand: omitted reads `stdin`, `@FILE` reads that path,
@@ -166,7 +180,7 @@ fn bindings_map(value: Value) -> Result<Map<String, Value>, PreviewError> {
 }
 
 fn preview_slot(slot_id: &str, value: Value) -> Result<SlotPreview, PreviewError> {
-    let binding: WorkerCli = serde_json::from_value(value).map_err(|error| {
+    let binding: BindingCli = serde_json::from_value(value).map_err(|error| {
         PreviewError::new(format!(
             "work_slot_bindings[{slot_id}] must be an object with exactly string `command` and array-of-string `args`: {error}"
         ))
@@ -178,13 +192,51 @@ fn preview_slot(slot_id: &str, value: Value) -> Result<SlotPreview, PreviewError
             push_unique(&mut models, model);
         }
     }
+    let preview_args = redact_nested_preambles(&binding.args);
     Ok(SlotPreview {
         slot_id: slot_id.to_owned(),
         command: binding.command,
-        args: binding.args,
+        args: preview_args,
         workers: workers.into_iter().map(PreviewWorker::from).collect(),
         models,
     })
+}
+
+fn redact_nested_preambles(args: &[String]) -> Vec<String> {
+    let mut redacted = args.to_vec();
+    let mut index = 0;
+    while index < redacted.len() {
+        if redacted[index] == "--worker" {
+            if let Some(raw) = redacted.get_mut(index + 1) {
+                redact_preamble_in_worker_json(raw);
+            }
+            index += 2;
+            continue;
+        }
+        if let Some(raw) = redacted[index].strip_prefix("--worker=") {
+            let mut raw = raw.to_owned();
+            redact_preamble_in_worker_json(&mut raw);
+            redacted[index] = format!("--worker={raw}");
+        }
+        index += 1;
+    }
+    redacted
+}
+
+fn redact_preamble_in_worker_json(raw: &mut String) {
+    let Ok(mut value) = serde_json::from_str::<Value>(raw) else {
+        return;
+    };
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    if object.contains_key("preamble") {
+        object.insert(
+            "preamble".to_owned(),
+            Value::String("<redacted>".to_owned()),
+        );
+        *raw = value.to_string();
+    }
 }
 
 fn nested_workers(slot_id: &str, args: &[String]) -> Result<Vec<WorkerCli>, PreviewError> {
@@ -193,11 +245,25 @@ fn nested_workers(slot_id: &str, args: &[String]) -> Result<Vec<WorkerCli>, Prev
     while index < args.len() {
         let token = &args[index];
         if let Some((flag, raw)) = nested_worker_json(args, &mut index)? {
-            let worker = parse_worker_cli_json(&raw).map_err(|error| {
-                PreviewError::new(format!(
-                    "nested {flag} for slot `{slot_id}` is not a {{command, args}} object: {error}"
-                ))
-            })?;
+            let worker = if flag == "--worker" {
+                parse_worker_cli_json(&raw).map_err(|error| {
+                    PreviewError::new(format!(
+                        "nested {flag} for slot `{slot_id}` is not a valid fan-out worker object: {error}"
+                    ))
+                })?
+            } else {
+                let task_worker: BindingCli = serde_json::from_str(&raw).map_err(|error| {
+                    PreviewError::new(format!(
+                        "nested {flag} for slot `{slot_id}` must be exactly {{command, args}}: {error}"
+                    ))
+                })?;
+                WorkerCli {
+                    command: task_worker.command,
+                    args: task_worker.args,
+                    preamble: None,
+                    output_schema: None,
+                }
+            };
             workers.push(worker);
             continue;
         }
@@ -401,6 +467,16 @@ mod tests {
         json!({"command": command, "args": args}).to_string()
     }
 
+    fn contracted_worker_json(command: &str, args: &[&str]) -> String {
+        json!({
+            "command": command,
+            "args": args,
+            "preamble": "full role text must not be previewed",
+            "output_schema": {"required": ["axis", "result"]}
+        })
+        .to_string()
+    }
+
     fn fan_out_binding(workers: &[String]) -> Value {
         let mut args = vec!["fan-out".to_owned()];
         for worker in workers {
@@ -464,6 +540,28 @@ mod tests {
     fn malformed_json_exits_nonzero() {
         let result = execute(["preview-bindings", "not-json"]);
         assert_eq!(result.exit_code, EXIT_INVALID_INVOCATION);
+    }
+
+    #[test]
+    fn contracted_fan_out_worker_preview_shows_presence_and_keys_not_preamble() {
+        let worker = contracted_worker_json("/bin/echo", &["ok"]);
+        let operand = json!({"design-review": fan_out_binding(&[worker])}).to_string();
+        let result = execute(["preview-bindings", &operand]);
+        assert_eq!(result.exit_code, EXIT_COMPLETED, "{}", result.stderr);
+        assert!(
+            !result
+                .stdout
+                .contains("full role text must not be previewed"),
+            "{}",
+            result.stdout
+        );
+        let report: Value = serde_json::from_str(result.stdout.trim()).expect("preview JSON");
+        let worker = &report["bindings"][0]["workers"][0];
+        assert_eq!(worker["has_preamble"], true);
+        assert_eq!(
+            worker["output_schema"]["required"],
+            json!(["axis", "result"])
+        );
     }
 
     #[test]
@@ -584,9 +682,37 @@ mod tests {
     }
 
     #[test]
-    fn extra_binding_fields_are_malformed() {
+    fn extra_binding_fields_are_malformed_in_preview_and_core_binding_type() {
+        for extra in [
+            json!({"preamble": "not allowed outside nested --worker"}),
+            json!({"output_schema": {"required": ["result"]}}),
+            json!({"extra": true}),
+        ] {
+            let mut binding = json!({"command": "echo", "args": []});
+            binding
+                .as_object_mut()
+                .expect("binding object")
+                .extend(extra.as_object().expect("extra object").clone());
+            assert!(
+                serde_json::from_value::<loop_core::WorkSlotBinding>(binding.clone()).is_err(),
+                "core accepted {binding}"
+            );
+            let operand = json!({"slot": binding}).to_string();
+            assert!(
+                preview(&operand, false).is_err(),
+                "preview accepted {operand}"
+            );
+        }
+    }
+
+    #[test]
+    fn task_worker_remains_strict_command_and_args() {
+        let task_worker = contracted_worker_json("pi", &["--print"]);
         let operand = json!({
-            "slot": {"command": "echo", "args": [], "extra": true}
+            "implement": {
+                "command": "software-change",
+                "args": ["run-plan-graph", "--task-worker", task_worker]
+            }
         })
         .to_string();
         assert!(preview(&operand, false).is_err());

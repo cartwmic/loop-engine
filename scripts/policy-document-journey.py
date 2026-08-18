@@ -31,6 +31,351 @@ WORK_SLOT_PROOF = [
     "overlay succeeded then checked event",
     "history invocation started and succeeded",
 ]
+CONSTRUCTOR_PROOF = [
+    "semantic-review constructor vs shipped readme-2 and agents-2",
+    "one worker per semantic policy in profile order",
+    "exact example_prompt, author/model, mode, and complete target object",
+    "preamble/schema bytes and preview-bindings output",
+    "unsupported slot, empty policies, missing prompt/target/mode, and invalid roster fail closed",
+    "resulting-profile preview equality and pre-start hash guard",
+    "shipped policy-document profiles omit frozen work_slot_bindings",
+]
+
+
+class ConstructorClosed(RuntimeError):
+    """The skill constructor rejected invalid input."""
+
+
+def repository_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def extract_skill_jq(skill: str) -> str:
+    marker = "<<'JQ'\n"
+    start = skill.index(marker) + len(marker)
+    end = skill.index("\nJQ\n", start)
+    return skill[start:end]
+
+
+def load_json(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def write_json(path: Path, value: Any) -> None:
+    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def run_constructor_jq(
+    filter_text: str,
+    profile: Path,
+    extra: Sequence[str],
+) -> str:
+    completed = subprocess.run(
+        ["jq", *extra, filter_text, str(profile)],
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
+        raise ConstructorClosed(detail or f"jq exited {completed.returncode}")
+    return completed.stdout
+
+
+def fan_out_workers(binding: dict[str, Any], *, engine: str) -> list[dict[str, Any]]:
+    if binding.get("command") != engine:
+        raise AssertionError(
+            f"constructor binding command {binding.get('command')!r} != {engine!r}"
+        )
+    args = binding.get("args")
+    if not isinstance(args, list) or not args or args[0] != "fan-out":
+        raise AssertionError(f"constructor binding was not fan-out: {binding}")
+    workers: list[dict[str, Any]] = []
+    index = 1
+    while index < len(args):
+        if args[index] != "--worker" or index + 1 >= len(args):
+            raise AssertionError(f"constructor fan-out args were not worker pairs: {args}")
+        worker = json.loads(args[index + 1])
+        if not isinstance(worker, dict):
+            raise AssertionError(f"constructor worker is not an object: {worker}")
+        workers.append(worker)
+        index += 2
+    return workers
+
+
+def expect_constructor_closed(run, *, needle: str, context: str) -> None:
+    try:
+        run()
+    except ConstructorClosed as error:
+        if needle not in str(error):
+            raise AssertionError(f"{context} failed for the wrong reason: {error}") from error
+    else:
+        raise AssertionError(f"{context} unexpectedly succeeded")
+
+
+def assert_semantic_review_constructor(engine: Path) -> None:
+    """Execute the skill constructor against shipped profiles and fail-closed cases."""
+    repository = repository_root()
+    skill_path = (
+        repository
+        / "crates/policy-document-provider/skills/using-policy-document-provider/SKILL.md"
+    )
+    preamble_path = (
+        repository / "crates/policy-document-provider/data/semantic-review-worker-preamble.md"
+    )
+    schema_path = (
+        repository
+        / "crates/policy-document-provider/data/semantic-review-worker-output-schema.json"
+    )
+    readme_profile = repository / "crates/policy-document-provider/data/readme.json"
+    agents_profile = repository / "crates/policy-document-provider/data/agents.json"
+    skill = skill_path.read_text(encoding="utf-8")
+    jq_filter = extract_skill_jq(skill)
+    preamble = preamble_path.read_text(encoding="utf-8")
+    schema = load_json(schema_path)
+    assert schema == {"required": ["axis", "author", "result", "findings"]}, schema
+    dummy_engine = "/tmp/loop-engine-constructor-proof"
+    dummy_pi = "/tmp/pi-constructor-proof"
+    dummy_cursor = "/tmp/cursor-provider-extension"
+    dummy_bridge = "/tmp/claude-bridge-extension"
+    roster = [
+        {"author": "reviewer-a", "model": "model-a"},
+        {"author": "reviewer-b", "model": "model-b"},
+    ]
+
+    def jq_args(roster_path: Path, *, slot_id: str = "semantic-review") -> list[str]:
+        return [
+            "--arg",
+            "slot",
+            slot_id,
+            "--arg",
+            "loop_engine",
+            dummy_engine,
+            "--arg",
+            "pi",
+            dummy_pi,
+            "--arg",
+            "cursor_extension",
+            dummy_cursor,
+            "--arg",
+            "claude_bridge_extension",
+            dummy_bridge,
+            "--rawfile",
+            "base_preamble",
+            str(preamble_path),
+            "--slurpfile",
+            "schema_documents",
+            str(schema_path),
+            "--slurpfile",
+            "roster_documents",
+            str(roster_path),
+        ]
+
+    def run_pd(profile: Path, roster_path: Path, *, slot_id: str = "semantic-review") -> dict[str, Any]:
+        stdout = run_constructor_jq(jq_filter, profile, jq_args(roster_path, slot_id=slot_id))
+        profile.write_text(stdout, encoding="utf-8")
+        return load_json(profile)
+
+    for shipped in (readme_profile, agents_profile):
+        raw = shipped.read_text(encoding="utf-8")
+        parsed = load_json(shipped)
+        work_slot_journey.assert_no_review_bindings(
+            parsed.get("work_slot_bindings"),
+            source=str(shipped),
+        )
+        assert "work_slot_bindings" not in raw, shipped
+
+    with tempfile.TemporaryDirectory(prefix="policy-document-constructor-") as temporary:
+        root = Path(temporary)
+        roster_path = root / "roster.json"
+        write_json(roster_path, roster)
+
+        for source_profile, label in ((readme_profile, "readme-2"), (agents_profile, "agents-2")):
+            target_file = root / f"{label}-target.md"
+            dest = root / f"{label}.json"
+            copied = load_json(source_profile)
+            copied["target"]["path"] = str(target_file.resolve())
+            target_file.write_text("# target\n", encoding="utf-8")
+            write_json(dest, copied)
+            source = load_json(dest)
+            result = run_pd(dest, roster_path)
+            bindings = result.get("work_slot_bindings")
+            if not isinstance(bindings, dict) or "semantic-review" not in bindings:
+                raise AssertionError(f"{label} constructor omitted semantic-review bindings")
+            assert bindings == result["work_slot_bindings"]
+            workers = fan_out_workers(bindings["semantic-review"], engine=dummy_engine)
+            policies = source["semantic_policies"]
+            assert all("required_authors" not in policy for policy in policies), label
+            if len(workers) != len(policies):
+                raise AssertionError(
+                    f"{label} worker count {len(workers)} != {len(policies)}"
+                )
+            target_json = json.dumps(source["target"], separators=(",", ":"))
+            for worker, policy in zip(workers, policies):
+                assert worker.get("command") == dummy_pi, label
+                assert worker.get("output_schema") == schema, label
+                worker_preamble = worker.get("preamble")
+                if not isinstance(worker_preamble, str) or not worker_preamble.startswith(
+                    preamble
+                ):
+                    raise AssertionError(f"{label} preamble did not start with exact provider bytes")
+                if policy["example_prompt"] not in worker_preamble:
+                    raise AssertionError(f"{label} omitted exact example_prompt for {policy['id']}")
+                if policy["id"] not in worker_preamble:
+                    raise AssertionError(f"{label} omitted axis id {policy['id']!r}")
+                if roster[0]["author"] not in worker_preamble:
+                    raise AssertionError(f"{label} omitted author {roster[0]['author']!r}")
+                args = worker.get("args")
+                if not isinstance(args, list) or "--model" not in args:
+                    raise AssertionError(f"{label} omitted --model: {worker}")
+                model_index = args.index("--model")
+                if args[model_index + 1] != roster[0]["model"]:
+                    raise AssertionError(f"{label} froze the wrong model")
+                for fragment in (
+                    "policy-document",
+                    "semantic-review",
+                    source["mode"],
+                    source["target"]["id"],
+                    source["target"]["path"],
+                    target_json,
+                ):
+                    if fragment not in worker_preamble:
+                        raise AssertionError(
+                            f"{label} worker omitted assignment field {fragment!r}"
+                        )
+            preview_path = root / f"{label}-bindings.json"
+            write_json(preview_path, bindings)
+            preview = subprocess.run(
+                [str(engine), "preview-bindings", f"@{preview_path}"],
+                capture_output=True,
+                text=True,
+            )
+            if preview.returncode != 0:
+                raise AssertionError(
+                    f"preview-bindings rejected {label}: {preview.stderr or preview.stdout}"
+                )
+            preview_text = f"{preview.stdout}\n{preview.stderr}".lower()
+            if "preamble" not in preview_text or "output_schema" not in preview_text.replace(
+                "-", "_"
+            ):
+                if "required" not in preview_text:
+                    raise AssertionError(
+                        f"preview-bindings omitted preamble/schema visibility for {label}: {preview_text}"
+                    )
+            confirmed = sha256_file(dest)
+            original = dest.read_bytes()
+            dest.write_bytes(original + b"\n")
+            if sha256_file(dest) == confirmed:
+                raise AssertionError(
+                    f"{label} pre-start hash guard would not detect a post-preview mutation"
+                )
+            dest.write_bytes(original)
+            if sha256_file(dest) != confirmed:
+                raise AssertionError(f"{label} hash-guard restore mutated the resulting profile")
+
+        two_author = root / "readme-two-authors.json"
+        two_doc = load_json(root / "readme-2.json")
+        two_doc["semantic_policies"][0]["required_authors"] = 2
+        write_json(two_author, two_doc)
+        two_result = run_pd(two_author, roster_path)
+        two_workers = fan_out_workers(
+            two_result["work_slot_bindings"]["semantic-review"], engine=dummy_engine
+        )
+        expected_two = len(two_doc["semantic_policies"]) + 1
+        if len(two_workers) != expected_two:
+            raise AssertionError(
+                f"required_authors=2 worker count {len(two_workers)} != {expected_two}"
+            )
+        first_axis = two_doc["semantic_policies"][0]["id"]
+        assert roster[0]["author"] in two_workers[0]["preamble"]
+        assert roster[1]["author"] in two_workers[1]["preamble"]
+        assert first_axis in two_workers[0]["preamble"] and first_axis in two_workers[1]["preamble"]
+
+        expect_constructor_closed(
+            lambda: run_pd(root / "readme-2.json", roster_path, slot_id="design-review"),
+            needle="unsupported slot",
+            context="policy-document unsupported slot",
+        )
+        empty_pd = load_json(root / "readme-2.json")
+        empty_pd["semantic_policies"] = []
+        empty_path = root / "empty-policies.json"
+        write_json(empty_path, empty_pd)
+        expect_constructor_closed(
+            lambda: run_pd(empty_path, roster_path),
+            needle="semantic_policies must be non-empty",
+            context="policy-document empty policies",
+        )
+        prompt_pd = load_json(root / "readme-2.json")
+        prompt_pd["semantic_policies"][0]["example_prompt"] = ""
+        prompt_path = root / "missing-prompt.json"
+        write_json(prompt_path, prompt_pd)
+        expect_constructor_closed(
+            lambda: run_pd(prompt_path, roster_path),
+            needle="example_prompt",
+            context="policy-document missing prompt",
+        )
+        mode_pd = load_json(root / "readme-2.json")
+        del mode_pd["mode"]
+        mode_path = root / "missing-mode.json"
+        write_json(mode_path, mode_pd)
+        expect_constructor_closed(
+            lambda: run_pd(mode_path, roster_path),
+            needle="mode must be draft or audit",
+            context="policy-document missing mode",
+        )
+        target_pd = load_json(root / "readme-2.json")
+        target_pd["target"]["path"] = "relative/README.md"
+        target_path = root / "relative-target.json"
+        write_json(target_path, target_pd)
+        expect_constructor_closed(
+            lambda: run_pd(target_path, roster_path),
+            needle="complete {id,path}",
+            context="policy-document missing/relative target",
+        )
+        del_target = load_json(root / "readme-2.json")
+        del del_target["target"]
+        del_target_path = root / "missing-target.json"
+        write_json(del_target_path, del_target)
+        expect_constructor_closed(
+            lambda: run_pd(del_target_path, roster_path),
+            needle="complete {id,path}",
+            context="policy-document missing target",
+        )
+        duplicate_roster = root / "duplicate-roster.json"
+        write_json(
+            duplicate_roster,
+            [roster[0], {"author": roster[0]["author"], "model": "model-c"}],
+        )
+        expect_constructor_closed(
+            lambda: run_pd(root / "readme-2.json", duplicate_roster),
+            needle="pairwise distinct",
+            context="policy-document duplicate author",
+        )
+        empty_author = root / "empty-author.json"
+        write_json(empty_author, [{"author": "", "model": "model-a"}])
+        expect_constructor_closed(
+            lambda: run_pd(root / "readme-2.json", empty_author),
+            needle="non-empty author and model",
+            context="policy-document empty author",
+        )
+        empty_model = root / "empty-model.json"
+        write_json(empty_model, [{"author": "reviewer-a", "model": ""}])
+        expect_constructor_closed(
+            lambda: run_pd(root / "readme-2.json", empty_model),
+            needle="non-empty author and model",
+            context="policy-document empty model",
+        )
+        short_roster = root / "short-roster.json"
+        write_json(short_roster, [roster[0]])
+        expect_constructor_closed(
+            lambda: run_pd(two_author, short_roster),
+            needle="enough authors",
+            context="policy-document insufficient roster",
+        )
+
 
 
 def call(engine: Path, database: Path, arguments: list[str]) -> dict[str, Any]:
@@ -137,6 +482,10 @@ def main() -> int:
     shipped_profile = Path(args.profile).resolve()
     if not shipped_profile.is_file():
         parser.error(f"profile is not a file: {shipped_profile}")
+    if not engine.is_file():
+        parser.error(f"engine is not a file: {engine}")
+
+    assert_semantic_review_constructor(engine)
 
     with tempfile.TemporaryDirectory(prefix="policy-document-journey-") as temporary:
         work = Path(temporary)
@@ -319,6 +668,7 @@ def main() -> int:
                         "fresh-process show persistence",
                         "terminal completion",
                         "copied shipped profile omitted review work_slot_bindings",
+                        *CONSTRUCTOR_PROOF,
                         *WORK_SLOT_PROOF,
                     ],
                 },

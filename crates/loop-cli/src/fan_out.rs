@@ -4,6 +4,8 @@
 //! does not open a database, encode a harness, or emit a run-state envelope.
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+use std::collections::BTreeSet;
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -16,12 +18,21 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static NEXT_ADHOC: AtomicU64 = AtomicU64::new(1);
 
-/// Worker argv: JSON object with exactly string `command` and array-of-string `args`.
+/// Nested fan-out worker argv and optional, caller-supplied contracts.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct WorkerCli {
     pub(crate) command: String,
     pub(crate) args: Vec<String>,
+    pub(crate) preamble: Option<String>,
+    pub(crate) output_schema: Option<OutputSchema>,
+}
+
+/// The complete supported output contract: presence of required top-level keys.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OutputSchema {
+    pub(crate) required: Vec<String>,
 }
 
 /// Bound-worker stdin packet.  Exactly the five engine invoke keys; no extras.
@@ -106,15 +117,53 @@ pub(crate) struct FanOutWorkerResult {
     pub(crate) exit_code: i32,
     pub(crate) stdout_path: String,
     pub(crate) stderr_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) status: Option<ContractStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) conformance_error: Option<String>,
 }
 
-/// Parse one worker CLI JSON object (`{command, args}`).
+/// Mechanical outcome for a worker that declared an output contract.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ContractStatus {
+    Succeeded,
+    Failed,
+}
+
+/// Parse one nested worker CLI JSON object and validate its exact output shape.
 pub(crate) fn parse_worker_cli_json(raw: &str) -> Result<WorkerCli, ParseError> {
-    serde_json::from_str(raw).map_err(|error| {
+    let worker: WorkerCli = serde_json::from_str(raw).map_err(|error| {
         ParseError::new(format!(
-            "worker CLI JSON must be an object with exactly string `command` and array-of-string `args`: {error}"
+            "worker CLI JSON must contain string `command`, array-of-string `args`, and only optional string `preamble` and output_schema {{required}}: {error}"
         ))
-    })
+    })?;
+    if let Some(schema) = &worker.output_schema {
+        validate_output_schema(schema)?;
+    }
+    Ok(worker)
+}
+
+fn validate_output_schema(schema: &OutputSchema) -> Result<(), ParseError> {
+    if schema.required.is_empty() {
+        return Err(ParseError::new(
+            "worker output_schema.required must contain at least one key",
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    for key in &schema.required {
+        if key.is_empty() {
+            return Err(ParseError::new(
+                "worker output_schema.required keys must be non-empty strings",
+            ));
+        }
+        if !seen.insert(key) {
+            return Err(ParseError::new(format!(
+                "worker output_schema.required contains duplicate key `{key}`"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Parse the five-key engine invoke packet from stdin JSON.
@@ -244,9 +293,13 @@ pub(crate) fn run_collector(
                 ));
             }
             let artifact_root = absolute_from_cwd(cwd, Path::new(&packet.artifact_root));
-            let payload = bound_stdin_payload(&packet, &artifact_root);
+            let base_payload = bound_stdin_payload(&packet, &artifact_root);
+            let payloads = workers
+                .iter()
+                .map(|worker| bound_worker_payload(worker, &packet, base_payload.as_bytes()))
+                .collect::<Vec<_>>();
             let output_dir = absolute_from_cwd(cwd, Path::new(&packet.capture_dir));
-            collect_workers(&workers, payload.as_bytes(), &output_dir)
+            collect_workers(&workers, &payloads, &output_dir)
         }
         FanOutMode::AdHoc {
             instructions_path,
@@ -254,15 +307,19 @@ pub(crate) fn run_collector(
         } => {
             ensure_workers(&workers)?;
             let instructions_path = absolute_from_cwd(cwd, &instructions_path);
-            let payload = fs::read(&instructions_path).map_err(|error| {
+            let base_payload = fs::read(&instructions_path).map_err(|error| {
                 CollectorError::Invalid(format!(
                     "could not read instructions file `{}`: {error}",
                     instructions_path.display()
                 ))
             })?;
+            let payloads = workers
+                .iter()
+                .map(|worker| ad_hoc_worker_payload(worker, &base_payload))
+                .collect::<Vec<_>>();
             let unique = unique_adhoc_id();
             let output_dir = cwd.join("fan-out-adhoc").join(unique);
-            collect_workers(&workers, &payload, &output_dir)
+            collect_workers(&workers, &payloads, &output_dir)
         }
     }
 }
@@ -320,6 +377,45 @@ fn bound_stdin_payload(packet: &InvokePacket, artifact_root: &Path) -> String {
     body
 }
 
+fn bound_worker_payload(worker: &WorkerCli, packet: &InvokePacket, base: &[u8]) -> Vec<u8> {
+    let Some(preamble) = &worker.preamble else {
+        return base.to_vec();
+    };
+    #[derive(Serialize)]
+    struct ArtifactRootContext<'a> {
+        artifact_root: &'a str,
+    }
+    let context = serde_json::to_vec(&ArtifactRootContext {
+        artifact_root: &packet.artifact_root,
+    })
+    .expect("serializing one string field cannot fail");
+    compose_preamble_payload(preamble, Some(&context), base)
+}
+
+fn ad_hoc_worker_payload(worker: &WorkerCli, base: &[u8]) -> Vec<u8> {
+    match &worker.preamble {
+        Some(preamble) => compose_preamble_payload(preamble, None, base),
+        None => base.to_vec(),
+    }
+}
+
+fn compose_preamble_payload(preamble: &str, context: Option<&[u8]>, base: &[u8]) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(
+        preamble.len() + context.map_or(0, |value| value.len() + 1) + 5 + base.len(),
+    );
+    payload.extend_from_slice(preamble.as_bytes());
+    if !preamble.as_bytes().ends_with(b"\n") {
+        payload.push(b'\n');
+    }
+    if let Some(context) = context {
+        payload.extend_from_slice(context);
+        payload.push(b'\n');
+    }
+    payload.extend_from_slice(b"---\n\n");
+    payload.extend_from_slice(base);
+    payload
+}
+
 fn unique_adhoc_id() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -343,9 +439,10 @@ fn path_to_string(path: &Path) -> String {
 
 fn collect_workers(
     workers: &[WorkerCli],
-    payload: &[u8],
+    payloads: &[Vec<u8>],
     output_dir: &Path,
 ) -> Result<FanOutSummary, CollectorError> {
+    debug_assert_eq!(workers.len(), payloads.len());
     fs::create_dir_all(output_dir).map_err(|error| {
         CollectorError::Failed(format!(
             "could not create fan-out output directory `{}`: {error}",
@@ -356,6 +453,7 @@ fn collect_workers(
     struct Spawned {
         command: String,
         args: Vec<String>,
+        output_schema: Option<OutputSchema>,
         child: std::process::Child,
         stdout_path: PathBuf,
         stderr_path: PathBuf,
@@ -409,12 +507,17 @@ fn collect_workers(
                 spawned.push(Spawned {
                     command: worker.command.clone(),
                     args: worker.args.clone(),
+                    output_schema: worker.output_schema.clone(),
                     child,
                     stdout_path,
                     stderr_path,
                 });
                 if let Some(stdin) = stdin {
-                    stdin_handles.push((worker.command.clone(), stdin));
+                    stdin_handles.push((
+                        worker.command.clone(),
+                        stdin,
+                        Arc::<[u8]>::from(payloads[index].clone()),
+                    ));
                 }
             }
             Err(error) => {
@@ -428,10 +531,8 @@ fn collect_workers(
 
     // Spawn every child before writing stdin, then write in parallel so a
     // slow or deferred reader cannot serialize launch or deadlock a peer.
-    let payload = Arc::<[u8]>::from(payload.to_vec());
     let mut writers = Vec::new();
-    for (command, mut stdin) in stdin_handles {
-        let payload = Arc::clone(&payload);
+    for (command, mut stdin, payload) in stdin_handles {
         writers.push(thread::spawn(move || {
             let result = stdin.write_all(&payload);
             drop(stdin);
@@ -452,15 +553,28 @@ fn collect_workers(
 
     let mut results = Vec::new();
     let mut wait_errors = Vec::new();
+    let mut conformance_failed = false;
     for mut job in spawned {
         match job.child.wait() {
             Ok(status) => {
+                let (contract_status, conformance_error) = match &job.output_schema {
+                    Some(schema) => match evaluate_output_conformance(&job.stdout_path, schema) {
+                        Ok(()) => (Some(ContractStatus::Succeeded), None),
+                        Err(error) => {
+                            conformance_failed = true;
+                            (Some(ContractStatus::Failed), Some(error))
+                        }
+                    },
+                    None => (None, None),
+                };
                 results.push(FanOutWorkerResult {
                     command: job.command,
                     args: job.args,
                     exit_code: status.code().unwrap_or(1),
                     stdout_path: path_to_string(&job.stdout_path),
                     stderr_path: path_to_string(&job.stderr_path),
+                    status: contract_status,
+                    conformance_error,
                 });
             }
             Err(error) => {
@@ -479,10 +593,76 @@ fn collect_workers(
     }
 
     write_summary_json(output_dir, &results)?;
+    if conformance_failed {
+        return Err(CollectorError::Failed(
+            "one or more workers did not satisfy their declared output_schema; inspect summary.json"
+                .to_owned(),
+        ));
+    }
     Ok(FanOutSummary {
         output_dir: path_to_string(output_dir),
         workers: results,
     })
+}
+
+fn evaluate_output_conformance(stdout_path: &Path, schema: &OutputSchema) -> Result<(), String> {
+    let bytes = fs::read(stdout_path)
+        .map_err(|error| format!("could not read captured stdout: {error}"))?;
+    let object = locate_stdout_object(&bytes)?;
+    let missing = schema
+        .required
+        .iter()
+        .filter(|key| !object.contains_key(key.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "stdout JSON object is missing required top-level keys: {}",
+            missing.join(", ")
+        ))
+    }
+}
+
+fn locate_stdout_object(bytes: &[u8]) -> Result<Map<String, Value>, String> {
+    if let Ok(value) = serde_json::from_slice::<Value>(bytes) {
+        return value
+            .as_object()
+            .cloned()
+            .ok_or_else(|| "stdout JSON must be an object".to_owned());
+    }
+
+    let text = std::str::from_utf8(bytes)
+        .map_err(|error| format!("stdout is not valid UTF-8: {error}"))?;
+    let lines = text.lines().collect::<Vec<_>>();
+    let openings = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| (line.trim() == "```json").then_some(index))
+        .collect::<Vec<_>>();
+    let opening = match openings.as_slice() {
+        [] => {
+            return Err(
+                "stdout is not a bare JSON object and contains no JSON fenced block".to_owned(),
+            )
+        }
+        [opening] => *opening,
+        _ => return Err("stdout contains multiple JSON fenced blocks".to_owned()),
+    };
+    let closing = lines
+        .iter()
+        .enumerate()
+        .skip(opening + 1)
+        .find_map(|(index, line)| (line.trim() == "```").then_some(index))
+        .ok_or_else(|| "stdout JSON fenced block is not closed".to_owned())?;
+    let raw = lines[opening + 1..closing].join("\n");
+    let value: Value = serde_json::from_str(&raw)
+        .map_err(|error| format!("stdout JSON fenced block is malformed: {error}"))?;
+    value
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "stdout JSON fenced block must contain an object".to_owned())
 }
 
 fn write_summary_json(
@@ -539,6 +719,8 @@ mod tests {
                 "_".to_owned(),
                 receipt.to_string_lossy().into_owned(),
             ],
+            preamble: None,
+            output_schema: None,
         }
     }
 
@@ -553,6 +735,8 @@ mod tests {
                 pid_path.to_string_lossy().into_owned(),
                 done_path.to_string_lossy().into_owned(),
             ],
+            preamble: None,
+            output_schema: None,
         }
     }
 
@@ -566,6 +750,8 @@ mod tests {
                 pid_path.to_string_lossy().into_owned(),
                 receipt.to_string_lossy().into_owned(),
             ],
+            preamble: None,
+            output_schema: None,
         }
     }
 
@@ -578,6 +764,8 @@ mod tests {
                 "_".to_owned(),
                 receipt.to_string_lossy().into_owned(),
             ],
+            preamble: None,
+            output_schema: None,
         }
     }
 
@@ -594,6 +782,35 @@ mod tests {
         let worker = parse_worker_cli_json(valid_worker_json()).expect("valid worker JSON");
         assert_eq!(worker.command, "echo");
         assert_eq!(worker.args, vec!["hello".to_owned()]);
+        assert_eq!(worker.preamble, None);
+        assert_eq!(worker.output_schema, None);
+    }
+
+    #[test]
+    fn worker_json_accepts_optional_preamble_and_exact_output_schema() {
+        let worker = parse_worker_cli_json(
+            r#"{"command":"echo","args":[],"preamble":"role","output_schema":{"required":["axis","result"]}}"#,
+        )
+        .expect("contracted worker");
+        assert_eq!(worker.preamble.as_deref(), Some("role"));
+        assert_eq!(
+            worker.output_schema.expect("schema").required,
+            vec!["axis".to_owned(), "result".to_owned()]
+        );
+    }
+
+    #[test]
+    fn worker_json_rejects_malformed_output_schemas() {
+        for raw in [
+            r#"{"command":"echo","args":[],"output_schema":{}}"#,
+            r#"{"command":"echo","args":[],"output_schema":{"required":[]}}"#,
+            r#"{"command":"echo","args":[],"output_schema":{"required":[""]}}"#,
+            r#"{"command":"echo","args":[],"output_schema":{"required":["a","a"]}}"#,
+            r#"{"command":"echo","args":[],"output_schema":{"required":[1]}}"#,
+            r#"{"command":"echo","args":[],"output_schema":{"required":["a"],"extra":true}}"#,
+        ] {
+            assert!(parse_worker_cli_json(raw).is_err(), "accepted {raw}");
+        }
     }
 
     #[test]
@@ -745,6 +962,91 @@ mod tests {
             payload,
             "Do the work\n\nrun_id: run-1\nslot_id: slot-1\nartifact_root: /tmp/artifacts\n"
         );
+    }
+
+    #[test]
+    fn opted_in_payloads_have_exact_bound_and_ad_hoc_framing() {
+        let packet = InvokePacket {
+            run_id: "run-1".to_owned(),
+            slot_id: "slot-1".to_owned(),
+            artifact_root: "quoted/\"root\\tail".to_owned(),
+            instruction_body: "Do the work".to_owned(),
+            capture_dir: "/tmp/captures/inv-1".to_owned(),
+        };
+        let worker = WorkerCli {
+            command: "echo".to_owned(),
+            args: Vec::new(),
+            preamble: Some("role".to_owned()),
+            output_schema: None,
+        };
+        let base = bound_stdin_payload(&packet, Path::new("/absolute/root"));
+        assert_eq!(
+            bound_worker_payload(&worker, &packet, base.as_bytes()),
+            b"role\n{\"artifact_root\":\"quoted/\\\"root\\\\tail\"}\n---\n\nDo the work\n\nrun_id: run-1\nslot_id: slot-1\nartifact_root: /absolute/root\n"
+        );
+        assert_eq!(
+            ad_hoc_worker_payload(&worker, b"instructions-without-lf"),
+            b"role\n---\n\ninstructions-without-lf"
+        );
+
+        let with_lf = WorkerCli {
+            preamble: Some("role\n".to_owned()),
+            ..worker.clone()
+        };
+        assert_eq!(
+            ad_hoc_worker_payload(&with_lf, b"body"),
+            b"role\n---\n\nbody"
+        );
+        let schema_only = WorkerCli {
+            preamble: None,
+            output_schema: Some(OutputSchema {
+                required: vec!["result".to_owned()],
+            }),
+            ..worker
+        };
+        assert_eq!(
+            bound_worker_payload(&schema_only, &packet, base.as_bytes()),
+            base.as_bytes()
+        );
+        assert_eq!(ad_hoc_worker_payload(&schema_only, b"body"), b"body");
+    }
+
+    #[test]
+    fn stdout_object_locator_accepts_bare_or_one_json_fence_only() {
+        let bare = locate_stdout_object(br#" {"axis":"a","result":null} "#).expect("bare object");
+        assert!(bare.contains_key("axis"));
+        let fenced = locate_stdout_object(
+            b"arbitrary prose\n```json\n{\"axis\":\"a\",\"result\":false}\n```\nmore prose\n",
+        )
+        .expect("fenced object");
+        assert!(fenced.contains_key("result"));
+
+        for stdout in [
+            b"prose {\"axis\":\"a\"}".as_slice(),
+            b"```json\n{bad}\n```".as_slice(),
+            b"```json\n[]\n```".as_slice(),
+            b"```json\n{\"a\":1}\n```\n```json\n{\"a\":2}\n```".as_slice(),
+            b"```json\n{\"a\":1}".as_slice(),
+        ] {
+            assert!(locate_stdout_object(stdout).is_err(), "accepted {stdout:?}");
+        }
+    }
+
+    #[test]
+    fn conformance_checks_only_declared_top_level_key_presence() {
+        let directory = tempdir().expect("tempdir");
+        let stdout = directory.path().join("stdout");
+        fs::write(&stdout, br#"{"axis":null,"result":{"anything":true}}"#).expect("stdout");
+        let schema = OutputSchema {
+            required: vec!["axis".to_owned(), "result".to_owned()],
+        };
+        evaluate_output_conformance(&stdout, &schema).expect("keys are present");
+        let missing = OutputSchema {
+            required: vec!["findings".to_owned()],
+        };
+        assert!(evaluate_output_conformance(&stdout, &missing)
+            .expect_err("missing key")
+            .contains("findings"));
     }
 
     #[test]
@@ -1005,6 +1307,8 @@ mod tests {
                             .to_string_lossy()
                             .into_owned(),
                         args: vec![],
+                        preamble: None,
+                        output_schema: None,
                     },
                 ],
                 instructions_path: Some(instructions),

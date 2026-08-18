@@ -6,13 +6,17 @@ This file covers work in this crate: the `software-change` binary, shipped confi
 
 The provider is deterministic only. It validates artifact schemas and revision links, then aggregates externally supplied `review-evidence`. It does not generate prompts, invoke a model, edit artifacts, or decide whether findings are true.
 
+Providers author worker-facing role and output content; the engine only transports and mechanically enforces it.
+Review workers return judgments only; drivers own deterministic checks, show, append, event, and progression.
+Exit 0 does not establish a valid deliverable.
+
 ## Authority
 
 Frozen requirements this crate's acceptance suite traces to (R1–R27, A1–A15, including amendments) live in [docs/prd.md](docs/prd.md). Drive a run with [README.md](README.md) and [skills/using-software-change-provider/SKILL.md](skills/using-software-change-provider/SKILL.md). Evidence shape and adjudication rules are [data/reviewer-protocol.md](data/reviewer-protocol.md). Repository-root `AGENTS.md` and `docs/agent-usage.md` govern checkout-wide operation and CLI envelopes.
 
 Per-run obligations are frozen in immutable `initial_input` (`review_policies`, `artifact_schemas`, `config_version`, `artifact_root`). `show` is the durable handoff; changing a source profile does not change an existing run. No policy, schema, prompt, or artifact shape is baked into provider code — those arrive in config data.
 
-Shipped profile versions currently in-tree: `minimal-4`, `standard-5`, `high-rigor-5`. Evidence `config_version` must match the run's frozen value, not whatever file is currently shipped. Shipped profiles omit `work_slot_bindings`; bound workers are opt-in skill templates.
+Shipped profile versions currently in-tree: `minimal-4`, `standard-5`, `high-rigor-5`. Evidence `config_version` must match the run's frozen value, not whatever file is currently shipped. Shipped profiles omit `work_slot_bindings`; bound workers are opt-in, and review bindings use the skill's deterministic per-axis constructor.
 
 ## Workflow
 
@@ -21,7 +25,7 @@ cargo test -p software-change-provider
 cargo fmt --all -- --check
 ```
 
-Crate tests are not a substitute for the public-boundary journey. After any crate change, also run the repository source journey from the repo root (build `loop-engine` and `software-change` first):
+Crate tests are not a substitute for the public-boundary journey. After any crate change, also run the repository source journey from the repo root (build `loop-engine` and `software-change` first). `python3 scripts/software-change-journey.py --self-test` must print `worker-data skill/root policy assertions passed`. Source full mode must print `contracted fan-out failure` after the bound nonconforming-worker overlay proof:
 
 ```sh
 python3 scripts/software-change-journey.py \

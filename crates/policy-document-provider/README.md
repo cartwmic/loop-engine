@@ -20,9 +20,11 @@ Dump refuses to overwrite any directory entry, including dangling symlinks. On w
 - `/tmp/policy-data/crates/policy-document-provider/data/readme.json`
 - `/tmp/policy-data/crates/policy-document-provider/data/agents.json`
 - `/tmp/policy-data/crates/policy-document-provider/data/reviewer-protocol.md`
+- `/tmp/policy-data/crates/policy-document-provider/data/semantic-review-worker-preamble.md`
+- `/tmp/policy-data/crates/policy-document-provider/data/semantic-review-worker-output-schema.json`
 - `/tmp/policy-data/crates/policy-document-provider/data/target-guidance.md`
 
-Copy chosen JSON profile, set `mode`, and replace target path with absolute path. Keep target ID `README.md` or `AGENTS.md` for shipped profiles.
+Copy chosen JSON profile, set `mode`, and replace target path with an absolute path. Keep target ID `README.md` or `AGENTS.md` for shipped profiles. The shipped skill uses the dumped worker files and that same selected profile to construct one assigned semantic-review worker per configured axis and required author, then previews and hash-confirms the resulting profile before starting it unchanged.
 
 ## Usage
 
@@ -73,5 +75,7 @@ for mode in draft audit; do
     --mode "$mode"
 done
 ```
+
+The software-change journey `--self-test` executes this crate's semantic-review constructor against the shipped readme and agents profile shapes (temporary absolute targets) and prints `worker-data skill/root policy assertions passed` only after those fixtures, required keys/data bytes/preview visibility, and fail-closed invalid cases pass.
 
 Packaged archive smoke extracts `loop-engine` and `policy-document`, runs `policy-document data-dump` into an empty temporary root, then runs both modes from an empty working directory using only dumped profile bytes. macOS arm64 and Linux x86_64 archive smoke must pass before release publication.

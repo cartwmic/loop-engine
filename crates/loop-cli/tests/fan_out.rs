@@ -10,6 +10,44 @@ fn worker_json(command: &str, args: &[&str]) -> String {
     json!({ "command": command, "args": args }).to_string()
 }
 
+fn contracted_worker_json(
+    command: &str,
+    args: &[&str],
+    preamble: Option<&str>,
+    required: &[&str],
+) -> String {
+    let mut worker = json!({
+        "command": command,
+        "args": args,
+        "output_schema": {"required": required},
+    });
+    if let Some(preamble) = preamble {
+        worker["preamble"] = Value::String(preamble.to_owned());
+    }
+    worker.to_string()
+}
+
+fn output_worker(
+    receipt: &Path,
+    stdout: &str,
+    exit_code: i32,
+    preamble: Option<&str>,
+    required: &[&str],
+) -> String {
+    contracted_worker_json(
+        "sh",
+        &[
+            "-c",
+            &format!("cat > \"$1\"; printf %s \"$2\"; exit {exit_code}"),
+            "_",
+            receipt.to_str().expect("utf-8 receipt"),
+            stdout,
+        ],
+        preamble,
+        required,
+    )
+}
+
 fn cat_worker(receipt: &Path) -> String {
     worker_json(
         "sh",
@@ -186,6 +224,44 @@ fn ad_hoc_without_instructions_is_rejected() {
 }
 
 #[test]
+fn public_cli_rejects_malformed_nested_contract_and_non_five_key_packet() {
+    let directory = tempdir().expect("tempdir");
+    let instructions = directory.path().join("instructions.txt");
+    std::fs::write(&instructions, b"body").expect("instructions");
+    let malformed_worker =
+        r#"{"command":"true","args":[],"output_schema":{"required":["result","result"]}}"#;
+    let malformed = run_fan_out(
+        directory.path(),
+        &[
+            "fan-out",
+            "--instructions",
+            instructions.to_str().expect("utf-8 instructions"),
+            "--worker",
+            malformed_worker,
+        ],
+        b"",
+    );
+    assert_eq!(malformed.status.code(), Some(2), "{malformed:?}");
+
+    let receipt = directory.path().join("unused.stdin");
+    let worker = cat_worker(&receipt);
+    let mut packet: Value = serde_json::from_str(&invoke_packet(
+        &directory.path().join("artifacts"),
+        &directory.path().join("captures"),
+        "body",
+    ))
+    .expect("packet");
+    packet["extra"] = json!("sixth key");
+    let extra_packet = run_fan_out(
+        directory.path(),
+        &["fan-out", "--worker", &worker],
+        packet.to_string().as_bytes(),
+    );
+    assert_eq!(extra_packet.status.code(), Some(2), "{extra_packet:?}");
+    assert!(!receipt.exists());
+}
+
+#[test]
 fn two_dummies_record_the_same_shared_stdin_and_are_reaped() {
     let directory = tempdir().expect("tempdir");
     let instructions = directory.path().join("instructions.bin");
@@ -243,12 +319,16 @@ fn two_dummies_record_the_same_shared_stdin_and_are_reaped() {
     assert_eq!(workers.len(), 2);
     assert_eq!(workers[0]["exit_code"], 0);
     assert_eq!(workers[1]["exit_code"], 0);
+    assert!(workers[0].get("status").is_none(), "{workers:?}");
+    assert!(workers[0].get("conformance_error").is_none(), "{workers:?}");
     assert!(Path::new(workers[0]["stdout_path"].as_str().unwrap()).is_file());
     assert!(Path::new(workers[1]["stderr_path"].as_str().unwrap()).is_file());
     let captured = capture_summary(output_dir);
     assert_eq!(captured["workers"].as_array().expect("workers").len(), 2);
     assert_eq!(captured["workers"][0]["exit_code"], 0);
     assert_eq!(captured["workers"][1]["exit_code"], 0);
+    assert!(captured["workers"][0].get("status").is_none());
+    assert!(captured["workers"][0].get("conformance_error").is_none());
 }
 
 #[test]
@@ -324,6 +404,197 @@ fn bound_mode_writes_under_capture_dir_and_records_locked_stdin() {
     let captured = capture_summary(summary["output_dir"].as_str().expect("output_dir"));
     assert_eq!(captured["workers"][0]["exit_code"], 0);
     assert_eq!(captured["workers"][0]["command"], "sh");
+}
+
+#[test]
+fn bound_preamble_has_exact_context_separator_legacy_body_and_trailer_order() {
+    let directory = tempdir().expect("tempdir");
+    let artifact_root = directory.path().join("artifact-\"quoted\\tail");
+    let capture_dir = directory.path().join("captures").join("inv-framed");
+    let receipt = directory.path().join("framed.stdin");
+    let preamble = "read-only role";
+    let worker = output_worker(
+        &receipt,
+        r#"{"result":null}"#,
+        0,
+        Some(preamble),
+        &["result"],
+    );
+    let packet = invoke_packet(&artifact_root, &capture_dir, "Review the design");
+    let output = run_fan_out(
+        directory.path(),
+        &["fan-out", "--worker", &worker],
+        packet.as_bytes(),
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+
+    let context = json!({"artifact_root": artifact_root.to_string_lossy()}).to_string();
+    let legacy = format!(
+        "Review the design\n\nrun_id: run-1\nslot_id: slot-1\nartifact_root: {}\n",
+        artifact_root.to_string_lossy()
+    );
+    let expected = format!("{preamble}\n{context}\n---\n\n{legacy}");
+    let recorded = std::fs::read(&receipt).expect("framed stdin");
+    assert_eq!(recorded, expected.as_bytes());
+    let context_value: Value = serde_json::from_str(&context).expect("context JSON");
+    assert_eq!(context_value.as_object().expect("context object").len(), 1);
+    assert!(context_value.get("artifact_root").is_some());
+    assert!(context_value.get("capture_dir").is_none());
+    assert!(context_value.get("run_id").is_none());
+    assert!(context_value.get("slot_id").is_none());
+
+    let summary = parse_summary(&output.stdout);
+    assert_eq!(summary["workers"][0]["status"], "succeeded");
+    assert_eq!(summary["workers"][0]["exit_code"], 0);
+    assert!(summary["workers"][0].get("conformance_error").is_none());
+}
+
+#[test]
+fn output_schema_only_preserves_bound_stdin_and_reports_conformance() {
+    let directory = tempdir().expect("tempdir");
+    let artifact_root = directory.path().join("artifacts");
+    let capture_dir = directory.path().join("captures").join("inv-schema-only");
+    let receipt = directory.path().join("schema-only.stdin");
+    let worker = output_worker(
+        &receipt,
+        "prose\n```json\n{\"result\":false}\n```\n",
+        9,
+        None,
+        &["result"],
+    );
+    let packet = invoke_packet(&artifact_root, &capture_dir, "judge this");
+    let output = run_fan_out(
+        directory.path(),
+        &["fan-out", "--worker", &worker],
+        packet.as_bytes(),
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let expected = format!(
+        "judge this\n\nrun_id: run-1\nslot_id: slot-1\nartifact_root: {}\n",
+        artifact_root.to_string_lossy()
+    );
+    assert_eq!(std::fs::read(&receipt).expect("stdin"), expected.as_bytes());
+    let summary = parse_summary(&output.stdout);
+    assert_eq!(summary["workers"][0]["status"], "succeeded");
+    assert_eq!(summary["workers"][0]["exit_code"], 9);
+}
+
+#[test]
+fn exit_zero_nonconforming_worker_fails_after_writing_summary() {
+    let directory = tempdir().expect("tempdir");
+    let artifact_root = directory.path().join("artifacts");
+    let capture_dir = directory.path().join("captures").join("inv-refusal");
+    let receipt = directory.path().join("refusal.stdin");
+    let worker = output_worker(
+        &receipt,
+        "I cannot perform that review.",
+        0,
+        None,
+        &["result"],
+    );
+    let packet = invoke_packet(&artifact_root, &capture_dir, "judge this");
+    let output = run_fan_out(
+        directory.path(),
+        &["fan-out", "--worker", &worker],
+        packet.as_bytes(),
+    );
+    assert_eq!(output.status.code(), Some(20), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("summary.json"));
+
+    let captured = capture_summary(capture_dir.to_str().expect("utf-8 capture"));
+    assert_eq!(captured["workers"][0]["status"], "failed");
+    assert_eq!(captured["workers"][0]["exit_code"], 0);
+    assert!(captured["workers"][0]["conformance_error"]
+        .as_str()
+        .expect("conformance error")
+        .contains("no JSON fenced block"));
+    assert!(capture_dir.join("0").join("stdout").is_file());
+    assert!(capture_dir.join("0").join("stderr").is_file());
+}
+
+#[test]
+fn public_cli_rejects_ambiguous_malformed_and_missing_key_stdout() {
+    let directory = tempdir().expect("tempdir");
+    let artifact_root = directory.path().join("artifacts");
+    let cases = [
+        (
+            "ambiguous",
+            "```json\n{\"result\":1}\n```\n```json\n{\"result\":2}\n```\n",
+            "multiple JSON fenced blocks",
+        ),
+        ("malformed", "```json\n{bad}\n```\n", "malformed"),
+        (
+            "missing-key",
+            "{\"axis\":true}\n",
+            "missing required top-level keys",
+        ),
+    ];
+    for (name, stdout, needle) in cases {
+        let capture_dir = directory.path().join("captures").join(name);
+        let receipt = directory.path().join(format!("{name}.stdin"));
+        let worker = output_worker(&receipt, stdout, 0, None, &["result"]);
+        let packet = invoke_packet(&artifact_root, &capture_dir, "judge this");
+        let output = run_fan_out(
+            directory.path(),
+            &["fan-out", "--worker", &worker],
+            packet.as_bytes(),
+        );
+        assert_eq!(output.status.code(), Some(20), "{name}: {output:?}");
+        let captured = capture_summary(capture_dir.to_str().expect("utf-8 capture"));
+        assert_eq!(captured["workers"][0]["status"], "failed", "{name}");
+        assert_eq!(captured["workers"][0]["exit_code"], 0, "{name}");
+        assert!(
+            captured["workers"][0]["conformance_error"]
+                .as_str()
+                .expect("conformance error")
+                .contains(needle),
+            "{name}: {}",
+            captured["workers"][0]["conformance_error"]
+        );
+    }
+}
+
+#[test]
+fn ad_hoc_preamble_is_framed_without_artifact_context_and_legacy_is_unchanged() {
+    let directory = tempdir().expect("tempdir");
+    let instructions = directory.path().join("instructions.bin");
+    std::fs::write(&instructions, b"instruction-bytes-without-lf").expect("instructions");
+    let framed_receipt = directory.path().join("framed.stdin");
+    let legacy_receipt = directory.path().join("legacy.stdin");
+    let framed = output_worker(
+        &framed_receipt,
+        r#"{"result":true}"#,
+        0,
+        Some("role\n"),
+        &["result"],
+    );
+    let legacy = cat_worker(&legacy_receipt);
+    let output = run_fan_out(
+        directory.path(),
+        &[
+            "fan-out",
+            "--instructions",
+            instructions.to_str().expect("utf-8 instructions"),
+            "--worker",
+            &framed,
+            "--worker",
+            &legacy,
+        ],
+        b"",
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        std::fs::read(&framed_receipt).expect("framed stdin"),
+        b"role\n---\n\ninstruction-bytes-without-lf"
+    );
+    assert_eq!(
+        std::fs::read(&legacy_receipt).expect("legacy stdin"),
+        b"instruction-bytes-without-lf"
+    );
+    assert!(!std::fs::read_to_string(&framed_receipt)
+        .expect("utf-8 framed")
+        .contains("artifact_root"));
 }
 
 #[test]

@@ -59,6 +59,10 @@ PACKET_KEYS = frozenset(
 OVERLAY_MEANING_SUCCEEDED = (
     "Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work."
 )
+BOUND_PREAMBLE_SEPARATOR = b"---\n\n"
+OVERLAY_MEANING_FAILED = (
+    "Overlay failed means the bound CLI exited nonzero or the waiter vanished."
+)
 DEFAULT_PI_SANDBOX_ARGS = ["--print", "--no-skills", "--no-extensions"]
 FORBIDDEN_PI_FLAGS = ("--no-context-files", "--tools")
 PI_NO_EXTENSIONS_WITHOUT_E = "has --no-extensions and no -e"
@@ -146,8 +150,8 @@ def assert_bound_redaction(
         f"{OVERLAY_MEANING_SUCCEEDED} "
         "Captures are at the named capture directory on the invocation view and invoke result. "
         "The driver triages worker output, appends provider-shaped records, then requests the shown event. "
-        "On overrun invoke the same slot again. "
-        "On failed inspect stderr."
+        "On overrun run show immediately before re-invoking the same slot. "
+        "On failed inspect capture_dir/summary.json and captured stdout before stderr."
     )
     if text != expected:
         raise WorkSlotJourneyFailure(
@@ -564,6 +568,92 @@ def worker_cli_json(cli: Mapping[str, Any]) -> str:
     )
 
 
+def fan_out_worker_json(cli: Mapping[str, Any]) -> str:
+    return json.dumps(dict(cli), separators=(",", ":"))
+
+
+def contracted_stdin_worker_cli(
+    receipt: Path, output: str, *, preamble: str, required: Sequence[str]
+) -> dict[str, Any]:
+    cli = stdin_worker_cli(receipt)
+    cli["args"] = list(cli["args"]) + ["--stdout", output]
+    cli["preamble"] = preamble
+    cli["output_schema"] = {"required": list(required)}
+    return cli
+
+
+def assert_bound_preamble_stdin(
+    raw: bytes,
+    *,
+    preamble: str,
+    artifact_root: Path,
+    run_id: str,
+    slot_id: str,
+) -> None:
+    """Assert bound opted-in stdin: preamble + one-key context + separator + legacy body."""
+    preamble_bytes = preamble.encode("utf-8")
+    if not preamble_bytes.endswith(b"\n"):
+        preamble_bytes += b"\n"
+    if not raw.startswith(preamble_bytes):
+        raise WorkSlotJourneyFailure(
+            f"bound contracted stdin did not start with preamble bytes: {raw!r}"
+        )
+    rest = raw[len(preamble_bytes) :]
+    separator_at = rest.find(BOUND_PREAMBLE_SEPARATOR)
+    if separator_at < 0:
+        raise WorkSlotJourneyFailure(
+            f"bound contracted stdin omitted literal separator after preamble: {raw!r}"
+        )
+    context_bytes = rest[:separator_at]
+    if not context_bytes.endswith(b"\n"):
+        raise WorkSlotJourneyFailure(
+            f"artifact_root context block omitted trailing LF: {context_bytes!r}"
+        )
+    try:
+        parsed_context = json.loads(context_bytes)
+    except json.JSONDecodeError as error:
+        raise WorkSlotJourneyFailure(
+            f"artifact_root context was not JSON: {context_bytes!r}"
+        ) from error
+    if not isinstance(parsed_context, dict):
+        raise WorkSlotJourneyFailure(
+            f"artifact_root context was not an object: {parsed_context!r}"
+        )
+    if list(parsed_context.keys()) != ["artifact_root"]:
+        raise WorkSlotJourneyFailure(
+            f"artifact_root context keys {list(parsed_context)} != ['artifact_root']"
+        )
+    expected_context = json.dumps(
+        {"artifact_root": str(artifact_root)}, separators=(",", ":")
+    ).encode("utf-8") + b"\n"
+    if context_bytes != expected_context:
+        raise WorkSlotJourneyFailure(
+            "artifact_root context bytes were not compact one-key JSON: "
+            f"{context_bytes!r} != {expected_context!r}"
+        )
+    if parsed_context["artifact_root"] != str(artifact_root):
+        raise WorkSlotJourneyFailure(
+            f"artifact_root context value {parsed_context['artifact_root']!r} "
+            f"!= {str(artifact_root)!r}"
+        )
+    if "capture_dir" in parsed_context or "run_id" in parsed_context or "slot_id" in parsed_context:
+        raise WorkSlotJourneyFailure(
+            f"artifact_root context included capture_dir or duplicate identity: {parsed_context}"
+        )
+    body = rest[separator_at + len(BOUND_PREAMBLE_SEPARATOR) :]
+    if BOUND_PREAMBLE_SEPARATOR in body:
+        raise WorkSlotJourneyFailure("legacy body/trailer unexpectedly contains the separator")
+    trailer = (
+        f"run_id: {run_id}\n"
+        f"slot_id: {slot_id}\n"
+        f"artifact_root: {artifact_root}\n"
+    ).encode("utf-8")
+    if not body.endswith(trailer):
+        raise WorkSlotJourneyFailure(
+            f"legacy body/trailer mismatch: expected suffix {trailer!r} in {body!r}"
+        )
+
+
 def append_task_worker(binding: Mapping[str, Any], task_worker: Mapping[str, Any]) -> dict[str, Any]:
     args = list(binding["args"]) + ["--task-worker", worker_cli_json(task_worker)]
     return {"command": binding["command"], "args": args}
@@ -579,7 +669,7 @@ def append_fan_out_workers(
     if instructions is not None:
         args.extend(["--instructions", str(instructions)])
     for worker in workers:
-        args.extend(["--worker", worker_cli_json(worker)])
+        args.extend(["--worker", fan_out_worker_json(worker)])
     return {"command": binding["command"], "args": args}
 
 
@@ -1864,6 +1954,170 @@ def prove_bound_fan_out_heartbeat(
     ]
 
 
+def prove_bound_contracted_fan_out_failure(
+    *,
+    engine: Path,
+    provider: Path,
+    profile_source: Path,
+    fixture_root: Path,
+    work_dir: Path,
+) -> Path:
+    """Bound fan-out preserves exit 0 workers while failing nonconformance."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    run_id = "bound-contracted-fan-out-failure"
+    slot_id = "design-review"
+    required = ["axis", "author", "result", "findings"]
+    preamble = "Read-only reviewer. Return only the contracted judgment."
+    receipt_a = work_dir / "conforming.stdin"
+    receipt_b = work_dir / "refusal.stdin"
+
+    conforming = json.dumps(
+        {
+            "axis": "journey-mechanics",
+            "author": {"name": "deterministic-worker", "kind": "script"},
+            "result": "pass",
+            "findings": "",
+        },
+        separators=(",", ":"),
+    )
+    refusal = "I refuse to produce the contracted review judgment.\n"
+    extra = {
+        slot_id: fan_out_binding(
+            engine=engine,
+            workers=[
+                contracted_stdin_worker_cli(
+                    receipt_a, conforming, preamble=preamble, required=required
+                ),
+                contracted_stdin_worker_cli(
+                    receipt_b, refusal, preamble=preamble, required=required
+                ),
+            ],
+        )
+    }
+    engine_call, artifact_root, profile = _start_isolated_software_change(
+        engine=engine,
+        provider=provider,
+        profile_source=profile_source,
+        fixture_root=fixture_root,
+        work_dir=work_dir / "run",
+        run_id=run_id,
+        extra_bindings=extra,
+    )
+    _advance_software_change_to(
+        engine_call,
+        run_id=run_id,
+        profile=profile,
+        artifact_root=artifact_root,
+        target="design-review",
+    )
+    failed = invoke_until_status(
+        engine_call,
+        run_id,
+        "design-review",
+        expected="failed",
+        timeout_s=20.0,
+    )
+    if failed.get("overlay_meaning") != OVERLAY_MEANING_FAILED:
+        raise WorkSlotJourneyFailure(
+            f"contracted fan-out failed overlay meaning mismatch: {failed}"
+        )
+    collector_exit = failed.get("exit_code")
+    if not isinstance(collector_exit, int) or collector_exit == 0:
+        raise WorkSlotJourneyFailure(
+            f"nonconforming collector must exit nonzero: {failed}"
+        )
+    _assert_inner_exit_codes(failed, (0, 0))
+    capture_raw = failed.get("capture_dir")
+    if not isinstance(capture_raw, str) or not capture_raw:
+        raise WorkSlotJourneyFailure(
+            f"contracted fan-out overlay omitted capture_dir: {failed}"
+        )
+    capture_dir = Path(capture_raw)
+    _assert_capture_files(capture_dir, ("0", "1"))
+    workers = _load_summary_workers(capture_dir)
+    statuses = [worker.get("status") for worker in workers]
+    if statuses != ["succeeded", "failed"]:
+        raise WorkSlotJourneyFailure(
+            f"contracted worker statuses {statuses} != ['succeeded', 'failed']"
+        )
+    if [worker.get("exit_code") for worker in workers] != [0, 0]:
+        raise WorkSlotJourneyFailure(
+            f"contracted summary did not preserve exit 0: {workers}"
+        )
+    if "conformance_error" in workers[0]:
+        raise WorkSlotJourneyFailure(
+            f"conforming worker unexpectedly has conformance_error: {workers[0]}"
+        )
+    error = workers[1].get("conformance_error")
+    if not isinstance(error, str) or not error:
+        raise WorkSlotJourneyFailure(
+            f"nonconforming worker omitted conformance_error: {workers[1]}"
+        )
+    stdout_a = capture_dir / "0" / "stdout"
+    stdout_b = capture_dir / "1" / "stdout"
+    if stdout_a.read_text(encoding="utf-8") != conforming:
+        raise WorkSlotJourneyFailure("conforming stdout capture changed")
+    if stdout_b.read_text(encoding="utf-8") != refusal:
+        raise WorkSlotJourneyFailure("refusal stdout capture changed")
+
+    rejected = engine_call(["event", run_id, "approved"])
+    expect_rejection(
+        rejected,
+        BOUND_SLOT_INVOCATION_REQUIRED,
+        action="event after contracted collector failure",
+    )
+    persisted = engine_call(["show", run_id])
+    if persisted.get("status") != "completed":
+        raise WorkSlotJourneyFailure(
+            f"show after contracted collector failure failed: {persisted}"
+        )
+    invocations = (persisted.get("result") or {}).get("work_slot_invocations")
+    match = next(
+        (
+            item
+            for item in invocations or []
+            if isinstance(item, dict)
+            and item.get("invocation_id") == failed.get("invocation_id")
+        ),
+        None,
+    )
+    if not isinstance(match, dict) or match.get("status") != "failed":
+        raise WorkSlotJourneyFailure(
+            f"failed contracted overlay was not persisted: {persisted}"
+        )
+    if match.get("capture_dir") != str(capture_dir):
+        raise WorkSlotJourneyFailure(
+            f"persisted capture_dir changed: {match}"
+        )
+    _assert_capture_files(capture_dir, ("0", "1"))
+    persisted_workers = _load_summary_workers(capture_dir)
+    if [worker.get("status") for worker in persisted_workers] != [
+        "succeeded",
+        "failed",
+    ]:
+        raise WorkSlotJourneyFailure(
+            f"contracted summary did not persist: {persisted_workers}"
+        )
+    if not receipt_a.is_file() or not receipt_b.is_file():
+        raise WorkSlotJourneyFailure(
+            f"contracted workers did not capture stdin: {receipt_a} {receipt_b}"
+        )
+    recorded_a = receipt_a.read_bytes()
+    recorded_b = receipt_b.read_bytes()
+    if recorded_a != recorded_b:
+        raise WorkSlotJourneyFailure(
+            f"contracted workers recorded different stdin: {recorded_a!r} / {recorded_b!r}"
+        )
+    assert_bound_preamble_stdin(
+        recorded_a,
+        preamble=preamble,
+        artifact_root=artifact_root,
+        run_id=run_id,
+        slot_id=slot_id,
+    )
+    return capture_dir
+
+
 def prove_bound_graph_runner_heartbeat(
     *,
     engine: Path,
@@ -2073,6 +2327,68 @@ def self_test_helpers() -> None:
             )
         if receipt.read_bytes() != b"raw-bytes-not-a-model":
             raise WorkSlotJourneyFailure("self-test: dummy-stdin-worker did not record raw stdin")
+        stdout_receipt = Path(temp) / "stdout.stdin"
+        printed = subprocess.run(
+            [
+                sys.executable,
+                str(STDIN_WORKER_SCRIPT),
+                "--receipt",
+                str(stdout_receipt),
+                "--stdout",
+                '{"axis":"a"}',
+            ],
+            input=b"record-me",
+            capture_output=True,
+            check=False,
+        )
+        if printed.returncode != 0 or printed.stdout != b'{"axis":"a"}':
+            raise WorkSlotJourneyFailure(
+                f"self-test: dummy-stdin-worker --stdout mismatch: {printed}"
+            )
+        if stdout_receipt.read_bytes() != b"record-me":
+            raise WorkSlotJourneyFailure(
+                "self-test: dummy-stdin-worker --stdout did not record stdin"
+            )
+
+    preamble = "Read-only reviewer. Return only the contracted judgment."
+    artifact_root = Path("/tmp/artifacts")
+    body = (
+        "Judge the assigned axis.\n\n"
+        "run_id: run-1\n"
+        "slot_id: design-review\n"
+        f"artifact_root: {artifact_root}\n"
+    )
+    context = b'{"artifact_root":"/tmp/artifacts"}\n'
+    raw = preamble.encode("utf-8") + b"\n" + context + BOUND_PREAMBLE_SEPARATOR + body.encode("utf-8")
+    assert_bound_preamble_stdin(
+        raw,
+        preamble=preamble,
+        artifact_root=artifact_root,
+        run_id="run-1",
+        slot_id="design-review",
+    )
+    duplicate = (
+        preamble.encode("utf-8")
+        + b"\n"
+        + b'{"artifact_root":"/tmp/artifacts","capture_dir":"/tmp/cap"}\n'
+        + BOUND_PREAMBLE_SEPARATOR
+        + body.encode("utf-8")
+    )
+    try:
+        assert_bound_preamble_stdin(
+            duplicate,
+            preamble=preamble,
+            artifact_root=artifact_root,
+            run_id="run-1",
+            slot_id="design-review",
+        )
+    except WorkSlotJourneyFailure as error:
+        if "capture_dir" not in str(error) and "one-key" not in str(error) and "keys" not in str(error):
+            raise WorkSlotJourneyFailure(
+                f"self-test: duplicate-identity stdin failed for the wrong reason: {error}"
+            ) from error
+    else:
+        raise WorkSlotJourneyFailure("self-test: capture_dir context unexpectedly accepted")
 
     if DEFAULT_PI_SANDBOX_ARGS != ["--print", "--no-skills", "--no-extensions"]:
         raise WorkSlotJourneyFailure(

@@ -1,0 +1,3 @@
+{
+  "required": ["axis", "author", "result", "findings"]
+}

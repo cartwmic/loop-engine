@@ -144,6 +144,8 @@ Amended 2026-08-13 (explicit amendment, owner-approved): the shared reviewer con
 
 Amended 2026-08-17 (explicit amendment, owner-approved): shipped software-change profiles omit `work_slot_bindings` (or `{}`) so `implement` and review slots stay driver-performed. Bound Pi workers are opt-in skill templates that keep `--no-extensions` and add `-e` placeholders for cursor-provider and claude-bridge. Config versions are minimal-4, standard-5, and high-rigor-5. Topology, review policies, and calibration procedure are unchanged.
 
+Amended 2026-08-17 (explicit amendment): software-change ships provider-owned review-worker preamble and output-schema data materialized by `data-dump`. Opt-in review bindings are produced by the skill's deterministic constructor over the same per-run profile: one nested worker per selected `review_policies` axis in profile order, then the first `required_authors // 1` caller-confirmed roster entries in roster order, with exact preamble/schema bytes, axis id, example_prompt, author claim, and model argv frozen before preview/start. Shipped profiles still omit `work_slot_bindings`. Topology, review policies, evidence schema, evaluator behavior, and calibration procedure are unchanged.
+
 ## 9. Contract-closure amendment (v0.2.3 candidate)
 
 The provider now exposes conventional `--help`/`-h` and `--version`/`-V` before stdin while preserving `describe`, `evaluate`, `data-dump`, and unsupported-argument behavior. Direct pushes to `main` dispatch read-only preflight at the pushed commit; generated release workflow ownership and publication topology remain unchanged.

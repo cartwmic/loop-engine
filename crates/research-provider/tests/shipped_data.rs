@@ -151,6 +151,10 @@ fn standard_profile_passes_production_config_validation() {
         config.get("artifact_root").is_none(),
         "shipped profile must omit artifact_root"
     );
+    assert!(
+        config.get("work_slot_bindings").is_none(),
+        "shipped profile must omit work_slot_bindings"
+    );
     research_provider::validate_config_for_tests(&config)
         .unwrap_or_else(|error| panic!("standard rejected by production validator: {error}"));
 
@@ -249,6 +253,58 @@ fn every_axis_prompt_references_subject_template_schema_and_all_antipedantry_gua
                 );
             }
         }
+    }
+}
+
+#[test]
+fn review_worker_data_defines_read_only_attributed_judgments() {
+    let schema: Value =
+        serde_json::from_str(&shipped_text("data/review-worker-output-schema.json"))
+            .expect("review worker output schema must be valid JSON");
+    assert_eq!(
+        schema,
+        serde_json::json!({
+            "required": ["axis", "author", "result", "findings"]
+        })
+    );
+
+    let preamble = shipped_text("data/review-worker-preamble.txt");
+    for clause in [
+        "read-only",
+        "Judge only the assigned axis.",
+        "frozen review assignment",
+        "artifact_root",
+        "Everything after the --- separator is driver context only.",
+        "Return only a review judgment",
+        "axis, author, result, and findings",
+        "Do not perform driver duties.",
+        "gather sources",
+        "synthesize conclusions",
+        "deterministic checks",
+        "loop-engine show",
+        "append evidence",
+        "request an event",
+        "progress the run",
+    ] {
+        assert!(
+            preamble.contains(clause),
+            "review worker preamble missing clause: {clause}"
+        );
+    }
+}
+
+#[test]
+fn crate_agents_records_common_worker_boundary_rules() {
+    let agents = shipped_text("AGENTS.md");
+    for clause in [
+        "Providers author worker-facing role and output content; the engine only transports and mechanically enforces it.",
+        "Review workers return judgments only; drivers own deterministic checks, show, append, event, and progression.",
+        "Exit 0 does not establish a valid deliverable.",
+    ] {
+        assert!(
+            agents.contains(clause),
+            "AGENTS.md missing common worker-boundary rule: {clause}"
+        );
     }
 }
 

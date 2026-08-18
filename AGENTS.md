@@ -22,6 +22,8 @@ The engine owns durable run state and progression. Callers perform primary work 
 
 Shipped skills: [skills/using-loop-engine/SKILL.md](skills/using-loop-engine/SKILL.md), `crates/software-change-provider/skills/using-software-change-provider/SKILL.md`, `crates/policy-document-provider/skills/using-policy-document-provider/SKILL.md`, and `crates/research-provider/skills/using-research-provider/SKILL.md`. Shipped software-change profiles omit `work_slot_bindings`; bound Pi workers are opt-in templates in those skills (`--no-extensions` plus `-e` placeholders, filled in the per-run profile JSON). `preview-bindings` warns when a pi worker has `--no-extensions` and no `-e`. Confirm work-slot policy with the user before `start`.
 
+Fan-out spawn/capture/conformance mechanics belong to the engine. Providers/callers own role framing and output content; the engine transports and checks those opaque values but does not author or interpret them. Reviewers produce judgments only. Drivers run deterministic checks, `show`, capture triage, `append`, `event`, and progression. Exit 0 alone does not establish deliverable validity. The authoritative overrun re-show and zero-axis review-binding rules are in [skills/using-loop-engine/SKILL.md](skills/using-loop-engine/SKILL.md) and [docs/agent-usage.md](docs/agent-usage.md).
+
 ## Workflow
 
 Build the engine and the reference providers, then run the repository baseline:
@@ -41,6 +43,8 @@ Public-boundary Python journeys are required validation for every in-scope chang
 - `policy-document` crate: both `scripts/policy-document-journey.py` modes.
 - `research` crate: `scripts/research-journey.py --mode source`.
 - Journey-harness edits: that script's `--self-test` when it has one, plus the journeys it runs.
+
+`python3 scripts/software-change-journey.py --self-test` must print `worker-data skill/root policy assertions passed` after executing the three provider skill constructors (software-change high-rigor design-review, policy-document shipped semantic policies/target/mode, research verify and synthesize) and root AGENTS rules. Source full mode must print `contracted fan-out failure` only after bound deterministic workers prove the compact one-key `artifact_root` stdin contract, exit-0 nonconformance, persisted summary/captures, and failed overlay.
 
 ```sh
 cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider
@@ -90,6 +94,8 @@ Synthetic journey evidence proves deterministic mechanics, routing, and persiste
 ## Completion and Handoff
 
 A change is done when in-scope behavior matches the accepted intent, authoritative docs for that behavior are current, workspace baseline checks have been run, and the black-box Python journeys that cover the touched public boundary have passed.
+
+A software-change `implementation-report.json` for this checkout must identify repository state as the current `git rev-parse HEAD` value plus `+uncommitted-worktree`, and `changed_surface` must equal the pathname list from `git status --porcelain=v1 --untracked-files=all` in that order (the path after each two-letter status). `scripts/assert-implementation-report.py` is the deterministic checker for that contract and the plan-owned final-matrix passed-string list, including the quoted pipefail commands stored as Python data. Drive it with `--report PATH --revision REVISION --plan-revision PLAN_REVISION`. Prove the checker with `python3 scripts/assert-implementation-report.py --self-test`.
 
 Handoff must include:
 

@@ -198,6 +198,8 @@ mod tests {
             assert_eq!(parsed.target.id, target);
             assert_eq!(parsed.deterministic_policies.len(), count);
             assert_eq!(parsed.semantic_policies.len(), semantic);
+            assert!(parsed.work_slot_bindings.is_none());
+            assert!(!raw.contains("work_slot_bindings"));
             let ids = parsed
                 .deterministic_policies
                 .iter()

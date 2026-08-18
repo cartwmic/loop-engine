@@ -15,11 +15,21 @@ invalid adapter/depth pairs fail before any work-root mutation.
 The evidence records are synthetic, conforming records.  They exercise schema,
 revision-link, author-independence, aggregation, routing, and persistence
 mechanics only; they are not semantic review judgments.
+
+``--self-test`` executes the three provider skill constructors against shipped
+profiles (software-change high-rigor design-review, policy-document semantic
+policies/target/mode, research verify and synthesize), asserts root AGENTS
+rules, and prints ``worker-data skill/root policy assertions passed`` only after
+all pass. Source full mode binds deterministic stdin-capturing workers that emit
+conforming JSON or exit-0 refusal text; after overlay failure, persisted
+summary/captures, and the compact one-key ``artifact_root`` stdin proof, it
+prints ``contracted fan-out failure``.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -92,6 +102,7 @@ DUMMY_WORKER_PROOF = [
     "opt-in dummy implement/review bindings may include -e args",
     "PATH stub pi default argv --print --no-skills --no-extensions without --no-context-files or --tools",
     "bound fan-out show heartbeat overlay_meaning elapsed remaining capture_dir inner_workers",
+    "contracted fan-out exit-0 conformance summary and failed-overlay capture persistence",
     "bound run-plan-graph inner workers in task order plus capture isolation",
     "no live model",
 ]
@@ -899,6 +910,7 @@ class Journey:
         assert self.run_dir is not None
         assert self.profile_source is not None
         assert self.fixture_root is not None
+        assert_worker_data_skill_and_root_policy()
         proof_root = self.run_dir / "dummy-worker-proofs"
         try:
             work_slot_journey.prove_shipped_software_change_profiles(self.data_root)
@@ -929,6 +941,13 @@ class Journey:
                 fixture_root=self.fixture_root,
                 work_dir=proof_root / "bound-fan-out-heartbeat",
             )
+            work_slot_journey.prove_bound_contracted_fan_out_failure(
+                engine=self.engine,
+                provider=self.provider,
+                profile_source=self.profile_source,
+                fixture_root=self.fixture_root,
+                work_dir=proof_root / "bound-contracted-fan-out-failure",
+            )
             work_slot_journey.prove_bound_graph_runner_heartbeat(
                 engine=self.engine,
                 provider=self.provider,
@@ -947,6 +966,7 @@ class Journey:
             "dummy worker proofs passed: shipped profiles, graph-runner, fan-out, "
             "preview-bindings fail-closed, missing -e warning, default sandbox argv, bound heartbeats"
         )
+        print("contracted fan-out failure")
 
     @staticmethod
     def _expect_status(
@@ -988,8 +1008,757 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+class ConstructorClosed(RuntimeError):
+    """A provider skill constructor rejected invalid input."""
+
+
+def _extract_jq_after(skill: str, anchor: str) -> str:
+    start = skill.index(anchor) + len(anchor)
+    if start >= len(skill) or skill[start] != "'":
+        raise JourneyFailure(f"skill constructor was not a quoted jq program after {anchor!r}")
+    start += 1
+    if start < len(skill) and skill[start] == "\n":
+        start += 1
+    end = skill.index("' \"$PROFILE\"", start)
+    return skill[start:end]
+
+
+def _extract_heredoc_jq(skill: str) -> str:
+    marker = "<<'JQ'\n"
+    start = skill.index(marker) + len(marker)
+    end = skill.index("\nJQ\n", start)
+    return skill[start:end]
+
+
+def _run_jq(filter_text: str, profile: Path, extra: Sequence[str]) -> str:
+    result = subprocess.run(
+        ["jq", *extra, filter_text, str(profile)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise ConstructorClosed(detail or f"jq exited {result.returncode}")
+    return result.stdout
+
+
+def _write_json(path: Path, value: Any) -> None:
+    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+
+def _load_json(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _fan_out_workers(binding: Dict[str, Any], *, engine: str) -> List[Dict[str, Any]]:
+    if binding.get("command") != engine:
+        raise JourneyFailure(f"constructor binding command {binding.get('command')!r} != {engine!r}")
+    args = binding.get("args")
+    if not isinstance(args, list) or not args or args[0] != "fan-out":
+        raise JourneyFailure(f"constructor binding was not fan-out: {binding}")
+    workers: List[Dict[str, Any]] = []
+    index = 1
+    while index < len(args):
+        if args[index] != "--worker" or index + 1 >= len(args):
+            raise JourneyFailure(f"constructor fan-out args were not worker pairs: {args}")
+        worker = json.loads(args[index + 1])
+        if not isinstance(worker, dict):
+            raise JourneyFailure(f"constructor worker is not an object: {worker}")
+        workers.append(worker)
+        index += 2
+    return workers
+
+
+def _policy_author_pairs(
+    policies: Sequence[Dict[str, Any]], roster: Sequence[Dict[str, Any]]
+) -> List[tuple[Dict[str, Any], Dict[str, Any]]]:
+    pairs: List[tuple[Dict[str, Any], Dict[str, Any]]] = []
+    for policy in policies:
+        count = policy.get("required_authors", 1)
+        if count is None:
+            count = 1
+        if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+            raise JourneyFailure(f"source required_authors is not a positive integer: {policy}")
+        if count > len(roster):
+            raise JourneyFailure("source policy needs more authors than the roster provides")
+        for index in range(count):
+            pairs.append((policy, dict(roster[index])))
+    return pairs
+
+
+def _assert_worker_assignment(
+    worker: Dict[str, Any],
+    *,
+    policy: Dict[str, Any],
+    roster_entry: Dict[str, Any],
+    base_preamble: str,
+    schema: Dict[str, Any],
+    pi_command: str,
+    fragments: Sequence[str],
+) -> None:
+    if worker.get("command") != pi_command:
+        raise JourneyFailure(f"worker command {worker.get('command')!r} != {pi_command!r}")
+    if worker.get("output_schema") != schema:
+        raise JourneyFailure(
+            f"worker output_schema {worker.get('output_schema')} != {schema}"
+        )
+    preamble = worker.get("preamble")
+    if not isinstance(preamble, str) or not preamble.startswith(base_preamble):
+        raise JourneyFailure("worker preamble did not start with exact provider bytes")
+    prompt = policy["example_prompt"]
+    if prompt not in preamble:
+        raise JourneyFailure(f"worker omitted exact example_prompt for {policy.get('id')}")
+    if policy["id"] not in preamble:
+        raise JourneyFailure(f"worker omitted exact axis id {policy['id']!r}")
+    if roster_entry["author"] not in preamble:
+        raise JourneyFailure(f"worker omitted exact author {roster_entry['author']!r}")
+    args = worker.get("args")
+    if not isinstance(args, list) or "--model" not in args:
+        raise JourneyFailure(f"worker omitted --model: {worker}")
+    model_index = args.index("--model")
+    if model_index + 1 >= len(args) or args[model_index + 1] != roster_entry["model"]:
+        raise JourneyFailure(
+            f"worker model {args} did not freeze {roster_entry['model']!r}"
+        )
+    for fragment in fragments:
+        if fragment not in preamble:
+            raise JourneyFailure(f"worker omitted subject/assignment metadata {fragment!r}")
+
+
+def _assert_preview_visibility(
+    repository: Path, bindings: Dict[str, Any], workers: Sequence[Dict[str, Any]]
+) -> None:
+    if len(workers) == 0:
+        raise JourneyFailure("constructor preview input had no workers")
+    full_preambles = []
+    for worker in workers:
+        if "preamble" not in worker or "output_schema" not in worker:
+            raise JourneyFailure(f"preview input omitted preamble/schema: {worker}")
+        required = (worker.get("output_schema") or {}).get("required")
+        if required != ["axis", "author", "result", "findings"]:
+            raise JourneyFailure(f"preview input omitted required keys: {worker}")
+        preamble = worker.get("preamble")
+        if isinstance(preamble, str) and preamble:
+            full_preambles.append(preamble)
+    engine = repository / "target/debug/loop-engine"
+    if not engine.is_file():
+        raise JourneyFailure(
+            "preview-bindings visibility requires target/debug/loop-engine; build loop-cli first"
+        )
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+        json.dump(bindings, handle)
+        bindings_path = Path(handle.name)
+    try:
+        result = subprocess.run(
+            [str(engine), "preview-bindings", f"@{bindings_path}"],
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        bindings_path.unlink(missing_ok=True)
+    if result.returncode != 0:
+        raise JourneyFailure(
+            f"preview-bindings rejected constructor output: {result.stderr or result.stdout}"
+        )
+    try:
+        report = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise JourneyFailure(
+            f"preview-bindings stdout was not JSON: {result.stdout}"
+        ) from error
+    preview_workers: List[Dict[str, Any]] = []
+    for slot in report.get("bindings") or []:
+        if not isinstance(slot, dict):
+            continue
+        slot_workers = slot.get("workers") or []
+        if isinstance(slot_workers, list):
+            preview_workers.extend(
+                item for item in slot_workers if isinstance(item, dict)
+            )
+        args = slot.get("args") or []
+        for arg in args:
+            if not isinstance(arg, str):
+                continue
+            try:
+                parsed_arg = json.loads(arg)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed_arg, dict) and "preamble" in parsed_arg:
+                if parsed_arg.get("preamble") != "<redacted>":
+                    raise JourneyFailure(
+                        "preview-bindings printed unredacted preamble in binding argv"
+                    )
+    if len(preview_workers) != len(workers):
+        raise JourneyFailure(
+            f"preview-bindings worker count {len(preview_workers)} != {len(workers)}"
+        )
+    for preview_worker in preview_workers:
+        if preview_worker.get("has_preamble") is not True:
+            raise JourneyFailure(
+                f"preview-bindings omitted has_preamble: {preview_worker}"
+            )
+        required = (preview_worker.get("output_schema") or {}).get("required")
+        if required != ["axis", "author", "result", "findings"]:
+            raise JourneyFailure(
+                f"preview-bindings omitted output_schema.required: {preview_worker}"
+            )
+        if "preamble" in preview_worker and preview_worker.get("preamble") not in (
+            None,
+            "<redacted>",
+        ):
+            raise JourneyFailure(
+                f"preview-bindings exposed preamble text: {preview_worker}"
+            )
+    stdout = result.stdout
+    for preamble in full_preambles:
+        if preamble and preamble in stdout:
+            raise JourneyFailure("preview-bindings leaked full provider preamble text")
+
+
+def _assert_hash_guard(profile: Path) -> None:
+    confirmed = _sha256_file(profile)
+    original = profile.read_bytes()
+    profile.write_bytes(original + b"\n")
+    if _sha256_file(profile) == confirmed:
+        raise JourneyFailure("pre-start hash guard would not detect a post-preview mutation")
+    profile.write_bytes(original)
+    if _sha256_file(profile) != confirmed:
+        raise JourneyFailure("hash-guard restore mutated the resulting profile")
+
+
+def _expect_constructor_closed(run, *, needle: str, context: str) -> None:
+    try:
+        run()
+    except ConstructorClosed as error:
+        if needle not in str(error):
+            raise JourneyFailure(f"{context} failed for the wrong reason: {error}") from error
+    else:
+        raise JourneyFailure(f"{context} unexpectedly succeeded")
+
+
+def assert_worker_data_skill_and_root_policy() -> None:
+    """Execute provider constructors and assert root policy against revision-18 contracts."""
+    repository = Path(__file__).resolve().parent.parent
+    dummy_engine = "/tmp/loop-engine-constructor-proof"
+    dummy_pi = "/tmp/pi-constructor-proof"
+    dummy_cursor = "/tmp/cursor-provider-extension"
+    dummy_bridge = "/tmp/claude-bridge-extension"
+    roster = [
+        {"author": "reviewer-a", "model": "model-a"},
+        {"author": "reviewer-b", "model": "model-b"},
+    ]
+    schema_required = {"required": ["axis", "author", "result", "findings"]}
+
+    sc_skill_path = (
+        repository
+        / "crates/software-change-provider/skills/using-software-change-provider/SKILL.md"
+    )
+    pd_skill_path = (
+        repository
+        / "crates/policy-document-provider/skills/using-policy-document-provider/SKILL.md"
+    )
+    research_skill_path = (
+        repository / "crates/research-provider/skills/using-research-provider/SKILL.md"
+    )
+    sc_skill = sc_skill_path.read_text(encoding="utf-8")
+    pd_skill = pd_skill_path.read_text(encoding="utf-8")
+    research_skill = research_skill_path.read_text(encoding="utf-8")
+    if '--rawfile preamble "' in sc_skill:
+        raise JourneyFailure("software-change skill still uses obsolete --rawfile preamble")
+    for skill, name in (
+        (sc_skill, "software-change"),
+        (pd_skill, "policy-document"),
+        (research_skill, "research"),
+    ):
+        if "--rawfile base_preamble" not in skill:
+            raise JourneyFailure(f"{name} constructor omitted --rawfile base_preamble")
+        if "preview-bindings" not in skill:
+            raise JourneyFailure(f"{name} constructor omitted preview-bindings")
+        if "SHA-256" not in skill and "SHA256" not in skill:
+            raise JourneyFailure(f"{name} constructor omitted SHA-256 confirmation")
+
+    sc_preamble_path = (
+        repository / "crates/software-change-provider/data/review-worker-preamble.txt"
+    )
+    sc_schema_path = (
+        repository / "crates/software-change-provider/data/review-worker-output-schema.json"
+    )
+    pd_preamble_path = (
+        repository / "crates/policy-document-provider/data/semantic-review-worker-preamble.md"
+    )
+    pd_schema_path = (
+        repository
+        / "crates/policy-document-provider/data/semantic-review-worker-output-schema.json"
+    )
+    research_preamble_path = (
+        repository / "crates/research-provider/data/review-worker-preamble.txt"
+    )
+    research_schema_path = (
+        repository / "crates/research-provider/data/review-worker-output-schema.json"
+    )
+    for path in (
+        sc_preamble_path,
+        sc_schema_path,
+        pd_preamble_path,
+        pd_schema_path,
+        research_preamble_path,
+        research_schema_path,
+    ):
+        if not path.is_file():
+            raise JourneyFailure(f"shipped worker data is missing: {path}")
+    sc_preamble = sc_preamble_path.read_text(encoding="utf-8")
+    pd_preamble = pd_preamble_path.read_text(encoding="utf-8")
+    research_preamble = research_preamble_path.read_text(encoding="utf-8")
+    sc_schema = _load_json(sc_schema_path)
+    pd_schema = _load_json(pd_schema_path)
+    research_schema = _load_json(research_schema_path)
+    if sc_schema != schema_required or pd_schema != schema_required or research_schema != schema_required:
+        raise JourneyFailure("provider output_schema bytes do not require axis/author/result/findings")
+
+    sc_jq = _extract_jq_after(sc_skill, '--slurpfile roster "$ROSTER" ')
+    pd_jq = _extract_heredoc_jq(pd_skill)
+    research_validate_jq = _extract_jq_after(research_skill, '--argjson roster "$ROSTER_JSON" ')
+    research_jq = _extract_jq_after(
+        research_skill, '--slurpfile output_schema "$OUTPUT_SCHEMA_PATH" '
+    )
+    high_rigor = repository / "crates/software-change-provider/data/configs/high-rigor.json"
+    readme_profile = repository / "crates/policy-document-provider/data/readme.json"
+    agents_profile = repository / "crates/policy-document-provider/data/agents.json"
+    research_profile = repository / "crates/research-provider/data/configs/standard.json"
+    for shipped in (high_rigor, readme_profile, agents_profile, research_profile):
+        if _load_json(shipped).get("work_slot_bindings"):
+            raise JourneyFailure(f"shipped profile unexpectedly binds slots: {shipped}")
+
+    def sc_args(slot_id: str, roster_path: Path) -> List[str]:
+        return [
+            "--arg",
+            "slot",
+            slot_id,
+            "--arg",
+            "engine",
+            dummy_engine,
+            "--arg",
+            "pi",
+            dummy_pi,
+            "--arg",
+            "cursor",
+            dummy_cursor,
+            "--arg",
+            "bridge",
+            dummy_bridge,
+            "--rawfile",
+            "base_preamble",
+            str(sc_preamble_path),
+            "--slurpfile",
+            "output_schema",
+            str(sc_schema_path),
+            "--slurpfile",
+            "roster",
+            str(roster_path),
+        ]
+
+    def pd_args(roster_path: Path) -> List[str]:
+        return [
+            "--arg",
+            "slot",
+            "semantic-review",
+            "--arg",
+            "loop_engine",
+            dummy_engine,
+            "--arg",
+            "pi",
+            dummy_pi,
+            "--arg",
+            "cursor_extension",
+            dummy_cursor,
+            "--arg",
+            "claude_bridge_extension",
+            dummy_bridge,
+            "--rawfile",
+            "base_preamble",
+            str(pd_preamble_path),
+            "--slurpfile",
+            "schema_documents",
+            str(pd_schema_path),
+            "--slurpfile",
+            "roster_documents",
+            str(roster_path),
+        ]
+
+    def research_args(slot_id: str, roster_json: str) -> List[str]:
+        return [
+            "--arg",
+            "slot",
+            slot_id,
+            "--argjson",
+            "roster",
+            roster_json,
+            "--arg",
+            "loop_engine",
+            dummy_engine,
+            "--arg",
+            "pi",
+            dummy_pi,
+            "--arg",
+            "cursor_extension",
+            dummy_cursor,
+            "--arg",
+            "claude_bridge_extension",
+            dummy_bridge,
+            "--rawfile",
+            "base_preamble",
+            str(research_preamble_path),
+            "--slurpfile",
+            "output_schema",
+            str(research_schema_path),
+        ]
+
+    def run_sc(profile: Path, slot_id: str, roster_path: Path) -> Dict[str, Any]:
+        stdout = _run_jq(sc_jq, profile, sc_args(slot_id, roster_path))
+        profile.write_text(stdout, encoding="utf-8")
+        return _load_json(profile)
+
+    def run_pd(profile: Path, roster_path: Path, *, slot_id: str = "semantic-review") -> Dict[str, Any]:
+        extra = pd_args(roster_path)
+        extra[2] = slot_id
+        stdout = _run_jq(pd_jq, profile, extra)
+        profile.write_text(stdout, encoding="utf-8")
+        return _load_json(profile)
+
+    def run_research(profile: Path, slot_id: str, roster_json: str) -> Dict[str, Any]:
+        extra = research_args(slot_id, roster_json)
+        try:
+            _run_jq(research_validate_jq, profile, ["-e", *extra[:6]])
+        except ConstructorClosed as error:
+            raise ConstructorClosed(
+                f"invalid or insufficient policies/roster for {slot_id}: {error}"
+            ) from error
+        stdout = _run_jq(research_jq, profile, extra)
+        profile.write_text(stdout, encoding="utf-8")
+        return _load_json(profile)
+
+    with tempfile.TemporaryDirectory(prefix="worker-data-constructor-") as temp:
+        root = Path(temp)
+        roster_path = root / "roster.json"
+        _write_json(roster_path, roster)
+        roster_json = json.dumps(roster, separators=(",", ":"))
+
+        design_profile = root / "high-rigor-design-review.json"
+        shutil.copy2(high_rigor, design_profile)
+        source = _load_json(design_profile)
+        result = run_sc(design_profile, "design-review", roster_path)
+        if result.get("review_policies") != source.get("review_policies"):
+            raise JourneyFailure("constructor mutated software-change review_policies")
+        bindings = result.get("work_slot_bindings")
+        if not isinstance(bindings, dict) or "design-review" not in bindings:
+            raise JourneyFailure("design-review constructor omitted work_slot_bindings")
+        if bindings != result["work_slot_bindings"]:
+            raise JourneyFailure("preview input diverged from resulting profile bindings")
+        workers = _fan_out_workers(bindings["design-review"], engine=dummy_engine)
+        expected = _policy_author_pairs(source["review_policies"]["design-review"], roster)
+        if len(workers) != len(expected):
+            raise JourneyFailure(
+                f"design-review worker count {len(workers)} != {len(expected)}"
+            )
+        for worker, (policy, entry) in zip(workers, expected):
+            _assert_worker_assignment(
+                worker,
+                policy=policy,
+                roster_entry=entry,
+                base_preamble=sc_preamble,
+                schema=sc_schema,
+                pi_command=dummy_pi,
+                fragments=(
+                    "software-change",
+                    "design-review",
+                    "artifact_root",
+                    f"required_author_claim: {entry['author']}",
+                ),
+            )
+        _assert_preview_visibility(repository, bindings, workers)
+        _assert_hash_guard(design_profile)
+
+        plan_profile = root / "high-rigor-plan-review.json"
+        shutil.copy2(high_rigor, plan_profile)
+        plan_source = _load_json(plan_profile)
+        plan_policies = plan_source["review_policies"]["plan-review"]
+        if any("required_authors" in entry for entry in plan_policies):
+            raise JourneyFailure("high-rigor plan-review unexpectedly sets required_authors")
+        plan_result = run_sc(plan_profile, "plan-review", roster_path)
+        plan_workers = _fan_out_workers(
+            plan_result["work_slot_bindings"]["plan-review"], engine=dummy_engine
+        )
+        plan_expected = _policy_author_pairs(plan_policies, roster)
+        if len(plan_expected) != len(plan_policies):
+            raise JourneyFailure("absent required_authors did not default to one worker per axis")
+        if len(plan_workers) != len(plan_policies):
+            raise JourneyFailure(
+                f"plan-review worker count {len(plan_workers)} != {len(plan_policies)}"
+            )
+        for worker, (policy, entry) in zip(plan_workers, plan_expected):
+            if entry["author"] != roster[0]["author"]:
+                raise JourneyFailure("plan-review used more than the default one roster author")
+            _assert_worker_assignment(
+                worker,
+                policy=policy,
+                roster_entry=entry,
+                base_preamble=sc_preamble,
+                schema=sc_schema,
+                pi_command=dummy_pi,
+                fragments=("software-change", "plan-review", "artifact_root"),
+            )
+        _assert_preview_visibility(
+            repository, plan_result["work_slot_bindings"], plan_workers
+        )
+        _assert_hash_guard(plan_profile)
+
+        empty_policies = root / "sc-empty-policies.json"
+        shutil.copy2(high_rigor, empty_policies)
+        empty_doc = _load_json(empty_policies)
+        empty_doc["review_policies"]["design-review"] = []
+        _write_json(empty_policies, empty_doc)
+        _expect_constructor_closed(
+            lambda: run_sc(empty_policies, "design-review", roster_path),
+            needle="unsupported or empty policy list",
+            context="software-change empty policies",
+        )
+
+        missing_prompt = root / "sc-missing-prompt.json"
+        shutil.copy2(high_rigor, missing_prompt)
+        missing_doc = _load_json(missing_prompt)
+        missing_doc["review_policies"]["design-review"][0]["example_prompt"] = ""
+        _write_json(missing_prompt, missing_doc)
+        _expect_constructor_closed(
+            lambda: run_sc(missing_prompt, "design-review", roster_path),
+            needle="example_prompt",
+            context="software-change missing example_prompt",
+        )
+
+        short_roster = root / "short-roster.json"
+        _write_json(short_roster, [roster[0]])
+        short_profile = root / "sc-short-roster.json"
+        shutil.copy2(high_rigor, short_profile)
+        _expect_constructor_closed(
+            lambda: run_sc(short_profile, "design-review", short_roster),
+            needle="too few entries",
+            context="software-change insufficient roster",
+        )
+
+        duplicate_roster = root / "duplicate-roster.json"
+        _write_json(
+            duplicate_roster,
+            [roster[0], {"author": roster[0]["author"], "model": "model-c"}],
+        )
+        duplicate_profile = root / "sc-duplicate-roster.json"
+        shutil.copy2(high_rigor, duplicate_profile)
+        _expect_constructor_closed(
+            lambda: run_sc(duplicate_profile, "design-review", duplicate_roster),
+            needle="pairwise distinct",
+            context="software-change duplicate author",
+        )
+
+        empty_author = root / "empty-author-roster.json"
+        _write_json(empty_author, [{"author": "", "model": "model-a"}, roster[1]])
+        empty_author_profile = root / "sc-empty-author.json"
+        shutil.copy2(high_rigor, empty_author_profile)
+        _expect_constructor_closed(
+            lambda: run_sc(empty_author_profile, "design-review", empty_author),
+            needle="non-empty strings",
+            context="software-change empty author",
+        )
+
+        unsupported_profile = root / "sc-unsupported-slot.json"
+        shutil.copy2(high_rigor, unsupported_profile)
+        _expect_constructor_closed(
+            lambda: run_sc(unsupported_profile, "semantic-review", roster_path),
+            needle="unsupported or empty policy list",
+            context="software-change unsupported slot",
+        )
+
+        for source_profile, label in ((readme_profile, "readme"), (agents_profile, "agents")):
+            target_file = root / f"{label}-target.md"
+            dest = root / f"{label}-semantic.json"
+            copied = _load_json(source_profile)
+            copied["target"]["path"] = str(target_file.resolve())
+            target_file.write_text("# target\n", encoding="utf-8")
+            _write_json(dest, copied)
+            pd_source = _load_json(dest)
+            pd_result = run_pd(dest, roster_path)
+            pd_bindings = pd_result.get("work_slot_bindings")
+            if not isinstance(pd_bindings, dict) or "semantic-review" not in pd_bindings:
+                raise JourneyFailure(f"{label} constructor omitted semantic-review bindings")
+            pd_workers = _fan_out_workers(pd_bindings["semantic-review"], engine=dummy_engine)
+            pd_expected = _policy_author_pairs(pd_source["semantic_policies"], roster)
+            if len(pd_workers) != len(pd_expected):
+                raise JourneyFailure(
+                    f"{label} worker count {len(pd_workers)} != {len(pd_expected)}"
+                )
+            target_json = json.dumps(pd_source["target"], separators=(",", ":"))
+            for worker, (policy, entry) in zip(pd_workers, pd_expected):
+                _assert_worker_assignment(
+                    worker,
+                    policy=policy,
+                    roster_entry=entry,
+                    base_preamble=pd_preamble,
+                    schema=pd_schema,
+                    pi_command=dummy_pi,
+                    fragments=(
+                        "policy-document",
+                        "semantic-review",
+                        pd_source["mode"],
+                        pd_source["target"]["id"],
+                        pd_source["target"]["path"],
+                    ),
+                )
+                if target_json not in worker["preamble"]:
+                    raise JourneyFailure(
+                        f"{label} worker omitted complete target object {target_json}"
+                    )
+            _assert_preview_visibility(repository, pd_bindings, pd_workers)
+            _assert_hash_guard(dest)
+
+        pd_unsupported = root / "pd-unsupported.json"
+        shutil.copy2(root / "readme-semantic.json", pd_unsupported)
+        _expect_constructor_closed(
+            lambda: run_pd(pd_unsupported, roster_path, slot_id="design-review"),
+            needle="unsupported slot",
+            context="policy-document unsupported slot",
+        )
+
+        pd_empty = root / "pd-empty.json"
+        empty_pd = _load_json(root / "readme-semantic.json")
+        empty_pd["semantic_policies"] = []
+        _write_json(pd_empty, empty_pd)
+        _expect_constructor_closed(
+            lambda: run_pd(pd_empty, roster_path),
+            needle="semantic_policies must be non-empty",
+            context="policy-document empty policies",
+        )
+
+        pd_prompt = root / "pd-missing-prompt.json"
+        prompt_pd = _load_json(root / "readme-semantic.json")
+        prompt_pd["semantic_policies"][0]["example_prompt"] = ""
+        _write_json(pd_prompt, prompt_pd)
+        _expect_constructor_closed(
+            lambda: run_pd(pd_prompt, roster_path),
+            needle="example_prompt",
+            context="policy-document missing prompt",
+        )
+
+        pd_mode = root / "pd-missing-mode.json"
+        mode_pd = _load_json(root / "readme-semantic.json")
+        del mode_pd["mode"]
+        _write_json(pd_mode, mode_pd)
+        _expect_constructor_closed(
+            lambda: run_pd(pd_mode, roster_path),
+            needle="mode must be draft or audit",
+            context="policy-document missing mode",
+        )
+
+        pd_target = root / "pd-missing-target.json"
+        target_pd = _load_json(root / "readme-semantic.json")
+        target_pd["target"]["path"] = "relative/README.md"
+        _write_json(pd_target, target_pd)
+        _expect_constructor_closed(
+            lambda: run_pd(pd_target, roster_path),
+            needle="complete {id,path}",
+            context="policy-document incomplete target",
+        )
+
+        for slot_id in ("verify", "synthesize"):
+            research_dest = root / f"research-{slot_id}.json"
+            shutil.copy2(research_profile, research_dest)
+            research_source = _load_json(research_dest)
+            research_result = run_research(research_dest, slot_id, roster_json)
+            research_bindings = research_result.get("work_slot_bindings")
+            if not isinstance(research_bindings, dict) or slot_id not in research_bindings:
+                raise JourneyFailure(f"research {slot_id} constructor omitted bindings")
+            research_workers = _fan_out_workers(
+                research_bindings[slot_id], engine=dummy_engine
+            )
+            research_expected = _policy_author_pairs(
+                research_source["review_policies"][slot_id], roster
+            )
+            if len(research_workers) != len(research_expected):
+                raise JourneyFailure(
+                    f"research {slot_id} worker count {len(research_workers)} != {len(research_expected)}"
+                )
+            for worker, (policy, entry) in zip(research_workers, research_expected):
+                _assert_worker_assignment(
+                    worker,
+                    policy=policy,
+                    roster_entry=entry,
+                    base_preamble=research_preamble,
+                    schema=research_schema,
+                    pi_command=dummy_pi,
+                    fragments=("research", slot_id, "artifact_root"),
+                )
+            _assert_preview_visibility(repository, research_bindings, research_workers)
+            _assert_hash_guard(research_dest)
+
+        research_bad_slot = root / "research-bad-slot.json"
+        shutil.copy2(research_profile, research_bad_slot)
+        _expect_constructor_closed(
+            lambda: run_research(research_bad_slot, "gather", roster_json),
+            needle="invalid or insufficient",
+            context="research unsupported slot",
+        )
+
+        research_empty = root / "research-empty.json"
+        empty_research = _load_json(research_profile)
+        empty_research["review_policies"]["verify"] = []
+        _write_json(research_empty, empty_research)
+        _expect_constructor_closed(
+            lambda: run_research(research_empty, "verify", roster_json),
+            needle="invalid or insufficient",
+            context="research empty policies",
+        )
+
+        research_prompt = root / "research-missing-prompt.json"
+        prompt_research = _load_json(research_profile)
+        prompt_research["review_policies"]["verify"][0]["example_prompt"] = ""
+        _write_json(research_prompt, prompt_research)
+        _expect_constructor_closed(
+            lambda: run_research(research_prompt, "verify", roster_json),
+            needle="invalid or insufficient",
+            context="research missing prompt",
+        )
+
+        bad_roster_json = json.dumps(
+            [{"author": "reviewer-a", "model": "model-a"}, {"author": "reviewer-a", "model": "model-b"}],
+            separators=(",", ":"),
+        )
+        research_dup = root / "research-duplicate.json"
+        shutil.copy2(research_profile, research_dup)
+        _expect_constructor_closed(
+            lambda: run_research(research_dup, "verify", bad_roster_json),
+            needle="invalid or insufficient",
+            context="research duplicate author",
+        )
+
+    policy = (repository / "AGENTS.md").read_text(encoding="utf-8")
+    policy_fragments = (
+        "Fan-out spawn/capture/conformance mechanics belong to the engine.",
+        "Providers/callers own role framing and output content",
+        "Reviewers produce judgments only.",
+        "Drivers run deterministic checks, `show`, capture triage, `append`, `event`, and progression.",
+        "Exit 0 alone does not establish deliverable validity.",
+        "overrun re-show and zero-axis review-binding rules",
+        "[skills/using-loop-engine/SKILL.md](skills/using-loop-engine/SKILL.md)",
+        "[docs/agent-usage.md](docs/agent-usage.md)",
+    )
+    for fragment in policy_fragments:
+        if fragment not in policy:
+            raise JourneyFailure(f"root AGENTS.md omitted policy fragment {fragment!r}")
+    print("worker-data skill/root policy assertions passed")
+
+
 def self_test() -> int:
-    """Prove unsupported adapter/depth pairs fail before touching work roots."""
+    """Prove interface rejection plus worker-data and root-policy contracts."""
     invalid_pairs = (("source", "checked-prefix"), ("packaged", "full"))
     with tempfile.TemporaryDirectory(prefix="software-change-journey-self-test-") as temp:
         root = Path(temp)
@@ -1023,6 +1792,7 @@ def self_test() -> int:
         work_slot_journey.self_test_helpers()
     except work_slot_journey.WorkSlotJourneyFailure as error:
         raise JourneyFailure(f"work-slot helper self-test failed: {error}") from error
+    assert_worker_data_skill_and_root_policy()
     print(
         "software-change journey interface self-test passed: invalid adapter/depth pairs rejected pre-mutation; dummy-worker helpers checked"
     )

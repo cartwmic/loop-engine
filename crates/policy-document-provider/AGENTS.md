@@ -12,6 +12,8 @@ Use this crate's [README.md](README.md) as the provider-contract summary and [sk
 
 Shipped profiles `readme-2` and `agents-2` are product. Keep `target.id` as `README.md` or `AGENTS.md` and keep `profile_version` unless you are intentionally authoring a custom profile. Deterministic and semantic policies live in immutable initial input; do not bake document-specific policy into provider code.
 
+Providers author worker-facing role and output content; the engine only transports and mechanically enforces it. Review workers return judgments only; drivers own deterministic checks, show, append, event, and progression. Exit 0 does not establish a valid deliverable.
+
 ## Workflow
 
 ```sh

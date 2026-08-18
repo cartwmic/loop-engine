@@ -92,7 +92,12 @@ loop-engine [--database DB] [--json] append [--record-id RECORD_ID] RUN_ID KIND 
 loop-engine [--database DB] [--json] event RUN_ID EVENT_ID
 loop-engine [--database DB] [--json] history RUN_ID
 loop-engine [--database DB] [--json] terminate RUN_ID
+loop-engine [--database DB] [--json] [--timeout-ms MS] invoke RUN_ID SLOT_ID
+loop-engine fan-out [--worker JSON]... [--instructions FILE]
+loop-engine preview-bindings [JSON|@FILE]
 ```
+
+The first eight forms are run-state operations. `fan-out` and `preview-bindings` are non-run-state commands: they do not open the run database or advance a run.
 
 Pass `--json` and parse the single envelope. Pass `--config` to `start` with uncommitted machine-local provider TOML using an exact alias and an absolute command path:
 
@@ -119,7 +124,7 @@ loop-engine --json --config /absolute/path/to/providers.toml \
 
 `start` initial input and `append` data accept JSON inline, `@FILE`, or `-` (stdin). `start` returns the run ID at `result.run.id`. Reuse the same catalog and run ID for every later operation. `show` is provider-free.
 
-Shipped software-change, policy-document, and research profiles omit `work_slot_bindings` (or `{}`), so implement and review slots stay driver-performed. Bound workers are opt-in skill templates: keep `--no-skills --no-extensions`, add `-e CURSOR_EXTENSION_PATH -e CLAUDE_BRIDGE_EXTENSION_PATH`, name `--model MODEL`, and fill those placeholders in the per-run profile JSON. `loop-engine preview-bindings` warns when a pi worker has `--no-extensions` and no `-e`. When `--task-worker` is omitted, the default inner worker is `pi --print --no-skills --no-extensions`. Details: [docs/agent-usage.md](docs/agent-usage.md) and the shipped skills.
+Shipped software-change, policy-document, and research profiles omit `work_slot_bindings` (or `{}`), so implement and review slots stay driver-performed. Bound workers are opt-in skill templates: keep `--no-skills --no-extensions`, add `-e CURSOR_EXTENSION_PATH -e CLAUDE_BRIDGE_EXTENSION_PATH`, name `--model MODEL`, and fill those placeholders in the per-run profile JSON. The providers' `data-dump` output includes their review-worker role framing and output declaration; their skills construct assigned workers from the same selected per-run profile before `start`. Nested fan-out workers can opt into opaque `preamble` framing and a required-key `output_schema`; fan-out captures each result and fails mechanically on nonconforming contracted output while preserving legacy stdin and summary shape for unopted workers. `loop-engine preview-bindings` reports contract presence while redacting preamble text and warns when a pi worker has `--no-extensions` and no `-e`. When `--task-worker` is omitted, the default inner worker is `pi --print --no-skills --no-extensions`. Exact stdin, capture-triage, binding, and rollback rules are in [docs/agent-usage.md](docs/agent-usage.md) and the shipped skills.
 
 With `--json`, exit `0` is `completed`, `10` is `rejected` (follow feedback; nothing is inferred as advancement), `20` is `error` (re-read `show`), and `2` is `invalid-invocation`. Full envelope and handoff rules: [docs/agent-usage.md](docs/agent-usage.md).
 
@@ -174,7 +179,9 @@ dist build --tag="$TAG" --artifacts=local --target=aarch64-apple-darwin
 
 Run packaged smoke with extracted `loop-engine`, `software-change`, `policy-document`, and `research` paths. Each provider must materialize embedded data, and all provider journeys must run outside checkout; policy-document covers both draft and audit modes, and the research packaged journey materializes embedded data via `data-dump` / `--mode packaged`. A macOS host build proves only macOS arm64; Linux x86_64 native build and archive smoke remain CI proof when no Linux host is available.
 
-Journey evidence records are synthetic and schema-conforming. They prove deterministic policy mechanics, routing, aggregation, persistence, and sparse work-slot `invoke` via `scripts/dummy-work-slot-worker.py`; they do not prove semantic review quality.
+Journey evidence records are synthetic and schema-conforming. They prove deterministic policy mechanics, routing, aggregation, persistence, sparse work-slot `invoke` via `scripts/dummy-work-slot-worker.py`, and contracted fan-out stdin/conformance via `scripts/dummy-stdin-worker.py`; they do not prove semantic review quality. `python3 scripts/software-change-journey.py --self-test` must print `worker-data skill/root policy assertions passed` after the three provider skill constructors and root AGENTS rules pass. Source full mode must print `contracted fan-out failure` after the bound conforming/refusal overlay proof.
+
+A software-change aggregate `implementation-report.json` for this checkout is checked by `scripts/assert-implementation-report.py` (`--report`, `--revision`, `--plan-revision`; prove with `--self-test`). That checker is not a publication gate. It requires `coverage.commit` to be current `git rev-parse HEAD` plus `+uncommitted-worktree` and `changed_surface` to match `git status --porcelain=v1 --untracked-files=all` pathnames.
 
 ### Publication path
 

@@ -71,6 +71,11 @@ def main() -> int:
         default=None,
         help="Exit 1 when the run-plan-graph task id matches this value",
     )
+    parser.add_argument(
+        "--stdout",
+        default=None,
+        help="Write this exact string to stdout after recording stdin",
+    )
     args = parser.parse_args()
 
     raw = sys.stdin.buffer.read()
@@ -84,6 +89,10 @@ def main() -> int:
         time.sleep(args.sleep)
 
     dest.with_name(dest.name + ".done").write_text("done\n", encoding="utf-8")
+
+    if args.stdout is not None:
+        sys.stdout.write(args.stdout)
+        sys.stdout.flush()
 
     if args.fail_task and task_id == args.fail_task:
         return 1

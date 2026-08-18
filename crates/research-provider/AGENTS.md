@@ -6,6 +6,10 @@ This file covers work in this crate: the `research` binary, shipped configs/temp
 
 The provider is deterministic only. It validates artifact schemas and revision links, then aggregates externally supplied `review-evidence` at verify and synthesize. It does not generate prompts, invoke a model, fetch the web, edit artifacts, or decide whether findings are true.
 
+Providers author worker-facing role and output content; the engine only transports and mechanically enforces it.
+Review workers return judgments only; drivers own deterministic checks, show, append, event, and progression.
+Exit 0 does not establish a valid deliverable.
+
 ## Authority
 
 Drive a run with [README.md](README.md) and [skills/using-research-provider/SKILL.md](skills/using-research-provider/SKILL.md). Evidence shape and adjudication rules are [data/reviewer-protocol.md](data/reviewer-protocol.md). Repository-root AGENTS.md and docs/agent-usage.md govern checkout-wide operation and CLI envelopes.

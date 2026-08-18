@@ -23,6 +23,20 @@ pub static FILES: &[EmbeddedFile] = &[
         )),
     },
     EmbeddedFile {
+        path: "crates/policy-document-provider/data/semantic-review-worker-preamble.md",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/semantic-review-worker-preamble.md"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/policy-document-provider/data/semantic-review-worker-output-schema.json",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/semantic-review-worker-output-schema.json"
+        )),
+    },
+    EmbeddedFile {
         path: "crates/policy-document-provider/data/target-guidance.md",
         bytes: include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -161,6 +175,8 @@ mod tests {
                 "crates/policy-document-provider/data/readme.json",
                 "crates/policy-document-provider/data/agents.json",
                 "crates/policy-document-provider/data/reviewer-protocol.md",
+                "crates/policy-document-provider/data/semantic-review-worker-preamble.md",
+                "crates/policy-document-provider/data/semantic-review-worker-output-schema.json",
                 "crates/policy-document-provider/data/target-guidance.md",
             ]
         );
@@ -205,6 +221,45 @@ mod tests {
         assert!(protocol.contains("human"));
         assert!(protocol.contains("agent"));
         assert!(protocol.contains("script"));
+    }
+
+    #[test]
+    fn semantic_review_worker_contract_is_complete() {
+        let preamble = std::str::from_utf8(
+            FILES
+                .iter()
+                .find(|file| file.path.ends_with("semantic-review-worker-preamble.md"))
+                .unwrap()
+                .bytes,
+        )
+        .unwrap();
+        for phrase in [
+            "read-only",
+            "Judge only the assigned axis.",
+            "driver context only",
+            "axis, author, result, and findings",
+            "Do not perform driver duties.",
+            "deterministic",
+            "show",
+            "append",
+            "event",
+            "progress",
+        ] {
+            assert!(preamble.contains(phrase), "missing {phrase}");
+        }
+
+        let schema_file = FILES
+            .iter()
+            .find(|file| {
+                file.path
+                    .ends_with("semantic-review-worker-output-schema.json")
+            })
+            .unwrap();
+        let schema: serde_json::Value = serde_json::from_slice(schema_file.bytes).unwrap();
+        assert_eq!(
+            schema,
+            serde_json::json!({"required": ["axis", "author", "result", "findings"]})
+        );
     }
 
     #[test]

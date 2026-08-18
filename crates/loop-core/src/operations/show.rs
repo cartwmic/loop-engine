@@ -119,7 +119,7 @@ const OVERLAY_MEANING_FAILED: &str =
 const OVERLAY_MEANING_RUNNING: &str =
     "Overlay running means the waiter is alive and allowed time has not elapsed.";
 const OVERLAY_MEANING_OVERRUN: &str =
-    "Overlay overrun means allowed time elapsed while the waiter is alive; invoke the same slot again.";
+    "Overlay overrun means allowed time elapsed while the waiter is alive; run show immediately before re-invoking the same slot.";
 
 fn overlay_meaning(status: ProjectedInvocationStatus) -> &'static str {
     match status {
@@ -276,7 +276,7 @@ fn current_state_instructions_for(run: &Run, stored: &str) -> String {
         Some((slot, binding)) => {
             let args = serde_json::to_string(&binding.args).unwrap_or_else(|_| "[]".to_owned());
             format!(
-                "Bound work slot `{slot_id}` is configured. Frozen worker CLI: command={command} args={args}. Legal start: loop-engine invoke {run_id} {slot_id}. Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. Captures are at the named capture directory on the invocation view and invoke result. The driver triages worker output, appends provider-shaped records, then requests the shown event. On overrun invoke the same slot again. On failed inspect stderr.",
+                "Bound work slot `{slot_id}` is configured. Frozen worker CLI: command={command} args={args}. Legal start: loop-engine invoke {run_id} {slot_id}. Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. Captures are at the named capture directory on the invocation view and invoke result. The driver triages worker output, appends provider-shaped records, then requests the shown event. On overrun run show immediately before re-invoking the same slot. On failed inspect capture_dir/summary.json and captured stdout before stderr.",
                 slot_id = slot.id,
                 command = binding.command,
                 run_id = run.id,
@@ -882,6 +882,14 @@ mod tests {
             projection.work_slot_invocations[3].remaining_allowed_ms,
             5_000
         );
+        assert_eq!(
+            projection.work_slot_invocations[2].overlay_meaning,
+            OVERLAY_MEANING_OVERRUN
+        );
+        assert!(
+            OVERLAY_MEANING_OVERRUN.contains("immediately before re-invoking"),
+            "overrun overlay_meaning must require show before re-invoke: {OVERLAY_MEANING_OVERRUN}"
+        );
         assert!(projection.work_slot_invocations[3].inner_workers.is_empty());
         assert_eq!(projection.work_slot_invocations[0].remaining_allowed_ms, 0);
         assert_eq!(projection.work_slot_invocations[1].remaining_allowed_ms, 0);
@@ -907,16 +915,24 @@ mod tests {
             !instructions.contains("SECRET BODY"),
             "bound slot must omit stored work body, got: {instructions}"
         );
+        const SUPERSEDED_TRIAGE: &str = concat!(
+            "On overrun invoke the same slot again.",
+            " On failed inspect stderr."
+        );
+        assert!(
+            !instructions.contains(SUPERSEDED_TRIAGE),
+            "superseded retry/failure order must not return: {instructions}"
+        );
         assert_eq!(
             instructions,
-            "Bound work slot `slot-1` is configured. Frozen worker CLI: command=worker args=[\"--flag\",\"value\"]. Legal start: loop-engine invoke run-1 slot-1. Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. Captures are at the named capture directory on the invocation view and invoke result. The driver triages worker output, appends provider-shaped records, then requests the shown event. On overrun invoke the same slot again. On failed inspect stderr."
+            "Bound work slot `slot-1` is configured. Frozen worker CLI: command=worker args=[\"--flag\",\"value\"]. Legal start: loop-engine invoke run-1 slot-1. Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. Captures are at the named capture directory on the invocation view and invoke result. The driver triages worker output, appends provider-shaped records, then requests the shown event. On overrun run show immediately before re-invoking the same slot. On failed inspect capture_dir/summary.json and captured stdout before stderr."
         );
         let triage = [
             "Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work.",
             "Captures are at the named capture directory on the invocation view and invoke result.",
             "The driver triages worker output, appends provider-shaped records, then requests the shown event.",
-            "On overrun invoke the same slot again.",
-            "On failed inspect stderr.",
+            "On overrun run show immediately before re-invoking the same slot.",
+            "On failed inspect capture_dir/summary.json and captured stdout before stderr.",
         ];
         let mut cursor = 0;
         for sentence in triage {

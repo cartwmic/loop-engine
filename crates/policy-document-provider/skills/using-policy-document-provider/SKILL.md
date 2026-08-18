@@ -27,7 +27,7 @@ Workflow: `prepare → deterministic-review → semantic-review → end`. `ready
 
 **Lock-in-before-start:** do not call `start` until the user confirms (1) bind or not (which slot IDs), (2) exact `{command, args}` per bound slot, and (3) model identity in those frozen args (nested `--worker` / `--task-worker` count) or explicit unpinned-default acceptance. Bindings freeze and cannot be patched.
 
-Run `loop-engine preview-bindings` on the JSON you will freeze before `start`. `describe` and `evaluate` remain deterministic and do not invoke a model. Provider contract: [README](../../README.md). Target constraints: [target guidance](../../data/target-guidance.md). Semantic evidence contract: [reviewer protocol](../../data/reviewer-protocol.md).
+Run `loop-engine preview-bindings` on the JSON you will freeze before `start`. `describe` and `evaluate` remain deterministic and do not invoke a model. Provider contract: `crates/policy-document-provider/README.md`. Target constraints: `crates/policy-document-provider/data/target-guidance.md`. Semantic evidence contract: `crates/policy-document-provider/data/reviewer-protocol.md`.
 
 ## Setup
 
@@ -49,27 +49,179 @@ For an installed provider, materialize embedded profiles and guidance into an em
 policy-document data-dump "$DATA_ROOT"
 ```
 
-Choose [readme.json](../../data/readme.json) or [agents.json](../../data/agents.json). Copy it to a run-specific file; set `mode` to `draft` or `audit`; replace `target.path` with the absolute target path. Keep shipped `target.id` and `profile_version` unchanged unless intentionally authoring a custom profile. Reserved `artifact_root` is accepted and ignored, and the provider is not required to write artifact files. Other unknown `initial_input` keys still fail.
+Choose `crates/policy-document-provider/data/readme.json` or `crates/policy-document-provider/data/agents.json`. Copy it to a run-specific file; set `mode` to `draft` or `audit`; replace `target.path` with the absolute target path. Keep shipped `target.id` and `profile_version` unchanged unless intentionally authoring a custom profile. Reserved `artifact_root` is accepted and ignored, and the provider is not required to write artifact files. Other unknown `initial_input` keys still fail.
 
 Shipped profiles omit `work_slot_bindings` (or `{}`). Cataloged slots are `deterministic-review` and `semantic-review`; both stay driver-performed until the caller adds a map. Bound workers are opt-in.
 
-Copy-paste templates below into the **per-run** profile JSON after replacing `CURSOR_EXTENSION_PATH`, `CLAUDE_BRIDGE_EXTENSION_PATH`, and `MODEL`. Do not put machine-local paths in the skill file. Keep `--no-skills --no-extensions` and add explicit `-e` so cursor-provider and claude-bridge load. Review `pi` examples include `--tools read,grep,find,ls` and must not pass `--no-context-files`. `preview-bindings` warns when a pi worker has `--no-extensions` and no `-e`; missing `--no-extensions` is not a required warning.
+Review workers return judgments only. The driver owns deterministic checks, `show`, `append`, `event`, and progression. A worker process exiting 0 is not enough: contracted output must conform mechanically, and the driver must still verify its values and semantic fitness before appending evidence.
 
-Do not add bindings, and do not start, until the user confirms: (1) driver-performed (omit the key or `{}`) vs which slots to bind; (2) exact `{command, args}` if bound, after filling placeholders; (3) which models those CLIs will use, encoded in frozen args. Nested inner workers count. Do not call `start` while a bound model-bearing CLI has no model in argv unless the user has explicitly accepted that CLI's unpinned default. Bindings freeze and cannot be patched. Run `loop-engine preview-bindings` on any `work_slot_bindings` JSON you will freeze.
+For a driver-performed run, omit `work_slot_bindings` or set `"work_slot_bindings": {}`. To bind review, use the constructor below instead of hand-writing one generic worker. It accepts only `SLOT_ID=semantic-review`, reads `.semantic_policies` from the same per-run `PROFILE` that will be started, and emits workers in policy order and then required-author roster order. Missing `required_authors` means one. The ordered `ROSTER` file is a JSON array of exact `{author,model}` objects; author labels must be pairwise distinct. Every generated worker freezes the exact provider preamble and output schema from `data-dump`, exact profile `mode` and complete `target`, policy `id` and `example_prompt`, claimed author, model argv, provider, and slot.
 
-Opt-in review binding (same pattern for `deterministic-review`; every model-bearing worker names a model):
+The constructor fails before preview or start on unsupported/empty/malformed input, atomically rewrites the same `PROFILE`, hashes and displays its exact resulting bytes and extracted bindings, previews those bindings, and asks the caller to confirm by typing that hash. It rechecks the hash immediately before starting that unchanged file. There is no post-preview merge. Set every path variable to an absolute caller-local value; do not put machine-local paths in this skill.
 
-```json
-"semantic-review": {
-  "command": "loop-engine",
-  "args": [
-    "fan-out",
-    "--worker", "{\"command\":\"pi\",\"args\":[\"--print\",\"--no-skills\",\"--no-extensions\",\"-e\",\"CURSOR_EXTENSION_PATH\",\"-e\",\"CLAUDE_BRIDGE_EXTENSION_PATH\",\"--tools\",\"read,grep,find,ls\",\"--model\",\"MODEL\"]}"
-  ]
+```bash
+set -eu
+
+: "${PROFILE:?absolute per-run profile JSON path}"
+: "${ROSTER:?JSON file containing an ordered array of {author,model}}"
+: "${SLOT_ID:?must be semantic-review}"
+: "${LOOP_ENGINE:?absolute loop-engine command path}"
+: "${POLICY_DOCUMENT:?absolute policy-document command path}"
+: "${PI:?absolute pi command path}"
+: "${CURSOR_EXTENSION_PATH:?absolute cursor-provider extension path}"
+: "${CLAUDE_BRIDGE_EXTENSION_PATH:?absolute claude-bridge extension path}"
+: "${PROVIDER_CONFIG:?absolute provider TOML path}"
+: "${RUN_LABEL:?run label}"
+
+case "$PROFILE" in /*) ;; *) echo "PROFILE must be absolute" >&2; exit 1;; esac
+case "$ROSTER" in /*) ;; *) echo "ROSTER must be absolute" >&2; exit 1;; esac
+[ "$SLOT_ID" = semantic-review ] || { echo "unsupported slot: $SLOT_ID" >&2; exit 1; }
+
+DATA_ROOT=$(mktemp -d)
+PROFILE_DIR=$(dirname "$PROFILE")
+TMP_PROFILE=$(mktemp "$PROFILE_DIR/.policy-document-profile.XXXXXX")
+BINDINGS_FILE=$(mktemp)
+cleanup() {
+  rm -rf "$DATA_ROOT"
+  rm -f "${TMP_PROFILE:-}" "$BINDINGS_FILE"
 }
+trap cleanup EXIT HUP INT TERM
+
+"$POLICY_DOCUMENT" data-dump "$DATA_ROOT"
+PREAMBLE_FILE="$DATA_ROOT/crates/policy-document-provider/data/semantic-review-worker-preamble.md"
+SCHEMA_FILE="$DATA_ROOT/crates/policy-document-provider/data/semantic-review-worker-output-schema.json"
+
+JQ_FILTER=$(cat <<'JQ'
+def nonblank: type == "string" and test("\\S");
+def require($condition; $message): if $condition then . else error($message) end;
+def worker($profile; $policy; $reviewer; $schema):
+  {
+    command: $pi,
+    args: [
+      "--print", "--no-skills", "--no-extensions",
+      "-e", $cursor_extension,
+      "-e", $claude_bridge_extension,
+      "--tools", "read,grep,find,ls",
+      "--model", $reviewer.model
+    ],
+    preamble: (
+      $base_preamble
+      + (if ($base_preamble | endswith("\n")) then "" else "\n" end)
+      + "\nFrozen assignment (authoritative):\n"
+      + ({
+          provider: "policy-document",
+          slot: $slot,
+          axis: $policy.id,
+          example_prompt: $policy.example_prompt,
+          author: $reviewer.author,
+          mode: $profile.mode,
+          target: $profile.target
+        } | tojson)
+    ),
+    output_schema: $schema
+  };
+
+. as $profile
+| require($slot == "semantic-review"; "unsupported slot")
+| require(($roster_documents | length) == 1; "ROSTER must contain one JSON value")
+| require(($schema_documents | length) == 1; "output schema must contain one JSON value")
+| ($roster_documents[0]) as $roster
+| ($schema_documents[0]) as $schema
+| require(($profile | type) == "object"; "PROFILE must be a JSON object")
+| require($profile.mode == "draft" or $profile.mode == "audit"; "PROFILE mode must be draft or audit")
+| require(
+    ($profile.target | type) == "object"
+    and (($profile.target | keys_unsorted | sort) == ["id", "path"])
+    and ($profile.target.id | nonblank)
+    and ($profile.target.path | nonblank)
+    and ($profile.target.path | startswith("/"));
+    "PROFILE target must be the complete {id,path} object with an absolute path"
+  )
+| require(($profile.semantic_policies | type) == "array" and ($profile.semantic_policies | length) > 0; "semantic_policies must be non-empty")
+| require(all($profile.semantic_policies[]; (.id | nonblank) and (.example_prompt | nonblank)); "every semantic policy needs a non-empty id and example_prompt")
+| require(([$profile.semantic_policies[].id] | unique | length) == ($profile.semantic_policies | length); "semantic policy ids must be unique")
+| require(
+    all($profile.semantic_policies[];
+      .required_authors == null
+      or ((.required_authors | type) == "number"
+          and (.required_authors | floor) == .required_authors
+          and .required_authors >= 1));
+    "required_authors must be a positive integer when present"
+  )
+| require(($roster | type) == "array" and ($roster | length) > 0; "ROSTER must be a non-empty array")
+| require(
+    all($roster[];
+      type == "object"
+      and ((keys_unsorted | sort) == ["author", "model"])
+      and (.author | nonblank)
+      and (.model | nonblank));
+    "every ROSTER entry must contain exactly non-empty author and model strings"
+  )
+| require(([$roster[].author] | unique | length) == ($roster | length); "ROSTER author labels must be pairwise distinct")
+| require(
+    ([ $profile.semantic_policies[] | (.required_authors // 1) ] | max) <= ($roster | length);
+    "ROSTER does not contain enough authors"
+  )
+| require($base_preamble | nonblank; "provider preamble must be non-empty")
+| require($schema == {"required": ["axis", "author", "result", "findings"]}; "provider output schema is invalid")
+| require($profile.work_slot_bindings == null or ($profile.work_slot_bindings | type) == "object"; "work_slot_bindings must be an object when present")
+| ([
+    $profile.semantic_policies[] as $policy
+    | range(0; ($policy.required_authors // 1)) as $roster_index
+    | ["--worker", (worker($profile; $policy; $roster[$roster_index]; $schema) | tojson)]
+  ] | add) as $worker_args
+| .work_slot_bindings = (
+    ($profile.work_slot_bindings // {})
+    + {($slot): {command: $loop_engine, args: (["fan-out"] + $worker_args)}}
+  )
+JQ
+)
+
+jq \
+  --arg slot "$SLOT_ID" \
+  --arg loop_engine "$LOOP_ENGINE" \
+  --arg pi "$PI" \
+  --arg cursor_extension "$CURSOR_EXTENSION_PATH" \
+  --arg claude_bridge_extension "$CLAUDE_BRIDGE_EXTENSION_PATH" \
+  --rawfile base_preamble "$PREAMBLE_FILE" \
+  --slurpfile schema_documents "$SCHEMA_FILE" \
+  --slurpfile roster_documents "$ROSTER" \
+  "$JQ_FILTER" "$PROFILE" >"$TMP_PROFILE"
+mv -f "$TMP_PROFILE" "$PROFILE"
+TMP_PROFILE=
+
+profile_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+PROFILE_SHA256=$(profile_sha256 "$PROFILE")
+jq -e '.work_slot_bindings as $bindings | if ($bindings | type) == "object" then $bindings else error("missing work_slot_bindings") end' \
+  "$PROFILE" >"$BINDINGS_FILE"
+
+printf '\nPROFILE=%s\nPROFILE_SHA256=%s\nExact resulting profile bytes follow:\n' "$PROFILE" "$PROFILE_SHA256"
+cat "$PROFILE"
+printf '\nExtracted work_slot_bindings (%s):\n' "$BINDINGS_FILE"
+cat "$BINDINGS_FILE"
+printf '\npreview-bindings output:\n'
+"$LOOP_ENGINE" preview-bindings "@$BINDINGS_FILE"
+
+printf '\nConfirm this exact profile, bindings, and model roster by typing %s: ' "$PROFILE_SHA256" >&2
+IFS= read -r CONFIRMED_PROFILE_SHA256
+[ "$CONFIRMED_PROFILE_SHA256" = "$PROFILE_SHA256" ] || { echo "confirmation hash did not match" >&2; exit 1; }
+
+CURRENT_PROFILE_SHA256=$(profile_sha256 "$PROFILE")
+[ "$CURRENT_PROFILE_SHA256" = "$PROFILE_SHA256" ] || {
+  echo "PROFILE changed after preview; refusing start" >&2
+  exit 1
+}
+"$LOOP_ENGINE" --json --config "$PROVIDER_CONFIG" \
+  start policy-document "@$PROFILE" "$RUN_LABEL"
 ```
 
-Driver-performed run: omit `work_slot_bindings` or set `"work_slot_bindings": {}`.
+This constructor intentionally does not bind `deterministic-review`; deterministic checking remains a driver duty. The generated reviewer preamble makes the frozen assignment authoritative and treats the later state instruction body as driver context only. The mechanically forwarded `artifact_root` context is irrelevant to policy-document review because the assignment already freezes the complete external target object.
 
 When the human did not explicitly ask to isolate in that session, omit `--database` and omit `artifact_root`. That start stores the run in the user-level catalog and uses an engine-owned per-run artifact directory. This is the production start, not a usual-case option beside a prudent isolate alternative. Existing start examples that already omit both flags remain examples of this required start. Independent runs sharing the user-level catalog do not clobber each other, because each run already receives an engine-owned per-run artifact directory. Occupancy of the catalog by other runs, and fear of affecting those runs, are not reasons to pass `--database` or a nonempty `artifact_root`. An agent must not pass `--database` or a nonempty `artifact_root` unless the human explicitly asked to isolate in that session. Isolation is not a self-chosen precaution. `--database /path/to/dir/loop.db` isolates SQLite and `/path/to/dir/runs/<id>/`. A nonempty `artifact_root` isolates files to a caller-chosen absolute existing directory. Do not treat a prior session's isolation preference as standing authority.
 
@@ -93,14 +245,14 @@ Heading aliases are case-insensitive; profiles do not require exact heading spel
 
 1. `show` and read current instructions plus immutable `initial_input` (including `work_slot_bindings` when present), `work_slots`, and `work_slot_invocations` (`overlay_meaning`, `elapsed_ms`, `remaining_allowed_ms`, `capture_dir`, `inner_workers`), especially `mode`, target, profile version, deterministic policies, and semantic policies.
 2. In `prepare`, author or revise target externally. Request `ready` to enter deterministic review.
-3. In `deterministic-review`, if that slot is bound, `invoke` it and poll overlay until `succeeded` / `failed` / `overrun`; on `overrun` invoke again; overlay `succeeded` is worker exit 0, not provider acceptance. Request `passed` only after overlay `succeeded`, or immediately if unbound. On `policy-document-nonconforming`, fix every reported violation, request check-free `revise`, then repeat from `prepare`.
+3. In `deterministic-review`, if that slot is bound, `invoke` it and poll overlay until `succeeded` / `failed` / `overrun`; on `overrun`, run `show` immediately before re-invoking; on failure, inspect `capture_dir/summary.json` and captured stdout before stderr. Overlay `succeeded` is worker exit 0, not provider acceptance. Request `passed` only after overlay `succeeded`, or immediately if unbound. On `policy-document-nonconforming`, fix every reported violation, request check-free `revise`, then repeat from `prepare`.
 4. After deterministic approval, compute lowercase SHA-256 over exact current bytes:
 
    ```sh
    TARGET_SHA256=$(shasum -a 256 "$TARGET" | awk '{print $1}')
    ```
 
-5. For semantic review: if `semantic-review` is bound, `invoke` it, poll overlay until `succeeded` / `failed` / `overrun`, on `overrun` invoke again, and read worker output; if unbound, commission external review yourself. Overlay `succeeded` is collector/worker exit 0, not that the review passed. Either way, cover every frozen semantic policy. Give each reviewer current target bytes or path, policy `description`, `example_prompt`, and relevant project evidence. Reviewer judges one axis and returns `pass` or actionable `fail` findings. You still triage and append; a bound worker does not write records.
+5. For semantic review: if `semantic-review` is bound, `invoke` it and poll overlay until `succeeded` / `failed` / `overrun`; on `overrun`, run `show` immediately before re-invoking; on failure, inspect `capture_dir/summary.json` and captured stdout before stderr; then read worker output. If unbound, commission external review yourself. Overlay `succeeded` is collector/worker exit 0, not that the review passed. Either way, cover every frozen semantic policy. Give each reviewer current target bytes or path, policy `description`, `example_prompt`, and relevant project evidence. Reviewer judges one axis and returns `pass` or actionable `fail` findings. You still triage and append; a bound worker does not write records.
 6. Append one `review-evidence` record per axis judgment, bound to exact target ID, digest, and profile version.
 7. Request semantic `passed`. On denial, use diagnostics to supersede malformed evidence with a later conforming record, address standing failures, or supply missing current passes. Any target byte change invalidates prior evidence: request `revise`, rerun deterministic review, recompute digest, and commission fresh semantic verdicts.
 

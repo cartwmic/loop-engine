@@ -27,7 +27,7 @@ DATA_ROOT="$HOME/.local/share/research-provider"
 research data-dump "$DATA_ROOT"
 ```
 
-The command creates `DATA_ROOT/crates/research-provider/...` with the profile, templates, reviewer protocol, skill, README, and AGENTS embedded in the binary. It preserves those repository-relative paths so guidance citations resolve under `DATA_ROOT`; it refuses to overwrite an existing target file. Copy the selected profile from that tree to a run-specific file. The engine allocates the durable directory and records that absolute path in object `initial_input`; `show` reveals it. Register the installed provider under an exact, case-sensitive alias:
+The command creates `DATA_ROOT/crates/research-provider/...` with the profile, templates, reviewer protocol, review-worker preamble and output schema, skill, README, and AGENTS embedded in the binary. It preserves those repository-relative paths so guidance citations resolve under `DATA_ROOT`; it refuses to overwrite an existing target file. Copy the selected profile from that tree to a run-specific file. The engine allocates the durable directory and records that absolute path in object `initial_input`; `show` reveals it. Register the installed provider under an exact, case-sensitive alias:
 
 ```toml
 [providers.research]
@@ -76,7 +76,7 @@ cargo test -p research-provider
 cargo clippy -p research-provider --all-targets -- -D warnings
 ```
 
-Source and packaged journeys live in `scripts/research-journey.py` at the repository root. Those journey commands are harness examples, distinct from the production start; do not copy isolation flags from them into production start. Crate tests remain the local proof surface for protocol, schema, evidence, and shipped data.
+Source and packaged journeys live in `scripts/research-journey.py` at the repository root. Those journey commands are harness examples, distinct from the production start; do not copy isolation flags from them into production start. Crate tests remain the local proof surface for protocol, schema, evidence, and shipped data. The software-change journey `--self-test` executes this crate's verify and synthesize constructors against `data/configs/standard.json` and prints `worker-data skill/root policy assertions passed` only after worker count/order, axis/`example_prompt`/author/model metadata, required keys/data bytes/preview visibility, and fail-closed invalid cases pass.
 
 ## Shipped data
 
@@ -93,9 +93,13 @@ These are the shipped files consumed by provider tests, guidance, and review pro
 - [data/templates/verification.md](data/templates/verification.md)
 - [data/templates/report.md](data/templates/report.md)
 
-### Reviewer protocol
+### Reviewer protocol and worker contract
 
 - [data/reviewer-protocol.md](data/reviewer-protocol.md)
+- [data/review-worker-preamble.txt](data/review-worker-preamble.txt)
+- [data/review-worker-output-schema.json](data/review-worker-output-schema.json)
+
+The shipped skill constructs opt-in `verify` or `synthesize` bindings from the selected per-run profile and freezes one assigned worker per configured axis and required author. Review workers return judgments only; the driver owns research, artifact authoring, deterministic checks, evidence recording, and run progression.
 
 ## Topology
 
