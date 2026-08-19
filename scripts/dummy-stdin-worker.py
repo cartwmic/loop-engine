@@ -9,7 +9,9 @@ inside that directory so one ``--task-worker`` CLI can record every task.
 Detects the summarizer assignment after the compact location JSON separator.
 Only that summarizer invocation may write ``artifact_root/implementation-report.json``;
 ordinary dummy tasks never write that file. Pass ``--no-report`` to skip the
-summarizer write (missing-report proofs). Does not call a model.
+summarizer write (missing-report proofs). When ``PI_CODING_AGENT_SESSION_DIR``
+is set (stdin-exec colocation), writes a dummy session marker there so journeys
+can name session traces without a live model. Does not call a model.
 """
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ from pathlib import Path
 SEPARATOR = "\n---\n\n"
 SUMMARIZER_PREFIX = "Write artifact_root/implementation-report.json"
 REPORT_FILE = "implementation-report.json"
+SESSION_ENV = "PI_CODING_AGENT_SESSION_DIR"
+SESSION_MARKER = "dummy-session.json"
 
 
 def split_stdin(stdin: str) -> tuple[dict[str, object], str, bool]:
@@ -96,6 +100,15 @@ def write_valid_report(location: dict[str, object]) -> None:
     Path(artifact_root, REPORT_FILE).write_text(json.dumps(report) + "\n", encoding="utf-8")
 
 
+def write_session_marker() -> None:
+    raw = os.environ.get(SESSION_ENV)
+    if not raw:
+        return
+    directory = Path(raw)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / SESSION_MARKER).write_text("{}\n", encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -140,6 +153,7 @@ def main() -> int:
     dest = receipt_destination(Path(args.receipt), task_id)
     dest.write_bytes(raw)
     dest.with_name(dest.name + ".pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+    write_session_marker()
 
     if args.sleep > 0:
         time.sleep(args.sleep)

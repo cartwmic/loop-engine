@@ -49,11 +49,13 @@ pub(crate) struct InvokePacket {
 }
 
 /// Collected `fan-out` flags after the command name.  Zero `--worker` entries
-/// are allowed at parse time; empty-worker execute fails closed.
+/// are allowed at parse time; empty-worker execute fails closed.  Optional
+/// `--max-active N` is omitted (uncapped) or a positive `u32`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FanOutArgs {
     pub(crate) workers: Vec<WorkerCli>,
     pub(crate) instructions_path: Option<PathBuf>,
+    pub(crate) max_active: Option<u32>,
 }
 
 /// Bound (invoke-packet stdin) versus ad-hoc (`--instructions FILE`) fan-out.
@@ -208,7 +210,9 @@ pub(crate) fn parse_invoke_packet(raw: &str) -> Result<InvokePacket, ParseError>
 /// Parse argv tokens after the `fan-out` command name.
 ///
 /// Repeated `--worker JSON` (zero entries allowed).  Optional once:
-/// `--instructions FILE`.  Unknown flags and leftover positionals are errors.
+/// `--instructions FILE`.  Optional once: `--max-active N` with decimal integer
+/// N >= 1 that fits `u32`.  Unknown flags (including `--max-concurrency`) and
+/// leftover positionals are errors.
 pub(crate) fn parse_fan_out_args<I, S>(args: I) -> Result<FanOutArgs, ParseError>
 where
     I: IntoIterator<Item = S>,
@@ -220,6 +224,7 @@ where
         .collect::<Vec<String>>();
     let mut workers = Vec::new();
     let mut instructions_path = None;
+    let mut max_active = None;
     let mut index = 0;
     while index < args.len() {
         let token = &args[index];
@@ -253,6 +258,22 @@ where
             instructions_path = Some(PathBuf::from(raw));
             continue;
         }
+        if let Some(raw) = strip_option(token, "--max-active") {
+            if max_active.is_some() {
+                return Err(ParseError::new(
+                    "`--max-active` may be supplied at most once",
+                ));
+            }
+            let raw = match raw {
+                Some(raw) => {
+                    index += 1;
+                    raw
+                }
+                None => option_value(&args, &mut index, "--max-active")?.to_owned(),
+            };
+            max_active = Some(parse_max_active(&raw)?);
+            continue;
+        }
         if token.starts_with('-') {
             return Err(ParseError::new(format!("unknown option `{token}`")));
         }
@@ -263,6 +284,7 @@ where
     Ok(FanOutArgs {
         workers,
         instructions_path,
+        max_active,
     })
 }
 
@@ -313,6 +335,7 @@ pub(crate) fn run_collector(
     stdin_bytes: &[u8],
     cwd: &Path,
 ) -> Result<FanOutSummary, CollectorError> {
+    let max_active = parsed_args.max_active;
     let mode = detect_mode(parsed_args, stdin_bytes)?;
     match mode {
         FanOutMode::Bound { packet, workers } => {
@@ -331,7 +354,7 @@ pub(crate) fn run_collector(
                 .map(|worker| bound_worker_payload(worker, &artifact_root))
                 .collect::<Vec<_>>();
             let output_dir = absolute_from_cwd(cwd, Path::new(&packet.capture_dir));
-            run_dagu_graph(&dagu, &engine, &workers, &payloads, &output_dir)
+            run_dagu_graph(&dagu, &engine, &workers, &payloads, &output_dir, max_active)
         }
         FanOutMode::AdHoc {
             instructions_path,
@@ -353,7 +376,7 @@ pub(crate) fn run_collector(
                 .collect::<Vec<_>>();
             let unique = unique_adhoc_id();
             let output_dir = cwd.join("fan-out-adhoc").join(unique);
-            run_dagu_graph(&dagu, &engine, &workers, &payloads, &output_dir)
+            run_dagu_graph(&dagu, &engine, &workers, &payloads, &output_dir, max_active)
         }
     }
 }
@@ -390,6 +413,17 @@ fn option_value<'a>(
     }
     *index += 1;
     Ok(value)
+}
+
+fn parse_max_active(raw: &str) -> Result<u32, ParseError> {
+    raw.parse::<u32>()
+        .ok()
+        .filter(|value| *value >= 1)
+        .ok_or_else(|| {
+            ParseError::new(format!(
+                "`--max-active` requires a decimal integer >= 1, got `{raw}`"
+            ))
+        })
 }
 
 fn ensure_workers(workers: &[WorkerCli]) -> Result<(), CollectorError> {
@@ -479,6 +513,7 @@ fn run_dagu_graph(
     workers: &[WorkerCli],
     payloads: &[Vec<u8>],
     output_dir: &Path,
+    max_active: Option<u32>,
 ) -> Result<FanOutSummary, CollectorError> {
     debug_assert_eq!(workers.len(), payloads.len());
     fs::create_dir_all(output_dir).map_err(|error| {
@@ -531,7 +566,7 @@ fn run_dagu_graph(
     };
     write_spec(&output_dir, &spec)?;
 
-    let yaml = emit_graph_yaml(&dag_name, &engine_str, &output_dir, &spec);
+    let yaml = emit_graph_yaml(&dag_name, &engine_str, &output_dir, &spec, max_active);
     let dags_dir = home.join("dags");
     fs::create_dir_all(&dags_dir).map_err(|error| {
         CollectorError::Failed(format!(
@@ -645,12 +680,19 @@ fn emit_graph_yaml(
     engine: &str,
     capture_root: &Path,
     spec: &FanOutSpec,
+    max_active: Option<u32>,
 ) -> String {
     let join_command = std::env::var_os(JOIN_COMMAND_OVERRIDE)
         .map(|value| path_to_string(&PathBuf::from(value)))
         .unwrap_or_else(|| engine.to_owned());
     let capture_dir = path_to_string(capture_root);
-    let mut yaml = String::from("type: graph\nsteps:\n");
+    let mut yaml = String::from("type: graph\n");
+    if let Some(max_active) = max_active {
+        yaml.push_str("max_active_steps: ");
+        yaml.push_str(&max_active.to_string());
+        yaml.push('\n');
+    }
+    yaml.push_str("steps:\n");
     let mut worker_names = Vec::new();
     for (index, worker) in spec.workers.iter().enumerate() {
         let name = format!("w{index}");
@@ -1063,6 +1105,7 @@ mod tests {
         let parsed = parse_fan_out_args(&[] as &[&str]).expect("zero --worker");
         assert!(parsed.workers.is_empty());
         assert!(parsed.instructions_path.is_none());
+        assert!(parsed.max_active.is_none());
     }
 
     #[test]
@@ -1079,6 +1122,39 @@ mod tests {
         assert_eq!(parsed.workers[0].args, vec!["hello".to_owned()]);
         assert_eq!(parsed.workers[1].command, "cat");
         assert_eq!(parsed.workers[1].args, vec!["-".to_owned()]);
+        assert!(parsed.max_active.is_none());
+    }
+
+    #[test]
+    fn max_active_n_is_parsed_and_omitted_stays_none() {
+        let omitted = parse_fan_out_args(["--worker", valid_worker_json()]).expect("omitted");
+        assert!(omitted.max_active.is_none());
+        let set = parse_fan_out_args(["--max-active", "2"]).expect("--max-active 2");
+        assert_eq!(set.max_active, Some(2));
+        assert!(set.workers.is_empty());
+        let equals = parse_fan_out_args(["--max-active=3"]).expect("--max-active=3");
+        assert_eq!(equals.max_active, Some(3));
+        let with_worker =
+            parse_fan_out_args(["--worker", valid_worker_json(), "--max-active", "8"])
+                .expect("worker plus --max-active");
+        assert_eq!(with_worker.max_active, Some(8));
+        assert_eq!(with_worker.workers.len(), 1);
+    }
+
+    #[test]
+    fn max_active_zero_missing_non_integer_repeat_and_max_concurrency_fail() {
+        assert!(parse_fan_out_args(["--max-active", "0"]).is_err());
+        assert!(parse_fan_out_args(["--max-active"]).is_err());
+        assert!(parse_fan_out_args(["--max-active", "nope"]).is_err());
+        assert!(parse_fan_out_args(["--max-active", "1.5"]).is_err());
+        assert!(parse_fan_out_args(["--max-active", "-1"]).is_err());
+        assert!(parse_fan_out_args(["--max-active=-1"]).is_err());
+        assert!(parse_fan_out_args(["--max-active", "2", "--max-active", "3"]).is_err());
+        assert!(parse_fan_out_args(["--max-active=2", "--max-active=4"]).is_err());
+        assert!(parse_fan_out_args(["--max-active", "4294967296"]).is_err());
+        let unknown =
+            parse_fan_out_args(["--max-concurrency", "2"]).expect_err("unknown --max-concurrency");
+        assert!(unknown.to_string().contains("unknown option"), "{unknown}");
     }
 
     #[test]
@@ -1248,6 +1324,7 @@ mod tests {
             FanOutArgs {
                 workers: Vec::new(),
                 instructions_path: None,
+                max_active: None,
             },
             packet.as_bytes(),
             directory.path(),
@@ -1258,6 +1335,7 @@ mod tests {
             FanOutArgs {
                 workers: Vec::new(),
                 instructions_path: Some(instructions),
+                max_active: None,
             },
             b"",
             directory.path(),
@@ -1283,8 +1361,9 @@ mod tests {
             "/abs/loop-engine",
             Path::new("/tmp/cap"),
             &spec,
+            None,
         );
-        assert!(yaml.starts_with("type: graph\n"), "{yaml}");
+        assert!(yaml.starts_with("type: graph\nsteps:\n"), "{yaml}");
         assert!(yaml.contains("action: exec"), "{yaml}");
         assert!(yaml.contains("name: \"w0\""), "{yaml}");
         assert!(yaml.contains("name: \"join\""), "{yaml}");
@@ -1294,6 +1373,53 @@ mod tests {
         assert!(!yaml.contains("retry_policy"), "{yaml}");
         assert!(!yaml.contains("max_active_steps"), "{yaml}");
         assert!(!yaml.contains("instruction_body"), "{yaml}");
+    }
+
+    #[test]
+    fn max_active_two_emits_max_active_steps_two_and_join_depends_on_every_worker() {
+        let spec = FanOutSpec {
+            workers: vec![
+                FanOutSpecWorker {
+                    command: "echo".to_owned(),
+                    args: vec!["hi".to_owned()],
+                    output_schema: None,
+                    stdin_path: "/tmp/0/stdin".to_owned(),
+                    stdout_path: "/tmp/0/stdout".to_owned(),
+                    stderr_path: "/tmp/0/stderr".to_owned(),
+                    sidecar_path: "/tmp/0/inner_exit.json".to_owned(),
+                },
+                FanOutSpecWorker {
+                    command: "cat".to_owned(),
+                    args: vec!["-".to_owned()],
+                    output_schema: None,
+                    stdin_path: "/tmp/1/stdin".to_owned(),
+                    stdout_path: "/tmp/1/stdout".to_owned(),
+                    stderr_path: "/tmp/1/stderr".to_owned(),
+                    sidecar_path: "/tmp/1/inner_exit.json".to_owned(),
+                },
+            ],
+        };
+        let yaml = emit_graph_yaml(
+            "fanout-inv-1",
+            "/abs/loop-engine",
+            Path::new("/tmp/cap"),
+            &spec,
+            Some(2),
+        );
+        assert!(
+            yaml.starts_with("type: graph\nmax_active_steps: 2\nsteps:\n"),
+            "{yaml}"
+        );
+        assert!(yaml.contains("name: \"w0\""), "{yaml}");
+        assert!(yaml.contains("name: \"w1\""), "{yaml}");
+        assert!(yaml.contains("name: \"join\""), "{yaml}");
+        let join = yaml.split("name: \"join\"").nth(1).expect("join step");
+        assert!(
+            join.contains("    depends:\n      - \"w0\"\n      - \"w1\"\n"),
+            "{yaml}"
+        );
+        assert!(!yaml.contains("continue_on"), "{yaml}");
+        assert!(!yaml.contains("retry_policy"), "{yaml}");
     }
 
     #[test]

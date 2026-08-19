@@ -105,6 +105,12 @@ DUMMY_WORKER_PROOF = [
     "contracted fan-out exit-0 conformance summary and failed-overlay capture persistence",
     "bound run-plan-graph inner workers in task order plus capture isolation",
     "dummy plan-graph summarizer writes implementation-report.json; ordinary dummy tasks do not",
+    "overlay-running bound fan-out invocation-progress names invocation capture_dir graph steps; show inner_workers empty",
+    "overlay-running bound run-plan-graph invocation-progress names task ids plus summarizer; show inner_workers empty",
+    "omitted fan-out yaml has no max_active_steps; omitted run-plan-graph yaml has max_active_steps: 4",
+    "set --max-active N in bound argv and ad-hoc fan-out yaml; N=1 never two ordinary steps running",
+    "progress-query failure leaves overlay running or succeeded from facade waitpid",
+    "invocation-progress names sidecar and session traces with last_modified_ms without parsing stdout",
     "no live model",
 ]
 
@@ -956,6 +962,34 @@ class Journey:
                 fixture_root=self.fixture_root,
                 work_dir=proof_root / "bound-graph-runner-heartbeat",
             )
+            work_slot_journey.prove_overlay_running_bound_fan_out_progress(
+                engine=self.engine,
+                provider=self.provider,
+                profile_source=self.profile_source,
+                fixture_root=self.fixture_root,
+                work_dir=proof_root / "overlay-running-bound-fan-out",
+            )
+            work_slot_journey.prove_overlay_running_bound_graph_runner_progress(
+                engine=self.engine,
+                provider=self.provider,
+                profile_source=self.profile_source,
+                fixture_root=self.fixture_root,
+                work_dir=proof_root / "overlay-running-bound-graph-runner",
+            )
+            work_slot_journey.prove_max_active_bound_fan_out(
+                engine=self.engine,
+                provider=self.provider,
+                profile_source=self.profile_source,
+                fixture_root=self.fixture_root,
+                work_dir=proof_root / "max-active-bound-fan-out",
+            )
+            work_slot_journey.prove_max_active_bound_graph_runner(
+                engine=self.engine,
+                provider=self.provider,
+                profile_source=self.profile_source,
+                fixture_root=self.fixture_root,
+                work_dir=proof_root / "max-active-bound-graph-runner",
+            )
         except work_slot_journey.WorkSlotJourneyFailure as error:
             raise JourneyFailure(
                 str(error),
@@ -965,7 +999,8 @@ class Journey:
         self.dummy_worker_proof = list(DUMMY_WORKER_PROOF)
         print(
             "dummy worker proofs passed: shipped profiles, graph-runner, fan-out, "
-            "preview-bindings fail-closed, missing -e warning, default sandbox argv, bound heartbeats"
+            "preview-bindings fail-closed, missing -e warning, default sandbox argv, bound heartbeats, "
+            "overlay-running invocation-progress, omitted vs set --max-active, progress-query overlay-untouched"
         )
         print("contracted fan-out failure")
 

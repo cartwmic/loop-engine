@@ -72,9 +72,19 @@ fn invoke_protocol(stdin: &[u8]) -> Output {
 }
 
 fn invoke_graph(worker: &str, packet: &Value, current_dir: Option<&Path>) -> Output {
+    invoke_graph_with(worker, packet, current_dir, &[])
+}
+
+fn invoke_graph_with(
+    worker: &str,
+    packet: &Value,
+    current_dir: Option<&Path>,
+    extra: &[&str],
+) -> Output {
     let mut command = Command::new(bin());
     command
         .args(["run-plan-graph", "--task-worker", worker])
+        .args(extra)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -290,6 +300,49 @@ fn independent_tasks_overlap_under_concurrency_cap() {
     assert!(yaml.contains("max_active_steps: 4"), "{yaml}");
     assert!(!yaml.contains("continue_on"), "{yaml}");
     assert!(!yaml.contains("retry_policy"), "{yaml}");
+}
+
+#[test]
+fn max_active_two_emits_that_cap_and_summarizer_depends_on_every_task() {
+    let (_dir, artifact_root, receipt_dir) = fixture("max-active-two");
+    write_plan(
+        &artifact_root,
+        &json!({
+            "tasks": [{"id": "task-a"}, {"id": "task-b"}],
+            "dependency_graph": []
+        }),
+    );
+    let worker = task_worker(&receipt_dir, &["--write-report"]);
+    let output = invoke_graph_with(
+        &worker,
+        &packet(
+            "run-1",
+            "implement",
+            &artifact_root.to_string_lossy(),
+            "Do the work",
+        ),
+        None,
+        &["--max-active", "2"],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let yaml = emitted_yaml(&capture_dir_for_root(&artifact_root));
+    assert!(yaml.contains("max_active_steps: 2"), "{yaml}");
+    assert!(!yaml.contains("max_active_steps: 4"), "{yaml}");
+    let summarizer = yaml
+        .split("name: \"summarizer\"")
+        .nth(1)
+        .expect("summarizer step");
+    assert!(summarizer.contains("      - \"task-a\""), "{yaml}");
+    assert!(summarizer.contains("      - \"task-b\""), "{yaml}");
+    assert!(
+        summarizer.contains("    depends:\n      - \"task-a\"\n      - \"task-b\"\n"),
+        "{yaml}"
+    );
 }
 
 #[test]
@@ -1003,6 +1056,31 @@ fn leftover_args_after_run_plan_graph_flags_are_errors() {
 }
 
 #[test]
+fn max_concurrency_and_invalid_max_active_are_parse_errors() {
+    let cases: &[&[&str]] = &[
+        &["run-plan-graph", "--max-concurrency", "8"],
+        &["run-plan-graph", "--max-active", "0"],
+        &["run-plan-graph", "--max-active"],
+        &["run-plan-graph", "--max-active", "2", "--max-active", "3"],
+    ];
+    for args in cases {
+        let output = Command::new(bin())
+            .args(*args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("run parse-error argv");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "args={args:?} stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
 fn default_task_worker_is_pi_print_without_tools_or_no_context_files() {
     let source =
         fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/run_plan_graph.rs"))
@@ -1021,6 +1099,11 @@ fn default_task_worker_is_pi_print_without_tools_or_no_context_files() {
     let help = Command::new(bin()).args(["--help"]).output().expect("help");
     let text = String::from_utf8_lossy(&help.stdout);
     assert!(text.contains("--task-worker"), "{text}");
+    assert!(text.contains("--max-active"), "{text}");
+    assert!(
+        text.contains("omitted means 4 ordinary tasks"),
+        "help must say omitted --max-active means 4 ordinary tasks: {text}"
+    );
     assert!(
         !text.contains("--no-context-files"),
         "help must not advertise --no-context-files: {text}"

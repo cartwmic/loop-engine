@@ -7,6 +7,7 @@
 
 mod dagu;
 mod fan_out;
+mod invocation_progress;
 mod preview_bindings;
 
 pub use dagu::{names_for_capture_root, resolve_dagu, write_locator, DaguError, DaguLocator};
@@ -165,6 +166,11 @@ pub enum ParsedRequest {
     PreviewBindings {
         options: CliOptions,
         operand: Option<String>,
+    },
+    InvocationProgress {
+        options: CliOptions,
+        run_id: RunId,
+        invocation_id: Option<InvocationId>,
     },
 }
 
@@ -578,6 +584,23 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
                     index += 1;
                     continue;
                 }
+                "--max-active" => {
+                    let value = next_option_value(args, &mut index, token)?;
+                    fan_out_tokens.push("--max-active".to_owned());
+                    fan_out_tokens.push(value);
+                    continue;
+                }
+                value if value.starts_with("--max-active=") => {
+                    fan_out_tokens.push("--max-active".to_owned());
+                    fan_out_tokens.push(
+                        value
+                            .strip_prefix("--max-active=")
+                            .expect("checked prefix")
+                            .to_owned(),
+                    );
+                    index += 1;
+                    continue;
+                }
                 "--stdin-file" => {
                     stdin_file = Some(next_option_value(args, &mut index, token)?);
                     continue;
@@ -736,6 +759,35 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
             ));
         }
         return parse_preview_bindings_request(options, positionals);
+    }
+
+    if command_name == "invocation-progress" {
+        if let Some(option) = fan_out_tokens.first() {
+            return Err(CliError::new(
+                "invalid-invocation",
+                format!("unknown option `{option}`"),
+            ));
+        }
+        reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
+        reject_capture_dir_option(&capture_dir)?;
+        reject_unrelated_options(
+            "invocation-progress",
+            provider,
+            input,
+            label,
+            start_id,
+            kind,
+            data,
+            record_id,
+            event,
+        )?;
+        if run_id.is_some() {
+            return Err(CliError::new(
+                "invalid-invocation",
+                "invocation-progress takes RUN_ID as a positional argument",
+            ));
+        }
+        return parse_invocation_progress_request(options, positionals);
     }
 
     if let Some(option) = fan_out_tokens.first() {
@@ -1144,6 +1196,11 @@ where
         ParsedRequest::PreviewBindings { options, operand } => {
             execute_preview_bindings(options, operand)
         }
+        ParsedRequest::InvocationProgress {
+            options,
+            run_id,
+            invocation_id,
+        } => invocation_progress::execute_invocation_progress(options, run_id, invocation_id),
     }
 }
 
@@ -1245,6 +1302,20 @@ fn parse_preview_bindings_request(
     Ok(ParsedRequest::PreviewBindings { options, operand })
 }
 
+fn parse_invocation_progress_request(
+    options: CliOptions,
+    mut positionals: Vec<String>,
+) -> Result<ParsedRequest, CliError> {
+    let run_id = required(take_positional(&mut positionals), "run ID")?;
+    let invocation_id = take_positional(&mut positionals);
+    ensure_no_positionals(&positionals, "invocation-progress")?;
+    Ok(ParsedRequest::InvocationProgress {
+        options,
+        run_id: run_id.into(),
+        invocation_id: invocation_id.map(InvocationId::from),
+    })
+}
+
 fn execute_preview_bindings(options: CliOptions, operand: Option<String>) -> Execution {
     let warn_default_timeout = options.provider_timeout.is_none();
     let source = match preview_bindings::load_from_stdin_or_operand(operand.as_deref()) {
@@ -1331,6 +1402,37 @@ fn parse_stdin_exec(
     })
 }
 
+const PI_CODING_AGENT_SESSION_DIR: &str = "PI_CODING_AGENT_SESSION_DIR";
+
+/// When `PI_CODING_AGENT_SESSION_DIR` is already present in the inherited
+/// environment, leave it unchanged. Otherwise, if `--stdin-file` has a non-empty
+/// parent, create `<parent>/sessions` and return that absolute path for the child.
+fn prepare_child_session_dir(stdin_file: &Path) -> Result<Option<PathBuf>, String> {
+    if std::env::var_os(PI_CODING_AGENT_SESSION_DIR).is_some() {
+        return Ok(None);
+    }
+    let Some(parent) = stdin_file.parent() else {
+        return Ok(None);
+    };
+    if parent.as_os_str().is_empty() {
+        return Ok(None);
+    }
+    let sessions = parent.join("sessions");
+    fs::create_dir_all(&sessions).map_err(|error| {
+        format!(
+            "could not create sessions directory {}: {error}",
+            sessions.display()
+        )
+    })?;
+    if sessions.is_absolute() {
+        return Ok(Some(sessions));
+    }
+    let cwd = std::env::current_dir().map_err(|error| {
+        format!("could not resolve current directory for sessions path: {error}")
+    })?;
+    Ok(Some(cwd.join(sessions)))
+}
+
 fn execute_stdin_exec(args: StdinExecArgs) -> Execution {
     let stdin = match fs::File::open(&args.stdin_file) {
         Ok(file) => file,
@@ -1344,13 +1446,20 @@ fn execute_stdin_exec(args: StdinExecArgs) -> Execution {
             )
         }
     };
-    let mut child = match Command::new(&args.command)
+    let session_dir = match prepare_child_session_dir(&args.stdin_file) {
+        Ok(path) => path,
+        Err(message) => return stdin_exec_failed(message, EXIT_ERROR),
+    };
+    let mut command = Command::new(&args.command);
+    command
         .args(&args.args)
         .stdin(Stdio::from(stdin))
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .spawn()
-    {
+        .stderr(Stdio::inherit());
+    if let Some(session_dir) = session_dir.as_ref() {
+        command.env(PI_CODING_AGENT_SESSION_DIR, session_dir);
+    }
+    let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
             return stdin_exec_failed(
@@ -2442,7 +2551,7 @@ fn usage(command: Option<&str>) -> String {
         Some("invoke") => "Usage: loop-engine [options] invoke <run-id> <slot-id>\n".to_owned(),
         Some("list") => "Usage: loop-engine [options] list\n".to_owned(),
         Some("fan-out") => {
-            "Usage: loop-engine [options] fan-out [--worker JSON]... [--instructions FILE]\n\n"
+            "Usage: loop-engine [options] fan-out [--worker JSON]... [--instructions FILE] [--max-active N]\n\n"
                 .to_owned()
                 + "Start one process per --worker concurrently as a local Dagu type:graph under\n"
                 + "an isolated home in the capture directory. Per-step progress is dagu status /\n"
@@ -2454,6 +2563,8 @@ fn usage(command: Option<&str>) -> String {
                 + "                           optional preamble and output_schema; repeatable\n"
                 + "  --instructions FILE      Shared instructions file for ad hoc mode.\n"
                 + "                           Bound mode reads the invoke packet from stdin instead.\n"
+                + "  --max-active N           At most N worker steps run at once. Omitted means\n"
+                + "                           uncapped concurrent worker start.\n"
         }
         Some("preview-bindings") => {
             "Usage: loop-engine [options] preview-bindings [JSON|@FILE]\n\n"
@@ -2464,6 +2575,19 @@ fn usage(command: Option<&str>) -> String {
                 + "that key. Reports a dagu PATH check (minimum 2.14.0) as ok with path and\n"
                 + "version, or as a warning; warnings alone still exit 0. This is not a run-state\n"
                 + "operation.\n"
+        }
+        Some("invocation-progress") => {
+            "Usage: loop-engine [options] invocation-progress RUN_ID [INVOCATION_ID]\n\n"
+                .to_owned()
+                + "Open the catalog, select one invocation, and print a JSON progress snapshot of\n"
+                + "that invocation's capture_dir graph liveness and already-associated traces.\n"
+                + "Does not write overlay or invocation status. Show remains the overlay authority.\n\n"
+                + "When INVOCATION_ID is omitted, the unique overlay-running invocation is selected\n"
+                + "if one exists; otherwise the latest invocation by started_at.\n\n"
+                + "Graph state is Dagu step-helper liveness (not_started|running|reaped), not overlay\n"
+                + "success and not inner waitpid. Graph is omitted when capture_dir/dagu-locator.json\n"
+                + "is absent. --timeout-ms bounds helper spawns only, never invocation allowed_time_ms.\n\n"
+                + "Options: --database <path> --json --timeout-ms <milliseconds>\n"
         }
         _ => {
             "Usage: loop-engine [options] <operation> [arguments]\n\n"
@@ -2478,9 +2602,14 @@ fn usage(command: Option<&str>) -> String {
                 + "  terminate\n"
                 + "  invoke\n\n"
                 + "Other commands:\n"
+                + "  invocation-progress RUN_ID [INVOCATION_ID]\n"
+                + "                             Snapshot capture_dir graph liveness and traces\n"
+                + "                             Opens the catalog; graph state is Dagu helper liveness\n"
+                + "                             --timeout-ms bounds helper spawns only\n"
                 + "  fan-out                    Run worker CLIs concurrently via a local Dagu graph\n"
                 + "                             --worker JSON          Nested worker contract; repeatable\n"
                 + "                             --instructions FILE    Shared instructions (ad hoc mode)\n"
+                + "                             --max-active N         Cap concurrent workers; omitted is uncapped\n"
                 + "  preview-bindings [JSON|@FILE]  Inspect work_slot_bindings without starting a run\n"
                 + "                             Omitted operand reads stdin; @FILE reads that path\n\n"
                 + "Global options:\n"
@@ -2505,6 +2634,11 @@ fn help_lists_fan_out_and_hides_wait_invocation() {
         help.stdout
     );
     assert!(
+        help.stdout.contains("invocation-progress"),
+        "help must list invocation-progress: {}",
+        help.stdout
+    );
+    assert!(
         !help.stdout.contains("wait-invocation"),
         "help must not mention hidden wait-invocation: {}",
         help.stdout
@@ -2522,9 +2656,21 @@ fn help_lists_fan_out_and_hides_wait_invocation() {
     let fan_out_help = execute(["fan-out", "--help"]);
     assert_eq!(fan_out_help.exit_code, EXIT_COMPLETED);
     assert!(fan_out_help.stdout.contains("fan-out"));
+    assert!(fan_out_help.stdout.contains("--max-active"));
+    assert!(fan_out_help.stdout.contains("uncapped"));
     assert!(!fan_out_help.stdout.contains("wait-invocation"));
     assert!(!fan_out_help.stdout.contains("stdin-exec"));
     assert!(!fan_out_help.stdout.contains("fan-out-join"));
+    let progress_help = execute(["invocation-progress", "--help"]);
+    assert_eq!(progress_help.exit_code, EXIT_COMPLETED);
+    assert!(progress_help.stdout.contains("invocation-progress"));
+    assert!(progress_help.stdout.contains("RUN_ID [INVOCATION_ID]"));
+    assert!(progress_help.stdout.contains("catalog"));
+    assert!(progress_help.stdout.contains("--timeout-ms"));
+    assert!(progress_help.stdout.contains("Dagu"));
+    assert!(!progress_help.stdout.contains("wait-invocation"));
+    assert!(!progress_help.stdout.contains("stdin-exec"));
+    assert!(!progress_help.stdout.contains("fan-out-join"));
 }
 
 #[cfg(test)]
@@ -2643,6 +2789,7 @@ mod tests {
             "invoke",
             "fan-out",
             "preview-bindings",
+            "invocation-progress",
         ] {
             let command_help = execute([command, "--help"]);
             assert_eq!(command_help.exit_code, EXIT_COMPLETED);
@@ -2752,6 +2899,11 @@ mod tests {
             "help must list preview-bindings: {}",
             help.stdout
         );
+        assert!(
+            help.stdout.contains("invocation-progress"),
+            "help must list invocation-progress: {}",
+            help.stdout
+        );
         let (operations, other) = help
             .stdout
             .split_once("Other commands:")
@@ -2765,8 +2917,20 @@ mod tests {
             "preview-bindings must not be a ninth primary operation: {operations}"
         );
         assert!(
+            !operations.contains("invocation-progress"),
+            "invocation-progress must not be a ninth primary operation: {operations}"
+        );
+        assert!(
             other.contains("preview-bindings"),
             "preview-bindings must be under Other commands: {other}"
+        );
+        assert!(
+            other.contains("invocation-progress"),
+            "invocation-progress must be under Other commands: {other}"
+        );
+        assert!(
+            other.contains("fan-out"),
+            "fan-out must be under Other commands: {other}"
         );
         assert!(
             help.stdout.contains("--worker"),
@@ -2776,6 +2940,11 @@ mod tests {
         assert!(
             help.stdout.contains("--instructions"),
             "help must document --instructions: {}",
+            help.stdout
+        );
+        assert!(
+            help.stdout.contains("--max-active"),
+            "help must document --max-active: {}",
             help.stdout
         );
         assert!(
@@ -2799,6 +2968,10 @@ mod tests {
         assert!(fan_out_help.stdout.contains("fan-out"));
         assert!(fan_out_help.stdout.contains("--worker JSON"));
         assert!(fan_out_help.stdout.contains("--instructions FILE"));
+        assert!(fan_out_help.stdout.contains("--max-active N"));
+        assert!(fan_out_help
+            .stdout
+            .contains("uncapped concurrent worker start"));
         assert!(!fan_out_help.stdout.contains("wait-invocation"));
         assert!(!fan_out_help.stdout.contains("stdin-exec"));
         assert!(!fan_out_help.stdout.contains("fan-out-join"));
@@ -2809,6 +2982,17 @@ mod tests {
         assert!(!preview_help.stdout.contains("wait-invocation"));
         assert!(!preview_help.stdout.contains("stdin-exec"));
         assert!(!preview_help.stdout.contains("fan-out-join"));
+        let progress_help = execute(["invocation-progress", "--help"]);
+        assert_eq!(progress_help.exit_code, EXIT_COMPLETED);
+        assert!(progress_help.stdout.contains("invocation-progress"));
+        assert!(progress_help.stdout.contains("RUN_ID [INVOCATION_ID]"));
+        assert!(progress_help.stdout.contains("catalog"));
+        assert!(progress_help.stdout.contains("--timeout-ms"));
+        assert!(progress_help.stdout.contains("helper"));
+        assert!(progress_help.stdout.contains("Dagu"));
+        assert!(!progress_help.stdout.contains("wait-invocation"));
+        assert!(!progress_help.stdout.contains("stdin-exec"));
+        assert!(!progress_help.stdout.contains("fan-out-join"));
     }
 
     #[test]
@@ -2819,6 +3003,7 @@ mod tests {
         };
         assert!(args.workers.is_empty());
         assert!(args.instructions_path.is_none());
+        assert!(args.max_active.is_none());
 
         let worker = r#"{"command":"echo","args":[]}"#;
         let parsed = parse_args(["fan-out", "--worker", worker]).expect("fan-out with worker");
@@ -2827,7 +3012,21 @@ mod tests {
         };
         assert_eq!(args.workers.len(), 1);
         assert_eq!(args.workers[0].command, "echo");
+        assert!(args.max_active.is_none());
         assert!(options.database.is_none());
+
+        let parsed = parse_args(["fan-out", "--max-active", "2", "--worker", worker])
+            .expect("fan-out with --max-active");
+        let ParsedRequest::FanOut { args, .. } = parsed else {
+            panic!("expected ParsedRequest::FanOut");
+        };
+        assert_eq!(args.max_active, Some(2));
+        assert_eq!(args.workers.len(), 1);
+
+        let unknown = parse_args(["fan-out", "--max-concurrency", "2"])
+            .expect_err("unknown --max-concurrency");
+        assert_eq!(unknown.code, "invalid-invocation");
+        assert!(unknown.message.contains("unknown option"), "{unknown}");
     }
 
     #[test]
@@ -2847,6 +3046,70 @@ mod tests {
         };
         assert_eq!(operand.as_deref(), Some("{}"));
         assert_eq!(options.provider_timeout, Some(Duration::from_millis(60000)));
+    }
+
+    #[test]
+    fn parser_invocation_progress_is_not_a_primary_command() {
+        let parsed = parse_args(["invocation-progress", "run-1"]).expect("progress should parse");
+        let ParsedRequest::InvocationProgress {
+            run_id,
+            invocation_id,
+            options,
+        } = parsed
+        else {
+            panic!("expected ParsedRequest::InvocationProgress, got {parsed:?}");
+        };
+        assert_eq!(run_id.as_str(), "run-1");
+        assert!(invocation_id.is_none());
+        assert_eq!(options.output, OutputFormat::Human);
+
+        let parsed = parse_args([
+            "--json",
+            "--database",
+            "/tmp/loop.db",
+            "--timeout-ms",
+            "5000",
+            "invocation-progress",
+            "run-1",
+            "inv-1",
+        ])
+        .expect("progress with globals and invocation id");
+        let ParsedRequest::InvocationProgress {
+            run_id,
+            invocation_id,
+            options,
+        } = parsed
+        else {
+            panic!("expected ParsedRequest::InvocationProgress");
+        };
+        assert_eq!(run_id.as_str(), "run-1");
+        assert_eq!(
+            invocation_id.as_ref().map(InvocationId::as_str),
+            Some("inv-1")
+        );
+        assert_eq!(options.output, OutputFormat::Json);
+        assert_eq!(options.database, Some(PathBuf::from("/tmp/loop.db")));
+        assert_eq!(options.provider_timeout, Some(Duration::from_millis(5000)));
+
+        let missing = parse_args(["invocation-progress"]).expect_err("run id required");
+        assert_eq!(missing.code, "invalid-invocation");
+        let extra = parse_args(["invocation-progress", "run-1", "inv-1", "extra"])
+            .expect_err("leftover tokens");
+        assert_eq!(extra.code, "invalid-invocation");
+        let capture = parse_args(["invocation-progress", "run-1", "--capture-dir", "/tmp"])
+            .expect_err("reject capture-dir");
+        assert_eq!(capture.code, "invalid-invocation");
+        let worker = parse_args([
+            "invocation-progress",
+            "run-1",
+            "--worker",
+            r#"{"command":"echo","args":[]}"#,
+        ])
+        .expect_err("reject worker");
+        assert_eq!(worker.code, "invalid-invocation");
+        let stdin = parse_args(["invocation-progress", "run-1", "--stdin-file", "x"])
+            .expect_err("reject stdin-exec flags");
+        assert_eq!(stdin.code, "invalid-invocation");
     }
 
     #[test]

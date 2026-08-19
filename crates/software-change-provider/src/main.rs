@@ -70,22 +70,22 @@ fn run() -> i32 {
                 Ok(rest) => rest,
                 Err(_) => {
                     eprintln!(
-                        "run-plan-graph arguments must be valid UTF-8; usage: software-change run-plan-graph [--task-worker JSON]"
+                        "run-plan-graph arguments must be valid UTF-8; usage: software-change run-plan-graph [--task-worker JSON] [--max-active N]"
                     );
                     return 2;
                 }
             };
             return match parse_run_plan_graph_args(&rest) {
-                Ok(worker) => {
+                Ok(parsed) => {
                     if let Err(error) = dagu::resolve_dagu() {
                         eprintln!("{error}");
                         return 1;
                     }
-                    run_plan_graph::execute(&worker)
+                    run_plan_graph::execute(&parsed)
                 }
                 Err(error) => {
                     eprintln!(
-                        "{error}; usage: software-change run-plan-graph [--task-worker JSON]"
+                        "{error}; usage: software-change run-plan-graph [--task-worker JSON] [--max-active N]"
                     );
                     2
                 }
@@ -153,7 +153,7 @@ fn run_protocol() -> i32 {
 
 fn provider_help() -> i32 {
     println!(
-        "software-change\n\nUsage:\n  software-change < stdin\n  software-change data-dump DIR\n  software-change run-plan-graph [--task-worker JSON]\n  software-change --help | -h\n  software-change --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nData:\n  data-dump  materialize embedded provider data under DIR\n\nPlan graph:\n  run-plan-graph  execute plan.json as a Dagu type:graph (max_active_steps {MAX_CONCURRENCY}) with a mandatory summarizer"
+        "software-change\n\nUsage:\n  software-change < stdin\n  software-change data-dump DIR\n  software-change run-plan-graph [--task-worker JSON] [--max-active N]\n  software-change --help | -h\n  software-change --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nData:\n  data-dump  materialize embedded provider data under DIR\n\nPlan graph:\n  run-plan-graph  execute plan.json as a Dagu type:graph (--max-active N; omitted means {MAX_CONCURRENCY} ordinary tasks) with a mandatory summarizer"
     );
     0
 }
@@ -267,6 +267,37 @@ fn take_option_value(
     Ok(None)
 }
 
+const PI_CODING_AGENT_SESSION_DIR: &str = "PI_CODING_AGENT_SESSION_DIR";
+
+/// When `PI_CODING_AGENT_SESSION_DIR` is already present in the inherited
+/// environment, leave it unchanged. Otherwise, if `--stdin-file` has a non-empty
+/// parent, create `<parent>/sessions` and return that absolute path for the child.
+fn prepare_child_session_dir(stdin_file: &Path) -> Result<Option<PathBuf>, String> {
+    if std::env::var_os(PI_CODING_AGENT_SESSION_DIR).is_some() {
+        return Ok(None);
+    }
+    let Some(parent) = stdin_file.parent() else {
+        return Ok(None);
+    };
+    if parent.as_os_str().is_empty() {
+        return Ok(None);
+    }
+    let sessions = parent.join("sessions");
+    fs::create_dir_all(&sessions).map_err(|error| {
+        format!(
+            "could not create sessions directory {}: {error}",
+            sessions.display()
+        )
+    })?;
+    if sessions.is_absolute() {
+        return Ok(Some(sessions));
+    }
+    let cwd = std::env::current_dir().map_err(|error| {
+        format!("could not resolve current directory for sessions path: {error}")
+    })?;
+    Ok(Some(cwd.join(sessions)))
+}
+
 fn execute_stdin_exec(args: StdinExecArgs) -> i32 {
     let stdin = match fs::File::open(&args.stdin_file) {
         Ok(file) => file,
@@ -280,13 +311,20 @@ fn execute_stdin_exec(args: StdinExecArgs) -> i32 {
             )
         }
     };
-    let mut child = match Command::new(&args.command)
+    let session_dir = match prepare_child_session_dir(&args.stdin_file) {
+        Ok(path) => path,
+        Err(message) => return stdin_exec_failed(message, EXIT_STDIN_EXEC_ERROR),
+    };
+    let mut command = Command::new(&args.command);
+    command
         .args(&args.args)
         .stdin(Stdio::from(stdin))
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .spawn()
-    {
+        .stderr(Stdio::inherit());
+    if let Some(session_dir) = session_dir.as_ref() {
+        command.env(PI_CODING_AGENT_SESSION_DIR, session_dir);
+    }
+    let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
             return stdin_exec_failed(

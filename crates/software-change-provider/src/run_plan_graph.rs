@@ -11,8 +11,8 @@ use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-/// Hard cap on concurrent inner-worker processes for `run-plan-graph`.
-/// Emitted as Dagu `max_active_steps`.
+/// Default concurrent ordinary plan-task cap when `--max-active` is omitted.
+/// Emitted as Dagu `max_active_steps`. The summarizer is not a concurrent peer.
 pub(crate) const MAX_CONCURRENCY: usize = 4;
 
 const DEFAULT_WORKER_COMMAND: &str = "pi";
@@ -37,6 +37,13 @@ const SUMMARIZER_ASSIGNMENT: &str = "Write artifact_root/implementation-report.j
 pub(crate) struct WorkerCli {
     pub(crate) command: String,
     pub(crate) args: Vec<String>,
+}
+
+/// Parsed argv after the `run-plan-graph` command name.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RunPlanGraphArgs {
+    pub(crate) worker: WorkerCli,
+    pub(crate) max_active: usize,
 }
 
 /// Bound-worker stdin packet.  Exactly the five engine invoke keys; no extras.
@@ -136,9 +143,10 @@ pub(crate) fn parse_invoke_packet(raw: &str) -> Result<InvokePacket, ParseError>
 /// Parse argv tokens after the `run-plan-graph` command name.
 ///
 /// Optional once: `--task-worker JSON`.  Omitted flag yields [`default_task_worker`].
-/// Unknown flags, leftover positionals, and repeated `--task-worker` are errors.
-/// There is no `--max-concurrency` flag; concurrency is [`MAX_CONCURRENCY`].
-pub(crate) fn parse_run_plan_graph_args<I, S>(args: I) -> Result<WorkerCli, ParseError>
+/// Optional once: `--max-active N` with decimal integer N >= 1.  Omitted flag
+/// yields [`MAX_CONCURRENCY`].  Unknown flags, leftover positionals, and
+/// repeated flags are errors.  There is no `--max-concurrency` flag.
+pub(crate) fn parse_run_plan_graph_args<I, S>(args: I) -> Result<RunPlanGraphArgs, ParseError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -148,6 +156,7 @@ where
         .map(|token| token.as_ref().to_owned())
         .collect::<Vec<String>>();
     let mut worker = None;
+    let mut max_active = None;
     let mut index = 0;
     while index < args.len() {
         let token = &args[index];
@@ -167,6 +176,22 @@ where
             worker = Some(parse_worker_cli_json(&raw)?);
             continue;
         }
+        if let Some(raw) = strip_option(token, "--max-active") {
+            if max_active.is_some() {
+                return Err(ParseError::new(
+                    "`--max-active` may be supplied at most once",
+                ));
+            }
+            let raw = match raw {
+                Some(raw) => {
+                    index += 1;
+                    raw
+                }
+                None => option_value(&args, &mut index, "--max-active")?.to_owned(),
+            };
+            max_active = Some(parse_max_active(&raw)?);
+            continue;
+        }
         if token.starts_with('-') {
             return Err(ParseError::new(format!("unknown option `{token}`")));
         }
@@ -174,7 +199,10 @@ where
             "unexpected argument `{token}` for run-plan-graph"
         )));
     }
-    Ok(worker.unwrap_or_else(default_task_worker))
+    Ok(RunPlanGraphArgs {
+        worker: worker.unwrap_or_else(default_task_worker),
+        max_active: max_active.unwrap_or(MAX_CONCURRENCY),
+    })
 }
 
 fn strip_option(token: &str, option: &str) -> Option<Option<String>> {
@@ -203,14 +231,25 @@ fn option_value<'a>(
     Ok(value)
 }
 
+fn parse_max_active(raw: &str) -> Result<usize, ParseError> {
+    raw.parse::<usize>()
+        .ok()
+        .filter(|value| *value >= 1)
+        .ok_or_else(|| {
+            ParseError::new(format!(
+                "`--max-active` requires a decimal integer >= 1, got `{raw}`"
+            ))
+        })
+}
+
 /// Read the invoke packet from stdin, schedule `plan.json`, and waitpid Dagu.
-pub(crate) fn execute(worker: &WorkerCli) -> i32 {
+pub(crate) fn execute(args: &RunPlanGraphArgs) -> i32 {
     let mut input = String::new();
     if let Err(error) = io::stdin().read_to_string(&mut input) {
         eprintln!("could not read invoke packet: {error}");
         return 2;
     }
-    match execute_from_packet(worker, &input) {
+    match execute_from_packet(args, &input) {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("{error}");
@@ -280,7 +319,7 @@ struct StepOutcome {
     exit_code: Option<i32>,
 }
 
-fn execute_from_packet(worker: &WorkerCli, raw_packet: &str) -> Result<(), ExecuteError> {
+fn execute_from_packet(args: &RunPlanGraphArgs, raw_packet: &str) -> Result<(), ExecuteError> {
     let packet =
         parse_invoke_packet(raw_packet).map_err(|error| ExecuteError::usage(error.to_string()))?;
     let _ = (&packet.run_id, &packet.slot_id, &packet.instruction_body);
@@ -299,7 +338,8 @@ fn execute_from_packet(worker: &WorkerCli, raw_packet: &str) -> Result<(), Execu
     let plan = parse_plan(&plan_raw)?;
     let dagu = resolve_dagu().map_err(|error| ExecuteError::failed(error.to_string()))?;
     run_dagu_graph(
-        worker,
+        &args.worker,
+        args.max_active,
         &dagu,
         &artifact_root,
         &plan_path,
@@ -446,6 +486,7 @@ fn has_cycle(order: &[String], successors: &HashMap<String, Vec<String>>) -> boo
 
 fn run_dagu_graph(
     worker: &WorkerCli,
+    max_active: usize,
     dagu: &Path,
     artifact_root: &Path,
     plan_path: &Path,
@@ -523,7 +564,14 @@ fn run_dagu_graph(
         depends: plan.order.clone(),
     };
 
-    let yaml = emit_graph_yaml(&dag_name, &software_change, worker, &steps, &summarizer);
+    let yaml = emit_graph_yaml(
+        &dag_name,
+        &software_change,
+        worker,
+        &steps,
+        &summarizer,
+        max_active,
+    );
     let dags_dir = home.join("dags");
     fs::create_dir_all(&dags_dir).map_err(|error| {
         ExecuteError::failed(format!("could not create {}: {error}", dags_dir.display()))
@@ -821,10 +869,11 @@ fn emit_graph_yaml(
     worker: &WorkerCli,
     steps: &[PreparedStep],
     summarizer: &PreparedStep,
+    max_active: usize,
 ) -> String {
     let _ = dag_name;
     let mut yaml = String::from("type: graph\nmax_active_steps: ");
-    yaml.push_str(&MAX_CONCURRENCY.to_string());
+    yaml.push_str(&max_active.to_string());
     yaml.push_str("\nsteps:\n");
     for step in steps.iter().chain(std::iter::once(summarizer)) {
         yaml.push_str("  - name: ");
@@ -1125,8 +1174,11 @@ mod tests {
 
     #[test]
     fn omitted_task_worker_yields_default_pi_print() {
-        let worker = parse_run_plan_graph_args(&[] as &[&str]).expect("omitted --task-worker");
+        let parsed = parse_run_plan_graph_args(&[] as &[&str]).expect("omitted --task-worker");
+        let worker = parsed.worker;
         assert_eq!(worker, default_task_worker());
+        assert_eq!(parsed.max_active, MAX_CONCURRENCY);
+        assert_eq!(parsed.max_active, 4);
         assert_eq!(worker.command, "pi");
         assert_eq!(
             worker.args,
@@ -1164,10 +1216,11 @@ mod tests {
 
     #[test]
     fn one_task_worker_replaces_default() {
-        let worker = parse_run_plan_graph_args(["--task-worker", valid_worker_json()])
+        let parsed = parse_run_plan_graph_args(["--task-worker", valid_worker_json()])
             .expect("one --task-worker");
-        assert_eq!(worker.command, "echo");
-        assert_eq!(worker.args, vec!["hello".to_owned()]);
+        assert_eq!(parsed.worker.command, "echo");
+        assert_eq!(parsed.worker.args, vec!["hello".to_owned()]);
+        assert_eq!(parsed.max_active, MAX_CONCURRENCY);
     }
 
     #[test]
@@ -1185,6 +1238,33 @@ mod tests {
     fn leftover_unknown_arg_fails() {
         assert!(parse_run_plan_graph_args(["leftover"]).is_err());
         assert!(parse_run_plan_graph_args(["--max-concurrency", "8"]).is_err());
+    }
+
+    #[test]
+    fn max_active_n_is_parsed_and_omitted_stays_four() {
+        let omitted = parse_run_plan_graph_args(&[] as &[&str]).expect("omitted --max-active");
+        assert_eq!(omitted.max_active, 4);
+        let set = parse_run_plan_graph_args(["--max-active", "2"]).expect("--max-active 2");
+        assert_eq!(set.max_active, 2);
+        assert_eq!(set.worker, default_task_worker());
+        let equals = parse_run_plan_graph_args(["--max-active=3"]).expect("--max-active=3");
+        assert_eq!(equals.max_active, 3);
+        let with_worker =
+            parse_run_plan_graph_args(["--task-worker", valid_worker_json(), "--max-active", "8"])
+                .expect("worker plus --max-active");
+        assert_eq!(with_worker.max_active, 8);
+        assert_eq!(with_worker.worker.command, "echo");
+    }
+
+    #[test]
+    fn max_active_zero_missing_non_integer_and_repeat_fail() {
+        assert!(parse_run_plan_graph_args(["--max-active", "0"]).is_err());
+        assert!(parse_run_plan_graph_args(["--max-active"]).is_err());
+        assert!(parse_run_plan_graph_args(["--max-active", "nope"]).is_err());
+        assert!(parse_run_plan_graph_args(["--max-active", "1.5"]).is_err());
+        assert!(parse_run_plan_graph_args(["--max-active", "-1"]).is_err());
+        assert!(parse_run_plan_graph_args(["--max-active", "2", "--max-active", "3"]).is_err());
+        assert!(parse_run_plan_graph_args(["--max-active=2", "--max-active=4"]).is_err());
     }
 
     #[test]
@@ -1234,18 +1314,79 @@ mod tests {
             &worker,
             &[task],
             &summarizer,
+            MAX_CONCURRENCY,
         );
         assert!(yaml.starts_with("type: graph\n"), "{yaml}");
         assert!(yaml.contains("max_active_steps: 4"), "{yaml}");
         assert!(yaml.contains("action: exec"), "{yaml}");
         assert!(yaml.contains("name: \"task-a\""), "{yaml}");
         assert!(yaml.contains("name: \"summarizer\""), "{yaml}");
+        assert!(
+            yaml.contains("    depends:\n      - \"task-a\"\n"),
+            "{yaml}"
+        );
         assert!(yaml.contains("stdin-exec"), "{yaml}");
         assert!(yaml.contains("--exit-mode"), "{yaml}");
         assert!(yaml.contains("propagate"), "{yaml}");
         assert!(!yaml.contains("continue_on"), "{yaml}");
         assert!(!yaml.contains("retry_policy"), "{yaml}");
         assert!(!yaml.contains("instruction_body"), "{yaml}");
+    }
+
+    #[test]
+    fn omitted_parse_emits_max_active_steps_four() {
+        let parsed = parse_run_plan_graph_args(&[] as &[&str]).expect("omitted");
+        let yaml = emit_sample(&parsed.worker, &["task-a"], parsed.max_active);
+        assert!(yaml.contains("max_active_steps: 4"), "{yaml}");
+        assert!(
+            yaml.contains("    depends:\n      - \"task-a\"\n"),
+            "{yaml}"
+        );
+    }
+
+    #[test]
+    fn max_active_two_emits_max_active_steps_two() {
+        let parsed = parse_run_plan_graph_args(["--max-active", "2"]).expect("N=2");
+        assert_eq!(parsed.max_active, 2);
+        let yaml = emit_sample(&parsed.worker, &["task-a", "task-b"], parsed.max_active);
+        assert!(yaml.contains("max_active_steps: 2"), "{yaml}");
+        assert!(!yaml.contains("max_active_steps: 4"), "{yaml}");
+        let summarizer = yaml
+            .split("name: \"summarizer\"")
+            .nth(1)
+            .expect("summarizer step");
+        assert!(
+            summarizer.contains("    depends:\n      - \"task-a\"\n      - \"task-b\"\n"),
+            "{yaml}"
+        );
+    }
+
+    fn emit_sample(worker: &WorkerCli, task_names: &[&str], max_active: usize) -> String {
+        let steps: Vec<PreparedStep> = task_names
+            .iter()
+            .map(|name| PreparedStep {
+                name: (*name).to_owned(),
+                stdin_path: format!("/tmp/cap/{name}/stdin"),
+                stdout_path: format!("/tmp/cap/{name}/stdout"),
+                stderr_path: format!("/tmp/cap/{name}/stderr"),
+                depends: Vec::new(),
+            })
+            .collect();
+        let summarizer = PreparedStep {
+            name: "summarizer".to_owned(),
+            stdin_path: "/tmp/cap/summarizer/stdin".to_owned(),
+            stdout_path: "/tmp/cap/summarizer/stdout".to_owned(),
+            stderr_path: "/tmp/cap/summarizer/stderr".to_owned(),
+            depends: task_names.iter().map(|name| (*name).to_owned()).collect(),
+        };
+        emit_graph_yaml(
+            "plan-graph-inv-1",
+            "/abs/software-change",
+            worker,
+            &steps,
+            &summarizer,
+            max_active,
+        )
     }
 
     #[test]

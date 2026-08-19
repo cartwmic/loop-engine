@@ -81,6 +81,126 @@ fn json_bearing_worker_args_are_literal() {
 }
 
 #[test]
+fn colocates_pi_session_dir_when_unset_and_leaves_argv_unchanged() {
+    let directory = tempdir().expect("tempdir");
+    let inspector = write_inspector(directory.path());
+    let worker_dir = directory.path().join("worker");
+    fs::create_dir_all(&worker_dir).expect("worker dir");
+    let stdin_file = worker_dir.join("stdin");
+    let sidecar = worker_dir.join("inner_exit.json");
+    let out = directory.path().join("inspect");
+    let frozen = r#"{"frozen":true}"#;
+    fs::write(&stdin_file, b"duty").expect("write stdin");
+
+    let output = engine()
+        .env_remove("PI_CODING_AGENT_SESSION_DIR")
+        .args([
+            "stdin-exec",
+            "--stdin-file",
+            stdin_file.to_str().expect("utf-8"),
+            "--exit-mode",
+            "sidecar",
+            "--sidecar-file",
+            sidecar.to_str().expect("utf-8"),
+            "--",
+            "python3",
+            inspector.to_str().expect("utf-8"),
+            out.to_str().expect("utf-8"),
+            "0",
+            frozen,
+        ])
+        .output()
+        .expect("run stdin-exec");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(sidecar_exit_code(&sidecar), 0);
+
+    let sessions = worker_dir.join("sessions");
+    assert!(
+        sessions.is_dir(),
+        "sessions directory must be created at {}",
+        sessions.display()
+    );
+
+    let env: Value = serde_json::from_str(&fs::read_to_string(out.join("env.json")).expect("env"))
+        .expect("env json");
+    assert_eq!(
+        env["PI_CODING_AGENT_SESSION_DIR"].as_str(),
+        Some(sessions.to_str().expect("utf-8"))
+    );
+
+    let argv: Vec<String> =
+        serde_json::from_str(&fs::read_to_string(out.join("argv.json")).expect("argv"))
+            .expect("argv json");
+    assert_eq!(
+        argv,
+        vec![
+            out.to_str().expect("utf-8").to_owned(),
+            "0".to_owned(),
+            frozen.to_owned(),
+        ]
+    );
+    assert!(
+        argv.iter().all(|arg| arg != "--session-dir"),
+        "child argv must not gain --session-dir: {argv:?}"
+    );
+}
+
+#[test]
+fn preserves_inherited_pi_session_dir() {
+    let directory = tempdir().expect("tempdir");
+    let inspector = write_inspector(directory.path());
+    let worker_dir = directory.path().join("worker");
+    fs::create_dir_all(&worker_dir).expect("worker dir");
+    let stdin_file = worker_dir.join("stdin");
+    let sidecar = worker_dir.join("inner_exit.json");
+    let out = directory.path().join("inspect");
+    let preset = directory.path().join("preset-sessions");
+    fs::create_dir_all(&preset).expect("preset sessions");
+    fs::write(&stdin_file, b"duty").expect("write stdin");
+
+    let output = engine()
+        .env("PI_CODING_AGENT_SESSION_DIR", &preset)
+        .args([
+            "stdin-exec",
+            "--stdin-file",
+            stdin_file.to_str().expect("utf-8"),
+            "--exit-mode",
+            "sidecar",
+            "--sidecar-file",
+            sidecar.to_str().expect("utf-8"),
+            "--",
+            "python3",
+            inspector.to_str().expect("utf-8"),
+            out.to_str().expect("utf-8"),
+            "0",
+        ])
+        .output()
+        .expect("run stdin-exec");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(sidecar_exit_code(&sidecar), 0);
+
+    assert!(
+        !worker_dir.join("sessions").exists(),
+        "inherited PI_CODING_AGENT_SESSION_DIR must not create <stdin-file parent>/sessions"
+    );
+
+    let env: Value = serde_json::from_str(&fs::read_to_string(out.join("env.json")).expect("env"))
+        .expect("env json");
+    assert_eq!(
+        env["PI_CODING_AGENT_SESSION_DIR"].as_str(),
+        Some(preset.to_str().expect("utf-8"))
+    );
+
+    let argv: Vec<String> =
+        serde_json::from_str(&fs::read_to_string(out.join("argv.json")).expect("argv"))
+            .expect("argv json");
+    assert!(
+        argv.iter().all(|arg| arg != "--session-dir"),
+        "child argv must not gain --session-dir: {argv:?}"
+    );
+}
+
+#[test]
 fn binary_stdin_bytes_are_delivered_intact() {
     let directory = tempdir().expect("tempdir");
     let inspector = write_inspector(directory.path());

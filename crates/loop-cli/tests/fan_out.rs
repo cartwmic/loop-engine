@@ -633,6 +633,7 @@ fn help_lists_fan_out_and_hides_wait_invocation() {
     assert!(stdout.contains("fan-out"), "{stdout}");
     assert!(stdout.contains("--worker"), "{stdout}");
     assert!(stdout.contains("--instructions"), "{stdout}");
+    assert!(stdout.contains("--max-active"), "{stdout}");
     assert!(!stdout.contains("wait-invocation"), "{stdout}");
     assert!(!stdout.contains("stdin-exec"), "{stdout}");
     assert!(!stdout.contains("fan-out-join"), "{stdout}");
@@ -651,6 +652,30 @@ fn help_lists_fan_out_and_hides_wait_invocation() {
             "help missing `{operation}`: {stdout}"
         );
     }
+
+    let fan_out_help = Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+        .args(["fan-out", "--help"])
+        .output()
+        .expect("run fan-out --help");
+    assert!(fan_out_help.status.success());
+    let fan_out_stdout = String::from_utf8_lossy(&fan_out_help.stdout);
+    assert!(
+        fan_out_stdout.contains("--max-active N"),
+        "{fan_out_stdout}"
+    );
+    assert!(
+        fan_out_stdout.contains("uncapped concurrent worker start"),
+        "{fan_out_stdout}"
+    );
+
+    let unknown = Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+        .args(["fan-out", "--max-concurrency", "2"])
+        .output()
+        .expect("run unknown --max-concurrency");
+    assert_eq!(unknown.status.code(), Some(2), "{unknown:?}");
+    let stderr = String::from_utf8_lossy(&unknown.stderr);
+    assert!(stderr.contains("unknown option"), "{stderr}");
+    assert!(stderr.contains("--max-concurrency"), "{stderr}");
 }
 
 #[test]

@@ -59,12 +59,26 @@ PACKET_KEYS = frozenset(
 OVERLAY_MEANING_SUCCEEDED = (
     "Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work."
 )
+OVERLAY_MEANING_RUNNING = (
+    "Overlay running means the waiter is alive and allowed time has not elapsed."
+)
 BOUND_PREAMBLE_SEPARATOR = b"---\n\n"
 GRAPH_STDIN_SEPARATOR = "\n---\n\n"
 SUMMARIZER_ASSIGNMENT_PREFIX = "Write artifact_root/implementation-report.json"
 OVERLAY_MEANING_FAILED = (
     "Overlay failed means the bound CLI exited nonzero or the waiter vanished."
 )
+GRAPH_STEP_STATES = frozenset({"not_started", "running", "reaped"})
+PROGRESS_SNAPSHOT_FORBIDDEN = frozenset(
+    {
+        "overlay",
+        "overlay_meaning",
+        "elapsed_ms",
+        "remaining_allowed_ms",
+        "inner_workers",
+    }
+)
+DUMMY_SESSION_MARKER = "dummy-session.json"
 DEFAULT_PI_SANDBOX_ARGS = ["--print", "--no-skills", "--no-extensions"]
 FORBIDDEN_PI_FLAGS = ("--no-context-files", "--tools")
 PI_NO_EXTENSIONS_WITHOUT_E = "has --no-extensions and no -e"
@@ -661,8 +675,16 @@ def assert_bound_preamble_stdin(
         )
 
 
-def append_task_worker(binding: Mapping[str, Any], task_worker: Mapping[str, Any]) -> dict[str, Any]:
-    args = list(binding["args"]) + ["--task-worker", worker_cli_json(task_worker)]
+def append_task_worker(
+    binding: Mapping[str, Any],
+    task_worker: Mapping[str, Any],
+    *,
+    max_active: int | None = None,
+) -> dict[str, Any]:
+    args = list(binding["args"])
+    if max_active is not None:
+        args.extend(["--max-active", str(max_active)])
+    args.extend(["--task-worker", worker_cli_json(task_worker)])
     return {"command": binding["command"], "args": args}
 
 
@@ -671,8 +693,11 @@ def append_fan_out_workers(
     workers: Sequence[Mapping[str, Any]],
     *,
     instructions: Path | None = None,
+    max_active: int | None = None,
 ) -> dict[str, Any]:
     args = list(binding["args"])
+    if max_active is not None:
+        args.extend(["--max-active", str(max_active)])
     if instructions is not None:
         args.extend(["--instructions", str(instructions)])
     for worker in workers:
@@ -684,12 +709,15 @@ def implement_graph_runner_binding(
     *,
     provider: Path,
     task_worker: Mapping[str, Any],
+    max_active: int | None = None,
 ) -> dict[str, Any]:
     shipped = {
         "implement": {"command": PATH_SOFTWARE_CHANGE, "args": list(SHIPPED_IMPLEMENT_ARGS)}
     }
     rewritten = rewrite_path_commands(shipped, provider=provider)
-    return append_task_worker(rewritten["implement"], task_worker)
+    return append_task_worker(
+        rewritten["implement"], task_worker, max_active=max_active
+    )
 
 
 def fan_out_binding(
@@ -697,13 +725,17 @@ def fan_out_binding(
     engine: Path,
     workers: Sequence[Mapping[str, Any]] = (),
     instructions: Path | None = None,
+    max_active: int | None = None,
 ) -> dict[str, Any]:
     shipped = {
         "design-review": {"command": PATH_LOOP_ENGINE, "args": list(SHIPPED_FAN_OUT_ARGS)}
     }
     rewritten = rewrite_path_commands(shipped, engine=engine)
     return append_fan_out_workers(
-        rewritten["design-review"], workers, instructions=instructions
+        rewritten["design-review"],
+        workers,
+        instructions=instructions,
+        max_active=max_active,
     )
 
 
@@ -732,6 +764,26 @@ def small_plan_document() -> dict[str, Any]:
             {"from": "alpha", "to": "gamma"},
             {"from": "beta", "to": "gamma"},
         ],
+    }
+
+
+def independent_plan_document(count: int = 3) -> dict[str, Any]:
+    """Independent plan tasks so a set --max-active can be observed."""
+    names = ("alpha", "beta", "gamma", "delta", "epsilon")
+    if count < 1:
+        raise WorkSlotJourneyFailure(f"independent plan needs at least one task, got {count}")
+    task_ids = list(names[:count]) if count <= len(names) else [f"t{index}" for index in range(count)]
+    return {
+        "revision": "1",
+        "tasks": [
+            {
+                "id": task_id,
+                "objective": f"Independent {task_id}",
+                "dependencies": [],
+            }
+            for task_id in task_ids
+        ],
+        "dependency_graph": [],
     }
 
 
@@ -929,6 +981,36 @@ def _assert_capture_files(capture_dir: Path, worker_ids: Sequence[str]) -> None:
             raise WorkSlotJourneyFailure(f"missing capture stdout {stdout}")
         if not stderr.is_file():
             raise WorkSlotJourneyFailure(f"missing capture stderr {stderr}")
+
+
+def _emitted_graph_yaml(capture_dir: Path) -> str:
+    dags = capture_dir / "dagu-home" / "dags"
+    if not dags.is_dir():
+        raise WorkSlotJourneyFailure(f"missing emitted dags directory {dags}")
+    yaml_files = sorted(
+        path for path in dags.iterdir() if path.is_file() and path.suffix == ".yaml"
+    )
+    if not yaml_files:
+        raise WorkSlotJourneyFailure(f"no emitted DAG yaml in {dags}")
+    try:
+        return yaml_files[0].read_text(encoding="utf-8")
+    except OSError as error:
+        raise WorkSlotJourneyFailure(f"could not read emitted yaml {yaml_files[0]}: {error}") from error
+
+
+def _assert_yaml_omits_max_active_steps(capture_dir: Path) -> None:
+    yaml = _emitted_graph_yaml(capture_dir)
+    if "max_active_steps" in yaml:
+        raise WorkSlotJourneyFailure(
+            f"omitted fan-out yaml unexpectedly contains max_active_steps: {yaml}"
+        )
+
+
+def _assert_yaml_max_active_steps(capture_dir: Path, expected: int) -> None:
+    yaml = _emitted_graph_yaml(capture_dir)
+    needle = f"max_active_steps: {expected}"
+    if needle not in yaml:
+        raise WorkSlotJourneyFailure(f"emitted yaml omitted {needle}: {yaml}")
 
 
 def run_preview_bindings(
@@ -1241,6 +1323,15 @@ def _write_small_plan(artifact_root: Path) -> dict[str, Any]:
     return plan
 
 
+def _write_plan_document(artifact_root: Path, plan: Mapping[str, Any]) -> dict[str, Any]:
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    payload = dict(plan)
+    (artifact_root / "plan.json").write_text(
+        json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+    )
+    return payload
+
+
 def _assert_dummy_report(artifact_root: Path, plan_revision: str) -> None:
     path = artifact_root / "implementation-report.json"
     try:
@@ -1368,6 +1459,7 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
     _assert_dummy_report(success_root, plan_revision)
 
     _assert_capture_files(success_capture, ("summarizer",))
+    _assert_yaml_max_active_steps(success_capture, 4)
     success_workers = _load_summary_workers(success_capture)
     if any(worker.get("command") == "summarizer" for worker in success_workers):
         raise WorkSlotJourneyFailure(
@@ -1557,6 +1649,7 @@ def prove_fan_out(*, engine: Path, work_dir: Path) -> list[str]:
                 f"bound worker pid {pid} still alive after fan-out exit"
             )
     _assert_capture_files(bound_capture, ("0", "1"))
+    _assert_yaml_omits_max_active_steps(bound_capture)
     bound_workers = _load_summary_workers(bound_capture)
     if [worker.get("exit_code") for worker in bound_workers] != [0, 0]:
         raise WorkSlotJourneyFailure(
@@ -1648,6 +1741,7 @@ def prove_fan_out(*, engine: Path, work_dir: Path) -> list[str]:
     if not isinstance(adhoc_dir, str) or not adhoc_dir:
         raise WorkSlotJourneyFailure(f"ad hoc collector omitted output_dir: {adhoc_summary}")
     _assert_capture_files(Path(adhoc_dir), ("0", "1"))
+    _assert_yaml_omits_max_active_steps(Path(adhoc_dir))
 
     return [
         "PATH rewrite loop-engine -> built engine",
@@ -2330,6 +2424,795 @@ def prove_bound_graph_runner_heartbeat(
     ]
 
 
+def _start_invocation(
+    engine_call: EngineCall,
+    run_id: str,
+    slot_id: str,
+) -> tuple[str, str]:
+    started = engine_call(["invoke", run_id, slot_id])
+    if started.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"invoke failed: {started}")
+    result = started.get("result") or {}
+    invocation_id = result.get("invocation_id")
+    if not isinstance(invocation_id, str) or not invocation_id:
+        raise WorkSlotJourneyFailure(f"invoke omitted invocation_id: {started}")
+    if result.get("slot_id") != slot_id:
+        raise WorkSlotJourneyFailure(f"invoke returned wrong slot_id: {started}")
+    capture_dir = result.get("capture_dir")
+    if not isinstance(capture_dir, str) or not capture_dir:
+        raise WorkSlotJourneyFailure(f"invoke omitted capture_dir: {started}")
+    return invocation_id, capture_dir
+
+
+def _show_invocation(
+    engine_call: EngineCall,
+    run_id: str,
+    invocation_id: str,
+) -> dict[str, Any] | None:
+    shown = engine_call(["show", run_id])
+    if shown.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"show after invoke failed: {shown}")
+    invocations = (shown.get("result") or {}).get("work_slot_invocations")
+    if not isinstance(invocations, list):
+        raise WorkSlotJourneyFailure("show omitted work_slot_invocations")
+    return next(
+        (
+            item
+            for item in invocations
+            if isinstance(item, dict) and item.get("invocation_id") == invocation_id
+        ),
+        None,
+    )
+
+
+def _wait_overlay_status(
+    engine_call: EngineCall,
+    run_id: str,
+    invocation_id: str,
+    *,
+    expected: str,
+    timeout_s: float,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_s
+    last_status = None
+    while time.monotonic() < deadline:
+        match = _show_invocation(engine_call, run_id, invocation_id)
+        if match is None:
+            last_status = "missing"
+        else:
+            last_status = match.get("status")
+            if last_status == expected:
+                return match
+            if (
+                last_status in ("succeeded", "failed", "overrun")
+                and last_status != expected
+            ):
+                raise WorkSlotJourneyFailure(
+                    f"overlay ended {last_status}, expected {expected}: {match}"
+                )
+        time.sleep(0.05)
+    raise WorkSlotJourneyFailure(
+        f"timed out waiting for overlay {expected} (last={last_status})"
+    )
+
+
+def _assert_running_overlay(
+    match: Mapping[str, Any],
+    *,
+    slot_id: str,
+    capture_dir: str,
+) -> None:
+    if match.get("slot_id") != slot_id:
+        raise WorkSlotJourneyFailure(f"running overlay has wrong slot: {match}")
+    if match.get("status") != "running":
+        raise WorkSlotJourneyFailure(f"overlay is not running: {match}")
+    if match.get("overlay_meaning") != OVERLAY_MEANING_RUNNING:
+        raise WorkSlotJourneyFailure(
+            f"running overlay_meaning mismatch: {match.get('overlay_meaning')!r}"
+        )
+    elapsed = match.get("elapsed_ms")
+    remaining = match.get("remaining_allowed_ms")
+    if not isinstance(elapsed, int) or elapsed < 0:
+        raise WorkSlotJourneyFailure(f"elapsed_ms invalid while running: {elapsed!r}")
+    if not isinstance(remaining, int) or remaining < 0:
+        raise WorkSlotJourneyFailure(
+            f"remaining_allowed_ms invalid while running: {remaining!r}"
+        )
+    if match.get("capture_dir") != capture_dir:
+        raise WorkSlotJourneyFailure(
+            f"running capture_dir {match.get('capture_dir')!r} != {capture_dir!r}"
+        )
+    inner = match.get("inner_workers")
+    if inner != []:
+        raise WorkSlotJourneyFailure(
+            f"running overlay inner_workers must be empty: {inner}"
+        )
+    if "waiter_pid" in match:
+        raise WorkSlotJourneyFailure("show leaked waiter_pid")
+
+
+def _assert_progress_snapshot(
+    envelope: Mapping[str, Any],
+    *,
+    run_id: str,
+    invocation_id: str,
+    capture_dir: str,
+) -> dict[str, Any]:
+    if envelope.get("status") != "completed":
+        raise WorkSlotJourneyFailure(
+            f"invocation-progress was not a success envelope: {envelope}"
+        )
+    result = envelope.get("result")
+    if not isinstance(result, dict):
+        raise WorkSlotJourneyFailure(f"invocation-progress omitted result: {envelope}")
+    leaked = sorted(PROGRESS_SNAPSHOT_FORBIDDEN.intersection(result))
+    if leaked:
+        raise WorkSlotJourneyFailure(
+            f"progress snapshot leaked overlay fields {leaked}: {result}"
+        )
+    if result.get("run_id") != run_id:
+        raise WorkSlotJourneyFailure(
+            f"progress run_id {result.get('run_id')!r} != {run_id!r}"
+        )
+    if result.get("invocation_id") != invocation_id:
+        raise WorkSlotJourneyFailure(
+            f"progress invocation_id {result.get('invocation_id')!r} != {invocation_id!r}"
+        )
+    if result.get("capture_dir") != capture_dir:
+        raise WorkSlotJourneyFailure(
+            f"progress capture_dir {result.get('capture_dir')!r} != {capture_dir!r}"
+        )
+    slot_id = result.get("slot_id")
+    if not isinstance(slot_id, str) or not slot_id:
+        raise WorkSlotJourneyFailure(f"progress omitted slot_id: {result}")
+    traces = result.get("traces")
+    if not isinstance(traces, list):
+        raise WorkSlotJourneyFailure(f"progress omitted traces list: {result}")
+    return result
+
+
+def _assert_graph_steps(
+    result: Mapping[str, Any],
+    expected_names: Sequence[str],
+) -> list[dict[str, Any]]:
+    graph = result.get("graph")
+    if not isinstance(graph, dict):
+        raise WorkSlotJourneyFailure(f"progress omitted graph after locator: {result}")
+    locator = graph.get("locator")
+    if not isinstance(locator, dict):
+        raise WorkSlotJourneyFailure(f"progress graph omitted locator: {graph}")
+    for key in ("dagu_home", "dag_name", "run_name"):
+        value = locator.get(key)
+        if not isinstance(value, str) or not value:
+            raise WorkSlotJourneyFailure(f"progress locator omitted {key}: {locator}")
+    steps = graph.get("steps")
+    if not isinstance(steps, list) or not steps:
+        raise WorkSlotJourneyFailure(f"progress graph omitted steps: {graph}")
+    names: list[str] = []
+    for step in steps:
+        if not isinstance(step, dict):
+            raise WorkSlotJourneyFailure(f"progress step is not an object: {step}")
+        name = step.get("name")
+        state = step.get("state")
+        if not isinstance(name, str) or not name:
+            raise WorkSlotJourneyFailure(f"progress step omitted name: {step}")
+        if state not in GRAPH_STEP_STATES:
+            raise WorkSlotJourneyFailure(
+                f"progress step state {state!r} not in {sorted(GRAPH_STEP_STATES)}"
+            )
+        names.append(name)
+    missing = [name for name in expected_names if name not in names]
+    if missing:
+        raise WorkSlotJourneyFailure(
+            f"progress graph omitted steps {missing}: {names}"
+        )
+    return [step for step in steps if isinstance(step, dict)]
+
+
+def _assert_progress_traces(
+    result: Mapping[str, Any],
+    *,
+    require_sidecar: bool = False,
+    require_session: bool = False,
+) -> list[dict[str, Any]]:
+    traces = result.get("traces")
+    if not isinstance(traces, list):
+        raise WorkSlotJourneyFailure(f"progress omitted traces: {result}")
+    now_ms = int(time.time() * 1000)
+    kinds: list[str] = []
+    for trace in traces:
+        if not isinstance(trace, dict):
+            raise WorkSlotJourneyFailure(f"progress trace is not an object: {trace}")
+        path = trace.get("path")
+        kind = trace.get("kind")
+        mtime = trace.get("last_modified_ms")
+        if not isinstance(path, str) or not path:
+            raise WorkSlotJourneyFailure(f"progress trace omitted path: {trace}")
+        if kind not in ("sidecar", "session"):
+            raise WorkSlotJourneyFailure(f"progress trace kind invalid: {trace}")
+        if not isinstance(mtime, int) or mtime <= 0:
+            raise WorkSlotJourneyFailure(
+                f"progress trace omitted last_modified_ms: {trace}"
+            )
+        if mtime > now_ms + 5_000 or now_ms - mtime > 3_600_000:
+            raise WorkSlotJourneyFailure(
+                f"progress last_modified_ms {mtime} is not unix milliseconds: {trace}"
+            )
+        lowered = path.replace("\\", "/").lower()
+        if lowered.endswith("/stdout") or lowered.endswith("/stderr"):
+            raise WorkSlotJourneyFailure(
+                f"progress named worker stdout/stderr as a trace: {trace}"
+            )
+        for forbidden in ("stdout", "stderr", "body", "contents"):
+            if forbidden in trace:
+                raise WorkSlotJourneyFailure(
+                    f"progress trace parsed {forbidden}: {trace}"
+                )
+        if not Path(path).is_file():
+            raise WorkSlotJourneyFailure(f"progress named missing trace file {path}")
+        kinds.append(kind)
+    if require_sidecar and "sidecar" not in kinds:
+        raise WorkSlotJourneyFailure(f"progress omitted sidecar traces: {traces}")
+    if require_session and "session" not in kinds:
+        raise WorkSlotJourneyFailure(f"progress omitted session traces: {traces}")
+    return [trace for trace in traces if isinstance(trace, dict)]
+
+
+def _ordinary_running_count(
+    steps: Sequence[Mapping[str, Any]],
+    *,
+    terminal_names: Sequence[str],
+) -> int:
+    terminals = set(terminal_names)
+    return sum(
+        1
+        for step in steps
+        if step.get("name") not in terminals and step.get("state") == "running"
+    )
+
+
+def _assert_terminal_after_ordinary(
+    steps: Sequence[Mapping[str, Any]],
+    *,
+    terminal_name: str,
+    ordinary_names: Sequence[str],
+) -> None:
+    by_name = {step.get("name"): step.get("state") for step in steps}
+    terminal_state = by_name.get(terminal_name)
+    if terminal_state not in ("running", "reaped"):
+        return
+    unfinished = [
+        name
+        for name in ordinary_names
+        if by_name.get(name) != "reaped"
+    ]
+    if unfinished:
+        raise WorkSlotJourneyFailure(
+            f"{terminal_name} is {terminal_state} before ordinary steps reaped "
+            f"{unfinished}: {steps}"
+        )
+
+
+def _locator_is_complete(locator: Path) -> bool:
+    try:
+        payload = json.loads(locator.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    return all(
+        isinstance(payload.get(key), str) and payload.get(key)
+        for key in ("dagu_home", "dag_name", "run_name")
+    )
+
+
+def _wait_for_locator(capture_dir: Path, timeout_s: float) -> Path:
+    locator = capture_dir / "dagu-locator.json"
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if locator.is_file() and _locator_is_complete(locator):
+            return locator
+        time.sleep(0.05)
+    raise WorkSlotJourneyFailure(f"timed out waiting for locator {locator}")
+
+
+def _query_progress(
+    engine_call: EngineCall,
+    run_id: str,
+    invocation_id: str | None = None,
+) -> dict[str, Any]:
+    arguments = ["invocation-progress", run_id]
+    if invocation_id is not None:
+        arguments.append(invocation_id)
+    return engine_call(arguments)
+
+
+def _assert_progress_query_error(envelope: Mapping[str, Any], *, context: str) -> None:
+    status = envelope.get("status")
+    if status == "completed":
+        raise WorkSlotJourneyFailure(
+            f"{context}: invocation-progress unexpectedly succeeded: {envelope}"
+        )
+    if status not in ("error", "invalid-invocation"):
+        raise WorkSlotJourneyFailure(
+            f"{context}: expected a non-success envelope, got {envelope}"
+        )
+
+
+def _induce_progress_query_failure(
+    engine_call: EngineCall,
+    *,
+    run_id: str,
+    invocation_id: str,
+    slot_id: str,
+    capture_dir: str,
+) -> None:
+    unknown = _query_progress(engine_call, run_id, "missing-invocation-id")
+    _assert_progress_query_error(unknown, context="unknown invocation id")
+    match = _show_invocation(engine_call, run_id, invocation_id)
+    if match is None:
+        raise WorkSlotJourneyFailure("show omitted overlay after unknown-id query")
+    status = match.get("status")
+    if status == "failed":
+        raise WorkSlotJourneyFailure(
+            f"unknown-id progress query flipped overlay to failed: {match}"
+        )
+    if status == "running":
+        _assert_running_overlay(match, slot_id=slot_id, capture_dir=capture_dir)
+
+    locator = _wait_for_locator(Path(capture_dir), 8.0)
+    original = locator.read_bytes()
+    try:
+        locator.write_text("{not-json", encoding="utf-8")
+        malformed = _query_progress(engine_call, run_id, invocation_id)
+        _assert_progress_query_error(malformed, context="malformed dagu-locator.json")
+    finally:
+        locator.write_bytes(original)
+    match = _show_invocation(engine_call, run_id, invocation_id)
+    if match is None:
+        raise WorkSlotJourneyFailure("show omitted overlay after malformed-locator query")
+    status = match.get("status")
+    if status == "failed":
+        raise WorkSlotJourneyFailure(
+            f"malformed-locator progress query flipped overlay to failed: {match}"
+        )
+    if status == "running":
+        _assert_running_overlay(match, slot_id=slot_id, capture_dir=capture_dir)
+    if status not in ("running", "succeeded"):
+        raise WorkSlotJourneyFailure(
+            f"progress query left overlay {status}: {match}"
+        )
+
+
+def _poll_overlay_running_progress(
+    engine_call: EngineCall,
+    *,
+    run_id: str,
+    invocation_id: str,
+    slot_id: str,
+    capture_dir: str,
+    expected_steps: Sequence[str],
+    timeout_s: float,
+    max_ordinary_running: int | None = None,
+    ordinary_names: Sequence[str] | None = None,
+    terminal_name: str | None = None,
+    require_session: bool = False,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_s
+    saw_graph = False
+    last_result: dict[str, Any] | None = None
+    last_with_sessions: dict[str, Any] | None = None
+    observed_ordinary_running = 0
+    while time.monotonic() < deadline:
+        match = _show_invocation(engine_call, run_id, invocation_id)
+        if match is None:
+            time.sleep(0.05)
+            continue
+        status = match.get("status")
+        if status == "running":
+            _assert_running_overlay(match, slot_id=slot_id, capture_dir=capture_dir)
+            envelope = _query_progress(engine_call, run_id)
+            if envelope.get("status") != "completed":
+                time.sleep(0.05)
+                continue
+            result = _assert_progress_snapshot(
+                envelope,
+                run_id=run_id,
+                invocation_id=invocation_id,
+                capture_dir=capture_dir,
+            )
+            after = _show_invocation(engine_call, run_id, invocation_id)
+            if after is None:
+                raise WorkSlotJourneyFailure("show omitted overlay after progress query")
+            if after.get("status") == "running":
+                _assert_running_overlay(
+                    after, slot_id=slot_id, capture_dir=capture_dir
+                )
+            graph = result.get("graph")
+            if isinstance(graph, dict):
+                steps = _assert_graph_steps(result, expected_steps)
+                saw_graph = True
+                last_result = result
+                traces = _assert_progress_traces(result)
+                if any(trace.get("kind") == "session" for trace in traces):
+                    last_with_sessions = result
+                if max_ordinary_running is not None:
+                    running = _ordinary_running_count(
+                        steps, terminal_names=(terminal_name,) if terminal_name else ()
+                    )
+                    if running > max_ordinary_running:
+                        raise WorkSlotJourneyFailure(
+                            f"invocation-progress showed {running} ordinary steps "
+                            f"running (cap {max_ordinary_running}): {steps}"
+                        )
+                    observed_ordinary_running = max(
+                        observed_ordinary_running, running
+                    )
+                if terminal_name and ordinary_names is not None:
+                    _assert_terminal_after_ordinary(
+                        steps,
+                        terminal_name=terminal_name,
+                        ordinary_names=ordinary_names,
+                    )
+        elif status == "succeeded":
+            break
+        elif status in ("failed", "overrun"):
+            raise WorkSlotJourneyFailure(
+                f"overlay ended {status} during progress poll: {match}"
+            )
+        time.sleep(0.05)
+    if not saw_graph or last_result is None:
+        raise WorkSlotJourneyFailure(
+            "never observed a locator-backed invocation-progress graph while overlay running"
+        )
+    if max_ordinary_running is not None and observed_ordinary_running < 1:
+        raise WorkSlotJourneyFailure(
+            "never observed an ordinary worker step running under the concurrency cap"
+        )
+    if require_session:
+        if last_with_sessions is None:
+            raise WorkSlotJourneyFailure(
+                "never observed session traces in invocation-progress while overlay running"
+            )
+        return last_with_sessions
+    return last_result
+
+
+def prove_overlay_running_bound_fan_out_progress(
+    *,
+    engine: Path,
+    provider: Path,
+    profile_source: Path,
+    fixture_root: Path,
+    work_dir: Path,
+) -> list[str]:
+    """Bound fan-out yields an overlay-running progress snapshot with dummy workers."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    run_id = "overlay-running-bound-fan-out"
+    slot_id = "design-review"
+    extra = {
+        slot_id: fan_out_binding(
+            engine=engine,
+            workers=[
+                stdin_worker_cli(work_dir / "w0.stdin", ("--sleep", "8")),
+                stdin_worker_cli(work_dir / "w1.stdin", ("--sleep", "8")),
+            ],
+        )
+    }
+    engine_call, _artifact_root, profile = _start_isolated_software_change(
+        engine=engine,
+        provider=provider,
+        profile_source=profile_source,
+        fixture_root=fixture_root,
+        work_dir=work_dir / "run",
+        run_id=run_id,
+        extra_bindings=extra,
+    )
+    _advance_software_change_to(
+        engine_call,
+        run_id=run_id,
+        profile=profile,
+        artifact_root=_artifact_root,
+        target=slot_id,
+    )
+    invocation_id, capture_dir = _start_invocation(engine_call, run_id, slot_id)
+    running = _wait_overlay_status(
+        engine_call, run_id, invocation_id, expected="running", timeout_s=8.0
+    )
+    _assert_running_overlay(running, slot_id=slot_id, capture_dir=capture_dir)
+    _induce_progress_query_failure(
+        engine_call,
+        run_id=run_id,
+        invocation_id=invocation_id,
+        slot_id=slot_id,
+        capture_dir=capture_dir,
+    )
+    snapshot = _poll_overlay_running_progress(
+        engine_call,
+        run_id=run_id,
+        invocation_id=invocation_id,
+        slot_id=slot_id,
+        capture_dir=capture_dir,
+        expected_steps=("w0", "w1", "join"),
+        timeout_s=30.0,
+        terminal_name="join",
+        ordinary_names=("w0", "w1"),
+        require_session=True,
+    )
+    _assert_yaml_omits_max_active_steps(Path(capture_dir))
+    _assert_progress_traces(snapshot, require_session=True)
+    succeeded = _wait_overlay_status(
+        engine_call, run_id, invocation_id, expected="succeeded", timeout_s=20.0
+    )
+    if succeeded.get("overlay_meaning") != OVERLAY_MEANING_SUCCEEDED:
+        raise WorkSlotJourneyFailure(
+            f"fan-out overlay meaning mismatch after progress queries: {succeeded}"
+        )
+    final = _query_progress(engine_call, run_id, invocation_id)
+    final_result = _assert_progress_snapshot(
+        final,
+        run_id=run_id,
+        invocation_id=invocation_id,
+        capture_dir=capture_dir,
+    )
+    _assert_graph_steps(final_result, ("w0", "w1", "join"))
+    _assert_progress_traces(final_result, require_sidecar=True, require_session=True)
+    return [
+        "overlay-running bound fan-out invocation-progress names invocation capture_dir graph steps",
+        "show overlay elapsed remaining capture_dir unchanged; inner_workers empty while running",
+        "progress-query failure leaves overlay running or succeeded from facade waitpid",
+        "snapshot names sidecar and session traces with last_modified_ms",
+        "no live model",
+    ]
+
+
+def prove_overlay_running_bound_graph_runner_progress(
+    *,
+    engine: Path,
+    provider: Path,
+    profile_source: Path,
+    fixture_root: Path,
+    work_dir: Path,
+) -> list[str]:
+    """Bound run-plan-graph yields an overlay-running progress snapshot with dummy workers."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    run_id = "overlay-running-bound-graph-runner"
+    slot_id = "implement"
+    extra = {
+        slot_id: implement_graph_runner_binding(
+            provider=provider,
+            task_worker=stdin_worker_cli(work_dir / "task-receipts", ("--sleep", "6")),
+        )
+    }
+    engine_call, artifact_root, profile = _start_isolated_software_change(
+        engine=engine,
+        provider=provider,
+        profile_source=profile_source,
+        fixture_root=fixture_root,
+        work_dir=work_dir / "run",
+        run_id=run_id,
+        extra_bindings=extra,
+    )
+    _advance_software_change_to(
+        engine_call,
+        run_id=run_id,
+        profile=profile,
+        artifact_root=artifact_root,
+        target=slot_id,
+    )
+    plan = _write_small_plan(artifact_root)
+    task_ids = [task["id"] for task in plan["tasks"]]
+    expected_steps = [*task_ids, "summarizer"]
+    invocation_id, capture_dir = _start_invocation(engine_call, run_id, slot_id)
+    running = _wait_overlay_status(
+        engine_call, run_id, invocation_id, expected="running", timeout_s=8.0
+    )
+    _assert_running_overlay(running, slot_id=slot_id, capture_dir=capture_dir)
+    snapshot = _poll_overlay_running_progress(
+        engine_call,
+        run_id=run_id,
+        invocation_id=invocation_id,
+        slot_id=slot_id,
+        capture_dir=capture_dir,
+        expected_steps=expected_steps,
+        timeout_s=35.0,
+        terminal_name="summarizer",
+        ordinary_names=task_ids,
+        require_session=True,
+    )
+    _assert_yaml_max_active_steps(Path(capture_dir), 4)
+    _assert_progress_traces(snapshot, require_session=True)
+    succeeded = _wait_overlay_status(
+        engine_call, run_id, invocation_id, expected="succeeded", timeout_s=35.0
+    )
+    if succeeded.get("overlay_meaning") != OVERLAY_MEANING_SUCCEEDED:
+        raise WorkSlotJourneyFailure(
+            f"run-plan-graph overlay meaning mismatch after progress poll: {succeeded}"
+        )
+    return [
+        "overlay-running bound run-plan-graph invocation-progress names task ids plus summarizer",
+        "omitted run-plan-graph yaml has max_active_steps: 4",
+        "show inner_workers empty while overlay running",
+        "no live model",
+    ]
+
+
+def prove_max_active_bound_fan_out(
+    *,
+    engine: Path,
+    provider: Path,
+    profile_source: Path,
+    fixture_root: Path,
+    work_dir: Path,
+) -> list[str]:
+    """Set --max-active N in bound argv and ad-hoc fan-out without a run."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    run_id = "max-active-bound-fan-out"
+    slot_id = "design-review"
+    extra = {
+        slot_id: fan_out_binding(
+            engine=engine,
+            max_active=1,
+            workers=[
+                stdin_worker_cli(work_dir / "w0.stdin", ("--sleep", "2.5")),
+                stdin_worker_cli(work_dir / "w1.stdin", ("--sleep", "2.5")),
+                stdin_worker_cli(work_dir / "w2.stdin", ("--sleep", "2.5")),
+            ],
+        )
+    }
+    engine_call, artifact_root, profile = _start_isolated_software_change(
+        engine=engine,
+        provider=provider,
+        profile_source=profile_source,
+        fixture_root=fixture_root,
+        work_dir=work_dir / "run",
+        run_id=run_id,
+        extra_bindings=extra,
+    )
+    _advance_software_change_to(
+        engine_call,
+        run_id=run_id,
+        profile=profile,
+        artifact_root=artifact_root,
+        target=slot_id,
+    )
+    invocation_id, capture_dir = _start_invocation(engine_call, run_id, slot_id)
+    _wait_overlay_status(
+        engine_call, run_id, invocation_id, expected="running", timeout_s=8.0
+    )
+    _poll_overlay_running_progress(
+        engine_call,
+        run_id=run_id,
+        invocation_id=invocation_id,
+        slot_id=slot_id,
+        capture_dir=capture_dir,
+        expected_steps=("w0", "w1", "w2", "join"),
+        timeout_s=25.0,
+        max_ordinary_running=1,
+        ordinary_names=("w0", "w1", "w2"),
+        terminal_name="join",
+    )
+    _assert_yaml_max_active_steps(Path(capture_dir), 1)
+    _wait_overlay_status(
+        engine_call, run_id, invocation_id, expected="succeeded", timeout_s=20.0
+    )
+
+    adhoc_root = work_dir / "adhoc"
+    adhoc_root.mkdir(parents=True, exist_ok=True)
+    instructions = adhoc_root / "instructions.bin"
+    instructions.write_bytes(b"ad-hoc-max-active-bytes")
+    adhoc = _run_binding(
+        fan_out_binding(
+            engine=engine,
+            max_active=3,
+            workers=[
+                stdin_worker_cli(adhoc_root / "a.stdin"),
+                stdin_worker_cli(adhoc_root / "b.stdin"),
+            ],
+            instructions=instructions,
+        ),
+        stdin=b"not a packet",
+        cwd=adhoc_root,
+    )
+    if adhoc.returncode != 0:
+        raise WorkSlotJourneyFailure(
+            "ad hoc --max-active fan-out exited "
+            f"{adhoc.returncode}: {adhoc.stderr.decode('utf-8', 'replace')}"
+        )
+    adhoc_summary = _json_stdout(adhoc)
+    adhoc_dir = adhoc_summary.get("output_dir")
+    if not isinstance(adhoc_dir, str) or not adhoc_dir:
+        raise WorkSlotJourneyFailure(
+            f"ad hoc --max-active omitted output_dir: {adhoc_summary}"
+        )
+    _assert_yaml_max_active_steps(Path(adhoc_dir), 3)
+    return [
+        "bound fan-out --max-active 1 yaml has max_active_steps: 1",
+        "invocation-progress never shows more than one ordinary fan-out step running",
+        "ad-hoc fan-out without a run emits max_active_steps N",
+        "no live model",
+    ]
+
+
+def prove_max_active_bound_graph_runner(
+    *,
+    engine: Path,
+    provider: Path,
+    profile_source: Path,
+    fixture_root: Path,
+    work_dir: Path,
+) -> list[str]:
+    """Set --max-active N on bound run-plan-graph with dummy ordinary tasks."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    run_id = "max-active-bound-graph-runner"
+    slot_id = "implement"
+    extra = {
+        slot_id: implement_graph_runner_binding(
+            provider=provider,
+            max_active=1,
+            task_worker=stdin_worker_cli(
+                work_dir / "task-receipts", ("--sleep", "2.5")
+            ),
+        )
+    }
+    engine_call, artifact_root, profile = _start_isolated_software_change(
+        engine=engine,
+        provider=provider,
+        profile_source=profile_source,
+        fixture_root=fixture_root,
+        work_dir=work_dir / "run",
+        run_id=run_id,
+        extra_bindings=extra,
+    )
+    _advance_software_change_to(
+        engine_call,
+        run_id=run_id,
+        profile=profile,
+        artifact_root=artifact_root,
+        target=slot_id,
+    )
+    plan = _write_plan_document(artifact_root, independent_plan_document(3))
+    task_ids = [task["id"] for task in plan["tasks"]]
+    invocation_id, capture_dir = _start_invocation(engine_call, run_id, slot_id)
+    _wait_overlay_status(
+        engine_call, run_id, invocation_id, expected="running", timeout_s=8.0
+    )
+    _poll_overlay_running_progress(
+        engine_call,
+        run_id=run_id,
+        invocation_id=invocation_id,
+        slot_id=slot_id,
+        capture_dir=capture_dir,
+        expected_steps=(*task_ids, "summarizer"),
+        timeout_s=25.0,
+        max_ordinary_running=1,
+        ordinary_names=task_ids,
+        terminal_name="summarizer",
+    )
+    _assert_yaml_max_active_steps(Path(capture_dir), 1)
+    succeeded = _wait_overlay_status(
+        engine_call, run_id, invocation_id, expected="succeeded", timeout_s=25.0
+    )
+    report = json.loads(
+        (artifact_root / "implementation-report.json").read_text(encoding="utf-8")
+    )
+    author = report.get("author") if isinstance(report, dict) else None
+    if not isinstance(author, dict) or author.get("name") != "dummy-stdin-worker":
+        raise WorkSlotJourneyFailure(
+            f"max-active summarizer did not write implementation-report.json: {author}"
+        )
+    if succeeded.get("overlay_meaning") != OVERLAY_MEANING_SUCCEEDED:
+        raise WorkSlotJourneyFailure(
+            f"max-active graph overlay meaning mismatch: {succeeded}"
+        )
+    return [
+        "bound run-plan-graph --max-active 1 yaml has max_active_steps: 1",
+        "invocation-progress never shows more than one ordinary plan task running",
+        "summarizer still runs after ordinary tasks",
+        "no live model",
+    ]
+
+
 def self_test_helpers() -> None:
     """Unit-test PATH rewrite and dummy-stdin-worker without spawning the engine."""
     engine = Path("/tmp/built/loop-engine")
@@ -2434,6 +3317,18 @@ def self_test_helpers() -> None:
     zero = fan_out_binding(engine=engine, workers=())
     if zero != {"command": str(engine), "args": ["fan-out"]}:
         raise WorkSlotJourneyFailure(f"self-test: zero-worker binding mismatch: {zero}")
+    capped = fan_out_binding(engine=engine, workers=(), max_active=2)
+    if capped != {"command": str(engine), "args": ["fan-out", "--max-active", "2"]}:
+        raise WorkSlotJourneyFailure(f"self-test: max-active fan-out binding mismatch: {capped}")
+    capped_graph = implement_graph_runner_binding(
+        provider=provider,
+        task_worker=stdin_worker_cli(Path("/tmp/receipts")),
+        max_active=1,
+    )
+    if capped_graph["args"][:3] != ["run-plan-graph", "--max-active", "1"]:
+        raise WorkSlotJourneyFailure(
+            f"self-test: max-active graph-runner args mismatch: {capped_graph['args']}"
+        )
 
     layout = (
         '{"artifact_root":"/tmp/artifacts"}\n'
@@ -2498,6 +3393,31 @@ def self_test_helpers() -> None:
         if stdout_receipt.read_bytes() != b"record-me":
             raise WorkSlotJourneyFailure(
                 "self-test: dummy-stdin-worker --stdout did not record stdin"
+            )
+        session_dir = Path(temp) / "sessions"
+        session_receipt = Path(temp) / "session.stdin"
+        session_env = os.environ.copy()
+        session_env["PI_CODING_AGENT_SESSION_DIR"] = str(session_dir)
+        session_run = subprocess.run(
+            [
+                sys.executable,
+                str(STDIN_WORKER_SCRIPT),
+                "--receipt",
+                str(session_receipt),
+            ],
+            input=b"session-me",
+            capture_output=True,
+            check=False,
+            env=session_env,
+        )
+        if session_run.returncode != 0:
+            raise WorkSlotJourneyFailure(
+                f"self-test: dummy session worker exited {session_run.returncode}"
+            )
+        marker = session_dir / DUMMY_SESSION_MARKER
+        if not marker.is_file():
+            raise WorkSlotJourneyFailure(
+                f"self-test: dummy worker omitted session marker {marker}"
             )
         receipts = Path(temp) / "graph-receipts"
         receipts.mkdir()
