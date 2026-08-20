@@ -92,15 +92,22 @@ fn invoke_graph_with(
         command.current_dir(dir);
     }
     let mut child = command.spawn().expect("run-plan-graph should spawn");
-    child
+    let write_result = child
         .stdin
         .take()
         .expect("stdin")
-        .write_all(&serde_json::to_vec(packet).expect("packet JSON"))
-        .expect("write invoke packet");
-    child
+        .write_all(&serde_json::to_vec(packet).expect("packet JSON"));
+    let output = child
         .wait_with_output()
-        .expect("run-plan-graph process should exit")
+        .expect("run-plan-graph process should exit");
+    if let Err(error) = write_result {
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "unexpected stdin write failure: {error}"
+        );
+    }
+    output
 }
 
 fn packet(run_id: &str, slot_id: &str, artifact_root: &str, body: &str) -> Value {
