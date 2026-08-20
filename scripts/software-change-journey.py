@@ -117,6 +117,12 @@ STITCHED_HOPS = (
     ("implement", "implementation-ready", "validation"),
     ("validation", "validation-ready", "validation-review"),
 )
+
+
+def _review_stdin_kinds(slot_ids: Sequence[str]) -> dict[str, list[str]]:
+    return {
+        slot_id: ["accepted-findings"] for slot_id in slot_ids if "-review" in slot_id
+    }
 WORK_SLOT_PROOF = [
     "frozen sparse work_slot_bindings in initial_input",
     "show work_slots catalog snapshot",
@@ -529,6 +535,7 @@ class Journey:
                 gated_event="intent-ready",
                 artifact_root=self.artifact_root,
                 expected_state="explore",
+                stdin_context_kinds=_review_stdin_kinds(SOFTWARE_CHANGE_SLOT_IDS),
             )
         except work_slot_journey.WorkSlotJourneyFailure as error:
             raise JourneyFailure(str(error), state="explore", event="invoke") from error
@@ -1115,13 +1122,16 @@ class Journey:
 
             self._start_run(self.run_id)
             shown = self._assert_show("explore", "stitched-start")
-            ids = self._work_slot_ids(shown)
-            if ids != STITCHED_SLOT_IDS:
-                raise JourneyFailure(
-                    f"stitched catalog {ids} != {STITCHED_SLOT_IDS}",
-                    state=self.state,
-                    event="stitched-start",
+            try:
+                work_slot_journey.assert_catalog(
+                    shown,
+                    STITCHED_SLOT_IDS,
+                    stdin_context_kinds=_review_stdin_kinds(STITCHED_SLOT_IDS),
                 )
+            except work_slot_journey.WorkSlotJourneyFailure as error:
+                raise JourneyFailure(
+                    str(error), state=self.state, event="stitched-start"
+                ) from error
             routes = [
                 (item.get("event"), item.get("target"))
                 for item in shown.get("requestable_events", [])
@@ -1196,26 +1206,6 @@ class Journey:
                     f"stitched profile must not enable {gate}",
                     event="stitched-start",
                 )
-
-    @staticmethod
-    def _work_slot_ids(shown: Dict[str, Any]) -> tuple[str, ...]:
-        slots = shown.get("work_slots")
-        if not isinstance(slots, list) and isinstance(shown.get("result"), dict):
-            slots = shown["result"].get("work_slots")
-        if not isinstance(slots, list):
-            raise JourneyFailure("show omitted work_slots catalog", event="show")
-        ids: List[str] = []
-        for slot in slots:
-            if isinstance(slot, str):
-                ids.append(slot)
-            elif isinstance(slot, dict) and isinstance(slot.get("id"), str):
-                ids.append(slot["id"])
-            else:
-                raise JourneyFailure(
-                    f"unexpected work slot catalog entry: {slot!r}",
-                    event="show",
-                )
-        return tuple(ids)
 
     def _run_dummy_worker_proofs(self) -> None:
         """Prove heartbeat, capture isolation, preview fail-closed, and sandbox argv."""

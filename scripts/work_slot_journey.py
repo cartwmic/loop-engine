@@ -131,28 +131,43 @@ def catalog_ids(shown: Mapping[str, Any]) -> list[str]:
         if extra:
             raise WorkSlotJourneyFailure(f"work_slots catalog leaked extra fields {sorted(extra)}")
         kinds = slot.get("stdin_context_kinds")
-        if kinds is None:
-            if "-review" in slot["id"]:
-                raise WorkSlotJourneyFailure(
-                    f"review slot {slot['id']} omitted stdin_context_kinds"
-                )
-        else:
-            if kinds != ["accepted-findings"]:
-                raise WorkSlotJourneyFailure(
-                    f"slot {slot['id']} stdin_context_kinds {kinds} != ['accepted-findings']"
-                )
-            if "-review" not in slot["id"]:
-                raise WorkSlotJourneyFailure(
-                    f"draft slot {slot['id']} declared stdin_context_kinds"
-                )
+        if kinds is not None and (
+            not isinstance(kinds, list) or not all(isinstance(kind, str) for kind in kinds)
+        ):
+            raise WorkSlotJourneyFailure(
+                f"slot {slot['id']} stdin_context_kinds must be a list of strings: {kinds}"
+            )
         ids.append(slot["id"])
     return ids
 
 
-def assert_catalog(shown: Mapping[str, Any], expected_ids: Sequence[str]) -> None:
+def assert_catalog(
+    shown: Mapping[str, Any],
+    expected_ids: Sequence[str],
+    *,
+    stdin_context_kinds: Mapping[str, Sequence[str]] | None = None,
+) -> None:
     ids = catalog_ids(shown)
     if ids != list(expected_ids):
         raise WorkSlotJourneyFailure(f"unexpected work_slots catalog: {ids}")
+    if stdin_context_kinds is None:
+        return
+    slots = shown.get("work_slots")
+    if not isinstance(slots, list):
+        raise WorkSlotJourneyFailure("show omitted work_slots catalog")
+    for slot in slots:
+        slot_id = slot["id"]
+        expected = list(stdin_context_kinds.get(slot_id, ()))
+        actual = slot.get("stdin_context_kinds")
+        if expected:
+            if actual != expected:
+                raise WorkSlotJourneyFailure(
+                    f"slot {slot_id} stdin_context_kinds {actual} != {expected}"
+                )
+        elif actual:
+            raise WorkSlotJourneyFailure(
+                f"slot {slot_id} declared stdin_context_kinds {actual}"
+            )
 
 
 def frozen_bindings(shown: Mapping[str, Any]) -> dict[str, Any]:
@@ -412,6 +427,7 @@ def prove_bound_visit(
     artifact_root: str | Path,
     expected_state: str,
     timeout_s: float = 15.0,
+    stdin_context_kinds: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, Any]:
     """Prove sparse binding, redaction, gate, dummy packet, and history."""
     shown_response = engine_call(["show", run_id])
@@ -424,7 +440,7 @@ def prove_bound_visit(
         raise WorkSlotJourneyFailure(
             f"expected state {expected_state}, got {shown.get('current_state')}"
         )
-    assert_catalog(shown, catalog)
+    assert_catalog(shown, catalog, stdin_context_kinds=stdin_context_kinds)
     assert_frozen_bindings(shown, bindings)
     redacted = assert_bound_redaction(
         shown,
@@ -3631,3 +3647,74 @@ def self_test_helpers() -> None:
             raise WorkSlotJourneyFailure(
                 f"self-test: sandbox argv contains forbidden {flag}"
             )
+
+    omitted_review = {
+        "work_slots": [
+            {
+                "id": "deterministic-review",
+                "state": "deterministic-review",
+                "event": "passed",
+            },
+            {"id": "semantic-review", "state": "semantic-review", "event": "passed"},
+        ]
+    }
+    assert_catalog(omitted_review, ["deterministic-review", "semantic-review"])
+    try:
+        assert_catalog(
+            omitted_review,
+            ["deterministic-review", "semantic-review"],
+            stdin_context_kinds={"deterministic-review": ["accepted-findings"]},
+        )
+    except WorkSlotJourneyFailure as error:
+        if "deterministic-review" not in str(error) or "stdin_context_kinds" not in str(
+            error
+        ):
+            raise WorkSlotJourneyFailure(
+                f"self-test: required kinds failed for the wrong reason: {error}"
+            ) from error
+    else:
+        raise WorkSlotJourneyFailure(
+            "self-test: omitted kinds unexpectedly accepted when required"
+        )
+    software_change_catalog = {
+        "work_slots": [
+            {
+                "id": "intent-review",
+                "state": "intent-review",
+                "event": "approved",
+                "stdin_context_kinds": ["accepted-findings"],
+            },
+            {"id": "intent-draft", "state": "explore", "event": "intent-ready"},
+        ]
+    }
+    assert_catalog(
+        software_change_catalog,
+        ["intent-review", "intent-draft"],
+        stdin_context_kinds={"intent-review": ["accepted-findings"]},
+    )
+    try:
+        assert_catalog(
+            {
+                "work_slots": [
+                    {
+                        "id": "intent-draft",
+                        "state": "explore",
+                        "event": "intent-ready",
+                        "stdin_context_kinds": ["accepted-findings"],
+                    }
+                ]
+            },
+            ["intent-draft"],
+            stdin_context_kinds={"intent-review": ["accepted-findings"]},
+        )
+    except WorkSlotJourneyFailure as error:
+        if "intent-draft" not in str(error) or "declared stdin_context_kinds" not in str(
+            error
+        ):
+            raise WorkSlotJourneyFailure(
+                f"self-test: draft kinds failed for the wrong reason: {error}"
+            ) from error
+    else:
+        raise WorkSlotJourneyFailure(
+            "self-test: draft stdin_context_kinds unexpectedly accepted"
+        )
