@@ -257,6 +257,13 @@ pub static FILES: &[EmbeddedFile] = &[
         )),
     },
     EmbeddedFile {
+        path: "crates/software-change-provider/data/templates/accepted-findings.json",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/templates/accepted-findings.json"
+        )),
+    },
+    EmbeddedFile {
         path: "crates/software-change-provider/data/templates/design.md",
         bytes: include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),

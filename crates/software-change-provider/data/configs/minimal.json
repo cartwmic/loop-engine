@@ -1,11 +1,11 @@
 {
-  "config_version": "minimal-4",
+  "config_version": "minimal-5",
   "review_policies": {
-    "intent": [],
+    "intent-review": [],
     "design-review": [],
     "plan-review": [],
     "implementation-review": [],
-    "validation": [
+    "validation-review": [
       {
         "id": "intent-delivered",
         "description": "Validation evidence demonstrates intent outcomes and acceptance boundaries were delivered.",

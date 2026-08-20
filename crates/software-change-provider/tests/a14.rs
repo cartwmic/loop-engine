@@ -5,17 +5,24 @@ use loop_core::{OperationOutcome, TransitionKind};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
-use support::{Engine, TestDir};
+use support::{metadata_schema, valid_metadata, Engine, TestDir};
 
 const EXPECTED_STATES: &[(&str, bool)] = &[
     ("explore", false),
+    ("intent-review", false),
+    ("intent-adversarial-review", false),
     ("design", false),
     ("design-review", false),
+    ("design-adversarial-review", false),
     ("plan", false),
     ("plan-review", false),
+    ("plan-adversarial-review", false),
     ("implement", false),
     ("implementation-review", false),
+    ("implementation-adversarial-review", false),
     ("validation", false),
+    ("validation-review", false),
+    ("validation-adversarial-review", false),
     ("end", true),
 ];
 
@@ -26,39 +33,91 @@ const OWNING_PHASE_ROUTES: &[(&str, &str, &str)] = &[
     ("implementation-review", "revise-plan", "plan"),
     ("implementation-review", "revise-design", "design"),
     ("implementation-review", "revise-intent", "explore"),
-    ("validation", "revise-plan", "plan"),
-    ("validation", "revise-design", "design"),
-    ("validation", "revise-intent", "explore"),
-];
-
-const CHECKED_PROGRESS: &[(&str, &str, &str)] = &[
-    ("explore", "intent-ready", "design"),
-    ("design", "design-ready", "design-review"),
-    ("design-review", "approved", "plan"),
-    ("plan", "plan-ready", "plan-review"),
-    ("plan-review", "approved", "implement"),
-    ("implement", "implementation-ready", "implementation-review"),
-    ("implementation-review", "approved", "validation"),
+    ("validation-review", "revise-implementation", "implement"),
+    ("validation-review", "revise-plan", "plan"),
+    ("validation-review", "revise-design", "design"),
+    ("validation-review", "revise-intent", "explore"),
 ];
 
 const EXPECTED_TRANSITIONS: &[(&str, &str, &str, &str)] = &[
-    ("explore", "intent-ready", "design", "checked"),
+    ("explore", "intent-ready", "intent-review", "checked"),
+    (
+        "intent-review",
+        "approved",
+        "intent-adversarial-review",
+        "checked",
+    ),
+    ("intent-review", "revise", "explore", "check-free"),
+    ("intent-adversarial-review", "approved", "design", "checked"),
+    (
+        "intent-adversarial-review",
+        "revise",
+        "explore",
+        "check-free",
+    ),
     ("design", "design-ready", "design-review", "checked"),
-    ("design-review", "approved", "plan", "checked"),
+    (
+        "design-review",
+        "approved",
+        "design-adversarial-review",
+        "checked",
+    ),
     ("design-review", "revise", "design", "check-free"),
     ("design-review", "revise-intent", "explore", "check-free"),
+    ("design-adversarial-review", "approved", "plan", "checked"),
+    (
+        "design-adversarial-review",
+        "revise",
+        "design",
+        "check-free",
+    ),
+    (
+        "design-adversarial-review",
+        "revise-intent",
+        "explore",
+        "check-free",
+    ),
     ("plan", "plan-ready", "plan-review", "checked"),
-    ("plan-review", "approved", "implement", "checked"),
+    (
+        "plan-review",
+        "approved",
+        "plan-adversarial-review",
+        "checked",
+    ),
     ("plan-review", "revise", "plan", "check-free"),
     ("plan-review", "revise-design", "design", "check-free"),
     ("plan-review", "revise-intent", "explore", "check-free"),
+    (
+        "plan-adversarial-review",
+        "approved",
+        "implement",
+        "checked",
+    ),
+    ("plan-adversarial-review", "revise", "plan", "check-free"),
+    (
+        "plan-adversarial-review",
+        "revise-design",
+        "design",
+        "check-free",
+    ),
+    (
+        "plan-adversarial-review",
+        "revise-intent",
+        "explore",
+        "check-free",
+    ),
     (
         "implement",
         "implementation-ready",
         "implementation-review",
         "checked",
     ),
-    ("implementation-review", "approved", "validation", "checked"),
+    (
+        "implementation-review",
+        "approved",
+        "implementation-adversarial-review",
+        "checked",
+    ),
     ("implementation-review", "revise", "implement", "check-free"),
     ("implementation-review", "revise-plan", "plan", "check-free"),
     (
@@ -73,11 +132,94 @@ const EXPECTED_TRANSITIONS: &[(&str, &str, &str, &str)] = &[
         "explore",
         "check-free",
     ),
-    ("validation", "passed", "end", "checked"),
-    ("validation", "revise", "implement", "check-free"),
-    ("validation", "revise-plan", "plan", "check-free"),
-    ("validation", "revise-design", "design", "check-free"),
-    ("validation", "revise-intent", "explore", "check-free"),
+    (
+        "implementation-adversarial-review",
+        "approved",
+        "validation",
+        "checked",
+    ),
+    (
+        "implementation-adversarial-review",
+        "revise",
+        "implement",
+        "check-free",
+    ),
+    (
+        "implementation-adversarial-review",
+        "revise-plan",
+        "plan",
+        "check-free",
+    ),
+    (
+        "implementation-adversarial-review",
+        "revise-design",
+        "design",
+        "check-free",
+    ),
+    (
+        "implementation-adversarial-review",
+        "revise-intent",
+        "explore",
+        "check-free",
+    ),
+    (
+        "validation",
+        "validation-ready",
+        "validation-review",
+        "checked",
+    ),
+    (
+        "validation-review",
+        "approved",
+        "validation-adversarial-review",
+        "checked",
+    ),
+    ("validation-review", "revise", "validation", "check-free"),
+    (
+        "validation-review",
+        "revise-implementation",
+        "implement",
+        "check-free",
+    ),
+    ("validation-review", "revise-plan", "plan", "check-free"),
+    ("validation-review", "revise-design", "design", "check-free"),
+    (
+        "validation-review",
+        "revise-intent",
+        "explore",
+        "check-free",
+    ),
+    ("validation-adversarial-review", "passed", "end", "checked"),
+    (
+        "validation-adversarial-review",
+        "revise",
+        "validation",
+        "check-free",
+    ),
+    (
+        "validation-adversarial-review",
+        "revise-implementation",
+        "implement",
+        "check-free",
+    ),
+    (
+        "validation-adversarial-review",
+        "revise-plan",
+        "plan",
+        "check-free",
+    ),
+    (
+        "validation-adversarial-review",
+        "revise-design",
+        "design",
+        "check-free",
+    ),
+    (
+        "validation-adversarial-review",
+        "revise-intent",
+        "explore",
+        "check-free",
+    ),
 ];
 
 fn assert_expected_topology(workflow: &Value) {
@@ -139,42 +281,85 @@ fn assert_expected_topology(workflow: &Value) {
     assert_eq!(actual_transitions, expected_transitions);
 }
 
+fn draft_events_to_review(source: &str) -> &'static [&'static str] {
+    match source {
+        "design-review" => &["intent-ready", "design-ready"],
+        "plan-review" => &["intent-ready", "design-ready", "plan-ready"],
+        "implementation-review" => &[
+            "intent-ready",
+            "design-ready",
+            "plan-ready",
+            "implementation-ready",
+        ],
+        "validation-review" => &[
+            "intent-ready",
+            "design-ready",
+            "plan-ready",
+            "implementation-ready",
+            "validation-ready",
+        ],
+        other => panic!("no draft path to {other}"),
+    }
+}
+
+fn subject_for_review(source: &str) -> &'static str {
+    match source {
+        "design-review" => "design.json",
+        "plan-review" => "plan.json",
+        "implementation-review" => "implementation-report.json",
+        "validation-review" => "validation-report.json",
+        other => panic!("no subject for {other}"),
+    }
+}
+
 #[test]
 fn owning_phase_routes_are_requestable_committed_and_persisted_on_fresh_runs() {
-    assert_eq!(OWNING_PHASE_ROUTES.len(), 9);
+    assert_eq!(OWNING_PHASE_ROUTES.len(), 10);
 
     for (index, &(source, event, target)) in OWNING_PHASE_ROUTES.iter().enumerate() {
         let state = TestDir::new(&format!("a14-route-state-{index}"));
         let engine = Engine::new(state.path().join("route.sqlite"));
         let run_id = format!("a14-route-{index}");
+        let mut policies = serde_json::Map::new();
+        policies.insert(
+            source.to_owned(),
+            json!([{"id": "axis", "description": "test axis"}]),
+        );
+        let subject = subject_for_review(source);
+        let mut schemas = serde_json::Map::new();
+        schemas.insert(subject.to_owned(), metadata_schema());
         engine.start_ok(
             &run_id,
             json!({
                 "config_version": "a14-route-test",
-                "review_policies": {}
+                "review_policies": policies,
+                "artifact_schemas": schemas
             }),
         );
+        let shown = engine.show(&run_id);
+        let root = shown.initial_input["artifact_root"]
+            .as_str()
+            .expect("allocated artifact_root");
+        fs::write(
+            Path::new(root).join(subject),
+            serde_json::to_vec(&valid_metadata("1")).expect("serialize subject"),
+        )
+        .expect("write subject artifact");
 
-        let mut current = "explore";
-        for &(progress_source, progress_event, progress_target) in CHECKED_PROGRESS {
-            assert_eq!(
-                progress_source, current,
-                "fresh run path drift before {source}"
-            );
+        for progress_event in draft_events_to_review(source) {
             let outcome = engine.event(&run_id, progress_event);
-            let committed = match outcome {
-                OperationOutcome::Completed(result) => result,
+            match outcome {
+                OperationOutcome::Completed(_) => {}
                 other => {
                     panic!("expected checked progress {progress_event} to commit, got {other:?}")
                 }
-            };
-            assert_eq!(committed.run.current_state.as_str(), progress_target);
-            current = progress_target;
-            if current == source {
-                break;
             }
         }
-        assert_eq!(current, source, "fresh run did not reach route source");
+        assert_eq!(
+            engine.current_state(&run_id).as_str(),
+            source,
+            "fresh run did not reach route source"
+        );
 
         let shown = engine.show(&run_id);
         let routes: Vec<_> = shown
@@ -222,27 +407,30 @@ fn describe_matches_snapshot_and_engine_prd_reference_topology() {
     let prd_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/PRD.md");
     let prd = fs::read_to_string(&prd_path).expect("read engine PRD");
     for line in [
-        "explore\n  └─ intent-ready [checked] → design",
+        "explore\n  └─ intent-ready [checked] → intent-review",
+        "intent-review\n  ├─ approved [checked] → intent-adversarial-review",
+        "  └─ revise [check-free] → explore",
+        "intent-adversarial-review\n  ├─ approved [checked] → design",
         "design\n  └─ design-ready [checked] → design-review",
-        "design-review\n  ├─ approved [checked] → plan",
+        "design-review\n  ├─ approved [checked] → design-adversarial-review",
         "  ├─ revise [check-free] → design",
         "  └─ revise-intent [check-free] → explore",
+        "design-adversarial-review\n  ├─ approved [checked] → plan",
         "plan\n  └─ plan-ready [checked] → plan-review",
-        "plan-review\n  ├─ approved [checked] → implement",
+        "plan-review\n  ├─ approved [checked] → plan-adversarial-review",
         "  ├─ revise [check-free] → plan",
         "  ├─ revise-design [check-free] → design",
-        "  └─ revise-intent [check-free] → explore",
+        "plan-adversarial-review\n  ├─ approved [checked] → implement",
         "implement\n  └─ implementation-ready [checked] → implementation-review",
-        "implementation-review\n  ├─ approved [checked] → validation",
+        "implementation-review\n  ├─ approved [checked] → implementation-adversarial-review",
         "  ├─ revise [check-free] → implement",
         "  ├─ revise-plan [check-free] → plan",
-        "  ├─ revise-design [check-free] → design",
-        "  └─ revise-intent [check-free] → explore",
-        "validation\n  ├─ passed [checked] → end",
-        "  ├─ revise [check-free] → implement",
-        "  ├─ revise-plan [check-free] → plan",
-        "  ├─ revise-design [check-free] → design",
-        "  └─ revise-intent [check-free] → explore",
+        "implementation-adversarial-review\n  ├─ approved [checked] → validation",
+        "validation\n  └─ validation-ready [checked] → validation-review",
+        "validation-review\n  ├─ approved [checked] → validation-adversarial-review",
+        "  ├─ revise [check-free] → validation",
+        "  ├─ revise-implementation [check-free] → implement",
+        "validation-adversarial-review\n  ├─ passed [checked] → end",
         "end [final]",
     ] {
         assert!(prd.contains(line), "PRD topology line missing: {line}");
@@ -255,10 +443,11 @@ fn review_states_expose_convergence_guidance() {
         .expect("snapshot workflow JSON");
     let states = workflow["states"].as_array().expect("workflow states");
     for state_id in [
+        "intent-review",
         "design-review",
         "plan-review",
         "implementation-review",
-        "validation",
+        "validation-review",
     ] {
         let state = states
             .iter()
@@ -277,6 +466,26 @@ fn review_states_expose_convergence_guidance() {
         }
     }
 
+    let validation_review = states
+        .iter()
+        .find(|state| state["id"] == "validation-review")
+        .expect("validation-review state")["instructions"]
+        .as_str()
+        .expect("validation-review guidance");
+    let validation_review_lower = validation_review.to_ascii_lowercase();
+    for clause in [
+        "validation-report-local defects use nearest check-free `revise` back to the validation draft",
+        "`revise-implementation` for implementation-owned defects",
+        "`revise-plan` for plan-owned defects",
+        "`revise-design` for design-owned defects",
+        "`revise-intent` for intent-owned defects",
+    ] {
+        assert!(
+            validation_review_lower.contains(clause),
+            "validation-review guidance missing routing semantic: {clause}"
+        );
+    }
+
     let validation = states
         .iter()
         .find(|state| state["id"] == "validation")
@@ -285,22 +494,17 @@ fn review_states_expose_convergence_guidance() {
         .expect("validation guidance");
     let validation_lower = validation.to_ascii_lowercase();
     for clause in [
-        "validation-report-local defects stay in validation",
+        "validation-report-local defects stay in this draft",
         "edit and recheck `validation-report.json`",
-        "retry checked `passed`",
-        "do not use `revise` for report-local corrections",
-        "from validation, select the owning phase: `revise` is only for implementation-owned defects",
-        "`revise-plan` for plan-owned defects",
-        "`revise-design` for design-owned defects",
-        "`revise-intent` for intent-owned defects",
+        "retry the next checked hop",
     ] {
         assert!(
             validation_lower.contains(clause),
-            "validation guidance missing routing semantic: {clause}"
+            "validation draft guidance missing routing semantic: {clause}"
         );
     }
     assert!(
         !validation_lower.contains("revise for validation-report-local"),
-        "validation guidance routes report-local corrections through revise"
+        "validation draft guidance routes report-local corrections through revise"
     );
 }

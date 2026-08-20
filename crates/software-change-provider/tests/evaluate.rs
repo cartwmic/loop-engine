@@ -55,15 +55,24 @@ fn checked(source: &str, event: &str, target: &str) -> Value {
     transition(source, event, target, "checked")
 }
 
+fn check_free(source: &str, event: &str, target: &str) -> Value {
+    transition(source, event, target, "check-free")
+}
+
+fn described_workflow(initial_input: &Value) -> Value {
+    let output = run_provider(json!({
+        "operation": "describe",
+        "initial_input": initial_input
+    }));
+    assert_exit(&output, 0);
+    response(&output)
+}
+
 fn base_request(initial_input: Value, transition: Value) -> Value {
+    let workflow = described_workflow(&initial_input);
     json!({
         "operation": "evaluate",
-        "workflow": {
-            "id": "software-change",
-            "initial_state": "explore",
-            "states": [],
-            "transitions": []
-        },
+        "workflow": workflow,
         "initial_input": initial_input,
         "context": [],
         "transition": transition,
@@ -111,7 +120,7 @@ fn config_with_axis(root: &TestDir) -> Value {
         "config_version": "test-1",
         "artifact_root": root.root_value(),
         "review_policies": {
-            "intent": [{"id": "axis", "description": "test axis"}]
+            "intent-review": [{"id": "axis", "description": "test axis"}]
         },
         "artifact_schemas": {"intent.json": metadata_schema()}
     })
@@ -132,6 +141,34 @@ fn context_record(data: Value) -> Value {
         "sequence": 1,
         "created_at": 1
     })
+}
+
+fn accepted_findings_record(gate: &str, subject: &str, revision: &str, findings: Value) -> Value {
+    json!({
+        "id": "accepted-1",
+        "kind": "accepted-findings",
+        "data": {
+            "gate": gate,
+            "subject": subject,
+            "subject_revision": revision,
+            "findings": findings
+        },
+        "sequence": 2,
+        "created_at": 2
+    })
+}
+
+fn passing_evidence() -> Value {
+    context_record(json!({
+        "gate": "intent-review",
+        "policy_id": "axis",
+        "result": "pass",
+        "findings": "",
+        "author": {"name": "reviewer", "kind": "agent"},
+        "subject": "intent.json",
+        "subject_revision": "1",
+        "config_version": "test-1"
+    }))
 }
 
 fn run_provider(request: Value) -> Output {
@@ -248,7 +285,9 @@ fn schema_deny_is_byte_identical_when_only_context_varies() {
 fn approval_transition_rechecks_current_subject_after_ready_pass() {
     let root = TestDir::new();
     root.write_json("design.json", &valid_metadata("1"));
-    let config = config_with_schema("design.json", Some(&root));
+    let mut config = config_with_schema("design.json", Some(&root));
+    config["review_policies"]["design-review"] =
+        json!([{"id": "axis", "description": "test axis"}]);
 
     let ready = run_provider(base_request(
         config.clone(),
@@ -320,7 +359,7 @@ fn unsupported_tuple_returns_exact_unsupported_result() {
 fn missing_review_policies_is_evaluation_error_naming_shipped_configs() {
     let output = run_provider(base_request(
         json!({"config_version": "test-1"}),
-        checked("explore", "intent-ready", "design"),
+        checked("explore", "intent-ready", "intent-review"),
     ));
     assert_exit(&output, 1);
     assert!(output.stdout.is_empty());
@@ -336,7 +375,7 @@ fn evidence_phase_denies_with_configured_axis_diagnostics() {
     root.write_json("intent.json", &valid_metadata("1"));
     let output = run_provider(base_request(
         config_with_axis(&root),
-        checked("explore", "intent-ready", "design"),
+        checked("intent-review", "approved", "design"),
     ));
     assert_exit(&output, 0);
     let value = response(&output);
@@ -361,11 +400,11 @@ fn mixed_current_blocker_and_stale_context_separates_feedback_projection() {
     let root = TestDir::new();
     root.write_json("intent.json", &valid_metadata("2"));
     let config = config_with_axis(&root);
-    let transition = checked("explore", "intent-ready", "design");
+    let transition = checked("intent-review", "approved", "design");
     let mut request = base_request(config, transition);
     request["context"] = json!([
         context_record(json!({
-            "gate": "intent",
+            "gate": "intent-review",
             "policy_id": "axis",
             "result": "fail",
             "findings": "current blocker",
@@ -375,7 +414,7 @@ fn mixed_current_blocker_and_stale_context_separates_feedback_projection() {
             "config_version": "test-1"
         })),
         context_record(json!({
-            "gate": "intent",
+            "gate": "intent-review",
             "policy_id": "axis",
             "result": "pass",
             "findings": "",
@@ -421,12 +460,9 @@ fn mixed_current_blocker_and_stale_context_separates_feedback_projection() {
 fn every_checked_reference_route_is_accepted_when_obligations_are_empty() {
     let routes = [
         ("explore", "intent-ready", "design"),
-        ("design", "design-ready", "design-review"),
-        ("design-review", "approved", "plan"),
-        ("plan", "plan-ready", "plan-review"),
-        ("plan-review", "approved", "implement"),
-        ("implement", "implementation-ready", "implementation-review"),
-        ("implementation-review", "approved", "validation"),
+        ("design", "design-ready", "plan"),
+        ("plan", "plan-ready", "implement"),
+        ("implement", "implementation-ready", "validation"),
         ("validation", "passed", "end"),
     ];
     for (source, event, target) in routes {
@@ -447,12 +483,9 @@ fn every_checked_reference_route_is_accepted_when_obligations_are_empty() {
 fn each_single_field_tuple_mismatch_is_unsupported() {
     let routes = [
         ("explore", "intent-ready", "design"),
-        ("design", "design-ready", "design-review"),
-        ("design-review", "approved", "plan"),
-        ("plan", "plan-ready", "plan-review"),
-        ("plan-review", "approved", "implement"),
-        ("implement", "implementation-ready", "implementation-review"),
-        ("implementation-review", "approved", "validation"),
+        ("design", "design-ready", "plan"),
+        ("plan", "plan-ready", "implement"),
+        ("implement", "implementation-ready", "validation"),
         ("validation", "passed", "end"),
     ];
     for (source, event, target) in routes {
@@ -538,7 +571,7 @@ fn revision_link_mismatch_is_schema_deny_naming_both_artifacts() {
         json!({"type": "string", "minLength": 1});
     let output = run_provider(base_request(
         config,
-        checked("design", "design-ready", "design-review"),
+        checked("design", "design-ready", "plan"),
     ));
     assert_exit(&output, 0);
     let value = response(&output);
@@ -584,7 +617,7 @@ fn malformed_config_classes_exit_one_without_stdout_result() {
             "bad required authors",
             json!({
                 "config_version": "x",
-                "review_policies": {"intent": [{"id": "axis", "description": "x", "required_authors": 0}]}
+                "review_policies": {"intent-review": [{"id": "axis", "description": "x", "required_authors": 0}]}
             }),
         ),
         (
@@ -597,7 +630,7 @@ fn malformed_config_classes_exit_one_without_stdout_result() {
         ),
         (
             "axes without schema",
-            json!({"config_version": "x", "review_policies": {"intent": [{"id": "axis", "description": "x"}]}}),
+            json!({"config_version": "x", "review_policies": {"intent-review": [{"id": "axis", "description": "x"}]}}),
         ),
         (
             "links without schemas",
@@ -609,11 +642,177 @@ fn malformed_config_classes_exit_one_without_stdout_result() {
         ),
     ];
     for (name, config) in cases {
-        let output = run_provider(base_request(
-            config,
-            checked("explore", "intent-ready", "design"),
-        ));
+        let workflow = described_workflow(&config);
+        let transition = workflow["transitions"]
+            .as_array()
+            .expect("described transitions")
+            .iter()
+            .find(|edge| edge["kind"] == "checked")
+            .cloned()
+            .expect("checked hop");
+        let output = run_provider(json!({
+            "operation": "evaluate",
+            "workflow": workflow,
+            "initial_input": config,
+            "context": [],
+            "transition": transition,
+            "prior_evaluations": []
+        }));
         assert_exit(&output, 1);
         assert!(output.stdout.is_empty(), "{name} emitted stdout");
     }
+}
+
+#[test]
+fn check_free_revise_allows_without_evidence_or_accepted_findings() {
+    let root = TestDir::new();
+    root.write_json("intent.json", &valid_metadata("1"));
+    let output = run_provider(base_request(
+        config_with_axis(&root),
+        check_free("intent-review", "revise", "explore"),
+    ));
+    assert_exit(&output, 0);
+    assert_eq!(response(&output), json!({"result": "allow"}));
+}
+
+#[test]
+fn review_approved_denied_without_current_revision_accepted_findings() {
+    let root = TestDir::new();
+    root.write_json("intent.json", &valid_metadata("1"));
+    let mut request = base_request(
+        config_with_axis(&root),
+        checked("intent-review", "approved", "design"),
+    );
+    request["context"] = json!([passing_evidence()]);
+    let output = run_provider(request);
+    assert_exit(&output, 0);
+    let value = response(&output);
+    assert_eq!(
+        value["feedback"]["code"],
+        "software-change-accepted-findings-missing"
+    );
+    assert_eq!(value["feedback"]["details"]["status"], "missing");
+}
+
+#[test]
+fn empty_accepted_findings_array_allows_review_approved() {
+    let root = TestDir::new();
+    root.write_json("intent.json", &valid_metadata("1"));
+    let mut request = base_request(
+        config_with_axis(&root),
+        checked("intent-review", "approved", "design"),
+    );
+    request["context"] = json!([
+        passing_evidence(),
+        accepted_findings_record("intent-review", "intent.json", "1", json!([]))
+    ]);
+    let output = run_provider(request);
+    assert_exit(&output, 0);
+    assert_eq!(response(&output), json!({"result": "allow"}));
+}
+
+#[test]
+fn malformed_accepted_findings_block_until_superseded() {
+    let root = TestDir::new();
+    root.write_json("intent.json", &valid_metadata("1"));
+    let config = config_with_axis(&root);
+    let transition = checked("intent-review", "approved", "design");
+
+    let mut malformed =
+        accepted_findings_record("intent-review", "intent.json", "1", json!("not-an-array"));
+    malformed["sequence"] = json!(2);
+    let mut blocked = base_request(config.clone(), transition.clone());
+    blocked["context"] = json!([passing_evidence(), malformed.clone()]);
+    let blocked_output = run_provider(blocked);
+    assert_exit(&blocked_output, 0);
+    assert_eq!(
+        response(&blocked_output)["feedback"]["details"]["status"],
+        "malformed"
+    );
+
+    let mut later = accepted_findings_record("intent-review", "intent.json", "1", json!([]));
+    later["id"] = json!("accepted-later");
+    later["sequence"] = json!(3);
+    later["created_at"] = json!(3);
+    malformed["id"] = json!("accepted-malformed");
+    let mut superseded = base_request(config, transition);
+    superseded["context"] = json!([passing_evidence(), malformed, later]);
+    let output = run_provider(superseded);
+    assert_exit(&output, 0);
+    assert_eq!(response(&output), json!({"result": "allow"}));
+}
+
+#[test]
+fn accepted_findings_for_prior_revision_does_not_satisfy_after_bump() {
+    let root = TestDir::new();
+    root.write_json("intent.json", &valid_metadata("2"));
+    let mut request = base_request(
+        config_with_axis(&root),
+        checked("intent-review", "approved", "design"),
+    );
+    let mut evidence = passing_evidence();
+    evidence["data"]["subject_revision"] = json!("2");
+    request["context"] = json!([
+        evidence,
+        accepted_findings_record("intent-review", "intent.json", "1", json!([]))
+    ]);
+    let output = run_provider(request);
+    assert_exit(&output, 0);
+    let details = &response(&output)["feedback"]["details"];
+    assert_eq!(details["status"], "stale");
+    assert_eq!(details["record_revision"], "1");
+    assert_eq!(details["current_revision"], "2");
+}
+
+#[test]
+fn same_policy_id_on_parent_and_adversarial_gates_aggregates_independently() {
+    let root = TestDir::new();
+    root.write_json("intent.json", &valid_metadata("1"));
+    let config = json!({
+        "config_version": "test-1",
+        "artifact_root": root.root_value(),
+        "review_policies": {
+            "intent-review": [{"id": "axis", "description": "parent axis"}],
+            "intent-adversarial-review": [{"id": "axis", "description": "adversarial axis"}]
+        },
+        "artifact_schemas": {"intent.json": metadata_schema()}
+    });
+    let parent_pass = context_record(json!({
+        "gate": "intent-review",
+        "policy_id": "axis",
+        "result": "pass",
+        "findings": "",
+        "author": {"name": "reviewer", "kind": "agent"},
+        "subject": "intent.json",
+        "subject_revision": "1",
+        "config_version": "test-1"
+    }));
+    let parent_findings = accepted_findings_record("intent-review", "intent.json", "1", json!([]));
+
+    let mut parent = base_request(
+        config.clone(),
+        checked("intent-review", "approved", "intent-adversarial-review"),
+    );
+    parent["context"] = json!([parent_pass.clone(), parent_findings.clone()]);
+    let parent_output = run_provider(parent);
+    assert_exit(&parent_output, 0);
+    assert_eq!(response(&parent_output), json!({"result": "allow"}));
+
+    let mut adversarial = base_request(
+        config,
+        checked("intent-adversarial-review", "approved", "design"),
+    );
+    adversarial["context"] = json!([parent_pass, parent_findings]);
+    let adversarial_output = run_provider(adversarial);
+    assert_exit(&adversarial_output, 0);
+    let value = response(&adversarial_output);
+    assert_eq!(
+        value["feedback"]["code"],
+        "software-change-review-incomplete"
+    );
+    assert!(value["feedback"]["details"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|axis| axis["axis"] == "axis"));
 }

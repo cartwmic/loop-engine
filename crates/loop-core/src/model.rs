@@ -294,12 +294,15 @@ impl Transition {
     }
 }
 
-/// Catalog entry type `WorkSlot` with exactly: `id` (WorkSlotId), `state` (StateId), `event` (EventId). No instruction body.
+/// Catalog entry type `WorkSlot` with `id`, `state`, `event`, and optional
+/// `stdin_context_kinds`. Omitted or empty kinds mean no extra stdin context.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WorkSlot {
     pub id: WorkSlotId,
     pub state: StateId,
     pub event: EventId,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stdin_context_kinds: Vec<String>,
 }
 
 impl WorkSlot {
@@ -312,7 +315,13 @@ impl WorkSlot {
             id: id.into(),
             state: state.into(),
             event: event.into(),
+            stdin_context_kinds: Vec::new(),
         }
+    }
+
+    pub fn with_stdin_context_kinds(mut self, kinds: Vec<String>) -> Self {
+        self.stdin_context_kinds = kinds;
+        self
     }
 }
 
@@ -1149,5 +1158,33 @@ mod tests {
             serde_json::from_value::<HistoryAction>(encoded_failed).unwrap(),
             failed
         );
+    }
+
+    #[test]
+    fn work_slot_omits_empty_stdin_context_kinds_and_deserializes_legacy_catalogs() {
+        let omitted = json!({
+            "id": "slot-1",
+            "state": "start",
+            "event": "finish"
+        });
+        let slot: WorkSlot = serde_json::from_value(omitted).unwrap();
+        assert_eq!(slot, WorkSlot::new("slot-1", "start", "finish"));
+        assert!(slot.stdin_context_kinds.is_empty());
+        assert!(serde_json::to_value(&slot)
+            .unwrap()
+            .get("stdin_context_kinds")
+            .is_none());
+
+        let empty = WorkSlot::new("slot-1", "start", "finish").with_stdin_context_kinds(Vec::new());
+        assert!(serde_json::to_value(&empty)
+            .unwrap()
+            .get("stdin_context_kinds")
+            .is_none());
+
+        let listed = WorkSlot::new("slot-1", "start", "finish")
+            .with_stdin_context_kinds(vec!["kind-a".to_owned()]);
+        let encoded = serde_json::to_value(&listed).unwrap();
+        assert_eq!(encoded["stdin_context_kinds"], json!(["kind-a"]));
+        assert_eq!(serde_json::from_value::<WorkSlot>(encoded).unwrap(), listed);
     }
 }

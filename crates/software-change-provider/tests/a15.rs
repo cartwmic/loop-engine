@@ -28,9 +28,20 @@ fn every_shipped_profile_starts_and_exposes_policies_and_schemas() {
 
         let first = engine.event(profile, "intent-ready");
         match profile {
-            "minimal" => assert!(matches!(first, OperationOutcome::Completed(_))),
+            "minimal" => {
+                assert!(
+                    matches!(first, OperationOutcome::Completed(_)),
+                    "{profile} draft ready: {first:?}"
+                );
+            }
             "standard" | "high-rigor" => {
-                let issue = match first {
+                assert!(
+                    matches!(first, OperationOutcome::Completed(_)),
+                    "{profile} draft ready should allow after schema pass, got {first:?}"
+                );
+                assert_eq!(engine.current_state(profile).as_str(), "intent-review");
+                let review = engine.event(profile, "approved");
+                let issue = match review {
                     OperationOutcome::Rejected(issue) => issue,
                     other => panic!("expected defined review denial for {profile}, got {other:?}"),
                 };

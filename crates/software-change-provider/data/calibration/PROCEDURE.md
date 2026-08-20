@@ -10,15 +10,17 @@ Calibration is supplied-material-only. Reviewers receive only bytes selected by 
 
 `manifest.json` contains two rows for every `(config_version, gate, axis)` key from shipped `minimal`, `standard`, and `high-rigor` profiles: one `good` fixture expected to pass and one materially defective fixture expected to fail. Existing `(config_version, gate, axis, fixture_id)` fields remain row identity. Fixture selection is owner metadata; selected fixture bytes and canonical source labels identify exact supplied material.
 
-Every subject fixture and every `intent_revision`, `design_revision`, and `plan_revision` link uses neutral revision `r15`. For each pair, defective subjects receive same good predecessor bytes as good subjects so review isolates subject material. Keep expected 35 PASS and 35 FAIL outcomes; do not change row keys, expected values, configs, fixtures, prompts, schemas, companions, or revision links as part of mechanical identity maintenance.
+Evidence and policy gate ids match review state names. Parent review gates are `intent-review`, `design-review`, `plan-review`, `implementation-review`, and `validation-review`. When a shipped profile lists counterpart axes, those keys live on the matching `*-adversarial-review` gate with the same `policy_id` as the parent axis. Each counterpart key has one good and one fail fixture. A good fixture that passes the parent axis must also pass the corresponding adversarial axis.
+
+Every subject fixture and every `intent_revision`, `design_revision`, and `plan_revision` link uses neutral revision `r15`. For each pair, defective subjects receive same good predecessor bytes as good subjects so review isolates subject material. Keep expected 69 PASS and 69 FAIL outcomes; do not change row keys, expected values, configs, fixtures, prompts, schemas, companions, or revision links as part of mechanical identity maintenance.
 
 | Gate | Subject fixture IDs | Required predecessor fixture IDs, in order | Gate subject | Template |
 |---|---|---|---|---|
-| `intent` | `intent-good`, `intent-defective` | none | `intent.json` | `intent.md` |
-| `design-review` | `design-good`, `design-defective`, `design-overbuilt` | `intent-good` | `design.json` | `design.md` |
-| `plan-review` | `plan-good`, `plan-defective` | `intent-good`, `design-good` | `plan.json` | `task-packet.md` |
-| `implementation-review` | `implementation-report-good`, `implementation-report-defective` | `intent-good`, `design-good`, `plan-good` | `implementation-report.json` | `implementation-report.md` |
-| `validation` | `validation-report-good`, `validation-report-defective` | `intent-good`, `design-good`, `plan-good`, `implementation-report-good` | `validation-report.json` | `validation-report.md` |
+| `intent-review`, `intent-adversarial-review` | `intent-good`, `intent-defective` | none | `intent.json` | `intent.md` |
+| `design-review`, `design-adversarial-review` | `design-good`, `design-defective`, `design-overbuilt` | `intent-good` | `design.json` | `design.md` |
+| `plan-review`, `plan-adversarial-review` | `plan-good`, `plan-defective` | `intent-good`, `design-good` | `plan.json` | `task-packet.md` |
+| `implementation-review`, `implementation-adversarial-review` | `implementation-report-good`, `implementation-report-defective` | `intent-good`, `design-good`, `plan-good` | `implementation-report.json` | `implementation-report.md` |
+| `validation-review`, `validation-adversarial-review` | `validation-report-good`, `validation-report-defective` | `intent-good`, `design-good`, `plan-good`, `implementation-report-good` | `validation-report.json` | `validation-report.md` |
 
 Use exact profile selected by row `config_version` and exact policy `example_prompt` selected by row `gate` and `axis`. `subject_revision` is selected subject fixture `revision` and remains `r15`. `subject` is gate subject, never fixture ID.
 
@@ -26,7 +28,7 @@ Use exact profile selected by row `config_version` and exact policy `example_pro
 
 Path-bearing fixture values use reserved `fictional-repo/` labels. Reviewers do not inspect live checkout paths. Supply stable companion bytes from `data/calibration/companions/fictional-repo/`.
 
-For each `implementation-review` row, read selected subject `coverage.commit` and use exactly one mapping:
+For each `implementation-review` or `implementation-adversarial-review` row, read selected subject `coverage.commit` and use exactly one mapping:
 
 | `coverage.commit` | Companion bytes |
 |---|---|
@@ -35,7 +37,7 @@ For each `implementation-review` row, read selected subject `coverage.commit` an
 
 The source label for either implementation companion is `companion:fictional-repo/implementation-evidence/repository-state.txt`. Verify companion `HEAD`, coverage label, and command identity match selected commit. Missing, unknown, or mismatched commits are invalid.
 
-For a `validation` row with `axis` `docs-integrated`, read selected subject `coverage.documents[].path`. Map each path one-to-one to its shipped companion and supply exact bytes. Allowed labels are:
+For a `validation-review` or `validation-adversarial-review` row with `axis` `docs-integrated`, read selected subject `coverage.documents[].path`. Map each path one-to-one to its shipped companion and supply exact bytes. Allowed labels are:
 
 - `fictional-repo/README.md`
 - `fictional-repo/provider/README.md`
@@ -107,9 +109,20 @@ Mechanical identity updates never mint semantic attestations. After fresh extern
 - `invocation`: `Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.`
 - `input_sha256`: exact stream identity updated with that review.
 
-Never change `expected`, row key, config, fixture, or coverage to force agreement. Keep returned evidence outside manifest when needed; `example-evidence.json` is illustrative R25 data, not attestation. Existing expected 35 PASS/35 FAIL and current fixture material remain unchanged while rows are pending.
+Never change `expected`, row key, config, fixture, or coverage to force agreement. Keep returned evidence outside manifest when needed; `example-evidence.json` is illustrative R25 data, not attestation. Existing expected 69 PASS/69 FAIL and current fixture material remain unchanged while rows are pending.
 
 Final validation retains explicit ignored A11 no-pending gate `calibration_manifest_has_no_pending_rows_for_final_validation`. It must remain failing while any row is pending and may pass only after every row has fresh external owner review, inspected evidence, and honest attestation. No automatic re-attestation or manifest rewriting exists or is shipped.
+
+## Reset rule
+
+Reset (change fixtures, expected class, or restart a key) only for:
+
+- wrong verdict;
+- leaked expected class;
+- materially false finding; or
+- a defect that would systematically admit bad work or reject good work.
+
+Wording-only rounds do not reset the corpus.
 
 ## Futility and materiality boundary
 

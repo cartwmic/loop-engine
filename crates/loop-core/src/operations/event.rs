@@ -523,6 +523,7 @@ mod tests {
         fn describe(
             &self,
             _provider: &ProviderAssociation,
+            _initial_input: Option<&Value>,
         ) -> std::result::Result<Workflow, ProviderError> {
             Ok(workflow())
         }

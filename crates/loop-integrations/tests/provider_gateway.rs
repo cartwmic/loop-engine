@@ -74,12 +74,35 @@ fn describe_sends_only_operation_and_receives_workflow() -> Result<(), Box<dyn s
     let (provider, request_path) = capture_response(&directory, WORKFLOW_JSON);
     let gateway = SubprocessProviderGateway::new(Duration::from_secs(2));
 
-    let described = gateway.describe(&provider)?;
+    let described = gateway.describe(&provider, None)?;
 
     assert_eq!(described, workflow());
     assert_eq!(
         captured_request(&request_path),
         json!({"operation": "describe"})
+    );
+    Ok(())
+}
+
+#[test]
+fn describe_forwards_optional_initial_input() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let (provider, request_path) = capture_response(&directory, WORKFLOW_JSON);
+    let gateway = SubprocessProviderGateway::new(Duration::from_secs(2));
+    let initial_input = json!({
+        "objective": "preserve",
+        "review_policies": {"design-review": ["axis"]}
+    });
+
+    let described = gateway.describe(&provider, Some(&initial_input))?;
+
+    assert_eq!(described, workflow());
+    assert_eq!(
+        captured_request(&request_path),
+        json!({
+            "operation": "describe",
+            "initial_input": initial_input
+        })
     );
     Ok(())
 }
@@ -287,7 +310,7 @@ fn every_gateway_call_starts_a_fresh_process() -> Result<(), Box<dyn std::error:
     );
     let gateway = SubprocessProviderGateway::new(Duration::from_secs(2));
 
-    gateway.describe(&provider)?;
+    gateway.describe(&provider, None)?;
     gateway.evaluate(
         &provider,
         EvaluationRequest::new(

@@ -143,11 +143,23 @@ mod tests {
     struct FakeGateway {
         described: Option<Result<Workflow, ProviderError>>,
         describe_calls: RefCell<usize>,
+        describe_inputs: RefCell<Vec<Option<Value>>>,
+        describe_from_input: Option<fn(Option<&Value>) -> Workflow>,
     }
 
     impl ProviderGateway for FakeGateway {
-        fn describe(&self, _provider: &ProviderAssociation) -> Result<Workflow, ProviderError> {
+        fn describe(
+            &self,
+            _provider: &ProviderAssociation,
+            initial_input: Option<&Value>,
+        ) -> Result<Workflow, ProviderError> {
             *self.describe_calls.borrow_mut() += 1;
+            self.describe_inputs
+                .borrow_mut()
+                .push(initial_input.cloned());
+            if let Some(describe_from_input) = self.describe_from_input {
+                return Ok(describe_from_input(initial_input));
+            }
             self.described
                 .clone()
                 .unwrap_or_else(|| Ok(workflow(false)))
@@ -359,8 +371,13 @@ mod tests {
         assert!(outcome.is_completed());
         assert_eq!(*resolver.calls.borrow(), 1);
         assert_eq!(*gateway.describe_calls.borrow(), 1);
+        assert_eq!(
+            gateway.describe_inputs.borrow().as_slice(),
+            [Some(json!({"objective": "test"}))]
+        );
         assert_eq!(persistence.created.borrow().len(), 1);
         let request = &persistence.created.borrow()[0];
+        assert_eq!(request.workflow, workflow(false));
         let allocated = allocated_canonical_string(catalog.path(), "run-1");
         assert_eq!(request.lifecycle, Lifecycle::Active);
         assert_eq!(request.initial_state, StateId::from("start"));
@@ -371,6 +388,119 @@ mod tests {
         assert_eq!(request.provider, "fake");
         assert_eq!(request.artifact_root.as_deref(), Some(allocated.as_str()));
         assert!(allocated_canonical(catalog.path(), "run-1").is_dir());
+    }
+
+    fn workflow_named(id: &str) -> Workflow {
+        Workflow::new(
+            id,
+            "start",
+            vec![
+                State::new("start", "Start", "Do work", false),
+                State::new("done", "Done", "Finished", true),
+            ],
+            vec![Transition::check_free("start", "finish", "done")],
+        )
+    }
+
+    fn workflow_from_topology(initial_input: Option<&Value>) -> Workflow {
+        let marker = initial_input
+            .and_then(Value::as_object)
+            .and_then(|map| map.get("topology"))
+            .and_then(Value::as_str)
+            .unwrap_or("union");
+        workflow_named(&format!("workflow-{marker}"))
+    }
+
+    #[test]
+    fn start_stores_the_workflow_describe_returned() {
+        let catalog = temp_catalog();
+        let described = workflow_named("described-snapshot");
+        let resolver = FakeResolver::default();
+        let gateway = FakeGateway {
+            described: Some(Ok(described.clone())),
+            ..FakeGateway::default()
+        };
+        let persistence = FakePersistence::default();
+        let caller = json!({"objective": "test", "review_policies": {"design-review": ["axis"]}});
+
+        let outcome = start::execute(
+            start::Request::new(
+                "run-1",
+                "fake",
+                caller.clone(),
+                None,
+                Timestamp::from_unix_millis(10),
+                catalog.path(),
+            ),
+            &resolver,
+            &gateway,
+            &persistence,
+        );
+
+        assert!(outcome.is_completed());
+        assert_eq!(gateway.describe_inputs.borrow().as_slice(), [Some(caller)]);
+        assert_eq!(persistence.created.borrow()[0].workflow, described);
+        assert!(persistence.created.borrow()[0]
+            .initial_input
+            .get("work_slot_bindings")
+            .is_none());
+    }
+
+    #[test]
+    fn start_stores_workflow_when_describe_varies_with_initial_input() {
+        let resolver = FakeResolver::default();
+        let gateway = FakeGateway {
+            describe_from_input: Some(workflow_from_topology),
+            ..FakeGateway::default()
+        };
+        let cases = [
+            ("run-union", json!({"objective": "a"}), "workflow-union"),
+            (
+                "run-live",
+                json!({"objective": "a", "topology": "live"}),
+                "workflow-live",
+            ),
+        ];
+        for (run_id, caller, expected_id) in cases {
+            let catalog = temp_catalog();
+            let persistence = FakePersistence::default();
+            let outcome = start::execute(
+                start::Request::new(
+                    run_id,
+                    "fake",
+                    caller.clone(),
+                    None,
+                    Timestamp::from_unix_millis(10),
+                    catalog.path(),
+                ),
+                &resolver,
+                &gateway,
+                &persistence,
+            );
+
+            assert!(outcome.is_completed(), "{run_id}");
+            assert_eq!(
+                persistence.created.borrow()[0].workflow.id.as_str(),
+                expected_id,
+                "{run_id}"
+            );
+            assert_eq!(
+                persistence.created.borrow()[0].workflow,
+                workflow_named(expected_id)
+            );
+            assert!(persistence.created.borrow()[0]
+                .initial_input
+                .get("work_slot_bindings")
+                .is_none());
+        }
+        assert_eq!(*gateway.describe_calls.borrow(), 2);
+        assert_eq!(
+            gateway.describe_inputs.borrow().as_slice(),
+            [
+                Some(json!({"objective": "a"})),
+                Some(json!({"objective": "a", "topology": "live"})),
+            ]
+        );
     }
 
     #[test]

@@ -193,7 +193,10 @@ pub fn process_request(
 
     match operation {
         "describe" => {
-            if object.len() != 1 {
+            let unknown = object
+                .keys()
+                .any(|key| key != "operation" && key != "initial_input");
+            if unknown {
                 return Err(FixtureError::new(
                     "describe request must contain only the operation field",
                 ));
@@ -1920,7 +1923,7 @@ mod unit_tests {
     use super::*;
 
     #[test]
-    fn software_change_topology_is_exact_and_run_input_independent() {
+    fn software_change_topology_is_exact_and_describe_ignores_initial_input() {
         let workflow = software_change_workflow();
         assert_eq!(workflow.initial_state.as_str(), "explore");
         assert_eq!(workflow.states.len(), 9);
@@ -1933,7 +1936,26 @@ mod unit_tests {
                 .unwrap()
                 .is_final
         );
-        assert_eq!(workflow, software_change_workflow());
+        let with_input = process_request(
+            FixtureProvider::SoftwareChange,
+            json!({
+                "operation": "describe",
+                "initial_input": {"review_policies": {"design-review": []}}
+            }),
+        )
+        .expect("fixtures accept and ignore describe.initial_input");
+        let without_input = process_request(
+            FixtureProvider::SoftwareChange,
+            json!({"operation": "describe"}),
+        )
+        .expect("bare describe remains valid");
+        match (with_input, without_input) {
+            (FixtureResponse::Json(left), FixtureResponse::Json(right)) => {
+                assert_eq!(left, right);
+                assert_eq!(left, serde_json::to_value(workflow).unwrap());
+            }
+            other => panic!("expected JSON describe responses, got {other:?}"),
+        }
     }
 
     #[test]

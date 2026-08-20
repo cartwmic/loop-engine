@@ -114,15 +114,24 @@ pub fn checked(source: &str, event: &str, target: &str) -> Value {
     transition(source, event, target, "checked")
 }
 
+pub fn check_free(source: &str, event: &str, target: &str) -> Value {
+    transition(source, event, target, "check-free")
+}
+
+pub fn described_workflow(initial_input: &Value) -> Value {
+    let output = invoke(json!({
+        "operation": "describe",
+        "initial_input": initial_input
+    }));
+    assert_exit(&output, 0);
+    response(&output)
+}
+
 pub fn base_request(initial_input: Value, transition: Value) -> Value {
+    let workflow = described_workflow(&initial_input);
     json!({
         "operation": "evaluate",
-        "workflow": {
-            "id": "software-change",
-            "initial_state": "explore",
-            "states": [],
-            "transitions": []
-        },
+        "workflow": workflow,
         "initial_input": initial_input,
         "context": [],
         "transition": transition,
@@ -196,6 +205,36 @@ pub fn evidence_context(
     )
 }
 
+pub fn accepted_findings(
+    gate: &str,
+    subject: &str,
+    subject_revision: &str,
+    findings: Value,
+) -> Value {
+    json!({
+        "gate": gate,
+        "subject": subject,
+        "subject_revision": subject_revision,
+        "findings": findings
+    })
+}
+
+pub fn accepted_findings_context(
+    id: &str,
+    gate: &str,
+    subject: &str,
+    subject_revision: &str,
+    findings: Value,
+) -> ContextRecord {
+    ContextRecord::new(
+        id,
+        "accepted-findings",
+        accepted_findings(gate, subject, subject_revision, findings),
+        0_u64.into(),
+        Timestamp::from_unix_millis(0),
+    )
+}
+
 pub fn load_profile(profile: &str) -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("data")
@@ -252,7 +291,7 @@ pub fn axis_config(root: &TestDir, axis: &str) -> Value {
         "config_version": "test-1",
         "artifact_root": root.value(),
         "review_policies": {
-            "intent": [{"id": axis, "description": "test axis"}]
+            "intent-review": [{"id": axis, "description": "test axis"}]
         },
         "artifact_schemas": {"intent.json": metadata_schema()}
     })
@@ -427,6 +466,21 @@ impl Engine {
                 subject_revision,
                 config_version,
             ),
+        );
+    }
+
+    pub fn append_accepted_findings(
+        &self,
+        run_id: &str,
+        id: &str,
+        gate: &str,
+        subject: &str,
+        subject_revision: &str,
+        findings: Value,
+    ) {
+        self.append(
+            run_id,
+            accepted_findings_context(id, gate, subject, subject_revision, findings),
         );
     }
 

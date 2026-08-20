@@ -172,9 +172,14 @@ impl SubprocessProviderGateway {
 }
 
 impl ProviderGateway for SubprocessProviderGateway {
-    fn describe(&self, provider: &ProviderAssociation) -> Result<Workflow, ProviderError> {
+    fn describe(
+        &self,
+        provider: &ProviderAssociation,
+        initial_input: Option<&Value>,
+    ) -> Result<Workflow, ProviderError> {
         let request = serde_json::to_vec(&DescribeRequest {
             operation: "describe",
+            initial_input,
         })
         .map_err(|error| {
             ProviderError::execution(
@@ -208,8 +213,10 @@ impl ProviderGateway for SubprocessProviderGateway {
 }
 
 #[derive(Serialize)]
-struct DescribeRequest {
+struct DescribeRequest<'a> {
     operation: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    initial_input: Option<&'a Value>,
 }
 
 /// The wire envelope is intentionally flat.  It carries only the fields in
@@ -576,7 +583,7 @@ mod tests {
     fn invalid_association_is_execution_error() {
         let gateway = SubprocessProviderGateway::default();
         let association = ProviderAssociation::new(json!({"command": 42, "args": []}));
-        let error = gateway.describe(&association).unwrap_err();
+        let error = gateway.describe(&association, None).unwrap_err();
         assert!(matches!(error, ProviderError::Execution { .. }));
     }
 }

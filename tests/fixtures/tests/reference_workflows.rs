@@ -328,7 +328,11 @@ impl UnavailableGateway {
 }
 
 impl ProviderGateway for UnavailableGateway {
-    fn describe(&self, _provider: &core::ProviderAssociation) -> Result<Workflow, ProviderError> {
+    fn describe(
+        &self,
+        _provider: &core::ProviderAssociation,
+        _initial_input: Option<&serde_json::Value>,
+    ) -> Result<Workflow, ProviderError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Err(ProviderError::execution(
             "provider-unavailable",
@@ -813,7 +817,7 @@ fn software_change_stored_association_and_workflow_snapshot_evolution_is_durable
     );
     let changed_description = switched_engine
         .gateway
-        .describe(&run.provider_association)
+        .describe(&run.provider_association, None)
         .expect("changed provider describe response");
     assert_eq!(changed_description.id.as_str(), "changed-describe");
 

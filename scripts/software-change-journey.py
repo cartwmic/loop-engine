@@ -23,7 +23,9 @@ rules, and prints ``worker-data skill/root policy assertions passed`` only after
 all pass. Source full mode binds deterministic stdin-capturing workers that emit
 conforming JSON or exit-0 refusal text; after overlay failure, persisted
 summary/captures, and the compact one-key ``artifact_root`` stdin proof, it
-prints ``contracted fan-out failure``.
+prints ``contracted fan-out failure``. It then starts a second run from shipped
+minimal.json and walks the stitched hops (empty review lists omitted, last-hop
+``passed`` on the live validation review).
 """
 
 from __future__ import annotations
@@ -42,6 +44,10 @@ from typing import Any, Dict, List, Optional, Sequence
 import work_slot_journey
 
 PROFILE_SUBPATH = Path("crates/software-change-provider/data/configs/high-rigor.json")
+STITCHED_PROFILE_SUBPATH = Path(
+    "crates/software-change-provider/data/configs/minimal.json"
+)
+STITCHED_RUN_ID = "journey-stitched-run"
 FIXTURE_SUBPATH = Path(
     "crates/software-change-provider/data/calibration/fixtures"
 )
@@ -53,11 +59,16 @@ SUBJECTS = {
     "validation-report.json": "validation-report-good.json",
 }
 GATE_SUBJECT = {
-    "intent": "intent.json",
+    "intent-review": "intent.json",
+    "intent-adversarial-review": "intent.json",
     "design-review": "design.json",
+    "design-adversarial-review": "design.json",
     "plan-review": "plan.json",
+    "plan-adversarial-review": "plan.json",
     "implementation-review": "implementation-report.json",
-    "validation": "validation-report.json",
+    "implementation-adversarial-review": "implementation-report.json",
+    "validation-review": "validation-report.json",
+    "validation-adversarial-review": "validation-report.json",
 }
 SUCCESSOR_ROUTE_CASES = (
     ("design-review", "revise-intent", "explore"),
@@ -66,21 +77,45 @@ SUCCESSOR_ROUTE_CASES = (
     ("implementation-review", "revise-plan", "plan"),
     ("implementation-review", "revise-design", "design"),
     ("implementation-review", "revise-intent", "explore"),
-    ("validation", "revise-plan", "plan"),
-    ("validation", "revise-design", "design"),
-    ("validation", "revise-intent", "explore"),
+    ("validation-review", "revise", "validation"),
+    ("validation-review", "revise-implementation", "implement"),
+    ("validation-review", "revise-plan", "plan"),
+    ("validation-review", "revise-design", "design"),
+    ("validation-review", "revise-intent", "explore"),
 )
-BOUND_SLOT_ID = "explore-intent"
+BOUND_SLOT_ID = "intent-draft"
 UNBOUND_INVOKE_SLOT_ID = "design-draft"
 SOFTWARE_CHANGE_SLOT_IDS = (
-    "explore-intent",
+    "intent-draft",
+    "intent-review",
+    "intent-adversarial-review",
     "design-draft",
     "design-review",
+    "design-adversarial-review",
     "plan-draft",
     "plan-review",
+    "plan-adversarial-review",
     "implement",
     "implementation-review",
-    "validate",
+    "implementation-adversarial-review",
+    "validation-draft",
+    "validation-review",
+    "validation-adversarial-review",
+)
+STITCHED_SLOT_IDS = (
+    "intent-draft",
+    "design-draft",
+    "plan-draft",
+    "implement",
+    "validation-draft",
+    "validation-review",
+)
+STITCHED_HOPS = (
+    ("explore", "intent-ready", "design"),
+    ("design", "design-ready", "plan"),
+    ("plan", "plan-ready", "implement"),
+    ("implement", "implementation-ready", "validation"),
+    ("validation", "validation-ready", "validation-review"),
 )
 WORK_SLOT_PROOF = [
     "frozen sparse work_slot_bindings in initial_input",
@@ -152,6 +187,7 @@ class Journey:
         self.work_slot_bindings: Dict[str, Any] = {}
         self.dummy_worker_proof: List[str] = []
         self.run_id = "journey-production-run"
+        self.stitched_run_id: Optional[str] = None
         self.state = "not-started"
 
     def preflight(self) -> None:
@@ -254,6 +290,7 @@ class Journey:
                     "mode": self.mode,
                     "traversal_depth": self.depth,
                     "run_id": self.run_id,
+                    "stitched_run_id": self.stitched_run_id,
                     "database": str(self.database),
                     "artifact_root": str(self.artifact_root),
                     "successor_route_cases": successor_route_cases,
@@ -289,9 +326,9 @@ class Journey:
         missing = sorted(required.difference(profile))
         if missing:
             raise JourneyFailure(f"high-rigor profile is missing fields: {', '.join(missing)}")
-        if profile.get("config_version") != "high-rigor-5":
+        if profile.get("config_version") != "high-rigor-6":
             raise JourneyFailure(
-                f"journey requires high-rigor-5, got {profile.get('config_version')!r}"
+                f"journey requires high-rigor-6, got {profile.get('config_version')!r}"
             )
         schemas = profile.get("artifact_schemas")
         if not isinstance(schemas, dict) or set(schemas) != set(SUBJECTS):
@@ -341,6 +378,8 @@ class Journey:
     def _prepare_profile(self) -> None:
         assert self.profile_path is not None
         assert self.artifact_root is not None
+        assert self.profile_source is not None
+        self.profile = self._read_json(self.profile_source, "profile")
         profile = dict(self.profile)
         profile["artifact_root"] = str(self.artifact_root)
         shipped = profile.get("work_slot_bindings")
@@ -348,7 +387,7 @@ class Journey:
             work_slot_journey.assert_shipped_path_names(shipped)
         except work_slot_journey.WorkSlotJourneyFailure as error:
             raise JourneyFailure(str(error), state="explore", event="start") from error
-        # Keep the existing sparse dummy overlay: only explore-intent is bound so
+        # Keep the existing sparse dummy overlay: only intent-draft is bound so
         # implement and review slots stay unbound on this full-journey start.
         self.work_slot_bindings = work_slot_journey.bindings_for([BOUND_SLOT_ID])
         profile["work_slot_bindings"] = self.work_slot_bindings
@@ -710,45 +749,171 @@ class Journey:
                         axis=axis,
                     )
 
+    def _append_accepted_findings_for(
+        self, run_id: str, gate: str, *, state: str, record_prefix: str = ""
+    ) -> None:
+        subject = GATE_SUBJECT[gate]
+        revision = self._fixture_revision(subject)
+        record_id = f"{record_prefix}accepted-findings-{gate}"
+        data = {
+            "gate": gate,
+            "subject": subject,
+            "subject_revision": revision,
+            "findings": [],
+        }
+        record = json.dumps(data, separators=(",", ":"))
+        response = self._engine_for(
+            run_id,
+            ["append", f"--record-id={record_id}", run_id, "accepted-findings", record],
+            state=state,
+            event="append",
+            axis=gate,
+        )
+        self._expect_status(
+            response, "completed", event="append", axis=gate, state=state
+        )
+        if response.get("result", {}).get("context", {}).get("id") != record_id:
+            raise JourneyFailure(
+                f"accepted-findings record ID was changed for {gate}",
+                state=state,
+                event="append",
+                axis=gate,
+            )
+
+    def _expect_denial_for(
+        self, run_id: str, state: str, event: str, axis: str, code: str
+    ) -> Dict[str, Any]:
+        response = self._event_for(run_id, event, state=state, axis=axis)
+        self._expect_status(
+            response, "rejected", event=event, axis=axis, state=state
+        )
+        if response.get("code") != code:
+            raise JourneyFailure(
+                f"expected denial {code}, got {response.get('code')}",
+                state=state,
+                event=event,
+                axis=axis,
+            )
+        self._assert_show_for(run_id, state, event + "-denied")
+        return response
+
+    def _pass_review_for(
+        self,
+        run_id: str,
+        state: str,
+        gate: str,
+        event: str,
+        target: str,
+        *,
+        record_prefix: str = "",
+    ) -> None:
+        self._expect_denial_for(
+            run_id, state, event, gate, "software-change-review-incomplete"
+        )
+        self._append_evidence_for(
+            run_id, gate, state=state, record_prefix=record_prefix
+        )
+        self._expect_denial_for(
+            run_id, state, event, gate, "software-change-accepted-findings-missing"
+        )
+        self._append_accepted_findings_for(
+            run_id, gate, state=state, record_prefix=record_prefix
+        )
+        self._expect_allow_for(run_id, state, event, target)
+
+    def _pass_review(self, gate: str, event: str, target: str) -> None:
+        self._pass_review_for(
+            self.run_id, self.state, gate, event, target, record_prefix=""
+        )
+        self.state = target
+
     def _prepare_successor_state(self, run_id: str, target: str) -> None:
         self._start_run(run_id)
         self._invoke_bound_slot(run_id, state="explore")
-        self._append_evidence_for(
-            run_id, "intent", state="explore", record_prefix=f"{run_id}-"
+        prefix = f"{run_id}-"
+        self._expect_allow_for(run_id, "explore", "intent-ready", "intent-review")
+        self._pass_review_for(
+            run_id,
+            "intent-review",
+            "intent-review",
+            "approved",
+            "intent-adversarial-review",
+            record_prefix=prefix,
         )
-        self._expect_allow_for(run_id, "explore", "intent-ready", "design")
+        self._pass_review_for(
+            run_id,
+            "intent-adversarial-review",
+            "intent-adversarial-review",
+            "approved",
+            "design",
+            record_prefix=prefix,
+        )
         self._expect_allow_for(run_id, "design", "design-ready", "design-review")
         if target == "design-review":
             return
 
-        self._append_evidence_for(
-            run_id, "design-review", state="design-review", record_prefix=f"{run_id}-"
+        self._pass_review_for(
+            run_id,
+            "design-review",
+            "design-review",
+            "approved",
+            "design-adversarial-review",
+            record_prefix=prefix,
         )
-        self._expect_allow_for(run_id, "design-review", "approved", "plan")
+        self._pass_review_for(
+            run_id,
+            "design-adversarial-review",
+            "design-adversarial-review",
+            "approved",
+            "plan",
+            record_prefix=prefix,
+        )
         self._expect_allow_for(run_id, "plan", "plan-ready", "plan-review")
         if target == "plan-review":
             return
 
-        self._append_evidence_for(
-            run_id, "plan-review", state="plan-review", record_prefix=f"{run_id}-"
+        self._pass_review_for(
+            run_id,
+            "plan-review",
+            "plan-review",
+            "approved",
+            "plan-adversarial-review",
+            record_prefix=prefix,
         )
-        self._expect_allow_for(run_id, "plan-review", "approved", "implement")
+        self._pass_review_for(
+            run_id,
+            "plan-adversarial-review",
+            "plan-adversarial-review",
+            "approved",
+            "implement",
+            record_prefix=prefix,
+        )
         self._expect_allow_for(
             run_id, "implement", "implementation-ready", "implementation-review"
         )
         if target == "implementation-review":
             return
 
-        self._append_evidence_for(
+        self._pass_review_for(
             run_id,
             "implementation-review",
-            state="implementation-review",
-            record_prefix=f"{run_id}-",
+            "implementation-review",
+            "approved",
+            "implementation-adversarial-review",
+            record_prefix=prefix,
+        )
+        self._pass_review_for(
+            run_id,
+            "implementation-adversarial-review",
+            "implementation-adversarial-review",
+            "approved",
+            "validation",
+            record_prefix=prefix,
         )
         self._expect_allow_for(
-            run_id, "implementation-review", "approved", "validation"
+            run_id, "validation", "validation-ready", "validation-review"
         )
-        if target != "validation":
+        if target != "validation-review":
             raise JourneyFailure(f"unsupported successor route source state: {target}")
 
     def _run_successor_route_proof(self) -> None:
@@ -827,14 +992,11 @@ class Journey:
                 self.fixture_root / SUBJECTS["intent.json"],
                 self.artifact_root / "intent.json",
             )
-        self._expect_denial("intent-ready", "intent", "software-change-review-incomplete")
-        self._append_evidence("intent")
-        self._expect_allow("intent-ready", "design")
-        self._assert_unbound_design()
+        self._expect_allow("intent-ready", "intent-review")
         if self.mode == "packaged":
             # Packaged smoke intentionally ends after one checked production
             # transition; the source adapter owns full graph traversal.
-            self._assert_show("design", "packaged-prefix-end")
+            self._assert_show("intent-review", "packaged-prefix-end")
 
     def _run_full_source(self) -> None:
         self._expect_denial("intent-ready", "intent", "software-change-schema-invalid")
@@ -844,9 +1006,9 @@ class Journey:
             self.fixture_root / SUBJECTS["intent.json"],
             self.artifact_root / "intent.json",
         )
-        self._expect_denial("intent-ready", "intent", "software-change-review-incomplete")
-        self._append_evidence("intent")
-        self._expect_allow("intent-ready", "design")
+        self._expect_allow("intent-ready", "intent-review")
+        self._pass_review("intent-review", "approved", "intent-adversarial-review")
+        self._pass_review("intent-adversarial-review", "approved", "design")
         self._assert_unbound_design()
 
         # The design route checks every configured revision link.  Mutating the
@@ -870,28 +1032,32 @@ class Journey:
         design_path.write_text(json.dumps(design, indent=2) + "\n", encoding="utf-8")
         self._expect_allow("design-ready", "design-review")
 
-        self._expect_denial("approved", "design-review", "software-change-review-incomplete")
-        self._append_evidence("design-review")
-        self._expect_allow("approved", "plan")
+        self._pass_review("design-review", "approved", "design-adversarial-review")
+        self._pass_review("design-adversarial-review", "approved", "plan")
 
         self._expect_allow("plan-ready", "plan-review")
-        self._expect_denial("approved", "plan-review", "software-change-review-incomplete")
-        self._append_evidence("plan-review")
-        self._expect_allow("approved", "implement")
+        self._pass_review("plan-review", "approved", "plan-adversarial-review")
+        self._pass_review("plan-adversarial-review", "approved", "implement")
 
         self._expect_allow("implementation-ready", "implementation-review")
-        self._expect_denial("approved", "implementation-review", "software-change-review-incomplete")
-        self._append_evidence("implementation-review")
-        self._expect_allow("approved", "validation")
+        self._pass_review(
+            "implementation-review", "approved", "implementation-adversarial-review"
+        )
+        self._pass_review(
+            "implementation-adversarial-review", "approved", "validation"
+        )
 
-        self._expect_denial("passed", "validation", "software-change-review-incomplete")
-        self._append_evidence("validation")
-        self._expect_allow("passed", "end")
+        self._expect_allow("validation-ready", "validation-review")
+        self._pass_review("validation-review", "approved", "validation-adversarial-review")
+        self._pass_review("validation-adversarial-review", "passed", "end")
         shown = self._assert_show("end", "terminal-show")
         if shown.get("lifecycle") != "final":
             raise JourneyFailure("full journey did not reach final lifecycle", state=self.state, event="passed")
         if shown.get("requestable_events") != []:
             raise JourneyFailure("final journey exposed requestable events", state=self.state, event="show")
+        print(
+            "full software-change journey passed: parent and adversarial reviews walked, last-hop passed"
+        )
 
         history = self._engine(["history", self.run_id], state=self.state, event="history")
         self._expect_status(history, "completed", event="history", state=self.state)
@@ -910,7 +1076,146 @@ class Journey:
             raise JourneyFailure("history omitted expected denial lineage", state=self.state, event="history")
 
         self._run_successor_route_proof()
+        self._run_stitched_source()
         self._run_dummy_worker_proofs()
+
+    def _run_stitched_source(self) -> None:
+        """Walk the live graph produced from shipped minimal.json on a second run."""
+        assert self.run_dir is not None
+        assert self.fixture_root is not None
+        source = self.data_root / STITCHED_PROFILE_SUBPATH
+        if not source.is_file():
+            raise JourneyFailure(f"stitched profile is missing: {source}")
+
+        saved_run_id = self.run_id
+        saved_artifact_root = self.artifact_root
+        saved_profile_path = self.profile_path
+        saved_profile = self.profile
+        saved_state = self.state
+        saved_bindings = self.work_slot_bindings
+        saved_source = self.profile_source
+
+        stitched_dir = self.run_dir / "stitched"
+        artifact_root = stitched_dir / "artifacts"
+        artifact_root.mkdir(parents=True)
+
+        self.profile_source = source
+        self.profile_path = stitched_dir / "minimal.json"
+        self.artifact_root = artifact_root
+        self.run_id = STITCHED_RUN_ID
+        self.stitched_run_id = STITCHED_RUN_ID
+        self.state = "not-started"
+
+        try:
+            self._prepare_profile()
+            self._assert_stitched_profile(self.profile)
+
+            for subject, fixture in SUBJECTS.items():
+                shutil.copy2(self.fixture_root / fixture, artifact_root / subject)
+
+            self._start_run(self.run_id)
+            shown = self._assert_show("explore", "stitched-start")
+            ids = self._work_slot_ids(shown)
+            if ids != STITCHED_SLOT_IDS:
+                raise JourneyFailure(
+                    f"stitched catalog {ids} != {STITCHED_SLOT_IDS}",
+                    state=self.state,
+                    event="stitched-start",
+                )
+            routes = [
+                (item.get("event"), item.get("target"))
+                for item in shown.get("requestable_events", [])
+                if isinstance(item, dict)
+            ]
+            if ("intent-ready", "design") not in routes:
+                raise JourneyFailure(
+                    f"stitched explore omitted intent-ready→design; got {routes}",
+                    state=self.state,
+                    event="stitched-start",
+                )
+            self._invoke_bound_slot(self.run_id, state="explore")
+            for expected_state, event, target in STITCHED_HOPS:
+                if self.state != expected_state:
+                    raise JourneyFailure(
+                        f"stitched hop expected {expected_state}, at {self.state}",
+                        state=self.state,
+                        event=event,
+                    )
+                self._expect_allow(event, target)
+            self._pass_review("validation-review", "passed", "end")
+            shown = self._assert_show("end", "stitched-terminal-show")
+            if shown.get("lifecycle") != "final":
+                raise JourneyFailure(
+                    "stitched journey did not reach final lifecycle",
+                    state=self.state,
+                    event="passed",
+                )
+            if shown.get("requestable_events") != []:
+                raise JourneyFailure(
+                    "stitched final journey exposed requestable events",
+                    state=self.state,
+                    event="show",
+                )
+            print(
+                "stitched software-change journey passed: empty review lists omitted, last-hop passed"
+            )
+        finally:
+            self.run_id = saved_run_id
+            self.artifact_root = saved_artifact_root
+            self.profile_path = saved_profile_path
+            self.profile = saved_profile
+            self.state = saved_state
+            self.work_slot_bindings = saved_bindings
+            self.profile_source = saved_source
+
+    @staticmethod
+    def _assert_stitched_profile(profile: Dict[str, Any]) -> None:
+        policies = profile.get("review_policies")
+        if not isinstance(policies, dict):
+            raise JourneyFailure("stitched profile review_policies must be an object")
+        for omitted in (
+            "intent-review",
+            "design-review",
+            "plan-review",
+            "implementation-review",
+        ):
+            if policies.get(omitted) != []:
+                raise JourneyFailure(
+                    f"stitched profile must omit {omitted} with an empty list",
+                    event="stitched-start",
+                )
+        validation = policies.get("validation-review")
+        if not isinstance(validation, list) or not validation:
+            raise JourneyFailure(
+                "stitched profile must keep a nonempty validation-review list",
+                event="stitched-start",
+            )
+        for gate, axes in policies.items():
+            if "adversarial" in str(gate) and axes:
+                raise JourneyFailure(
+                    f"stitched profile must not enable {gate}",
+                    event="stitched-start",
+                )
+
+    @staticmethod
+    def _work_slot_ids(shown: Dict[str, Any]) -> tuple[str, ...]:
+        slots = shown.get("work_slots")
+        if not isinstance(slots, list) and isinstance(shown.get("result"), dict):
+            slots = shown["result"].get("work_slots")
+        if not isinstance(slots, list):
+            raise JourneyFailure("show omitted work_slots catalog", event="show")
+        ids: List[str] = []
+        for slot in slots:
+            if isinstance(slot, str):
+                ids.append(slot)
+            elif isinstance(slot, dict) and isinstance(slot.get("id"), str):
+                ids.append(slot["id"])
+            else:
+                raise JourneyFailure(
+                    f"unexpected work slot catalog entry: {slot!r}",
+                    event="show",
+                )
+        return tuple(ids)
 
     def _run_dummy_worker_proofs(self) -> None:
         """Prove heartbeat, capture isolation, preview fail-closed, and sandbox argv."""
@@ -1347,6 +1652,14 @@ def assert_worker_data_skill_and_root_policy() -> None:
         if not path.is_file():
             raise JourneyFailure(f"shipped worker data is missing: {path}")
     sc_preamble = sc_preamble_path.read_text(encoding="utf-8")
+    for clause in (
+        "extra mechanism, unlisted requirements, and hypothetical-future",
+        "Confirmation consumes the durable set",
+        "does not search again except for fix-introduced holes",
+        "Bound workers do not use previously overlooked",
+    ):
+        if clause.lower() not in sc_preamble.lower():
+            raise JourneyFailure(f"review-worker preamble omitted {clause!r}")
     pd_preamble = pd_preamble_path.read_text(encoding="utf-8")
     research_preamble = research_preamble_path.read_text(encoding="utf-8")
     sc_schema = _load_json(sc_schema_path)
@@ -1552,6 +1865,111 @@ def assert_worker_data_skill_and_root_policy() -> None:
         )
         _assert_hash_guard(plan_profile)
 
+        intent_profile = root / "high-rigor-intent-review.json"
+        shutil.copy2(high_rigor, intent_profile)
+        intent_source = _load_json(intent_profile)
+        intent_result = run_sc(intent_profile, "intent-review", roster_path)
+        intent_bindings = intent_result.get("work_slot_bindings")
+        if not isinstance(intent_bindings, dict) or "intent-review" not in intent_bindings:
+            raise JourneyFailure("intent-review constructor omitted work_slot_bindings")
+        for draft in (
+            "intent-draft",
+            "design-draft",
+            "plan-draft",
+            "implement",
+            "validation-draft",
+        ):
+            if draft in intent_bindings:
+                raise JourneyFailure(f"constructor emitted draft binding {draft}")
+        if "intent-adversarial-review" in intent_bindings:
+            raise JourneyFailure(
+                "intent-review constructor mixed adversarial fan-out into the parent slot"
+            )
+        intent_workers = _fan_out_workers(
+            intent_bindings["intent-review"], engine=dummy_engine
+        )
+        intent_expected = _policy_author_pairs(
+            intent_source["review_policies"]["intent-review"], roster
+        )
+        if len(intent_workers) != len(intent_expected):
+            raise JourneyFailure(
+                f"intent-review worker count {len(intent_workers)} != {len(intent_expected)}"
+            )
+        for worker, (policy, entry) in zip(intent_workers, intent_expected):
+            _assert_worker_assignment(
+                worker,
+                policy=policy,
+                roster_entry=entry,
+                base_preamble=sc_preamble,
+                schema=sc_schema,
+                pi_command=dummy_pi,
+                fragments=(
+                    "software-change",
+                    "intent-review",
+                    "artifact_root",
+                    f"required_author_claim: {entry['author']}",
+                ),
+            )
+
+        adv_profile = root / "high-rigor-design-adversarial.json"
+        shutil.copy2(high_rigor, adv_profile)
+        adv_source = _load_json(adv_profile)
+        adv_result = run_sc(adv_profile, "design-adversarial-review", roster_path)
+        adv_bindings = adv_result.get("work_slot_bindings")
+        if not isinstance(adv_bindings, dict) or "design-adversarial-review" not in adv_bindings:
+            raise JourneyFailure(
+                "design-adversarial-review constructor omitted work_slot_bindings"
+            )
+        if "design-review" in adv_bindings:
+            raise JourneyFailure(
+                "adversarial constructor mixed parent fan-out into the adversarial slot"
+            )
+        adv_workers = _fan_out_workers(
+            adv_bindings["design-adversarial-review"], engine=dummy_engine
+        )
+        adv_expected = _policy_author_pairs(
+            adv_source["review_policies"]["design-adversarial-review"], roster
+        )
+        if len(adv_workers) != len(adv_expected):
+            raise JourneyFailure(
+                f"design-adversarial-review worker count {len(adv_workers)} != {len(adv_expected)}"
+            )
+        for worker, (policy, entry) in zip(adv_workers, adv_expected):
+            if entry["author"] != roster[0]["author"]:
+                raise JourneyFailure(
+                    "adversarial constructor required a second roster or disjoint author"
+                )
+            _assert_worker_assignment(
+                worker,
+                policy=policy,
+                roster_entry=entry,
+                base_preamble=sc_preamble,
+                schema=sc_schema,
+                pi_command=dummy_pi,
+                fragments=(
+                    "software-change",
+                    "design-adversarial-review",
+                    "artifact_root",
+                ),
+            )
+
+        for draft in (
+            "intent-draft",
+            "design-draft",
+            "plan-draft",
+            "implement",
+            "validation-draft",
+        ):
+            draft_profile = root / f"sc-draft-{draft}.json"
+            shutil.copy2(high_rigor, draft_profile)
+            _expect_constructor_closed(
+                lambda draft=draft, draft_profile=draft_profile: run_sc(
+                    draft_profile, draft, roster_path
+                ),
+                needle="constructor does not emit draft bindings",
+                context=f"software-change draft slot {draft}",
+            )
+
         empty_policies = root / "sc-empty-policies.json"
         shutil.copy2(high_rigor, empty_policies)
         empty_doc = _load_json(empty_policies)
@@ -1611,7 +2029,7 @@ def assert_worker_data_skill_and_root_policy() -> None:
         shutil.copy2(high_rigor, unsupported_profile)
         _expect_constructor_closed(
             lambda: run_sc(unsupported_profile, "semantic-review", roster_path),
-            needle="unsupported or empty policy list",
+            needle="unsupported review slot",
             context="software-change unsupported slot",
         )
 

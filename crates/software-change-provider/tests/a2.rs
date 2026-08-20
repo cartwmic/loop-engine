@@ -9,7 +9,31 @@ use support::{Engine, TestDir};
 fn missing_policies_errors_on_first_check_and_leaves_engine_state_unchanged() {
     let state = TestDir::new("a2-missing-state");
     let engine = Engine::new(state.path().join("missing.sqlite"));
-    engine.start_ok("missing-policies", json!({"config_version": "standard-1"}));
+    let run = engine.start_ok("missing-policies", json!({"config_version": "standard-1"}));
+    assert_eq!(run.workflow.states.len(), 16);
+    let slot_ids: Vec<_> = run
+        .workflow
+        .work_slots
+        .iter()
+        .map(|slot| slot.id.as_str())
+        .collect();
+    assert!(slot_ids.contains(&"intent-draft"));
+    assert!(slot_ids.contains(&"validation-draft"));
+    assert!(slot_ids.contains(&"intent-review"));
+    let draft = run
+        .workflow
+        .work_slots
+        .iter()
+        .find(|slot| slot.id.as_str() == "intent-draft")
+        .expect("intent-draft");
+    assert!(draft.stdin_context_kinds.is_empty());
+    let review = run
+        .workflow
+        .work_slots
+        .iter()
+        .find(|slot| slot.id.as_str() == "intent-review")
+        .expect("intent-review");
+    assert_eq!(review.stdin_context_kinds, ["accepted-findings"]);
 
     let outcome = engine.event("missing-policies", "intent-ready");
     let issue = match outcome {
@@ -57,11 +81,8 @@ fn explicitly_empty_policies_walk_to_end_with_allocated_artifact_root() {
     for event in [
         "intent-ready",
         "design-ready",
-        "approved",
         "plan-ready",
-        "approved",
         "implementation-ready",
-        "approved",
         "passed",
     ] {
         let result = engine.event("empty-policies", event);

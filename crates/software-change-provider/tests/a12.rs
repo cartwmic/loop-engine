@@ -13,7 +13,7 @@ fn malformed_shipped_schema_fails_closed_as_evaluation_error() {
     });
     let output = invoke(base_request(
         config,
-        checked("explore", "intent-ready", "design"),
+        checked("explore", "intent-ready", "intent-review"),
     ));
 
     support::assert_exit(&output, 1);

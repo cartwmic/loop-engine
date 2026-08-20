@@ -1,7 +1,7 @@
 {
-  "config_version": "high-rigor-5",
+  "config_version": "high-rigor-6",
   "review_policies": {
-    "intent": [
+    "intent-review": [
       {
         "id": "solution-agnostic",
         "description": "Intent states product need and outcome without choosing an unforced implementation.",
@@ -26,6 +26,38 @@
         "id": "problem-grounded",
         "description": "Intent grounds change in an affected problem rather than target laundering.",
         "example_prompt": "Judge problem-grounded only. Confirm problem names affected users, operators, systems, or behavior and explains why outcome matters; do not accept a chosen target as the problem. Template: crates/software-change-provider/data/templates/intent.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/intent.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings."
+      }
+    ],
+    "intent-adversarial-review": [
+      {
+        "id": "solution-agnostic",
+        "description": "Falsify the parent `solution-agnostic` pass claim against that named obligation: Intent states product need and outcome without choosing an unforced implementation.",
+        "example_prompt": "Falsify solution-agnostic only. Attack the parent pass claim against that named obligation: problem, outcome, acceptance, or non-goals smuggle an unforced internal mechanism instead of stating a product need. Template: crates/software-change-provider/data/templates/intent.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/intent.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 1
+      },
+      {
+        "id": "outside-verifiable",
+        "description": "Falsify the parent `outside-verifiable` pass claim against that named obligation: Intent defines outcomes an outside observer can check.",
+        "example_prompt": "Falsify outside-verifiable only. Attack the parent pass claim against that named obligation: outcome or acceptance is a work instruction or undefined qualifier rather than a situation an outside observer can check. Template: crates/software-change-provider/data/templates/intent.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/intent.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 1
+      },
+      {
+        "id": "scope-fenced",
+        "description": "Falsify the parent `scope-fenced` pass claim against that named obligation: Intent bounds adjacent capability without arbitrary mechanism bans.",
+        "example_prompt": "Falsify scope-fenced only. Attack the parent pass claim against that named obligation: non-goals or acceptance fail to fence adjacent capability, or instead impose an arbitrary mechanism ban. Template: crates/software-change-provider/data/templates/intent.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/intent.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 1
+      },
+      {
+        "id": "constraints-are-limits",
+        "description": "Falsify the parent `constraints-are-limits` pass claim against that named obligation: Intent distinguishes externally imposed constraints from preferences.",
+        "example_prompt": "Falsify constraints-are-limits only. Attack the parent pass claim against that named obligation: a listed constraint is an author preference or unforced implementation disguised as an outside obligation or real boundary. Template: crates/software-change-provider/data/templates/intent.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/intent.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 1
+      },
+      {
+        "id": "problem-grounded",
+        "description": "Falsify the parent `problem-grounded` pass claim against that named obligation: Intent grounds change in an affected problem rather than target laundering.",
+        "example_prompt": "Falsify problem-grounded only. Attack the parent pass claim against that named obligation: the problem is a chosen target (target laundering) rather than affected users, operators, systems, or behavior with why the outcome matters. Template: crates/software-change-provider/data/templates/intent.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/intent.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 1
       }
     ],
     "design-review": [
@@ -66,6 +98,44 @@
         "required_authors": 2
       }
     ],
+    "design-adversarial-review": [
+      {
+        "id": "intent-faithful",
+        "description": "Falsify the parent `intent-faithful` pass claim against that named obligation: Design delivers intent outcome and respects constraints and non-goals.",
+        "example_prompt": "Falsify intent-faithful only. Attack the parent pass claim against that named obligation: the described design shape would miss the intent outcome or violate a constraint or non-goal. Template: crates/software-change-provider/data/templates/design.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/design.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 1
+      },
+      {
+        "id": "acceptance-covered",
+        "description": "Falsify the parent `acceptance-covered` pass claim against that named obligation: Design names structural parts and relationships that deliver each acceptance line.",
+        "example_prompt": "Falsify acceptance-covered only. Attack the parent pass claim against that named obligation: a coverage entry is an unsupported promise or one-hop restatement instead of named design parts and relationships. Template: crates/software-change-provider/data/templates/design.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/design.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 1
+      },
+      {
+        "id": "structural-not-procedural",
+        "description": "Falsify the parent `structural-not-procedural` pass claim against that named obligation: Design describes resulting shape and boundaries, not ordered work.",
+        "example_prompt": "Falsify structural-not-procedural only. Attack the parent pass claim against that named obligation: the design is a work schedule, numbered implementation steps, or file-edit checklist rather than parts, responsibilities, boundaries, and structural dependencies. Template: crates/software-change-provider/data/templates/design.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/design.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 1
+      },
+      {
+        "id": "decisions-justified",
+        "description": "Falsify the parent `decisions-justified` pass claim against that named obligation: Design records real alternatives and reasons for consequential choices.",
+        "example_prompt": "Falsify decisions-justified only. Attack the parent pass claim against that named obligation: a consequential choice lacks a concrete rationale or a meaningful rejected alternative where a live fork exists. Template: crates/software-change-provider/data/templates/design.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/design.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 1
+      },
+      {
+        "id": "risk-honest",
+        "description": "Falsify the parent `risk-honest` pass claim against that named obligation: Design names specific material risks and accepted residuals.",
+        "example_prompt": "Falsify risk-honest only. Attack the parent pass claim against that named obligation: named risks are generic engineering hazards, or they omit material stated exposures and residuals specific to this design. Template: crates/software-change-provider/data/templates/design.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/design.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 1
+      },
+      {
+        "id": "mechanism-forced",
+        "description": "Falsify the parent `mechanism-forced` pass claim against that named obligation: the axis judges that every design mechanism is forced by a named requirement and no needed mechanism is missing.",
+        "example_prompt": "Falsify mechanism-forced only. Attack the parent pass claim against that named obligation: a mechanism, section, or configurable surface has no forcing requirement (overbuild), or a claimed simplification leaves a concrete uncovered failure or unmet requirement. Template: crates/software-change-provider/data/templates/design.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/design.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 1
+      }
+    ],
     "plan-review": [
       {
         "id": "task-sized",
@@ -98,6 +168,44 @@
         "example_prompt": "Judge dependencies-honest only. Confirm every declared predecessor is needed and every needed contract or hard input is declared; parallel fan-out must be ownership-safe. Template: crates/software-change-provider/data/templates/task-packet.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/plan.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings."
       }
     ],
+    "plan-adversarial-review": [
+      {
+        "id": "task-sized",
+        "description": "Falsify the parent `task-sized` pass claim against that named obligation: Each task has bounded objective, surface, and completion.",
+        "example_prompt": "Falsify task-sized only. Attack the parent pass claim against that named obligation: a task is too large for one capable worker or unbounded in objective, deliverables, out-of-scope, validation, or handoff. Template: crates/software-change-provider/data/templates/task-packet.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/plan.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 1
+      },
+      {
+        "id": "context-sufficient",
+        "description": "Falsify the parent `context-sufficient` pass claim against that named obligation: Each task has enough source context and predecessor contract to execute.",
+        "example_prompt": "Falsify context-sufficient only. Attack the parent pass claim against that named obligation: a fresh worker would rediscover settled decisions because source-of-truth references or predecessor interfaces are missing. Template: crates/software-change-provider/data/templates/task-packet.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/plan.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 1
+      },
+      {
+        "id": "done-observable",
+        "description": "Falsify the parent `done-observable` pass claim against that named obligation: Task completion can be proven by its validation and handoff.",
+        "example_prompt": "Falsify done-observable only. Attack the parent pass claim against that named obligation: validation or handoff claims completion without proving required behavior. Template: crates/software-change-provider/data/templates/task-packet.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/plan.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 1
+      },
+      {
+        "id": "decision-free",
+        "description": "Falsify the parent `decision-free` pass claim against that named obligation: Plan leaves no product or architecture decision for implementation agents.",
+        "example_prompt": "Falsify decision-free only. Attack the parent pass claim against that named obligation: a fresh worker must invent product semantics, architecture, interfaces, or scope rather than execute the packet. Template: crates/software-change-provider/data/templates/task-packet.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/plan.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 1
+      },
+      {
+        "id": "design-faithful",
+        "description": "Falsify the parent `design-faithful` pass claim against that named obligation: Dependency graph and packets preserve frozen design boundaries.",
+        "example_prompt": "Falsify design-faithful only. Attack the parent pass claim against that named obligation: tasks or the graph add states, mechanisms, or abstractions beyond frozen design boundaries. Template: crates/software-change-provider/data/templates/task-packet.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/plan.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 1
+      },
+      {
+        "id": "dependencies-honest",
+        "description": "Falsify the parent `dependencies-honest` pass claim against that named obligation: Dependencies represent real contract and hard-input needs.",
+        "example_prompt": "Falsify dependencies-honest only. Attack the parent pass claim against that named obligation: a declared predecessor is unneeded, or a needed contract or hard input is undeclared, including ownership-unsafe parallel fan-out. Template: crates/software-change-provider/data/templates/task-packet.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/plan.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 1
+      }
+    ],
     "implementation-review": [
       {
         "id": "tasks-actually-done",
@@ -115,7 +223,27 @@
         "example_prompt": "Judge design-faithful-final only. Confirm delivered implementation and coverage remain faithful to accepted design decisions, interfaces, and guardrails. Template: crates/software-change-provider/data/templates/implementation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/implementation-report.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings."
       }
     ],
-    "validation": [
+    "implementation-adversarial-review": [
+      {
+        "id": "tasks-actually-done",
+        "description": "Falsify the parent `tasks-actually-done` pass claim against that named obligation: Implementation report demonstrates assigned work actually landed.",
+        "example_prompt": "Falsify tasks-actually-done only. Attack the parent pass claim against that named obligation: coverage, changed surface, or validation is prose unsupported by repository evidence that assigned tasks landed. Template: crates/software-change-provider/data/templates/implementation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/implementation-report.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 1
+      },
+      {
+        "id": "no-scope-creep",
+        "description": "Falsify the parent `no-scope-creep` pass claim against that named obligation: Implementation stayed within accepted plan and out-of-scope boundaries.",
+        "example_prompt": "Falsify no-scope-creep only. Attack the parent pass claim against that named obligation: changed surface or coverage adds material unplanned capability or boundary expansion. Template: crates/software-change-provider/data/templates/implementation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/implementation-report.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 1
+      },
+      {
+        "id": "design-faithful-final",
+        "description": "Falsify the parent `design-faithful-final` pass claim against that named obligation: Final implementation remains faithful to frozen design.",
+        "example_prompt": "Falsify design-faithful-final only. Attack the parent pass claim against that named obligation: delivered implementation or coverage drifts from accepted design decisions, interfaces, or guardrails. Template: crates/software-change-provider/data/templates/implementation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/implementation-report.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 1
+      }
+    ],
+    "validation-review": [
       {
         "id": "intent-delivered",
         "description": "Validation evidence demonstrates intent outcomes and acceptance boundaries were delivered.",
@@ -133,6 +261,26 @@
         "description": "Validation maps requirements and acceptance criteria to concrete proof.",
         "example_prompt": "Judge requirement-proof-mapping only. Confirm every requirement and acceptance criterion names executable or scripted proof and the proof actually covers it; reject unsupported summary claims. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
         "required_authors": 2
+      }
+    ],
+    "validation-adversarial-review": [
+      {
+        "id": "intent-delivered",
+        "description": "Falsify the parent `intent-delivered` pass claim against that named obligation: Validation evidence demonstrates intent outcomes and acceptance boundaries were delivered.",
+        "example_prompt": "Falsify intent-delivered only. Attack the parent pass claim against that named obligation: the validation report maps only completed work rather than observable proof of intent outcomes and acceptance boundaries. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 1
+      },
+      {
+        "id": "docs-integrated",
+        "description": "Falsify the parent `docs-integrated` pass claim against that named obligation: Authoritative repository documents integrate delivered behavior without parallel truth.",
+        "example_prompt": "Falsify docs-integrated only. Attack the parent pass claim against that named obligation: authoritative repository documents, notably the repo-wide PRD and documents touched by the change, disagree with delivered behavior or leave a parallel change truth. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 1
+      },
+      {
+        "id": "requirement-proof-mapping",
+        "description": "Falsify the parent `requirement-proof-mapping` pass claim against that named obligation: Validation maps requirements and acceptance criteria to concrete proof.",
+        "example_prompt": "Falsify requirement-proof-mapping only. Attack the parent pass claim against that named obligation: a requirement or acceptance criterion lacks executable or scripted proof, or the named proof does not actually cover it. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 1
       }
     ]
   },

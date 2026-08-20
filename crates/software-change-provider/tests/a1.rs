@@ -2,7 +2,7 @@
 mod support;
 
 use loop_core::OperationOutcome;
-use serde_json::Value;
+use serde_json::{json, Value};
 use support::{config_artifact_root, load_fixture, load_profile, Engine, TestDir};
 
 #[test]
@@ -11,18 +11,22 @@ fn standard_run_progresses_schema_deny_then_evidence_deny_then_allow() {
     let state = TestDir::new("a1-state");
     let config = config_artifact_root(load_profile("standard"), &artifacts);
     let engine = Engine::new(state.path().join("a1.sqlite"));
+    let config_version = config["config_version"]
+        .as_str()
+        .expect("standard config_version")
+        .to_owned();
 
     engine.start_ok("a1", config.clone());
     let shown = engine.show("a1");
     assert_eq!(shown.initial_input, config);
-    assert!(shown.initial_input["review_policies"]["intent"]
+    assert!(shown.initial_input["review_policies"]["intent-review"]
         .as_array()
         .is_some_and(|axes| !axes.is_empty()));
     assert!(shown.initial_input["artifact_schemas"]["intent.json"].is_object());
     assert_eq!(shown.current_state.as_str(), "explore");
 
-    // No artifact exists yet, so deterministic shape checking denies before
-    // semantic evidence is consulted.
+    // Draft ready is schema and links only; missing artifact denies before
+    // review evidence or accepted-findings are consulted.
     let schema_denial = engine.event("a1", "intent-ready");
     let schema_issue = match schema_denial {
         OperationOutcome::Rejected(issue) => issue,
@@ -33,7 +37,14 @@ fn standard_run_progresses_schema_deny_then_evidence_deny_then_allow() {
 
     let intent = load_fixture("intent-good.json");
     artifacts.write_json("intent.json", &intent);
-    let evidence_denial = engine.event("a1", "intent-ready");
+    let ready = engine.event("a1", "intent-ready");
+    assert!(
+        matches!(ready, OperationOutcome::Completed(_)),
+        "expected draft ready to allow after schema pass, got {ready:?}"
+    );
+    assert_eq!(engine.current_state("a1").as_str(), "intent-review");
+
+    let evidence_denial = engine.event("a1", "approved");
     let evidence_issue = match evidence_denial {
         OperationOutcome::Rejected(issue) => issue,
         other => panic!("expected evidence denial, got {other:?}"),
@@ -56,7 +67,7 @@ fn standard_run_progresses_schema_deny_then_evidence_deny_then_allow() {
         engine.append_evidence(
             "a1",
             &format!("a1-{axis}"),
-            "intent",
+            "intent-review",
             axis,
             "pass",
             "",
@@ -64,16 +75,36 @@ fn standard_run_progresses_schema_deny_then_evidence_deny_then_allow() {
             "agent",
             "intent.json",
             "r15",
-            "standard-5",
+            &config_version,
         );
-        // Keep sequence values visible in source even though persistence owns
-        // durable sequence allocation; enumerate documents append order.
         let _ = sequence;
     }
 
-    let allowed = engine.event("a1", "intent-ready");
+    let findings_denial = engine.event("a1", "approved");
+    let findings_issue = match findings_denial {
+        OperationOutcome::Rejected(issue) => issue,
+        other => panic!("expected accepted-findings denial, got {other:?}"),
+    };
+    assert_eq!(
+        findings_issue.code,
+        "software-change-accepted-findings-missing"
+    );
+
+    engine.append_accepted_findings(
+        "a1",
+        "a1-accepted",
+        "intent-review",
+        "intent.json",
+        "r15",
+        json!([]),
+    );
+
+    let allowed = engine.event("a1", "approved");
     assert!(matches!(allowed, OperationOutcome::Completed(_)));
-    assert_eq!(engine.current_state("a1").as_str(), "design");
+    assert_eq!(
+        engine.current_state("a1").as_str(),
+        "intent-adversarial-review"
+    );
 
     // Ensure shipped evidence path was consumed as JSON, not copied into a
     // test-local representation.

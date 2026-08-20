@@ -14,14 +14,19 @@ use std::fmt;
 
 /// Gate identifiers accepted in `review_policies`.
 ///
-/// This is the policy namespace from technical-design §8.  Transition tuple
-/// mapping remains owned by `gates.rs`.
+/// These match review state names from the union phase table in `workflow`.
+/// Retired keys `intent` and `validation` are not accepted.
 pub(crate) const GATE_IDS: &[&str] = &[
-    "intent",
+    "intent-review",
+    "intent-adversarial-review",
     "design-review",
+    "design-adversarial-review",
     "plan-review",
+    "plan-adversarial-review",
     "implementation-review",
-    "validation",
+    "implementation-adversarial-review",
+    "validation-review",
+    "validation-adversarial-review",
 ];
 
 /// Artifact subject names accepted in `artifact_schemas` and revision links.
@@ -1052,11 +1057,13 @@ fn is_known_subject(subject: &str) -> bool {
 
 fn gate_subject(gate: &str) -> Option<&'static str> {
     match gate {
-        "intent" => Some("intent.json"),
-        "design-review" => Some("design.json"),
-        "plan-review" => Some("plan.json"),
-        "implementation-review" => Some("implementation-report.json"),
-        "validation" => Some("validation-report.json"),
+        "intent-review" | "intent-adversarial-review" => Some("intent.json"),
+        "design-review" | "design-adversarial-review" => Some("design.json"),
+        "plan-review" | "plan-adversarial-review" => Some("plan.json"),
+        "implementation-review" | "implementation-adversarial-review" => {
+            Some("implementation-report.json")
+        }
+        "validation-review" | "validation-adversarial-review" => Some("validation-report.json"),
         _ => None,
     }
 }
@@ -1123,7 +1130,7 @@ mod tests {
 
     #[test]
     fn valid_config_parses_into_semantically_keyed_surface() {
-        let mut config = axis_config("intent", "intent.json", author_schema());
+        let mut config = axis_config("intent-review", "intent.json", author_schema());
         config["artifact_root"] = json!(null);
         config["extra"] = json!({"caller": [1, true]});
         config["revision_links"] = json!([
@@ -1138,11 +1145,17 @@ mod tests {
         assert!(parsed.schema("intent.json").is_some());
         assert_eq!(parsed.links_from("intent.json").len(), 1);
         assert_eq!(parsed.links_from("intent.json")[0].field(), "base_revision");
-        assert_eq!(parsed.axis("intent", "axis").unwrap().required_authors(), 1);
+        assert_eq!(
+            parsed
+                .axis("intent-review", "axis")
+                .unwrap()
+                .required_authors(),
+            1
+        );
         assert_eq!(
             parsed
                 .axis_namespace()
-                .get("intent")
+                .get("intent-review")
                 .expect("configured gate"),
             &BTreeSet::from(["axis".to_owned()])
         );
@@ -1166,21 +1179,21 @@ mod tests {
         assert!(parsed.artifact_root().is_none());
 
         config["work_slot_bindings"] = json!({
-            "explore-intent": {"command": "echo", "args": ["ok"]}
+            "intent-draft": {"command": "echo", "args": ["ok"]}
         });
         let parsed = parse_initial_input(&config).expect("object bindings must be unread");
         assert_eq!(
             parsed.work_slot_bindings(),
-            Some(&json!({"explore-intent": {"command": "echo", "args": ["ok"]}}))
+            Some(&json!({"intent-draft": {"command": "echo", "args": ["ok"]}}))
         );
     }
 
     #[test]
     fn extra_and_unknown_policy_fields_are_ignored() {
-        let mut config = axis_config("intent", "intent.json", author_schema());
+        let mut config = axis_config("intent-review", "intent.json", author_schema());
         config["extra"] = json!("opaque");
-        config["review_policies"]["intent"][0]["example_prompt"] = json!({"opaque": true});
-        config["review_policies"]["intent"][0]["future_field"] = json!(null);
+        config["review_policies"]["intent-review"][0]["example_prompt"] = json!({"opaque": true});
+        config["review_policies"]["intent-review"][0]["future_field"] = json!(null);
         assert!(parse_initial_input(&config).is_ok());
     }
 
@@ -1223,7 +1236,7 @@ mod tests {
         let config = json!({
             "config_version": "test-1",
             "review_policies": {
-                "intent": [{"id": "axis", "description": "desc"}]
+                "intent-review": [{"id": "axis", "description": "desc"}]
             }
         });
         let error = parse_initial_input(&config).expect_err("axis needs schema");
@@ -1232,14 +1245,14 @@ mod tests {
 
     #[test]
     fn schema_missing_revision_and_author_metadata_is_rejected() {
-        let config = axis_config("intent", "intent.json", json!({"type": "object"}));
+        let config = axis_config("intent-review", "intent.json", json!({"type": "object"}));
         let error = parse_initial_input(&config).expect_err("metadata is required");
         assert!(classes(error).contains(&"schema-metadata-invalid"));
     }
 
     #[test]
     fn object_schema_without_metadata_on_axis_is_rejected() {
-        let config = axis_config("intent", "intent.json", json!({"type": "object"}));
+        let config = axis_config("intent-review", "intent.json", json!({"type": "object"}));
         let error = parse_initial_input(&config).expect_err("B2 object schema must be rejected");
         assert!(error.violations().iter().any(|violation| {
             matches!(violation, ConfigViolation::SchemaMetadataInvalid { .. })
@@ -1278,16 +1291,16 @@ mod tests {
 
     #[test]
     fn bad_required_authors_is_rejected() {
-        let mut config = axis_config("intent", "intent.json", author_schema());
-        config["review_policies"]["intent"][0]["required_authors"] = json!(0);
+        let mut config = axis_config("intent-review", "intent.json", author_schema());
+        config["review_policies"]["intent-review"][0]["required_authors"] = json!(0);
         let error = parse_initial_input(&config).expect_err("required authors must be positive");
         assert!(classes(error).contains(&"bad-required-authors"));
     }
 
     #[test]
     fn duplicate_axis_id_is_rejected_within_gate() {
-        let mut config = axis_config("intent", "intent.json", author_schema());
-        config["review_policies"]["intent"] = json!([
+        let mut config = axis_config("intent-review", "intent.json", author_schema());
+        config["review_policies"]["intent-review"] = json!([
             {"id": "axis", "description": "one"},
             {"id": "axis", "description": "two"}
         ]);
@@ -1422,7 +1435,7 @@ mod tests {
                 "policy axes not array",
                 json!({
                     "config_version": "test-1",
-                    "review_policies": {"intent": {}}
+                    "review_policies": {"intent-review": {}}
                 }),
                 "policy-axes-shape",
             ),
@@ -1430,7 +1443,7 @@ mod tests {
                 "policy entry not object",
                 json!({
                     "config_version": "test-1",
-                    "review_policies": {"intent": [null]}
+                    "review_policies": {"intent-review": [null]}
                 }),
                 "policy-entry-shape",
             ),
@@ -1439,7 +1452,7 @@ mod tests {
                 json!({
                     "config_version": "test-1",
                     "review_policies": {
-                        "intent": [{"description": "desc"}]
+                        "intent-review": [{"description": "desc"}]
                     }
                 }),
                 "policy-id-missing",
@@ -1449,7 +1462,7 @@ mod tests {
                 json!({
                     "config_version": "test-1",
                     "review_policies": {
-                        "intent": [{"id": 1, "description": "desc"}]
+                        "intent-review": [{"id": 1, "description": "desc"}]
                     }
                 }),
                 "policy-id-not-string",
@@ -1459,7 +1472,7 @@ mod tests {
                 json!({
                     "config_version": "test-1",
                     "review_policies": {
-                        "intent": [{"id": "", "description": "desc"}]
+                        "intent-review": [{"id": "", "description": "desc"}]
                     }
                 }),
                 "policy-id-empty",
@@ -1468,7 +1481,7 @@ mod tests {
                 "policy description missing",
                 json!({
                     "config_version": "test-1",
-                    "review_policies": {"intent": [{"id": "axis"}]}
+                    "review_policies": {"intent-review": [{"id": "axis"}]}
                 }),
                 "policy-description-missing",
             ),
@@ -1477,7 +1490,7 @@ mod tests {
                 json!({
                     "config_version": "test-1",
                     "review_policies": {
-                        "intent": [{"id": "axis", "description": false}]
+                        "intent-review": [{"id": "axis", "description": false}]
                     }
                 }),
                 "policy-description-not-string",

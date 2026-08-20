@@ -51,9 +51,19 @@ fn describe_work_slots_are_exactly_the_locked_checked_edges() {
         actual,
         vec![
             (
-                "explore-intent".to_owned(),
+                "intent-draft".to_owned(),
                 "explore".to_owned(),
                 "intent-ready".to_owned(),
+            ),
+            (
+                "intent-review".to_owned(),
+                "intent-review".to_owned(),
+                "approved".to_owned(),
+            ),
+            (
+                "intent-adversarial-review".to_owned(),
+                "intent-adversarial-review".to_owned(),
+                "approved".to_owned(),
             ),
             (
                 "design-draft".to_owned(),
@@ -63,6 +73,11 @@ fn describe_work_slots_are_exactly_the_locked_checked_edges() {
             (
                 "design-review".to_owned(),
                 "design-review".to_owned(),
+                "approved".to_owned(),
+            ),
+            (
+                "design-adversarial-review".to_owned(),
+                "design-adversarial-review".to_owned(),
                 "approved".to_owned(),
             ),
             (
@@ -76,6 +91,11 @@ fn describe_work_slots_are_exactly_the_locked_checked_edges() {
                 "approved".to_owned(),
             ),
             (
+                "plan-adversarial-review".to_owned(),
+                "plan-adversarial-review".to_owned(),
+                "approved".to_owned(),
+            ),
+            (
                 "implement".to_owned(),
                 "implement".to_owned(),
                 "implementation-ready".to_owned(),
@@ -86,12 +106,160 @@ fn describe_work_slots_are_exactly_the_locked_checked_edges() {
                 "approved".to_owned(),
             ),
             (
-                "validate".to_owned(),
+                "implementation-adversarial-review".to_owned(),
+                "implementation-adversarial-review".to_owned(),
+                "approved".to_owned(),
+            ),
+            (
+                "validation-draft".to_owned(),
                 "validation".to_owned(),
+                "validation-ready".to_owned(),
+            ),
+            (
+                "validation-review".to_owned(),
+                "validation-review".to_owned(),
+                "approved".to_owned(),
+            ),
+            (
+                "validation-adversarial-review".to_owned(),
+                "validation-adversarial-review".to_owned(),
                 "passed".to_owned(),
             ),
         ]
     );
+}
+
+#[test]
+fn describe_accepts_optional_initial_input() {
+    let without = invoke(br#"{"operation":"describe"}"#);
+    let with = invoke(br#"{"operation":"describe","initial_input":{"objective":"test"}}"#);
+
+    assert!(without.status.success(), "stderr: {:?}", without.stderr);
+    assert!(with.status.success(), "stderr: {:?}", with.stderr);
+    assert_eq!(without.stdout, with.stdout);
+    assert_eq!(without.stdout, include_bytes!("snapshots/describe.json"));
+}
+
+fn describe_workflow(input: serde_json::Value) -> serde_json::Value {
+    let request = serde_json::to_vec(&input).expect("request should serialize");
+    let output = invoke(&request);
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("describe JSON")
+}
+
+fn state_ids(workflow: &serde_json::Value) -> Vec<&str> {
+    workflow["states"]
+        .as_array()
+        .expect("states")
+        .iter()
+        .map(|state| state["id"].as_str().expect("state id"))
+        .collect()
+}
+
+#[test]
+fn describe_omitted_review_policies_is_sixteen_state_union() {
+    let workflow = describe_workflow(json!({"operation": "describe"}));
+    assert_eq!(
+        state_ids(&workflow),
+        vec![
+            "explore",
+            "intent-review",
+            "intent-adversarial-review",
+            "design",
+            "design-review",
+            "design-adversarial-review",
+            "plan",
+            "plan-review",
+            "plan-adversarial-review",
+            "implement",
+            "implementation-review",
+            "implementation-adversarial-review",
+            "validation",
+            "validation-review",
+            "validation-adversarial-review",
+            "end",
+        ]
+    );
+}
+
+#[test]
+fn describe_empty_review_policies_omits_reviews_and_uses_passed_on_validation_draft() {
+    let workflow = describe_workflow(json!({
+        "operation": "describe",
+        "initial_input": {"review_policies": {}}
+    }));
+    assert_eq!(
+        state_ids(&workflow),
+        vec![
+            "explore",
+            "design",
+            "plan",
+            "implement",
+            "validation",
+            "end",
+        ]
+    );
+    let slots = workflow["work_slots"].as_array().expect("work_slots");
+    let validation_draft = slots
+        .iter()
+        .find(|slot| slot["id"] == "validation-draft")
+        .expect("validation-draft");
+    assert_eq!(validation_draft["event"], "passed");
+    assert!(validation_draft.get("stdin_context_kinds").is_none());
+}
+
+#[test]
+fn describe_live_review_slots_declare_accepted_findings_and_drafts_omit_it() {
+    let workflow = describe_workflow(json!({"operation": "describe"}));
+    for slot in workflow["work_slots"].as_array().expect("work_slots") {
+        let id = slot["id"].as_str().expect("id");
+        let is_review = id.ends_with("-review");
+        if is_review {
+            assert_eq!(
+                slot.get("stdin_context_kinds"),
+                Some(&json!(["accepted-findings"])),
+                "{id}"
+            );
+        } else {
+            assert!(
+                slot.get("stdin_context_kinds").is_none(),
+                "draft slot {id} must omit stdin_context_kinds"
+            );
+        }
+    }
+}
+
+#[test]
+fn describe_fails_closed_on_orphan_adversarial_and_unknown_counterpart() {
+    let orphan = invoke(
+        br#"{"operation":"describe","initial_input":{"review_policies":{"intent-adversarial-review":[{"id":"axis","description":"d"}]}}}"#,
+    );
+    assert_eq!(orphan.status.code(), Some(2));
+    assert!(orphan.stdout.is_empty());
+    let orphan_err = String::from_utf8_lossy(&orphan.stderr);
+    assert!(orphan_err.contains("empty or absent"), "{orphan_err}");
+
+    let unknown = invoke(
+        br#"{"operation":"describe","initial_input":{"review_policies":{"intent-review":[{"id":"parent","description":"d"}],"intent-adversarial-review":[{"id":"other","description":"d"}]}}}"#,
+    );
+    assert_eq!(unknown.status.code(), Some(2));
+    assert!(unknown.stdout.is_empty());
+    let unknown_err = String::from_utf8_lossy(&unknown.stderr);
+    assert!(unknown_err.contains("other"), "{unknown_err}");
+    assert!(unknown_err.contains("not on"), "{unknown_err}");
+}
+
+#[test]
+fn unknown_describe_envelope_field_exits_with_protocol_error() {
+    let output = invoke(br#"{"operation":"describe","unexpected":true}"#);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unknown field `unexpected`"));
 }
 
 #[test]
@@ -143,20 +311,19 @@ fn unknown_evaluate_envelope_field_exits_with_protocol_error() {
 
 #[test]
 fn evaluate_without_review_policies_exits_with_shipped_config_error() {
+    let described = invoke(br#"{"operation":"describe"}"#);
+    assert!(described.status.success(), "stderr: {:?}", described.stderr);
+    let workflow: serde_json::Value =
+        serde_json::from_slice(&described.stdout).expect("union workflow");
     let request = json!({
         "operation": "evaluate",
-        "workflow": {
-            "id": "software-change",
-            "initial_state": "explore",
-            "states": [],
-            "transitions": []
-        },
+        "workflow": workflow,
         "initial_input": {},
         "context": [],
         "transition": {
             "source": "explore",
             "event": "intent-ready",
-            "target": "design",
+            "target": "intent-review",
             "kind": "checked"
         },
         "prior_evaluations": []

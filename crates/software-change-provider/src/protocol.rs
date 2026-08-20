@@ -9,10 +9,15 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 /// The input envelope accepted by `describe`.
+///
+/// `initial_input` is the same caller object start freezes. Omitted means the
+/// union catalog. Unknown keys still fail closed.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DescribeRequest {
     pub(crate) operation: String,
+    #[serde(default)]
+    pub(crate) initial_input: Option<Value>,
 }
 
 /// The complete flat input envelope accepted by `evaluate`.

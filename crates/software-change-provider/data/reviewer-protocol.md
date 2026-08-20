@@ -15,7 +15,7 @@ Provider checks evidence shape and aggregation. Reviewer decides truth externall
     "author": {"name": "reviewer-sol", "kind": "agent"},
     "subject": "design.json",
     "subject_revision": "3",
-    "config_version": "standard-4"
+    "config_version": "standard-6"
   }
 }
 ```
@@ -45,34 +45,45 @@ Do not use style, silence, length/count proxies, invented norms, or bounded omis
 
 Reviewer output is candidate data until owner inspection. **Before append or mutation**, triage each candidate against failure burden, independent scope and materiality, evidence integrity, and current subject revision. Do not append a candidate merely because reviewer output calls it a failure, and do not mutate an artifact to evade a finding.
 
-Append an accepted in-scope material failure as conforming binary evidence; provider aggregation then blocks normally. There is no waiver: accepted material failure remains blocking until fixed or a subject revision changes the reviewed work. Unsupported, advisory, unrelated, or burden-deficient candidates do not authorize an owner pass and are not appended as blocking failures. If owner disputes a candidate's evidence, consequence, materiality, or scope classification, request **focused external reconsideration** of that candidate only. Give reconsideration the disputed evidence and original-intent linkage; append only returned conforming evidence that meets this protocol. Focused reconsideration does not silently turn a disputed material concern into approval.
+Adversarial output is candidate data under the YAGNI/pragmatic append bar: extra mechanism, unlisted requirements, and hypothetical-future fails are not appended. `review-evidence` stays binary.
+
+Append an accepted in-scope material failure as conforming binary evidence; provider aggregation then blocks normally. After triage, append a well-formed `accepted-findings` record for that review gate, subject, and current subject revision — a self-contained snapshot of the post-triage accepted-finding set, including an empty list. It is not `review-evidence`. Optional `author` may be present and is not counted and has no independence floor.
+
+There is no waiver: accepted material failure remains blocking until fixed or a subject revision changes the reviewed work. Known accepted material defects are never waived. Unsupported, advisory, unrelated, or burden-deficient candidates do not authorize an owner pass and are not appended as blocking failures. If owner disputes a candidate's evidence, consequence, materiality, or scope classification, request **focused external reconsideration** of that candidate only. Give reconsideration the disputed evidence and original-intent linkage; append only returned conforming evidence that meets this protocol. Focused reconsideration does not silently turn a disputed material concern into approval.
 
 ## Review rounds
 
 The **comprehensive first review** is the first ordinary review: inspect all supplied evidence and report all material findings visible within configured axis scope. Do not spend the first round on only one preferred concern.
 
-After accepted findings are fixed, a **confirmation review** is bounded: verify each accepted fix, affected-scope behavior, downstream consistency, and regressions introduced by the fix. Confirmation does not reopen unrelated advisory concerns or repeat a full search for already-settled material claims.
+Quiet, progress, and thrash count per review state on the post-triage accepted-finding set. They replace round-count escalation. evaluate does not judge them, and they never pass or waive a known defect.
 
-A late material finding remains actionable and is not waived because it arrived after approval or confirmation. A late-finding proof names current supplied evidence, violated in-scope obligation, concrete consequence, validation gap, and provenance explaining whether the issue was newly exposed, fix-introduced, or previously overlooked. Provenance explains timing; it is not an exclusion test: previous visibility or reviewer overlook does not waive a known material defect. When that burden is met, accept the finding and route it to its owning phase; timing never changes its materiality. Comprehensive first review remains mandatory, so this rule does not permit drip-feeding findings. Unrelated reopening still carries the independent scope and materiality burden above.
+- **Quiet**: that review state's current-revision accepted-finding set gained no new accepted statements this round.
+- **Progress**: accepted statements on that state were fixed, or the current-revision set shrank because a genuine fix made previously accepted statements inapplicable.
+- **Thrash**: the same accepted statements cycle without a genuine fix, settled claims are reopened, or extra-mechanism / unlisted-requirement / hypothetical-future candidates are treated as accepted.
 
-The default **three-round circuit breaker** limits ordinary review rounds. After three rounds, owner consolidates unresolved material cases and either commissions one bounded review using the consolidated case or routes work directly to the phase owning the defect. Budget exhaustion changes review method, never verdict: it never waives a known defect, and an unresolved accepted in-scope material finding remains blocking.
+After accepted findings are fixed, a **confirmation review** is bounded: verify each accepted fix, affected-scope behavior, downstream consistency, and regressions introduced by the fix. Confirmation consumes the durable set and does not search again except for fix-introduced holes. Bound workers receive that set on stdin; use the latest well-formed `accepted-findings` record for this gate and current subject revision, and treat older-revision records as the previous accepted set only.
+
+Bound workers do not use previously overlooked after that state's first comprehensive review of the subject. Humans still may with full failure burden. Known accepted material defects are never waived.
+
+A late material finding remains actionable and is not waived because it arrived after approval or confirmation. A late-finding proof names current supplied evidence, violated in-scope obligation, concrete consequence, validation gap, and provenance explaining whether the issue was newly exposed, fix-introduced, or previously overlooked. Provenance explains timing; it is not an exclusion test: previous visibility or reviewer overlook does not waive a known material defect. Bound workers still must not use previously overlooked after that state's first comprehensive review of the subject; a human late finding that uses previously overlooked still carries the full failure burden. When that burden is met, accept the finding and route it to its owning phase; timing never changes its materiality. Comprehensive first review remains mandatory, so this rule does not permit drip-feeding findings. Unrelated reopening still carries the independent scope and materiality burden above.
 
 ## Owning-phase routing
 
-A review operator selects the phase that owns an accepted material defect. Use phase-named check-free events exposed by the static graph:
+A review operator selects the phase that owns an accepted material defect. Use phase-named check-free events exposed by the live graph. Parent and adversarial review for a phase share the same nearest revise and owning-phase events:
 
 | Review state | Nearest `revise` | Direct owning-phase events |
 |---|---|---|
-| `design-review` | `revise` → `design` | `revise-intent` → `explore` |
-| `plan-review` | `revise` → `plan` | `revise-design` → `design`; `revise-intent` → `explore` |
-| `implementation-review` | `revise` → `implement` | `revise-plan` → `plan`; `revise-design` → `design`; `revise-intent` → `explore` |
-| `validation` | `revise` → `implement` | `revise-plan` → `plan`; `revise-design` → `design`; `revise-intent` → `explore` |
+| `intent-review`, `intent-adversarial-review` | `revise` → `explore` | — |
+| `design-review`, `design-adversarial-review` | `revise` → `design` | `revise-intent` → `explore` |
+| `plan-review`, `plan-adversarial-review` | `revise` → `plan` | `revise-design` → `design`; `revise-intent` → `explore` |
+| `implementation-review`, `implementation-adversarial-review` | `revise` → `implement` | `revise-plan` → `plan`; `revise-design` → `design`; `revise-intent` → `explore` |
+| `validation-review`, `validation-adversarial-review` | `revise` → `validation` | `revise-implementation` → `implement`; `revise-plan` → `plan`; `revise-design` → `design`; `revise-intent` → `explore` |
 
-In `validation`, use nearest `revise` only for an implementation-owned defect. Validation-local `validation-report.json` corrections stay in validation: correct the report and retry checked `passed`. Use the phase-named event for an earlier owner: `revise-plan` for plan-owned defects, `revise-design` for design-owned defects, and `revise-intent` for intent-owned defects. After any fix, confirmation covers affected scope and downstream regressions before the review gate is attempted again.
+Validation-local `validation-report.json` corrections stay in validation: nearest `revise` returns to the validation draft, including report-local corrections; correct the report and retry the next checked hop. Use `revise-implementation` for an implementation-owned defect, `revise-plan` for a plan-owned defect, `revise-design` for a design-owned defect, and `revise-intent` for an intent-owned defect. After any fix, confirmation covers affected scope and downstream regressions before the review gate is attempted again.
 
 ## Convergence
 
-The change terminates only when no unresolved accepted in-scope material finding remains, accepted fixes and downstream consistency validate, and executable acceptance checks pass. Zero advisory comments is not required. Provider validates and aggregates evidence; external reviewers and owners perform semantic judgment, candidate triage, round accounting, and route selection. Round state stays outside provider runtime.
+The change terminates only when no unresolved accepted in-scope material finding remains, accepted fixes and downstream consistency validate, and executable acceptance checks pass. Zero advisory comments is not required. Provider validates and aggregates evidence; external reviewers and owners perform semantic judgment, candidate triage, round accounting, and route selection. Round state stays outside provider runtime. Quiet, progress, and thrash never waive a known defect.
 
 ## How to judge
 

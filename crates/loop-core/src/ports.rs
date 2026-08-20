@@ -88,10 +88,16 @@ impl std::error::Error for ProviderResolutionError {}
 /// deny, or report unsupported; it cannot choose a target state or mutate a
 /// run through this port.
 pub trait ProviderGateway {
-    /// Snapshot the provider workflow, including the `work_slots` catalog
-    /// field (`id`, `state`, `event`) used by start to validate frozen
-    /// `work_slot_bindings`.
-    fn describe(&self, provider: &ProviderAssociation) -> Result<Workflow, ProviderError>;
+    /// Snapshot the provider workflow for this start caller object.
+    ///
+    /// `initial_input` is the caller JSON when present. Core snapshots
+    /// whatever workflow is returned and does not interpret provider-specific
+    /// keys such as `review_policies`.
+    fn describe(
+        &self,
+        provider: &ProviderAssociation,
+        initial_input: Option<&Value>,
+    ) -> Result<Workflow, ProviderError>;
 
     fn evaluate(
         &self,
@@ -997,7 +1003,11 @@ mod tests {
     struct StubGateway;
 
     impl ProviderGateway for StubGateway {
-        fn describe(&self, _provider: &ProviderAssociation) -> Result<Workflow, ProviderError> {
+        fn describe(
+            &self,
+            _provider: &ProviderAssociation,
+            _initial_input: Option<&Value>,
+        ) -> Result<Workflow, ProviderError> {
             Ok(workflow())
         }
 
@@ -1140,7 +1150,7 @@ mod tests {
         let resolver = StubResolver;
         let association = resolver.resolve(&ProviderSelector::new("stub")).unwrap();
         let gateway = StubGateway;
-        let described = gateway.describe(&association).unwrap();
+        let described = gateway.describe(&association, None).unwrap();
         let transition = described.transitions[0].clone();
         let result = gateway
             .evaluate(

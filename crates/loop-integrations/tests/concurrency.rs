@@ -105,7 +105,11 @@ impl BlockingGateway {
 }
 
 impl ProviderGateway for BlockingGateway {
-    fn describe(&self, _provider: &ProviderAssociation) -> Result<Workflow, ProviderError> {
+    fn describe(
+        &self,
+        _provider: &ProviderAssociation,
+        _initial_input: Option<&serde_json::Value>,
+    ) -> Result<Workflow, ProviderError> {
         Ok(workflow())
     }
 
@@ -138,7 +142,11 @@ impl CountingGateway {
 }
 
 impl ProviderGateway for CountingGateway {
-    fn describe(&self, _provider: &ProviderAssociation) -> Result<Workflow, ProviderError> {
+    fn describe(
+        &self,
+        _provider: &ProviderAssociation,
+        _initial_input: Option<&serde_json::Value>,
+    ) -> Result<Workflow, ProviderError> {
         Ok(workflow())
     }
 

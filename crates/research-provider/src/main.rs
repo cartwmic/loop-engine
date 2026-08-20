@@ -112,7 +112,7 @@ fn describe(request: Value) -> i32 {
         Ok(_) => return protocol_error("describe request has the wrong operation".into()),
         Err(error) => return protocol_error(format!("invalid describe request: {error}")),
     };
-    let _ = request;
+    let _ = request.initial_input;
 
     write_json(&workflow::research_workflow())
 }

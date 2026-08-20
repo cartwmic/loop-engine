@@ -28,7 +28,7 @@ SHIPPED_UNBOUND_SLOT_IDS = (
     "design-review",
     "plan-review",
     "implementation-review",
-    "validate",
+    "validation-draft",
 )
 SHIPPED_PROFILE_RELATIVE = Path("crates/software-change-provider/data/configs")
 SHIPPED_PROFILE_NAMES = ("minimal.json", "standard.json", "high-rigor.json")
@@ -40,18 +40,27 @@ SOFTWARE_CHANGE_FIXTURES = (
     ("validation-report.json", "validation-report-good.json"),
 )
 SOFTWARE_CHANGE_GATE_SUBJECT = {
-    "intent": "intent.json",
+    "intent-review": "intent.json",
+    "intent-adversarial-review": "intent.json",
     "design-review": "design.json",
+    "design-adversarial-review": "design.json",
     "plan-review": "plan.json",
+    "plan-adversarial-review": "plan.json",
     "implementation-review": "implementation-report.json",
-    "validation": "validation-report.json",
+    "implementation-adversarial-review": "implementation-report.json",
+    "validation-review": "validation-report.json",
+    "validation-adversarial-review": "validation-report.json",
 }
 SOFTWARE_CHANGE_ADVANCE_STEPS = (
-    ("explore", "intent", "intent-ready", "design"),
+    ("explore", None, "intent-ready", "intent-review"),
+    ("intent-review", "intent-review", "approved", "intent-adversarial-review"),
+    ("intent-adversarial-review", "intent-adversarial-review", "approved", "design"),
     ("design", None, "design-ready", "design-review"),
-    ("design-review", "design-review", "approved", "plan"),
+    ("design-review", "design-review", "approved", "design-adversarial-review"),
+    ("design-adversarial-review", "design-adversarial-review", "approved", "plan"),
     ("plan", None, "plan-ready", "plan-review"),
-    ("plan-review", "plan-review", "approved", "implement"),
+    ("plan-review", "plan-review", "approved", "plan-adversarial-review"),
+    ("plan-adversarial-review", "plan-adversarial-review", "approved", "implement"),
 )
 PACKET_KEYS = frozenset(
     {"run_id", "slot_id", "artifact_root", "instruction_body", "capture_dir"}
@@ -118,9 +127,24 @@ def catalog_ids(shown: Mapping[str, Any]) -> list[str]:
     for slot in slots:
         if not isinstance(slot, dict) or not isinstance(slot.get("id"), str):
             raise WorkSlotJourneyFailure(f"malformed work_slots entry: {slot}")
-        extra = set(slot) - {"id", "state", "event"}
+        extra = set(slot) - {"id", "state", "event", "stdin_context_kinds"}
         if extra:
             raise WorkSlotJourneyFailure(f"work_slots catalog leaked extra fields {sorted(extra)}")
+        kinds = slot.get("stdin_context_kinds")
+        if kinds is None:
+            if "-review" in slot["id"]:
+                raise WorkSlotJourneyFailure(
+                    f"review slot {slot['id']} omitted stdin_context_kinds"
+                )
+        else:
+            if kinds != ["accepted-findings"]:
+                raise WorkSlotJourneyFailure(
+                    f"slot {slot['id']} stdin_context_kinds {kinds} != ['accepted-findings']"
+                )
+            if "-review" not in slot["id"]:
+                raise WorkSlotJourneyFailure(
+                    f"draft slot {slot['id']} declared stdin_context_kinds"
+                )
         ids.append(slot["id"])
     return ids
 
@@ -615,7 +639,7 @@ def assert_bound_preamble_stdin(
     run_id: str | None = None,
     slot_id: str | None = None,
 ) -> None:
-    """Assert bound opted-in stdin: preamble + one-key context + separator and no instruction_body."""
+    """Assert bound opted-in stdin: preamble + compact location JSON + separator and no instruction_body."""
     del run_id, slot_id
     preamble_bytes = preamble.encode("utf-8")
     if not preamble_bytes.endswith(b"\n"):
@@ -645,16 +669,27 @@ def assert_bound_preamble_stdin(
         raise WorkSlotJourneyFailure(
             f"artifact_root context was not an object: {parsed_context!r}"
         )
-    if list(parsed_context.keys()) != ["artifact_root"]:
+    keys = list(parsed_context.keys())
+    if not keys or keys[0] != "artifact_root":
         raise WorkSlotJourneyFailure(
-            f"artifact_root context keys {list(parsed_context)} != ['artifact_root']"
+            f"artifact_root context keys {keys} did not start with artifact_root"
         )
-    expected_context = compact_artifact_root_stdin(artifact_root)
-    if context_bytes != expected_context:
+    extra = set(keys) - {"artifact_root", "context"}
+    if extra:
         raise WorkSlotJourneyFailure(
-            "artifact_root context bytes were not compact one-key JSON: "
-            f"{context_bytes!r} != {expected_context!r}"
+            f"artifact_root context included unexpected keys {sorted(extra)}"
         )
+    if "context" in parsed_context and not isinstance(parsed_context["context"], list):
+        raise WorkSlotJourneyFailure(
+            f"artifact_root context.context was not an array: {parsed_context['context']!r}"
+        )
+    if "context" not in parsed_context:
+        expected_context = compact_artifact_root_stdin(artifact_root)
+        if context_bytes != expected_context:
+            raise WorkSlotJourneyFailure(
+                "artifact_root context bytes were not compact one-key JSON: "
+                f"{context_bytes!r} != {expected_context!r}"
+            )
     if parsed_context["artifact_root"] != str(artifact_root):
         raise WorkSlotJourneyFailure(
             f"artifact_root context value {parsed_context['artifact_root']!r} "
@@ -1161,6 +1196,46 @@ def _append_synthetic_gate_evidence(
                 )
 
 
+def _append_synthetic_accepted_findings(
+    engine_call: EngineCall,
+    *,
+    run_id: str,
+    profile: Mapping[str, Any],
+    artifact_root: Path,
+    gate: str,
+    record_prefix: str = "",
+) -> None:
+    subject = SOFTWARE_CHANGE_GATE_SUBJECT[gate]
+    path = artifact_root / subject
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise WorkSlotJourneyFailure(f"could not read {path}: {error}") from error
+    revision = document.get("revision") if isinstance(document, dict) else None
+    if not isinstance(revision, str) or not revision:
+        raise WorkSlotJourneyFailure(f"{subject} omitted revision")
+    record_id = f"{record_prefix}accepted-findings-{gate}"
+    data = {
+        "gate": gate,
+        "subject": subject,
+        "subject_revision": revision,
+        "findings": [],
+    }
+    appended = engine_call(
+        [
+            "append",
+            f"--record-id={record_id}",
+            run_id,
+            "accepted-findings",
+            json.dumps(data, separators=(",", ":")),
+        ]
+    )
+    if appended.get("status") != "completed":
+        raise WorkSlotJourneyFailure(
+            f"{gate} accepted-findings append failed: {appended}"
+        )
+
+
 def _expect_event_state(
     engine_call: EngineCall,
     run_id: str,
@@ -1195,12 +1270,20 @@ def _advance_software_change_to(
         )
     if target == "explore":
         return
-    invoke_until_succeeded(engine_call, run_id, "explore-intent", timeout_s=20.0)
+    invoke_until_succeeded(engine_call, run_id, "intent-draft", timeout_s=20.0)
     for current_state, gate, event, nxt in SOFTWARE_CHANGE_ADVANCE_STEPS:
         if current_state == target:
             return
         if gate is not None:
             _append_synthetic_gate_evidence(
+                engine_call,
+                run_id=run_id,
+                profile=profile,
+                artifact_root=artifact_root,
+                gate=gate,
+                record_prefix=f"{run_id}-",
+            )
+            _append_synthetic_accepted_findings(
                 engine_call,
                 run_id=run_id,
                 profile=profile,
@@ -1248,7 +1331,7 @@ def _start_isolated_software_change(
     profile = dict(profile)
     profile["artifact_root"] = str(artifact_root)
     profile["work_slot_bindings"] = {
-        **bindings_for(["explore-intent"]),
+        **bindings_for(["intent-draft"]),
         **dict(extra_bindings),
     }
     profile_path = work_dir / "profile.json"
@@ -3269,14 +3352,14 @@ def self_test_helpers() -> None:
             "command": PATH_LOOP_ENGINE,
             "args": list(SHIPPED_FAN_OUT_ARGS),
         },
-        "explore-intent": {"command": sys.executable, "args": [str(WORKER_SCRIPT)]},
+        "intent-draft": {"command": sys.executable, "args": [str(WORKER_SCRIPT)]},
     }
     try:
         assert_shipped_path_names(
             {
                 key: value
                 for key, value in caller_supplied.items()
-                if key != "explore-intent"
+                if key != "intent-draft"
             }
         )
     except WorkSlotJourneyFailure as error:
@@ -3295,7 +3378,7 @@ def self_test_helpers() -> None:
         raise WorkSlotJourneyFailure("self-test: implement PATH was not rewritten")
     if rewritten["design-review"]["command"] != str(engine):
         raise WorkSlotJourneyFailure("self-test: review PATH was not rewritten")
-    if rewritten["explore-intent"]["command"] != sys.executable:
+    if rewritten["intent-draft"]["command"] != sys.executable:
         raise WorkSlotJourneyFailure("self-test: non-PATH command was rewritten")
     if rewritten["implement"]["args"] != SHIPPED_IMPLEMENT_ARGS:
         raise WorkSlotJourneyFailure("self-test: rewrite mutated implement args")

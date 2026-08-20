@@ -57,7 +57,10 @@ fn run() -> i32 {
 }
 fn describe(value: Value) -> i32 {
     match serde_json::from_value::<DescribeRequest>(value) {
-        Ok(req) if req.operation == "describe" => write_json(&workflow::workflow()),
+        Ok(req) if req.operation == "describe" => {
+            let _ = req.initial_input;
+            write_json(&workflow::workflow())
+        }
         Ok(_) => protocol_error("describe request has wrong operation".into()),
         Err(e) => protocol_error(format!("invalid describe request: {e}")),
     }

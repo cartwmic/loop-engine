@@ -133,9 +133,10 @@ A workflow may also declare **work slots**: provider-named jobs attached to chec
 slot ID
 state
 event
+optional stdin_context_kinds
 ```
 
-Catalog entries do not include instruction bodies. A slot ID is unique within a workflow and names an existing state plus a checked event from that state. Unbound slots (cataloged but absent from frozen `work_slot_bindings`) do not change progression rules.
+Catalog entries do not include instruction bodies. Omitted or empty `stdin_context_kinds` means invoke stdin has no extra context. A nonempty list causes invoke to forward stored context records whose kind is in that list, historical included, append order, unmodified. The engine does not interpret kinds or payloads. A slot ID is unique within a workflow and names an existing state plus a checked event from that state. Unbound slots (cataloged but absent from frozen `work_slot_bindings`) do not change progression rules.
 
 For a given state, an event ID identifies at most one transition.
 
@@ -382,7 +383,7 @@ all context records in durable append order
 requestable events
 each event's target and whether it is checked
 latest durable evaluation for each checked transition that has been evaluated
-work_slots (catalog snapshot: id, state, event; no instruction body)
+work_slots (catalog snapshot: id, state, event, optional stdin_context_kinds; no instruction body)
 work_slot_invocations (invocation_id, slot_id, binding snapshot, instruction_digest, subject, overlay status, overlay_meaning, elapsed_ms, remaining_allowed_ms, capture_dir, inner_workers, started_at, allowed_time_ms, optional exit_code, optional completed_at)
 ```
 
@@ -498,7 +499,7 @@ Duty assignment bytes live only in that file; they are not copied onto argv or i
 
 `software-change` duplicates that helper with the same argv inside the provider crate. Plan-graph uses `--exit-mode propagate` only so the helper exit is the inner waitpid; `--sidecar-file` is rejected in that mode. `software-change --help` and `--version` omit it.
 
-The bound worker's stdin is exactly one JSON object with `run_id`, `slot_id`, `artifact_root`, `instruction_body`, and `capture_dir`. The packet is not passed on argv, environment, or a temp file. Waiter stdin is not the worker packet. Binding `{command, args}` remains the worker argv.
+The bound worker's stdin is exactly one JSON object with `run_id`, `slot_id`, `artifact_root`, `instruction_body`, and `capture_dir`, plus optional `context` when the bound slot declared nonempty `stdin_context_kinds`. The packet is not passed on argv, environment, or a temp file. Waiter stdin is not the worker packet. Binding `{command, args}` remains the worker argv.
 
 Later `show`, `history`, `event`, and `invoke` read stored records. They may observe waiter liveness as `running` and apply recorded `allowed_time_ms` as `overrun`. They do not waitpid the original worker.
 
@@ -524,7 +525,7 @@ loop-engine fan-out [--worker JSON]... [--instructions FILE] [--max-active N]
 
 Workers come only from repeated `--worker` JSON objects. The nested object is strict: required `command` (string) and `args` (array of strings), plus optional `preamble` (string) and optional `output_schema` whose complete supported shape is `{"required":["key", ...]}` with at least one unique, non-empty top-level key name. Unknown or malformed fields are rejected. This nested type does not change the outer work-slot binding type, which remains exactly `{command,args}`. Zero `--worker` entries fail closed.
 
-Bound mode reads the existing, unchanged five-key invoke packet (including `capture_dir`) and rejects `--instructions`. Bound stdin does not dump `instruction_body`. A worker without `preamble` receives compact JSON with exactly absolute `artifact_root` plus one LF, including when it declares only `output_schema`. A worker with `preamble` receives, in exact order: the decoded preamble bytes unchanged; exactly one appended LF only when those bytes do not already end in LF; compact JSON serialized from exactly `{"artifact_root": <absolute>}`; one LF; literal `---\n\n`; and no instruction body. The location object contains no `capture_dir` or duplicate run/slot identity. The invoke packet, digest input, and gate matching do not change. Ad hoc mode has no invoke packet: with `preamble` it emits the preamble, the same conditional LF, literal `---\n\n`, then unchanged instruction-file bytes, with no fabricated artifact-root context; without `preamble`, instruction bytes remain byte-identical. Ad-hoc success prints exactly one JSON summary object (`dagu --quiet`). Re-invoke uses a new capture directory and a new home; prior captures are not overwritten.
+Bound mode reads the existing invoke packet (including `capture_dir`, plus optional `context` when the slot declared nonempty `stdin_context_kinds`) and rejects `--instructions`. Bound stdin does not dump `instruction_body`. A worker without `preamble` receives compact JSON with exactly absolute `artifact_root` plus one LF, and `context` when the invoke packet carried it, including when it declares only `output_schema`. A worker with `preamble` receives, in exact order: the decoded preamble bytes unchanged; exactly one appended LF only when those bytes do not already end in LF; compact JSON serialized from `artifact_root` plus `context` when forwarded; one LF; literal `---\n\n`; and no instruction body. The location object contains no `capture_dir` or duplicate run/slot identity. Digest input and gate matching do not change. Ad hoc mode has no invoke packet: with `preamble` it emits the preamble, the same conditional LF, literal `---\n\n`, then unchanged instruction-file bytes, with no fabricated artifact-root context; without `preamble`, instruction bytes remain byte-identical. Ad-hoc success prints exactly one JSON summary object (`dagu --quiet`). Re-invoke uses a new capture directory and a new home; prior captures are not overwritten.
 
 Bound mode honors `packet.capture_dir`: it writes per-worker stdout/stderr under `0/`, `1/`, … plus `summary.json` in argv order, `fan-out-spec.json`, and the locator. Worker steps `w<index>` start concurrently with no inter-worker depends, no `continue_on`, and no `retry_policy`. Omitted `--max-active` emits no `max_active_steps` (uncapped concurrent worker start); `--max-active N` emits `max_active_steps` N so at most N worker steps run at once. Each is `action:exec` of hidden `stdin-exec --exit-mode sidecar`. Join depends on every worker, runs hidden `fan-out-join --capture-dir ABS`, writes `summary.json`, invokes no model, and does not append `review-evidence`. If the graph stops before join, the facade still writes `summary.json` from spec and sidecars. For a worker with `output_schema`, fan-out accepts stdout only when the entire whitespace-trimmed output is a JSON object or when otherwise arbitrary prose contains exactly one fenced `json` block whose content is a JSON object. Missing, malformed, non-object, or ambiguous candidates fail conformance. Fan-out checks only presence of the declared top-level keys and does not interpret names or values. Every worker summary entry contains `command`, `args`, the true process `exit_code`, `stdout_path`, and `stderr_path`. A worker with `output_schema` additionally receives `status` (`succeeded` or `failed`) and receives `conformance_error` only on failure. Both new fields are omitted for workers without `output_schema`, preserving the uncontracted summary shape. Any conformance failure is a facade failure, but `summary.json` is written first so the driver can inspect it and captured stdout before stderr. Ordinary inner nonzero exits are recorded in the sidecar and do not fail the facade. Overlay success is not a review pass. Exit 0 and mechanical key presence do not establish semantic deliverable validity.
 
@@ -606,12 +607,12 @@ workflow ID
 initial state
 states
 transitions
-work_slots (optional catalog: id, state, event)
+work_slots (optional catalog: id, state, event, optional stdin_context_kinds)
 ```
 
 The engine validates the definition before creating a run according to the structural-validity requirements in Section 4.1. Work-slot catalogs are snapshotted with the workflow; instruction bodies stay on states, not on catalog entries.
 
-In v0.1, workflow topology is **run-input-independent**: an individual run's initial input or context does not change the workflow definition produced for its provider association. Run-specific information influences the work and provider evaluation, not the workflow topology returned by `describe`.
+Start snapshots the workflow `describe` returns for that caller object. The describe envelope is `{operation: describe}` plus optional `initial_input` (the same caller JSON start freezes). Core does not interpret provider-specific keys such as `review_policies` and gains no restitch language. Providers may vary topology from that object; active runs keep the snapshotted workflow. Omitted `initial_input` is a union or otherwise input-independent catalog, as the provider defines.
 
 The complete validated workflow definition is snapshotted into the run.
 
@@ -748,16 +749,29 @@ No caller-facing leases, revisions, idempotency keys, or retry protocol are requ
 
 The primary reference workflow validates agentic software-engineering use.
 
-Required topology:
+Required topology (union catalog when `review_policies` is omitted; a present `review_policies` object keeps only live review states):
 
 ```text
 explore
-  └─ intent-ready [checked] → design
+  └─ intent-ready [checked] → intent-review
+
+intent-review
+  ├─ approved [checked] → intent-adversarial-review
+  └─ revise [check-free] → explore
+
+intent-adversarial-review
+  ├─ approved [checked] → design
+  └─ revise [check-free] → explore
 
 design
   └─ design-ready [checked] → design-review
 
 design-review
+  ├─ approved [checked] → design-adversarial-review
+  ├─ revise [check-free] → design
+  └─ revise-intent [check-free] → explore
+
+design-adversarial-review
   ├─ approved [checked] → plan
   ├─ revise [check-free] → design
   └─ revise-intent [check-free] → explore
@@ -766,6 +780,12 @@ plan
   └─ plan-ready [checked] → plan-review
 
 plan-review
+  ├─ approved [checked] → plan-adversarial-review
+  ├─ revise [check-free] → plan
+  ├─ revise-design [check-free] → design
+  └─ revise-intent [check-free] → explore
+
+plan-adversarial-review
   ├─ approved [checked] → implement
   ├─ revise [check-free] → plan
   ├─ revise-design [check-free] → design
@@ -775,6 +795,13 @@ implement
   └─ implementation-ready [checked] → implementation-review
 
 implementation-review
+  ├─ approved [checked] → implementation-adversarial-review
+  ├─ revise [check-free] → implement
+  ├─ revise-plan [check-free] → plan
+  ├─ revise-design [check-free] → design
+  └─ revise-intent [check-free] → explore
+
+implementation-adversarial-review
   ├─ approved [checked] → validation
   ├─ revise [check-free] → implement
   ├─ revise-plan [check-free] → plan
@@ -782,8 +809,20 @@ implementation-review
   └─ revise-intent [check-free] → explore
 
 validation
+  └─ validation-ready [checked] → validation-review
+
+validation-review
+  ├─ approved [checked] → validation-adversarial-review
+  ├─ revise [check-free] → validation
+  ├─ revise-implementation [check-free] → implement
+  ├─ revise-plan [check-free] → plan
+  ├─ revise-design [check-free] → design
+  └─ revise-intent [check-free] → explore
+
+validation-adversarial-review
   ├─ passed [checked] → end
-  ├─ revise [check-free] → implement
+  ├─ revise [check-free] → validation
+  ├─ revise-implementation [check-free] → implement
   ├─ revise-plan [check-free] → plan
   ├─ revise-design [check-free] → design
   └─ revise-intent [check-free] → explore
@@ -794,27 +833,34 @@ end [final]
 Checked-edge work slots for this workflow:
 
 ```text
-explore-intent (explore, intent-ready)
+intent-draft (explore, intent-ready)
+intent-review (intent-review, approved)
+intent-adversarial-review (intent-adversarial-review, approved)
 design-draft (design, design-ready)
 design-review (design-review, approved)
+design-adversarial-review (design-adversarial-review, approved)
 plan-draft (plan, plan-ready)
 plan-review (plan-review, approved)
+plan-adversarial-review (plan-adversarial-review, approved)
 implement (implement, implementation-ready)
 implementation-review (implementation-review, approved)
-validate (validation, passed)
+implementation-adversarial-review (implementation-adversarial-review, approved)
+validation-draft (validation, validation-ready)
+validation-review (validation-review, approved)
+validation-adversarial-review (validation-adversarial-review, passed)
 ```
 
-Shipped software-change profiles omit `work_slot_bindings` (or `{}`), so `implement`, `design-review`, `plan-review`, and `implementation-review` stay driver-performed. `validate` stays unbound. Bound workers are opt-in skill templates: keep `--no-skills --no-extensions`, add `-e CURSOR_EXTENSION_PATH -e CLAUDE_BRIDGE_EXTENSION_PATH`, name `--model MODEL`, and fill those placeholders in the per-run profile JSON. A usable review binding is caller-supplied `--worker` objects frozen at `start` after `preview-bindings` and lock-in. Documented review `pi` worker examples include `--print --no-skills --no-extensions -e CURSOR_EXTENSION_PATH -e CLAUDE_BRIDGE_EXTENSION_PATH --tools read,grep,find,ls` and must not pass `--no-context-files`. `preview-bindings` warns when a pi worker has `--no-extensions` and no `-e`; missing `--no-extensions` is not a required warning. Policy-document and research shipped profiles stay unbound.
+Shipped software-change profiles omit `work_slot_bindings` (or `{}`), so draft slots stay driver-performed by convention. Review slots are bindable. Bound workers are opt-in skill templates: keep `--no-skills --no-extensions`, add `-e CURSOR_EXTENSION_PATH -e CLAUDE_BRIDGE_EXTENSION_PATH`, name `--model MODEL`, and fill those placeholders in the per-run profile JSON. A usable review binding is caller-supplied `--worker` objects frozen at `start` after `preview-bindings` and lock-in. Documented review `pi` worker examples include `--print --no-skills --no-extensions -e CURSOR_EXTENSION_PATH -e CLAUDE_BRIDGE_EXTENSION_PATH --tools read,grep,find,ls` and must not pass `--no-context-files`. `preview-bindings` warns when a pi worker has `--no-extensions` and no `-e`; missing `--no-extensions` is not a required warning. Policy-document and research shipped profiles stay unbound.
 
 The provider may inspect repository state, documents, tests, reviews, or other software-specific information. Core understands none of those concepts.
 
-Review-state routing is explicit in this reference graph: external review operators select the phase owning an accepted material defect through `revise-intent`, `revise-design`, or `revise-plan`; validation-report-local defects stay in validation: edit and recheck `validation-report.json`, then retry checked `passed`; from validation, nearest `revise` is only for implementation-owned defects. Candidate reviewer output is triaged before append or artifact mutation, and disputed candidates use focused external reconsideration. A late finding requires current evidence, violated in-scope obligation, concrete consequence, validation gap, and provenance as newly exposed, fix-introduced, or previously overlooked; prior visibility or reviewer overlook does not waive known materiality. Comprehensive-first review still bars drip-feeding, and unrelated reopening must meet independent scope/materiality burden. A default three-round circuit breaker changes review method only and never waives a known defect. These are provider/operator conventions, not Loop Engine core policy or a review subsystem.
+Review-state routing is explicit in this reference graph: external review operators select the phase owning an accepted material defect through `revise-intent`, `revise-design`, or `revise-plan`. Nearest `revise` from parent and adversarial review returns to that phase's draft. Validation-report-local defects stay in the validation draft: edit and recheck `validation-report.json`, then retry the next checked hop (`validation-ready` or `passed`). Validation-review and validation-adversarial-review also expose `revise-implementation` to implement. Candidate reviewer output is triaged before append or artifact mutation, and disputed candidates use focused external reconsideration. A late finding requires current evidence, violated in-scope obligation, concrete consequence, validation gap, and provenance as newly exposed, fix-introduced, or previously overlooked; prior visibility or reviewer overlook does not waive known materiality. Comprehensive-first review still bars drip-feeding, and unrelated reopening must meet independent scope/materiality burden. Quiet, progress, and thrash count per review state on the post-triage accepted-finding set; they replace a numeric breaker and never waive a known defect. These are provider/operator conventions, not Loop Engine core policy or a review subsystem.
 
 ### 10.1 Run-Configured Semantic Review Policies
 
 The software-change provider's shipped review contract remains external and deterministic at its boundary. Binaries built from this candidate source expose identity through `--help`/`-h` and `--version`/`-V` before stdin; public v0.2.2 binaries predate those flags. Direct pushes to `main` reuse read-only production preflight at the pushed SHA. Calibration fixtures are supplied-material-only and use stable fictional path labels with shipped companions, so review does not resolve labels against a live checkout. Stale evidence is recovery context under `details.informational`; current unsatisfied obligations remain under blocking `details.diagnostics`.
 
-At run creation, the software-change workflow may receive semantic review policies in immutable initial input. These policies configure what must be reviewed at the review/validation gates without changing workflow topology.
+At run creation, the software-change workflow may receive semantic review policies in immutable initial input. These policies configure what must be reviewed at the live review gates. A present `review_policies` object is applied at `describe`: only nonempty gate lists keep those review states, and start snapshots that live graph. Core does not interpret `review_policies`. The snapshotted topology for an existing run does not change during that run.
 
 The initial input may contain the equivalent of:
 
@@ -828,14 +874,19 @@ optional supporting context
 The review gates are:
 
 ```text
-intent (explore → design)
+intent-review
+intent-adversarial-review
 design-review
+design-adversarial-review
 plan-review
+plan-adversarial-review
 implementation-review
-validation
+implementation-adversarial-review
+validation-review
+validation-adversarial-review
 ```
 
-A policy is a durable semantic requirement, conceptually identified by a stable workflow-specific ID and human-readable description. The exact input schema belongs to the software-change provider rather than Loop Engine core. Different runs may therefore use materially different review policies while retaining the same stored workflow topology. Because the policies are part of immutable initial input, the configured policy set for an existing run does not silently change during that run.
+A policy is a durable semantic requirement, conceptually identified by a stable workflow-specific ID and human-readable description. The exact input schema belongs to the software-change provider rather than Loop Engine core. Different runs may therefore snapshot different live graphs from the same union phase table. Because the policies are part of immutable initial input, the configured policy set and snapshotted topology for an existing run do not silently change during that run.
 
 Configured policies are exposed to callers through the ordinary `show` projection because `show` already returns immutable initial input. They are **not formatted prompts** and the provider interface does not gain a prompt-generation operation. A human, agent harness, or other caller may render a policy into whatever review instructions or prompts are appropriate for that reviewer.
 
@@ -850,7 +901,7 @@ The workflow must support:
 - a minimal initial idea;
 - substantial initial context representing already-discussed intent/design/planning;
 - semantic review policies configured per review/validation gate at run creation;
-- different policy configurations across runs without changing workflow topology or core behavior;
+- different policy configurations across runs, each snapping the live graph `describe` returns for that caller object;
 - external human/agent review across configured policy axes;
 - durable review evidence appended as ordinary context;
 - user steering appended during the run;
@@ -1153,7 +1204,7 @@ v0.1 is complete when the following are demonstrated end to end.
 - A caller can inspect the frozen slot catalog (`work_slots`) and sparse `work_slot_bindings` from `show` / `initial_input` before work proceeds. `preview-bindings` inspects that JSON before `start` without creating a run. It reports a `dagu` PATH check (minimum 2.14.0) as ok with path and version or as a warning; well-formed bindings still exit 0. `fan-out` and `software-change run-plan-graph` execute fail-close on the same missing, unrunnable, or unsupported-version condition before any worker spawn. Isolated home is `capture_dir/dagu-home/` with locator `capture_dir/dagu-locator.json` keys `dagu_home`, `dag_name`, and `run_name` (`fanout-<capture-dir-name>` for fan-out, `plan-graph-<capture-dir-name>` for plan-graph). loop-engine and software-change packages do not contain or vendor `dagu`.
 - Omitted `work_slot_bindings` and `{}` both mean no bindings; unknown slot IDs, unknown binding fields, and non-object values are rejected at `start`. `start` does not parse `fan-out` or `run-plan-graph` argv. `preview-bindings` exits nonzero on a zero-worker `fan-out` freeze.
 - When a slot is bound, `current_state_instructions` names the slot ID plus the frozen CLI binding `{command, args}` and that the legal start is `loop-engine invoke RUN_ID SLOT_ID`; it omits the stored work body and states the bound-instruction triage order (overlay succeeded is bound CLI exit 0, not provider acceptance; captures are at the named directory; the driver triages, appends, then requests the shown event; on overrun run `show` immediately before re-invoking; on failed inspect `summary.json` and captured output before stderr).
-- `invoke` is the only legal start for bound work. On accept it allocates `capture_dir` as `{artifact_root}/work-slot-captures/{slot_id}/{invocation_id}`, creates that directory, stores it, and returns it. The bound worker's stdin is exactly one JSON object with `run_id`, `slot_id`, `artifact_root`, `instruction_body`, and `capture_dir` (not argv, environment, or a temp file). Waiter stdin is not the worker packet.
+- `invoke` is the only legal start for bound work. On accept it allocates `capture_dir` as `{artifact_root}/work-slot-captures/{slot_id}/{invocation_id}`, creates that directory, stores it, and returns it. The bound worker's stdin is exactly one JSON object with `run_id`, `slot_id`, `artifact_root`, `instruction_body`, and `capture_dir`, plus optional `context` when the slot declared nonempty `stdin_context_kinds` (not argv, environment, or a temp file). Waiter stdin is not the worker packet.
 - Hidden `wait-invocation` is parent of the bound worker, waitpids it, writes terminal `succeeded`/`failed` plus `exit_code`, then exits. After waitpid, a well-formed `capture_dir/summary.json` is copied as `inner_workers` (`command`, `args`, `exit_code` only); overlay remains the bound CLI process exit. It is not a daemon. A vanished waiter with no terminal status is overlay-`failed`.
 - Hidden `stdin-exec` opens a stdin file, attaches it to child stdin, and runs `COMMAND [ARG]...` after `--` with no shell. Duty bytes stay in that file (not argv or environment). Sidecar mode writes `{"exit_code": <inner waitpid as i32>}` then exits 0; propagate mode is the inner waitpid and rejects `--sidecar-file`. Spawn failure exits nonzero without a successful sidecar. `--help` omits it. When `PI_CODING_AGENT_SESSION_DIR` is unset in the inherited environment, stdin-exec colocates Pi sessions under the worker `capture_dir/sessions` via that variable at spawn; frozen argv does not add `--session-dir`. `software-change` duplicates the same helper; plan-graph uses propagate mode only.
 - Invocation records are engine-authored; `append` cannot write them. History records `invocation started {invocation_id}` and `invocation status changed {invocation_id, status}` for waiter-written `succeeded`/`failed` only.
@@ -1165,7 +1216,7 @@ v0.1 is complete when the following are demonstrated end to end.
 - Slot-visit subjects are minted via set-current-subject on entry into a slot state, including `start` when the initial state is a slot. `invoke` snapshots via get-current-subject and does not mint. `instruction_digest` is SHA-256 of the stored instruction body UTF-8 bytes, lowercase hex.
 - Public-boundary journeys (`scripts/software-change-journey.py`, `scripts/policy-document-journey.py`, `scripts/research-journey.py`) freeze a sparse dummy-worker binding, invoke before the bound checked event, and prove catalog snapshot, instruction redaction, unbound-invoke rejection, pre-evaluate gate, worker-packet stdin, overlay `succeeded`, unbound stored instructions, and invocation history. Software-change journeys also prove unbound shipped profiles, graph-runner and fan-out behavior with dummy inner workers, `preview-bindings` nonzero on zero-worker `fan-out` JSON without creating a run, `preview-bindings` warning when pi has `--no-extensions` and no `-e`, and do not call a live model. `scripts/software-change-journey.py --self-test` executes the three provider skill constructors against software-change high-rigor design-review, policy-document shipped semantic policies/target/mode, and research verify plus synthesize; it compares worker count/order and exact axis/`example_prompt`/author/model/subject metadata to each source profile, asserts required keys/data bytes/preview visibility and fail-closed invalid cases, asserts root AGENTS rules, and prints `worker-data skill/root policy assertions passed` only after all pass. The software-change source full journey binds deterministic stdin-capturing workers that emit conforming JSON or exit-0 refusal text and, through separate public CLI processes, asserts the compact one-key `artifact_root` context precedes the separator/body with no `capture_dir` or duplicate identity in that block, conforming `status` succeeded, refusal `status` failed with `exit_code` 0, summary/captures persist, overlay fails, then prints `contracted fan-out failure`.
 - Bound review slots frozen to `fan-out` still require `loop-engine invoke RUN_ID SLOT_ID`. A usable review binding contains provider-constructed assigned `--worker` objects frozen at `start` after `preview-bindings` and lock-in; a review slot with an empty configured policy-axis list is not bound. Shipped profiles omit `work_slot_bindings` so slots stay driver-performed. Opt-in skill templates keep `--no-extensions` and add `-e` placeholders for cursor-provider and claude-bridge. Default implement inner argv when `--task-worker` is omitted remains `pi --print --no-skills --no-extensions` and must not pass `--no-context-files`.
-- Nested fan-out workers accept only `command`, `args`, optional opaque `preamble`, and optional `output_schema` with exact required-key syntax. Bound stdin is compact one-key absolute `artifact_root` JSON (optional preamble plus fixed separator) and does not dump `instruction_body`; the five-key packet, digest, and gate matching remain unchanged. Ad hoc framing adds no run context. Contracted output records preserve process exit and capture paths, add conformance status/error, and are written to `summary.json` before facade failure. Fan-out is a local Dagu `type:graph` with concurrent worker steps that have no inter-worker depends, no `continue_on`, and no `retry_policy`; omitted `--max-active` emits no `max_active_steps` (uncapped); `--max-active N` emits `max_active_steps` N. Sidecar inner exits, mechanical join, and facade fallback if the graph stops before join remain. `software-change run-plan-graph` omitted `--max-active` remains `max_active_steps` 4 ordinary plan tasks; `--max-active N` is at most N ordinary plan tasks; the summarizer still runs after those tasks.
+- Nested fan-out workers accept only `command`, `args`, optional opaque `preamble`, and optional `output_schema` with exact required-key syntax. Bound stdin is compact absolute `artifact_root` JSON, plus `context` when the invoke packet carried matching `stdin_context_kinds` (optional preamble plus fixed separator), and does not dump `instruction_body`; the worker packet, digest, and gate matching remain unchanged. Ad hoc framing adds no run context. Contracted output records preserve process exit and capture paths, add conformance status/error, and are written to `summary.json` before facade failure. Fan-out is a local Dagu `type:graph` with concurrent worker steps that have no inter-worker depends, no `continue_on`, and no `retry_policy`; omitted `--max-active` emits no `max_active_steps` (uncapped); `--max-active N` emits `max_active_steps` N. Sidecar inner exits, mechanical join, and facade fallback if the graph stops before join remain. `software-change run-plan-graph` omitted `--max-active` remains `max_active_steps` 4 ordinary plan tasks; `--max-active N` is at most N ordinary plan tasks; the summarizer still runs after those tasks.
 
 ## 15. Complexity Guardrails
 

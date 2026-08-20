@@ -72,15 +72,18 @@ pub type Result = CreateRunResult;
 /// Execute `start` through the provider and persistence ports.
 ///
 /// Provider resolution and description happen before validation and before
-/// persistence is called.  After a valid workflow, start validates reserved
-/// `work_slot_bindings` on object initial_input against the described
-/// `work_slots` catalog, then allocates the engine-owned per-run directory
-/// and composes reserved `artifact_root` into stored object input.  The
-/// persistence adapter owns the atomic run plus creation-history write.
+/// persistence is called.  Start always forwards the caller `initial_input`
+/// to `describe` and snapshots the returned workflow unchanged; core does
+/// not interpret provider-specific keys such as `review_policies`.  After a
+/// valid workflow, start validates reserved `work_slot_bindings` on object
+/// initial_input against the described `work_slots` catalog, then allocates
+/// the engine-owned per-run directory and composes reserved `artifact_root`
+/// into stored object input.  The persistence adapter owns the atomic run
+/// plus creation-history write.
 ///
 /// Frozen initial_input key is `work_slot_bindings`: object map slot_id → {command, args}.
 /// Slot identity is a string slot_id. Use the existing `string_identifier!` newtype pattern: `WorkSlotId`.
-/// Catalog entry type `WorkSlot` with exactly: `id` (WorkSlotId), `state` (StateId), `event` (EventId). No instruction body.
+/// Catalog entry type `WorkSlot` with `id`, `state`, `event`, and optional `stdin_context_kinds`. No instruction body.
 /// Binding value type with exactly `{command, args}`. `command: String`. `args: Vec<String>` — the same argv list type loop-integrations already uses for process argument lists (`ProviderDefinition.args` / `ProviderInvocation.args`). `#[serde(deny_unknown_fields)]`.
 /// Omit the key OR `{}` both mean no bindings. Start must succeed in both cases (existing start tests omit the key and MUST keep passing).
 /// Start rejects: unknown slot id (not in the provider catalog snapshot for this workflow), unknown fields on a binding object, non-object values (the map itself or a binding value).
@@ -100,7 +103,7 @@ where
         Err(error) => return provider_resolution_error(error),
     };
 
-    let workflow = match gateway.describe(&association) {
+    let workflow = match gateway.describe(&association, Some(&request.initial_input)) {
         Ok(workflow) => workflow,
         Err(error) => return provider_error(error),
     };
@@ -182,7 +185,7 @@ where
 /// Frozen initial_input key is `work_slot_bindings`: object map slot_id → {command, args}.
 ///
 /// Slot identity is a string slot_id. Use the existing `string_identifier!` newtype pattern: `WorkSlotId`.
-/// Catalog entry type `WorkSlot` with exactly: `id` (WorkSlotId), `state` (StateId), `event` (EventId). No instruction body.
+/// Catalog entry type `WorkSlot` with `id`, `state`, `event`, and optional `stdin_context_kinds`. No instruction body.
 /// Binding value type with exactly `{command, args}`. `command: String`. `args: Vec<String>` — the same argv list type loop-integrations already uses for process argument lists (`ProviderDefinition.args` / `ProviderInvocation.args`). `#[serde(deny_unknown_fields)]`.
 /// Omit the key OR `{}` both mean no bindings. Start must succeed in both cases (existing start tests omit the key and MUST keep passing).
 /// Start rejects: unknown slot id (not in the provider catalog snapshot for this workflow), unknown fields on a binding object, non-object values (the map itself or a binding value).
@@ -416,6 +419,7 @@ mod tests {
         fn describe(
             &self,
             _provider: &ProviderAssociation,
+            _initial_input: Option<&Value>,
         ) -> std::result::Result<Workflow, ProviderError> {
             Ok(self.workflow.clone())
         }

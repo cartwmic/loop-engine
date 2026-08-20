@@ -8,10 +8,15 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 /// The input envelope accepted by `describe`.
+///
+/// `initial_input` is accepted and ignored so engine start can always send the
+/// caller object. Topology stays input-independent.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DescribeRequest {
     pub(crate) operation: String,
+    #[serde(default)]
+    pub(crate) initial_input: Option<Value>,
 }
 
 /// The complete flat input envelope accepted by `evaluate`.

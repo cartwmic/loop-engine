@@ -2,9 +2,9 @@
 
 use super::persistence_error;
 use crate::{
-    instruction_digest, project_invocation_status, CreateWorkSlotInvocationRequest, InvocationId,
-    OperationOutcome, Persistence, ProcessError, ProjectedInvocationStatus, RunId, Timestamp,
-    WaiterSpawnArgs, WorkSlotBinding, WorkSlotId, WorkSlotProcess,
+    instruction_digest, project_invocation_status, ContextRecord, CreateWorkSlotInvocationRequest,
+    InvocationId, OperationOutcome, Persistence, ProcessError, ProjectedInvocationStatus, RunId,
+    Timestamp, WaiterSpawnArgs, WorkSlotBinding, WorkSlotId, WorkSlotProcess,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -56,6 +56,8 @@ struct WorkerPacket {
     artifact_root: String,
     instruction_body: String,
     capture_dir: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context: Option<Vec<ContextRecord>>,
 }
 
 #[derive(Serialize)]
@@ -170,6 +172,24 @@ where
         Err(error) => return persistence_error(error),
     };
 
+    let forwarded_context = if slot.stdin_context_kinds.is_empty() {
+        None
+    } else {
+        match persistence.load_context_records(&request.run_id) {
+            Ok(records) => Some(
+                records
+                    .into_iter()
+                    .filter(|record| {
+                        slot.stdin_context_kinds
+                            .iter()
+                            .any(|kind| kind == &record.kind)
+                    })
+                    .collect(),
+            ),
+            Err(error) => return persistence_error(error),
+        }
+    };
+
     let artifact_root = artifact_root_from_input(&run.initial_input);
     if artifact_root.is_empty() {
         return OperationOutcome::error(
@@ -221,6 +241,7 @@ where
             artifact_root,
             instruction_body,
             capture_dir: capture_dir.clone(),
+            context: forwarded_context,
         },
     };
     let envelope_json = match serde_json::to_vec(&envelope) {
@@ -395,6 +416,7 @@ mod tests {
         created: RefCell<Vec<CreateWorkSlotInvocationRequest>>,
         subjects: RefCell<HashMap<(String, String), String>>,
         set_subject_calls: RefCell<Vec<(String, String, String)>>,
+        context_records: RefCell<Vec<ContextRecord>>,
         log: CallLog,
     }
 
@@ -406,6 +428,7 @@ mod tests {
                 created: RefCell::new(Vec::new()),
                 subjects: RefCell::new(HashMap::new()),
                 set_subject_calls: RefCell::new(Vec::new()),
+                context_records: RefCell::new(Vec::new()),
                 log,
             }
         }
@@ -419,6 +442,11 @@ mod tests {
 
         fn with_invocations(self, invocations: Vec<WorkSlotInvocation>) -> Self {
             *self.invocations.borrow_mut() = invocations;
+            self
+        }
+
+        fn with_context_records(self, records: Vec<ContextRecord>) -> Self {
+            *self.context_records.borrow_mut() = records;
             self
         }
     }
@@ -477,7 +505,7 @@ mod tests {
             &self,
             _run_id: &RunId,
         ) -> std::result::Result<Vec<ContextRecord>, PersistenceError> {
-            unavailable()
+            Ok(self.context_records.borrow().clone())
         }
 
         fn load_history(
@@ -983,5 +1011,273 @@ mod tests {
         assert_eq!(outcome.issue().unwrap().code, "no-current-visit-subject");
         assert!(process.spawn_args.borrow().is_empty());
         assert!(log.borrow().is_empty());
+    }
+
+    fn run_with_slot(artifact_root: &str, slot: WorkSlot) -> Run {
+        let mut run = sample_run(bound_input(artifact_root));
+        run.workflow.work_slots = vec![slot];
+        run
+    }
+
+    fn record(id: &str, kind: &str, sequence: u64, data: Value) -> ContextRecord {
+        ContextRecord::new(
+            id,
+            kind,
+            data,
+            crate::SemanticSequence::new(sequence),
+            Timestamp::from_unix_millis(sequence as i64),
+        )
+    }
+
+    fn worker_packet(process: &FakeProcess) -> Value {
+        let envelope: Value =
+            serde_json::from_slice(&process.envelopes.borrow()[0]).expect("envelope json");
+        envelope["worker_packet"].clone()
+    }
+
+    #[test]
+    fn omitted_and_empty_stdin_context_kinds_keep_five_key_packet() {
+        let artifacts = tempfile::tempdir().expect("temp artifact root");
+        let artifact_root = artifacts.path().to_string_lossy().into_owned();
+        let slots = [
+            WorkSlot::new("slot-1", "start", "finish"),
+            WorkSlot::new("slot-1", "start", "finish").with_stdin_context_kinds(Vec::new()),
+        ];
+        for slot in slots {
+            let (persistence, process, _log) = harness(run_with_slot(&artifact_root, slot));
+            let persistence = persistence
+                .with_subject("slot-1", "visit-1")
+                .with_context_records(vec![record(
+                    "ctx-1",
+                    "kind-a",
+                    1,
+                    json!({"payload": "stored"}),
+                )]);
+
+            let outcome = execute(
+                invoke_request(),
+                &persistence,
+                &process,
+                Timestamp::from_unix_millis(1_000),
+                30_000,
+            );
+            assert!(outcome.is_completed(), "{outcome:?}");
+            let packet = worker_packet(&process);
+            let object = packet.as_object().expect("packet");
+            assert!(object.get("context").is_none());
+            let keys = object
+                .keys()
+                .map(|key| key.as_str())
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                keys,
+                BTreeSet::from([
+                    "run_id",
+                    "slot_id",
+                    "artifact_root",
+                    "instruction_body",
+                    "capture_dir",
+                ])
+            );
+        }
+    }
+
+    #[test]
+    fn work_slot_omitting_stdin_context_kinds_round_trips_without_the_key() {
+        let omitted = json!({
+            "id": "slot-1",
+            "state": "start",
+            "event": "finish"
+        });
+        let slot: WorkSlot = serde_json::from_value(omitted).unwrap();
+        assert_eq!(slot, WorkSlot::new("slot-1", "start", "finish"));
+        assert!(slot.stdin_context_kinds.is_empty());
+        let encoded = serde_json::to_value(&slot).unwrap();
+        assert!(encoded.get("stdin_context_kinds").is_none());
+        assert_eq!(
+            encoded,
+            json!({
+                "id": "slot-1",
+                "state": "start",
+                "event": "finish"
+            })
+        );
+
+        let empty = WorkSlot::new("slot-1", "start", "finish").with_stdin_context_kinds(Vec::new());
+        assert!(serde_json::to_value(&empty)
+            .unwrap()
+            .get("stdin_context_kinds")
+            .is_none());
+    }
+
+    #[test]
+    fn nonempty_stdin_context_kinds_forwards_matching_records_in_append_order() {
+        let artifacts = tempfile::tempdir().expect("temp artifact root");
+        let artifact_root = artifacts.path().to_string_lossy().into_owned();
+        let older = record(
+            "ctx-old",
+            "kind-a",
+            1,
+            json!({"rev": "1", "note": "historical"}),
+        );
+        let other_kind = record("ctx-other", "kind-b", 2, json!({"rev": "skip"}));
+        let between = record("ctx-mid", "kind-c", 3, json!({"rev": "mid"}));
+        let newer = record(
+            "ctx-new",
+            "kind-a",
+            4,
+            json!({"rev": "2", "note": "current"}),
+        );
+        let slot = WorkSlot::new("slot-1", "start", "finish")
+            .with_stdin_context_kinds(vec!["kind-a".to_owned(), "kind-c".to_owned()]);
+        let (persistence, process, _log) = harness(run_with_slot(&artifact_root, slot));
+        let persistence = persistence
+            .with_subject("slot-1", "visit-1")
+            .with_context_records(vec![
+                older.clone(),
+                other_kind,
+                between.clone(),
+                newer.clone(),
+            ]);
+
+        let outcome = execute(
+            invoke_request(),
+            &persistence,
+            &process,
+            Timestamp::from_unix_millis(1_000),
+            30_000,
+        );
+        assert!(outcome.is_completed(), "{outcome:?}");
+        let packet = worker_packet(&process);
+        let forwarded = packet["context"].as_array().expect("context array");
+        assert_eq!(forwarded.len(), 3);
+        assert_eq!(forwarded[0], serde_json::to_value(&older).unwrap());
+        assert_eq!(forwarded[1], serde_json::to_value(&between).unwrap());
+        assert_eq!(forwarded[2], serde_json::to_value(&newer).unwrap());
+        assert_eq!(
+            forwarded[0]["data"],
+            json!({"rev": "1", "note": "historical"})
+        );
+        assert_eq!(forwarded[2]["data"], json!({"rev": "2", "note": "current"}));
+    }
+
+    #[test]
+    fn nonempty_stdin_context_kinds_with_no_matches_still_emits_context_key() {
+        let artifacts = tempfile::tempdir().expect("temp artifact root");
+        let artifact_root = artifacts.path().to_string_lossy().into_owned();
+        let slot = WorkSlot::new("slot-1", "start", "finish")
+            .with_stdin_context_kinds(vec!["kind-a".to_owned()]);
+        let (persistence, process, _log) = harness(run_with_slot(&artifact_root, slot));
+        let persistence = persistence
+            .with_subject("slot-1", "visit-1")
+            .with_context_records(vec![record("ctx-other", "kind-b", 1, json!({}))]);
+
+        let outcome = execute(
+            invoke_request(),
+            &persistence,
+            &process,
+            Timestamp::from_unix_millis(1_000),
+            30_000,
+        );
+        assert!(outcome.is_completed(), "{outcome:?}");
+        let packet = worker_packet(&process);
+        assert_eq!(packet["context"], json!([]));
+    }
+
+    #[test]
+    fn review_slot_forwards_accepted_findings_and_draft_slot_omits_context() {
+        let artifacts = tempfile::tempdir().expect("temp artifact root");
+        let artifact_root = artifacts.path().to_string_lossy().into_owned();
+        let draft = WorkSlot::new("intent-draft", "explore", "intent-ready");
+        let review = WorkSlot::new("intent-review", "intent-review", "approved")
+            .with_stdin_context_kinds(vec!["accepted-findings".to_owned()]);
+        let findings = record(
+            "accepted-1",
+            "accepted-findings",
+            1,
+            json!({
+                "gate": "intent-review",
+                "subject": "intent.json",
+                "subject_revision": "1",
+                "findings": []
+            }),
+        );
+        let evidence = record(
+            "evidence-1",
+            "review-evidence",
+            2,
+            json!({"gate": "intent-review", "policy_id": "axis", "result": "pass"}),
+        );
+        let mut run = sample_run(json!({
+            "artifact_root": artifact_root,
+            "work_slot_bindings": {
+                "intent-draft": {"command": "echo", "args": ["draft"]},
+                "intent-review": {"command": "echo", "args": ["review"]}
+            }
+        }));
+        run.workflow = Workflow::new(
+            "workflow",
+            "explore",
+            vec![
+                State::new("explore", "Explore", "Draft", false),
+                State::new("intent-review", "Intent review", "Review", false),
+                State::new("end", "End", "Done", true),
+            ],
+            vec![
+                Transition::checked("explore", "intent-ready", "intent-review"),
+                Transition::checked("intent-review", "approved", "end"),
+            ],
+        )
+        .with_work_slots(vec![draft, review]);
+
+        let (draft_persistence, draft_process, _draft_log) = harness(run.clone());
+        let draft_persistence = draft_persistence
+            .with_subject("intent-draft", "visit-draft")
+            .with_context_records(vec![findings.clone(), evidence.clone()]);
+        let draft_outcome = execute(
+            Request::new("run-1", "intent-draft", "inv-draft", "/tmp/loop.db"),
+            &draft_persistence,
+            &draft_process,
+            Timestamp::from_unix_millis(1_000),
+            30_000,
+        );
+        assert!(draft_outcome.is_completed(), "{draft_outcome:?}");
+        let draft_packet = worker_packet(&draft_process);
+        assert_eq!(draft_packet["slot_id"], "intent-draft");
+        assert!(draft_packet.get("context").is_none());
+        let draft_keys = draft_packet
+            .as_object()
+            .expect("packet")
+            .keys()
+            .map(|key| key.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            draft_keys,
+            BTreeSet::from([
+                "run_id",
+                "slot_id",
+                "artifact_root",
+                "instruction_body",
+                "capture_dir",
+            ])
+        );
+
+        let (review_persistence, review_process, _review_log) = harness(run);
+        let review_persistence = review_persistence
+            .with_subject("intent-review", "visit-review")
+            .with_context_records(vec![findings.clone(), evidence]);
+        let review_outcome = execute(
+            Request::new("run-1", "intent-review", "inv-review", "/tmp/loop.db"),
+            &review_persistence,
+            &review_process,
+            Timestamp::from_unix_millis(1_000),
+            30_000,
+        );
+        assert!(review_outcome.is_completed(), "{review_outcome:?}");
+        let review_packet = worker_packet(&review_process);
+        assert_eq!(review_packet["slot_id"], "intent-review");
+        let forwarded = review_packet["context"].as_array().expect("context");
+        assert_eq!(forwarded.len(), 1);
+        assert_eq!(forwarded[0], serde_json::to_value(&findings).unwrap());
     }
 }

@@ -8,9 +8,9 @@ mod support;
 #[test]
 fn standard_profile_and_task_packet_template_carry_doc_integration_contract() {
     let standard = support::load_profile("standard");
-    let validation_axes: BTreeSet<&str> = standard["review_policies"]["validation"]
+    let validation_axes: BTreeSet<&str> = standard["review_policies"]["validation-review"]
         .as_array()
-        .expect("validation axes")
+        .expect("validation-review axes")
         .iter()
         .map(|entry| entry["id"].as_str().expect("axis id"))
         .collect();

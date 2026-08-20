@@ -1,0 +1,14 @@
+{
+  "kind": "accepted-findings",
+  "data": {
+    "gate": "design-review",
+    "subject": "design.json",
+    "subject_revision": "1",
+    "findings": [
+      {
+        "policy_id": "intent-faithful",
+        "statement": "Accepted in-scope material finding after triage."
+      }
+    ]
+  }
+}

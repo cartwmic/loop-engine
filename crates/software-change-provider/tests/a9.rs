@@ -41,14 +41,25 @@ fn engine_distinguishes_inaccessible_root_provider_failure_from_review_deny_and_
     review_artifacts.write_json("intent.json", &valid_metadata("1"));
     let review = Engine::new(state.path().join("review.sqlite"));
     review.start_ok("review-deny", axis_config(&review_artifacts, "axis"));
-    let review_outcome = review.event("review-deny", "intent-ready");
+    assert!(matches!(
+        review.event("review-deny", "intent-ready"),
+        OperationOutcome::Completed(_)
+    ));
+    let review_outcome = review.event("review-deny", "approved");
     let review_issue = match review_outcome {
         OperationOutcome::Rejected(issue) => issue,
         other => panic!("expected review denial, got {other:?}"),
     };
     assert_eq!(review_issue.code, "software-change-review-incomplete");
-    assert_eq!(review.current_state("review-deny").as_str(), "explore");
-    assert_eq!(review.show("review-deny").latest_evaluations.len(), 1);
+    assert_eq!(
+        review.current_state("review-deny").as_str(),
+        "intent-review"
+    );
+    assert!(review
+        .show("review-deny")
+        .latest_evaluations
+        .iter()
+        .any(|evaluation| evaluation.is_deny()));
 
     let missing_binary = state.path().join("provider-does-not-exist");
     let unavailable = Engine::with_command(state.path().join("missing.sqlite"), missing_binary);
@@ -82,7 +93,7 @@ fn engine_classifies_stale_config_evidence_as_review_denial() {
     engine.append_evidence(
         "stale-config",
         "stale-config-evidence",
-        "intent",
+        "intent-review",
         "axis",
         "pass",
         "",
@@ -93,7 +104,11 @@ fn engine_classifies_stale_config_evidence_as_review_denial() {
         "stale-test-version",
     );
 
-    let outcome = engine.event("stale-config", "intent-ready");
+    assert!(matches!(
+        engine.event("stale-config", "intent-ready"),
+        OperationOutcome::Completed(_)
+    ));
+    let outcome = engine.event("stale-config", "approved");
     let issue = match outcome {
         OperationOutcome::Rejected(issue) => issue,
         OperationOutcome::Error(issue) => {
@@ -129,8 +144,13 @@ fn engine_classifies_stale_config_evidence_as_review_denial() {
         .expect("stale config diagnostic");
     assert_eq!(stale_config["evidence_version"], "stale-test-version");
     assert_eq!(stale_config["run_version"], "test-1");
-    assert_eq!(engine.current_state("stale-config").as_str(), "explore");
+    assert_eq!(
+        engine.current_state("stale-config").as_str(),
+        "intent-review"
+    );
     let shown = engine.show("stale-config");
-    assert_eq!(shown.latest_evaluations.len(), 1);
-    assert!(shown.latest_evaluations[0].is_deny());
+    assert!(shown
+        .latest_evaluations
+        .iter()
+        .any(|evaluation| evaluation.is_deny()));
 }

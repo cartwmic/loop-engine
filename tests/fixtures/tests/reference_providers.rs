@@ -98,7 +98,7 @@ fn all_evidence_for_set_a(gate: &str, sequence_start: u64) -> Vec<ContextRecord>
 #[test]
 fn software_change_describe_exposes_exact_reference_topology(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let described = gateway().describe(&association("software-change-provider"))?;
+    let described = gateway().describe(&association("software-change-provider"), None)?;
     assert_eq!(described, software_change_workflow());
     assert_eq!(described.states.len(), 9);
     assert_eq!(described.transitions.len(), 12);
@@ -356,7 +356,7 @@ fn fixture_has_no_prompt_generation_and_supports_controlled_provider_failures() 
 #[test]
 fn policy_document_describe_has_prepare_deterministic_semantic_end_topology(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let described = gateway().describe(&association("policy-document-provider"))?;
+    let described = gateway().describe(&association("policy-document-provider"), None)?;
     assert_eq!(described, policy_document_workflow());
     assert_eq!(
         described
@@ -683,7 +683,7 @@ fn write_json(root: &std::path::Path, name: &str, value: &Value) {
 #[test]
 fn research_describe_has_scope_gather_verify_synthesize_end_topology(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let described = gateway().describe(&association("research-provider"))?;
+    let described = gateway().describe(&association("research-provider"), None)?;
     assert_eq!(described, research_workflow());
     assert_eq!(described.states.len(), 5);
     assert_eq!(described.transitions.len(), 10);

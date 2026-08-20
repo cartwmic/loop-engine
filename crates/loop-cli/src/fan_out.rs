@@ -37,7 +37,10 @@ pub(crate) struct OutputSchema {
     pub(crate) required: Vec<String>,
 }
 
-/// Bound-worker stdin packet.  Exactly the five engine invoke keys; no extras.
+/// Bound-worker stdin packet. Engine invoke keys plus optional `context`.
+///
+/// Omitted `context` keeps today's compact `{artifact_root}` worker stdin.
+/// A present `context` array is forwarded unmodified onto that compact JSON.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct InvokePacket {
@@ -46,6 +49,8 @@ pub(crate) struct InvokePacket {
     pub(crate) artifact_root: String,
     pub(crate) instruction_body: String,
     pub(crate) capture_dir: String,
+    #[serde(default)]
+    pub(crate) context: Option<Vec<Value>>,
 }
 
 /// Collected `fan-out` flags after the command name.  Zero `--worker` entries
@@ -202,7 +207,7 @@ fn validate_output_schema(schema: &OutputSchema) -> Result<(), ParseError> {
 pub(crate) fn parse_invoke_packet(raw: &str) -> Result<InvokePacket, ParseError> {
     serde_json::from_str(raw).map_err(|error| {
         ParseError::new(format!(
-            "invoke packet must be a JSON object with exactly `run_id`, `slot_id`, `artifact_root`, `instruction_body`, and `capture_dir`: {error}"
+            "invoke packet must be a JSON object with `run_id`, `slot_id`, `artifact_root`, `instruction_body`, `capture_dir`, and optional `context`: {error}"
         ))
     })
 }
@@ -351,7 +356,9 @@ pub(crate) fn run_collector(
             let artifact_root = path_to_string(&artifact_root);
             let payloads = workers
                 .iter()
-                .map(|worker| bound_worker_payload(worker, &artifact_root))
+                .map(|worker| {
+                    bound_worker_payload(worker, &artifact_root, packet.context.as_deref())
+                })
                 .collect::<Vec<_>>();
             let output_dir = absolute_from_cwd(cwd, Path::new(&packet.capture_dir));
             run_dagu_graph(&dagu, &engine, &workers, &payloads, &output_dir, max_active)
@@ -435,17 +442,26 @@ fn ensure_workers(workers: &[WorkerCli]) -> Result<(), CollectorError> {
     Ok(())
 }
 
-fn compact_artifact_root_json(artifact_root: &str) -> Vec<u8> {
+fn compact_location_json(artifact_root: &str, context: Option<&[Value]>) -> Vec<u8> {
     #[derive(Serialize)]
-    struct ArtifactRootContext<'a> {
+    struct Location<'a> {
         artifact_root: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        context: Option<&'a [Value]>,
     }
-    serde_json::to_vec(&ArtifactRootContext { artifact_root })
-        .expect("serializing one string field cannot fail")
+    serde_json::to_vec(&Location {
+        artifact_root,
+        context,
+    })
+    .expect("serializing location object cannot fail")
 }
 
-fn bound_worker_payload(worker: &WorkerCli, artifact_root: &str) -> Vec<u8> {
-    let location = compact_artifact_root_json(artifact_root);
+fn bound_worker_payload(
+    worker: &WorkerCli,
+    artifact_root: &str,
+    context: Option<&[Value]>,
+) -> Vec<u8> {
+    let location = compact_location_json(artifact_root, context);
     match &worker.preamble {
         Some(preamble) => compose_preamble_payload(preamble, Some(&location), b""),
         None => {
@@ -1080,6 +1096,29 @@ mod tests {
         assert_eq!(packet.artifact_root, "/tmp/artifacts");
         assert_eq!(packet.instruction_body, "Do the work");
         assert_eq!(packet.capture_dir, "/tmp/captures/inv-1");
+        assert_eq!(packet.context, None);
+    }
+
+    #[test]
+    fn invoke_packet_optional_context_deserializes_unmodified() {
+        let raw = json!({
+            "run_id": "run-1",
+            "slot_id": "slot-1",
+            "artifact_root": "/tmp/artifacts",
+            "instruction_body": "Do the work",
+            "capture_dir": "/tmp/captures/inv-1",
+            "context": [{"id": "ctx-old", "kind": "kind-a", "data": {"rev": "1"}}]
+        })
+        .to_string();
+        let packet = parse_invoke_packet(&raw).expect("packet with context");
+        assert_eq!(
+            packet.context,
+            Some(vec![json!({
+                "id": "ctx-old",
+                "kind": "kind-a",
+                "data": {"rev": "1"}
+            })])
+        );
     }
 
     #[test]
@@ -1218,7 +1257,7 @@ mod tests {
             output_schema: None,
         };
         assert_eq!(
-            bound_worker_payload(&worker, "/tmp/artifacts"),
+            bound_worker_payload(&worker, "/tmp/artifacts", None),
             b"{\"artifact_root\":\"/tmp/artifacts\"}\n"
         );
         let schema_only = WorkerCli {
@@ -1228,9 +1267,47 @@ mod tests {
             ..worker
         };
         assert_eq!(
-            bound_worker_payload(&schema_only, "/absolute/root"),
+            bound_worker_payload(&schema_only, "/absolute/root", None),
             b"{\"artifact_root\":\"/absolute/root\"}\n"
         );
+    }
+
+    #[test]
+    fn bound_stdin_forwards_packet_context_unmodified_on_compact_json() {
+        let worker = WorkerCli {
+            command: "echo".to_owned(),
+            args: Vec::new(),
+            preamble: None,
+            output_schema: None,
+        };
+        let records = vec![
+            json!({"id": "ctx-old", "kind": "kind-a", "data": {"rev": "1"}}),
+            json!({"id": "ctx-new", "kind": "kind-a", "data": {"rev": "2"}}),
+        ];
+        let payload = bound_worker_payload(&worker, "/tmp/artifacts", Some(&records));
+        let parsed: Value = serde_json::from_slice(&payload[..payload.len() - 1]).expect("json");
+        assert_eq!(
+            parsed,
+            json!({
+                "artifact_root": "/tmp/artifacts",
+                "context": [
+                    {"id": "ctx-old", "kind": "kind-a", "data": {"rev": "1"}},
+                    {"id": "ctx-new", "kind": "kind-a", "data": {"rev": "2"}}
+                ]
+            })
+        );
+        assert_eq!(payload.last().copied(), Some(b'\n'));
+
+        let with_preamble = WorkerCli {
+            preamble: Some("role".to_owned()),
+            ..worker
+        };
+        let framed = bound_worker_payload(&with_preamble, "/tmp/artifacts", Some(&records));
+        let framed_text = String::from_utf8(framed).expect("utf8");
+        assert!(framed_text.starts_with("role\n{"));
+        assert!(framed_text.ends_with("\n---\n\n"));
+        assert!(framed_text.contains("\"context\""));
+        assert!(!framed_text.contains("instruction_body"));
     }
 
     #[test]
@@ -1242,7 +1319,7 @@ mod tests {
             output_schema: None,
         };
         assert_eq!(
-            bound_worker_payload(&worker, "quoted/\"root\\tail"),
+            bound_worker_payload(&worker, "quoted/\"root\\tail", None),
             b"role\n{\"artifact_root\":\"quoted/\\\"root\\\\tail\"}\n---\n\n"
         );
         assert_eq!(

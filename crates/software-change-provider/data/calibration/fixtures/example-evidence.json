@@ -1,7 +1,7 @@
 {
   "kind": "review-evidence",
   "data": {
-    "gate": "intent",
+    "gate": "intent-review",
     "policy_id": "solution-agnostic",
     "result": "pass",
     "findings": "",
@@ -11,6 +11,6 @@
     },
     "subject": "intent.json",
     "subject_revision": "r15",
-    "config_version": "standard-5"
+    "config_version": "standard-6"
   }
 }
