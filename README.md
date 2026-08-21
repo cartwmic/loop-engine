@@ -54,7 +54,7 @@ Reference providers:
 
 ### Prebuilt GitHub Releases
 
-Starting with v0.3.0, releases publish separate cargo-dist archives for all four binaries and supported targets:
+Current releases publish separate cargo-dist archives for all four binaries and supported targets:
 
 - `loop-cli-aarch64-apple-darwin.tar.xz` — macOS arm64, contains `loop-engine`.
 - `loop-cli-x86_64-unknown-linux-gnu.tar.xz` — Linux x86_64, contains `loop-engine`.
@@ -116,7 +116,7 @@ cargo build --release -p loop-cli -p software-change-provider -p policy-document
 
 ## Usage
 
-`loop-engine` stores run state in a SQLite catalog and snapshots provider association, workflow topology, and state instructions at `start`. When the human did not explicitly ask to isolate in that session, omit `--database` and omit `artifact_root`. That start stores the run in the user-level catalog and uses an engine-owned per-run artifact directory. This is the production start, not a usual-case option beside a prudent isolate alternative. Existing start examples that already omit both flags remain examples of this required start. Independent runs sharing the user-level catalog do not clobber each other, because each run already receives an engine-owned per-run artifact directory. Occupancy of the catalog by other runs, and fear of affecting those runs, are not reasons to pass `--database` or a nonempty `artifact_root`. An agent must not pass `--database` or a nonempty `artifact_root` unless the human explicitly asked to isolate in that session. Isolation is not a self-chosen precaution. `--database /path/to/dir/loop.db` isolates SQLite and `/path/to/dir/runs/<id>/`. A nonempty `artifact_root` isolates files to a caller-chosen absolute existing directory. Do not treat a prior session's isolation preference as standing authority. When `--database` and database env vars are unset, the catalog is `$LOOP_ENGINE_HOME/loop.db` or `$LOOP_HOME/loop.db` if either home env is set, else `$XDG_DATA_HOME/loop-engine/loop.db` if `XDG_DATA_HOME` is set, else `$HOME/.local/share/loop-engine/loop.db`. `list` from any working directory reads that same file. Perform the work named by `show` externally, append durable context when the provider requires it, then request one event from `requestable_events`.
+`loop-engine` stores run state in a SQLite catalog and snapshots provider association, workflow topology, and state instructions at `start`. For normal production use, omit `--database` and `artifact_root` unless the human explicitly asked to isolate that session; the engine then uses the user-level catalog and an engine-owned per-run artifact directory. When those options and database environment variables are unset, the catalog is `$LOOP_ENGINE_HOME/loop.db`, `$LOOP_HOME/loop.db`, `$XDG_DATA_HOME/loop-engine/loop.db`, or `$HOME/.local/share/loop-engine/loop.db` in that order. Perform the work named by `show` externally, append durable context when the provider requires it, then request one event from `requestable_events`.
 
 ```text
 loop-engine [--database DB] [--config CONFIG] [--json] [--timeout-ms MS] start [--id RUN_ID] PROVIDER INITIAL_JSON [LABEL]
@@ -129,41 +129,45 @@ loop-engine [--database DB] [--json] terminate RUN_ID
 loop-engine [--database DB] [--json] [--timeout-ms MS] invoke RUN_ID SLOT_ID
 loop-engine [--database DB] [--json] [--timeout-ms MS] invocation-progress RUN_ID [INVOCATION_ID]
 loop-engine fan-out [--worker JSON]... [--instructions FILE] [--max-active N]
+software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--max-active N]
 loop-engine preview-bindings [JSON|@FILE]
 ```
 
-The first eight forms are run-state operations. `invocation-progress`, `fan-out`, and `preview-bindings` are other commands, not a ninth primary. `fan-out` and `preview-bindings` do not open the run database or advance a run. `invocation-progress` opens the catalog to resolve one invocation and its stored `capture_dir`; it does not append, invoke, request events, or write overlay. A progress-query failure or timeout returns an error envelope and does not flip overlay. `--help` omits hidden helpers `wait-invocation`, `stdin-exec`, and `fan-out-join`. Bound `fan-out` and `software-change run-plan-graph` are Dagu-backed facades: each invocation emits a local `type:graph` under isolated `capture_dir/dagu-home/` and records `capture_dir/dagu-locator.json`. Callers do not supply Dagu YAML. While overlay is `running`, the canonical driver poll is `show` (overlay, `elapsed_ms`, `remaining_allowed_ms`, `capture_dir`, `inner_workers` empty) plus `invocation-progress` (`invocation_id`, `capture_dir`, per-step `not_started`|`running`|`reaped`, named sidecar/session traces). Graph state is Dagu helper liveness; true inner waitpid remains in sidecar traces and `summary.json`; overlay remains the bound CLI process exit. `dagu status` / `dagu history` against the locator remain the underlying surface `invocation-progress` uses; they are not the driver-facing path. `loop-engine fan-out --max-active N`: omitted stays uncapped concurrent worker start; set N is at most N worker steps. `software-change run-plan-graph --max-active N`: omitted stays 4 ordinary plan tasks; set N is at most N ordinary plan tasks; the mandatory summarizer still runs after those tasks. Fan-out joins mechanically: hidden `fan-out-join` writes `summary.json` and invokes no model.
+The first eight forms are run-state operations. `invocation-progress`, `fan-out`, and `preview-bindings` are other commands, not a ninth primary. `fan-out` and `preview-bindings` do not open the run database or advance a run. `invocation-progress` reads the catalog for one invocation and does not append, invoke, request events, or write overlay. `software-change run-plan-graph` is a provider command, not an engine operation. Its required `--working-directory ABS` must name one existing absolute directory selected and maintained by the driver; it is applied to every ordinary plan task and the summarizer, and the provider does not create or manage worktrees. Omitted `--max-active` allows four ordinary plan tasks; the mandatory summarizer runs only after all ordinary tasks succeed. If an ordinary task fails, the graph leaves mechanical `summary.json` and captures and does not write `implementation-report.json`. Dagu is an operator-provided PATH dependency (minimum 2.14.0), not part of release packages. Exact binding, stdin, capture, polling, and review procedures belong in the linked agent documentation and provider skills.
 
-Pass `--json` and parse the single envelope. Pass `--config` to `start` with uncommitted machine-local provider TOML using an exact alias and an absolute command path:
-
-```toml
-[providers.software-change]
-command = "/absolute/path/to/software-change"
-args = []
-
-[providers.policy-document]
-command = "/absolute/path/to/policy-document"
-args = []
-
-[providers.research]
-command = "/absolute/path/to/research"
-args = []
-```
-
-The engine allocates a durable per-run directory and records that absolute path in object `initial_input`. `list` JSON includes optional `provider` (the start alias) and `artifact_root`; `show` and `history` JSON keys are unchanged.
+Pass `--json` and parse the single envelope. For a minimal installed-binary start, materialize the provider's embedded data into an empty temporary root, copy one shipped profile, and create an uncommitted machine-local provider TOML with resolved absolute executable paths:
 
 ```sh
-loop-engine --json --config /absolute/path/to/providers.toml \
-  start software-change @/tmp/profile.json "my run"
+ENGINE="$(command -v loop-engine)"
+PROVIDER="$(command -v software-change)"
+case "$ENGINE:$PROVIDER" in
+  /*:/*) ;;
+  *) echo "PATH must resolve installed binaries to absolute paths" >&2; exit 1 ;;
+esac
+
+data_root="$(mktemp -d)"
+"$PROVIDER" data-dump "$data_root"
+profile=/tmp/loop-engine-software-change-minimal.json
+cp "$data_root/crates/software-change-provider/data/configs/minimal.json" "$profile"
+cat >/tmp/loop-engine-providers.toml <<EOF
+[providers.software-change]
+command = "$PROVIDER"
+args = []
+EOF
+"$ENGINE" --json --config /tmp/loop-engine-providers.toml \
+  start software-change "@$profile" "my run"
 ```
 
-`start` initial input and `append` data accept JSON inline, `@FILE`, or `-` (stdin). `start` returns the run ID at `result.run.id`. Reuse the same catalog and run ID for every later operation. `show` is provider-free.
+`start` initial input and `append` data accept JSON inline, `@FILE`, or `-` (stdin). `start` returns the run ID at `result.run.id`; reuse the same catalog and run ID for later operations. With `--json`, exit `0` is `completed`, `10` is `rejected` (follow feedback), `20` is `error` (re-read `show`), and `2` is `invalid-invocation`. Full handoff, binding, capture, and review procedures are in [AGENTS.md](AGENTS.md), [docs/agent-usage.md](docs/agent-usage.md), [skills/using-loop-engine/SKILL.md](skills/using-loop-engine/SKILL.md), and the provider skills. `loop-engine --help` and `--version` work before operations; `software-change` and `research` also support `--help`/`--version` and `data-dump`, while `policy-document` accepts `data-dump DIR` on argv and otherwise reads JSON on stdin.
 
-Shipped software-change, policy-document, and research profiles omit `work_slot_bindings` (or `{}`), so implement and review slots stay driver-performed. Bound workers are opt-in skill templates: keep `--no-skills --no-extensions`, add `-e CURSOR_EXTENSION_PATH -e CLAUDE_BRIDGE_EXTENSION_PATH`, name `--model MODEL`, and fill those placeholders in the per-run profile JSON. The providers' `data-dump` output includes their review-worker role framing and output declaration; their skills construct assigned workers from the same selected per-run profile before `start`. Nested fan-out workers can opt into opaque `preamble` framing and a required-key `output_schema`; fan-out runs a local Dagu graph, captures each result, and fails mechanically on nonconforming contracted output. Bound stdin is compact `artifact_root` JSON (optional preamble plus separator) and does not dump `instruction_body`. `loop-engine preview-bindings` reports contract presence while redacting preamble text, warns when a pi worker has `--no-extensions` and no `-e`, and reports a `dagu` PATH check: ok with the resolved binary path and version, or a warning naming the path (or that PATH lookup found nothing) and required version 2.14.0. Well-formed bindings still exit 0 on that warning; `fan-out` and `software-change run-plan-graph` execute fail-close on the same condition before any worker spawn. Isolated home is `capture_dir/dagu-home/` with locator keys `dagu_home`, `dag_name`, and `run_name` (`fanout-<capture-dir-name>` for fan-out, `plan-graph-<capture-dir-name>` for plan-graph). `software-change run-plan-graph` runs a Dagu `type:graph` (omitted `--max-active` is `max_active_steps` 4; `--max-active N` is at most N ordinary plan tasks) whose mandatory `summarizer` still runs after those tasks and is the sole writer of `implementation-report.json`. Hidden `stdin-exec` colocates Pi sessions under each worker `capture_dir/sessions` via `PI_CODING_AGENT_SESSION_DIR` at spawn unless that variable is already inherited; do not add `--session-dir` to frozen argv, and do not switch bound Pi commands to `--mode json`. True inner waitpid lives in the sidecar and `summary.json`; snapshot `reaped` is helper liveness (helper exit 0 after the worker terminates). When `--task-worker` is omitted, the default inner worker is `pi --print --no-skills --no-extensions`. Exact stdin, capture-triage, binding, and rollback rules are in [docs/agent-usage.md](docs/agent-usage.md) and the shipped skills.
+## Adoption limits
 
-With `--json`, exit `0` is `completed`, `10` is `rejected` (follow feedback; nothing is inferred as advancement), `20` is `error` (re-read `show`), and `2` is `invalid-invocation`. Full envelope and handoff rules: [docs/agent-usage.md](docs/agent-usage.md).
+The v0.1 scope is deliberately local and narrow ([docs/PRD.md](docs/PRD.md), especially its non-goals and authority invariants):
 
-`loop-engine --help` and `--version` work before any operation. `software-change --help`/`-h` and `research --help`/`-h` describe `describe`, `evaluate`, and `data-dump`; `--version`/`-V` prints the Cargo package version. `software-change --help` omits hidden `stdin-exec`. `policy-document` accepts `data-dump DIR` on argv and otherwise reads one JSON request on stdin; it does not implement `--help` or `--version`. Historical v0.2.2 release installers predate the software-change CLI flags.
+- no distributed execution, multi-user authentication, workflow migration, or special sensitive-data handling;
+- one logical mutating actor per run;
+- CLI and provider validation may evolve, but a stored run's workflow topology and provider association remain frozen;
+- shipped binaries are the supported interface; workspace crates are not public API.
 
 ## Validation
 
@@ -180,6 +184,7 @@ dist plan --output-format=json > /tmp/loop-engine-dist-plan.json
 python3 scripts/assert-dist-plan.py --self-test
 python3 scripts/assert-dist-plan.py /tmp/loop-engine-dist-plan.json
 python3 scripts/assert-release-gates.py
+python3 scripts/assert-push-main-preflight.py
 python3 scripts/software-change-journey.py --self-test
 python3 scripts/research-journey.py --self-test
 cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider
@@ -214,7 +219,7 @@ dist build --tag="$TAG" --artifacts=local --target=aarch64-apple-darwin
 
 Run packaged smoke with extracted `loop-engine`, `software-change`, `policy-document`, and `research` paths. Each provider must materialize embedded data, and all provider journeys must run outside checkout; policy-document covers both draft and audit modes, and the research packaged journey materializes embedded data via `data-dump` / `--mode packaged`. A macOS host build proves only macOS arm64; Linux x86_64 native build and archive smoke remain CI proof when no Linux host is available.
 
-Journey evidence records are synthetic and schema-conforming. They prove deterministic policy mechanics, routing, aggregation, persistence, sparse work-slot `invoke` via `scripts/dummy-work-slot-worker.py`, and contracted fan-out stdin/conformance via `scripts/dummy-stdin-worker.py`; they do not prove semantic review quality. Dummy inner workers prove Dagu-backed `fan-out` and `run-plan-graph` facade contracts (compact `artifact_root` stdin, bound `capture_dir/summary.json`, per-index or per-task stdout/stderr). The plan-graph dummy writes `implementation-report.json` only when stdin is the summarizer assignment. `python3 scripts/software-change-journey.py --self-test` must print `worker-data skill/root policy assertions passed` after the three provider skill constructors and root AGENTS rules pass. Source full mode must print `contracted fan-out failure` after the bound conforming/refusal overlay proof.
+Journey evidence records are synthetic and schema-conforming. They prove deterministic policy mechanics, routing, aggregation, persistence, sparse work-slot `invoke` via `scripts/dummy-work-slot-worker.py`, and contracted fan-out stdin/conformance via `scripts/dummy-stdin-worker.py`; they do not prove semantic review quality. Dummy inner workers prove Dagu-backed `fan-out` and `run-plan-graph` facade contracts (compact `artifact_root` stdin, bound `capture_dir/summary.json`, per-index or per-task stdout/stderr). The bound plan-graph journey freezes a driver-owned symlink alias, requires the checkout's `.git` marker, and checks every task and summarizer cwd with filesystem-equivalence semantics. The plan-graph dummy writes `implementation-report.json` only when stdin is the summarizer assignment. `python3 scripts/software-change-journey.py --self-test` must print `worker-data skill/root policy assertions passed` after the three provider skill constructors and root AGENTS rules pass. Source full mode must print `contracted fan-out failure` after the bound conforming/refusal overlay proof.
 
 A software-change aggregate `implementation-report.json` for this checkout is checked by `scripts/assert-implementation-report.py` (`--report`, `--revision`, `--plan-revision`; prove with `--self-test`). That checker is not a publication gate. It requires `coverage.commit` to be current `git rev-parse HEAD` plus `+uncommitted-worktree` and `changed_surface` to match `git status --porcelain=v1 --untracked-files=all` pathnames.
 

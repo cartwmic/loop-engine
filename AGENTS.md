@@ -6,23 +6,29 @@ This file instructs agents working in this loop-engine checkout. In scope: `loop
 
 Out of scope: performing primary workflow work *inside* the engine or a provider; inventing engine policy, review orchestration, or core semantics; and treating this file as a human product overview. Humans start at [README.md](README.md).
 
-Crate-level `AGENTS.md` files add crate-local procedure only. They must not contradict this file.
+Nested `AGENTS.md` files govern crate-local procedure only and must never contradict this root file.
 
 ## Authority
 
-When instructions conflict, use this order:
+Use this scoped order when sources conflict; each source is authoritative only for the scope named here:
 
-1. This file, for how to operate in this checkout.
-2. [docs/PRD.md](docs/PRD.md), living engine product requirements.
-3. `crates/software-change-provider/docs/prd.md`, frozen software-change provider requirements.
-4. The relevant crate README and skill, for driving that provider.
-5. [docs/agent-usage.md](docs/agent-usage.md), for CLI forms, JSON envelopes, and the `show` / `append` / `event` / `invoke` loop.
+1. Root `AGENTS.md` governs checkout operations.
+2. A nested `AGENTS.md` governs crate-local procedure and must never contradict root `AGENTS.md`.
+3. [docs/PRD.md](docs/PRD.md) governs living engine product requirements.
+4. Frozen provider requirements and protocols govern provider-specific requirements and protocol contracts.
+5. The relevant provider README governs that provider's public contract.
+6. The relevant provider skill governs the procedure for driving that provider.
+7. [docs/agent-usage.md](docs/agent-usage.md) governs generic CLI forms and loop operations.
+
+The root [README.md](README.md) is the human product overview, not operational authority.
 
 The engine owns durable run state and progression. Callers perform primary work externally. Providers `describe` topology and `evaluate` the exact transition the engine selected; they do not choose the next state, edit repositories, invoke reviewers, or judge semantic truth. Context `kind` and `data` are opaque to core; follow the active provider's record conventions.
 
 Shipped skills: [skills/using-loop-engine/SKILL.md](skills/using-loop-engine/SKILL.md), `crates/software-change-provider/skills/using-software-change-provider/SKILL.md`, `crates/policy-document-provider/skills/using-policy-document-provider/SKILL.md`, and `crates/research-provider/skills/using-research-provider/SKILL.md`. Shipped software-change profiles omit `work_slot_bindings`; bound Pi workers are opt-in templates in those skills (`--no-extensions` plus `-e` placeholders, filled in the per-run profile JSON). `preview-bindings` warns when a pi worker has `--no-extensions` and no `-e`, and reports a `dagu` PATH check (minimum 2.14.0) as ok with path and version or as a warning; warnings still exit 0. Confirm work-slot policy with the user before `start`.
 
-Fan-out spawn/capture/conformance mechanics belong to the engine. Each `fan-out` invocation emits a local Dagu `type:graph` under an isolated `capture_dir/dagu-home/` (no inter-worker depends, no `continue_on` or `retry_policy`; omitted `--max-active` emits no `max_active_steps` and stays uncapped; `--max-active N` is at most N worker steps), waitpids `dagu start --quiet --dagu-home`, and joins mechanically: hidden `fan-out-join` writes `summary.json` and invokes no model. While overlay is `running`, the canonical driver poll is `show` (overlay, `elapsed_ms`, `remaining_allowed_ms`, `capture_dir`, `inner_workers` empty) plus `loop-engine invocation-progress RUN_ID [INVOCATION_ID]` (`invocation_id`, `capture_dir`, per-step `not_started`|`running`|`reaped`, named sidecar/session traces). `invocation-progress` is an other command with `fan-out` and `preview-bindings`, not a ninth primary; it opens the catalog and does not write overlay. A query failure does not flip overlay. Graph state is Dagu helper liveness; overlay remains the facade process exit. True inner waitpid lives in the sidecar and `summary.json`; snapshot `reaped` is helper liveness, not overlay success and not inner waitpid 0. `dagu status` / `dagu history` against `capture_dir/dagu-locator.json` (`dagu_home`, `dag_name`, `run_name` as `fanout-<capture-dir-name>`) remain the underlying surface `invocation-progress` uses; they are not the driver-facing path. Bound worker stdin is compact location JSON with exactly absolute `artifact_root` (optional preamble plus `---\n\n`); it does not dump `instruction_body`. Hidden `loop-engine stdin-exec` (omitted from `--help` like `wait-invocation` and `fan-out-join`) attaches a stdin file to a worker argv with no shell; duty bytes stay in that file, not on argv or in the environment. When `PI_CODING_AGENT_SESSION_DIR` is unset in the inherited environment, stdin-exec creates `<worker-capture-dir>/sessions` and sets that variable on the child only; do not add `--session-dir` to frozen argv, and do not switch bound Pi commands to `--mode json`. Sidecar mode records the inner waitpid then exits 0 so ordinary inner nonzero does not fail the Dagu step. `software-change` duplicates that helper with the same argv; plan-graph uses `--exit-mode propagate` only so the helper exit is the inner waitpid. `dagu` is resolved from PATH at run time (runnable file, version `>= 2.14.0`); a miss, non-runnable file, or unsupported version fails `fan-out` and `software-change run-plan-graph` before any worker spawn and is the same condition `preview-bindings` reports. Isolated home layout is `capture_dir/dagu-home/` with locator `capture_dir/dagu-locator.json` keys `dagu_home`, `dag_name`, and `run_name` (`fanout-<capture-dir-name>` for fan-out, `plan-graph-<capture-dir-name>` for plan-graph). `run-plan-graph` emits a Dagu `type:graph` (omitted `--max-active` is `max_active_steps` 4; `--max-active N` is at most N ordinary plan tasks) with a mandatory `summarizer` that still runs after those tasks and is the sole writer of `implementation-report.json`. If the graph stops before join, the facade still writes `summary.json` from spec and sidecars. Dagu is GPLv3: invoke the binary as a subprocess only; do not embed its Go API. Release packages do not ship Dagu. Preflight installs operator-provided `dagu` >= 2.14.0 onto PATH before cargo test and dummy journeys; a miss fails with the resolver error rather than a skip. Providers/callers own role framing and output content; the engine transports and checks those opaque values but does not author or interpret them. Reviewers produce judgments only. Drivers run deterministic checks, `show`, capture triage, `append`, `event`, and progression. Exit 0 alone does not establish deliverable validity. The authoritative overrun re-show and zero-axis review-binding rules are in [skills/using-loop-engine/SKILL.md](skills/using-loop-engine/SKILL.md) and [docs/agent-usage.md](docs/agent-usage.md).
+Fan-out spawn/capture/conformance mechanics belong to the engine. `software-change run-plan-graph --working-directory ABS` requires one existing absolute directory selected and maintained by the driver, applies it to every ordinary plan task and the summarizer, and does not create or manage worktrees. Its summarizer runs only after all ordinary tasks succeed; a task failure leaves mechanical `summary.json` and captures and writes no `implementation-report.json`. Providers/callers own role framing and output content; the engine transports and checks those opaque values but does not author or interpret them. Reviewers produce judgments only. Drivers run deterministic checks, `show`, capture triage, `append`, `event`, and progression. Exit 0 alone does not establish deliverable validity. Load the exact fan-out and plan-graph binding, stdin, capture, polling, Dagu, overrun, and review-binding rules from [skills/using-loop-engine/SKILL.md](skills/using-loop-engine/SKILL.md), [docs/agent-usage.md](docs/agent-usage.md), and [crates/software-change-provider/skills/using-software-change-provider/SKILL.md](crates/software-change-provider/skills/using-software-change-provider/SKILL.md); the authoritative overrun re-show and zero-axis review-binding rules live there; do not duplicate those mechanics here.
+
+Plan-graph Do: before invocation, use unique task IDs matching `[A-Za-z0-9_-]+` except reserved `summarizer`, and ensure `dependency_graph` is acyclic and every endpoint names a declared task.
 
 ## Workflow
 
@@ -44,7 +50,7 @@ Public-boundary Python journeys are required validation for every in-scope chang
 - `research` crate: `scripts/research-journey.py --mode source`.
 - Journey-harness edits: that script's `--self-test` when it has one, plus the journeys it runs.
 
-`python3 scripts/software-change-journey.py --self-test` must print `worker-data skill/root policy assertions passed` after executing the three provider skill constructors (software-change high-rigor design-review, policy-document shipped semantic policies/target/mode, research verify and synthesize) and root AGENTS rules. Source full mode must print `contracted fan-out failure` only after bound deterministic workers prove the compact one-key `artifact_root` stdin contract, exit-0 nonconformance, persisted summary/captures, and failed overlay.
+`python3 scripts/software-change-journey.py --self-test` must print `worker-data skill/root policy assertions passed` after executing the three provider skill constructors (software-change high-rigor design-review, policy-document shipped semantic policies/target/mode, research verify and synthesize) and root AGENTS rules. Source full mode must print `contracted fan-out failure` only after bound deterministic workers prove compact plan-worker location stdin, separately forwarded review context where declared, exit-0 nonconformance, persisted summary/captures, and failed overlay.
 
 ```sh
 cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider
@@ -72,7 +78,16 @@ python3 scripts/research-journey.py \
   --profile crates/research-provider/data/configs/standard.json
 ```
 
-Reproduce `dist generate --check` and the assert scripts when the change can affect release proof or generated workflow.
+When a change can affect release proof or generated workflow, run the complete proof set:
+
+```sh
+dist generate --check
+dist plan --output-format=json > /tmp/loop-engine-dist-plan.json
+python3 scripts/assert-dist-plan.py --self-test
+python3 scripts/assert-dist-plan.py /tmp/loop-engine-dist-plan.json
+python3 scripts/assert-release-gates.py
+python3 scripts/assert-push-main-preflight.py
+```
 
 Drive production runs with `loop-engine`. Pass `--json` and parse the single JSON envelope. Pass `--config` on `start` with uncommitted machine-local provider TOML. When the human did not explicitly ask to isolate in that session, omit `--database` and omit `artifact_root`. That start stores the run in the user-level catalog and uses an engine-owned per-run artifact directory. This is the production start, not a usual-case option beside a prudent isolate alternative. Existing start examples that already omit both flags remain examples of this required start. Independent runs sharing the user-level catalog do not clobber each other, because each run already receives an engine-owned per-run artifact directory. Occupancy of the catalog by other runs, and fear of affecting those runs, are not reasons to pass `--database` or a nonempty `artifact_root`. An agent must not pass `--database` or a nonempty `artifact_root` unless the human explicitly asked to isolate in that session. Isolation is not a self-chosen precaution. `--database /path/to/dir/loop.db` isolates SQLite and `/path/to/dir/runs/<id>/`. A nonempty `artifact_root` isolates files to a caller-chosen absolute existing directory. Do not treat a prior session's isolation preference as standing authority. When `--database` and database env vars are unset, the catalog is `$LOOP_ENGINE_HOME/loop.db` or `$LOOP_HOME/loop.db` if either home env is set, else `$XDG_DATA_HOME/loop-engine/loop.db` if `XDG_DATA_HOME` is set, else `$HOME/.local/share/loop-engine/loop.db`. `list` from any working directory reads that same file. Use exact aliases `software-change`, `policy-document`, and `research` and absolute `command` paths. Do not commit provider TOML, run databases, or secrets.
 
@@ -87,9 +102,16 @@ Parse the single JSON envelope even on nonzero exit. Treat only `status: "comple
 
 When drafting or auditing `README.md` or `AGENTS.md`, use the policy-document provider and a copy of the shipped profile (`readme-2` or `agents-2`). Keep `target.id` and `profile_version` unless intentionally authoring a custom profile. Local markdown links must resolve under the target file's directory; parent-directory segments (`..`) are rejected as escapes, so crate docs must not markdown-link outside the crate. Web, mail, `data:`, fragment-only, and protocol-relative links are ignored by that check.
 
-Do not hand-edit `.github/workflows/release.yml`; it is cargo-dist generated. Change dist metadata and regenerate. Direct pushes to `main` run read-only preflight only; publication is dispatch-only via `gh workflow run release.yml --ref main -f tag="$TAG"` after versioning and review. Do not skip git hooks. Do not force-push `main`.
+Do not hand-edit `.github/workflows/release.yml`; it is cargo-dist generated. Change dist metadata and regenerate. Direct pushes to `main` run read-only preflight only; publication is dispatch-only via `gh workflow run release.yml --ref main -f tag="$TAG"` after versioning and review. Do not force-push `main`.
 
 Synthetic journey evidence proves deterministic mechanics, routing, and persistence only. It is not semantic review quality.
+
+## Safety tiers
+
+- **Advisory documentation:** Markdown in `README.md` and this file is advisory and non-enforcing; resolve conflicts using the scoped Authority order above.
+- **Repository safety:** this checkout has no tracked hook for secret or runtime-artifact detection. Before committing, inspect staged paths and the staged diff with `git diff --cached --name-status` and `git diff --cached`; never commit secrets, machine-local provider TOML, run databases, or runtime artifacts.
+- **Operator confirmation:** ask before committing, pushing, destructive actions, or any worktree lifecycle action.
+- **Release safety:** keep `.github/workflows/release.yml` generated, keep direct pushes to `main` read-only, and use the dispatch-only publication path above.
 
 ## Completion and Handoff
 

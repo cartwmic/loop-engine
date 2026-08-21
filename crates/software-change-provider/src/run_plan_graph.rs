@@ -44,6 +44,7 @@ pub(crate) struct WorkerCli {
 pub(crate) struct RunPlanGraphArgs {
     pub(crate) worker: WorkerCli,
     pub(crate) max_active: usize,
+    pub(crate) working_directory: PathBuf,
 }
 
 /// Bound-worker stdin packet.  Exactly the five engine invoke keys; no extras.
@@ -142,6 +143,8 @@ pub(crate) fn parse_invoke_packet(raw: &str) -> Result<InvokePacket, ParseError>
 
 /// Parse argv tokens after the `run-plan-graph` command name.
 ///
+/// Required once: `--working-directory ABS`, an existing absolute directory
+/// selected and maintained by the caller.  The supplied path is preserved.
 /// Optional once: `--task-worker JSON`.  Omitted flag yields [`default_task_worker`].
 /// Optional once: `--max-active N` with decimal integer N >= 1.  Omitted flag
 /// yields [`MAX_CONCURRENCY`].  Unknown flags, leftover positionals, and
@@ -157,9 +160,26 @@ where
         .collect::<Vec<String>>();
     let mut worker = None;
     let mut max_active = None;
+    let mut working_directory = None;
     let mut index = 0;
     while index < args.len() {
         let token = &args[index];
+        if let Some(raw) = strip_option(token, "--working-directory") {
+            if working_directory.is_some() {
+                return Err(ParseError::new(
+                    "`--working-directory` may be supplied at most once",
+                ));
+            }
+            let raw = match raw {
+                Some(raw) => {
+                    index += 1;
+                    raw
+                }
+                None => option_value(&args, &mut index, "--working-directory")?.to_owned(),
+            };
+            working_directory = Some(validate_working_directory(&raw)?);
+            continue;
+        }
         if let Some(raw) = strip_option(token, "--task-worker") {
             if worker.is_some() {
                 return Err(ParseError::new(
@@ -199,10 +219,37 @@ where
             "unexpected argument `{token}` for run-plan-graph"
         )));
     }
+    let working_directory = working_directory.ok_or_else(|| {
+        ParseError::new(
+            "missing required option `--working-directory` (working directory was omitted)",
+        )
+    })?;
     Ok(RunPlanGraphArgs {
         worker: worker.unwrap_or_else(default_task_worker),
         max_active: max_active.unwrap_or(MAX_CONCURRENCY),
+        working_directory,
     })
+}
+
+fn validate_working_directory(raw: &str) -> Result<PathBuf, ParseError> {
+    let path = PathBuf::from(raw);
+    if !path.is_absolute() {
+        return Err(ParseError::new(format!(
+            "`--working-directory` value `{raw}` is relative; expected an absolute directory"
+        )));
+    }
+    match fs::metadata(&path) {
+        Ok(metadata) if metadata.is_dir() => Ok(path),
+        Ok(_) => Err(ParseError::new(format!(
+            "`--working-directory` value `{raw}` is not a directory"
+        ))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Err(ParseError::new(format!(
+            "`--working-directory` value `{raw}` is nonexistent"
+        ))),
+        Err(error) => Err(ParseError::new(format!(
+            "`--working-directory` value `{raw}` is not a directory: {error}"
+        ))),
+    }
 }
 
 fn strip_option(token: &str, option: &str) -> Option<Option<String>> {
@@ -338,8 +385,7 @@ fn execute_from_packet(args: &RunPlanGraphArgs, raw_packet: &str) -> Result<(), 
     let plan = parse_plan(&plan_raw)?;
     let dagu = resolve_dagu().map_err(|error| ExecuteError::failed(error.to_string()))?;
     run_dagu_graph(
-        &args.worker,
-        args.max_active,
+        args,
         &dagu,
         &artifact_root,
         &plan_path,
@@ -485,8 +531,7 @@ fn has_cycle(order: &[String], successors: &HashMap<String, Vec<String>>) -> boo
 }
 
 fn run_dagu_graph(
-    worker: &WorkerCli,
-    max_active: usize,
+    args: &RunPlanGraphArgs,
     dagu: &Path,
     artifact_root: &Path,
     plan_path: &Path,
@@ -567,10 +612,11 @@ fn run_dagu_graph(
     let yaml = emit_graph_yaml(
         &dag_name,
         &software_change,
-        worker,
+        &args.worker,
+        &args.working_directory,
         &steps,
         &summarizer,
-        max_active,
+        args.max_active,
     );
     let dags_dir = home.join("dags");
     fs::create_dir_all(&dags_dir).map_err(|error| {
@@ -610,7 +656,7 @@ fn run_dagu_graph(
     let start_ok = start_result.is_ok();
     let outcomes = step_outcomes(&home);
 
-    let summary_error = write_plan_summary(capture_root, worker, plan, &steps, &outcomes);
+    let summary_error = write_plan_summary(capture_root, &args.worker, plan, &steps, &outcomes);
     let summarizer_ok = summarizer_succeeded(&outcomes, capture_root, start_ok);
     let report_error = if summarizer_ok {
         validate_fresh_report(artifact_root, &plan.revision)
@@ -867,12 +913,15 @@ fn emit_graph_yaml(
     dag_name: &str,
     software_change: &str,
     worker: &WorkerCli,
+    working_directory: &Path,
     steps: &[PreparedStep],
     summarizer: &PreparedStep,
     max_active: usize,
 ) -> String {
     let _ = dag_name;
-    let mut yaml = String::from("type: graph\nmax_active_steps: ");
+    let mut yaml = String::from("type: graph\nworking_dir: ");
+    yaml.push_str(&yaml_double_quoted(&path_to_string(working_directory)));
+    yaml.push_str("\nmax_active_steps: ");
     yaml.push_str(&max_active.to_string());
     yaml.push_str("\nsteps:\n");
     for step in steps.iter().chain(std::iter::once(summarizer)) {
@@ -1174,11 +1223,13 @@ mod tests {
 
     #[test]
     fn omitted_task_worker_yields_default_pi_print() {
-        let parsed = parse_run_plan_graph_args(&[] as &[&str]).expect("omitted --task-worker");
+        let parsed = parse_run_plan_graph_args(["--working-directory", "/tmp"])
+            .expect("omitted --task-worker");
         let worker = parsed.worker;
         assert_eq!(worker, default_task_worker());
         assert_eq!(parsed.max_active, MAX_CONCURRENCY);
         assert_eq!(parsed.max_active, 4);
+        assert_eq!(parsed.working_directory, PathBuf::from("/tmp"));
         assert_eq!(worker.command, "pi");
         assert_eq!(
             worker.args,
@@ -1216,8 +1267,13 @@ mod tests {
 
     #[test]
     fn one_task_worker_replaces_default() {
-        let parsed = parse_run_plan_graph_args(["--task-worker", valid_worker_json()])
-            .expect("one --task-worker");
+        let parsed = parse_run_plan_graph_args([
+            "--working-directory",
+            "/tmp",
+            "--task-worker",
+            valid_worker_json(),
+        ])
+        .expect("one --task-worker");
         assert_eq!(parsed.worker.command, "echo");
         assert_eq!(parsed.worker.args, vec!["hello".to_owned()]);
         assert_eq!(parsed.max_active, MAX_CONCURRENCY);
@@ -1226,12 +1282,81 @@ mod tests {
     #[test]
     fn two_task_worker_flags_fail() {
         let result = parse_run_plan_graph_args([
+            "--working-directory",
+            "/tmp",
             "--task-worker",
             valid_worker_json(),
             "--task-worker",
             valid_worker_json(),
         ]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn working_directory_is_required_and_validated_without_canonicalizing() {
+        let root = std::env::temp_dir().join(format!(
+            "software-change-working-directory-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).expect("working-directory test directory");
+        let file = root.join("not-a-directory");
+        fs::write(&file, b"file").expect("working-directory test file");
+        let missing = root.join("missing");
+        let root = root.to_string_lossy().into_owned();
+        let missing = missing.to_string_lossy().into_owned();
+
+        let omitted = parse_run_plan_graph_args(&[] as &[&str]).expect_err("omitted directory");
+        assert!(omitted.to_string().contains("omitted"), "{omitted}");
+
+        let relative = parse_run_plan_graph_args(["--working-directory", "relative/checkout"])
+            .expect_err("relative directory");
+        assert!(relative.to_string().contains("relative"), "{relative}");
+        assert!(
+            relative.to_string().contains("relative/checkout"),
+            "{relative}"
+        );
+
+        let nonexistent = parse_run_plan_graph_args(["--working-directory", &missing])
+            .expect_err("nonexistent directory");
+        assert!(
+            nonexistent.to_string().contains("nonexistent"),
+            "{nonexistent}"
+        );
+        assert!(nonexistent.to_string().contains(&missing), "{nonexistent}");
+
+        let not_directory = parse_run_plan_graph_args([
+            "--working-directory",
+            file.to_str().expect("test file UTF-8"),
+        ])
+        .expect_err("file directory");
+        assert!(
+            not_directory.to_string().contains("not a directory"),
+            "{not_directory}"
+        );
+        assert!(not_directory
+            .to_string()
+            .contains(file.to_str().expect("test file UTF-8")));
+
+        let separate = parse_run_plan_graph_args(["--working-directory", &root])
+            .expect("separated working-directory");
+        assert_eq!(separate.working_directory, PathBuf::from(&root));
+        let equals = parse_run_plan_graph_args(vec![format!("--working-directory={root}")])
+            .expect("equals working-directory");
+        assert_eq!(equals.working_directory, PathBuf::from(&root));
+        let duplicate = parse_run_plan_graph_args(vec![
+            "--working-directory".to_owned(),
+            root.clone(),
+            format!("--working-directory={root}"),
+        ])
+        .expect_err("duplicate working-directory");
+        assert!(
+            duplicate.to_string().contains("at most once"),
+            "{duplicate}"
+        );
+
+        let _ = fs::remove_file(file);
+        let _ = fs::remove_dir(root);
     }
 
     #[test]
@@ -1242,29 +1367,66 @@ mod tests {
 
     #[test]
     fn max_active_n_is_parsed_and_omitted_stays_four() {
-        let omitted = parse_run_plan_graph_args(&[] as &[&str]).expect("omitted --max-active");
+        let omitted = parse_run_plan_graph_args(["--working-directory", "/tmp"])
+            .expect("omitted --max-active");
         assert_eq!(omitted.max_active, 4);
-        let set = parse_run_plan_graph_args(["--max-active", "2"]).expect("--max-active 2");
+        let set = parse_run_plan_graph_args(["--working-directory", "/tmp", "--max-active", "2"])
+            .expect("--max-active 2");
         assert_eq!(set.max_active, 2);
         assert_eq!(set.worker, default_task_worker());
-        let equals = parse_run_plan_graph_args(["--max-active=3"]).expect("--max-active=3");
+        let equals = parse_run_plan_graph_args(["--working-directory", "/tmp", "--max-active=3"])
+            .expect("--max-active=3");
         assert_eq!(equals.max_active, 3);
-        let with_worker =
-            parse_run_plan_graph_args(["--task-worker", valid_worker_json(), "--max-active", "8"])
-                .expect("worker plus --max-active");
+        let with_worker = parse_run_plan_graph_args([
+            "--working-directory",
+            "/tmp",
+            "--task-worker",
+            valid_worker_json(),
+            "--max-active",
+            "8",
+        ])
+        .expect("worker plus --max-active");
         assert_eq!(with_worker.max_active, 8);
         assert_eq!(with_worker.worker.command, "echo");
     }
 
     #[test]
     fn max_active_zero_missing_non_integer_and_repeat_fail() {
-        assert!(parse_run_plan_graph_args(["--max-active", "0"]).is_err());
-        assert!(parse_run_plan_graph_args(["--max-active"]).is_err());
-        assert!(parse_run_plan_graph_args(["--max-active", "nope"]).is_err());
-        assert!(parse_run_plan_graph_args(["--max-active", "1.5"]).is_err());
-        assert!(parse_run_plan_graph_args(["--max-active", "-1"]).is_err());
-        assert!(parse_run_plan_graph_args(["--max-active", "2", "--max-active", "3"]).is_err());
-        assert!(parse_run_plan_graph_args(["--max-active=2", "--max-active=4"]).is_err());
+        assert!(
+            parse_run_plan_graph_args(["--working-directory", "/tmp", "--max-active", "0"])
+                .is_err()
+        );
+        assert!(
+            parse_run_plan_graph_args(["--working-directory", "/tmp", "--max-active"]).is_err()
+        );
+        assert!(
+            parse_run_plan_graph_args(["--working-directory", "/tmp", "--max-active", "nope"])
+                .is_err()
+        );
+        assert!(
+            parse_run_plan_graph_args(["--working-directory", "/tmp", "--max-active", "1.5"])
+                .is_err()
+        );
+        assert!(
+            parse_run_plan_graph_args(["--working-directory", "/tmp", "--max-active", "-1"])
+                .is_err()
+        );
+        assert!(parse_run_plan_graph_args([
+            "--working-directory",
+            "/tmp",
+            "--max-active",
+            "2",
+            "--max-active",
+            "3"
+        ])
+        .is_err());
+        assert!(parse_run_plan_graph_args([
+            "--working-directory",
+            "/tmp",
+            "--max-active=2",
+            "--max-active=4"
+        ])
+        .is_err());
     }
 
     #[test]
@@ -1312,11 +1474,16 @@ mod tests {
             "plan-graph-inv-1",
             "/abs/software-change",
             &worker,
+            Path::new("/tmp/selected-checkout"),
             &[task],
             &summarizer,
             MAX_CONCURRENCY,
         );
-        assert!(yaml.starts_with("type: graph\n"), "{yaml}");
+        assert!(
+            yaml.starts_with("type: graph\nworking_dir: \"/tmp/selected-checkout\"\n"),
+            "{yaml}"
+        );
+        assert_eq!(yaml.matches("working_dir:").count(), 1, "{yaml}");
         assert!(yaml.contains("max_active_steps: 4"), "{yaml}");
         assert!(yaml.contains("action: exec"), "{yaml}");
         assert!(yaml.contains("name: \"task-a\""), "{yaml}");
@@ -1334,9 +1501,48 @@ mod tests {
     }
 
     #[test]
+    fn emitted_yaml_escapes_working_directory_once_at_graph_level() {
+        let worker = WorkerCli {
+            command: "python3".to_owned(),
+            args: vec!["worker.py".to_owned()],
+        };
+        let yaml = emit_sample(
+            &worker,
+            Path::new("/tmp/checkout with \\\\slash and \"quote\""),
+            &["task-a"],
+            MAX_CONCURRENCY,
+        );
+        let expected = format!(
+            "working_dir: {}",
+            yaml_double_quoted("/tmp/checkout with \\\\slash and \"quote\"")
+        );
+        assert!(yaml.contains(&expected), "{yaml}");
+        assert_eq!(yaml.matches("working_dir:").count(), 1, "{yaml}");
+        assert!(!yaml.contains("    working_dir:"), "{yaml}");
+
+        let parsed = parse_run_plan_graph_args(["--working-directory", "/tmp"]).expect("omitted");
+        let yaml = emit_sample(
+            &parsed.worker,
+            Path::new("/tmp/selected-checkout"),
+            &["task-a"],
+            parsed.max_active,
+        );
+        assert!(yaml.contains("max_active_steps: 4"), "{yaml}");
+        assert!(
+            yaml.contains("    depends:\n      - \"task-a\"\n"),
+            "{yaml}"
+        );
+    }
+
+    #[test]
     fn omitted_parse_emits_max_active_steps_four() {
-        let parsed = parse_run_plan_graph_args(&[] as &[&str]).expect("omitted");
-        let yaml = emit_sample(&parsed.worker, &["task-a"], parsed.max_active);
+        let parsed = parse_run_plan_graph_args(["--working-directory", "/tmp"]).expect("omitted");
+        let yaml = emit_sample(
+            &parsed.worker,
+            Path::new("/tmp/selected-checkout"),
+            &["task-a"],
+            parsed.max_active,
+        );
         assert!(yaml.contains("max_active_steps: 4"), "{yaml}");
         assert!(
             yaml.contains("    depends:\n      - \"task-a\"\n"),
@@ -1346,9 +1552,16 @@ mod tests {
 
     #[test]
     fn max_active_two_emits_max_active_steps_two() {
-        let parsed = parse_run_plan_graph_args(["--max-active", "2"]).expect("N=2");
+        let parsed =
+            parse_run_plan_graph_args(["--working-directory", "/tmp", "--max-active", "2"])
+                .expect("N=2");
         assert_eq!(parsed.max_active, 2);
-        let yaml = emit_sample(&parsed.worker, &["task-a", "task-b"], parsed.max_active);
+        let yaml = emit_sample(
+            &parsed.worker,
+            Path::new("/tmp/selected-checkout"),
+            &["task-a", "task-b"],
+            parsed.max_active,
+        );
         assert!(yaml.contains("max_active_steps: 2"), "{yaml}");
         assert!(!yaml.contains("max_active_steps: 4"), "{yaml}");
         let summarizer = yaml
@@ -1361,7 +1574,12 @@ mod tests {
         );
     }
 
-    fn emit_sample(worker: &WorkerCli, task_names: &[&str], max_active: usize) -> String {
+    fn emit_sample(
+        worker: &WorkerCli,
+        working_directory: &Path,
+        task_names: &[&str],
+        max_active: usize,
+    ) -> String {
         let steps: Vec<PreparedStep> = task_names
             .iter()
             .map(|name| PreparedStep {
@@ -1383,6 +1601,7 @@ mod tests {
             "plan-graph-inv-1",
             "/abs/software-change",
             worker,
+            working_directory,
             &steps,
             &summarizer,
             max_active,

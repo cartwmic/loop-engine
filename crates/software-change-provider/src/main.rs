@@ -70,7 +70,7 @@ fn run() -> i32 {
                 Ok(rest) => rest,
                 Err(_) => {
                     eprintln!(
-                        "run-plan-graph arguments must be valid UTF-8; usage: software-change run-plan-graph [--task-worker JSON] [--max-active N]"
+                        "run-plan-graph arguments must be valid UTF-8; usage: software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--max-active N]"
                     );
                     return 2;
                 }
@@ -85,7 +85,7 @@ fn run() -> i32 {
                 }
                 Err(error) => {
                     eprintln!(
-                        "{error}; usage: software-change run-plan-graph [--task-worker JSON] [--max-active N]"
+                        "{error}; usage: software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--max-active N]"
                     );
                     2
                 }
@@ -153,7 +153,7 @@ fn run_protocol() -> i32 {
 
 fn provider_help() -> i32 {
     println!(
-        "software-change\n\nUsage:\n  software-change < stdin\n  software-change data-dump DIR\n  software-change run-plan-graph [--task-worker JSON] [--max-active N]\n  software-change --help | -h\n  software-change --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nData:\n  data-dump  materialize embedded provider data under DIR\n\nPlan graph:\n  run-plan-graph  execute plan.json as a Dagu type:graph (--max-active N; omitted means {MAX_CONCURRENCY} ordinary tasks) with a mandatory summarizer"
+        "software-change\n\nUsage:\n  software-change < stdin\n  software-change data-dump DIR\n  software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--max-active N]\n  software-change --help | -h\n  software-change --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nData:\n  data-dump  materialize embedded provider data under DIR\n\nPlan graph:\n  run-plan-graph  requires --working-directory ABS (one existing driver-selected directory for every task and summarizer; no Git/worktree management) and executes plan.json as a Dagu type:graph (--max-active N; omitted means {MAX_CONCURRENCY} ordinary tasks) with a mandatory summarizer"
     );
     0
 }

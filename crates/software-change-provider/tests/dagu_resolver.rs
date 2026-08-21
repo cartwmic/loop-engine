@@ -124,8 +124,20 @@ fn task_worker(receipt: &Path) -> String {
 }
 
 fn invoke_graph(worker: &str, packet: &Value, path: OsString) -> Output {
+    let working_directory = packet["artifact_root"]
+        .as_str()
+        .map(PathBuf::from)
+        .expect("artifact root working directory");
+    assert!(working_directory.is_absolute());
+    assert!(working_directory.is_dir());
     let mut child = Command::new(bin())
-        .args(["run-plan-graph", "--task-worker", worker])
+        .args([
+            "run-plan-graph",
+            "--working-directory",
+            working_directory.to_str().expect("working directory UTF-8"),
+            "--task-worker",
+            worker,
+        ])
         .env("PATH", path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

@@ -5,6 +5,9 @@ Records raw stdin bytes to ``--receipt PATH``. Default exit 0; ``--exit N``
 for failure cases. When stdin contains a compact run-plan-graph task payload
 and PATH has no file suffix (or is a directory), writes ``{task_id}.stdin``
 inside that directory so one ``--task-worker`` CLI can record every task.
+With ``--record-cwd``, writes the actual process cwd beside each stdin
+receipt. ``--require-cwd-entry ENTRY`` additionally requires that ENTRY is
+visible from that cwd before the worker succeeds.
 
 Detects the summarizer assignment after the compact location JSON separator.
 Only that summarizer invocation may write ``artifact_root/implementation-report.json``;
@@ -144,6 +147,16 @@ def main() -> int:
         action="store_true",
         help="Do not write implementation-report.json even when this process is the summarizer",
     )
+    parser.add_argument(
+        "--record-cwd",
+        action="store_true",
+        help="Write the actual process cwd beside each stdin receipt",
+    )
+    parser.add_argument(
+        "--require-cwd-entry",
+        default=None,
+        help="Require this path, relative to the process cwd, before succeeding",
+    )
     args = parser.parse_args()
 
     raw = sys.stdin.buffer.read()
@@ -153,6 +166,25 @@ def main() -> int:
     dest = receipt_destination(Path(args.receipt), task_id)
     dest.write_bytes(raw)
     dest.with_name(dest.name + ".pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+
+    process_cwd = Path.cwd()
+    if args.require_cwd_entry:
+        required_entry = Path(args.require_cwd_entry)
+        if not required_entry.is_absolute():
+            required_entry = process_cwd / required_entry
+        if not required_entry.exists():
+            print(
+                f"required cwd entry is not visible: {required_entry}",
+                file=sys.stderr,
+            )
+            return 1
+        dest.with_name(dest.name + ".cwd-entry").write_text(
+            str(required_entry) + "\n", encoding="utf-8"
+        )
+    if args.record_cwd or args.require_cwd_entry:
+        dest.with_name(dest.name + ".cwd").write_text(
+            str(process_cwd) + "\n", encoding="utf-8"
+        )
     write_session_marker()
 
     if args.sleep > 0:

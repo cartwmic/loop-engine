@@ -81,9 +81,26 @@ fn invoke_graph_with(
     current_dir: Option<&Path>,
     extra: &[&str],
 ) -> Output {
+    let working_directory = current_dir
+        .map(Path::to_path_buf)
+        .or_else(|| {
+            packet
+                .get("artifact_root")
+                .and_then(Value::as_str)
+                .map(PathBuf::from)
+        })
+        .expect("packet must identify an explicit working directory");
+    assert!(working_directory.is_absolute());
+    assert!(working_directory.is_dir());
     let mut command = Command::new(bin());
     command
-        .args(["run-plan-graph", "--task-worker", worker])
+        .args([
+            "run-plan-graph",
+            "--working-directory",
+            working_directory.to_str().expect("working directory UTF-8"),
+            "--task-worker",
+            worker,
+        ])
         .args(extra)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -241,6 +258,62 @@ fn max_overlap(intervals: &[(f64, f64)]) -> usize {
         max = max.max(current as usize);
     }
     max
+}
+
+#[test]
+fn invalid_working_directory_fails_before_dagu_or_worker_launch() {
+    let (dir, _artifact_root, receipt_dir) = fixture("invalid-working-directory");
+    let marker = dir.path().join("worker-started");
+    let worker = task_worker(
+        &receipt_dir,
+        &["--spawn-marker", marker.to_str().expect("marker UTF-8")],
+    );
+    let file = dir.path().join("not-a-directory");
+    fs::write(&file, b"file").expect("write non-directory path");
+    let missing = dir.path().join("missing");
+    let cases = vec![
+        (Vec::<String>::new(), "omitted", "".to_owned()),
+        (
+            vec![
+                "--working-directory".to_owned(),
+                "relative/checkout".to_owned(),
+            ],
+            "relative",
+            "relative/checkout".to_owned(),
+        ),
+        (
+            vec![
+                "--working-directory".to_owned(),
+                missing.to_string_lossy().into_owned(),
+            ],
+            "nonexistent",
+            missing.to_string_lossy().into_owned(),
+        ),
+        (
+            vec![
+                "--working-directory".to_owned(),
+                file.to_string_lossy().into_owned(),
+            ],
+            "not a directory",
+            file.to_string_lossy().into_owned(),
+        ),
+    ];
+    for (extra, category, supplied) in cases {
+        let output = Command::new(bin())
+            .arg("run-plan-graph")
+            .arg("--task-worker")
+            .arg(&worker)
+            .args(&extra)
+            .output()
+            .expect("invalid run-plan-graph should spawn");
+        assert_eq!(output.status.code(), Some(2), "{category}: {output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(category), "{category}: {stderr}");
+        if !supplied.is_empty() {
+            assert!(stderr.contains(&supplied), "{category}: {stderr}");
+        }
+        assert!(!marker.exists(), "{category} started the dummy worker");
+    }
 }
 
 #[test]
@@ -928,7 +1001,13 @@ fn live_locator_exists_and_second_capture_dir_is_isolated() {
         &first_capture,
     );
     let mut child = Command::new(bin())
-        .args(["run-plan-graph", "--task-worker", &worker])
+        .args([
+            "run-plan-graph",
+            "--working-directory",
+            artifact_root.to_str().expect("artifact root UTF-8"),
+            "--task-worker",
+            &worker,
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

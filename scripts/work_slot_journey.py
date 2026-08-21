@@ -730,9 +730,16 @@ def append_task_worker(
     binding: Mapping[str, Any],
     task_worker: Mapping[str, Any],
     *,
+    working_directory: Path,
     max_active: int | None = None,
 ) -> dict[str, Any]:
+    if not working_directory.is_absolute() or not working_directory.is_dir():
+        raise WorkSlotJourneyFailure(
+            "run-plan-graph working directory must be an existing absolute directory: "
+            f"{working_directory}"
+        )
     args = list(binding["args"])
+    args.extend(["--working-directory", str(working_directory)])
     if max_active is not None:
         args.extend(["--max-active", str(max_active)])
     args.extend(["--task-worker", worker_cli_json(task_worker)])
@@ -760,6 +767,7 @@ def implement_graph_runner_binding(
     *,
     provider: Path,
     task_worker: Mapping[str, Any],
+    working_directory: Path,
     max_active: int | None = None,
 ) -> dict[str, Any]:
     shipped = {
@@ -767,7 +775,10 @@ def implement_graph_runner_binding(
     }
     rewritten = rewrite_path_commands(shipped, provider=provider)
     return append_task_worker(
-        rewritten["implement"], task_worker, max_active=max_active
+        rewritten["implement"],
+        task_worker,
+        working_directory=working_directory,
+        max_active=max_active,
     )
 
 
@@ -1062,6 +1073,17 @@ def _assert_yaml_max_active_steps(capture_dir: Path, expected: int) -> None:
     needle = f"max_active_steps: {expected}"
     if needle not in yaml:
         raise WorkSlotJourneyFailure(f"emitted yaml omitted {needle}: {yaml}")
+
+
+def _assert_yaml_working_directory(capture_dir: Path, selected_directory: Path) -> None:
+    yaml = _emitted_graph_yaml(capture_dir)
+    needle = f"working_dir: {json.dumps(str(selected_directory))}"
+    if yaml.count("working_dir:") != 1 or needle not in yaml:
+        raise WorkSlotJourneyFailure(
+            f"emitted graph did not contain one graph-level {needle}: {yaml}"
+        )
+    if "    working_dir:" in yaml:
+        raise WorkSlotJourneyFailure(f"emitted graph repeated working_dir per step: {yaml}")
 
 
 def run_preview_bindings(
@@ -1462,6 +1484,40 @@ def _assert_dummy_report(artifact_root: Path, plan_revision: str) -> None:
         )
 
 
+def _assert_cwd_receipt(
+    receipt_dir: Path,
+    worker_id: str,
+    *,
+    selected_directory: Path,
+) -> None:
+    path = receipt_dir / f"{worker_id}.stdin.cwd"
+    try:
+        reported = Path(path.read_text(encoding="utf-8").strip())
+    except OSError as error:
+        raise WorkSlotJourneyFailure(f"missing cwd receipt {path}: {error}") from error
+    if not reported.is_absolute() or not reported.is_dir():
+        raise WorkSlotJourneyFailure(
+            f"worker {worker_id} reported a non-directory cwd: {reported}"
+        )
+    try:
+        equivalent = reported.samefile(selected_directory)
+    except OSError as error:
+        raise WorkSlotJourneyFailure(
+            f"could not compare worker {worker_id} cwd {reported} with "
+            f"selected directory {selected_directory}: {error}"
+        ) from error
+    if not equivalent:
+        raise WorkSlotJourneyFailure(
+            f"worker {worker_id} cwd {reported} is not filesystem-equivalent to "
+            f"selected directory {selected_directory}"
+        )
+    marker = receipt_dir / f"{worker_id}.stdin.cwd-entry"
+    if not marker.is_file():
+        raise WorkSlotJourneyFailure(
+            f"worker {worker_id} omitted required cwd-entry receipt {marker}"
+        )
+
+
 def _assert_task_receipt(
     receipt_dir: Path,
     task: Mapping[str, Any],
@@ -1509,6 +1565,7 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
     success_binding = implement_graph_runner_binding(
         provider=provider,
         task_worker=stdin_worker_cli(success_receipts),
+        working_directory=work_dir,
     )
     if success_binding["command"] != str(provider):
         raise WorkSlotJourneyFailure(
@@ -1574,6 +1631,7 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
         implement_graph_runner_binding(
             provider=provider,
             task_worker=stdin_worker_cli(missing_receipts, ("--no-report",)),
+            working_directory=work_dir,
         ),
         stdin=_invoke_packet(
             run_id=run_id,
@@ -1615,6 +1673,7 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
             task_worker=stdin_worker_cli(
                 reap_receipts, ("--sleep", "0.4", "--fail-task", "alpha")
             ),
+            working_directory=work_dir,
         ),
         stdin=_invoke_packet(
             run_id=run_id,
@@ -2037,6 +2096,8 @@ def prove_preview_pi_extension_warnings(*, engine: Path, work_dir: Path) -> list
             "command": PATH_SOFTWARE_CHANGE,
             "args": [
                 "run-plan-graph",
+                "--working-directory",
+                "/tmp",
                 "--task-worker",
                 json.dumps(
                     {
@@ -2152,7 +2213,10 @@ def prove_default_sandbox_argv(*, provider: Path, work_dir: Path) -> list[str]:
             f"PATH stub pi was not the resolved pi: {which!r} vs {stub}"
         )
     completed = _run_binding(
-        {"command": str(provider), "args": list(SHIPPED_IMPLEMENT_ARGS)},
+        {
+            "command": str(provider),
+            "args": [*SHIPPED_IMPLEMENT_ARGS, "--working-directory", str(work_dir)],
+        },
         stdin=_invoke_packet(
             run_id="default-sandbox-argv",
             slot_id="implement",
@@ -2428,17 +2492,46 @@ def prove_bound_graph_runner_heartbeat(
     provider: Path,
     profile_source: Path,
     fixture_root: Path,
+    checkout_root: Path,
     work_dir: Path,
 ) -> list[str]:
     """Bound run-plan-graph invoke: inner workers in task order plus capture isolation."""
     work_dir.mkdir(parents=True, exist_ok=True)
     run_id = "bound-graph-runner-heartbeat"
+    selected_checkout = work_dir / "selected-checkout"
+    if not checkout_root.is_absolute() or not checkout_root.is_dir():
+        raise WorkSlotJourneyFailure(
+            f"bound graph checkout is not an existing absolute directory: {checkout_root}"
+        )
+    if not (checkout_root / ".git").exists():
+        raise WorkSlotJourneyFailure(
+            f"bound graph checkout omitted repository marker {checkout_root / '.git'}"
+        )
+    try:
+        selected_checkout.symlink_to(checkout_root, target_is_directory=True)
+    except OSError as error:
+        raise WorkSlotJourneyFailure(
+            f"could not create selected checkout symlink {selected_checkout}: {error}"
+        ) from error
+    if not selected_checkout.is_dir() or not (selected_checkout / ".git").exists():
+        raise WorkSlotJourneyFailure(
+            f"selected checkout alias cannot see repository marker: {selected_checkout}"
+        )
     extra = {
         "implement": implement_graph_runner_binding(
             provider=provider,
-            task_worker=stdin_worker_cli(work_dir / "task-receipts"),
+            task_worker=stdin_worker_cli(
+                work_dir / "task-receipts",
+                ("--record-cwd", "--require-cwd-entry", ".git"),
+            ),
+            working_directory=selected_checkout,
         )
     }
+    implement_args = extra["implement"]["args"]
+    if implement_args[1:3] != ["--working-directory", str(selected_checkout)]:
+        raise WorkSlotJourneyFailure(
+            f"bound implement argv did not freeze selected checkout alias: {implement_args}"
+        )
     engine_call, artifact_root, profile = _start_isolated_software_change(
         engine=engine,
         provider=provider,
@@ -2472,6 +2565,7 @@ def prove_bound_graph_runner_heartbeat(
     _assert_inner_exit_codes(first, [0] * len(task_ids))
     _assert_capture_files(Path(first["capture_dir"]), task_ids)
     _assert_capture_files(Path(first["capture_dir"]), ("summarizer",))
+    _assert_yaml_working_directory(Path(first["capture_dir"]), selected_checkout)
     plan_revision = plan.get("revision")
     if not isinstance(plan_revision, str) or not plan_revision:
         raise WorkSlotJourneyFailure(f"isolated plan.json omitted revision: {plan}")
@@ -2501,6 +2595,12 @@ def prove_bound_graph_runner_heartbeat(
         raise WorkSlotJourneyFailure("bound dummy omitted summarizer stdin receipt")
     if SUMMARIZER_ASSIGNMENT_PREFIX not in summarizer_receipt.read_text(encoding="utf-8"):
         raise WorkSlotJourneyFailure("bound dummy summarizer receipt omitted assignment")
+    for worker_id in [*task_ids, "summarizer"]:
+        _assert_cwd_receipt(
+            receipts,
+            worker_id,
+            selected_directory=selected_checkout,
+        )
     for worker in inner:
         if worker.get("command") != sys.executable:
             raise WorkSlotJourneyFailure(
@@ -2517,6 +2617,8 @@ def prove_bound_graph_runner_heartbeat(
     _assert_capture_isolation(first, second, task_ids)
     return [
         "bound run-plan-graph show inner workers in plan task order",
+        "graph-level working_dir inherited by every task and summarizer",
+        "symlink-selected checkout cwd receipts are filesystem-equivalent and see .git",
         "capture_dir isolation on implement retry",
         "dummy summarizer writes implementation-report.json; ordinary dummy tasks do not",
         "no live model",
@@ -3081,6 +3183,7 @@ def prove_overlay_running_bound_graph_runner_progress(
         slot_id: implement_graph_runner_binding(
             provider=provider,
             task_worker=stdin_worker_cli(work_dir / "task-receipts", ("--sleep", "6")),
+            working_directory=work_dir,
         )
     }
     engine_call, artifact_root, profile = _start_isolated_software_change(
@@ -3252,6 +3355,7 @@ def prove_max_active_bound_graph_runner(
             task_worker=stdin_worker_cli(
                 work_dir / "task-receipts", ("--sleep", "2.5")
             ),
+            working_directory=work_dir,
         )
     }
     engine_call, artifact_root, profile = _start_isolated_software_change(
@@ -3402,12 +3506,15 @@ def self_test_helpers() -> None:
     binding = implement_graph_runner_binding(
         provider=provider,
         task_worker=stdin_worker_cli(Path("/tmp/receipts")),
+        working_directory=Path("/tmp"),
     )
     if binding["command"] != str(provider):
         raise WorkSlotJourneyFailure("self-test: graph-runner command not rewritten")
-    if binding["args"][0] != "run-plan-graph" or binding["args"][1] != "--task-worker":
+    if binding["args"][:3] != ["run-plan-graph", "--working-directory", "/tmp"]:
         raise WorkSlotJourneyFailure(f"self-test: unexpected graph-runner args {binding['args']}")
-    parsed_worker = json.loads(binding["args"][2])
+    if binding["args"][3] != "--task-worker":
+        raise WorkSlotJourneyFailure(f"self-test: missing task-worker flag {binding['args']}")
+    parsed_worker = json.loads(binding["args"][4])
     if parsed_worker["command"] != sys.executable:
         raise WorkSlotJourneyFailure("self-test: task-worker is not the dummy python")
     if "dummy-stdin-worker.py" not in parsed_worker["args"][0]:
@@ -3422,9 +3529,16 @@ def self_test_helpers() -> None:
     capped_graph = implement_graph_runner_binding(
         provider=provider,
         task_worker=stdin_worker_cli(Path("/tmp/receipts")),
+        working_directory=Path("/tmp"),
         max_active=1,
     )
-    if capped_graph["args"][:3] != ["run-plan-graph", "--max-active", "1"]:
+    if capped_graph["args"][:5] != [
+        "run-plan-graph",
+        "--working-directory",
+        "/tmp",
+        "--max-active",
+        "1",
+    ]:
         raise WorkSlotJourneyFailure(
             f"self-test: max-active graph-runner args mismatch: {capped_graph['args']}"
         )
@@ -3493,6 +3607,39 @@ def self_test_helpers() -> None:
             raise WorkSlotJourneyFailure(
                 "self-test: dummy-stdin-worker --stdout did not record stdin"
             )
+        cwd_root = Path(temp) / "cwd-root"
+        cwd_root.mkdir()
+        (cwd_root / "checkout-marker").mkdir()
+        cwd_receipt = Path(temp) / "cwd.stdin"
+        cwd_run = subprocess.run(
+            [
+                sys.executable,
+                str(STDIN_WORKER_SCRIPT),
+                "--receipt",
+                str(cwd_receipt),
+                "--record-cwd",
+                "--require-cwd-entry",
+                "checkout-marker",
+            ],
+            input=b"cwd-me",
+            capture_output=True,
+            check=False,
+            cwd=cwd_root,
+        )
+        if cwd_run.returncode != 0:
+            raise WorkSlotJourneyFailure(
+                f"self-test: dummy cwd worker exited {cwd_run.returncode}: "
+                f"{cwd_run.stderr!r}"
+            )
+        reported_cwd = Path(
+            (Path(str(cwd_receipt) + ".cwd")).read_text(encoding="utf-8").strip()
+        )
+        if not reported_cwd.samefile(cwd_root):
+            raise WorkSlotJourneyFailure(
+                f"self-test: dummy cwd receipt {reported_cwd} != {cwd_root}"
+            )
+        if not Path(str(cwd_receipt) + ".cwd-entry").is_file():
+            raise WorkSlotJourneyFailure("self-test: dummy cwd entry receipt missing")
         session_dir = Path(temp) / "sessions"
         session_receipt = Path(temp) / "session.stdin"
         session_env = os.environ.copy()

@@ -138,13 +138,15 @@ Opt-in implement example:
   "command": "software-change",
   "args": [
     "run-plan-graph",
+    "--working-directory",
+    "ABSOLUTE_EXISTING_DIRECTORY",
     "--task-worker",
     "{\"command\":\"pi\",\"args\":[\"--print\",\"--no-skills\",\"--no-extensions\",\"-e\",\"CURSOR_EXTENSION_PATH\",\"-e\",\"CLAUDE_BRIDGE_EXTENSION_PATH\",\"--model\",\"MODEL\"]}"
   ]
 }
 ```
 
-`software-change run-plan-graph` is an argv command of the software-change provider binary — not an engine operation. Bound mode honors `packet.capture_dir` (per-task `{task_id}/` plus `summary.json`). Each invocation emits a local Dagu `type:graph` under isolated `--dagu-home` at `capture_dir/dagu-home/`. Omitted `--max-active` is `max_active_steps` 4 ordinary plan tasks; `--max-active N` is at most N ordinary plan tasks. The mandatory `summarizer` still runs after those tasks and is the sole writer of `implementation-report.json`. Ordinary task stdin is compact `{"artifact_root"}` JSON plus that task's plan object only. While overlay is `running`, poll `invocation-progress` for per-step graph state and named traces; overlay remains the facade process exit. When `--task-worker` is omitted, the default inner worker is `pi --print --no-skills --no-extensions`; it does not pass `--no-context-files` and does not pass `--tools`, so bash, edit, write, and AGENTS.md remain available. That omitted-`--task-worker` fallback does not add `-e` paths.
+`software-change run-plan-graph` is an argv command of the software-change provider binary — not an engine operation. `--working-directory ABSOLUTE_EXISTING_DIRECTORY` is required and must be one driver-selected existing absolute directory frozen before `start`; it is applied to every ordinary plan task and the summarizer. Invalid or omitted values are rejected before any worker launches. The flag requires no Git and does not create, manage, or suggest worktrees. Bound mode honors `packet.capture_dir` (per-task `{task_id}/` plus `summary.json`). Each invocation emits a local Dagu `type:graph` under isolated `--dagu-home` at `capture_dir/dagu-home/`. Omitted `--max-active` is `max_active_steps` 4 ordinary plan tasks; `--max-active N` is at most N ordinary plan tasks. The mandatory `summarizer` runs only after all ordinary tasks succeed; task failure leaves mechanical `summary.json` and captures and writes no `implementation-report.json`. The summarizer is the sole writer of `implementation-report.json`. Ordinary task stdin is compact `{"artifact_root"}` JSON plus that task's plan object only. While overlay is `running`, poll `invocation-progress` for per-step graph state and named traces; overlay remains the facade process exit. When `--task-worker` is omitted, the default inner worker is `pi --print --no-skills --no-extensions`; it does not pass `--no-context-files` and does not pass `--tools`, so bash, edit, write, and AGENTS.md remain available. That omitted-`--task-worker` fallback does not add `-e` paths.
 
 ## Non-run-state command: preview-bindings
 
