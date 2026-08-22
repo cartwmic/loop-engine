@@ -12,7 +12,7 @@ The engine owns durable progression. The caller owns execution. Humans and agent
 show → perform work externally → append evidence → request an event → accept or reject → repeat
 ```
 
-Current release is v0.15.1 (`MIT OR Apache-2.0`). The living product requirements are [docs/PRD.md](docs/PRD.md). Agent CLI semantics are [docs/agent-usage.md](docs/agent-usage.md). Checkout operating rules for agents are [AGENTS.md](AGENTS.md). When a repository enables Bookends, its configured living PRD is the sole requirement-ID authority; README.md and AGENTS.md remain outside Bookends coverage.
+Current release is v0.16.0 (`MIT OR Apache-2.0`). The living product requirements are [docs/PRD.md](docs/PRD.md). Agent CLI semantics are [docs/agent-usage.md](docs/agent-usage.md). Checkout operating rules for agents are [AGENTS.md](AGENTS.md). When a repository enables Bookends, its configured living PRD is the sole requirement-ID authority; README.md and AGENTS.md remain outside Bookends coverage.
 
 ### Why not a workflow engine, Temporal, or an FSM library
 
@@ -70,7 +70,7 @@ Each archive has a matching `.sha256` file; release `sha256.sum` provides the un
 Generated cargo-dist installers choose platform automatically:
 
 ```sh
-VERSION=v0.15.1
+VERSION=v0.16.0
 curl --proto '=https' --tlsv1.2 -LsSf \
   "https://github.com/cartwmic/loop-engine/releases/download/$VERSION/loop-cli-installer.sh" | sh
 curl --proto '=https' --tlsv1.2 -LsSf \
@@ -84,10 +84,10 @@ curl --proto '=https' --tlsv1.2 -LsSf \
 With [mise](https://mise.jdx.dev/), manage `loop-engine` as one tool and use separate provider installers. Do not add multiple executable selections for the same GitHub repository to one mise config: mise canonicalizes them to one tool entry, so binaries would be missing.
 
 ```sh
-mise use --global 'github:cartwmic/loop-engine[exe=loop-engine]@v0.15.1'
+mise use --global 'github:cartwmic/loop-engine[exe=loop-engine]@v0.16.0'
 for app in software-change-provider policy-document-provider research-provider; do
   curl --proto '=https' --tlsv1.2 -LsSf \
-    "https://github.com/cartwmic/loop-engine/releases/download/v0.15.1/$app-installer.sh" | sh
+    "https://github.com/cartwmic/loop-engine/releases/download/v0.16.0/$app-installer.sh" | sh
 done
 ```
 
