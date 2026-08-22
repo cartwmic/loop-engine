@@ -1795,7 +1795,6 @@ else:
             for item in frozen_show["requestable_events"]
             if item.get("event") == "intent-ready"
         )
-        # bookends:LE-3 — the run's stored topology is stable within the active run despite input/provider changes.
         # bookends:LE-11 — after the provider's current describe changes, the public show assertion retains the stored edge and exact instructions.
         if (
             changed_event.get("target") == original_event.get("target")
@@ -1917,7 +1916,6 @@ else:
         # bookends:LE-26 — unavailable events, reads, unsupported evaluations, and provider failures add no semantic history.
         # bookends:LE-32 — unsupported and failed evaluations, including this uncommitted result, do not enter lineage.
         # bookends:LE-35 — the captured public evaluate request carries no raw run history.
-        # bookends:LE-51 — the user-steering context record is present in the later checked evaluation.
         if (
             before.get("current_state") != "explore"
             or after.get("current_state") != "explore"

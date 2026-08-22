@@ -110,6 +110,12 @@ These items came from operating the Bookends software-change run. They are order
 - **Candidate:** Reproduce inspection while a plan graph is running and after it completes, then fix the smallest confirmed break in locator discovery, Dagu invocation, status mapping, or presentation.
 - **Open questions:** The defect may depend on locator timing, invocation lifecycle, Dagu version, or completed-run behavior. Do not design a replacement inspection surface before reproducing it.
 
+#### Add honest public proof for concurrent context appends
+
+- **Observed:** LE-38 says concurrent context appends alone do not make an in-flight evaluation stale. An internal concurrency test exercises that behavior, but the Bookends citation in the public software-change journey only says its state-race fixture makes no guarantee about context appends. The tagged scenario therefore does not semantically prove the requirement.
+- **Candidate:** Add a public CLI scenario that blocks a checked evaluation, appends context concurrently, releases the evaluation, and proves the evaluation may commit from its original context snapshot while both the append and transition remain durable. Keep the scenario focused on the declared v0.1 boundary rather than broadening concurrency semantics.
+- **Open questions:** Confirm the expected public outcome and diagnostics for both `allow` and `deny`, and whether one representative result is sufficient when internal tests retain the complete matrix.
+
 #### Reframe adversarial review terminology
 
 - **Observed:** “Adversarial” and repeated “attack/falsify” framing can push reviewers toward security-style overreach even though the reviewer protocol limits findings to material failures against frozen intent.
@@ -120,9 +126,21 @@ These items came from operating the Bookends software-change run. They are order
 
 #### Calibrate plan and validation review axes
 
-- **Observed:** Plan review has `done-observable` and `decision-free`, while validation review has `intent-delivered` and `requirement-proof-mapping`. The latest run still admitted plans without an explicit pragmatic black-box/E2E bar, packets that could over-specify implementation, and validation evidence that could describe completed work without proving the change works as intended.
-- **Candidate:** Revise and calibrate the shipped axes so plans require validation gates and user-path proof where realistic, reject both under-specified and over-specified task packets, and require validation to demonstrate the frozen outcome rather than internal activity. This also covers the broader review-axis coverage follow-up.
+- **Observed:** Plan review has `done-observable` and `decision-free`, while validation review has `intent-delivered` and `requirement-proof-mapping`. The latest run still admitted plans without an explicit pragmatic black-box/E2E bar, packets that could over-specify implementation, and validation evidence that could describe completed work without proving the change works as intended. In a Bookends-enabled repository, a citation can also be mechanically present while the tagged journey or contract assertion does not semantically cover the cited requirement.
+- **Candidate:** Revise and calibrate the shipped axes so plans require validation gates and user-path proof where realistic, reject both under-specified and over-specified task packets, and require validation to demonstrate the frozen outcome rather than internal activity. For every new or changed Bookends citation, validation review should inspect whether the tagged scenario and observable assertion actually prove the cited requirement instead of accepting token placement as coverage. This also covers the broader review-axis coverage follow-up.
 - **Open questions:** “Where realistic” needs concrete fixtures so reviewers do not demand impossible E2E tests or invent infrastructure. Determine whether existing axes should be sharpened or new axes added.
+
+#### Deliver steering mechanically to later software-change work
+
+- **Observed:** LE-51 was tombstoned because the implementation proves only that durable `user-steering` reaches `show` and checked evaluation requests. Software-change draft and implementation slots do not receive it, review slots receive only `accepted-findings`, and the cited journey did not prove that steering changed later work or authorization.
+- **Candidate:** Define a workflow-level steering-delivery contract that names intended later recipients, carries applicable durable steering to bound workers or evaluations without relying on driver memory, and proves an observable later result changes because of it. Keep context opaque to Loop Engine core and do not expand this into live interruption, which remains deferred.
+- **Open questions:** Define recipient selection, ordering and supersession, whether steering applies to already-frozen artifacts or only later phases, and how a driver records that steering was incorporated when work remains unbound.
+
+#### Route policy-document findings into later review work
+
+- **Observed:** Policy-document review evidence and denial diagnostics are durable and visible to the driver and provider, but bound semantic-review workers receive no forwarded context. LE-58 and LE-59 therefore describe possible reuse of previous findings without mechanically delivering those findings to the later external reviewer.
+- **Candidate:** Give each later semantic review or revision commission a durable, current-target finding packet derived from prior accepted findings or review evidence. Preserve raw evidence and digest identity; the delivery mechanism must not reinterpret findings or let stale evidence satisfy current conformance.
+- **Open questions:** Decide whether to forward selected `review-evidence`, introduce a normalized workflow-specific finding record, or have the driver construct a digest-bound packet; define supersession and handling of findings against changed target bytes.
 
 #### Freeze operating threat model and risk posture in intent
 
@@ -149,6 +167,12 @@ These items came from operating the Bookends software-change run. They are order
 - **Open questions:** Define which boundaries are contracts rather than journeys, avoid duplicating the same assertion in both classes, and keep citations at durable public assertions rather than internal unit-test seams.
 
 ### High-complexity candidates
+
+#### Separate enduring product requirements from implementation specifications
+
+- **Observed:** The living PRD now gives requirement IDs to a heterogeneous set of product outcomes, architecture boundaries, exact CLI and JSON contracts, Dagu/helper details, journey implementation, CI wiring, and cargo-dist assertions. The policy-document and research sections mix enduring workflow behavior with provider mechanics and test/release requirements; the work-slot section is especially coupled to current commands, helpers, paths, packet fields, and Dagu. Several requirements would therefore need edits after an implementation replacement that preserved product behavior, while Section 16 says exact CLI grammar, field names, framing, and internal representation belong to technical design.
+- **Candidate:** Reshape the requirement catalog around stable user/operator/integrator outcomes and intentional product constraints across core, software-change, policy-document, research, and work-slot delegation. Move exact public protocol encodings into a versioned interface contract, implementation choices into technical design, and test/release mechanics into validation and release policy. Do not copy research's explicit “blackbox tests exist” requirement into policy-document; require public-boundary journey proof through repository validation policy instead. Preserve Bookends traceability from those journeys and contract tests to the smaller living requirement set.
+- **Open questions:** Identify which exact interfaces are intentional compatibility promises, choose authoritative homes for extracted material, and plan tombstone/new-ID continuity without weakening current public proof or losing historical rationale.
 
 #### Add a revision-scoped finding ledger and selective review routing
 

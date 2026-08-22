@@ -1103,578 +1103,395 @@ v0.1 is complete when the following are demonstrated end to end.
 
 ### 14.1 Workflow Authority
 
-
 ### LE-1: A caller cannot directly set current state.
 - Status: live
 - Coverage: e2e/journey
-
-A caller cannot directly set current state.
 
 ### LE-2: A structurally uninterpretable workflow definition cannot create a run, while structurally valid unusual topology such as cycles, unreachable states, non-final sinks, or absence of a final state is permitted.
 - Status: live
 - Coverage: e2e/journey
 
-A structurally uninterpretable workflow definition cannot create a run, while structurally valid unusual topology such as cycles, unreachable states, non-final sinks, or absence of a final state is permitted.
-
 ### LE-3: Workflow topology does not vary per run based on initial input or accumulated context.
-- Status: live
-- Coverage: e2e/journey
-
-Workflow topology does not vary per run based on initial input or accumulated context.
+- Status: tombstone
 
 ### LE-4: A syntactically valid but unavailable event is rejected without changing state or semantic history.
 - Status: live
 - Coverage: e2e/journey
 
-A syntactically valid but unavailable event is rejected without changing state or semantic history.
-
 ### LE-5: A check-free transition commits from stored graph semantics without provider evaluation.
 - Status: live
 - Coverage: e2e/journey
-
-A check-free transition commits from stored graph semantics without provider evaluation.
 
 ### LE-6: A checked transition cannot advance without provider `allow`.
 - Status: live
 - Coverage: e2e/journey
 
-A checked transition cannot advance without provider `allow`.
-
 ### LE-7: Provider output cannot select a different target state.
 - Status: live
 - Coverage: e2e/journey
-
-Provider output cannot select a different target state.
 
 ### LE-8: Rejected and errored requests preserve current state.
 - Status: live
 - Coverage: e2e/journey
 
-Rejected and errored requests preserve current state.
-
 ### LE-9: Accepted transitions and their required history commit atomically.
 - Status: live
 - Coverage: e2e/journey
-
-Accepted transitions and their required history commit atomically.
 
 ### LE-10: Current state survives process restart.
 - Status: live
 - Coverage: e2e/journey
 
-Current state survives process restart.
-
 ### LE-11: Active runs retain their stored topology and instructions after the provider's current `describe` output changes.
 - Status: live
 - Coverage: e2e/journey
 
-Active runs retain their stored topology and instructions after the provider's current `describe` output changes.
+At `start`, the engine snapshots the workflow returned by `describe` for that
+caller's immutable initial input. Later provider changes may affect new runs or
+make evaluation of a stored action unsupported, but they cannot replace an
+active run's stored states, transitions, work-slot catalog, or instructions.
 
 ### LE-12: A provider implementation unable to evaluate a stored workflow/action fails explicitly without advancing the run.
 - Status: live
 - Coverage: e2e/journey
 
-A provider implementation unable to evaluate a stored workflow/action fails explicitly without advancing the run.
-
 ### LE-13: Final states cannot declare outgoing transitions.
 - Status: live
 - Coverage: e2e/journey
-
-Final states cannot declare outgoing transitions.
 
 ### LE-14: An initially-final run is created final.
 - Status: live
 - Coverage: e2e/journey
 
-An initially-final run is created final.
-
 ### LE-15: Terminal runs expose no requestable events and reject `append`, `event`, and `terminate` without semantic history.
 - Status: live
 - Coverage: e2e/journey
 
-Terminal runs expose no requestable events and reject `append`, `event`, and `terminate` without semantic history.
-
-
 ### 14.2 Durable Context and Handoff
-
 
 ### LE-16: Initial input is immutable after creation and survives restart.
 - Status: live
 - Coverage: e2e/journey
 
-Initial input is immutable after creation and survives restart.
-
 ### LE-17: Context records survive restart in stable append order.
 - Status: live
 - Coverage: e2e/journey
-
-Context records survive restart in stable append order.
 
 ### LE-18: Context records have no engine-level truth, provenance, approval, or supersession semantics.
 - Status: live
 - Coverage: e2e/journey
 
-Context records have no engine-level truth, provenance, approval, or supersession semantics.
-
 ### LE-19: Every checked evaluation receives all accumulated context records in durable append order.
 - Status: live
 - Coverage: e2e/journey
-
-Every checked evaluation receives all accumulated context records in durable append order.
 
 ### LE-20: `show` gives a fresh actor enough information to resume without the previous conversation or raw history, assuming access to externally referenced work.
 - Status: live
 - Coverage: e2e/journey
 
-`show` gives a fresh actor enough information to resume without the previous conversation or raw history, assuming access to externally referenced work.
-
 ### LE-21: Workflow-specific external work identity required for handoff is durably represented through opaque workflow data or instructions rather than ambient session state.
 - Status: live
 - Coverage: e2e/journey
 
-Workflow-specific external work identity required for handoff is durably represented through opaque workflow data or instructions rather than ambient session state.
+When continuation requires a repository, workspace, artifact root, document,
+or other external subject, a fresh actor must be able to recover its identity
+or location from initial input, context, or stored instructions. Correct
+handoff cannot depend on prior chat, an unstated working directory, or
+actor-private memory.
 
 ### LE-22: Appended steering is visible to subsequent actors and evaluations.
 - Status: live
 - Coverage: e2e/journey
 
-Appended steering is visible to subsequent actors and evaluations.
-
 ### LE-23: `show` preserves review feedback across revision edges by exposing the chronologically latest durable evaluation per checked-transition lineage.
 - Status: live
 - Coverage: e2e/journey
-
-`show` preserves review feedback across revision edges by exposing the chronologically latest durable evaluation per checked-transition lineage.
 
 ### LE-24: Later durable evaluations supersede earlier ones in either direction: `allow` can supersede `deny`, and `deny` can supersede `allow`.
 - Status: live
 - Coverage: e2e/journey
 
-Later durable evaluations supersede earlier ones in either direction: `allow` can supersede `deny`, and `deny` can supersede `allow`.
-
-
 ### 14.3 Run History and Evaluation Lineage
-
 
 ### LE-25: Run history contains only the semantic actions defined in Section 4.4.
 - Status: live
 - Coverage: e2e/journey
 
-Run history contains only the semantic actions defined in Section 4.4.
-
 ### LE-26: Reads, unavailable events, unsupported evaluations, and operational failures do not pollute semantic history.
 - Status: live
 - Coverage: e2e/journey
-
-Reads, unavailable events, unsupported evaluations, and operational failures do not pollute semantic history.
 
 ### LE-27: One transition request creates at most one aggregate transition history entry.
 - Status: live
 - Coverage: e2e/journey
 
-One transition request creates at most one aggregate transition history entry.
-
 ### LE-28: History ordering remains stable across restart.
 - Status: live
 - Coverage: e2e/journey
-
-History ordering remains stable across restart.
 
 ### LE-29: A committed `allow` and durably recorded `deny` survive process and actor changes.
 - Status: live
 - Coverage: e2e/journey
 
-A committed `allow` and durably recorded `deny` survive process and actor changes.
-
 ### LE-30: Evaluation lineage is scoped to the exact checked transition, not a provider policy key.
 - Status: live
 - Coverage: e2e/journey
 
-Evaluation lineage is scoped to the exact checked transition, not a provider policy key.
+The lineage key is the stored source-state/event pair, which uniquely selects
+a transition. Provider policy-axis IDs may be reused across gates or several
+axes may contribute to one gate; neither changes how the engine groups prior
+durable `allow` and `deny` results.
 
 ### LE-31: Later evaluations receive prior durable `allow`/`deny` lineage in stable order.
 - Status: live
 - Coverage: e2e/journey
 
-Later evaluations receive prior durable `allow`/`deny` lineage in stable order.
-
 ### LE-32: `unsupported`, provider failures, stale results, and uncommitted evaluations do not enter evaluation lineage.
 - Status: live
 - Coverage: e2e/journey
-
-`unsupported`, provider failures, stale results, and uncommitted evaluations do not enter evaluation lineage.
 
 ### LE-33: Providers may use or ignore prior evaluations without different engine semantics.
 - Status: live
 - Coverage: e2e/journey
 
-Providers may use or ignore prior evaluations without different engine semantics.
-
 ### LE-34: `allow` requires no durable feedback payload; `deny` carries durable actionable feedback.
 - Status: live
 - Coverage: e2e/journey
-
-`allow` requires no durable feedback payload; `deny` carries durable actionable feedback.
 
 ### LE-35: Raw run history is not implicitly supplied as evaluation context.
 - Status: live
 - Coverage: e2e/journey
 
-Raw run history is not implicitly supplied as evaluation context.
-
-
 ### 14.4 Concurrency
-
 
 ### LE-36: Overlapping event attempts competing against the same pre-mutation run state cannot both produce conflicting commits.
 - Status: live
 - Coverage: e2e/journey
 
-Overlapping event attempts competing against the same pre-mutation run state cannot both produce conflicting commits.
-
 ### LE-37: An in-flight checked evaluation made stale by a state or lifecycle change produces no transition, semantic history, or evaluation lineage regardless of whether the provider returned `allow` or `deny`.
 - Status: live
 - Coverage: e2e/journey
-
-An in-flight checked evaluation made stale by a state or lifecycle change produces no transition, semantic history, or evaluation lineage regardless of whether the provider returned `allow` or `deny`.
 
 ### LE-38: Concurrent context appends alone are explicitly outside v0.1 evaluation-staleness guarantees.
 - Status: live
 - Coverage: e2e/journey
 
-Concurrent context appends alone are explicitly outside v0.1 evaluation-staleness guarantees.
-
-
 ### 14.5 Software-Change Workflow
-
 
 ### LE-39: A minimal idea can be driven to completion.
 - Status: live
 - Coverage: e2e/journey
 
-A minimal idea can be driven to completion.
-
 ### LE-40: Substantial already-known intent/design/planning context can use the same workflow.
 - Status: live
 - Coverage: e2e/journey
-
-Substantial already-known intent/design/planning context can use the same workflow.
 
 ### LE-41: A run can configure semantic review policies for the review/validation gates in immutable initial input.
 - Status: live
 - Coverage: e2e/journey
 
-A run can configure semantic review policies for the review/validation gates in immutable initial input.
-
 ### LE-42: The configured policies are available to a fresh actor through `show` without a provider call or separate policy-discovery operation.
 - Status: live
 - Coverage: e2e/journey
-
-The configured policies are available to a fresh actor through `show` without a provider call or separate policy-discovery operation.
 
 ### LE-43: The same workflow topology and software-change provider mechanism can execute runs with materially different review-policy configurations.
 - Status: live
 - Coverage: e2e/journey
 
-The same workflow topology and software-change provider mechanism can execute runs with materially different review-policy configurations.
-
 ### LE-44: Human or agent reviewers can perform each configured semantic review externally and append the resulting pass/fail findings as ordinary durable context using the software-change provider's workflow-specific evidence convention.
 - Status: live
 - Coverage: e2e/journey
-
-Human or agent reviewers can perform each configured semantic review externally and append the resulting pass/fail findings as ordinary durable context using the software-change provider's workflow-specific evidence convention.
 
 ### LE-45: The reference software-change provider does not itself perform the semantic review or generate formatted review prompts; it validates whether the configured review obligations have acceptable durable evidence before allowing progression from a review/validation gate.
 - Status: live
 - Coverage: e2e/journey
 
-The reference software-change provider does not itself perform the semantic review or generate formatted review prompts; it validates whether the configured review obligations have acceptable durable evidence before allowing progression from a review/validation gate.
-
 ### LE-46: Missing or failed required review evidence denies the corresponding checked approval with actionable feedback identifying the unsatisfied policy obligation.
 - Status: live
 - Coverage: e2e/journey
-
-Missing or failed required review evidence denies the corresponding checked approval with actionable feedback identifying the unsatisfied policy obligation.
 
 ### LE-47: Acceptable evidence for all configured policies at a gate allows that policy portion of the gate to pass without introducing engine-level policy or review-result semantics.
 - Status: live
 - Coverage: e2e/journey
 
-Acceptable evidence for all configured policies at a gate allows that policy portion of the gate to pass without introducing engine-level policy or review-result semantics.
-
 ### LE-48: At least one review denial and revision cycle is demonstrated.
 - Status: live
 - Coverage: e2e/journey
-
-At least one review denial and revision cycle is demonstrated.
 
 ### LE-49: After a review denial and check-free revision edge, a fresh actor can see the configured policies, durable review evidence, and actionable review feedback through `show` without reading `history`.
 - Status: live
 - Coverage: e2e/journey
 
-After a review denial and check-free revision edge, a fresh actor can see the configured policies, durable review evidence, and actionable review feedback through `show` without reading `history`.
-
 ### LE-50: After a later successful evaluation, the previous denial is no longer projected as the latest result for that transition.
 - Status: live
 - Coverage: e2e/journey
 
-After a later successful evaluation, the previous denial is no longer projected as the latest result for that transition.
-
 ### LE-51: User steering can affect later work and evaluation.
-- Status: live
-- Coverage: e2e/journey
-
-User steering can affect later work and evaluation.
+- Status: tombstone
 
 ### LE-52: Prior review evidence and evaluation lineage can inform later review/check cycles.
 - Status: live
 - Coverage: e2e/journey
 
-Prior review evidence and evaluation lineage can inform later review/check cycles.
-
 ### LE-53: A run can move between distinct actor sessions or harnesses.
 - Status: live
 - Coverage: e2e/journey
-
-A run can move between distinct actor sessions or harnesses.
 
 ### LE-54: A check-free revision edge remains usable when provider evaluation is unavailable.
 - Status: live
 - Coverage: e2e/journey
 
-A check-free revision edge remains usable when provider evaluation is unavailable.
-
-
 ### 14.6 Policy-Document Workflow
-
 
 ### LE-55: Draft and audit modes both work.
 - Status: live
 - Coverage: e2e/journey
 
-Draft and audit modes both work.
-
 ### LE-56: Deterministic policy failure blocks progression with actionable findings.
 - Status: live
 - Coverage: e2e/journey
-
-Deterministic policy failure blocks progression with actionable findings.
 
 ### LE-57: Semantic policy failure blocks progression with actionable findings.
 - Status: live
 - Coverage: e2e/journey
 
-Semantic policy failure blocks progression with actionable findings.
-
 ### LE-58: Successive semantic reviews may use previous findings.
 - Status: live
 - Coverage: e2e/journey
-
-Successive semantic reviews may use previous findings.
 
 ### LE-59: Successive external semantic reviews may use previous findings; provider may use prior lineage only to inform validation diagnostics or evidence aggregation, or ignore it when validating current evidence.
 - Status: live
 - Coverage: e2e/journey
 
-Successive external semantic reviews may use previous findings; provider may use prior lineage only to inform validation diagnostics or evidence aggregation, or ignore it when validating current evidence.
-
 ### LE-60: The actor can revise and request evaluation repeatedly until policies pass.
 - Status: live
 - Coverage: e2e/journey
-
-The actor can revise and request evaluation repeatedly until policies pass.
 
 ### LE-61: After deterministic review passes, a later document revision that violates a deterministic policy cannot finalize until deterministic conformance is re-established according to the external state observed by provider evaluation.
 - Status: live
 - Coverage: e2e/journey
 
-After deterministic review passes, a later document revision that violates a deterministic policy cannot finalize until deterministic conformance is re-established according to the external state observed by provider evaluation.
-
 ### LE-62: The workflow does not rely on Loop Engine atomically locking, versioning, or committing the external document together with workflow state.
 - Status: live
 - Coverage: e2e/journey
-
-The workflow does not rely on Loop Engine atomically locking, versioning, or committing the external document together with workflow state.
 
 ### LE-63: README-like and `AGENTS.md`-like policy sets require no core changes.
 - Status: live
 - Coverage: e2e/journey
 
-README-like and `AGENTS.md`-like policy sets require no core changes.
-
-
 ### 14.7 Research Workflow
-
 
 ### LE-64: An operator can start a research run through Loop Engine using `start` / `show` / `append` / `event`, and `invoke` when a slot is bound.
 - Status: live
 - Coverage: e2e/journey
 
-An operator can start a research run through Loop Engine using `start` / `show` / `append` / `event`, and `invoke` when a slot is bound.
-
 ### LE-65: Topology covers scope, gather, adversarial verify, and synthesize.
 - Status: live
 - Coverage: e2e/journey
-
-Topology covers scope, gather, adversarial verify, and synthesize.
 
 ### LE-66: Checked transitions refuse until artifacts satisfy declared structure and independent evidence satisfies declared review obligations at verify and synthesize.
 - Status: live
 - Coverage: e2e/journey
 
-Checked transitions refuse until artifacts satisfy declared structure and independent evidence satisfies declared review obligations at verify and synthesize.
-
 ### LE-67: Local blackbox tests exercise at least one checked denial and a successful completion.
 - Status: live
 - Coverage: e2e/journey
-
-Local blackbox tests exercise at least one checked denial and a successful completion.
 
 ### LE-68: CI preflight builds the research binary and runs a source journey; archive-smoke runs a packaged journey after materializing embedded data.
 - Status: live
 - Coverage: e2e/journey
 
-CI preflight builds the research binary and runs a source journey; archive-smoke runs a packaged journey after materializing embedded data.
-
 ### LE-69: cargo-dist plan and release-gate assertions include the research binary.
 - Status: live
 - Coverage: e2e/journey
-
-cargo-dist plan and release-gate assertions include the research binary.
 
 ### LE-70: The provider does not fetch, invoke models, or judge semantic truth.
 - Status: live
 - Coverage: e2e/journey
 
-The provider does not fetch, invoke models, or judge semantic truth.
-
-
 ### 14.8 Operational Simplicity
-
 
 ### LE-71: Local operation requires no daemon or external infrastructure beyond Loop Engine's local durable state and configured provider integration. Hidden `wait-invocation` is a short-lived per-invocation waiter, not a background service.
 - Status: live
 - Coverage: e2e/journey
 
-Local operation requires no daemon or external infrastructure beyond Loop Engine's local durable state and configured provider integration. Hidden `wait-invocation` is a short-lived per-invocation waiter, not a background service.
-
 ### LE-72: The primary caller surface remains eight operations (`start`, `list`, `show`, `append`, `event`, `history`, `terminate`, `invoke`). Visible `invocation-progress`, `fan-out`, and `preview-bindings` are other commands, not a ninth primary. `fan-out` and `preview-bindings` do not open the run database. `invocation-progress` opens the catalog; a query failure does not flip overlay.
 - Status: live
 - Coverage: e2e/journey
-
-The primary caller surface remains eight operations (`start`, `list`, `show`, `append`, `event`, `history`, `terminate`, `invoke`). Visible `invocation-progress`, `fan-out`, and `preview-bindings` are other commands, not a ninth primary. `fan-out` and `preview-bindings` do not open the run database. `invocation-progress` opens the catalog; a query failure does not flip overlay.
 
 ### LE-73: The semantic provider interface remains `describe` + `evaluate`.
 - Status: live
 - Coverage: e2e/journey
 
-The semantic provider interface remains `describe` + `evaluate`.
-
 ### LE-74: Provider correctness does not depend on retained in-memory state from earlier invocations.
 - Status: live
 - Coverage: e2e/journey
 
-Provider correctness does not depend on retained in-memory state from earlier invocations.
-
-
 ### 14.9 Work-Slot Delegation
-
 
 ### LE-75: A caller can inspect the frozen slot catalog (`work_slots`) and sparse `work_slot_bindings` from `show` / `initial_input` before work proceeds. `preview-bindings` inspects that JSON before `start` without creating a run. It reports a `dagu` PATH check (minimum 2.14.0) as ok with path and version or as a warning; well-formed bindings still exit 0. `fan-out` and `software-change run-plan-graph` execute fail-close on the same missing, unrunnable, or unsupported-version condition before any worker spawn. Isolated home is `capture_dir/dagu-home/` with locator `capture_dir/dagu-locator.json` keys `dagu_home`, `dag_name`, and `run_name` (`fanout-<capture-dir-name>` for fan-out, `plan-graph-<capture-dir-name>` for plan-graph). loop-engine and software-change packages do not contain or vendor `dagu`.
 - Status: live
 - Coverage: e2e/journey
 
-A caller can inspect the frozen slot catalog (`work_slots`) and sparse `work_slot_bindings` from `show` / `initial_input` before work proceeds. `preview-bindings` inspects that JSON before `start` without creating a run. It reports a `dagu` PATH check (minimum 2.14.0) as ok with path and version or as a warning; well-formed bindings still exit 0. `fan-out` and `software-change run-plan-graph` execute fail-close on the same missing, unrunnable, or unsupported-version condition before any worker spawn. Isolated home is `capture_dir/dagu-home/` with locator `capture_dir/dagu-locator.json` keys `dagu_home`, `dag_name`, and `run_name` (`fanout-<capture-dir-name>` for fan-out, `plan-graph-<capture-dir-name>` for plan-graph). loop-engine and software-change packages do not contain or vendor `dagu`.
-
 ### LE-76: Omitted `work_slot_bindings` and `{}` both mean no bindings; unknown slot IDs, unknown binding fields, and non-object values are rejected at `start`. `start` does not parse `fan-out` or `run-plan-graph` argv. `preview-bindings` exits nonzero on a zero-worker `fan-out` freeze.
 - Status: live
 - Coverage: e2e/journey
-
-Omitted `work_slot_bindings` and `{}` both mean no bindings; unknown slot IDs, unknown binding fields, and non-object values are rejected at `start`. `start` does not parse `fan-out` or `run-plan-graph` argv. `preview-bindings` exits nonzero on a zero-worker `fan-out` freeze.
 
 ### LE-77: When a slot is bound, `current_state_instructions` names the slot ID plus the frozen CLI binding `{command, args}` and that the legal start is `loop-engine invoke RUN_ID SLOT_ID`; it omits the stored work body and states the bound-instruction triage order (overlay succeeded is bound CLI exit 0, not provider acceptance; captures are at the named directory; the driver triages, appends, then requests the shown event; on overrun run `show` immediately before re-invoking; on failed inspect `summary.json` and captured output before stderr).
 - Status: live
 - Coverage: e2e/journey
 
-When a slot is bound, `current_state_instructions` names the slot ID plus the frozen CLI binding `{command, args}` and that the legal start is `loop-engine invoke RUN_ID SLOT_ID`; it omits the stored work body and states the bound-instruction triage order (overlay succeeded is bound CLI exit 0, not provider acceptance; captures are at the named directory; the driver triages, appends, then requests the shown event; on overrun run `show` immediately before re-invoking; on failed inspect `summary.json` and captured output before stderr).
-
 ### LE-78: `invoke` is the only legal start for bound work. On accept it allocates `capture_dir` as `{artifact_root}/work-slot-captures/{slot_id}/{invocation_id}`, creates that directory, stores it, and returns it. The bound worker's stdin is exactly one JSON object with `run_id`, `slot_id`, `artifact_root`, `instruction_body`, and `capture_dir`, plus optional `context` when the slot declared nonempty `stdin_context_kinds` (not argv, environment, or a temp file). Waiter stdin is not the worker packet.
 - Status: live
 - Coverage: e2e/journey
-
-`invoke` is the only legal start for bound work. On accept it allocates `capture_dir` as `{artifact_root}/work-slot-captures/{slot_id}/{invocation_id}`, creates that directory, stores it, and returns it. The bound worker's stdin is exactly one JSON object with `run_id`, `slot_id`, `artifact_root`, `instruction_body`, and `capture_dir`, plus optional `context` when the slot declared nonempty `stdin_context_kinds` (not argv, environment, or a temp file). Waiter stdin is not the worker packet.
 
 ### LE-79: Hidden `wait-invocation` is parent of the bound worker, waitpids it, writes terminal `succeeded`/`failed` plus `exit_code`, then exits. After waitpid, a well-formed `capture_dir/summary.json` is copied as `inner_workers` (`command`, `args`, `exit_code` only); overlay remains the bound CLI process exit. It is not a daemon. A vanished waiter with no terminal status is overlay-`failed`.
 - Status: live
 - Coverage: e2e/journey
 
-Hidden `wait-invocation` is parent of the bound worker, waitpids it, writes terminal `succeeded`/`failed` plus `exit_code`, then exits. After waitpid, a well-formed `capture_dir/summary.json` is copied as `inner_workers` (`command`, `args`, `exit_code` only); overlay remains the bound CLI process exit. It is not a daemon. A vanished waiter with no terminal status is overlay-`failed`.
-
 ### LE-80: Hidden `stdin-exec` opens a stdin file, attaches it to child stdin, and runs `COMMAND [ARG]...` after `--` with no shell. Duty bytes stay in that file (not argv or environment). Sidecar mode writes `{"exit_code": <inner waitpid as i32>}` then exits 0; propagate mode is the inner waitpid and rejects `--sidecar-file`. Spawn failure exits nonzero without a successful sidecar. `--help` omits it. When `PI_CODING_AGENT_SESSION_DIR` is unset in the inherited environment, stdin-exec colocates Pi sessions under the worker `capture_dir/sessions` via that variable at spawn; frozen argv does not add `--session-dir`. `software-change` duplicates the same helper; plan-graph uses propagate mode only.
 - Status: live
 - Coverage: e2e/journey
-
-Hidden `stdin-exec` opens a stdin file, attaches it to child stdin, and runs `COMMAND [ARG]...` after `--` with no shell. Duty bytes stay in that file (not argv or environment). Sidecar mode writes `{"exit_code": <inner waitpid as i32>}` then exits 0; propagate mode is the inner waitpid and rejects `--sidecar-file`. Spawn failure exits nonzero without a successful sidecar. `--help` omits it. When `PI_CODING_AGENT_SESSION_DIR` is unset in the inherited environment, stdin-exec colocates Pi sessions under the worker `capture_dir/sessions` via that variable at spawn; frozen argv does not add `--session-dir`. `software-change` duplicates the same helper; plan-graph uses propagate mode only.
 
 ### LE-81: Invocation records are engine-authored; `append` cannot write them. History records `invocation started {invocation_id}` and `invocation status changed {invocation_id, status}` for waiter-written `succeeded`/`failed` only.
 - Status: live
 - Coverage: e2e/journey
 
-Invocation records are engine-authored; `append` cannot write them. History records `invocation started {invocation_id}` and `invocation status changed {invocation_id, status}` for waiter-written `succeeded`/`failed` only.
-
 ### LE-82: `work_slot_invocations.status` is the reader overlay `running` | `succeeded` | `failed` | `overrun`. Each view also reports `overlay_meaning`, `elapsed_ms`, `remaining_allowed_ms`, `capture_dir`, and `inner_workers`. Overlay `overrun` is not a history action. `waiter_pid` is not in `show`. `show` does not spawn a provider and does not read capture files. While overlay is `running`, the canonical driver poll is `show` for overlay (`inner_workers` empty) plus `invocation-progress` for inner graph/traces. Graph state is Dagu helper liveness (`reaped` is helper finished, not overlay success and not inner waitpid 0). `dagu status` / `dagu history` remain the underlying surface `invocation-progress` uses, not the driver-facing path.
 - Status: live
 - Coverage: e2e/journey
-
-`work_slot_invocations.status` is the reader overlay `running` | `succeeded` | `failed` | `overrun`. Each view also reports `overlay_meaning`, `elapsed_ms`, `remaining_allowed_ms`, `capture_dir`, and `inner_workers`. Overlay `overrun` is not a history action. `waiter_pid` is not in `show`. `show` does not spawn a provider and does not read capture files. While overlay is `running`, the canonical driver poll is `show` for overlay (`inner_workers` empty) plus `invocation-progress` for inner graph/traces. Graph state is Dagu helper liveness (`reaped` is helper finished, not overlay success and not inner waitpid 0). `dagu status` / `dagu history` remain the underlying surface `invocation-progress` uses, not the driver-facing path.
 
 ### LE-83: A bound checked edge is refused unless overlay status is `succeeded` matching slot ID, `instruction_digest`, and the current slot-visit subject. Overlay `running`, `failed`, and `overrun` do not satisfy. Check-free edges are ungated. `evaluate` never waits.
 - Status: live
 - Coverage: e2e/journey
 
-A bound checked edge is refused unless overlay status is `succeeded` matching slot ID, `instruction_digest`, and the current slot-visit subject. Overlay `running`, `failed`, and `overrun` do not satisfy. Check-free edges are ungated. `evaluate` never waits.
-
 ### LE-84: Overlay `overrun` is terminal for retry: a later `invoke` of the same slot is not already-running, but the driver runs `show` immediately before re-invoking. Failed and overrun records remain inspectable and never count as success. On failure the driver inspects `summary.json` and captured output before stderr. Overlay succeeded remains the bound CLI exiting 0 even when stored `inner_workers` contain a nonzero `exit_code`.
 - Status: live
 - Coverage: e2e/journey
-
-Overlay `overrun` is terminal for retry: a later `invoke` of the same slot is not already-running, but the driver runs `show` immediately before re-invoking. Failed and overrun records remain inspectable and never count as success. On failure the driver inspects `summary.json` and captured output before stderr. Overlay succeeded remains the bound CLI exiting 0 even when stored `inner_workers` contain a nonzero `exit_code`.
 
 ### LE-85: When a slot has no binding, the driver may perform that job and no invocation record is required. When the binding set is empty, a run can still complete with the driver performing the work.
 - Status: live
 - Coverage: e2e/journey
 
-When a slot has no binding, the driver may perform that job and no invocation record is required. When the binding set is empty, a run can still complete with the driver performing the work.
-
 ### LE-86: Policy-document has no work slot for `prepare` → `ready`. Software-change, policy-document, and research share the same binding, invoke, overlay, and gate contract; each only declares its catalog.
 - Status: live
 - Coverage: e2e/journey
-
-Policy-document has no work slot for `prepare` → `ready`. Software-change, policy-document, and research share the same binding, invoke, overlay, and gate contract; each only declares its catalog.
 
 ### LE-87: Slot-visit subjects are minted via set-current-subject on entry into a slot state, including `start` when the initial state is a slot. `invoke` snapshots via get-current-subject and does not mint. `instruction_digest` is SHA-256 of the stored instruction body UTF-8 bytes, lowercase hex.
 - Status: live
 - Coverage: e2e/journey
 
-Slot-visit subjects are minted via set-current-subject on entry into a slot state, including `start` when the initial state is a slot. `invoke` snapshots via get-current-subject and does not mint. `instruction_digest` is SHA-256 of the stored instruction body UTF-8 bytes, lowercase hex.
-
 ### LE-88: Public-boundary journeys (`scripts/software-change-journey.py`, `scripts/policy-document-journey.py`, `scripts/research-journey.py`) freeze a sparse dummy-worker binding, invoke before the bound checked event, and prove catalog snapshot, instruction redaction, unbound-invoke rejection, pre-evaluate gate, worker-packet stdin, overlay `succeeded`, unbound stored instructions, and invocation history. Software-change journeys also prove unbound shipped profiles, graph-runner and fan-out behavior with dummy inner workers, `preview-bindings` nonzero on zero-worker `fan-out` JSON without creating a run, `preview-bindings` warning when pi has `--no-extensions` and no `-e`, and do not call a live model. `scripts/software-change-journey.py --self-test` executes the three provider skill constructors against software-change high-rigor design-review, policy-document shipped semantic policies/target/mode, and research verify plus synthesize; it compares worker count/order and exact axis/`example_prompt`/author/model/subject metadata to each source profile, asserts required keys/data bytes/preview visibility and fail-closed invalid cases, asserts root AGENTS rules, and prints `worker-data skill/root policy assertions passed` only after all pass. The software-change source full journey binds deterministic stdin-capturing workers that emit conforming JSON or exit-0 refusal text and, through separate public CLI processes, asserts the compact one-key `artifact_root` context precedes the separator/body with no `capture_dir` or duplicate identity in that block, conforming `status` succeeded, refusal `status` failed with `exit_code` 0, summary/captures persist, overlay fails, then prints `contracted fan-out failure`.
 - Status: live
 - Coverage: e2e/journey
-
-Public-boundary journeys (`scripts/software-change-journey.py`, `scripts/policy-document-journey.py`, `scripts/research-journey.py`) freeze a sparse dummy-worker binding, invoke before the bound checked event, and prove catalog snapshot, instruction redaction, unbound-invoke rejection, pre-evaluate gate, worker-packet stdin, overlay `succeeded`, unbound stored instructions, and invocation history. Software-change journeys also prove unbound shipped profiles, graph-runner and fan-out behavior with dummy inner workers, `preview-bindings` nonzero on zero-worker `fan-out` JSON without creating a run, `preview-bindings` warning when pi has `--no-extensions` and no `-e`, and do not call a live model. `scripts/software-change-journey.py --self-test` executes the three provider skill constructors against software-change high-rigor design-review, policy-document shipped semantic policies/target/mode, and research verify plus synthesize; it compares worker count/order and exact axis/`example_prompt`/author/model/subject metadata to each source profile, asserts required keys/data bytes/preview visibility and fail-closed invalid cases, asserts root AGENTS rules, and prints `worker-data skill/root policy assertions passed` only after all pass. The software-change source full journey binds deterministic stdin-capturing workers that emit conforming JSON or exit-0 refusal text and, through separate public CLI processes, asserts the compact one-key `artifact_root` context precedes the separator/body with no `capture_dir` or duplicate identity in that block, conforming `status` succeeded, refusal `status` failed with `exit_code` 0, summary/captures persist, overlay fails, then prints `contracted fan-out failure`.
 
 ### LE-89: Bound review slots frozen to `fan-out` still require `loop-engine invoke RUN_ID SLOT_ID`. A usable review binding contains provider-constructed assigned `--worker` objects frozen at `start` after `preview-bindings` and lock-in; a review slot with an empty configured policy-axis list is not bound. Shipped profiles omit `work_slot_bindings` so slots stay driver-performed. Opt-in skill templates keep `--no-extensions` and add `-e` placeholders for cursor-provider and claude-bridge. Default implement inner argv when `--task-worker` is omitted remains `pi --print --no-skills --no-extensions` and must not pass `--no-context-files`.
 - Status: live
 - Coverage: e2e/journey
 
-Bound review slots frozen to `fan-out` still require `loop-engine invoke RUN_ID SLOT_ID`. A usable review binding contains provider-constructed assigned `--worker` objects frozen at `start` after `preview-bindings` and lock-in; a review slot with an empty configured policy-axis list is not bound. Shipped profiles omit `work_slot_bindings` so slots stay driver-performed. Opt-in skill templates keep `--no-extensions` and add `-e` placeholders for cursor-provider and claude-bridge. Default implement inner argv when `--task-worker` is omitted remains `pi --print --no-skills --no-extensions` and must not pass `--no-context-files`.
-
 ### LE-90: Nested fan-out workers accept only `command`, `args`, optional opaque `preamble`, and optional `output_schema` with exact required-key syntax. Bound stdin is compact absolute `artifact_root` JSON, plus `context` when the invoke packet carried matching `stdin_context_kinds` (optional preamble plus fixed separator), and does not dump `instruction_body`; the worker packet, digest, and gate matching remain unchanged. Ad hoc framing adds no run context. Contracted output records preserve process exit and capture paths, add conformance status/error, and are written to `summary.json` before facade failure. Fan-out is a local Dagu `type:graph` with concurrent worker steps that have no inter-worker depends, no `continue_on`, and no `retry_policy`; omitted `--max-active` emits no `max_active_steps` (uncapped); `--max-active N` emits `max_active_steps` N. Sidecar inner exits, mechanical join, and facade fallback if the graph stops before join remain. `software-change run-plan-graph` omitted `--max-active` remains `max_active_steps` 4 ordinary plan tasks; `--max-active N` is at most N ordinary plan tasks; the summarizer still runs after those tasks.
 - Status: live
 - Coverage: e2e/journey
-
-Nested fan-out workers accept only `command`, `args`, optional opaque `preamble`, and optional `output_schema` with exact required-key syntax. Bound stdin is compact absolute `artifact_root` JSON, plus `context` when the invoke packet carried matching `stdin_context_kinds` (optional preamble plus fixed separator), and does not dump `instruction_body`; the worker packet, digest, and gate matching remain unchanged. Ad hoc framing adds no run context. Contracted output records preserve process exit and capture paths, add conformance status/error, and are written to `summary.json` before facade failure. Fan-out is a local Dagu `type:graph` with concurrent worker steps that have no inter-worker depends, no `continue_on`, and no `retry_policy`; omitted `--max-active` emits no `max_active_steps` (uncapped); `--max-active N` emits `max_active_steps` N. Sidecar inner exits, mechanical join, and facade fallback if the graph stops before join remain. `software-change run-plan-graph` omitted `--max-active` remains `max_active_steps` 4 ordinary plan tasks; `--max-active N` is at most N ordinary plan tasks; the summarizer still runs after those tasks.
 
 ## 15. Complexity Guardrails
 
