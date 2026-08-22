@@ -14,6 +14,7 @@ from typing import Any, Optional, Sequence
 
 import work_slot_journey
 
+ROOT = Path(__file__).resolve().parents[1]
 DUMPED_PROFILE = "crates/research-provider/data/configs/standard.json"
 PACKAGED_PROFILE_NAME = "standard.json"
 BOUND_SLOT_ID = "scope"
@@ -44,6 +45,9 @@ class JourneyFailure(Exception):
 
 def call(engine: Path, database: Path, arguments: list[str]) -> dict[str, Any]:
     """Invoke one fresh CLI process and parse its public JSON response."""
+    # bookends:LE-64 — every research operation crosses the real start/show/append/event CLI.
+    # bookends:LE-71 — the journey uses local durable state, not a daemon or service.
+    # bookends:LE-74 — each invocation is independent of provider process memory.
     completed = subprocess.run(
         [str(engine), "--database", str(database), "--json", *arguments],
         text=True,
@@ -161,6 +165,7 @@ def evidence(
     }
 
 
+# bookends:LE-70 — deterministic workers append supplied judgments; no model is invoked here.
 def append_evidence(
     engine: Path,
     database: Path,
@@ -261,6 +266,109 @@ class Journey:
                 raise JourneyFailure(f"{label} does not exist: {path}")
             if not os.access(path, os.X_OK):
                 raise JourneyFailure(f"{label} is not executable: {path}")
+        help_run = subprocess.run(
+            [str(self.engine), "--help"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        help_text = help_run.stdout
+        primary = ("start", "list", "show", "append", "event", "history", "terminate", "invoke")
+        other = ("invocation-progress", "fan-out", "preview-bindings")
+        hidden = ("wait-invocation", "stdin-exec", "fan-out-join")
+        # bookends:LE-72 — the real engine help keeps exactly eight primary operations and places the visible delegation commands outside that list while hiding internal helpers.
+        if (
+            help_run.returncode != 0
+            or not all(f"  {name}\n" in help_text for name in primary)
+            or not all(name in help_text for name in other)
+            or any(name in help_text for name in hidden)
+        ):
+            raise JourneyFailure(f"engine public operation surface changed: {help_text}")
+
+    # bookends:LE-68 — the public source and packaged journeys assert their actual required-CI wiring, including the research build, archive extraction, binary lookup, and data-dump path.
+    def _assert_release_wiring(self) -> None:
+        try:
+            preflight = " ".join(
+                (ROOT / ".github/workflows/preflight.yml")
+                .read_text(encoding="utf-8")
+                .replace("\\\n", " ")
+                .split()
+            )
+            archive_smoke = " ".join(
+                (ROOT / ".github/workflows/archive-smoke.yml")
+                .read_text(encoding="utf-8")
+                .replace("\\\n", " ")
+                .split()
+            )
+        except OSError as error:
+            raise JourneyFailure(f"could not read research CI workflows: {error}") from error
+
+        if self.mode == "source":
+            if not all(
+                token in preflight
+                for token in (
+                    "cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider",
+                    "python3 scripts/research-journey.py --mode source --engine target/debug/loop-engine --provider target/debug/research --profile crates/research-provider/data/configs/standard.json",
+                )
+            ):
+                raise JourneyFailure(
+                    "required preflight does not build and run the research source journey"
+                )
+            return
+
+        if not all(
+            token in archive_smoke
+            for token in (
+                "for app in loop-cli software-change-provider policy-document-provider research-provider",
+                'research_provider="$(find "$extract" -type f -name research -perm -u+x -print -quit)"',
+                'test -n "$research_provider"',
+                'research_data_root="$RUNNER_TEMP/research-data-$target"',
+                'mkdir -p "$extract" "$software_work_root" "$research_data_root" "$smoke_cwd"',
+                'python3 "$GITHUB_WORKSPACE/scripts/research-journey.py" --mode packaged --engine "$engine" --provider "$research_provider" --data-root "$research_data_root" --profile standard.json',
+            )
+        ):
+            raise JourneyFailure(
+                "archive smoke does not extract and run the packaged research journey"
+            )
+
+    # bookends:LE-69 — the source journey runs the real cargo-dist plan and the existing plan and release-gate assertions that include research-provider.
+    def _assert_release_plan(self) -> None:
+        dist = shutil.which("dist")
+        if dist is None:
+            raise JourneyFailure(
+                "cargo-dist executable is required for the research source journey"
+            )
+        with tempfile.TemporaryDirectory(prefix="research-dist-plan-") as temporary:
+            plan_path = Path(temporary) / "dist-plan.json"
+            planned = subprocess.run(
+                [dist, "plan", "--output-format=json"],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if planned.returncode != 0:
+                raise JourneyFailure(
+                    "cargo-dist plan failed: "
+                    + (planned.stderr.strip() or planned.stdout.strip())
+                )
+            plan_path.write_text(planned.stdout, encoding="utf-8")
+            for command in (
+                [sys.executable, str(ROOT / "scripts/assert-dist-plan.py"), str(plan_path)],
+                [sys.executable, str(ROOT / "scripts/assert-release-gates.py")],
+            ):
+                checked = subprocess.run(
+                    command,
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                if checked.returncode != 0:
+                    raise JourneyFailure(
+                        "release assertion failed: "
+                        + (checked.stderr.strip() or checked.stdout.strip())
+                    )
 
     def _dump_packaged_data(self) -> None:
         assert self.data_root is not None
@@ -370,6 +478,8 @@ class Journey:
             raise JourneyFailure("show did not project frozen review_policies")
         if "artifact_schemas" not in shown.get("initial_input", {}):
             raise JourneyFailure("show did not project frozen artifact_schemas")
+        # bookends:LE-66 — the first checked event refuses before the declared artifact exists.
+        # bookends:LE-67 — this black-box path includes both denial and successful progression.
         schema = expect_denial(
             call(self.engine, self.database, ["event", self.run_id, "scoped"]),
             "research-schema-invalid",
@@ -379,6 +489,7 @@ class Journey:
             raise JourneyFailure(f"schema denial missing violations: {schema}")
         show_state(self.engine, self.database, self.run_id, "scope")
         write_json(self.artifacts / "brief.json", brief())
+        # bookends:LE-73 — this checked public event exercises the production describe/evaluate integration.
         scoped = call(self.engine, self.database, ["event", self.run_id, "scoped"])
         if scoped.get("status") != "completed":
             raise JourneyFailure(f"scoped failed: {scoped}")
@@ -403,6 +514,11 @@ class Journey:
         synthesize_axes = [
             item["id"] for item in self.profile["review_policies"]["synthesize"]
         ]
+        if "adversarial" not in verify_axes:
+            raise JourneyFailure(
+                f"research verify topology omitted adversarial review axis: {verify_axes}"
+            )
+        # bookends:LE-65 — the public topology plus frozen verify policy explicitly includes adversarial verification before synthesize.
 
         write_json(self.artifacts / "sources.json", sources())
         gathered = call(self.engine, self.database, ["event", self.run_id, "gathered"])
@@ -490,6 +606,9 @@ class Journey:
 
     def run(self) -> dict[str, Any]:
         self.preflight()
+        self._assert_release_wiring()
+        if self.mode == "source":
+            self._assert_release_plan()
         with tempfile.TemporaryDirectory(prefix="research-journey-") as temporary:
             work = Path(temporary)
             if self.mode == "packaged":
@@ -578,7 +697,7 @@ def self_test() -> int:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     try:
-        if raw_argv == ["--self-test"]:
+        if not raw_argv or raw_argv == ["--self-test"]:
             return self_test()
         Journey(parse_args(raw_argv)).run()
         return 0

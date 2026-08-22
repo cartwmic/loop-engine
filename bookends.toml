@@ -1,0 +1,10 @@
+prd = "docs/PRD.md"
+
+[classes.e2e_journey]
+pathspecs = [
+  "scripts/software-change-journey.py",
+  "scripts/policy-document-journey.py",
+  "scripts/research-journey.py",
+  "scripts/generate-prd-journey.py",
+]
+required_ci_jobs = ["baseline-and-source-journey"]

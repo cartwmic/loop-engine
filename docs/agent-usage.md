@@ -172,6 +172,16 @@ Exit codes map to `0` completed, `10` rejected, `20` error, and `2` invalid invo
 
 At `start`, the provider alias resolves once to its configured `command` and ordered `args`; that association, plus the provider's workflow topology and state-instruction snapshot, is stored with the run. Changing TOML cannot redirect an existing run. Executable contents at the stored command path may change; a later provider implementation evaluates the stored workflow snapshot and may return `unsupported` if it no longer supports it. Each provider `describe` or checked-transition `evaluate` call starts a fresh subprocess, sends one JSON request on stdin, and reads one JSON response on stdout; stderr is diagnostic only. A provider describes the workflow and evaluates the exact transition selected by the engine. It cannot choose a different target or set current state. Check-free transitions do not invoke it.
 
+## Generate-PRD research path
+
+Repositories without a schema-valid living PRD can use the existing research provider with `crates/research-provider/data/configs/generate-prd.json` and `crates/research-provider/skills/using-generate-prd/SKILL.md`. The deterministic source journey writes `prd-candidate.md` and an evidence sidecar, reaches research `end`, and runs `bookends-check candidate` against the candidate. Candidate IDs are provisional: a human must accept or reject the candidate before any commit to `docs/PRD.md`; the path does not edit or commit that file.
+
+## Software-change Bookends overlay
+
+The overlay is off by default. On a per-run copy of a shipped software-change profile, set `extra.bookends.enabled` to JSON `true`; do not edit shipped profiles. It requires nonempty live `LE-<n>` IDs in `intent.json`, `design.json`, `plan.json`, and `validation-report.json`, rejects missing or tombstoned IDs, and calls the same checker in-process without a repository bypass. Validation `passed` is refused on checker `RED` or `BYPASS`. The provider adds only `ids-grounded` and validation `bypass-not-green` review axes.
+
+At each durable `e2e/journey` or declared `contract` test boundary, the driver or bound worker cites the same live ID as `bookends:LE-<n>` in the captured/test output. The driver triages that output and appends evidence. The repository gate command is `scripts/bookends-check-gate.sh`; it prints `GREEN`, `RED`, or `BYPASS`, and accepts only `BOOKENDS_BYPASS=<class>:<reason>` as explicit invocation evidence. Parser-only candidate validation is `bookends-check candidate PRD.md`. README.md and AGENTS.md are not coverage classes.
+
 ## Agent rules
 
 - One logical mutating actor per run: serialize `append`, `event`, `invoke`, and `terminate` calls; never race them from parallel workers. Concurrent reads are fine. Context appended during an in-flight checked evaluation does not invalidate or reach that evaluation.

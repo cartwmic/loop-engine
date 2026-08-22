@@ -50,6 +50,12 @@ jobs:
           python3 scripts/assert-push-main-preflight.py
       - name: Run research journey interface negative self-test
         run: python3 scripts/research-journey.py --self-test
+      - name: Run Generate-PRD journey self-test
+        run: python3 scripts/generate-prd-journey.py --self-test
+      - name: Run Bookends check
+        env:
+          BOOKENDS_BYPASS: ""
+        run: scripts/bookends-check-gate.sh
       - name: Test workspace
         run: cargo test --workspace
       - name: Clippy workspace
@@ -59,7 +65,20 @@ jobs:
       - name: Check generated release workflow
         run: dist generate --check
       - name: Build journey binaries
-        run: cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider
+        run: cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider -p bookends-check
+      # These exact no-argument harness invocations are the Bookends discovery
+      # surface. The checker accepts only one-file command forms for default-CI
+      # eligibility; the parameterized journeys below provide the end-to-end proof.
+      - name: Collect software-change public journey surface for Bookends
+        run: python3 scripts/software-change-journey.py
+      - name: Collect policy-document public journey surface for Bookends
+        run: python3 scripts/policy-document-journey.py
+      - name: Collect research public journey surface for Bookends
+        run: python3 scripts/research-journey.py
+      - name: Collect Generate-PRD public journey surface for Bookends
+        run: python3 scripts/generate-prd-journey.py
+      - name: Assert Generate-PRD profile
+        run: python3 scripts/assert-generate-prd-profile.py
       - name: Run journey interface negative self-test
         run: python3 scripts/software-change-journey.py --self-test
       - name: Run full software-change source journey
@@ -95,3 +114,15 @@ jobs:
             --engine target/debug/loop-engine \
             --provider target/debug/research \
             --profile crates/research-provider/data/configs/standard.json
+      - name: Run Generate-PRD source journey
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/generate-prd-journey-work"
+          python3 scripts/generate-prd-journey.py \
+            --mode source \
+            --engine target/debug/loop-engine \
+            --provider target/debug/research \
+            --checker target/debug/bookends-check \
+            --work-root "$RUNNER_TEMP/generate-prd-journey-work" \
+            --profile crates/research-provider/data/configs/generate-prd.json

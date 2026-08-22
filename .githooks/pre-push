@@ -1,0 +1,14 @@
+#!/bin/sh
+# Always-on pre-push bookends gate. No path-filter exemption: every push
+# runs the same checker as required CI.
+#
+# Operators enable this hook with:
+#   git config core.hooksPath .githooks
+#
+# Any bypass is supplied through BOOKENDS_BYPASS=<class>:<reason>; the wrapper
+# handles that environment channel. This hook passes no bypass argument.
+# README wording is owned by authoritative-doc-integration.
+set -eu
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+exec "$root/scripts/bookends-check-gate.sh"

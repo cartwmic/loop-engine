@@ -37,6 +37,13 @@ pub static FILES: &[EmbeddedFile] = &[
         )),
     },
     EmbeddedFile {
+        path: "crates/research-provider/data/configs/generate-prd.json",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/configs/generate-prd.json"
+        )),
+    },
+    EmbeddedFile {
         path: "crates/research-provider/data/reviewer-protocol.md",
         bytes: include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -65,6 +72,34 @@ pub static FILES: &[EmbeddedFile] = &[
         )),
     },
     EmbeddedFile {
+        path: "crates/research-provider/data/templates/generate-prd/brief.md",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/templates/generate-prd/brief.md"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/research-provider/data/templates/generate-prd/report.md",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/templates/generate-prd/report.md"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/research-provider/data/templates/generate-prd/sources.md",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/templates/generate-prd/sources.md"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/research-provider/data/templates/generate-prd/verification.md",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/templates/generate-prd/verification.md"
+        )),
+    },
+    EmbeddedFile {
         path: "crates/research-provider/data/templates/report.md",
         bytes: include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -90,6 +125,13 @@ pub static FILES: &[EmbeddedFile] = &[
         bytes: include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/skills/using-research-provider/SKILL.md"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/research-provider/skills/using-generate-prd/SKILL.md",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/skills/using-generate-prd/SKILL.md"
         )),
     },
 ];

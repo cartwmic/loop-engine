@@ -14,22 +14,53 @@ from typing import Any, NoReturn, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# Plan revision 18 final-validation-and-report command matrix, stored as Python
+# Plan revision 6 final-validation-and-report command matrix, stored as Python
 # data so quoted pipefail commands are not re-encoded through a shell.
 FINAL_MATRIX_COMMANDS = [
-    "cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider",
     "cargo test --workspace",
+    "env -u BOOKENDS_BYPASS scripts/bookends-check-gate.sh",
+    "isolated temporary GIT_INDEX_FILE with all worktree paths staged, env -u BOOKENDS_BYPASS scripts/bookends-check-gate.sh",
     "cargo clippy --workspace --all-targets -- -D warnings",
     "cargo fmt --all -- --check",
-    r"bash -o pipefail -c 'python3 scripts/software-change-journey.py --self-test | tee /tmp/software-change-self-test.log && rg -q ^worker-data\ skill/root\ policy\ assertions\ passed$ /tmp/software-change-self-test.log'",
-    "python3 scripts/research-journey.py --self-test",
-    r"bash -o pipefail -c 'python3 scripts/software-change-journey.py --mode source --engine target/debug/loop-engine --provider target/debug/software-change --data-root $PWD --work-root ${TMPDIR:-/tmp}/loop-engine-software-change-journey --profile crates/software-change-provider/data/configs/high-rigor.json --traversal-depth full | tee /tmp/software-change-source.log && rg -q contracted\ fan-out\ failure /tmp/software-change-source.log'",
+    "cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider -p bookends-check",
+    "cargo test -p bookends-check --offline",
+    "cargo test -p software-change-provider --offline",
+    r"bash -o pipefail -c 'python3 scripts/software-change-journey.py --self-test | tee /tmp/loop-engine-software-change-self-test.log && rg -q ^worker-data\ skill/root\ policy\ assertions\ passed$ /tmp/loop-engine-software-change-self-test.log'",
     "for mode in draft audit; do python3 scripts/policy-document-journey.py --engine target/debug/loop-engine --provider target/debug/policy-document --profile crates/policy-document-provider/data/readme.json --mode $mode; done",
+    "python3 scripts/research-journey.py --self-test",
     "python3 scripts/research-journey.py --mode source --engine target/debug/loop-engine --provider target/debug/research --profile crates/research-provider/data/configs/standard.json",
-    "python3 scripts/assert-implementation-report.py --report /Users/cartwmic/.local/share/loop-engine/runs/run-1786983836068185000-1-73588/implementation-report.json --revision 3 --plan-revision 18",
+    "research packaged public journey with an empty temporary data-root: python3 scripts/research-journey.py --mode packaged --engine target/debug/loop-engine --provider target/debug/research --data-root <empty temporary directory> --profile standard.json",
+    "python3 scripts/generate-prd-journey.py --self-test",
+    "python3 scripts/assert-generate-prd-profile.py",
+    r"bash -o pipefail -c 'env -u BOOKENDS_BYPASS python3 scripts/software-change-journey.py --mode source --engine target/debug/loop-engine --provider target/debug/software-change --data-root $PWD --work-root ${TMPDIR:-/tmp}/loop-engine-software-change-journey --profile crates/software-change-provider/data/configs/high-rigor.json --traversal-depth full | tee /tmp/loop-engine-software-change-source.log && rg -q contracted\ fan-out\ failure /tmp/loop-engine-software-change-source.log && rg -q bookends-enabled\ external\ scenario\ passed: /tmp/loop-engine-software-change-source.log && rg -q LE-2\ topology\ scenarios\ passed:\ malformed\ rejected,\ cyclic\ topology\ accepted /tmp/loop-engine-software-change-source.log && rg -q LE-11\ frozen-run\ scenario\ passed:\ changed\ describe\ did\ not\ alter\ show /tmp/loop-engine-software-change-source.log && rg -q LE-12\ unsupported-action\ scenario\ passed:\ explicit\ and\ operational\ errors\ preserved\ state /tmp/loop-engine-software-change-source.log && rg -q LE-13\ final-state\ scenario\ passed:\ outgoing\ transition\ rejected\ before\ run\ creation /tmp/loop-engine-software-change-source.log && rg -q LE-14\ initially-final\ scenario\ passed:\ run\ created\ final /tmp/loop-engine-software-change-source.log && rg -q LE-15\ terminal-mutation\ scenario\ passed:\ append/event/terminate\ rejected\ without\ history\ change /tmp/loop-engine-software-change-source.log'",
+    "software-change packaged public journey with an empty temporary data-root: python3 scripts/software-change-journey.py --mode packaged --engine target/debug/loop-engine --provider target/debug/software-change --data-root <empty temporary directory> --work-root <temporary directory> --profile high-rigor.json --traversal-depth checked-prefix",
+    "python3 scripts/generate-prd-journey.py --mode source --engine target/debug/loop-engine --provider target/debug/research --checker target/debug/bookends-check --work-root ${TMPDIR:-/tmp}/loop-engine-generate-prd-journey --profile crates/research-provider/data/configs/generate-prd.json",
+    "python3 scripts/assert-push-main-preflight.py",
+    "dist generate --check",
+    "dist plan --output-format=json > /tmp/loop-engine-dist-plan.json",
+    "python3 scripts/assert-dist-plan.py --self-test",
+    "python3 scripts/assert-dist-plan.py /tmp/loop-engine-dist-plan.json",
+    "python3 scripts/assert-release-gates.py",
+    "python3 scripts/assert-implementation-report.py --self-test",
+    "python3 scripts/assert-implementation-report.py --report /Users/cartwmic/.local/share/loop-engine/runs/run-1787371334879759000-1-70458/implementation-report.json --revision 5 --plan-revision 6",
 ]
 PROOF_MARKERS = [
     "worker-data skill/root policy assertions passed",
+    "contracted fan-out failure",
+    "bookends-enabled external scenario passed: show instructions, missing/empty/tombstoned IDs, RED, and BYPASS",
+    "LE-2 topology scenarios passed: malformed rejected, cyclic topology accepted",
+    "LE-11 frozen-run scenario passed: changed describe did not alter show",
+    "LE-12 unsupported-action scenario passed: explicit and operational errors preserved state",
+    "LE-13 final-state scenario passed: outgoing transition rejected before run creation",
+    "LE-14 initially-final scenario passed: run created final",
+    "LE-15 terminal-mutation scenario passed: append/event/terminate rejected without history change",
+    "LE-68 exact CI wiring proof: source/preflight and packaged/archive-smoke assertions passed",
+    "LE-69 exact release proof: cargo-dist plan and release-gate assertions passed",
+    "prior exhaustive/independent 90/90 Bookends audit retained",
+    "implementation-report provider schema check: passed",
+    "current and isolated-index Bookends gates returned GREEN with BOOKENDS_BYPASS unset",
+    "GREEN",
+    "terminal end reached",
 ]
 EXPECTED_VALIDATION = [f"{command}: passed" for command in FINAL_MATRIX_COMMANDS] + list(
     PROOF_MARKERS
@@ -146,6 +177,18 @@ def self_test() -> int:
         raise AssertionError("self-test pipefail command lost Python-data backslash quoting")
     if r"contracted\ fan-out\ failure" not in pipefail[1]:
         raise AssertionError("source-journey pipefail command lost Python-data backslash quoting")
+    if r"bookends-enabled\ external\ scenario\ passed:" not in pipefail[1]:
+        raise AssertionError("source-journey pipefail command lost the enabled-Bookends marker")
+    for marker in (
+        r"LE-2\ topology\ scenarios\ passed:\ malformed\ rejected,\ cyclic\ topology\ accepted",
+        r"LE-11\ frozen-run\ scenario\ passed:\ changed\ describe\ did\ not\ alter\ show",
+        r"LE-12\ unsupported-action\ scenario\ passed:\ explicit\ and\ operational\ errors\ preserved\ state",
+        r"LE-13\ final-state\ scenario\ passed:\ outgoing\ transition\ rejected\ before\ run\ creation",
+        r"LE-14\ initially-final\ scenario\ passed:\ run\ created\ final",
+        r"LE-15\ terminal-mutation\ scenario\ passed:\ append/event/terminate\ rejected\ without\ history\ change",
+    ):
+        if marker not in pipefail[1]:
+            raise AssertionError(f"source-journey pipefail command lost focused marker {marker}")
 
     tampered: list[tuple[str, dict[str, Any]]] = []
 

@@ -12,7 +12,7 @@ The engine owns durable progression. The caller owns execution. Humans and agent
 show → perform work externally → append evidence → request an event → accept or reject → repeat
 ```
 
-Current release is v0.15.1 (`MIT OR Apache-2.0`). The living product requirements are [docs/PRD.md](docs/PRD.md). Agent CLI semantics are [docs/agent-usage.md](docs/agent-usage.md). Checkout operating rules for agents are [AGENTS.md](AGENTS.md).
+Current release is v0.15.1 (`MIT OR Apache-2.0`). The living product requirements are [docs/PRD.md](docs/PRD.md). Agent CLI semantics are [docs/agent-usage.md](docs/agent-usage.md). Checkout operating rules for agents are [AGENTS.md](AGENTS.md). When a repository enables Bookends, its configured living PRD is the sole requirement-ID authority; README.md and AGENTS.md remain outside Bookends coverage.
 
 ### Why not a workflow engine, Temporal, or an FSM library
 
@@ -169,6 +169,14 @@ The v0.1 scope is deliberately local and narrow ([docs/PRD.md](docs/PRD.md), esp
 - CLI and provider validation may evolve, but a stored run's workflow topology and provider association remain frozen;
 - shipped binaries are the supported interface; workspace crates are not public API.
 
+## Bookends
+
+An enabled repository configures one living markdown PRD and explicit proof surfaces in `bookends.toml`. The `bookends-check` library/CLI parses the PRD, resolves `bookends:LE-<n>` citations, checks live and optional contract coverage, and verifies tracked, non-skipped files are collected by named required-CI commands. It compares only with the immediately preceding committed PRD: exact ID plus title is identity, retirement keeps an exact-title tombstone, and tombstones cannot disappear or revive. `bookends-check candidate PRD.md` validates only candidate grammar.
+
+Repository gates use `scripts/bookends-check-gate.sh`, which prints `GREEN`, `RED`, or `BYPASS`. Only an explicit `BOOKENDS_BYPASS=<class>:<reason>` bypasses a red gate, and its printed output is the invocation evidence. README.md and AGENTS.md are not coverage classes. The software-change overlay is off by default; enable it only on a per-run copy of a shipped profile with `extra.bookends.enabled: true`. Its artifact IDs, live-ID checks, validation gate, and worker citation instructions are documented in the provider skill.
+
+A repository without a schema-valid git PRD can use the research provider's [Generate-PRD skill](crates/research-provider/skills/using-generate-prd/SKILL.md) and `crates/research-provider/data/configs/generate-prd.json` to produce a provisional `prd-candidate.md` with per-requirement tracked evidence. Validate it with `bookends-check candidate prd-candidate.md`; the parser-only command does not check coverage, CI, or continuity. A human must accept or reject the candidate before any commit to `docs/PRD.md`; the path never auto-edits that file or commits.
+
 ## Validation
 
 Supported publication matrix is exactly four applications (`loop-cli`, `software-change-provider`, `policy-document-provider`, `research-provider`) by two native targets (`aarch64-apple-darwin`, `x86_64-unknown-linux-gnu`). `dist plan` describes this matrix; it does not compile or run archives.
@@ -187,7 +195,10 @@ python3 scripts/assert-release-gates.py
 python3 scripts/assert-push-main-preflight.py
 python3 scripts/software-change-journey.py --self-test
 python3 scripts/research-journey.py --self-test
-cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider
+python3 scripts/generate-prd-journey.py --self-test
+python3 scripts/assert-generate-prd-profile.py
+scripts/bookends-check-gate.sh
+cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider -p bookends-check
 python3 scripts/software-change-journey.py \
   --mode source \
   --engine target/debug/loop-engine \
@@ -208,6 +219,12 @@ python3 scripts/research-journey.py \
   --engine target/debug/loop-engine \
   --provider target/debug/research \
   --profile crates/research-provider/data/configs/standard.json
+python3 scripts/generate-prd-journey.py \
+  --mode source \
+  --engine target/debug/loop-engine \
+  --provider target/debug/research \
+  --checker target/debug/bookends-check \
+  --profile crates/research-provider/data/configs/generate-prd.json
 ```
 
 Build local host-target archives and smoke extracted binaries before handoff. Use only a newly approved, unpublished release tag; never reuse an existing public tag:

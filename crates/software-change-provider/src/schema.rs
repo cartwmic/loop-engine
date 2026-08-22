@@ -40,6 +40,13 @@ const ARRAY_KEYWORDS: &[&str] = &["items", "minItems", "type"];
 /// Keywords permitted on a string schema, in sorted order.
 const STRING_KEYWORDS: &[&str] = &["enum", "minLength", "type"];
 
+// The provider's bounded schema language normally has no regex keyword. The
+// bookends overlay needs exactly this one closed-field token, so it is
+// accepted as a private schema extension without widening the general
+// allowlist.
+const REQUIREMENT_ID_PATTERN: &str = r"^LE-[1-9][0-9]*$";
+const REQUIREMENT_ID_SCHEMA_PATH: &str = "/properties/requirement_ids/items";
+
 /// Return exact keyword allowlist for one schema type.
 ///
 /// This is intentionally kept as one small, inspectable table.  Production
@@ -263,6 +270,7 @@ struct SchemaNode {
     min_items: Option<u64>,
     min_length: Option<u64>,
     enum_values: Vec<String>,
+    pattern: Option<String>,
 }
 
 impl SchemaNode {
@@ -276,6 +284,7 @@ impl SchemaNode {
             min_items: None,
             min_length: None,
             enum_values: Vec::new(),
+            pattern: None,
         }
     }
 }
@@ -313,6 +322,13 @@ fn compile_node(value: &Value, path: &str, violations: &mut Vec<MetaViolation>) 
     };
 
     for keyword in object.keys() {
+        if keyword == "pattern"
+            && path == REQUIREMENT_ID_SCHEMA_PATH
+            && schema_type == Some(SchemaType::String)
+            && object.get("pattern").and_then(Value::as_str) == Some(REQUIREMENT_ID_PATTERN)
+        {
+            continue;
+        }
         if !known_keyword(keyword) {
             violations.push(MetaViolation::new(
                 child_path(path, keyword),
@@ -343,6 +359,7 @@ fn compile_node(value: &Value, path: &str, violations: &mut Vec<MetaViolation>) 
     let min_items = compile_nonnegative_integer(object, path, "minItems", violations);
     let min_length = compile_nonnegative_integer(object, path, "minLength", violations);
     let enum_values = compile_enum(object, path, violations);
+    let pattern = compile_requirement_id_pattern(path, object, schema_type);
 
     SchemaNode {
         schema_type: schema_type.unwrap_or(SchemaType::String),
@@ -353,6 +370,7 @@ fn compile_node(value: &Value, path: &str, violations: &mut Vec<MetaViolation>) 
         min_items,
         min_length,
         enum_values,
+        pattern,
     }
 }
 
@@ -495,6 +513,21 @@ fn compile_nonnegative_integer(
             ));
             None
         }
+    }
+}
+
+fn compile_requirement_id_pattern(
+    path: &str,
+    object: &Map<String, Value>,
+    schema_type: Option<SchemaType>,
+) -> Option<String> {
+    if path == REQUIREMENT_ID_SCHEMA_PATH
+        && schema_type == Some(SchemaType::String)
+        && object.get("pattern").and_then(Value::as_str) == Some(REQUIREMENT_ID_PATTERN)
+    {
+        Some(REQUIREMENT_ID_PATTERN.to_owned())
+    } else {
+        None
     }
 }
 
@@ -651,8 +684,26 @@ fn evaluate_node(
                     "string is not one of enum values".to_owned(),
                 ));
             }
+            if schema.pattern.as_deref() == Some(REQUIREMENT_ID_PATTERN)
+                && !matches_requirement_id_pattern(string)
+            {
+                violations.push(InstanceViolation::new(
+                    path,
+                    "pattern",
+                    format!("string does not match `{REQUIREMENT_ID_PATTERN}`"),
+                ));
+            }
         }
     }
+}
+
+fn matches_requirement_id_pattern(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix("LE-") else {
+        return false;
+    };
+    let mut chars = rest.chars();
+    matches!(chars.next(), Some(first) if first.is_ascii_digit() && first != '0')
+        && chars.all(|character| character.is_ascii_digit())
 }
 
 fn matches_type(schema_type: SchemaType, instance: &Value) -> bool {
@@ -992,6 +1043,29 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn requirement_id_pattern_is_only_allowed_on_the_overlay_items_schema() {
+        let valid = json!({
+            "type": "object",
+            "properties": {
+                "requirement_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "pattern": REQUIREMENT_ID_PATTERN
+                    }
+                }
+            }
+        });
+        assert!(validate_schema(&valid).is_ok());
+
+        let invalid = json!({
+            "type": "string",
+            "pattern": REQUIREMENT_ID_PATTERN
+        });
+        assert!(validate_schema(&invalid).is_err());
     }
 
     #[test]

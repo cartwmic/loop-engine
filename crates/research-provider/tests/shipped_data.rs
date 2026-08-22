@@ -29,6 +29,16 @@ fn load_profile() -> Value {
     serde_json::from_str(&text).unwrap_or_else(|error| panic!("invalid JSON in {path}: {error}"))
 }
 
+fn load_generate_prd_profile() -> Value {
+    let path = format!(
+        "{}/data/configs/generate-prd.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("could not read shipped config {path}: {error}"));
+    serde_json::from_str(&text).unwrap_or_else(|error| panic!("invalid JSON in {path}: {error}"))
+}
+
 fn object<'a>(value: &'a Value, path: &str) -> &'a serde_json::Map<String, Value> {
     value
         .as_object()
@@ -140,6 +150,10 @@ fn markdown_files() -> Vec<(String, String)> {
             "skills/using-research-provider/SKILL.md".to_owned(),
             shipped_text("skills/using-research-provider/SKILL.md"),
         ),
+        (
+            "skills/using-generate-prd/SKILL.md".to_owned(),
+            shipped_text("skills/using-generate-prd/SKILL.md"),
+        ),
     ]
 }
 
@@ -221,6 +235,25 @@ fn standard_profile_carries_exact_verify_and_synthesize_axes() {
             ),
         ])
     );
+}
+
+#[test]
+fn generate_prd_profile_reuses_research_topology_and_schemas() {
+    let standard = load_profile();
+    let generate = load_generate_prd_profile();
+    assert_eq!(generate["config_version"], standard["config_version"]);
+    assert_eq!(generate["artifact_schemas"], standard["artifact_schemas"]);
+    assert_eq!(generate["revision_links"], standard["revision_links"]);
+    assert_eq!(axis_map(&generate), axis_map(&standard));
+    assert_eq!(
+        generate["extra"],
+        serde_json::json!({
+            "profile": "generate-prd",
+            "template_root": "crates/research-provider/data/templates/generate-prd"
+        })
+    );
+    research_provider::validate_config_for_tests(&generate)
+        .unwrap_or_else(|error| panic!("generate-prd rejected by production validator: {error}"));
 }
 
 #[test]

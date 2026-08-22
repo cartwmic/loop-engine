@@ -14,7 +14,7 @@ The provider does not invoke models, fetch the web, or judge semantic truth. Cal
 
 Per-run obligations live in immutable initial input. The provider is called by Loop Engine; it does not discover or load a config profile by itself.
 
-Agent procedure for this crate is [AGENTS.md](AGENTS.md). Drive a run with [skills/using-research-provider/SKILL.md](skills/using-research-provider/SKILL.md).
+Agent procedure for this crate is [AGENTS.md](AGENTS.md). Drive a standard run with [skills/using-research-provider/SKILL.md](skills/using-research-provider/SKILL.md), or extract a provisional PRD candidate with [skills/using-generate-prd/SKILL.md](skills/using-generate-prd/SKILL.md).
 
 ## Setup
 
@@ -50,7 +50,7 @@ This produces `target/debug/research`; the checkout's `crates/research-provider/
 Build the engine binary too, or replace `target/debug/loop-engine` below with an installed `loop-engine` executable:
 
 ```sh
-cargo build -p loop-cli -p research-provider
+cargo build -p loop-cli -p research-provider -p bookends-check
 ENGINE=target/debug/loop-engine
 PROVIDER_CONFIG="/absolute/path/to/your/providers.toml"
 ```
@@ -76,15 +76,18 @@ cargo test -p research-provider
 cargo clippy -p research-provider --all-targets -- -D warnings
 ```
 
-Source and packaged journeys live in `scripts/research-journey.py` at the repository root. Those journey commands are harness examples, distinct from the production start; do not copy isolation flags from them into production start. Crate tests remain the local proof surface for protocol, schema, evidence, and shipped data. The software-change journey `--self-test` executes this crate's verify and synthesize constructors against `data/configs/standard.json` and prints `worker-data skill/root policy assertions passed` only after worker count/order, axis/`example_prompt`/author/model metadata, required keys/data bytes/preview visibility, and fail-closed invalid cases pass.
+Source and packaged journeys live in `scripts/research-journey.py` at the repository root. Those journey commands are harness examples, distinct from the production start; do not copy isolation flags from them into production start. Crate tests remain the local proof surface for protocol, schema, evidence, and shipped data. `scripts/assert-generate-prd-profile.py` proves that the Generate-PRD profile uses the existing research binary and does not add a provider. The source Generate-PRD journey drives that profile with deterministic bound workers, writes `prd-candidate.md` plus exact repository evidence, reaches `end`, and runs `bookends-check candidate`; it does not edit `docs/PRD.md` or commit. The software-change journey `--self-test` executes this crate's verify and synthesize constructors against `data/configs/standard.json` and prints `worker-data skill/root policy assertions passed` only after worker count/order, axis/`example_prompt`/author/model metadata, required keys/data bytes/preview visibility, and fail-closed invalid cases pass.
 
 ## Shipped data
 
 These are the shipped files consumed by provider tests, guidance, and review procedure. The config profile is a complete initial-input template; copy it for a run.
 
-### Config profile
+### Config profiles
 
 - [data/configs/standard.json](data/configs/standard.json) (`config_version` `research-1`; verify axes `claim-grounded` and `adversarial`; synthesize axes `cited-conclusion` and `scope-faithful`)
+- [data/configs/generate-prd.json](data/configs/generate-prd.json) (the same research topology and schemas, with Generate-PRD templates)
+
+Generate-PRD candidate IDs are provisional proposals. A human must accept or reject `prd-candidate.md` before any commit to `docs/PRD.md`; the profile never auto-commits or claims semantic completeness.
 
 ### Templates
 
@@ -92,6 +95,10 @@ These are the shipped files consumed by provider tests, guidance, and review pro
 - [data/templates/sources.md](data/templates/sources.md)
 - [data/templates/verification.md](data/templates/verification.md)
 - [data/templates/report.md](data/templates/report.md)
+- [data/templates/generate-prd/brief.md](data/templates/generate-prd/brief.md)
+- [data/templates/generate-prd/sources.md](data/templates/generate-prd/sources.md)
+- [data/templates/generate-prd/verification.md](data/templates/generate-prd/verification.md)
+- [data/templates/generate-prd/report.md](data/templates/generate-prd/report.md)
 
 ### Reviewer protocol and worker contract
 
@@ -99,7 +106,7 @@ These are the shipped files consumed by provider tests, guidance, and review pro
 - [data/review-worker-preamble.txt](data/review-worker-preamble.txt)
 - [data/review-worker-output-schema.json](data/review-worker-output-schema.json)
 
-The shipped skill constructs opt-in `verify` or `synthesize` bindings from the selected per-run profile and freezes one assigned worker per configured axis and required author. Review workers return judgments only; the driver owns research, artifact authoring, deterministic checks, evidence recording, and run progression.
+The shipped research skill constructs opt-in `verify` or `synthesize` bindings from the selected per-run profile and freezes one assigned worker per configured axis and required author. Review workers return judgments only; the driver owns research, artifact authoring, deterministic checks, evidence recording, and run progression. The Generate-PRD skill uses the same provider workflow for candidate extraction and requires human acceptance before PRD authority.
 
 ## Topology
 

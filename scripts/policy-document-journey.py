@@ -7,6 +7,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Sequence
@@ -179,6 +180,7 @@ def assert_semantic_review_constructor(engine: Path) -> None:
         profile.write_text(stdout, encoding="utf-8")
         return load_json(profile)
 
+    # bookends:LE-63 — README-like and AGENTS-like targets are exercised as policy inputs, not Bookends classes.
     for shipped in (readme_profile, agents_profile):
         raw = shipped.read_text(encoding="utf-8")
         parsed = load_json(shipped)
@@ -470,7 +472,26 @@ def append_evidence(
         assert response["result"]["context"]["id"] == f"{prefix}-{index}", response
 
 
+def self_test() -> int:
+    """Run the constructor contract without creating a provider run."""
+    engine = repository_root() / "target/debug/loop-engine"
+    if not engine.is_file() or not engine.stat().st_mode & 0o111:
+        raise AssertionError(
+            "policy-document public self-test requires target/debug/loop-engine"
+        )
+    assert_semantic_review_constructor(engine)
+    print("policy-document journey self-test passed: constructor and preview contract")
+    return 0
+
+
 def main() -> int:
+    if len(sys.argv) == 1 or sys.argv[1:] == ["--self-test"]:
+        try:
+            return self_test()
+        except (AssertionError, OSError, subprocess.SubprocessError, json.JSONDecodeError) as error:
+            print(f"policy-document journey self-test failed: {error}", file=sys.stderr)
+            return 1
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--engine", required=True)
     parser.add_argument("--provider", required=True)
@@ -549,6 +570,7 @@ def main() -> int:
             deterministic_shown, "Run configured deterministic checks"
         )
 
+        # bookends:LE-56 — the public deterministic gate returns all actionable policy findings.
         deterministic = expect_denial(
             call(engine, database, ["event", run_id, "passed"]),
             "policy-document-nonconforming",
@@ -587,6 +609,7 @@ def main() -> int:
             expected_state="semantic-review",
         )
 
+        # bookends:LE-57 — the public semantic gate refuses until independent evidence exists.
         missing = expect_denial(
             call(engine, database, ["event", run_id, "passed"]),
             "policy-document-review-incomplete",
@@ -610,6 +633,8 @@ def main() -> int:
         )
 
         # Finalization must rerun deterministic policy before consulting evidence.
+        # bookends:LE-61 — finalization rechecks the externally changed document, not stale engine state.
+        # bookends:LE-62 — the target file and Loop Engine state are deliberately separate commits.
         broken = conforming.replace("## Validation", "Validation")
         target.write_text(broken, encoding="utf-8")
         final_deterministic = expect_denial(
@@ -632,6 +657,14 @@ def main() -> int:
         stale_diagnostics = stale["details"]["diagnostics"]
         assert [item["kind"] for item in stale_diagnostics].count("stale") == len(axes)
         assert [item["kind"] for item in stale_diagnostics].count("missing") == len(axes)
+        stale_record_ids = {
+            item["record_id"]
+            for item in stale_diagnostics
+            if item.get("kind") == "stale"
+        }
+        assert stale_record_ids == {f"initial-review-{index}" for index in range(len(axes))}
+        # bookends:LE-58 — the next semantic request inspects every prior review record before reporting stale/missing findings.
+        # bookends:LE-59 — the external fresh-review cycle carries those prior record identities into provider diagnostics.
         fresh_digest = hashlib.sha256(target.read_bytes()).hexdigest()
         assert fresh_digest != initial_digest
         assert stale["target_sha256"] == fresh_digest
@@ -646,6 +679,8 @@ def main() -> int:
             target_id,
         )
 
+        # bookends:LE-55 — this same public run is executed in both draft and audit modes.
+        # bookends:LE-60 — the actor can repeat repair and evaluation until completion.
         final = call(engine, database, ["event", run_id, "passed"])
         assert final["status"] == "completed", final
         terminal = show_state(engine, database, run_id, "end")

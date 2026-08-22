@@ -1,0 +1,25 @@
+[package]
+name = "bookends-check"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[package.metadata.dist]
+dist = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "bookends-check"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3"

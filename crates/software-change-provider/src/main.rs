@@ -8,6 +8,7 @@ mod config;
 mod dagu;
 mod evidence;
 mod gates;
+mod overlay;
 mod protocol;
 mod run_plan_graph;
 mod schema;

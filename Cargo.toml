@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/bookends-check",
     "crates/loop-core",
     "crates/loop-integrations",
     "crates/loop-cli",

@@ -2,7 +2,7 @@
 
 ## Scope
 
-This file covers work in this crate: the `research` binary, shipped configs/templates/protocol under `data/`, crate tests, and `skills/using-research-provider/`. Engine CLI behavior and workspace-wide checks are documented at the repository root.
+This file covers work in this crate: the `research` binary, shipped configs/templates/protocol under `data/`, crate tests, and the research skills under `skills/`. Engine CLI behavior and workspace-wide checks are documented at the repository root.
 
 The provider is deterministic only. It validates artifact schemas and revision links, then aggregates externally supplied `review-evidence` at verify and synthesize. It does not generate prompts, invoke a model, fetch the web, edit artifacts, or decide whether findings are true.
 
@@ -12,11 +12,11 @@ Exit 0 does not establish a valid deliverable.
 
 ## Authority
 
-Drive a run with [README.md](README.md) and [skills/using-research-provider/SKILL.md](skills/using-research-provider/SKILL.md). Evidence shape and adjudication rules are [data/reviewer-protocol.md](data/reviewer-protocol.md). Repository-root AGENTS.md and docs/agent-usage.md govern checkout-wide operation and CLI envelopes.
+Drive a standard run with [README.md](README.md) and [skills/using-research-provider/SKILL.md](skills/using-research-provider/SKILL.md). Drive candidate extraction with [skills/using-generate-prd/SKILL.md](skills/using-generate-prd/SKILL.md). Evidence shape and adjudication rules are [data/reviewer-protocol.md](data/reviewer-protocol.md). Repository-root AGENTS.md and docs/agent-usage.md govern checkout-wide operation and CLI envelopes.
 
 Per-run obligations are frozen in immutable `initial_input` (`review_policies`, `artifact_schemas`, `config_version`, `artifact_root`). `show` is the durable handoff; changing a source profile does not change an existing run. No policy, schema, prompt, or artifact shape is baked into provider code — those arrive in config data.
 
-Shipped profile version currently in-tree: `research-1`. Evidence `config_version` must match the run's frozen value, not whatever file is currently shipped. Verify axes are `claim-grounded` and `adversarial`; synthesize axes are `cited-conclusion` and `scope-faithful`.
+Shipped profile version currently in-tree: `research-1`. Evidence `config_version` must match the run's frozen value, not whatever file is currently shipped. Verify axes are `claim-grounded` and `adversarial`; synthesize axes are `cited-conclusion` and `scope-faithful`. `data/configs/generate-prd.json` keeps the same research topology and schemas but points its authoring guidance at `data/templates/generate-prd/`; it emits a provisional candidate and never changes PRD authority.
 
 ## Workflow
 
@@ -24,9 +24,10 @@ Shipped profile version currently in-tree: `research-1`. Evidence `config_versio
 cargo test -p research-provider
 cargo clippy -p research-provider --all-targets -- -D warnings
 cargo fmt --all -- --check
+python3 scripts/assert-generate-prd-profile.py
 ```
 
-Crate tests are not a substitute for the public-boundary journey. After any crate change, also run the repository source journey from the repo root (build `loop-engine` and `research` first):
+Crate tests are not a substitute for the public-boundary journeys. After any crate change, also run the repository source journey from the repo root (build `loop-engine`, `research`, and `bookends-check` first):
 
 ```sh
 python3 scripts/research-journey.py \
@@ -48,10 +49,10 @@ The subject's declared author never counts toward its own review. Stale `subject
 
 Local markdown links in this crate's documents must resolve under this crate directory. Do not use parent-directory segments in those links. Refer to repository-root files such as docs/agent-usage.md in prose.
 
-`research --help`/`-h` names `describe`, `evaluate`, and `data-dump`. `--version`/`-V` prints the Cargo package version. `data-dump DIR` materializes embedded data and refuses to overwrite existing target files.
+`research --help`/`-h` names `describe`, `evaluate`, and `data-dump`. `--version`/`-V` prints the Cargo package version. `data-dump DIR` materializes embedded data and refuses to overwrite existing target files, including `generate-prd.json`, its templates, and its skill.
 
 ## Completion and Handoff
 
-Crate work is complete when `cargo test -p research-provider`, `cargo clippy -p research-provider --all-targets -- -D warnings`, and the source research journey pass, shipped configs/templates/protocol still match runtime behavior, and this crate's README/AGENTS.md remain accurate.
+Crate work is complete when `cargo test -p research-provider`, `cargo clippy -p research-provider --all-targets -- -D warnings`, the source research journey, and the Generate-PRD profile assertion and source journey pass, shipped configs/templates/protocol/skills still match runtime behavior, and this crate's README/AGENTS.md remain accurate.
 
 Handoff the files changed, commands run, and residuals: unread locked artifacts, synthetic test evidence is not semantic quality, and round state lives outside the provider.

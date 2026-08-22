@@ -22,7 +22,9 @@ Use this scoped order when sources conflict; each source is authoritative only f
 
 The root [README.md](README.md) is the human product overview, not operational authority.
 
-The engine owns durable run state and progression. Callers perform primary work externally. Providers `describe` topology and `evaluate` the exact transition the engine selected; they do not choose the next state, edit repositories, invoke reviewers, or judge semantic truth. Context `kind` and `data` are opaque to core; follow the active provider's record conventions.
+When a repository enables Bookends, its configured living markdown PRD is the sole requirement-ID authority. README.md and AGENTS.md remain outside Bookends coverage; policy-document owns their quality. Candidate IDs are proposals until a human accepts and commits them.
+
+The engine owns durable run state and progression. Callers perform primary work externally. Providers `describe` topology and `evaluate` the exact transition the engine selected; they do not choose the next state, edit repositories, invoke reviewers, or judge semantic truth. Context `kind` and `data` are opaque to core; follow the active provider's record conventions. Generate-PRD is a research-provider profile and skill, not a fourth provider or a software-change precondition; candidate IDs remain provisional until explicit human acceptance and commit.
 
 Shipped skills: [skills/using-loop-engine/SKILL.md](skills/using-loop-engine/SKILL.md), `crates/software-change-provider/skills/using-software-change-provider/SKILL.md`, `crates/policy-document-provider/skills/using-policy-document-provider/SKILL.md`, and `crates/research-provider/skills/using-research-provider/SKILL.md`. Shipped software-change profiles omit `work_slot_bindings`; bound Pi workers are opt-in templates in those skills (`--no-extensions` plus `-e` placeholders, filled in the per-run profile JSON). `preview-bindings` warns when a pi worker has `--no-extensions` and no `-e`, and reports a `dagu` PATH check (minimum 2.14.0) as ok with path and version or as a warning; warnings still exit 0. Confirm work-slot policy with the user before `start`.
 
@@ -40,22 +42,27 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
-CI preflight also runs `dist generate --check`, `scripts/assert-dist-plan.py`, `scripts/assert-release-gates.py`, `scripts/assert-push-main-preflight.py`, `scripts/software-change-journey.py --self-test`, `scripts/research-journey.py --self-test`, a locked build of the four release packages, the software-change source journey (`--mode source --traversal-depth full` against high-rigor), both policy-document source journey modes, and the research source journey.
+For an enabled repository, run `scripts/bookends-check-gate.sh` from the repository root in pre-push and required CI. It emits `GREEN`, `RED`, or `BYPASS`; only an explicit `BOOKENDS_BYPASS=<class>:<reason>` may bypass a red repository gate, and that output is the invocation evidence. The parser-only candidate command is `bookends-check candidate PRD.md`. Bookends does not load README.md or AGENTS.md as coverage classes. The optional software-change overlay is off unless a per-run profile sets `extra.bookends.enabled` to JSON `true`; its driver and bound-worker citation procedure is in the provider skill.
+
+CI preflight also runs `scripts/bookends-check-gate.sh` without a bypass, `dist generate --check`, `scripts/assert-dist-plan.py`, `scripts/assert-release-gates.py`, `scripts/assert-push-main-preflight.py`, `scripts/assert-generate-prd-profile.py`, `scripts/generate-prd-journey.py --self-test`, the software-change, policy-document, and research journey interface self-tests, a locked build of the four release packages plus `bookends-check`, the software-change source journey (`--mode source --traversal-depth full` against high-rigor), both policy-document source journey modes, the research source journey, and the Generate-PRD source journey.
 
 Public-boundary Python journeys are required validation for every in-scope change. Workspace `cargo test` / clippy / fmt do not substitute for them. Build the four release packages, then run the journeys that cover the public boundary you touched; if that boundary is unclear, run all three source journeys.
 
 - Engine, CLI, core, integrations, shared `scripts/`, or `invoke` / work-slot behavior: all three source journeys.
 - `software-change` crate: `scripts/software-change-journey.py --mode source --traversal-depth full`.
 - `policy-document` crate: both `scripts/policy-document-journey.py` modes.
-- `research` crate: `scripts/research-journey.py --mode source`.
+- `research` crate: `scripts/research-journey.py --mode source` and `scripts/generate-prd-journey.py --mode source`.
+- Bookends checker or repository gate: `cargo test -p bookends-check --offline` plus the enabled repository gate.
 - Journey-harness edits: that script's `--self-test` when it has one, plus the journeys it runs.
 
 `python3 scripts/software-change-journey.py --self-test` must print `worker-data skill/root policy assertions passed` after executing the three provider skill constructors (software-change high-rigor design-review, policy-document shipped semantic policies/target/mode, research verify and synthesize) and root AGENTS rules. Source full mode must print `contracted fan-out failure` only after bound deterministic workers prove compact plan-worker location stdin, separately forwarded review context where declared, exit-0 nonconformance, persisted summary/captures, and failed overlay.
 
 ```sh
-cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider
+cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider -p bookends-check
 python3 scripts/software-change-journey.py --self-test
 python3 scripts/research-journey.py --self-test
+python3 scripts/generate-prd-journey.py --self-test
+python3 scripts/assert-generate-prd-profile.py
 python3 scripts/software-change-journey.py \
   --mode source \
   --engine target/debug/loop-engine \
@@ -76,6 +83,12 @@ python3 scripts/research-journey.py \
   --engine target/debug/loop-engine \
   --provider target/debug/research \
   --profile crates/research-provider/data/configs/standard.json
+python3 scripts/generate-prd-journey.py \
+  --mode source \
+  --engine target/debug/loop-engine \
+  --provider target/debug/research \
+  --checker target/debug/bookends-check \
+  --profile crates/research-provider/data/configs/generate-prd.json
 ```
 
 When a change can affect release proof or generated workflow, run the complete proof set:

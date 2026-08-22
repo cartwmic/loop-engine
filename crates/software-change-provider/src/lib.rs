@@ -7,6 +7,7 @@
 
 mod config;
 mod dagu;
+mod overlay;
 mod schema;
 
 pub mod embedded_data;
@@ -19,4 +20,14 @@ pub fn validate_config_for_tests(initial_input: &serde_json::Value) -> Result<()
     config::validate_config(initial_input)
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+/// Evaluate-time overlay clone used by overlay injection tests.
+#[doc(hidden)]
+pub fn apply_bookends_overlay_for_tests(initial_input: &serde_json::Value) -> serde_json::Value {
+    if overlay::enabled(initial_input) {
+        overlay::apply(initial_input)
+    } else {
+        initial_input.clone()
+    }
 }

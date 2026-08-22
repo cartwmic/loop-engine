@@ -5,12 +5,19 @@
 //! sixteen-state union. When the key is present, only live review states are
 //! emitted and ready/approved/passed rewire onto the next live successor.
 
+use crate::overlay;
 use loop_core::{State, Transition, WorkSlot, Workflow};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
 /// Context kind forwarded on every live review slot's stdin.
 pub(crate) const ACCEPTED_FINDINGS_KIND: &str = "accepted-findings";
+
+const BOOKENDS_STATE_GUIDANCE: &str = "Bookends overlay: cite at least one live PRD ID in `requirement_ids`; at every durable e2e/journey or declared contract test boundary, use the same live ID in a citation. Bound workers include that citation in their captured result for driver triage. Never mint an ID.";
+
+fn bookends_citation_hint() -> String {
+    ["bookends", ":LE-", "<n>"].concat()
+}
 
 /// Owning-phase check-free revise from a review state to an earlier draft.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -221,10 +228,10 @@ pub(crate) fn describe_workflow(initial_input: Option<&Value>) -> Result<Workflo
     let review_policies = initial_input
         .and_then(Value::as_object)
         .and_then(|object| object.get("review_policies"));
-    stitch(review_policies)
+    stitch(review_policies, initial_input.is_some_and(overlay::enabled))
 }
 
-fn stitch(review_policies: Option<&Value>) -> Result<Workflow, String> {
+fn stitch(review_policies: Option<&Value>, bookends_enabled: bool) -> Result<Workflow, String> {
     if let Some(value) = review_policies {
         if !value.is_object() {
             return Err("`review_policies` must be an object".to_owned());
@@ -252,7 +259,7 @@ fn stitch(review_policies: Option<&Value>) -> Result<Workflow, String> {
     let mut transitions = Vec::new();
     let mut work_slots = Vec::new();
     for (index, hop) in hops.iter().copied().enumerate() {
-        states.push(hop.state());
+        states.push(hop.state(bookends_enabled));
         let event = hop_event(hop, index == last_index);
         let target = if index == last_index {
             "end"
@@ -363,23 +370,23 @@ impl Hop {
         }
     }
 
-    fn state(self) -> State {
+    fn state(self, bookends_enabled: bool) -> State {
         match self {
             Self::Draft(phase) => State::new(
                 phase.draft_state,
                 phase.draft_title,
-                phase.draft_instructions,
+                with_bookends_guidance(phase.draft_instructions, bookends_enabled),
                 false,
             ),
             Self::Parent(phase) => State::new(
                 phase.parent_review,
                 phase.parent_review_title,
-                phase.parent_review_instructions,
+                with_bookends_guidance(phase.parent_review_instructions, bookends_enabled),
                 false,
             ),
             Self::Adversarial(phase) => {
                 let title = adversarial_title(phase.parent_review_title);
-                let instructions = adversarial_instructions(phase);
+                let instructions = adversarial_instructions(phase, bookends_enabled);
                 State::new(phase.adversarial_review, title, instructions, false)
             }
         }
@@ -421,11 +428,25 @@ fn adversarial_title(parent_title: &str) -> String {
     }
 }
 
-fn adversarial_instructions(phase: &Phase) -> String {
-    format!(
-        "This counterpart adversarial review follows parent `{}` and falsifies that parent's pass claim against named obligations. {}",
-        phase.parent_review, phase.parent_review_instructions
+fn adversarial_instructions(phase: &Phase, bookends_enabled: bool) -> String {
+    with_bookends_guidance(
+        &format!(
+            "This counterpart adversarial review follows parent `{}` and falsifies that parent's pass claim against named obligations. {}",
+            phase.parent_review, phase.parent_review_instructions
+        ),
+        bookends_enabled,
     )
+}
+
+fn with_bookends_guidance(instructions: &str, enabled: bool) -> String {
+    if enabled {
+        format!(
+            "{instructions} {BOOKENDS_STATE_GUIDANCE} Citation spelling: `{}`.",
+            bookends_citation_hint()
+        )
+    } else {
+        instructions.to_owned()
+    }
 }
 
 #[cfg(test)]
@@ -577,6 +598,26 @@ mod tests {
                     "draft slot {id} must omit stdin_context_kinds"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn overlay_guidance_reaches_driver_and_bound_state_instructions() {
+        let workflow = describe_workflow(Some(&json!({
+            "extra": {"bookends": {"enabled": true}},
+            "review_policies": {}
+        })))
+        .expect("overlay workflow");
+        for state_id in ["explore", "design", "validation"] {
+            let state = workflow
+                .states
+                .iter()
+                .find(|state| state.id.as_str() == state_id)
+                .expect(state_id);
+            assert!(state.instructions.contains("durable e2e/journey"));
+            assert!(state
+                .instructions
+                .contains(&["bookends", ":LE-", "<n>"].concat()));
         }
     }
 

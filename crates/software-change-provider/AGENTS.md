@@ -12,7 +12,7 @@ Exit 0 does not establish a valid deliverable.
 
 ## Authority
 
-Frozen requirements this crate's acceptance suite traces to (R1–R27, A1–A15, including amendments) live in [docs/prd.md](docs/prd.md). Drive a run with [README.md](README.md) and [skills/using-software-change-provider/SKILL.md](skills/using-software-change-provider/SKILL.md). Evidence shape and adjudication rules are [data/reviewer-protocol.md](data/reviewer-protocol.md). Repository-root `AGENTS.md` and `docs/agent-usage.md` govern checkout-wide operation and CLI envelopes.
+Frozen requirements this crate's acceptance suite traces to (R1–R27, A1–A15, including amendments) live in [docs/prd.md](docs/prd.md). A repository's Bookends IDs belong only to its configured living PRD; this crate must not mint them. Drive a run with [README.md](README.md) and [skills/using-software-change-provider/SKILL.md](skills/using-software-change-provider/SKILL.md). Evidence shape and adjudication rules are [data/reviewer-protocol.md](data/reviewer-protocol.md). Repository-root `AGENTS.md` and `docs/agent-usage.md` govern checkout-wide operation and CLI envelopes.
 
 Per-run obligations are frozen in immutable `initial_input` (`review_policies`, `artifact_schemas`, `config_version`, `artifact_root`). `show` is the durable handoff; changing a source profile does not change an existing run. No policy, schema, prompt, or artifact shape is baked into provider code — those arrive in config data.
 

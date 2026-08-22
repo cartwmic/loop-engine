@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -480,6 +481,15 @@ def prove_bound_visit(
         raise WorkSlotJourneyFailure(
             f"receipt capture_dir {packet.get('capture_dir')!r} != overlay {overlay.get('capture_dir')!r}"
         )
+    expected_digest = hashlib.sha256(
+        packet["instruction_body"].encode("utf-8")
+    ).hexdigest()
+    if overlay.get("instruction_digest") != expected_digest:
+        raise WorkSlotJourneyFailure(
+            f"invoke instruction_digest {overlay.get('instruction_digest')!r} != {expected_digest!r}"
+        )
+    if not isinstance(overlay.get("subject"), str) or not overlay["subject"]:
+        raise WorkSlotJourneyFailure("invoke did not snapshot a current slot-visit subject")
     history = engine_call(["history", run_id])
     if history.get("status") != "completed":
         raise WorkSlotJourneyFailure(f"history failed: {history}")
@@ -1913,6 +1923,144 @@ def prove_fan_out(*, engine: Path, work_dir: Path) -> list[str]:
     ]
 
 
+def prove_stdin_exec(*, provider: Path, work_dir: Path) -> list[str]:
+    """Drive the provider's hidden stdin-exec helper as a real CLI."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    stdin_file = work_dir / "duty.json"
+    duty = b'{"duty":"bytes stay in the stdin file"}\n'
+    stdin_file.write_bytes(duty)
+    receipt = work_dir / "child.stdin"
+    session_receipt = work_dir / "child.session-dir"
+    sidecar = work_dir / "sidecar.json"
+    child = (
+        "import os,sys; from pathlib import Path; "
+        f"Path({str(receipt)!r}).write_bytes(sys.stdin.buffer.read()); "
+        f"Path({str(session_receipt)!r}).write_text(os.environ.get('PI_CODING_AGENT_SESSION_DIR', '')); "
+        "raise SystemExit(7)"
+    )
+    clean_env = os.environ.copy()
+    clean_env.pop("PI_CODING_AGENT_SESSION_DIR", None)
+    sidecar_run = subprocess.run(
+        [
+            str(provider),
+            "stdin-exec",
+            "--stdin-file",
+            str(stdin_file),
+            "--exit-mode",
+            "sidecar",
+            "--sidecar-file",
+            str(sidecar),
+            "--",
+            sys.executable,
+            "-c",
+            child,
+        ],
+        input=b"not-duty-argv-or-stdin",
+        capture_output=True,
+        check=False,
+        cwd=work_dir,
+        env=clean_env,
+    )
+    if sidecar_run.returncode != 0:
+        raise WorkSlotJourneyFailure(
+            f"stdin-exec sidecar failed: {sidecar_run.returncode}: "
+            f"{sidecar_run.stderr!r}"
+        )
+    if json.loads(sidecar.read_text(encoding="utf-8")) != {"exit_code": 7}:
+        raise WorkSlotJourneyFailure("stdin-exec sidecar did not preserve inner waitpid exit")
+    if receipt.read_bytes() != duty:
+        raise WorkSlotJourneyFailure("stdin-exec did not attach the requested stdin file")
+    session_dir = Path(session_receipt.read_text(encoding="utf-8"))
+    if session_dir != (stdin_file.parent / "sessions").resolve():
+        raise WorkSlotJourneyFailure(
+            f"stdin-exec did not colocate the child session directory: {session_dir}"
+        )
+    if duty.decode("utf-8") in sidecar_run.args:
+        raise WorkSlotJourneyFailure("stdin-exec duty bytes appeared in argv")
+
+    propagate = work_dir / "propagate.stdin"
+    propagate_run = subprocess.run(
+        [
+            str(provider),
+            "stdin-exec",
+            "--stdin-file",
+            str(stdin_file),
+            "--exit-mode",
+            "propagate",
+            "--",
+            sys.executable,
+            "-c",
+            child,
+        ],
+        capture_output=True,
+        check=False,
+        cwd=work_dir,
+        env=clean_env,
+    )
+    if propagate_run.returncode != 7 or not receipt.is_file():
+        raise WorkSlotJourneyFailure(
+            f"stdin-exec propagate did not return inner exit 7: {propagate_run.returncode}"
+        )
+    bad_propagate = subprocess.run(
+        [
+            str(provider),
+            "stdin-exec",
+            "--stdin-file",
+            str(stdin_file),
+            "--exit-mode",
+            "propagate",
+            "--sidecar-file",
+            str(work_dir / "bad-sidecar.json"),
+            "--",
+            sys.executable,
+            "-c",
+            "pass",
+        ],
+        capture_output=True,
+        check=False,
+        cwd=work_dir,
+        env=clean_env,
+    )
+    if bad_propagate.returncode == 0:
+        raise WorkSlotJourneyFailure("stdin-exec propagate accepted --sidecar-file")
+
+    missing_sidecar = work_dir / "missing-sidecar.json"
+    missing = subprocess.run(
+        [
+            str(provider),
+            "stdin-exec",
+            "--stdin-file",
+            str(stdin_file),
+            "--exit-mode",
+            "sidecar",
+            "--sidecar-file",
+            str(missing_sidecar),
+            "--",
+            str(work_dir / "does-not-exist"),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=work_dir,
+        env=clean_env,
+    )
+    if missing.returncode == 0 or missing_sidecar.exists():
+        raise WorkSlotJourneyFailure("stdin-exec spawn failure produced a successful sidecar")
+
+    help_run = subprocess.run(
+        [str(provider), "--help"], capture_output=True, text=True, check=False
+    )
+    if help_run.returncode != 0 or "stdin-exec" in help_run.stdout:
+        raise WorkSlotJourneyFailure("software-change help exposed hidden stdin-exec")
+    return [
+        "stdin-exec sidecar records inner waitpid exit and file stdin",
+        "stdin-exec propagate returns inner exit and rejects sidecar-file",
+        "stdin-exec spawn failure has no successful sidecar",
+        "stdin-exec colocates session directory without frozen --session-dir",
+        "software-change help omits hidden stdin-exec",
+        "no live model",
+    ]
+
+
 def invoke_until_status(
     engine_call: EngineCall,
     run_id: str,
@@ -2318,6 +2466,113 @@ def prove_bound_fan_out_heartbeat(
         "show heartbeat overlay_meaning elapsed_ms remaining_allowed_ms capture_dir inner_workers",
         "inner nonzero with collector 0 yields overlay succeeded",
         "second invoke uses a new invocation-id capture_dir and leaves the first intact",
+        "no live model",
+    ]
+
+
+def prove_bound_fan_out_overrun(
+    *,
+    engine: Path,
+    provider: Path,
+    profile_source: Path,
+    fixture_root: Path,
+    work_dir: Path,
+) -> list[str]:
+    """Prove reader overrun, immediate show, and retry admission via public CLI."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    run_id = "bound-fan-out-overrun"
+    slot_id = "design-review"
+    binding = fan_out_binding(
+        engine=engine,
+        workers=[stdin_worker_cli(work_dir / "overrun.stdin", ("--sleep", "0.5"))],
+    )
+    engine_call, artifact_root, profile = _start_isolated_software_change(
+        engine=engine,
+        provider=provider,
+        profile_source=profile_source,
+        fixture_root=fixture_root,
+        work_dir=work_dir / "run",
+        run_id=run_id,
+        extra_bindings={slot_id: binding},
+    )
+    _advance_software_change_to(
+        engine_call,
+        run_id=run_id,
+        profile=profile,
+        artifact_root=artifact_root,
+        target=slot_id,
+    )
+    database = work_dir / "run" / "loop.sqlite"
+
+    def invoke_with_short_budget() -> dict[str, Any]:
+        completed = subprocess.run(
+            [
+                str(engine),
+                "--database",
+                str(database),
+                "--timeout-ms",
+                "20",
+                "--json",
+                "invoke",
+                run_id,
+                slot_id,
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        try:
+            value = json.loads(completed.stdout)
+        except json.JSONDecodeError as error:
+            raise WorkSlotJourneyFailure(
+                f"overrun invoke returned non-JSON: {error}; stderr={completed.stderr!r}"
+            ) from error
+        if value.get("status") != "completed":
+            raise WorkSlotJourneyFailure(f"short-budget invoke failed: {value}")
+        return value
+
+    first_started = invoke_with_short_budget()
+    first_id = first_started["result"]["invocation_id"]
+    first = _wait_overlay_status(
+        engine_call,
+        run_id,
+        first_id,
+        expected="overrun",
+        timeout_s=5.0,
+    )
+    immediately_shown = engine_call(["show", run_id])
+    if immediately_shown.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"show before overrun retry failed: {immediately_shown}")
+    first_view = next(
+        item
+        for item in immediately_shown["result"]["work_slot_invocations"]
+        if item.get("invocation_id") == first_id
+    )
+    retry_started = invoke_with_short_budget()
+    second_id = retry_started["result"]["invocation_id"]
+    second = _wait_overlay_status(
+        engine_call,
+        run_id,
+        second_id,
+        expected="overrun",
+        timeout_s=5.0,
+    )
+    if (
+        first_view.get("status") != "overrun"
+        or first_view.get("overlay_meaning", "").find("run show immediately") < 0
+        or second_id == first_id
+        or second.get("status") != "overrun"
+        or Path(first["capture_dir"]) == Path(second["capture_dir"])
+    ):
+        raise WorkSlotJourneyFailure(
+            f"overrun retry was not inspectable or isolated: first={first_view}; "
+            f"second={second}"
+        )
+    time.sleep(0.7)
+    return [
+        "overrun remains a reader overlay and is not already-running",
+        "driver show occurs immediately before retry",
+        "overrun and retry captures remain distinct and inspectable",
         "no live model",
     ]
 

@@ -13,8 +13,10 @@ use crate::config::parse_initial_input;
 use crate::evidence::{
     evaluate_accepted_findings, evaluate_evidence, AuthorIdentity as EvidenceAuthorIdentity,
 };
+use crate::overlay;
 use crate::protocol::{allow_response, deny_response, unsupported_response, EvaluateRequest};
 use crate::workflow::{self, TransitionDuties};
+use bookends_check::CheckStatus;
 use loop_core::{DurableEvaluationResult, TransitionKind};
 use serde_json::{json, Value};
 use std::fmt;
@@ -22,9 +24,11 @@ use std::fmt;
 const SCHEMA_DENY_CODE: &str = "software-change-schema-invalid";
 const EVIDENCE_DENY_CODE: &str = "software-change-review-incomplete";
 const ACCEPTED_FINDINGS_DENY_CODE: &str = "software-change-accepted-findings-missing";
+const BOOKENDS_RED_DENY_CODE: &str = "software-change-bookends-red";
 const SCHEMA_DENY_MESSAGE: &str = "not judged: fix shape first";
 const EVIDENCE_DENY_MESSAGE: &str = "review evidence incomplete";
 const ACCEPTED_FINDINGS_DENY_MESSAGE: &str = "accepted findings missing or malformed";
+const BOOKENDS_RED_DENY_MESSAGE: &str = "in-process bookends check is red";
 
 /// Evaluation result consumed by `main.rs` for exit-code handling.
 pub(crate) enum EvaluationOutcome {
@@ -44,8 +48,15 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
     };
 
     // §9.3: config validation is obligation-independent and artifact_root is
-    // deliberately untouched by parse_initial_input.
-    let config = match parse_initial_input(&request.initial_input) {
+    // deliberately untouched by parse_initial_input. Overlay injection is
+    // evaluate-time only and does not mutate the frozen initial_input.
+    let overlay_on = overlay::enabled(&request.initial_input);
+    let initial_input = if overlay_on {
+        overlay::apply(&request.initial_input)
+    } else {
+        request.initial_input.clone()
+    };
+    let config = match parse_initial_input(&initial_input) {
         Ok(config) => config,
         Err(error) => return EvaluationOutcome::EvaluationError(error.to_string()),
     };
@@ -57,6 +68,15 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
         return EvaluationOutcome::Response(allow_response());
     };
 
+    let bookends_report = if overlay_on {
+        match load_bookends_report() {
+            Ok(report) => Some(report),
+            Err(error) => return EvaluationOutcome::EvaluationError(error),
+        }
+    } else {
+        None
+    };
+
     let schema = config.schema(subject);
     let links = config.links_from(subject);
     let axes = gate
@@ -66,6 +86,14 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
     // §9.4: no configured schema, link, or semantic axis means allow without
     // requiring artifact_root and without consulting context.
     if schema.is_none() && links.is_empty() && axes.is_none() {
+        if overlay_on && is_passed(request) && !bookends_is_green(bookends_report.as_ref()) {
+            return EvaluationOutcome::Response(bookends_red_deny(
+                request,
+                bookends_report
+                    .as_ref()
+                    .expect("overlay-on loads the checker"),
+            ));
+        }
         return EvaluationOutcome::Response(allow_response());
     }
 
@@ -88,18 +116,38 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
     let mut metadata = None;
     if let (Some(schema), Some(document)) = (schema, document.as_ref()) {
         let report = schema.evaluate(document.value());
-        if !report.is_valid() {
-            let violations = report
-                .violations()
-                .iter()
-                .map(|violation| {
-                    json!({
-                        "path": violation.path,
-                        "rule": violation.rule,
-                        "message": violation.message,
-                    })
+        let mut violations: Vec<Value> = report
+            .violations()
+            .iter()
+            .map(|violation| {
+                json!({
+                    "path": violation.path,
+                    "rule": violation.rule,
+                    "message": violation.message,
                 })
-                .collect();
+            })
+            .collect();
+        if let Some(bookends) = bookends_report.as_ref() {
+            for extra in overlay::requirement_id_violations(document.value(), &bookends.live_ids) {
+                // The ID grammar is also represented by the injected schema.
+                // Keep the overlay's live-ID rule, but do not report the same
+                // malformed token twice when the schema already emitted its
+                // pattern violation.
+                let already_reported = violations.iter().any(|violation| {
+                    violation.get("path").and_then(Value::as_str) == Some(extra.path.as_str())
+                        && violation.get("rule").and_then(Value::as_str)
+                            == Some(extra.rule.as_str())
+                });
+                if !already_reported {
+                    violations.push(json!({
+                        "path": extra.path,
+                        "rule": extra.rule,
+                        "message": extra.message,
+                    }));
+                }
+            }
+        }
+        if !violations.is_empty() {
             return EvaluationOutcome::Response(schema_deny(request, violations));
         }
 
@@ -133,6 +181,15 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
                 return EvaluationOutcome::EvaluationError(error.to_string())
             }
         }
+    }
+
+    if overlay_on && is_passed(request) && !bookends_is_green(bookends_report.as_ref()) {
+        return EvaluationOutcome::Response(bookends_red_deny(
+            request,
+            bookends_report
+                .as_ref()
+                .expect("overlay-on loads the checker"),
+        ));
     }
 
     // §9.6: evidence is consulted only after all deterministic checks pass.
@@ -188,6 +245,62 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
     }
 
     EvaluationOutcome::Response(allow_response())
+}
+
+fn load_bookends_report() -> Result<bookends_check::CheckReport, String> {
+    let cwd = std::env::current_dir()
+        .map_err(|error| format!("cannot read evaluate process cwd: {error}"))?;
+    let bypass = match std::env::var("BOOKENDS_BYPASS") {
+        Ok(value) if !value.is_empty() => {
+            let Some((class, reason)) = value.split_once(':') else {
+                return Err(
+                    "BOOKENDS_BYPASS must have the form <class>:<reason> when non-empty".into(),
+                );
+            };
+            if class.is_empty() || reason.is_empty() {
+                return Err("BOOKENDS_BYPASS must have non-empty <class> and <reason>".into());
+            }
+            Some((class.to_owned(), reason.to_owned()))
+        }
+        _ => None,
+    };
+    let bypass = bypass
+        .as_ref()
+        .map(|(class, reason)| (class.as_str(), reason.as_str()));
+    bookends_check::check_repo(&cwd, bypass).map_err(|error| error.to_string())
+}
+
+fn is_passed(request: &EvaluateRequest) -> bool {
+    request.transition.event.as_str() == "passed"
+}
+
+fn bookends_is_green(report: Option<&bookends_check::CheckReport>) -> bool {
+    report.is_some_and(|report| matches!(report.status, CheckStatus::Green))
+}
+
+fn bookends_red_deny(request: &EvaluateRequest, report: &bookends_check::CheckReport) -> Value {
+    let mut details = json!({
+        "phase": "bookends",
+        "status": match &report.status {
+            CheckStatus::Green => "green",
+            CheckStatus::Red => "red",
+            CheckStatus::Bypass { .. } => "bypass",
+        },
+        "findings": report.findings,
+        "prior_denials": prior_denials(request),
+    });
+    if let CheckStatus::Bypass { class, reason } = &report.status {
+        let object = details
+            .as_object_mut()
+            .expect("bookends denial details are an object");
+        object.insert("bypass_class".to_owned(), json!(class));
+        object.insert("bypass_reason".to_owned(), json!(reason));
+    }
+    deny_response(
+        BOOKENDS_RED_DENY_CODE,
+        BOOKENDS_RED_DENY_MESSAGE,
+        Some(details),
+    )
 }
 
 fn duties_for_snapshotted_transition(request: &EvaluateRequest) -> Option<TransitionDuties> {

@@ -57,7 +57,10 @@ def main() -> int:
         "python3 scripts/assert-release-gates.py",
         "python3 scripts/software-change-journey.py --self-test",
         "python3 scripts/research-journey.py --self-test",
-        "cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider",
+        "python3 scripts/generate-prd-journey.py --self-test",
+        "scripts/bookends-check-gate.sh",
+        "python3 scripts/assert-generate-prd-profile.py",
+        "cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider -p bookends-check",
         "--traversal-depth full",
         "python3 scripts/policy-document-journey.py",
         "--profile crates/policy-document-provider/data/readme.json",
@@ -65,10 +68,14 @@ def main() -> int:
         "python3 scripts/research-journey.py",
         "--provider target/debug/research",
         "--profile crates/research-provider/data/configs/standard.json",
+        "--profile crates/research-provider/data/configs/generate-prd.json",
+        "--checker target/debug/bookends-check",
     )
     missing = [token for token in required_preflight if token not in preflight]
     if missing:
         fail(f"reusable preflight lost required gate(s): {missing}")
+    if 'run: scripts/bookends-check-gate.sh' not in preflight or 'BOOKENDS_BYPASS: ""' not in preflight:
+        fail("required CI must run the Bookends gate without a bypass")
     if re.search(r"^    if:", preflight, re.MULTILINE):
         fail("reusable preflight must not be independently skippable")
     if "version=2.14.0" not in preflight or "github.com/dagu-org/dagu/releases/download/v${version}/" not in preflight:

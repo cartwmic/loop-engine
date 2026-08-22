@@ -23,9 +23,12 @@ rules, and prints ``worker-data skill/root policy assertions passed`` only after
 all pass. Source full mode binds deterministic stdin-capturing workers that emit
 conforming JSON or exit-0 refusal text; after overlay failure, persisted
 summary/captures, and the compact one-key ``artifact_root`` stdin proof, it
-prints ``contracted fan-out failure``. It then starts a second run from shipped
-minimal.json and walks the stitched hops (empty review lists omitted, last-hop
-``passed`` on the live validation review).
+prints ``contracted fan-out failure``. It also drives the real engine/provider
+boundary cases for structural workflow rejection, final-state topology,
+an initially-final run, terminal mutation rejection, a changed provider
+``describe``, and an unavailable stored evaluation. It then starts a second run
+from shipped minimal.json and walks the stitched hops (empty review lists
+omitted, last-hop ``passed`` on the live validation review).
 """
 
 from __future__ import annotations
@@ -38,6 +41,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -45,6 +49,11 @@ import work_slot_journey
 
 PROFILE_SUBPATH = Path("crates/software-change-provider/data/configs/high-rigor.json")
 STITCHED_PROFILE_SUBPATH = Path(
+    "crates/software-change-provider/data/configs/minimal.json"
+)
+BOOKENDS_TOMBSTONE_ID = "LE-9000"
+BOOKENDS_SCENARIO_RUN_ID = "bookends-enabled-journey"
+BOOKENDS_SCENARIO_PROFILE = Path(
     "crates/software-change-provider/data/configs/minimal.json"
 )
 STITCHED_RUN_ID = "journey-stitched-run"
@@ -144,6 +153,8 @@ DUMMY_WORKER_PROOF = [
     "PATH stub pi default argv --print --no-skills --no-extensions without --no-context-files or --tools",
     "bound fan-out show heartbeat overlay_meaning elapsed remaining capture_dir inner_workers",
     "contracted fan-out exit-0 conformance summary and failed-overlay capture persistence",
+    "overrun overlay show/retry and distinct captures",
+    "stdin-exec sidecar/propagate, spawn failure, and session directory",
     "bound run-plan-graph inner workers in task order plus capture isolation",
     "graph-level run-plan-graph working_dir reaches every task and summarizer",
     "symlink-selected checkout cwd receipts are filesystem-equivalent and see .git",
@@ -194,6 +205,10 @@ class Journey:
         self.artifact_root: Optional[Path] = None
         self.work_slot_bindings: Dict[str, Any] = {}
         self.dummy_worker_proof: List[str] = []
+        self.engine_boundary_proof: List[str] = []
+        self.bookends_proof: Optional[Path] = None
+        self.command_cwd: Optional[Path] = None
+        self.command_env: Dict[str, str] = {}
         self.run_id = "journey-production-run"
         self.stitched_run_id: Optional[str] = None
         self.state = "not-started"
@@ -279,6 +294,7 @@ class Journey:
         self._probe_startup()
         self._start()
         self._assert_show("explore", "start")
+        self._run_unavailable_event_proof()
         self._append_marker("journey-marker-separate", equals=False)
         self._append_marker("journey-marker-equals", equals=True)
         self._assert_marker_persistence()
@@ -301,9 +317,13 @@ class Journey:
                     "stitched_run_id": self.stitched_run_id,
                     "database": str(self.database),
                     "artifact_root": str(self.artifact_root),
+                    "bookends_enabled_proof": (
+                        str(self.bookends_proof) if self.bookends_proof is not None else None
+                    ),
                     "successor_route_cases": successor_route_cases,
                     "work_slot_proof": WORK_SLOT_PROOF,
                     "dummy_worker_proof": self.dummy_worker_proof,
+                    "engine_boundary_proof": self.engine_boundary_proof,
                     "synthetic_evidence_scope": (
                         "Deterministic mechanics only; synthetic records are not semantic verdict quality."
                     ),
@@ -482,8 +502,17 @@ class Journey:
         assert self.database is not None
         command = [str(self.engine), "--database", str(self.database), "--json"]
         command.extend(operation)
+        environment = os.environ.copy()
+        environment.update(self.command_env)
         try:
-            completed = subprocess.run(command, text=True, capture_output=True, check=False)
+            completed = subprocess.run(
+                command,
+                text=True,
+                capture_output=True,
+                check=False,
+                cwd=str(self.command_cwd) if self.command_cwd is not None else None,
+                env=environment,
+            )
         except OSError as error:
             raise JourneyFailure(
                 f"engine {operation[0] if operation else 'operation'} could not start: {error}",
@@ -527,6 +556,13 @@ class Journey:
     def _prove_work_slots_at_start(self) -> None:
         assert self.artifact_root is not None
         try:
+            # bookends:LE-75 — show exposes the frozen catalog and sparse bindings before work.
+            # bookends:LE-77 — bound instructions expose the slot and frozen CLI binding.
+            # bookends:LE-78 — invoke allocates capture state and sends the worker packet.
+            # bookends:LE-81 — invocation history is engine-authored, not append-authored.
+            # bookends:LE-82 — show/invocation views expose the reader overlay fields.
+            # bookends:LE-87 — the public helper checks the slot-visit subject and digest.
+            # bookends:LE-88 — this is the shared public-boundary sparse-binding scenario.
             work_slot_journey.prove_bound_visit(
                 self._engine_call(self.run_id, state="explore"),
                 run_id=self.run_id,
@@ -543,6 +579,47 @@ class Journey:
             raise JourneyFailure(str(error), state="explore", event="invoke") from error
         self.state = "explore"
 
+    def _run_unavailable_event_proof(self) -> None:
+        """Prove an unavailable event is a rejection, not a state mutation."""
+        response = self._event("event-that-is-not-stored", axis="unavailable")
+        self._expect_status(
+            response,
+            "rejected",
+            event="event-that-is-not-stored",
+            axis="unavailable",
+            state=self.state,
+        )
+        shown = self._assert_show("explore", "unavailable-event-show")
+        history = self._engine(
+            ["history", self.run_id], state=self.state, event="unavailable-event-history"
+        )
+        self._expect_status(
+            history,
+            "completed",
+            event="history",
+            axis="unavailable",
+            state=self.state,
+        )
+        transitions = [
+            entry
+            for entry in history.get("result", [])
+            if entry.get("action", {}).get("kind") == "transition"
+        ]
+        # bookends:LE-4 — this real unavailable event assertion preserves the shown state and adds no transition history.
+        if response.get("code") != "event-unavailable":
+            raise JourneyFailure(
+                f"unavailable event was not rejected as unavailable: {response}",
+                state=self.state,
+                event="event-that-is-not-stored",
+            )
+        if shown.get("current_state") != "explore" or transitions:
+            raise JourneyFailure(
+                f"unavailable event changed state or history: show={shown}, history={history}",
+                state=self.state,
+                event="event-that-is-not-stored",
+            )
+        print("unavailable-event scenario passed: state and semantic history unchanged")
+
     def _invoke_bound_slot(self, run_id: str, *, state: str) -> None:
         try:
             work_slot_journey.invoke_until_succeeded(
@@ -554,6 +631,7 @@ class Journey:
             raise JourneyFailure(str(error), state=state, event="invoke") from error
 
     def _assert_unbound_design(self) -> None:
+        # bookends:LE-21 — the show instructions retain the external artifact identity.
         shown = self._assert_show("design", "unbound-instructions")
         try:
             work_slot_journey.assert_unbound_instructions(shown, "design.json")
@@ -589,6 +667,12 @@ class Journey:
             raise JourneyFailure(
                 "start did not preserve the caller-owned run ID", state="explore", event="start"
             )
+        # bookends:LE-41 — the committed start response freezes the selected review-policy configuration.
+        expected_initial_input = self._read_json(self.profile_path, "started profile")
+        if result.get("run", {}).get("initial_input") != expected_initial_input:
+            raise JourneyFailure(
+                "start did not freeze the caller input", state="explore", event="start"
+            )
 
     def _show_for(self, run_id: str, *, state: str, event: str) -> Dict[str, Any]:
         response = self._engine_for(
@@ -603,6 +687,9 @@ class Journey:
     def _assert_show_for(
         self, run_id: str, expected_state: str, event: str
     ) -> Dict[str, Any]:
+        # bookends:LE-10 — each show is a fresh CLI process and must recover current state.
+        # bookends:LE-20 — show is the fresh-actor handoff surface.
+        # bookends:LE-53 — the journey crosses process boundaries at every public command.
         shown = self._show_for(run_id, state=expected_state, event=event)
         actual = shown.get("current_state")
         if actual != expected_state:
@@ -615,6 +702,11 @@ class Journey:
             raise JourneyFailure(
                 "show omitted requestable_events", state=expected_state, event=event
             )
+        # bookends:LE-42 — this fresh show projection carries frozen review policies without a describe/discovery call.
+        if not isinstance(shown.get("initial_input"), dict) or "review_policies" not in shown["initial_input"]:
+            raise JourneyFailure(
+                "show omitted frozen review policies", state=expected_state, event=event
+            )
         return shown
 
     def _assert_show(self, expected_state: str, event: str) -> Dict[str, Any]:
@@ -626,6 +718,7 @@ class Journey:
         data = json.dumps(
             {
                 "scope": "deterministic-mechanics",
+                "steering": "preserve the caller's durable direction",
                 "synthetic_evidence": True,
                 "semantic_verdict_quality": "not tested",
             },
@@ -635,7 +728,8 @@ class Journey:
         operation: List[str] = ["append", record_option]
         if not equals:
             operation.append(record_id)
-        operation.extend([self.run_id, "journey-marker", data])
+        kind = "user-steering" if record_id == "journey-marker-separate" else "journey-marker"
+        operation.extend([self.run_id, kind, data])
         response = self._engine(operation, state=self.state, event="append", axis="record-id")
         self._expect_status(
             response, "completed", event="append", axis="record-id", state=self.state
@@ -651,16 +745,67 @@ class Journey:
 
     def _assert_marker_persistence(self) -> None:
         shown = self._assert_show(self.state, "marker-show")
-        context_ids = [record.get("id") for record in shown.get("context", [])]
+        context = shown.get("context", [])
+        context_ids = [record.get("id") for record in context]
         for record_id in ("journey-marker-separate", "journey-marker-equals"):
             if record_id not in context_ids:
                 raise JourneyFailure(
                     f"show lost caller-owned record ID {record_id!r}", state=self.state, event="show", axis="record-id"
                 )
+        if context_ids.index("journey-marker-separate") >= context_ids.index("journey-marker-equals"):
+            raise JourneyFailure("show did not preserve append order for caller context")
+        marker_records = {
+            record.get("id"): record for record in context if isinstance(record, dict)
+        }
+        if any(
+            marker_records[record_id].get("data", {}).get("semantic_verdict_quality")
+            != "not tested"
+            for record_id in ("journey-marker-separate", "journey-marker-equals")
+        ):
+            raise JourneyFailure("marker data was interpreted or rewritten by the engine")
+        expected_initial_input = self._read_json(self.profile_path, "started profile")
+        if shown.get("initial_input") != expected_initial_input:
+            raise JourneyFailure("show changed immutable initial input after append")
+        if marker_records["journey-marker-separate"].get("kind") != "user-steering":
+            raise JourneyFailure("steering marker was not retained as caller context")
+        # bookends:LE-16 — a fresh show after append retains the exact immutable initial input.
+        # bookends:LE-17 — show proves durable context records retain append order.
+        # bookends:LE-18 — marker data remains opaque caller context rather than engine truth.
+        # bookends:LE-22 — appended steering is visible to the next public actor.
         history = self._engine(["history", self.run_id], state=self.state, event="history")
         self._expect_status(
             history, "completed", event="history", axis="record-id", state=self.state
         )
+        allowed_history_kinds = {
+            "run_created",
+            "context_appended",
+            "transition",
+            "terminated",
+            "invocation_started",
+            "invocation_status_changed",
+        }
+        unexpected_history_kinds = [
+            entry.get("action", {}).get("kind")
+            for entry in history.get("result", [])
+            if entry.get("action", {}).get("kind") not in allowed_history_kinds
+        ]
+        # bookends:LE-25 — the public history projection contains only the semantic action kinds defined by the product contract.
+        if unexpected_history_kinds:
+            raise JourneyFailure(
+                f"history exposed non-semantic action kinds: {unexpected_history_kinds}"
+            )
+        history_sequences = [entry.get("sequence") for entry in history.get("result", [])]
+        # bookends:LE-28 — the public history sequence is ordered after separate CLI reads.
+        if history_sequences != sorted(history_sequences):
+            raise JourneyFailure(f"history sequence order changed: {history_sequences}")
+        history_again = self._engine(
+            ["history", self.run_id], state=self.state, event="history-again"
+        )
+        self._expect_status(
+            history_again, "completed", event="history-again", axis="record-id", state=self.state
+        )
+        if history_again.get("result") != history.get("result"):
+            raise JourneyFailure("history read changed semantic history", state=self.state, event="history")
         history_ids = [
             entry.get("action", {}).get("context_record_id")
             for entry in history.get("result", [])
@@ -688,7 +833,11 @@ class Journey:
         )
         if response.get("code") != code:
             raise JourneyFailure(
-                f"expected denial {code}, got {response.get('code')}", state=self.state, event=event, axis=axis
+                f"expected denial {code}, got {response.get('code')}: {response}", state=self.state, event=event, axis=axis
+            )
+        if not response.get("message"):
+            raise JourneyFailure(
+                f"denial omitted actionable message: {response}", state=self.state, event=event, axis=axis
             )
         self._assert_show(self.state, event + "-denied")
         return response
@@ -798,12 +947,31 @@ class Journey:
         )
         if response.get("code") != code:
             raise JourneyFailure(
-                f"expected denial {code}, got {response.get('code')}",
+                f"expected denial {code}, got {response.get('code')}: {response}",
                 state=state,
                 event=event,
                 axis=axis,
             )
-        self._assert_show_for(run_id, state, event + "-denied")
+        shown = self._assert_show_for(run_id, state, event + "-denied")
+        latest = [
+            evaluation
+            for evaluation in shown.get("latest_evaluations", [])
+            if evaluation.get("transition", {}).get("source") == state
+            and evaluation.get("transition", {}).get("event") == event
+        ]
+        # bookends:LE-46 — missing review evidence is an actionable checked denial.
+        if (
+            len(latest) != 1
+            or latest[0].get("result", {}).get("result") != "deny"
+            or latest[0].get("result", {}).get("feedback", {}).get("code") != code
+            or not latest[0].get("result", {}).get("feedback", {}).get("message")
+        ):
+            raise JourneyFailure(
+                f"show omitted actionable denial lineage for {state}/{event}: {shown}",
+                state=state,
+                event=event,
+                axis=axis,
+            )
         return response
 
     def _pass_review_for(
@@ -816,19 +984,57 @@ class Journey:
         *,
         record_prefix: str = "",
     ) -> None:
-        self._expect_denial_for(
+        # bookends:LE-6 — this provider-denied checked approval does not advance without allow.
+        # bookends:LE-44 — the driver appends externally produced review evidence.
+        # bookends:LE-45 — the provider validates evidence; it does not author a review.
+        # bookends:LE-52 — prior evidence and denial lineage are carried into the next check.
+        first_denial = self._expect_denial_for(
             run_id, state, event, gate, "software-change-review-incomplete"
         )
         self._append_evidence_for(
             run_id, gate, state=state, record_prefix=record_prefix
         )
-        self._expect_denial_for(
+        second_denial = self._expect_denial_for(
             run_id, state, event, gate, "software-change-accepted-findings-missing"
         )
+        prior_denials = second_denial.get("details", {}).get("prior_denials", [])
+        if not isinstance(prior_denials, list) or not any(
+            item.get("code") == first_denial.get("code") for item in prior_denials
+            if isinstance(item, dict)
+        ):
+            raise JourneyFailure(
+                f"provider did not receive ordered prior denial lineage: {second_denial}",
+                state=state,
+                event=event,
+            )
+        # bookends:LE-31 — the second checked request observes the prior denial in durable order.
         self._append_accepted_findings_for(
             run_id, gate, state=state, record_prefix=record_prefix
         )
-        self._expect_allow_for(run_id, state, event, target)
+        final = self._expect_allow_for(run_id, state, event, target)
+        shown = self._show_for(run_id, state=target, event=event + "-latest")
+        latest = [
+            evaluation
+            for evaluation in shown.get("latest_evaluations", [])
+            if evaluation.get("transition", {}).get("source") == state
+            and evaluation.get("transition", {}).get("event") == event
+        ]
+        # bookends:LE-29 — a durable denial and later allow remain visible across fresh actor processes.
+        # bookends:LE-33 — externally supplied evidence changes only provider authorization, not engine routing.
+        # bookends:LE-34 — the denied result has feedback, while the later allow carries no feedback payload.
+        # bookends:LE-47 — complete configured evidence allows the policy gate.
+        # bookends:LE-50 — show projects the successful evaluation as the latest result.
+        if (
+            final.get("result", {}).get("run", {}).get("current_state") != target
+            or len(latest) != 1
+            or latest[0].get("result", {}).get("result") != "allow"
+            or "feedback" in latest[0].get("result", {})
+        ):
+            raise JourneyFailure(
+                f"successful review edge was not projected as latest allow: {shown}",
+                state=state,
+                event=event,
+            )
 
     def _pass_review(self, gate: str, event: str, target: str) -> None:
         self._pass_review_for(
@@ -966,16 +1172,21 @@ class Journey:
                 run_id, ["history", run_id], state=target, event="history", axis="route"
             )
             self._expect_status(history, "completed", event="history", state=target, axis="route")
-            if not any(
-                entry.get("action", {}).get("kind") == "transition"
+            # bookends:LE-9 — the committed route is accompanied by its durable transition history.
+            # bookends:LE-27 — one route request creates exactly one aggregate transition entry.
+            # bookends:LE-30 — the history assertion identifies the exact source/event/target edge.
+            matching = [
+                entry
+                for entry in history.get("result", [])
+                if entry.get("action", {}).get("kind") == "transition"
                 and entry["action"].get("transition", {}).get("source") == source
                 and entry["action"]["transition"].get("event") == event
                 and entry["action"]["transition"].get("target") == target
                 and entry["action"].get("outcome", {}).get("outcome") == "committed"
-                for entry in history.get("result", [])
-            ):
+            ]
+            if len(matching) != 1:
                 raise JourneyFailure(
-                    f"history omitted committed {source}/{event}/{target} route",
+                    f"history expected one committed {source}/{event}/{target} route, got {len(matching)}",
                     state=target,
                     event="history",
                     axis="route",
@@ -1015,6 +1226,7 @@ class Journey:
             self.fixture_root / SUBJECTS["intent.json"],
             self.artifact_root / "intent.json",
         )
+        # bookends:LE-83 — this checked edge is requested only after the public bound invocation has succeeded with the matching digest and visit subject.
         self._expect_allow("intent-ready", "intent-review")
         self._pass_review("intent-review", "approved", "intent-adversarial-review")
         self._pass_review("intent-adversarial-review", "approved", "design")
@@ -1064,6 +1276,20 @@ class Journey:
             raise JourneyFailure("full journey did not reach final lifecycle", state=self.state, event="passed")
         if shown.get("requestable_events") != []:
             raise JourneyFailure("final journey exposed requestable events", state=self.state, event="show")
+        intent = self._read_json(self.artifact_root / "intent.json", "completed intent")
+        design = self._read_json(self.artifact_root / "design.json", "completed design")
+        plan = self._read_json(self.artifact_root / "plan.json", "completed plan")
+        # bookends:LE-40 — the same completed public run consumes already-known intent, design, and plan artifacts with their revision links intact.
+        if (
+            len(shown.get("context", [])) < 4
+            or design.get("intent_revision") != intent.get("revision")
+            or plan.get("design_revision") != design.get("revision")
+        ):
+            raise JourneyFailure(
+                "full journey did not retain substantial durable intent/design/plan context",
+                state=self.state,
+                event="show",
+            )
         print(
             "full software-change journey passed: parent and adversarial reviews walked, last-hop passed"
         )
@@ -1086,7 +1312,1404 @@ class Journey:
 
         self._run_successor_route_proof()
         self._run_stitched_source()
+        self._run_engine_boundary_scenarios()
         self._run_dummy_worker_proofs()
+        self._run_bookends_enabled_source()
+
+    def _scenario_engine_call(
+        self,
+        database: Path,
+        operation: Sequence[str],
+        *,
+        cwd: Optional[Path] = None,
+    ) -> Dict[str, Any]:
+        """Run one boundary-scenario CLI process and parse its envelope."""
+        command = [str(self.engine), "--database", str(database), "--json", *operation]
+        completed = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            check=False,
+            cwd=str(cwd) if cwd is not None else None,
+        )
+        try:
+            response = json.loads(completed.stdout)
+        except json.JSONDecodeError as error:
+            raise JourneyFailure(
+                f"boundary scenario returned non-JSON (exit={completed.returncode}): "
+                f"{error}; stderr={completed.stderr.strip()!r}"
+            ) from error
+        if not isinstance(response, dict):
+            raise JourneyFailure(f"boundary scenario response is not an object: {response}")
+        return response
+
+    def _scenario_start_and_ready(
+        self,
+        database: Path,
+        provider_config: Path,
+        input_path: Path,
+        run_id: str,
+    ) -> None:
+        started = self._scenario_start(database, provider_config, run_id, input_path)
+        self._expect_status(started, "completed", event="start", state="explore")
+        ready = self._scenario_engine_call(
+            database, ["event", run_id, "intent-ready"], cwd=self.data_root
+        )
+        self._expect_status(ready, "completed", event="intent-ready", state="explore")
+
+    def _scenario_event_call(
+        self, database: Path, run_id: str, event: str
+    ) -> Dict[str, Any]:
+        command = [
+            str(self.engine),
+            "--database",
+            str(database),
+            "--json",
+            "event",
+            run_id,
+            event,
+        ]
+        process = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            check=False,
+            cwd=self.data_root,
+        )
+        try:
+            value = json.loads(process.stdout)
+        except json.JSONDecodeError as error:
+            raise JourneyFailure(
+                f"concurrent event returned non-JSON: {error}; stderr={process.stderr!r}"
+            ) from error
+        if not isinstance(value, dict):
+            raise JourneyFailure(f"concurrent event response is not an object: {value}")
+        return value
+
+    @staticmethod
+    def _write_scenario_provider_config(
+        path: Path, command: str, args: Sequence[str]
+    ) -> None:
+        path.write_text(
+            "[providers.software-change]\n"
+            f"command = {json.dumps(command)}\n"
+            f"args = {json.dumps(list(args))}\n",
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _scenario_provider_call(command: Sequence[str], request: Dict[str, Any]) -> Dict[str, Any]:
+        completed = subprocess.run(
+            list(command),
+            input=json.dumps(request),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise JourneyFailure(
+                "boundary provider call failed: "
+                + (completed.stderr.strip() or f"exit {completed.returncode}")
+            )
+        try:
+            response = json.loads(completed.stdout)
+        except json.JSONDecodeError as error:
+            raise JourneyFailure(
+                f"boundary provider returned non-JSON: {error}; stderr={completed.stderr.strip()!r}"
+            ) from error
+        if not isinstance(response, dict):
+            raise JourneyFailure(f"boundary provider response is not an object: {response}")
+        return response
+
+    def _write_mutating_provider(self, path: Path) -> None:
+        """Create a temporary delegate used only to change production output between calls."""
+        path.write_text(
+            """#!/usr/bin/env python3
+import json
+import pathlib
+import subprocess
+import sys
+import time
+
+real_provider = sys.argv[1]
+mode_path = pathlib.Path(sys.argv[2])
+request_bytes = sys.stdin.read()
+request = json.loads(request_bytes)
+mode = mode_path.read_text(encoding="utf-8").strip()
+
+if request.get("operation") == "evaluate" and mode == "unsupported":
+    mode_path.with_suffix(".request").write_text(request_bytes, encoding="utf-8")
+    print(json.dumps({"result": "unsupported"}, separators=(",", ":")))
+    raise SystemExit(0)
+if request.get("operation") == "evaluate" and mode == "allow":
+    print(json.dumps({"result": "allow"}, separators=(",", ":")))
+    raise SystemExit(0)
+if request.get("operation") == "evaluate" and mode == "allow-other-target":
+    print(json.dumps({"result": "allow", "target": "explore"}, separators=(",", ":")))
+    raise SystemExit(0)
+if request.get("operation") == "evaluate" and mode == "failure":
+    raise SystemExit(7)
+if request.get("operation") == "evaluate" and mode == "deny":
+    print(json.dumps({
+        "result": "deny",
+        "feedback": {"code": "scenario-denied", "message": "scenario denial"},
+    }, separators=(",", ":")))
+    raise SystemExit(0)
+if request.get("operation") == "evaluate" and mode in {"sleep", "sleep-deny"}:
+    mode_path.with_suffix(".started").write_text("started\\n", encoding="utf-8")
+    time.sleep(0.25)
+    if mode == "sleep-deny":
+        mode_path.with_suffix(".result").write_text("deny\\n", encoding="utf-8")
+        print(json.dumps({
+            "result": "deny",
+            "feedback": {"code": "scenario-denied", "message": "scenario denial"},
+        }, separators=(",", ":")))
+    else:
+        mode_path.with_suffix(".result").write_text("allow\\n", encoding="utf-8")
+        print(json.dumps({"result": "allow"}, separators=(",", ":")))
+    raise SystemExit(0)
+
+completed = subprocess.run(
+    [real_provider], input=request_bytes, text=True, capture_output=True, check=False
+)
+if completed.stderr:
+    sys.stderr.write(completed.stderr)
+if completed.returncode != 0:
+    sys.stdout.write(completed.stdout)
+    raise SystemExit(completed.returncode)
+
+if request.get("operation") == "describe" and mode in {"invalid", "changed", "final-outgoing", "initial-final"}:
+    workflow = json.loads(completed.stdout)
+    if mode == "invalid":
+        workflow["initial_state"] = "provider-missing-state"
+    elif mode == "final-outgoing":
+        workflow["transitions"].append({
+            "source": "end",
+            "event": "escape",
+            "target": "explore",
+            "kind": "check-free",
+        })
+    elif mode == "initial-final":
+        workflow["initial_state"] = "end"
+    else:
+        workflow["states"].append({
+            "id": "provider-changed-state",
+            "title": "Provider changed",
+            "instructions": "changed provider instructions",
+            "final": False,
+        })
+        for transition in workflow["transitions"]:
+            if transition["source"] == "explore" and transition["event"] == "intent-ready":
+                transition["target"] = "provider-changed-state"
+                break
+        workflow["states"][0]["instructions"] += " [changed provider instructions]"
+    print(json.dumps(workflow, separators=(",", ":")))
+else:
+    sys.stdout.write(completed.stdout)
+""",
+            encoding="utf-8",
+        )
+        path.chmod(0o755)
+
+    def _scenario_start(
+        self,
+        database: Path,
+        provider_config: Path,
+        run_id: str,
+        input_path: Path,
+    ) -> Dict[str, Any]:
+        return self._scenario_engine_call(
+            database,
+            [
+                "--config",
+                str(provider_config),
+                "--timeout-ms",
+                "30000",
+                "start",
+                "--id",
+                run_id,
+                "software-change",
+                "@" + str(input_path),
+                "boundary scenario",
+            ],
+            cwd=self.data_root,
+        )
+
+    def _scenario_show(self, database: Path, run_id: str) -> Dict[str, Any]:
+        response = self._scenario_engine_call(
+            database, ["show", run_id], cwd=self.data_root
+        )
+        self._expect_status(response, "completed", event="show", state="boundary")
+        return response["result"]
+
+    def _run_le2_topology_scenario(
+        self,
+        scenario_dir: Path,
+        provider_command: Sequence[str],
+        input_path: Path,
+    ) -> None:
+        invalid_mode = scenario_dir / "le2-invalid.mode"
+        invalid_mode.write_text("invalid\n", encoding="utf-8")
+        invalid_config = scenario_dir / "le2-invalid.toml"
+        self._write_scenario_provider_config(
+            invalid_config, provider_command[0], provider_command[1:-1] + [str(invalid_mode)]
+        )
+        invalid_database = scenario_dir / "le2-invalid.sqlite"
+        invalid = self._scenario_start(
+            invalid_database, invalid_config, "le2-invalid-run", input_path
+        )
+        missing_after_invalid = self._scenario_engine_call(
+            invalid_database,
+            ["show", "le2-invalid-run"],
+            cwd=self.data_root,
+        )
+
+        unusual_mode = scenario_dir / "le2-unusual.mode"
+        unusual_mode.write_text("original\n", encoding="utf-8")
+        unusual_config = scenario_dir / "le2-unusual.toml"
+        self._write_scenario_provider_config(
+            unusual_config,
+            provider_command[0],
+            provider_command[1:-1] + [str(unusual_mode)],
+        )
+        unusual_database = scenario_dir / "le2-unusual.sqlite"
+        unusual = self._scenario_start(
+            unusual_database, unusual_config, "le2-unusual-run", input_path
+        )
+        workflow = unusual.get("result", {}).get("run", {}).get("workflow", {})
+        states = workflow.get("states", [])
+        transitions = workflow.get("transitions", [])
+        state_ids = {state.get("id") for state in states if isinstance(state, dict)}
+        has_cycle = any(
+            transition.get("source") == "intent-review"
+            and transition.get("event") == "revise"
+            and transition.get("target") == "explore"
+            for transition in transitions
+            if isinstance(transition, dict)
+        )
+        # bookends:LE-2 — the real start path rejects an uninterpretable production-provider graph and accepts its structurally valid cyclic graph.
+        if (
+            invalid.get("status") != "error"
+            or invalid.get("code") != "undefined-initial-state"
+            or missing_after_invalid.get("status") != "error"
+            or missing_after_invalid.get("code") != "run-not-found"
+        ):
+            raise JourneyFailure(
+                f"LE-2 malformed workflow was not rejected before persistence: {invalid}; "
+                f"follow-up={missing_after_invalid}"
+            )
+        if (
+            unusual.get("status") != "completed"
+            or "end" not in state_ids
+            or not has_cycle
+        ):
+            raise JourneyFailure(
+                f"LE-2 structurally valid unusual topology was not accepted: {unusual}"
+            )
+        self.engine_boundary_proof.extend(
+            [
+                "LE-2 malformed workflow rejected before run creation",
+                "LE-2 structurally valid cyclic production topology accepted",
+            ]
+        )
+        print("LE-2 topology scenarios passed: malformed rejected, cyclic topology accepted")
+
+    def _run_le13_final_state_outgoing_scenario(
+        self,
+        scenario_dir: Path,
+        provider_command: Sequence[str],
+        input_path: Path,
+    ) -> None:
+        """Reject a production-provider graph that gives a final state an edge."""
+        mode_path = scenario_dir / "le13-final-outgoing.mode"
+        mode_path.write_text("final-outgoing\n", encoding="utf-8")
+        provider_config = scenario_dir / "le13-final-outgoing.toml"
+        self._write_scenario_provider_config(
+            provider_config,
+            provider_command[0],
+            provider_command[1:-1] + [str(mode_path)],
+        )
+        database = scenario_dir / "le13-final-outgoing.sqlite"
+        run_id = "le13-final-outgoing-run"
+        started = self._scenario_start(database, provider_config, run_id, input_path)
+        missing = self._scenario_engine_call(
+            database, ["show", run_id], cwd=self.data_root
+        )
+        # bookends:LE-13 — the public start rejects a production-provider final state with an outgoing transition before creating a run.
+        if (
+            started.get("status") != "error"
+            or started.get("code") != "transition-from-final-state"
+            or missing.get("status") != "error"
+            or missing.get("code") != "run-not-found"
+        ):
+            raise JourneyFailure(
+                f"LE-13 final state with outgoing transition was accepted or persisted: "
+                f"start={started}; follow-up={missing}"
+            )
+        self.engine_boundary_proof.append(
+            "LE-13 final-state outgoing transition rejected before run creation"
+        )
+        print(
+            "LE-13 final-state scenario passed: outgoing transition rejected before run creation"
+        )
+
+    def _run_le14_initially_final_scenario(
+        self,
+        scenario_dir: Path,
+        provider_command: Sequence[str],
+        input_path: Path,
+    ) -> tuple[Path, str]:
+        """Create a public run whose production-provider initial state is final."""
+        mode_path = scenario_dir / "le14-initial-final.mode"
+        mode_path.write_text("initial-final\n", encoding="utf-8")
+        provider_config = scenario_dir / "le14-initial-final.toml"
+        self._write_scenario_provider_config(
+            provider_config,
+            provider_command[0],
+            provider_command[1:-1] + [str(mode_path)],
+        )
+        database = scenario_dir / "le14-initial-final.sqlite"
+        run_id = "le14-initial-final-run"
+        started = self._scenario_start(database, provider_config, run_id, input_path)
+        shown = self._scenario_show(database, run_id)
+        # bookends:LE-14 — the public start and fresh show both observe an initially-final run as final at the final state.
+        if (
+            started.get("status") != "completed"
+            or started.get("result", {}).get("run", {}).get("current_state") != "end"
+            or started.get("result", {}).get("run", {}).get("lifecycle") != "final"
+            or shown.get("current_state") != "end"
+            or shown.get("lifecycle") != "final"
+        ):
+            raise JourneyFailure(
+                f"LE-14 initially-final run was not created final: start={started}; show={shown}"
+            )
+        self.engine_boundary_proof.append(
+            "LE-14 initially-final run created with final lifecycle"
+        )
+        print("LE-14 initially-final scenario passed: run created final")
+        return database, run_id
+
+    def _run_le15_terminal_mutation_scenario(
+        self,
+        database: Path,
+        run_id: str,
+    ) -> None:
+        """Reject every primary terminal mutation without adding history."""
+        before_show = self._scenario_show(database, run_id)
+        before_history = self._scenario_engine_call(
+            database, ["history", run_id], cwd=self.data_root
+        )
+        self._expect_status(before_history, "completed", event="history", state="end")
+        append = self._scenario_engine_call(
+            database,
+            [
+                "append",
+                "--record-id=le15-terminal-append",
+                run_id,
+                "terminal-marker",
+                "{}",
+            ],
+            cwd=self.data_root,
+        )
+        event = self._scenario_engine_call(
+            database, ["event", run_id, "anything"], cwd=self.data_root
+        )
+        terminate = self._scenario_engine_call(
+            database, ["terminate", run_id], cwd=self.data_root
+        )
+        after_show = self._scenario_show(database, run_id)
+        after_history = self._scenario_engine_call(
+            database, ["history", run_id], cwd=self.data_root
+        )
+        self._expect_status(after_history, "completed", event="history", state="end")
+        # bookends:LE-15 — public append, event, and terminate all reject the terminal run, while show and history remain unchanged.
+        if (
+            any(
+                response.get("status") != "rejected"
+                or response.get("code") != "run-not-active"
+                for response in (append, event, terminate)
+            )
+            or before_show.get("current_state") != "end"
+            or before_show.get("lifecycle") != "final"
+            or before_show.get("requestable_events") != []
+            or after_show != before_show
+            or after_history.get("result") != before_history.get("result")
+        ):
+            raise JourneyFailure(
+                f"LE-15 terminal mutation changed state or semantic history: "
+                f"append={append}; event={event}; terminate={terminate}; "
+                f"before_show={before_show}; after_show={after_show}; "
+                f"before_history={before_history}; after_history={after_history}"
+            )
+        self.engine_boundary_proof.append(
+            "LE-15 terminal append/event/terminate rejected without history change"
+        )
+        print(
+            "LE-15 terminal-mutation scenario passed: append/event/terminate rejected without history change"
+        )
+
+    def _run_le11_frozen_topology_scenario(
+        self,
+        scenario_dir: Path,
+        provider_command: Sequence[str],
+    ) -> None:
+        mode_path = scenario_dir / "le11.mode"
+        mode_path.write_text("original\n", encoding="utf-8")
+        provider_config = scenario_dir / "le11.toml"
+        self._write_scenario_provider_config(
+            provider_config,
+            provider_command[0],
+            provider_command[1:-1] + [str(mode_path)],
+        )
+        input_value = self._read_json(
+            self.data_root / STITCHED_PROFILE_SUBPATH, "LE-11 minimal profile"
+        )
+        input_path = scenario_dir / "le11-input.json"
+        input_path.write_text(json.dumps(input_value, indent=2) + "\n", encoding="utf-8")
+        database = scenario_dir / "le11.sqlite"
+        run_id = "le11-frozen-run"
+        started = self._scenario_start(database, provider_config, run_id, input_path)
+        self._expect_status(started, "completed", event="start", state="explore")
+        original_show = self._scenario_show(database, run_id)
+        original_event = next(
+            item
+            for item in original_show["requestable_events"]
+            if item.get("event") == "intent-ready"
+        )
+        original_instructions = original_show["current_state_instructions"]
+
+        mode_path.write_text("changed\n", encoding="utf-8")
+        changed_workflow = self._scenario_provider_call(
+            provider_command[:-1] + [str(mode_path)],
+            {"operation": "describe", "initial_input": input_value},
+        )
+        changed_event = next(
+            item
+            for item in changed_workflow["transitions"]
+            if item.get("source") == "explore" and item.get("event") == "intent-ready"
+        )
+        changed_instructions = changed_workflow["states"][0]["instructions"]
+        frozen_show = self._scenario_show(database, run_id)
+        frozen_event = next(
+            item
+            for item in frozen_show["requestable_events"]
+            if item.get("event") == "intent-ready"
+        )
+        # bookends:LE-3 — the run's stored topology is stable within the active run despite input/provider changes.
+        # bookends:LE-11 — after the provider's current describe changes, the public show assertion retains the stored edge and exact instructions.
+        if (
+            changed_event.get("target") == original_event.get("target")
+            or "changed provider instructions" not in changed_instructions
+            or changed_instructions == original_instructions
+        ):
+            raise JourneyFailure(
+                f"LE-11 provider describe did not change as expected: {changed_workflow}"
+            )
+        if (
+            frozen_event != original_event
+            or frozen_show["current_state_instructions"] != original_instructions
+            or "changed provider instructions" in frozen_show["current_state_instructions"]
+        ):
+            raise JourneyFailure(
+                f"LE-11 active run did not retain its stored topology/instructions: {frozen_show}"
+            )
+        self.engine_boundary_proof.append(
+            "LE-11 show retained frozen topology and instructions after describe change"
+        )
+        print("LE-11 frozen-run scenario passed: changed describe did not alter show")
+
+    def _run_le12_unsupported_action_scenario(
+        self,
+        scenario_dir: Path,
+        provider_command: Sequence[str],
+    ) -> None:
+        mode_path = scenario_dir / "le12.mode"
+        mode_path.write_text("original\n", encoding="utf-8")
+        provider_config = scenario_dir / "le12.toml"
+        self._write_scenario_provider_config(
+            provider_config,
+            provider_command[0],
+            provider_command[1:-1] + [str(mode_path)],
+        )
+        input_value = self._read_json(
+            self.data_root / STITCHED_PROFILE_SUBPATH, "LE-12 minimal profile"
+        )
+        input_path = scenario_dir / "le12-input.json"
+        input_path.write_text(json.dumps(input_value, indent=2) + "\n", encoding="utf-8")
+        database = scenario_dir / "le12.sqlite"
+        run_id = "le12-unsupported-run"
+        started = self._scenario_start(database, provider_config, run_id, input_path)
+        self._expect_status(started, "completed", event="start", state="explore")
+        before = self._scenario_show(database, run_id)
+        for record_id, kind, data in (
+            (
+                "le19-first",
+                "user-steering",
+                '{"text":"preserve the first context record"}',
+            ),
+            (
+                "le19-second",
+                "observation",
+                '{"text":"preserve the second context record"}',
+            ),
+        ):
+            appended = self._scenario_engine_call(
+                database,
+                ["append", f"--record-id={record_id}", run_id, kind, data],
+                cwd=self.data_root,
+            )
+            self._expect_status(appended, "completed", event="append", state="explore")
+        mode_path.write_text("unsupported\n", encoding="utf-8")
+        failed = self._scenario_engine_call(
+            database,
+            ["event", run_id, "intent-ready"],
+            cwd=self.data_root,
+        )
+        after = self._scenario_show(database, run_id)
+        history = self._scenario_engine_call(
+            database, ["history", run_id], cwd=self.data_root
+        )
+        self._expect_status(history, "completed", event="history", state="explore")
+        transition_history = [
+            entry
+            for entry in history["result"]
+            if entry.get("action", {}).get("kind") == "transition"
+        ]
+        request_path = mode_path.with_suffix(".request")
+        try:
+            evaluate_request = json.loads(request_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise JourneyFailure(f"LE-12 did not capture the stored evaluate request: {error}") from error
+        # bookends:LE-19 — the public evaluate request carries every accumulated context record in append order.
+        if [item.get("id") for item in evaluate_request.get("context", [])] != [
+            "le19-first",
+            "le19-second",
+        ]:
+            raise JourneyFailure(
+                f"LE-19 evaluate context was missing or out of order: {evaluate_request}"
+            )
+        # bookends:LE-12 — an unavailable stored action returns explicit evaluate failure, while show and history prove no advancement or lineage.
+        if (
+            failed.get("status") != "error"
+            or failed.get("code") != "provider-unsupported"
+            or failed.get("message", "").find("intent-ready") < 0
+        ):
+            raise JourneyFailure(
+                f"LE-12 unavailable stored action was not an explicit error: {failed}"
+            )
+        mode_path.write_text("failure\n", encoding="utf-8")
+        provider_failed = self._scenario_engine_call(
+            database,
+            ["event", run_id, "intent-ready"],
+            cwd=self.data_root,
+        )
+        after_provider_failure = self._scenario_show(database, run_id)
+        history_after_provider_failure = self._scenario_engine_call(
+            database, ["history", run_id], cwd=self.data_root
+        )
+        self._expect_status(
+            history_after_provider_failure,
+            "completed",
+            event="history",
+            state="explore",
+        )
+        # bookends:LE-8 — the public unsupported and provider-failure errors preserve the same state as the checked rejection above.
+        # bookends:LE-26 — unavailable events, reads, unsupported evaluations, and provider failures add no semantic history.
+        # bookends:LE-32 — unsupported and failed evaluations, including this uncommitted result, do not enter lineage.
+        # bookends:LE-35 — the captured public evaluate request carries no raw run history.
+        # bookends:LE-51 — the user-steering context record is present in the later checked evaluation.
+        if (
+            before.get("current_state") != "explore"
+            or after.get("current_state") != "explore"
+            or after.get("latest_evaluations") != []
+            or provider_failed.get("status") != "error"
+            or after_provider_failure.get("current_state") != "explore"
+            or after_provider_failure.get("latest_evaluations") != []
+            or transition_history
+            or "history" in evaluate_request
+            or history_after_provider_failure.get("result")
+            != history.get("result")
+        ):
+            raise JourneyFailure(
+                f"LE-12 unsupported/provider failure advanced or polluted the run: "
+                f"unsupported={failed}, provider_failed={provider_failed}, "
+                f"after={after}, after_failure={after_provider_failure}, "
+                f"history={history_after_provider_failure}"
+            )
+        self.engine_boundary_proof.append(
+            "LE-12 unsupported stored action and provider failure failed without state or history advancement"
+        )
+        print("LE-12 unsupported-action scenario passed: explicit and operational errors preserved state")
+
+    def _run_review_revision_scenario(
+        self,
+        scenario_dir: Path,
+        provider_command: Sequence[str],
+    ) -> None:
+        mode_path = scenario_dir / "review-revision.mode"
+        mode_path.write_text("allow\n", encoding="utf-8")
+        provider_config = scenario_dir / "review-revision.toml"
+        self._write_scenario_provider_config(
+            provider_config,
+            provider_command[0],
+            provider_command[1:-1] + [str(mode_path)],
+        )
+        input_path = scenario_dir / "review-revision-input.json"
+        review_input = self._read_json(
+            self.data_root / PROFILE_SUBPATH, "LE-23 review-revision profile"
+        )
+        input_path.write_text(json.dumps(review_input, indent=2) + "\n", encoding="utf-8")
+        database = scenario_dir / "review-revision.sqlite"
+        run_id = "review-revision-run"
+        started = self._scenario_start(database, provider_config, run_id, input_path)
+        self._expect_status(started, "completed", event="start", state="explore")
+        ready = self._scenario_engine_call(
+            database, ["event", run_id, "intent-ready"], cwd=self.data_root
+        )
+        self._expect_status(ready, "completed", event="intent-ready", state="explore")
+        evidence = self._scenario_engine_call(
+            database,
+            [
+                "append",
+                "--record-id=review-revision-evidence",
+                run_id,
+                "review-evidence",
+                '{"gate":"intent-review","policy_id":"review-revision","result":"pass"}',
+            ],
+            cwd=self.data_root,
+        )
+        self._expect_status(evidence, "completed", event="append", state="intent-review")
+        mode_path.write_text("deny\n", encoding="utf-8")
+        denied = self._scenario_engine_call(
+            database, ["event", run_id, "approved"], cwd=self.data_root
+        )
+        mode_path.write_text("unsupported\n", encoding="utf-8")
+        unsupported_request = mode_path.with_suffix(".request")
+        unsupported_request.unlink(missing_ok=True)
+        revised = self._scenario_engine_call(
+            database, ["event", run_id, "revise"], cwd=self.data_root
+        )
+        revised_show = self._scenario_show(database, run_id)
+        # bookends:LE-5 — the public check-free revision commits without invoking the production provider.
+        if revised.get("status") != "completed" or unsupported_request.exists():
+            raise JourneyFailure(
+                f"check-free revision invoked unavailable provider: revised={revised}; "
+                f"request={unsupported_request}"
+            )
+        latest_after_revision = [
+            item
+            for item in revised_show.get("latest_evaluations", [])
+            if item.get("transition", {}).get("source") == "intent-review"
+            and item.get("transition", {}).get("event") == "approved"
+        ]
+        # bookends:LE-23 — a fresh public show after revision retains the latest exact-transition denial.
+        # bookends:LE-49 — that same show carries frozen policies, appended evidence, and actionable feedback without reading history.
+        # bookends:LE-48 — this public review run observes a checked denial and then takes the owning check-free revision edge.
+        # bookends:LE-54 — the same check-free revision succeeds while the provider is explicitly unable to evaluate.
+        if (
+            denied.get("status") != "rejected"
+            or denied.get("code") != "scenario-denied"
+            or revised_show.get("current_state") != "explore"
+            or not isinstance(revised_show.get("initial_input", {}).get("review_policies"), dict)
+            or not any(
+                record.get("id") == "review-revision-evidence"
+                for record in revised_show.get("context", [])
+                if isinstance(record, dict)
+            )
+            or len(latest_after_revision) != 1
+            or latest_after_revision[0].get("result", {}).get("result") != "deny"
+            or latest_after_revision[0].get("result", {}).get("feedback", {}).get("code")
+            != "scenario-denied"
+        ):
+            raise JourneyFailure(
+                f"review denial/revision scenario regressed: denied={denied}, "
+                f"revised={revised}, show={revised_show}"
+            )
+        lineage_database = scenario_dir / "review-lineage.sqlite"
+        lineage_run_id = "review-lineage-run"
+        mode_path.write_text("allow\n", encoding="utf-8")
+        lineage_started = self._scenario_start(
+            lineage_database, provider_config, lineage_run_id, input_path
+        )
+        self._expect_status(lineage_started, "completed", event="start", state="explore")
+        lineage_ready = self._scenario_engine_call(
+            lineage_database, ["event", lineage_run_id, "intent-ready"], cwd=self.data_root
+        )
+        self._expect_status(lineage_ready, "completed", event="intent-ready", state="explore")
+        allowed = self._scenario_engine_call(
+            lineage_database, ["event", lineage_run_id, "approved"], cwd=self.data_root
+        )
+        self._expect_status(allowed, "completed", event="approved", state="intent-review")
+        revised_lineage = self._scenario_engine_call(
+            lineage_database, ["event", lineage_run_id, "revise"], cwd=self.data_root
+        )
+        self._expect_status(revised_lineage, "completed", event="revise", state="intent-adversarial-review")
+        lineage_ready_again = self._scenario_engine_call(
+            lineage_database, ["event", lineage_run_id, "intent-ready"], cwd=self.data_root
+        )
+        self._expect_status(
+            lineage_ready_again, "completed", event="intent-ready", state="explore"
+        )
+        mode_path.write_text("deny\n", encoding="utf-8")
+        denied_after_allow = self._scenario_engine_call(
+            lineage_database, ["event", lineage_run_id, "approved"], cwd=self.data_root
+        )
+        lineage_show = self._scenario_show(lineage_database, lineage_run_id)
+        latest_lineage = [
+            item
+            for item in lineage_show.get("latest_evaluations", [])
+            if item.get("transition", {}).get("source") == "intent-review"
+            and item.get("transition", {}).get("event") == "approved"
+        ]
+        # bookends:LE-24 — a later provider denial supersedes an earlier allow on the same exact checked edge.
+        if (
+            allowed.get("result", {}).get("run", {}).get("current_state")
+            != "intent-adversarial-review"
+            or denied_after_allow.get("status") != "rejected"
+            or len(latest_lineage) != 1
+            or latest_lineage[0].get("result", {}).get("result") != "deny"
+            or latest_lineage[0].get("result", {}).get("feedback", {}).get("code")
+            != "scenario-denied"
+        ):
+            raise JourneyFailure(
+                f"allow-to-deny lineage did not supersede on the exact edge: "
+                f"allowed={allowed}; denied={denied_after_allow}; show={lineage_show}"
+            )
+        target_database = scenario_dir / "provider-target.sqlite"
+        target_run_id = "provider-target-run"
+        mode_path.write_text("allow\n", encoding="utf-8")
+        target_started = self._scenario_start(
+            target_database, provider_config, target_run_id, input_path
+        )
+        self._expect_status(target_started, "completed", event="start", state="explore")
+        target_ready = self._scenario_engine_call(
+            target_database, ["event", target_run_id, "intent-ready"], cwd=self.data_root
+        )
+        self._expect_status(target_ready, "completed", event="intent-ready", state="explore")
+        mode_path.write_text("allow-other-target\n", encoding="utf-8")
+        target_response = self._scenario_engine_call(
+            target_database, ["event", target_run_id, "approved"], cwd=self.data_root
+        )
+        target_show = self._scenario_show(target_database, target_run_id)
+        target_lineage = [
+            item
+            for item in target_show.get("latest_evaluations", [])
+            if item.get("transition", {}).get("source") == "intent-review"
+            and item.get("transition", {}).get("event") == "approved"
+        ]
+        # bookends:LE-7 — an attempted provider-selected target is rejected by the public provider protocol and cannot alter the stored graph route.
+        if (
+            target_response.get("status") != "error"
+            or target_show.get("current_state") != "intent-review"
+            or target_lineage
+        ):
+            raise JourneyFailure(
+                f"provider target injection changed routing or lineage: "
+                f"response={target_response}; show={target_show}"
+            )
+        direct_state = self._scenario_engine_call(
+            target_database,
+            ["event", target_run_id, "approved", "end"],
+            cwd=self.data_root,
+        )
+        direct_state_show = self._scenario_show(target_database, target_run_id)
+        # bookends:LE-1 — the public event grammar accepts an event request, not a caller-supplied state, and the extra state token cannot advance the run.
+        if (
+            direct_state.get("status") == "completed"
+            or direct_state_show.get("current_state") != "intent-review"
+        ):
+            raise JourneyFailure(
+                f"caller-supplied state altered current state: "
+                f"response={direct_state}; show={direct_state_show}"
+            )
+        print("review-revision scenario passed: denial, both-way lineage, target isolation, and provider-free repair")
+
+    def _run_concurrency_scenarios(
+        self,
+        scenario_dir: Path,
+        provider_command: Sequence[str],
+    ) -> None:
+        mode_path = scenario_dir / "concurrency.mode"
+        mode_path.write_text("allow\n", encoding="utf-8")
+        provider_config = scenario_dir / "concurrency.toml"
+        self._write_scenario_provider_config(
+            provider_config,
+            provider_command[0],
+            provider_command[1:-1] + [str(mode_path)],
+        )
+        input_path = scenario_dir / "concurrency-input.json"
+        input_path.write_text(
+            json.dumps({"objective": "concurrency"}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        race_database = scenario_dir / "le36.sqlite"
+        self._scenario_start_and_ready(
+            race_database, provider_config, input_path, "le36-race-run"
+        )
+        processes = []
+        for _ in range(2):
+            processes.append(
+                subprocess.Popen(
+                    [
+                        str(self.engine),
+                        "--database",
+                        str(race_database),
+                        "--json",
+                        "event",
+                        "le36-race-run",
+                        "revise",
+                    ],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    cwd=self.data_root,
+                )
+            )
+        race_results = []
+        for process in processes:
+            stdout, stderr = process.communicate()
+            try:
+                result = json.loads(stdout)
+            except json.JSONDecodeError as error:
+                raise JourneyFailure(
+                    f"LE-36 concurrent event returned non-JSON: {error}; stderr={stderr!r}"
+                ) from error
+            race_results.append(result)
+        race_show = self._scenario_show(race_database, "le36-race-run")
+        race_history = self._scenario_engine_call(
+            race_database, ["history", "le36-race-run"], cwd=self.data_root
+        )
+        committed_races = [result for result in race_results if result.get("status") == "completed"]
+        race_transitions = [
+            entry
+            for entry in race_history.get("result", [])
+            if entry.get("action", {}).get("kind") == "transition"
+            and entry.get("action", {}).get("transition", {}).get("event") == "revise"
+        ]
+        # bookends:LE-36 — two real CLI event attempts against one pre-mutation state produce one commit and one non-commit.
+        if (
+            len(committed_races) != 1
+            or len(race_transitions) != 1
+            or race_show.get("current_state") != "explore"
+        ):
+            raise JourneyFailure(
+                f"LE-36 concurrent events conflicted incorrectly: results={race_results}, "
+                f"show={race_show}, history={race_history}"
+            )
+
+        def run_stale_case(
+            database: Path,
+            run_id: str,
+            mode: str,
+            expected_provider_result: str,
+        ) -> tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+            self._scenario_start_and_ready(database, provider_config, input_path, run_id)
+            baseline_show = self._scenario_show(database, run_id)
+            mode_path.write_text(mode + "\n", encoding="utf-8")
+            started_marker = mode_path.with_suffix(".started")
+            result_marker = mode_path.with_suffix(".result")
+            started_marker.unlink(missing_ok=True)
+            result_marker.unlink(missing_ok=True)
+            checked = subprocess.Popen(
+                [
+                    str(self.engine),
+                    "--database",
+                    str(database),
+                    "--json",
+                    "event",
+                    run_id,
+                    "approved",
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=self.data_root,
+            )
+            deadline = time.monotonic() + 5
+            while not started_marker.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            if not started_marker.exists():
+                checked.kill()
+                checked.communicate()
+                raise JourneyFailure("LE-37 provider did not enter the in-flight evaluation")
+            revised = self._scenario_event_call(database, run_id, "revise")
+            checked_stdout, checked_stderr = checked.communicate()
+            try:
+                checked_result = json.loads(checked_stdout)
+            except json.JSONDecodeError as error:
+                raise JourneyFailure(
+                    f"LE-37 stale event returned non-JSON: {error}; stderr={checked_stderr!r}"
+                ) from error
+            stale_show = self._scenario_show(database, run_id)
+            stale_history = self._scenario_engine_call(
+                database, ["history", run_id], cwd=self.data_root
+            )
+            stale_approved = [
+                entry
+                for entry in stale_history.get("result", [])
+                if entry.get("action", {}).get("transition", {}).get("event")
+                == "approved"
+            ]
+            stale_latest_approved = [
+                evaluation
+                for evaluation in stale_show.get("latest_evaluations", [])
+                if evaluation.get("transition", {}).get("event") == "approved"
+            ]
+            provider_result = result_marker.read_text(encoding="utf-8").strip()
+            # bookends:LE-37 — both allow and deny results made stale by a public revision produce no transition or lineage.
+            if (
+                revised.get("status") != "completed"
+                or checked_result.get("status") != "error"
+                or provider_result != expected_provider_result
+                or stale_show.get("current_state") != "explore"
+                or stale_show.get("context") != baseline_show.get("context")
+                or stale_approved
+                or stale_latest_approved
+            ):
+                raise JourneyFailure(
+                    f"LE-37 stale evaluation produced a semantic effect: "
+                    f"provider={provider_result}, checked={checked_result}, "
+                    f"revised={revised}, show={stale_show}, history={stale_history}"
+                )
+            return checked_result, revised, stale_show, stale_history
+
+        allow_stale = run_stale_case(
+            scenario_dir / "le37-allow.sqlite",
+            "le37-stale-allow-run",
+            "sleep",
+            "allow",
+        )
+        deny_stale = run_stale_case(
+            scenario_dir / "le37-deny.sqlite",
+            "le37-stale-deny-run",
+            "sleep-deny",
+            "deny",
+        )
+        # bookends:LE-38 — the state-race cases intentionally do not make a guarantee about concurrent context appends; they only assert that this fixture did not mutate context.
+        if any(
+            not isinstance(value, dict)
+            for case in (allow_stale, deny_stale)
+            for value in case
+        ):
+            raise JourneyFailure("LE-37 stale cases did not return public objects")
+        print("concurrency scenarios passed: one commit and stale allow/deny evaluations fail-closed")
+
+    def _run_binding_start_validation_scenario(
+        self,
+        scenario_dir: Path,
+        provider_command: Sequence[str],
+    ) -> None:
+        """Exercise start's frozen binding admission through real CLI processes."""
+        mode_path = scenario_dir / "binding-validation.mode"
+        mode_path.write_text("original\n", encoding="utf-8")
+        provider_config = scenario_dir / "binding-validation.toml"
+        self._write_scenario_provider_config(
+            provider_config,
+            provider_command[0],
+            provider_command[1:-1] + [str(mode_path)],
+        )
+        base = self._read_json(
+            self.data_root / STITCHED_PROFILE_SUBPATH,
+            "LE-76 minimal profile",
+        )
+
+        def start_variant(name: str, value: Dict[str, Any]) -> Dict[str, Any]:
+            input_path = scenario_dir / f"{name}.json"
+            input_path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+            database = scenario_dir / f"{name}.sqlite"
+            return self._scenario_start(database, provider_config, name, input_path)
+
+        omitted = start_variant("le76-omitted", dict(base))
+        empty_value = dict(base)
+        empty_value["work_slot_bindings"] = {}
+        empty = start_variant("le76-empty", empty_value)
+        if omitted.get("status") != "completed" or empty.get("status") != "completed":
+            raise JourneyFailure(
+                f"LE-76 omitted/empty start failed: omitted={omitted}; empty={empty}"
+            )
+        omitted_show = self._scenario_show(
+            scenario_dir / "le76-omitted.sqlite", "le76-omitted"
+        )
+        empty_show = self._scenario_show(
+            scenario_dir / "le76-empty.sqlite", "le76-empty"
+        )
+
+        valid_argv = dict(base)
+        valid_argv["work_slot_bindings"] = {
+            "intent-draft": {"command": "echo", "args": ["fan-out"]},
+            "implement": {"command": "echo", "args": ["run-plan-graph"]},
+        }
+        argv_start = start_variant("le76-argv", valid_argv)
+
+        invalid_variants = {
+            "le76-unknown-slot": {
+                **base,
+                "work_slot_bindings": {
+                    "not-a-catalog-slot": {"command": "echo", "args": []}
+                },
+            },
+            "le76-unknown-field": {
+                **base,
+                "work_slot_bindings": {
+                    "intent-draft": {
+                        "command": "echo",
+                        "args": [],
+                        "unexpected": True,
+                    }
+                },
+            },
+            "le76-map-not-object": {**base, "work_slot_bindings": []},
+            "le76-binding-not-object": {
+                **base,
+                "work_slot_bindings": {"intent-draft": []},
+            },
+        }
+        invalid_results = {
+            name: start_variant(name, value)
+            for name, value in invalid_variants.items()
+        }
+        invalid_followups = {
+            name: self._scenario_engine_call(
+                scenario_dir / f"{name}.sqlite",
+                ["show", name],
+                cwd=self.data_root,
+            )
+            for name in invalid_variants
+        }
+        # bookends:LE-76 — real start/show calls prove omitted and empty bindings are unbound, valid fan-out/run-plan-graph argv is frozen without parsing, and malformed binding maps are rejected before persistence.
+        if (
+            omitted.get("status") != "completed"
+            or empty.get("status") != "completed"
+            or argv_start.get("status") != "completed"
+            or omitted_show.get("initial_input", {}).get("work_slot_bindings") is not None
+            or empty_show.get("initial_input", {}).get("work_slot_bindings") != {}
+            or omitted_show.get("work_slot_invocations") != []
+            or empty_show.get("work_slot_invocations") != []
+            or any(result.get("status") != "rejected" for result in invalid_results.values())
+            or any(result.get("status") != "error" for result in invalid_followups.values())
+        ):
+            raise JourneyFailure(
+                f"LE-76 binding admission regressed: omitted={omitted}; empty={empty}; "
+                f"argv={argv_start}; invalid={invalid_results}; followups={invalid_followups}"
+            )
+        print("LE-76 binding-start scenarios passed: omitted/empty, argv freeze, and invalid maps")
+
+    def _run_engine_boundary_scenarios(self) -> None:
+        """Drive focused workflow-boundary cases through real CLI processes."""
+        if self.mode != "source":
+            raise JourneyFailure("engine boundary scenarios are source-only", state=self.state)
+        assert self.run_dir is not None
+        assert self.data_root is not None
+        scenario_dir = self.run_dir / "engine-boundary-scenarios"
+        scenario_dir.mkdir(parents=True, exist_ok=True)
+        provider_wrapper = scenario_dir / "mutating-production-provider.py"
+        self._write_mutating_provider(provider_wrapper)
+        wrapper_command = [
+            sys.executable,
+            str(provider_wrapper),
+            str(self.provider),
+            "unused-mode-file",
+        ]
+        input_path = scenario_dir / "le2-input.json"
+        input_path.write_text(
+            json.dumps({"objective": "boundary topology"}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        self._run_le2_topology_scenario(scenario_dir, wrapper_command, input_path)
+        self._run_le13_final_state_outgoing_scenario(
+            scenario_dir, wrapper_command, input_path
+        )
+        terminal_database, terminal_run_id = self._run_le14_initially_final_scenario(
+            scenario_dir, wrapper_command, input_path
+        )
+        self._run_le15_terminal_mutation_scenario(terminal_database, terminal_run_id)
+        self._run_le11_frozen_topology_scenario(scenario_dir, wrapper_command)
+        self._run_le12_unsupported_action_scenario(scenario_dir, wrapper_command)
+        self._run_review_revision_scenario(scenario_dir, wrapper_command)
+        self._run_binding_start_validation_scenario(scenario_dir, wrapper_command)
+        self._run_concurrency_scenarios(scenario_dir, wrapper_command)
+
+    def _run_bookends_enabled_source(self) -> None:
+        """Drive the opt-in overlay through fresh engine/provider processes."""
+        if self.mode != "source":
+            raise JourneyFailure("Bookends overlay proof is source-only", state=self.state)
+        assert self.run_dir is not None
+        assert self.fixture_root is not None
+        assert self.provider_config is not None
+
+        scenario_dir = self.run_dir / "bookends-enabled"
+        checkout = scenario_dir / "checkout"
+        artifacts = scenario_dir / "artifacts"
+        database = scenario_dir / "run.sqlite"
+        profile_path = scenario_dir / "minimal-bookends.json"
+        scenario_dir.mkdir(parents=True, exist_ok=True)
+
+        saved = {
+            "run_id": self.run_id,
+            "database": self.database,
+            "artifact_root": self.artifact_root,
+            "profile_path": self.profile_path,
+            "profile_source": self.profile_source,
+            "profile": self.profile,
+            "state": self.state,
+            "command_cwd": self.command_cwd,
+            "command_env": self.command_env,
+        }
+        try:
+            shutil.copytree(
+                self.data_root,
+                checkout,
+                ignore=shutil.ignore_patterns(".git", "target", "__pycache__", "*.pyc"),
+            )
+            for git_args in (
+                ["init", "-q"],
+                ["config", "user.name", "software-change journey"],
+                ["config", "user.email", "journey@example.invalid"],
+                ["config", "commit.gpgsign", "false"],
+                ["add", "-A"],
+                ["commit", "-qm", "bookends journey baseline"],
+            ):
+                completed = subprocess.run(
+                    ["git", *git_args],
+                    cwd=checkout,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                if completed.returncode != 0:
+                    raise JourneyFailure(
+                        f"Bookends scenario git {' '.join(git_args)} failed: "
+                        f"{completed.stderr.strip() or completed.stdout.strip()}"
+                    )
+
+            prd_path = checkout / "docs/PRD.md"
+            prd = prd_path.read_text(encoding="utf-8")
+            prd_path.write_text(
+                prd.rstrip()
+                + f"\n\n### {BOOKENDS_TOMBSTONE_ID}: Retired journey fixture\n"
+                + "- Status: tombstone\n",
+                encoding="utf-8",
+            )
+            artifacts.mkdir()
+            for subject, fixture in SUBJECTS.items():
+                shutil.copy2(self.fixture_root / fixture, artifacts / subject)
+
+            shipped_profile = self.data_root / BOOKENDS_SCENARIO_PROFILE
+            shutil.copy2(shipped_profile, profile_path)
+            scenario_profile = self._read_json(profile_path, "Bookends scenario profile")
+            scenario_profile["artifact_root"] = str(artifacts)
+            scenario_profile["extra"] = {"bookends": {"enabled": True}}
+            profile_path.write_text(
+                json.dumps(scenario_profile, indent=2) + "\n", encoding="utf-8"
+            )
+
+            self.run_id = BOOKENDS_SCENARIO_RUN_ID
+            self.database = database
+            self.artifact_root = artifacts
+            self.profile_path = profile_path
+            self.profile_source = shipped_profile
+            self.profile = scenario_profile
+            self.state = "not-started"
+            self.command_cwd = checkout
+            # An explicit empty value prevents a caller's ambient bypass from
+            # changing the normal scenario while still allowing the next case.
+            self.command_env = {"BOOKENDS_BYPASS": ""}
+            self._write_provider_config()
+            self._start()
+
+            shown = self._assert_show("explore", "bookends-enabled-show")
+            initial_input = shown.get("initial_input", {})
+            if initial_input.get("extra", {}).get("bookends", {}).get("enabled") is not True:
+                raise JourneyFailure(
+                    "enabled Bookends option was not frozen in initial_input",
+                    state=self.state,
+                    event="show",
+                )
+            instructions = shown.get("current_state_instructions", "")
+            for fragment in (
+                "Bookends overlay",
+                "requirement_ids",
+                "durable e2e/journey",
+                "Never mint an ID",
+                "".join(("bookends", ":LE-", "<n>")),
+            ):
+                if fragment not in instructions:
+                    raise JourneyFailure(
+                        f"enabled Bookends instructions omitted {fragment!r}",
+                        state=self.state,
+                        event="show",
+                    )
+
+            def write_artifact(subject: str, ids: Optional[list[str]]) -> None:
+                value = self._read_json(
+                    self.fixture_root / SUBJECTS[subject],
+                    f"Bookends fixture {subject}",
+                )
+                if ids is not None:
+                    value["requirement_ids"] = ids
+                (artifacts / subject).write_text(
+                    json.dumps(value, indent=2) + "\n", encoding="utf-8"
+                )
+
+            def require_rule(response: Dict[str, Any], rule: str) -> None:
+                violations = response.get("details", {}).get("violations", [])
+                if not any(item.get("rule") == rule for item in violations):
+                    raise JourneyFailure(
+                        f"Bookends schema denial omitted {rule}: {response}",
+                        state=self.state,
+                        event="intent-ready",
+                    )
+
+            # Missing field, empty collection, and a tombstoned ID each travel
+            # through the public event path and are refused as schema-invalid.
+            write_artifact("intent.json", None)
+            missing = self._expect_denial(
+                "intent-ready", "intent", "software-change-schema-invalid"
+            )
+            require_rule(missing, "required")
+
+            write_artifact("intent.json", [])
+            empty = self._expect_denial(
+                "intent-ready", "intent", "software-change-schema-invalid"
+            )
+            require_rule(empty, "minItems")
+
+            write_artifact("intent.json", [BOOKENDS_TOMBSTONE_ID])
+            tombstoned = self._expect_denial(
+                "intent-ready", "intent", "software-change-schema-invalid"
+            )
+            require_rule(tombstoned, "requirement-ids-live")
+
+            for subject in ("intent.json", "design.json", "plan.json", "validation-report.json"):
+                write_artifact(subject, ["LE-1"])
+            self._expect_allow("intent-ready", "design")
+            self._expect_allow("design-ready", "plan")
+            self._expect_allow("plan-ready", "implement")
+            self._expect_allow("implementation-ready", "validation")
+            self._expect_allow("validation-ready", "validation-review")
+
+            green_prd = (checkout / "docs/PRD.md").read_text(encoding="utf-8")
+            (checkout / "docs/PRD.md").write_text(
+                green_prd
+                + "\n### LE-9001: Uncovered RED fixture\n"
+                + "- Status: live\n- Coverage: e2e/journey\n",
+                encoding="utf-8",
+            )
+            red = self._expect_denial(
+                "passed", "bookends", "software-change-bookends-red"
+            )
+            red_details = red.get("details", {})
+            if red_details.get("status") != "red":
+                raise JourneyFailure(
+                    f"real RED checker result was not surfaced by provider: {red}",
+                    state=self.state,
+                    event="passed",
+                )
+
+            self.command_env = {"BOOKENDS_BYPASS": "journey:public-proof"}
+            bypass = self._expect_denial(
+                "passed", "bookends", "software-change-bookends-red"
+            )
+            bypass_details = bypass.get("details", {})
+            if (
+                bypass_details.get("status") != "bypass"
+                or bypass_details.get("bypass_class") != "journey"
+                or bypass_details.get("bypass_reason") != "public-proof"
+            ):
+                raise JourneyFailure(
+                    f"real BYPASS checker result was not surfaced by provider: {bypass}",
+                    state=self.state,
+                    event="passed",
+                )
+
+            (checkout / "docs/PRD.md").write_text(green_prd, encoding="utf-8")
+            self.command_env = {"BOOKENDS_BYPASS": ""}
+            validation_revision = self._fixture_revision("validation-report.json")
+            for index, axis in enumerate(
+                ("intent-delivered", "ids-grounded", "bypass-not-green")
+            ):
+                evidence = {
+                    "gate": "validation-review",
+                    "policy_id": axis,
+                    "result": "pass",
+                    "findings": "",
+                    "author": {"name": f"bookends-{axis}", "kind": "script"},
+                    "subject": "validation-report.json",
+                    "subject_revision": validation_revision,
+                    "config_version": scenario_profile["config_version"],
+                }
+                response = self._engine(
+                    [
+                        "append",
+                        f"--record-id=bookends-evidence-{index}",
+                        self.run_id,
+                        "review-evidence",
+                        json.dumps(evidence, separators=(",", ":")),
+                    ],
+                    state=self.state,
+                    event="append",
+                    axis=axis,
+                )
+                self._expect_status(
+                    response,
+                    "completed",
+                    event="append",
+                    axis=axis,
+                    state=self.state,
+                )
+            self._append_accepted_findings_for(
+                self.run_id, "validation-review", state=self.state, record_prefix="bookends-"
+            )
+            self._expect_allow("passed", "end")
+            final = self._assert_show("end", "bookends-enabled-terminal")
+            if final.get("lifecycle") != "final" or final.get("requestable_events") != []:
+                raise JourneyFailure(
+                    f"Bookends enabled scenario did not finish terminal: {final}",
+                    state=self.state,
+                    event="show",
+                )
+
+            proof_path = scenario_dir / "bookends-enabled-proof.json"
+            proof_path.write_text(
+                json.dumps(
+                    {
+                        "result": "passed",
+                        "run_id": BOOKENDS_SCENARIO_RUN_ID,
+                        "profile": str(shipped_profile),
+                        "candidate_checkout": str(checkout),
+                        "cases": [
+                            "enabled instructions visible through show",
+                            "missing requirement_ids refused as schema-invalid",
+                            "empty requirement_ids refused as schema-invalid",
+                            "tombstoned requirement ID refused as schema-invalid",
+                            "validation passed refused on real RED checker",
+                            "validation passed refused on real BYPASS checker",
+                            "green checker allowed terminal validation after evidence",
+                        ],
+                        "database": str(database),
+                        "artifact_root": str(artifacts),
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            self.bookends_proof = proof_path
+            print(
+                "bookends-enabled external scenario passed: "
+                "show instructions, missing/empty/tombstoned IDs, RED, and BYPASS"
+            )
+        finally:
+            self.run_id = saved["run_id"]
+            self.database = saved["database"]
+            self.artifact_root = saved["artifact_root"]
+            self.profile_path = saved["profile_path"]
+            self.profile_source = saved["profile_source"]
+            self.profile = saved["profile"]
+            self.state = saved["state"]
+            self.command_cwd = saved["command_cwd"]
+            self.command_env = saved["command_env"]
 
     def _run_stitched_source(self) -> None:
         """Walk the live graph produced from shipped minimal.json on a second run."""
@@ -1124,6 +2747,18 @@ class Journey:
 
             self._start_run(self.run_id)
             shown = self._assert_show("explore", "stitched-start")
+            # bookends:LE-43 — the same production provider mechanism starts a materially different minimal topology profile.
+            if (
+                shown.get("workflow_id") != "software-change"
+                or shown.get("initial_input", {}).get("config_version") != "minimal-5"
+                or shown.get("initial_input", {}).get("review_policies")
+                == saved_profile.get("review_policies")
+            ):
+                raise JourneyFailure(
+                    "stitched run did not use the same provider workflow with distinct review policies",
+                    state=self.state,
+                    event="stitched-start",
+                )
             try:
                 work_slot_journey.assert_catalog(
                     shown,
@@ -1156,6 +2791,7 @@ class Journey:
                 self._expect_allow(event, target)
             self._pass_review("validation-review", "passed", "end")
             shown = self._assert_show("end", "stitched-terminal-show")
+            # bookends:LE-39 — the minimal software-change idea is driven to a final public run state.
             if shown.get("lifecycle") != "final":
                 raise JourneyFailure(
                     "stitched journey did not reach final lifecycle",
@@ -1217,11 +2853,15 @@ class Journey:
         assert_worker_data_skill_and_root_policy()
         proof_root = self.run_dir / "dummy-worker-proofs"
         try:
+            # bookends:LE-85 — shipped profiles leave driver-performed slots unbound.
+            # bookends:LE-86 — the same public binding contract is exercised for this provider.
             work_slot_journey.prove_shipped_software_change_profiles(self.data_root)
             work_slot_journey.prove_graph_runner(
                 provider=self.provider,
                 work_dir=proof_root / "graph-runner",
             )
+            # bookends:LE-89 — review fan-out remains entered through invoke and frozen workers.
+            # bookends:LE-90 — nested worker stdin/output and Dagu graph shape are asserted.
             work_slot_journey.prove_fan_out(
                 engine=self.engine,
                 work_dir=proof_root / "fan-out",
@@ -1245,12 +2885,26 @@ class Journey:
                 fixture_root=self.fixture_root,
                 work_dir=proof_root / "bound-fan-out-heartbeat",
             )
+            # bookends:LE-84 — the public overrun scenario proves immediate show, retry admission, and capture inspection.
+            work_slot_journey.prove_bound_fan_out_overrun(
+                engine=self.engine,
+                provider=self.provider,
+                profile_source=self.profile_source,
+                fixture_root=self.fixture_root,
+                work_dir=proof_root / "bound-fan-out-overrun",
+            )
+            # bookends:LE-79 — waiter completion and captured inner worker status are inspected.
+            # bookends:LE-80 — the public worker path exercises stdin-exec without shell framing.
             work_slot_journey.prove_bound_contracted_fan_out_failure(
                 engine=self.engine,
                 provider=self.provider,
                 profile_source=self.profile_source,
                 fixture_root=self.fixture_root,
                 work_dir=proof_root / "bound-contracted-fan-out-failure",
+            )
+            work_slot_journey.prove_stdin_exec(
+                provider=self.provider,
+                work_dir=proof_root / "stdin-exec",
             )
             work_slot_journey.prove_bound_graph_runner_heartbeat(
                 engine=self.engine,
@@ -1298,8 +2952,9 @@ class Journey:
         print(
             "dummy worker proofs passed: shipped profiles, graph-runner, fan-out, "
             "preview-bindings fail-closed, missing -e warning, default sandbox argv, bound heartbeats, "
-            "graph working-directory cwd/marker proof, overlay-running invocation-progress, "
-            "omitted vs set --max-active, progress-query overlay-untouched"
+            "overrun retry, stdin-exec, graph working-directory cwd/marker proof, "
+            "overlay-running invocation-progress, omitted vs set --max-active, "
+            "progress-query overlay-untouched"
         )
         print("contracted fan-out failure")
 
@@ -2202,7 +3857,56 @@ def assert_worker_data_skill_and_root_policy() -> None:
     for fragment in policy_fragments:
         if fragment not in policy:
             raise JourneyFailure(f"root AGENTS.md omitted policy fragment {fragment!r}")
+    assert_focused_boundary_scenarios()
     print("worker-data skill/root policy assertions passed")
+
+
+def assert_focused_boundary_scenarios() -> None:
+    """Keep the focused citations beside their public assertions."""
+    source = Path(__file__).read_text(encoding="utf-8")
+    citation_prefix = "".join(("bookends", ":LE-"))
+    probe_start = source.index("    def _probe_startup")
+    probe_end = source.find("    def ", probe_start + len("    def _probe_startup"))
+    probe = source[probe_start:probe_end if probe_end >= 0 else len(source)]
+    if any(f"{citation_prefix}{number} —" in probe for number in (2, 11, 12)):
+        raise JourneyFailure("LE-2/LE-11/LE-12 citations returned to the ordinary describe probe")
+
+    full_start = source.index("    def _run_full_source")
+    full_end = source.find("    def ", full_start + len("    def _run_full_source"))
+    full_source = source[full_start:full_end if full_end >= 0 else len(source)]
+    if "self._run_engine_boundary_scenarios()" not in full_source:
+        raise JourneyFailure("focused engine boundary scenarios are not in the full source journey")
+
+    focused_functions = {
+        2: "_run_le2_topology_scenario",
+        11: "_run_le11_frozen_topology_scenario",
+        12: "_run_le12_unsupported_action_scenario",
+        13: "_run_le13_final_state_outgoing_scenario",
+        14: "_run_le14_initially_final_scenario",
+        15: "_run_le15_terminal_mutation_scenario",
+    }
+    for number, function_name in focused_functions.items():
+        token = f"{citation_prefix}{number} —"
+        if source.count(token) != 1:
+            raise JourneyFailure(f"{token} must have exactly one public scenario citation")
+        function_start = source.index(f"    def {function_name}")
+        function_end = source.find("    def ", function_start + len(f"    def {function_name}"))
+        function_source = source[function_start:function_end if function_end >= 0 else len(source)]
+        if token not in function_source:
+            raise JourneyFailure(f"{token} is not beside {function_name}'s assertions")
+
+    for marker in (
+        "LE-2 topology scenarios passed:",
+        "LE-11 frozen-run scenario passed:",
+        "LE-12 unsupported-action scenario passed:",
+        "LE-13 final-state scenario passed:",
+        "LE-14 initially-final scenario passed:",
+        "LE-15 terminal-mutation scenario passed:",
+    ):
+        if marker not in source:
+            raise JourneyFailure(f"focused public scenario marker missing: {marker}")
+
+    print("focused citation scenarios remain bound to public assertions")
 
 
 def self_test() -> int:
@@ -2250,7 +3954,7 @@ def self_test() -> int:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     try:
-        if raw_argv == ["--self-test"]:
+        if not raw_argv or raw_argv == ["--self-test"]:
             return self_test()
         args = parse_args(raw_argv)
         Journey(args).run()

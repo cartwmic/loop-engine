@@ -74,6 +74,12 @@ cp "$DATA_ROOT/crates/software-change-provider/data/configs/high-rigor.json" /tm
 
 `start` returns the run ID at `result.run.id`. The CLI accepts `@FILE` JSON input as shown above. Once the run exists, `show` reveals the allocated (or caller) `artifact_root` inside object `initial_input`. `start` may insert reserved `artifact_root` into object `initial_input` when the caller did not supply a nonempty path; object schemas that deny unknown keys must accept that field to remain evaluable; the engine does not skip injection, strip unknown keys, or classify providers. Subject files use the fixed filenames expected by the selected schema: `intent.json`, `design.json`, `plan.json`, `implementation-report.json`, and `validation-report.json`.
 
+## Bookends overlay
+
+Shipped profiles keep Bookends off. On a per-run copy, set `extra.bookends.enabled` to JSON `true`; do not edit shipped profile bytes. Overlay-on requires a nonempty `requirement_ids` array on `intent.json`, `design.json`, `plan.json`, and `validation-report.json`. Every value must be a live ID already declared by the repository PRD (`LE-[1-9][0-9]*`); missing and tombstoned IDs are denied mechanically.
+
+At each durable `e2e/journey` or declared `contract` test boundary, the driver or bound worker cites the same live ID as `bookends:LE-<n>` in the captured/test output, then the driver triages and appends evidence. The overlay adds `ids-grounded` to configured review gates and `bypass-not-green` to validation review gates. It calls the checker in-process without inventing a bypass and refuses validation `passed` unless the result is `GREEN`; an externally supplied repository-gate `BYPASS` remains visible and is never validation green.
+
 ## Validation
 
 The repository-owned journey runner has one contract with two adapters:
