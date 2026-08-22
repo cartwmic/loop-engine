@@ -91,3 +91,97 @@ Do not turn this into an unbounded history-authority scan.
 **Smallest scope:** Add a separate post-commit record that names the run ID, report revisions, landed commit, and proof that the committed pathname set and bytes match the reviewed worktree. Keep the run reports immutable.
 
 **Done when:** A later auditor can move from the final run evidence to the landed commit without relying on chat history, while the original reports remain unchanged.
+
+## Latest-run candidate triage
+
+These items came from operating the Bookends software-change run. They are ordered by perceived implementation complexity, not priority. Each entry is a candidate for later intent/design work, not an accepted requirement.
+
+### Bounded candidates
+
+#### Reject citations outside approved Bookends surfaces
+
+- **Observed:** Bookends indexes citations only in the class pathspecs from `bookends.toml`. A `bookends:LE-<n>` token in another tracked file is ignored rather than rejected.
+- **Candidate:** Scan citation tokens across the tracked textual tree and reject tokens outside approved proof surfaces. Keep the configured class pathspecs as the authority for where citations may count.
+- **Open questions:** Define treatment for the PRD itself, generated files, fixtures, vendored content, skipped files, and binary/non-text files. Compare the final rule with Compass before choosing syntax or exclusions.
+
+#### Diagnose Dagu status through `invocation-progress`
+
+- **Observed:** The latest run suggested that Dagu state was not visible or reliable through Loop Engine inspection. The documented driver surface is `invocation-progress`; direct `dagu status` and `dagu history` are underlying implementation details.
+- **Candidate:** Reproduce inspection while a plan graph is running and after it completes, then fix the smallest confirmed break in locator discovery, Dagu invocation, status mapping, or presentation.
+- **Open questions:** The defect may depend on locator timing, invocation lifecycle, Dagu version, or completed-run behavior. Do not design a replacement inspection surface before reproducing it.
+
+#### Reframe adversarial review terminology
+
+- **Observed:** “Adversarial” and repeated “attack/falsify” framing can push reviewers toward security-style overreach even though the reviewer protocol limits findings to material failures against frozen intent.
+- **Candidate:** Use “challenge review,” “devil's-advocate review,” or “weakness-exposure review” in human-facing titles and instructions. Preserve existing state and gate IDs in the first iteration to avoid a topology/config migration for a wording change.
+- **Open questions:** Pick one term, test whether it changes review quality, and decide later whether internal IDs merit migration.
+
+### Moderate candidates
+
+#### Calibrate plan and validation review axes
+
+- **Observed:** Plan review has `done-observable` and `decision-free`, while validation review has `intent-delivered` and `requirement-proof-mapping`. The latest run still admitted plans without an explicit pragmatic black-box/E2E bar, packets that could over-specify implementation, and validation evidence that could describe completed work without proving the change works as intended.
+- **Candidate:** Revise and calibrate the shipped axes so plans require validation gates and user-path proof where realistic, reject both under-specified and over-specified task packets, and require validation to demonstrate the frozen outcome rather than internal activity. This also covers the broader review-axis coverage follow-up.
+- **Open questions:** “Where realistic” needs concrete fixtures so reviewers do not demand impossible E2E tests or invent infrastructure. Determine whether existing axes should be sharpened or new axes added.
+
+#### Freeze operating threat model and risk posture in intent
+
+- **Observed:** The intent schema freezes constraints and non-goals but has no explicit operating threat model or accepted risk posture. Security-focused reviewers can therefore assume a stronger environment than the owner accepted and drive extra mechanisms.
+- **Candidate:** Carry a concise operating context, threat boundary, and explicit risk acceptance from frozen intent through design, plan, implementation, and validation review packets. Reviewers must judge within that boundary unless the change itself invalidates it.
+- **Open questions:** Decide whether this belongs in new intent fields or a stricter convention over existing constraints/non-goals. Keep real outside obligations distinct from owner preferences, and do not let accepted risk become a waiver for failing stated acceptance.
+
+#### Add a driver-owned implementation commit checkpoint
+
+- **Observed:** `run-plan-graph` completes tasks and a summarizer, but the resulting work may remain uncommitted. Having each parallel task worker commit would conflict with the shared working directory and create merge/ownership policy inside the workflow.
+- **Candidate:** Add a driver-owned checkpoint after graph summary/triage and before implementation review. A repository-specific deterministic finalizer may create and verify the commit; Loop Engine and the software-change provider remain unaware of Git mechanics and consume only bounded completion evidence.
+- **Open questions:** Determine whether this is an operator-configured finalizer binding, external evidence required by the implementation transition, or only a stronger driver instruction. The design must preserve explicit commit authorization and must not treat command exit zero as proof of the expected repository state.
+
+#### Add reviewer-output conformance recovery
+
+- **Observed:** Fan-out checks only declared top-level output keys. A reviewer that emits malformed or incomplete JSON can fail the whole fan-out before the semantic result reaches the summarizer.
+- **Candidate:** Preserve the raw output, run deterministic schema validation, and allow a focused shape-repair worker before summarization. The repair step may recover representation but may not change the reviewer's semantic verdict or invent findings.
+- **Open questions:** Define the full schema, how repair provenance is retained, when to retry the original reviewer instead, and what remains a hard failure. A generic “schema fixer” must not silently become a second reviewer.
+
+#### Add public contract tests with Bookends IDs
+
+- **Observed:** Bookends supports an optional `contract` class, but this repository currently configures only `e2e_journey`. Public contracts therefore have no separate allowlisted proof surface carrying `bookends:LE-<n>` citations.
+- **Candidate:** Identify real public contract-test boundaries, configure the Bookends contract class and required CI collection, and thread living PRD IDs through those tests.
+- **Open questions:** Define which boundaries are contracts rather than journeys, avoid duplicating the same assertion in both classes, and keep citations at durable public assertions rather than internal unit-test seams.
+
+### High-complexity candidates
+
+#### Add a revision-scoped finding ledger and selective review routing
+
+- **Observed:** `accepted-findings` is durable per review gate/revision and is supplied to review workers, but implementation workers do not receive a normalized finding packet. A revised artifact can also trigger the whole fan-out even when only some axes need confirmation. Churn/thrash remains an operator judgment outside the bound review work.
+- **Candidate:** Produce a durable routing record that names each accepted finding, owning phase, affected task IDs, affected review axes, subject revision, and disposition. Add a bound semantic meta-review that categorizes candidate findings against frozen intent, configured policy, pragmatism, YAGNI, KISS, maintainability, correctness, and UX. The driver still inspects that judgment before append. Use the record to select confirmation reviewers, reuse same-revision passing axes where valid, and escalate detected churn to the human.
+- **Open questions:** Define authority between raw reviewers, the meta-reviewer, and the driver; stale-record rules; what counts as a meaningful revision; and when a prior pass is invalidated. Mechanical propagation/audit and semantic classification must remain separate.
+
+#### Add incremental plan-graph retries
+
+- **Observed:** Re-invoking `run-plan-graph` traverses the whole DAG with model calls. A failed node, an accepted implementation finding, or a later review revision can therefore repeat successful tasks that do not own the defect.
+- **Candidate:** Make task results addressable by task ID, plan revision, dependency inputs, and repository state. Feed routed accepted findings into affected implementation packets, rerun the invalidated subgraph, and regenerate the implementation summary from reused plus new task evidence.
+- **Open questions:** Define safe reuse when tasks mutate one shared checkout, dependency invalidation, partial side effects, changed plan packets, report revision identity, and the operator's ability to force a clean rerun. A successful process exit alone cannot make a node reusable.
+
+#### Add an explicit in-run operator override
+
+- **Observed:** Existing runs expose only provider-described events and checked transitions; a frozen obligation cannot be waived. There is no owner-only way to bypass one state after an explicit decision.
+- **Candidate:** Explore a separate operator override control that records the requested state/event, reason, skipped checks, actor, and resulting history without pretending the skipped transition passed.
+- **Open questions:** Determine which states can ever be overridden, whether final safety gates remain non-overridable, how providers represent the resulting run, and whether termination/restart should remain the only valid answer. This must not weaken ordinary event selection or silently rewrite history.
+
+#### Add evidence-backed replay for replacement runs
+
+- **Observed:** Restarting with corrected frozen bindings/profile data requires a new run and re-traversal. Copying databases, artifact roots, captures, or frozen bindings is unsafe, while manually omitting states changes the workflow being proved.
+- **Candidate:** Add a distinct replay/fast-forward path for a replacement run that references qualifying prior artifacts and evidence, re-evaluates each transition under the new run's frozen obligations, and stops at the first incompatible or failed gate.
+- **Open questions:** Define artifact/revision identity, policy compatibility, evidence freshness, author independence, binding changes, and audit history. Replay must not clone runtime state or convert historical success into an unchecked current pass.
+
+#### Generalize provider evaluation and calibration
+
+- **Observed:** The software-change provider ships a calibration procedure and fixtures, while other providers may rely mainly on deterministic journeys and ad hoc semantic review. Those prove mechanics but not reviewer/prompt quality.
+- **Candidate:** Evaluate whether a provider-neutral workflow should compare policy prompts, expected findings, false positives, and model behavior across software-change, policy-document, research, and future providers.
+- **Open questions:** Determine which semantics are actually shared, what remains provider-specific, who owns gold judgments, and whether the existing software-change calibration can be reused without turning evaluation into provider runtime behavior.
+
+#### Create a prototype-to-spec workflow
+
+- **Observed:** Software-change freezes relatively strong intent/design/plan artifacts before implementation. Early product work may instead need a disposable prototype, owner iteration, and learning before a build-quality specification is possible.
+- **Candidate:** Explore a lower-ceremony workflow that scopes a question, builds and iterates a prototype with the owner, records what was learned, then produces a candidate intent/design/spec for a normal quality implementation workflow. Prototype output is evidence, not production code by default.
+- **Open questions:** Decide whether this is a research profile, a new provider, or orchestration across existing providers; when requirements become frozen; what prototype code may survive; and how the final specification avoids laundering accidental prototype choices into requirements.
