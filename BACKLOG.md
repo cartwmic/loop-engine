@@ -104,11 +104,11 @@ These items came from operating the Bookends software-change run. They are order
 - **Candidate:** Scan citation tokens across the tracked textual tree and reject tokens outside approved proof surfaces. Keep the configured class pathspecs as the authority for where citations may count.
 - **Open questions:** Define treatment for the PRD itself, generated files, fixtures, vendored content, skipped files, and binary/non-text files. Compare the final rule with Compass before choosing syntax or exclusions.
 
-#### Diagnose Dagu status through `invocation-progress`
+#### Add a concise CLI status and progress view
 
-- **Observed:** The latest run suggested that Dagu state was not visible or reliable through Loop Engine inspection. The documented driver surface is `invocation-progress`; direct `dagu status` and `dagu history` are underlying implementation details.
-- **Candidate:** Reproduce inspection while a plan graph is running and after it completes, then fix the smallest confirmed break in locator discovery, Dagu invocation, status mapping, or presentation.
-- **Open questions:** The defect may depend on locator timing, invocation lifecycle, Dagu version, or completed-run behavior. Do not design a replacement inspection surface before reproducing it.
+- **Observed:** `show` and `invocation-progress` expose durable state and bound-work progress, but following a long software-change run still requires reading large JSON envelopes and correlating graph details manually. The latest run also suggested that Dagu-backed task state was not always visible or reliable through `invocation-progress`; direct `dagu status` and `dagu history` are underlying implementation details rather than the driver-facing contract.
+- **Candidate:** Add a deterministic human-readable CLI view for one run that concisely presents lifecycle, current state, requestable events, latest checked outcome, active or latest invocation, and available inner task counts/statuses. Derive it from existing engine operations rather than creating a second state authority, preserve machine-readable JSON, and first reproduce and repair any confirmed `invocation-progress` mapping defect.
+- **Open questions:** Decide whether this is a new `progress` command or a compact `show` mode, which provider-neutral fields are stable, how unavailable inner progress is displayed, and whether completed, failed, overrun, reused, and skipped tasks need distinct presentation. Black-box CLI proof must cover a running graph, a completed graph, and unavailable progress without requiring the operator to invoke Dagu directly.
 
 #### Add honest public proof for concurrent context appends
 
@@ -124,12 +124,6 @@ These items came from operating the Bookends software-change run. They are order
 
 ### Moderate candidates
 
-#### Calibrate plan and validation review axes
-
-- **Observed:** Plan review has `done-observable` and `decision-free`, while validation review has `intent-delivered` and `requirement-proof-mapping`. The latest run still admitted plans without an explicit pragmatic black-box/E2E bar, packets that could over-specify implementation, and validation evidence that could describe completed work without proving the change works as intended. In a Bookends-enabled repository, a citation can also be mechanically present while the tagged journey or contract assertion does not semantically cover the cited requirement.
-- **Candidate:** Revise and calibrate the shipped axes so plans require validation gates and user-path proof where realistic, reject both under-specified and over-specified task packets, and require validation to demonstrate the frozen outcome rather than internal activity. For every new or changed Bookends citation, validation review should inspect whether the tagged scenario and observable assertion actually prove the cited requirement instead of accepting token placement as coverage. This also covers the broader review-axis coverage follow-up.
-- **Open questions:** “Where realistic” needs concrete fixtures so reviewers do not demand impossible E2E tests or invent infrastructure. Determine whether existing axes should be sharpened or new axes added.
-
 #### Deliver steering mechanically to later software-change work
 
 - **Observed:** LE-51 was tombstoned because the implementation proves only that durable `user-steering` reaches `show` and checked evaluation requests. Software-change draft slots still do not receive steering; implementation and review slots receive the current `finding-ledger` context, but the cited journey did not prove that steering changed later work or authorization.
@@ -142,23 +136,17 @@ These items came from operating the Bookends software-change run. They are order
 - **Candidate:** Give each later semantic review or revision commission a durable, current-target finding packet derived from prior accepted findings or review evidence. Preserve raw evidence and digest identity; the delivery mechanism must not reinterpret findings or let stale evidence satisfy current conformance.
 - **Open questions:** Decide whether to forward selected `review-evidence`, introduce a normalized workflow-specific finding record, or have the driver construct a digest-bound packet; define supersession and handling of findings against changed target bytes.
 
-#### Freeze operating threat model and risk posture in intent
+#### Mechanically harvest reviewer candidates for driver triage
 
-- **Observed:** The intent schema freezes constraints and non-goals but has no explicit operating threat model or accepted risk posture. Security-focused reviewers can therefore assume a stronger environment than the owner accepted and drive extra mechanisms.
-- **Candidate:** Carry a concise operating context, threat boundary, and explicit risk acceptance from frozen intent through design, plan, implementation, and validation review packets. Reviewers must judge within that boundary unless the change itself invalidates it.
-- **Open questions:** Decide whether this belongs in new intent fields or a stricter convention over existing constraints/non-goals. Keep real outside obligations distinct from owner preferences, and do not let accepted risk become a waiver for failing stated acceptance.
+- **Observed:** Bound review fan-out mechanically captures and validates each selected reviewer attempt, but neither the engine nor provider turns those outputs into durable candidate-finding records. The skill still tells the driver to inspect captures and hand-author `review-evidence` plus the authoritative `finding-ledger` snapshot. Missing or inconsistent ledger data fails closed after append, but candidate ingestion itself remains an orchestrator procedure.
+- **Candidate:** After every review invocation completes, deterministically harvest its selected schema-conforming outputs into immutable, nonauthoritative candidate records carrying run, gate, subject/revision, policy axis, reviewer/invocation identity, selected-attempt path and digest, result, and finding text. Present a current triage bundle to the driver, who explicitly accepts, edits, rejects, owns, and routes candidates before a separate authoritative ledger snapshot is appended. Keep Loop Engine core opaque to finding semantics and never auto-promote a candidate, model proposal, or failing verdict into driver authority.
+- **Open questions:** Prefer the review-invocation boundary rather than every state end: draft states have no standardized reviewer findings, and review progression already needs triage before it can end. Decide whether harvesting is a provider command automatically chained to a bound review slot or a generic engine result-adapter contract; how unbound/external reviews enter the same candidate format; how malformed or exhausted attempts are represented; and how stable IDs deduplicate retries and repeated fan-out. Black-box proof must show candidates appear without hand-authored finding JSON, preserve exact selected-attempt provenance, remain inert before driver confirmation, and cannot satisfy a checked transition until the driver-authored ledger agrees with current failing evidence.
 
 #### Add a driver-owned implementation commit checkpoint
 
 - **Observed:** `run-plan-graph` completes tasks and a summarizer, but the resulting work may remain uncommitted. Having each parallel task worker commit would conflict with the shared working directory and create merge/ownership policy inside the workflow.
 - **Candidate:** Add a driver-owned checkpoint after graph summary/triage and before implementation review. A repository-specific deterministic finalizer may create and verify the commit; Loop Engine and the software-change provider remain unaware of Git mechanics and consume only bounded completion evidence.
 - **Open questions:** Determine whether this is an operator-configured finalizer binding, external evidence required by the implementation transition, or only a stronger driver instruction. The design must preserve explicit commit authorization and must not treat command exit zero as proof of the expected repository state.
-
-#### Add reviewer-output conformance recovery
-
-- **Observed:** Fan-out checks only declared top-level output keys. A reviewer that emits malformed or incomplete JSON can fail the whole fan-out before the semantic result reaches the summarizer.
-- **Candidate:** Preserve the raw output, run deterministic schema validation, and allow a focused shape-repair worker before summarization. The repair step may recover representation but may not change the reviewer's semantic verdict or invent findings.
-- **Open questions:** Define the full schema, how repair provenance is retained, when to retry the original reviewer instead, and what remains a hard failure. A generic “schema fixer” must not silently become a second reviewer.
 
 #### Add public contract tests with Bookends IDs
 
@@ -174,17 +162,17 @@ These items came from operating the Bookends software-change run. They are order
 - **Candidate:** Reshape the requirement catalog around stable user/operator/integrator outcomes and intentional product constraints across core, software-change, policy-document, research, and work-slot delegation. Move exact public protocol encodings into a versioned interface contract, implementation choices into technical design, and test/release mechanics into validation and release policy. Do not copy research's explicit “blackbox tests exist” requirement into policy-document; require public-boundary journey proof through repository validation policy instead. Preserve Bookends traceability from those journeys and contract tests to the smaller living requirement set.
 - **Open questions:** Identify which exact interfaces are intentional compatibility promises, choose authoritative homes for extracted material, and plan tombstone/new-ID continuity without weakening current public proof or losing historical rationale.
 
-#### Add selective review routing and incremental plan-graph retries
+#### Add selective review execution and review-result reuse
 
-- **Observed:** The shipped software-change contract now has a durable per-gate/revision `finding-ledger` with exact task and review-axis routing, but it intentionally does not select or reuse a partial plan graph. A revised artifact can still trigger the whole fan-out even when only some axes need confirmation. Churn/thrash remains an operator judgment outside the bound review work.
-- **Candidate:** Explore selective confirmation and incremental execution only as a later workflow capability: reuse eligible review results or plan-task outputs only when their complete dependency, artifact, and repository identities still match, while preserving full-DAG and fresh-review fallbacks. The driver remains the semantic authority, and no proposal or cache may become a gate without current evidence.
-- **Open questions:** Define revision and dependency identities, invalidation boundaries, failure recovery, and the driver's ability to force a clean rerun. Keep mechanical propagation separate from semantic classification and do not turn this deferred work into a second finding-ledger contract.
+- **Observed:** The shipped `finding-ledger` now routes current findings to exact review axes, but routing controls what a reviewer sees rather than whether that reviewer runs. A revised subject still invokes the complete configured review fan-out even when only one axis is affected, and a previous pass is never reused.
+- **Candidate:** Reuse or skip a review axis only when the exact subject bytes, policy/config version, worker assignment and binding, schema, relevant ledger inputs, and reviewer authority still match. Merge reused and new evidence mechanically while keeping the driver authoritative, and always provide a force-fresh full-review path.
+- **Open questions:** Define the complete review-result identity, which subject or ledger changes invalidate a pass, how reused evidence appears in captures and `show`, and whether selective review begins only after a full parent pass. Black-box proof must demonstrate that an unaffected reviewer process is not invoked, an affected or stale axis is invoked, and a force-fresh request runs every configured reviewer.
 
-#### Add incremental plan-graph retries
+#### Reuse completed plan-graph work across implementation cycles
 
-- **Observed:** Re-invoking `run-plan-graph` traverses the whole DAG with model calls. A failed node, an accepted implementation finding, or a later review revision can therefore repeat successful tasks that do not own the defect.
-- **Candidate:** Make task results addressable by task ID, plan revision, dependency inputs, and repository state. Feed routed accepted findings into affected implementation packets, rerun the invalidated subgraph, and regenerate the implementation summary from reused plus new task evidence.
-- **Open questions:** Define safe reuse when tasks mutate one shared checkout, dependency invalidation, partial side effects, changed plan packets, report revision identity, and the operator's ability to force a clean rerun. A successful process exit alone cannot make a node reusable.
+- **Observed:** Finding-ledger routing enriches only the affected task packets, but every `run-plan-graph` invocation still executes every ordinary node and the summarizer. Revisions found during implementation review can therefore repeat expensive completed model work. Returning to `plan` raises a second question: a new complete plan revision may contain unchanged or equivalent nodes whose work is already present in the same checkout.
+- **Candidate:** First support conservative reuse within one frozen plan: retain mechanically verifiable task completion records, invalidate tasks named by accepted findings plus affected dependants, skip unaffected completed nodes without spawning their workers, and regenerate the summary and repository checkpoint from reused plus new evidence. Keep each `plan.json` revision as the complete authoritative desired DAG and keep execution history in a separate append-only record rather than creating a mutable union “master plan.” As a later optional step, allow exact-node reuse across plan revisions when normalized task content, dependencies, routed findings, worker binding, and repository preconditions all match; otherwise rerun.
+- **Open questions:** Define task and dependency fingerprints, per-task proof that remains valid after later tasks mutate the shared checkout, overlap and partial-side-effect handling, report revision identity, cache storage and provenance, and the driver's force-clean-rerun control. Decide during design whether findings that cannot map cleanly onto an existing task justify a new remediation-plan artifact or workflow state; do not add one merely to express a small task-packet revision. Black-box journeys must use observable worker counters or fail-if-invoked sentinels to prove completed nodes are mechanically skipped, invalidated nodes and dependants rerun, stale identities fail closed, and an optionally reused node in a later complete plan revision is genuinely not invoked.
 
 #### Add an explicit in-run operator override
 
