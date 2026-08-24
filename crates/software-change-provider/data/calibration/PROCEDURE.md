@@ -8,11 +8,11 @@ Calibration is supplied-material-only. Reviewers receive only bytes selected by 
 
 ## Coverage universe and pairing
 
-`manifest.json` contains two rows for every `(config_version, gate, axis)` key from shipped `minimal`, `standard`, and `high-rigor` profiles: one `good` fixture expected to pass and one materially defective fixture expected to fail. Existing `(config_version, gate, axis, fixture_id)` fields remain row identity. Fixture selection is owner metadata; selected fixture bytes and canonical source labels identify exact supplied material.
+`manifest.json` contains two rows for every `(config_version, gate, axis)` key from shipped `minimal`, `standard`, and `high-rigor` profiles: one pass fixture expected to pass and one materially defective fixture expected to fail. Existing `(config_version, gate, axis, fixture_id)` fields remain row identity. Fixture selection is owner metadata; selected fixture bytes and canonical source labels identify exact supplied material. The paired corpus specifically calibrates accepted risk versus invalid waiver, practical versus concretely impractical black-box proof, vague and over-prescribed packets, activity-only validation, token-only Bookends citations, and semantic outcome proof.
 
 Evidence and policy gate ids match review state names. Parent review gates are `intent-review`, `design-review`, `plan-review`, `implementation-review`, and `validation-review`. When a shipped profile lists counterpart axes, those keys live on the matching `*-adversarial-review` gate with the same `policy_id` as the parent axis. Each counterpart key has one good and one fail fixture. A good fixture that passes the parent axis must also pass the corresponding adversarial axis.
 
-Every subject fixture and every `intent_revision`, `design_revision`, and `plan_revision` link uses neutral revision `r15`. For each pair, defective subjects receive same good predecessor bytes as good subjects so review isolates subject material. Keep expected 69 PASS and 69 FAIL outcomes; do not change row keys, expected values, configs, fixtures, prompts, schemas, companions, or revision links as part of mechanical identity maintenance.
+Every subject fixture and every `intent_revision`, `design_revision`, and `plan_revision` link uses neutral revision `r15`. For each pair, defective subjects receive the same pass predecessor bytes so review isolates subject material. The current shipped versions are `minimal-6`, `standard-7`, and `high-rigor-7`; keep expected 69 PASS and 69 FAIL outcomes. After any supplied prompt, protocol, template, schema, or fixture change, rehash affected rows and reset them to pending until a fresh owner review is completed; do not change row keys or expected values to force agreement.
 
 | Gate | Subject fixture IDs | Required predecessor fixture IDs, in order | Gate subject | Template |
 |---|---|---|---|---|
@@ -28,14 +28,16 @@ Use exact profile selected by row `config_version` and exact policy `example_pro
 
 Path-bearing fixture values use reserved `fictional-repo/` labels. Reviewers do not inspect live checkout paths. Supply stable companion bytes from `data/calibration/companions/fictional-repo/`.
 
-For each `implementation-review` or `implementation-adversarial-review` row, read selected subject `coverage.commit` and use exactly one mapping:
+For each `implementation-review` or `implementation-adversarial-review` row, and each `validation-review` or `validation-adversarial-review` row whose axis is `intent-delivered` or `requirement-proof-mapping`, read selected subject `coverage.commit` and use exactly one mapping:
 
 | `coverage.commit` | Companion bytes |
 |---|---|
 | `repo-state-2026-08-12` | `implementation-evidence/repo-state-2026-08-12.txt` |
 | `repo-state-2026-08-13` | `implementation-evidence/repo-state-2026-08-13.txt` |
 
-The source label for either implementation companion is `companion:fictional-repo/implementation-evidence/repository-state.txt`. Verify companion `HEAD`, coverage label, and command identity match selected commit. Missing, unknown, or mismatched commits are invalid.
+The source label for either repository-state companion is `companion:fictional-repo/implementation-evidence/repository-state.txt`. Verify companion `HEAD`, coverage label, and command identity match selected commit. For a passing `intent-delivered` or `requirement-proof-mapping` subject, the selected companion supplies the cited public operator-journey captures and observable outcomes for frozen-profile inspection, exhaustive structural denial, configured evidence denial, unchanged-state behavior, evidence-gated acceptance, terminal state, and denial lineage. Missing, unknown, or mismatched commits are invalid.
+
+For a validation row with axis `requirement-proof-mapping`, follow that repository-state record with these exact source records in listed order: `companion:fictional-repo/docs/PRD.md`, `companion:fictional-repo/implementation-evidence/requirement-to-proof.md`, `companion:fictional-repo/scripts/assert-requirement-proof.py`, and `companion:fictional-repo/scripts/production-journey.py`. These exact bytes make the requirement set, mapping checker, public commands, and observable assertions semantically inspectable; a scenario name or passing-command claim alone is not proof.
 
 For a `validation-review` or `validation-adversarial-review` row with `axis` `docs-integrated`, read selected subject `coverage.documents[].path`. Map each path one-to-one to its shipped companion and supply exact bytes. Allowed labels are:
 
@@ -49,6 +51,7 @@ For a `validation-review` or `validation-adversarial-review` row with `axis` `do
 - `fictional-repo/loop-engine-software-change-provider-technical-design.md`
 - `fictional-repo/scripts/assert-doc-authority.py`
 - `fictional-repo/scripts/assert-requirement-proof.py`
+- `fictional-repo/scripts/production-journey.py`
 
 Sort docs companion labels by canonical fictional label's bytewise UTF-8 order. Supply no unknown, unmapped, live-checkout, or per-run companion. Coverage selection uses selected subject coverage only, never expected, observed, axis, row index, or fixture class.
 
@@ -63,7 +66,7 @@ Use one fresh external reviewer context per manifest row. Do not carry prior-row
 5. `schema:data/configs/{profile}.json#/artifact_schemas/{subject}` — selected artifact schema bytes.
 6. `subject:data/calibration/fixtures/{fixture_id}.json` — exact selected subject fixture bytes.
 7. One `required predecessor:data/calibration/fixtures/{fixture_id}.json` record for each required predecessor, in intent, design, plan, implementation-report, validation order — exact predecessor fixture bytes.
-8. Exact companion records, when supplied, with labels `companion:{fictional-repo-label}`, sorted by canonical label bytes. Implementation companion uses common repository-state label above; docs companions use their coverage labels.
+8. Exact companion records, when supplied, with labels `companion:{fictional-repo-label}`. Implementation and `intent-delivered` validation rows use the common repository-state label above. Docs companions use their coverage labels sorted by canonical label bytes. `requirement-proof-mapping` rows use the repository-state record followed by the four exact proof-source records in the order defined above.
 9. `request-json` — exact canonical request bytes below.
 
 The fixed instruction file is UTF-8 without BOM, LF-only, and has exactly one final LF. Supply it verbatim; never parse or normalize it. Protocol, template, fixture, companion, prompt, and request bytes are likewise never trimmed, parsed and reserialized, normalized, or given inserted separators. Source-record labels identify this ordered exact supplied-material set. The binary framing below is a digest identity for those records; it is not itself passed to a model.
@@ -82,7 +85,7 @@ Lengths count bytes, not characters. The instruction, prompt, protocol, template
 
 Selected schema bytes use the value at `artifact_schemas/{subject}` from selected profile JSON. Recursively sort every object key by bytewise UTF-8 lexicographic order, serialize compact UTF-8 JSON with comma and colon separators, and emit no trailing LF. Do not otherwise parse or normalize supplied bytes.
 
-Any supplied-byte change invalidates every row whose source stream contains that byte; unrelated rows remain scoped to their own source set. A needed policy, schema, link, or prompt change still follows existing T07 rule: bump that profile `config_version`, rerun T07 validation, and restart affected manifest keys. `input_sha256` is mechanical identity, not semantic review proof. No provider runtime path reads or interprets it.
+Any supplied-byte change invalidates every row whose source stream contains that byte; unrelated rows remain scoped to their own source set. A needed policy, schema, link, or prompt change bumps that profile `config_version`, requires rehashing the affected manifest keys, and requires fresh semantic owner review. `input_sha256` is mechanical identity, not semantic review proof. No provider runtime path reads or interprets it.
 
 ## Canonical request JSON
 

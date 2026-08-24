@@ -4,6 +4,40 @@
     "name": "change-owner",
     "kind": "human"
   },
+  "operating_context": {
+    "operators": [
+      "trusted sole operator",
+      "repository maintainer"
+    ],
+    "environment": [
+      "local repository checkout",
+      "Loop Engine and software-change provider CLIs",
+      "configured local worker CLIs"
+    ],
+    "threat_boundary": {
+      "in_scope": [
+        "operator-visible software-change runs",
+        "local repository artifacts and configured workers"
+      ],
+      "excluded": [
+        "hostile users",
+        "mutually distrusting tenants",
+        "enterprise authorization or audit infrastructure"
+      ]
+    },
+    "accepted_risks": [
+      {
+        "risk": "The implementation may omit a named acceptance outcome.",
+        "rationale": "The operator accepts the omission, so reviewers do not need to require proof of that outcome."
+      }
+    ],
+    "outside_obligations": [
+      {
+        "source": "Loop Engine provider boundary",
+        "obligation": "The provider remains deterministic and external reviewers retain semantic authority."
+      }
+    ]
+  },
   "problem": "Build the new Rust provider crate.",
   "outcome": "Implement all required modules correctly.",
   "acceptance": [

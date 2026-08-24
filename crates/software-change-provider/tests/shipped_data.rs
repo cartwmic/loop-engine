@@ -310,9 +310,9 @@ fn all_profiles_pass_production_config_validation_and_have_exact_subjects() {
     for profile in PROFILES {
         let config = load_profile(profile);
         let expected_version = match *profile {
-            "minimal" => "minimal-5",
-            "standard" => "standard-6",
-            "high-rigor" => "high-rigor-6",
+            "minimal" => "minimal-6",
+            "standard" => "standard-7",
+            "high-rigor" => "high-rigor-7",
             _ => unreachable!("unknown profile {profile}"),
         };
         assert_eq!(config["config_version"], expected_version);
@@ -368,6 +368,202 @@ fn all_profiles_pass_production_config_validation_and_have_exact_subjects() {
             ]
         );
     }
+}
+
+#[test]
+fn every_profile_exposes_exact_closed_operating_context_schema() {
+    for profile in PROFILES {
+        let config = load_profile(profile);
+        let intent = object(
+            &object(&config["artifact_schemas"], "artifact_schemas")["intent.json"],
+            "intent.json",
+        );
+        let required: BTreeSet<&str> = array(intent.get("required").unwrap(), "intent.required")
+            .iter()
+            .map(|value| string(value, "intent required entry"))
+            .collect();
+        assert!(required.contains("operating_context"));
+
+        let properties = object(intent.get("properties").unwrap(), "intent.properties");
+        let context = object(
+            properties.get("operating_context").unwrap(),
+            "intent.operating_context",
+        );
+        assert_eq!(context.get("type").and_then(Value::as_str), Some("object"));
+        assert_eq!(context["additionalProperties"], Value::Bool(false));
+        let context_required: BTreeSet<&str> = array(
+            context.get("required").unwrap(),
+            "operating_context.required",
+        )
+        .iter()
+        .map(|value| string(value, "operating_context required entry"))
+        .collect();
+        assert_eq!(
+            context_required,
+            BTreeSet::from([
+                "operators",
+                "environment",
+                "threat_boundary",
+                "accepted_risks",
+                "outside_obligations",
+            ])
+        );
+        let context_properties = object(
+            context.get("properties").unwrap(),
+            "operating_context.properties",
+        );
+
+        for field in ["operators", "environment"] {
+            let schema = object(context_properties.get(field).unwrap(), field);
+            assert_eq!(schema["type"].as_str(), Some("array"));
+            assert_eq!(schema["minItems"].as_u64(), Some(1));
+            let items = object(schema.get("items").unwrap(), &format!("{field}.items"));
+            assert_eq!(items["type"].as_str(), Some("string"));
+            assert_eq!(items["minLength"].as_u64(), Some(1));
+        }
+
+        let boundary = object(
+            context_properties.get("threat_boundary").unwrap(),
+            "threat_boundary",
+        );
+        assert_eq!(boundary["type"].as_str(), Some("object"));
+        assert_eq!(boundary["additionalProperties"], Value::Bool(false));
+        let boundary_properties = object(
+            boundary.get("properties").unwrap(),
+            "threat_boundary.properties",
+        );
+        for field in ["in_scope", "excluded"] {
+            let schema = object(boundary_properties.get(field).unwrap(), field);
+            assert_eq!(schema["type"].as_str(), Some("array"));
+            assert_eq!(schema["minItems"].as_u64(), Some(1));
+            let items = object(schema.get("items").unwrap(), &format!("{field}.items"));
+            assert_eq!(items["type"].as_str(), Some("string"));
+            assert_eq!(items["minLength"].as_u64(), Some(1));
+        }
+
+        for (field, item_fields) in [
+            ("accepted_risks", ["risk", "rationale"]),
+            ("outside_obligations", ["source", "obligation"]),
+        ] {
+            let schema = object(context_properties.get(field).unwrap(), field);
+            assert_eq!(schema["type"].as_str(), Some("array"));
+            assert_eq!(schema["minItems"].as_u64(), Some(0));
+            let item = object(schema.get("items").unwrap(), &format!("{field}.items"));
+            assert_eq!(item["type"].as_str(), Some("object"));
+            assert_eq!(item["additionalProperties"], Value::Bool(false));
+            let required: BTreeSet<&str> = array(
+                item.get("required").unwrap(),
+                &format!("{field}.items.required"),
+            )
+            .iter()
+            .map(|value| string(value, "item required entry"))
+            .collect();
+            assert_eq!(required, BTreeSet::from(item_fields));
+            let item_properties = object(item.get("properties").unwrap(), "item.properties");
+            for item_field in item_fields {
+                let property = object(item_properties.get(item_field).unwrap(), item_field);
+                assert_eq!(property["type"].as_str(), Some("string"));
+                assert_eq!(property["minLength"].as_u64(), Some(1));
+            }
+        }
+    }
+}
+
+#[test]
+fn shipped_review_prompts_and_calibration_fixtures_expose_the_new_boundaries() {
+    let required_prompt_terms = [
+        "operating_context",
+        "threat_boundary",
+        "accepted_risks",
+        "outside_obligations",
+        "hostile-user",
+        "multi-tenant",
+        "never waives",
+    ];
+    for profile in PROFILES {
+        let config = load_profile(profile);
+        for entries in object(&config["review_policies"], "review_policies").values() {
+            for policy in array(entries, "review policy list") {
+                let prompt = string(&object(policy, "policy")["example_prompt"], "prompt");
+                for term in required_prompt_terms {
+                    assert!(prompt.contains(term), "{profile} prompt omitted {term}");
+                }
+            }
+        }
+        for policy in config["review_policies"]["plan-review"]
+            .as_array()
+            .unwrap_or(&Vec::new())
+        {
+            let policy_object = object(policy, "plan policy");
+            let prompt = string(&policy_object["example_prompt"], "prompt");
+            match string(&policy_object["id"], "plan policy id") {
+                "task-sized" => {
+                    assert!(prompt.contains("user or operator"));
+                    assert!(prompt.contains("vague task packet"));
+                }
+                "done-observable" => {
+                    assert!(prompt.contains("black-box"));
+                    assert!(prompt.contains("impractical"));
+                }
+                "decision-free" => assert!(prompt.contains("replaceable mechanism")),
+                _ => {}
+            }
+        }
+        for policy in config["review_policies"]["validation-review"]
+            .as_array()
+            .unwrap_or(&Vec::new())
+        {
+            let prompt = string(
+                &object(policy, "validation policy")["example_prompt"],
+                "prompt",
+            );
+            assert!(prompt.contains("activity-only"));
+            assert!(prompt.contains("Bookends"));
+            assert!(prompt.contains("requirement token"));
+        }
+    }
+
+    let intent_good: Value =
+        serde_json::from_str(&shipped_text("data/calibration/fixtures/intent-good.json")).unwrap();
+    assert!(!intent_good["operating_context"]["accepted_risks"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let intent_invalid_waiver: Value = serde_json::from_str(&shipped_text(
+        "data/calibration/fixtures/intent-defective.json",
+    ))
+    .unwrap();
+    assert!(
+        intent_invalid_waiver["operating_context"]["accepted_risks"][0]["rationale"]
+            .as_str()
+            .unwrap()
+            .contains("reviewers do not need")
+    );
+    let plan: Value =
+        serde_json::from_str(&shipped_text("data/calibration/fixtures/plan-good.json")).unwrap();
+    assert!(plan["objective"].as_str().unwrap().contains("black-box"));
+    assert!(plan["objective"]
+        .as_str()
+        .unwrap()
+        .contains("impracticality"));
+    let overbuilt: Value = serde_json::from_str(&shipped_text(
+        "data/calibration/fixtures/design-overbuilt.json",
+    ))
+    .unwrap();
+    assert!(overbuilt
+        .to_string()
+        .contains("speculative plugin registry"));
+    let validation: Value = serde_json::from_str(&shipped_text(
+        "data/calibration/fixtures/validation-report-good.json",
+    ))
+    .unwrap();
+    assert!(validation.to_string().contains("semantically prove"));
+    assert!(validation.to_string().contains("bookends:LE-39"));
+    let activity_only: Value = serde_json::from_str(&shipped_text(
+        "data/calibration/fixtures/validation-report-defective.json",
+    ))
+    .unwrap();
+    assert_eq!(activity_only["requirements"][0]["proof"], "bookends:LE-39");
 }
 
 #[test]
@@ -585,6 +781,18 @@ fn shipped_profiles_describe_live_graph_and_keep_one_to_one_counterparts() {
 
         let workflow = describe_profile(&config);
         let states = state_ids(&workflow);
+        for state in array(&workflow["states"], "describe.states") {
+            if state["id"] != "end" {
+                let instructions = string(
+                    &object(state, "describe state")["instructions"],
+                    "state instructions",
+                );
+                assert!(
+                    instructions.contains("operating_context"),
+                    "{profile} describe instructions omitted frozen operating_context"
+                );
+            }
+        }
 
         for parent in PARENT_GATES {
             let parent_ids = policies
@@ -714,11 +922,18 @@ fn reviewer_protocol_defines_convergence_contract() {
         "previously overlooked",
         "previous visibility or reviewer overlook does not waive",
         "quiet, progress, and thrash count per review state on the post-triage accepted-finding set",
-        "confirmation consumes the durable set and does not search again except for fix-introduced holes",
+        "confirmation consumes the durable ledger set and does not search again except for fix-introduced holes",
         "extra mechanism, unlisted requirements, and hypothetical-future fails are not appended",
         "bound workers do not use previously overlooked",
         "humans still may with full failure burden",
         "known accepted material defects are never waived",
+        "operating_context",
+        "threat_boundary",
+        "accepted_risks",
+        "outside_obligations",
+        "hostile-user",
+        "multi-tenant",
+        "never waives",
         "adversarial output is candidate data",
         "no unresolved accepted in-scope material finding",
         "zero advisory comments is not required",
@@ -808,34 +1023,67 @@ fn authoritative_docs_integrate_convergence_contract_and_routes() {
 }
 
 #[test]
-fn accepted_findings_template_matches_well_formed_shape() {
-    let envelope: Value =
-        serde_json::from_str(&shipped_text("data/templates/accepted-findings.json"))
-            .expect("accepted-findings template must be JSON");
-    assert_eq!(
-        envelope["kind"].as_str(),
-        Some("accepted-findings"),
-        "template must emit kind accepted-findings so neither provider nor engine writes it"
-    );
-    let data = object(&envelope["data"], "accepted-findings.data");
+fn finding_ledger_template_matches_well_formed_shape() {
+    let envelope: Value = serde_json::from_str(&shipped_text("data/templates/finding-ledger.json"))
+        .expect("finding-ledger template must be JSON");
+    assert_eq!(envelope["kind"].as_str(), Some("finding-ledger"));
+    let data = object(&envelope["data"], "finding-ledger.data");
+    assert_eq!(string(&data["schema_version"], "schema_version"), "1");
     for key in ["gate", "subject", "subject_revision"] {
         let value = string(&data[key], key);
-        assert!(
-            !value.is_empty(),
-            "accepted-findings.{key} must be nonempty"
-        );
+        assert!(!value.is_empty(), "finding-ledger.{key} must be nonempty");
     }
+    let author = object(&data["author"], "author");
+    assert!(!string(&author["name"], "author.name").is_empty());
+    assert!(matches!(
+        string(&author["kind"], "author.kind"),
+        "human" | "agent"
+    ));
+    assert!(data["repository_state"].is_null());
     let findings = array(&data["findings"], "findings");
     for (index, item) in findings.iter().enumerate() {
         let object = object(item, &format!("findings[{index}]"));
-        assert!(
-            !string(&object["policy_id"], "policy_id").is_empty(),
-            "findings[{index}].policy_id must be nonempty"
-        );
-        assert!(
-            !string(&object["statement"], "statement").is_empty(),
-            "findings[{index}].statement must be nonempty"
-        );
+        for key in [
+            "id",
+            "source",
+            "policy_id",
+            "statement",
+            "disposition",
+            "reason",
+            "owner_phase",
+            "task_ids",
+            "review_axes",
+            "status",
+        ] {
+            assert!(object.get(key).is_some(), "findings[{index}] missing {key}");
+        }
+    }
+}
+
+#[test]
+fn advisory_finding_proposal_is_a_closed_inert_context_template() {
+    let envelope: Value = serde_json::from_str(&shipped_text(
+        "data/templates/advisory-finding-proposal.json",
+    ))
+    .expect("advisory proposal must be JSON");
+    assert_eq!(envelope["kind"].as_str(), Some("advisory-finding-proposal"));
+    let data = object(&envelope["data"], "advisory-finding-proposal.data");
+    assert_eq!(data["schema_version"].as_str(), Some("1"));
+    let proposals = array(&data["proposals"], "proposals");
+    assert!(!proposals.is_empty());
+    for (index, proposal) in proposals.iter().enumerate() {
+        let proposal = object(proposal, &format!("proposals[{index}]"));
+        for key in [
+            "candidate_source_ids",
+            "proposed_disposition",
+            "proposed_reason",
+            "proposed_owner_phase",
+            "proposed_task_ids",
+            "proposed_review_axes",
+            "rationale",
+        ] {
+            assert!(proposal.get(key).is_some(), "proposal missing {key}");
+        }
     }
 }
 
@@ -846,9 +1094,14 @@ fn review_worker_preamble_carries_yagni_bar_and_confirmation_stdin_rule() {
         "extra mechanism",
         "unlisted requirements",
         "hypothetical-future",
-        "confirmation consumes the durable set",
+        "confirmation consumes the durable finding-ledger history",
         "does not search again except for fix-introduced holes",
         "bound workers do not use previously overlooked",
+        "operating_context",
+        "threat_boundary",
+        "outside_obligations",
+        "review_axes",
+        "never waive a stated outcome",
     ] {
         assert!(
             preamble.contains(clause),
@@ -959,6 +1212,59 @@ fn constructor_rejects_draft_slots_and_accepts_intent_and_adversarial_review() {
         !intent_bindings.contains_key("intent-adversarial-review"),
         "same-slot mixed parent and adversarial fan-out is not the enabled path"
     );
+    let binding_args = array(
+        &intent_bindings["intent-review"]["args"],
+        "intent-review constructor args",
+    );
+    assert_eq!(binding_args[0], "fan-out");
+    let expected_schema = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["axis", "author", "result", "findings"],
+        "properties": {
+            "axis": {"type": "string", "minLength": 1},
+            "author": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "kind"],
+                "properties": {
+                    "name": {"type": "string", "minLength": 1},
+                    "kind": {"type": "string", "enum": ["human", "agent", "script"]}
+                }
+            },
+            "result": {"type": "string", "enum": ["pass", "fail"]},
+            "findings": {"type": "string"}
+        },
+        "oneOf": [
+            {"properties": {"result": {"const": "pass"}, "findings": {"const": ""}}},
+            {"properties": {"result": {"const": "fail"}, "findings": {"type": "string", "minLength": 1}}}
+        ]
+    });
+    let high_rigor = load_profile("high-rigor");
+    let intent_policies = array(
+        &object(&high_rigor["review_policies"], "review_policies")["intent-review"],
+        "intent-review policies",
+    );
+    for (worker_index, worker_pair) in binding_args[1..].chunks_exact(2).enumerate() {
+        assert_eq!(worker_pair[0], "--worker");
+        let worker: Value = serde_json::from_str(string(&worker_pair[1], "constructor worker"))
+            .expect("constructor worker must be JSON");
+        assert!(
+            worker.get("output_schema").is_none(),
+            "constructor must not emit legacy output_schema: {worker}"
+        );
+        let mut expected_worker_schema = expected_schema.clone();
+        expected_worker_schema["properties"]["axis"]["const"] = json!(string(
+            &object(&intent_policies[worker_index], "intent policy")["id"],
+            "policy id"
+        ));
+        expected_worker_schema["properties"]["author"]["const"] =
+            json!({"name": "reviewer-a", "kind": "agent"});
+        assert_eq!(
+            worker["full_output_schema"], expected_worker_schema,
+            "constructor must emit assignment-specific axis and author constants"
+        );
+    }
 
     let adversarial = run_review_constructor(&profile, "design-adversarial-review", &roster)
         .expect("design-adversarial-review must be a live constructor slot");

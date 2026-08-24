@@ -1,0 +1,32 @@
+{
+  "kind": "finding-ledger",
+  "data": {
+    "schema_version": "1",
+    "gate": "design-review",
+    "subject": "design.json",
+    "subject_revision": "1",
+    "author": {
+      "name": "driver",
+      "kind": "human"
+    },
+    "repository_state": null,
+    "findings": [
+      {
+        "id": "F-example",
+        "source": {
+          "kind": "external-artifact",
+          "relative_path": "review.stdout",
+          "output_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "policy_id": "intent-faithful",
+        "statement": "Accepted in-scope material finding after driver triage.",
+        "disposition": "accepted",
+        "reason": "The driver accepted the candidate and routed it to the owning phase.",
+        "owner_phase": "design",
+        "task_ids": [],
+        "review_axes": ["intent-faithful"],
+        "status": "unresolved"
+      }
+    ]
+  }
+}

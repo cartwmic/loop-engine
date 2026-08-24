@@ -7,7 +7,9 @@ and PATH has no file suffix (or is a directory), writes ``{task_id}.stdin``
 inside that directory so one ``--task-worker`` CLI can record every task.
 With ``--record-cwd``, writes the actual process cwd beside each stdin
 receipt. ``--require-cwd-entry ENTRY`` additionally requires that ENTRY is
-visible from that cwd before the worker succeeds.
+visible from that cwd before the worker succeeds. ``--inspect-operating-context``
+reads ``artifact_root/intent.json`` and records its frozen operating context
+beside the receipt.
 
 Detects the summarizer assignment after the compact location JSON separator.
 Only that summarizer invocation may write ``artifact_root/implementation-report.json``;
@@ -153,6 +155,11 @@ def main() -> int:
         help="Write the actual process cwd beside each stdin receipt",
     )
     parser.add_argument(
+        "--inspect-operating-context",
+        action="store_true",
+        help="Read and record artifact_root/intent.json operating_context",
+    )
+    parser.add_argument(
         "--require-cwd-entry",
         default=None,
         help="Require this path, relative to the process cwd, before succeeding",
@@ -162,6 +169,13 @@ def main() -> int:
     raw = sys.stdin.buffer.read()
     text = raw.decode("utf-8", errors="replace")
     location, rest, is_summarizer = split_stdin(text)
+    if not location:
+        try:
+            compact_location = json.loads(text)
+        except json.JSONDecodeError:
+            compact_location = {}
+        if isinstance(compact_location, dict):
+            location = compact_location
     task_id = parse_task_id(rest, is_summarizer)
     dest = receipt_destination(Path(args.receipt), task_id)
     dest.write_bytes(raw)
@@ -184,6 +198,23 @@ def main() -> int:
     if args.record_cwd or args.require_cwd_entry:
         dest.with_name(dest.name + ".cwd").write_text(
             str(process_cwd) + "\n", encoding="utf-8"
+        )
+    if args.inspect_operating_context:
+        artifact_root = location.get("artifact_root")
+        if not isinstance(artifact_root, str) or not artifact_root:
+            print("operating-context inspection requires artifact_root", file=sys.stderr)
+            return 1
+        try:
+            intent = json.loads(
+                (Path(artifact_root) / "intent.json").read_text(encoding="utf-8")
+            )
+            operating_context = intent["operating_context"]
+        except (KeyError, OSError, TypeError, json.JSONDecodeError) as error:
+            print(f"could not inspect frozen operating_context: {error}", file=sys.stderr)
+            return 1
+        dest.with_name(dest.name + ".operating-context.json").write_text(
+            json.dumps(operating_context, separators=(",", ":")) + "\n",
+            encoding="utf-8",
         )
     write_session_marker()
 

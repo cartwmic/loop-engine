@@ -1013,17 +1013,18 @@ def _invoke_packet(
     artifact_root: Path,
     instruction_body: str,
     capture_dir: Path,
+    context: Sequence[Mapping[str, Any]] | None = None,
 ) -> bytes:
-    return json.dumps(
-        {
-            "run_id": run_id,
-            "slot_id": slot_id,
-            "artifact_root": str(artifact_root),
-            "instruction_body": instruction_body,
-            "capture_dir": str(capture_dir),
-        },
-        separators=(",", ":"),
-    ).encode("utf-8")
+    packet: dict[str, Any] = {
+        "run_id": run_id,
+        "slot_id": slot_id,
+        "artifact_root": str(artifact_root),
+        "instruction_body": instruction_body,
+        "capture_dir": str(capture_dir),
+    }
+    if context is not None:
+        packet["context"] = list(context)
+    return json.dumps(packet, separators=(",", ":")).encode("utf-8")
 
 
 def _load_summary_workers(capture_dir: Path) -> list[dict[str, Any]]:
@@ -1244,7 +1245,7 @@ def _append_synthetic_gate_evidence(
                 )
 
 
-def _append_synthetic_accepted_findings(
+def _append_synthetic_finding_ledger(
     engine_call: EngineCall,
     *,
     run_id: str,
@@ -1262,11 +1263,18 @@ def _append_synthetic_accepted_findings(
     revision = document.get("revision") if isinstance(document, dict) else None
     if not isinstance(revision, str) or not revision:
         raise WorkSlotJourneyFailure(f"{subject} omitted revision")
-    record_id = f"{record_prefix}accepted-findings-{gate}"
+    record_id = f"{record_prefix}finding-ledger-{gate}"
     data = {
+        "schema_version": "1",
         "gate": gate,
         "subject": subject,
         "subject_revision": revision,
+        "author": {"name": "journey-driver", "kind": "agent"},
+        "repository_state": (
+            None
+            if subject in {"intent.json", "design.json", "plan.json"}
+            else "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        ),
         "findings": [],
     }
     appended = engine_call(
@@ -1274,13 +1282,13 @@ def _append_synthetic_accepted_findings(
             "append",
             f"--record-id={record_id}",
             run_id,
-            "accepted-findings",
+            "finding-ledger",
             json.dumps(data, separators=(",", ":")),
         ]
     )
     if appended.get("status") != "completed":
         raise WorkSlotJourneyFailure(
-            f"{gate} accepted-findings append failed: {appended}"
+            f"{gate} finding-ledger append failed: {appended}"
         )
 
 
@@ -1331,7 +1339,7 @@ def _advance_software_change_to(
                 gate=gate,
                 record_prefix=f"{run_id}-",
             )
-            _append_synthetic_accepted_findings(
+            _append_synthetic_finding_ledger(
                 engine_call,
                 run_id=run_id,
                 profile=profile,
@@ -1447,6 +1455,16 @@ def _assert_capture_isolation(
 
 def _write_small_plan(artifact_root: Path) -> dict[str, Any]:
     artifact_root.mkdir(parents=True, exist_ok=True)
+    # Successful plan graphs now emit a provider checkpoint. Keep standalone
+    # fixtures small while supplying the three revision-bearing documents that
+    # checkpoint generation reads; full software-change fixtures are preserved.
+    for name in ("intent.json", "design.json"):
+        path = artifact_root / name
+        if not path.exists():
+            path.write_text(
+                json.dumps({"revision": "1"}, separators=(",", ":")),
+                encoding="utf-8",
+            )
     plan = small_plan_document()
     (artifact_root / "plan.json").write_text(
         json.dumps(plan, indent=2) + "\n", encoding="utf-8"
@@ -1555,9 +1573,39 @@ def _assert_task_receipt(
         )
 
 
+def _ensure_git_repository(path: Path) -> None:
+    """Give standalone plan-graph fixtures the real repository boundary they prove."""
+    path.mkdir(parents=True, exist_ok=True)
+    if (path / ".git").exists():
+        return
+    marker = path / ".journey-baseline"
+    marker.write_text("baseline\n", encoding="utf-8")
+    for git_args in (
+        ["init", "-q"],
+        ["config", "user.name", "software-change journey"],
+        ["config", "user.email", "journey@example.invalid"],
+        ["config", "commit.gpgsign", "false"],
+        ["add", "-A"],
+        ["commit", "-qm", "journey baseline"],
+    ):
+        completed = subprocess.run(
+            ["git", *git_args],
+            cwd=path,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise WorkSlotJourneyFailure(
+                f"could not initialize plan-graph fixture repository: "
+                f"{completed.stderr.strip() or completed.stdout.strip()}"
+            )
+
+
 def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
     """Prove run-plan-graph with dummy --task-worker. Never calls a live model."""
     work_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_git_repository(work_dir)
     plan = small_plan_document()
     task_ids = [task["id"] for task in plan["tasks"]]
     tasks_by_id = {task["id"]: task for task in plan["tasks"]}
@@ -1632,6 +1680,139 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
             f"success summary included summarizer: {success_workers}"
         )
 
+    # Ledger routing is an operator-visible provider path: pass immutable
+    # context through separate CLI processes and assert only the exact task
+    # receives the current implementation-owned entry. A proposal-only run
+    # proves advisory classification is inert before the driver appends a
+    # disposition.
+    proposal_root = work_dir / "finding-proposal-only"
+    proposal_receipts = proposal_root / "receipts"
+    proposal_capture = proposal_root / "captures" / "inv-proposal-only"
+    _write_small_plan(proposal_root)
+    proposal_context = [
+        {
+            "id": "proposal-only-1",
+            "kind": "advisory-finding-proposal",
+            "data": {"proposals": [{"candidate_source_ids": ["source-1"]}]},
+            "sequence": 1,
+            "created_at": 1,
+        }
+    ]
+    proposal_run = _run_binding(
+        implement_graph_runner_binding(
+            provider=provider,
+            task_worker=stdin_worker_cli(proposal_receipts),
+            working_directory=work_dir,
+        ),
+        stdin=_invoke_packet(
+            run_id=run_id,
+            slot_id=slot_id,
+            artifact_root=proposal_root,
+            instruction_body=instruction_body,
+            capture_dir=proposal_capture,
+            context=proposal_context,
+        ),
+    )
+    if proposal_run.returncode != 0:
+        raise WorkSlotJourneyFailure(
+            f"proposal-only graph exited {proposal_run.returncode}: "
+            f"{proposal_run.stderr.decode('utf-8', 'replace')}"
+        )
+    for task in plan["tasks"]:
+        recorded = parse_graph_runner_stdin(
+            (proposal_receipts / f"{task['id']}.stdin").read_text(encoding="utf-8")
+        )
+        expected_proposal_task = dict(task)
+        expected_proposal_task["finding_context"] = []
+        if recorded["task"] != expected_proposal_task:
+            raise WorkSlotJourneyFailure(
+                f"advisory proposal changed task {task['id']} before driver disposition: "
+                f"{recorded['task']}"
+            )
+
+    # bookends:LE-92 — only the driver-confirmed ledger entry routes to alpha; the advisory proposal remains absent from every task packet.
+    routing_root = work_dir / "finding-routing"
+    routing_receipts = routing_root / "receipts"
+    routing_capture = routing_root / "captures" / "inv-routing"
+    _write_small_plan(routing_root)
+    raw_source = b"routing reviewer stdout\\n"
+    (routing_root / "review.stdout").write_bytes(raw_source)
+    source_digest = "sha256:" + hashlib.sha256(raw_source).hexdigest()
+    routing_source = {
+        "kind": "external-artifact",
+        "relative_path": "review.stdout",
+        "output_sha256": source_digest,
+    }
+    routing_finding = {
+        "id": "F-route-alpha",
+        "source": routing_source,
+        "policy_id": "axis",
+        "statement": "route alpha",
+        "disposition": "accepted",
+        "reason": "driver accepted and routed the finding",
+        "owner_phase": "implementation",
+        "task_ids": ["alpha"],
+        "review_axes": ["axis"],
+        "status": "unresolved",
+    }
+    routing_context = [
+        {
+            "id": "routing-ledger-1",
+            "kind": "finding-ledger",
+            "data": {
+                "schema_version": "1",
+                "gate": "plan-review",
+                "subject": "plan.json",
+                "subject_revision": "1",
+                "author": {"name": "driver", "kind": "agent"},
+                "repository_state": None,
+                "findings": [routing_finding],
+            },
+            "sequence": 1,
+            "created_at": 1,
+        },
+        {
+            "id": "routing-proposal-1",
+            "kind": "advisory-finding-proposal",
+            "data": {"proposals": [{"candidate_source_ids": ["source-1"]}]},
+            "sequence": 2,
+            "created_at": 2,
+        },
+    ]
+    routing = _run_binding(
+        implement_graph_runner_binding(
+            provider=provider,
+            task_worker=stdin_worker_cli(routing_receipts),
+            working_directory=work_dir,
+        ),
+        stdin=_invoke_packet(
+            run_id=run_id,
+            slot_id=slot_id,
+            artifact_root=routing_root,
+            instruction_body=instruction_body,
+            capture_dir=routing_capture,
+            context=routing_context,
+        ),
+    )
+    if routing.returncode != 0:
+        raise WorkSlotJourneyFailure(
+            "finding-routing graph exited "
+            f"{routing.returncode}: {routing.stderr.decode('utf-8', 'replace')}"
+        )
+    for task in plan["tasks"]:
+        task_id = task["id"]
+        recorded = parse_graph_runner_stdin(
+            (routing_receipts / f"{task_id}.stdin").read_text(encoding="utf-8")
+        )
+        expected = dict(task)
+        expected["finding_context"] = (
+            [routing_finding] if task_id == "alpha" else []
+        )
+        if recorded["task"] != expected:
+            raise WorkSlotJourneyFailure(
+                f"finding routing mismatch for {task_id}: {recorded['task']}"
+            )
+    _assert_capture_files(routing_capture, (*task_ids, "summarizer"))
 
     missing_root = work_dir / "missing-report"
     missing_receipts = missing_root / "receipts"
@@ -1743,6 +1924,8 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
         "success path exits 0 when summarizer writes implementation-report.json",
         "dummy receipts match compact artifact_root stdin layout",
         "capture_dir summary.json and per-task stdout/stderr",
+        "advisory proposal alone is inert in every task packet",
+        "driver-confirmed ledger routes only the exact implementation task",
         "missing implementation-report.json exits nonzero",
         "failing sibling reaped before runner exits",
         "no live model",
@@ -1919,6 +2102,385 @@ def prove_fan_out(*, engine: Path, work_dir: Path) -> list[str]:
         "bound outputs under packet.capture_dir",
         "inner nonzero exit with collector exit 0",
         "ad hoc summary.json present",
+        "no live model",
+    ]
+
+
+def prove_full_schema_retry(*, engine: Path, work_dir: Path) -> list[str]:
+    """Drive both bounded same-worker conformance outcomes through fan-out CLI."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    worker_script = work_dir / "full-schema-worker.py"
+    worker_script.write_text(
+        "import argparse, json\n"
+        "from pathlib import Path\n"
+        "parser = argparse.ArgumentParser()\n"
+        "parser.add_argument('--state', required=True)\n"
+        "parser.add_argument('--receipt', required=True)\n"
+        "parser.add_argument('--mode', choices=('success', 'exhaust'), required=True)\n"
+        "args = parser.parse_args()\n"
+        "raw = __import__('sys').stdin.buffer.read()\n"
+        "state = Path(args.state)\n"
+        "count = int(state.read_text()) if state.exists() else 0\n"
+        "state.write_text(str(count + 1))\n"
+        "Path(args.receipt).write_bytes(raw)\n"
+        "if args.mode == 'success' and count == 0:\n"
+        "    __import__('sys').stdout.buffer.write(b'{\\\"axis\\\":\\\"wrong\\\"}')\n"
+        "else:\n"
+        "    output = {'axis':'retry-axis','author':{'name':'retry-author','kind':'script'},'result':'pass','findings':''}\n"
+        "    if args.mode == 'exhaust':\n"
+        "        output['axis'] = 'always-wrong'\n"
+        "    __import__('sys').stdout.write(json.dumps(output, separators=(',', ':')))\n"
+        "",
+        encoding="utf-8",
+    )
+    worker_script.chmod(0o755)
+    schema = {
+        "type": "object",
+        "required": ["axis", "author", "result", "findings"],
+        "properties": {
+            "axis": {"const": "retry-axis"},
+            "author": {"const": {"name": "retry-author", "kind": "script"}},
+            "result": {"enum": ["pass", "fail"]},
+            "findings": {"type": "string"},
+        },
+        "additionalProperties": False,
+    }
+
+    def run_case(name: str, mode: str) -> tuple[Path, dict[str, Any], bytes, bytes]:
+        root = work_dir / name
+        root.mkdir(parents=True, exist_ok=True)
+        instructions = root / "instructions.txt"
+        instructions.write_bytes(b"frozen review assignment\n")
+        state = root / "attempt-count"
+        receipt = root / "last-stdin"
+        worker = {
+            "command": sys.executable,
+            "args": [
+                str(worker_script),
+                "--state",
+                str(state),
+                "--receipt",
+                str(receipt),
+                "--mode",
+                mode,
+            ],
+            "preamble": "same frozen reviewer assignment",
+            "full_output_schema": schema,
+        }
+        completed = _run_binding(
+            fan_out_binding(
+                engine=engine,
+                workers=[worker],
+                instructions=instructions,
+            ),
+            stdin=b"not-an-invoke-packet",
+            cwd=root,
+        )
+        capture_root = root / "fan-out-adhoc"
+        captures = sorted(capture_root.iterdir()) if capture_root.is_dir() else []
+        if len(captures) != 1 or not captures[0].is_dir():
+            raise WorkSlotJourneyFailure(
+                f"{name} did not leave exactly one capture root: {captures}"
+            )
+        capture = captures[0]
+        summary_path = capture / "summary.json"
+        if not summary_path.is_file():
+            raise WorkSlotJourneyFailure(f"{name} omitted persisted summary: {capture}")
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        workers = summary.get("workers") if isinstance(summary, dict) else None
+        if not isinstance(workers, list) or len(workers) != 1:
+            raise WorkSlotJourneyFailure(f"{name} summary omitted one worker: {summary}")
+        worker_summary = workers[0]
+        if worker_summary.get("command") != sys.executable or worker_summary.get("args") != worker["args"]:
+            raise WorkSlotJourneyFailure(
+                f"{name} changed the frozen worker command or args: {worker_summary}"
+            )
+        if worker_summary.get("attempts_path") != "0/attempts.json":
+            raise WorkSlotJourneyFailure(
+                f"{name} did not publish the relative attempts path: {worker_summary}"
+            )
+        attempts_path = capture / "0" / "attempts.json"
+        manifest = json.loads(attempts_path.read_text(encoding="utf-8"))
+        attempts = manifest.get("attempts")
+        if manifest.get("schema_version") != "1" or not isinstance(attempts, list) or len(attempts) != 2:
+            raise WorkSlotJourneyFailure(f"{name} did not preserve two attempts: {manifest}")
+        for number, attempt in enumerate(attempts, start=1):
+            if attempt.get("number") != number:
+                raise WorkSlotJourneyFailure(f"{name} attempt numbering changed: {manifest}")
+            stdout = (capture / "0" / "attempts" / str(number) / "stdout").read_bytes()
+            stderr = (capture / "0" / "attempts" / str(number) / "stderr").read_bytes()
+            if attempt.get("stdout_sha256") != "sha256:" + hashlib.sha256(stdout).hexdigest():
+                raise WorkSlotJourneyFailure(f"{name} stdout digest lost raw bytes: {manifest}")
+            if attempt.get("stderr_sha256") != "sha256:" + hashlib.sha256(stderr).hexdigest():
+                raise WorkSlotJourneyFailure(f"{name} stderr digest lost raw bytes: {manifest}")
+        compatibility_stdout = (capture / "0" / "stdout").read_bytes()
+        compatibility_stderr = (capture / "0" / "stderr").read_bytes()
+        return capture, worker_summary, compatibility_stdout, compatibility_stderr
+
+    # bookends:LE-93 — one malformed response is corrected by the identical frozen worker, with both raw attempts and exact retry diagnostics retained.
+    success_capture, success_summary, success_stdout, success_stderr = run_case(
+        "invalid-then-valid", "success"
+    )
+    success_manifest = json.loads(
+        (success_capture / "0" / "attempts.json").read_text(encoding="utf-8")
+    )
+    if (
+        success_summary.get("status") != "succeeded"
+        or success_summary.get("selected_attempt") != 2
+        or success_manifest.get("selected_attempt") != 2
+        or success_manifest.get("exhausted") is not False
+        or success_stdout != (success_capture / "0" / "attempts" / "2" / "stdout").read_bytes()
+        or success_stderr != (success_capture / "0" / "attempts" / "2" / "stderr").read_bytes()
+        or json.loads(success_stdout).get("axis") != "retry-axis"
+        or (work_dir / "invalid-then-valid" / "attempt-count").read_text() != "2"
+    ):
+        raise WorkSlotJourneyFailure(f"invalid-then-valid did not select attempt 2: {success_summary}")
+    first_stdout = (success_capture / "0" / "attempts" / "1" / "stdout").read_bytes()
+    second_assignment = (work_dir / "invalid-then-valid" / "last-stdin").read_bytes()
+    original_assignment = (
+        b"same frozen reviewer assignment\n---\n\nfrozen review assignment\n"
+    )
+    if not second_assignment.startswith(original_assignment):
+        raise WorkSlotJourneyFailure(
+            "retry assignment changed the frozen preamble or original assignment"
+        )
+    if first_stdout not in second_assignment:
+        raise WorkSlotJourneyFailure("retry assignment omitted unchanged first stdout")
+    for error in success_manifest["attempts"][0]["validation_errors"]:
+        if error.encode("utf-8") not in second_assignment:
+            raise WorkSlotJourneyFailure(
+                f"retry assignment omitted exact validation error {error!r}"
+            )
+
+    exhaustion_capture, exhaustion_summary, exhaustion_stdout, exhaustion_stderr = run_case(
+        "invalid-twice", "exhaust"
+    )
+    exhaustion_manifest = json.loads(
+        (exhaustion_capture / "0" / "attempts.json").read_text(encoding="utf-8")
+    )
+    if (
+        exhaustion_summary.get("status") != "failed"
+        or exhaustion_summary.get("selected_attempt", "missing") is not None
+        or exhaustion_manifest.get("selected_attempt", "missing") is not None
+        or exhaustion_manifest.get("exhausted") is not True
+        or not isinstance(exhaustion_summary.get("conformance_error"), str)
+        or "exhausted" not in exhaustion_summary["conformance_error"]
+        or "result" in exhaustion_summary
+        or exhaustion_stdout != (exhaustion_capture / "0" / "attempts" / "2" / "stdout").read_bytes()
+        or exhaustion_stderr != (exhaustion_capture / "0" / "attempts" / "2" / "stderr").read_bytes()
+        or (work_dir / "invalid-twice" / "attempt-count").read_text() != "2"
+    ):
+        raise WorkSlotJourneyFailure(
+            f"invalid-twice did not fail closed after two attempts: {exhaustion_summary}"
+        )
+    return [
+        "same frozen worker command/args and assignment on retry",
+        "invalid-then-valid selects attempt 2 and preserves attempt 1 bytes",
+        "attempts.json digests and exact validation errors are retrievable",
+        "invalid-twice exhausts once with no substitute semantic verdict",
+        "no live model",
+    ]
+
+
+def prove_selected_attempt_ledger_linkage(
+    *,
+    engine: Path,
+    provider: Path,
+    profile_source: Path,
+    fixture_root: Path,
+    work_dir: Path,
+) -> list[str]:
+    """Prove a selected retry attempt can be linked by a public ledger gate."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    worker_script = work_dir / "selected-attempt-worker.py"
+    worker_script.write_text(
+        "import argparse, json, sys\n"
+        "from pathlib import Path\n"
+        "parser = argparse.ArgumentParser()\n"
+        "parser.add_argument('--state', required=True)\n"
+        "args = parser.parse_args()\n"
+        "state = Path(args.state)\n"
+        "count = int(state.read_text()) if state.exists() else 0\n"
+        "state.write_text(str(count + 1))\n"
+        "sys.stdin.buffer.read()\n"
+        "if count == 0:\n"
+        "    sys.stdout.write('{\\\"axis\\\":\\\"wrong\\\"}')\n"
+        "else:\n"
+        "    sys.stdout.write(json.dumps({'axis':'selected-axis','author':{'name':'selected-worker','kind':'script'},'result':'fail','findings':'selected-attempt finding'}, separators=(',', ':')))\n"
+        "",
+        encoding="utf-8",
+    )
+    worker_script.chmod(0o755)
+    custom_profile = work_dir / "selected-attempt-profile.json"
+    profile = json.loads(profile_source.read_text(encoding="utf-8"))
+    policies = profile["review_policies"]
+    for gate in list(policies):
+        policies[gate] = []
+    policies["design-review"] = [
+        {
+            "id": "selected-axis",
+            "description": "Selected attempt linkage proof",
+            "example_prompt": "Judge selected-axis only.",
+            "required_authors": 1,
+        }
+    ]
+    custom_profile.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
+    schema = {
+        "type": "object",
+        "required": ["axis", "author", "result", "findings"],
+        "properties": {
+            "axis": {"const": "selected-axis"},
+            "author": {"const": {"name": "selected-worker", "kind": "script"}},
+            "result": {"enum": ["pass", "fail"]},
+            "findings": {"type": "string"},
+        },
+        "additionalProperties": False,
+    }
+    binding = fan_out_binding(
+        engine=engine,
+        workers=[
+            {
+                "command": sys.executable,
+                "args": [str(worker_script), "--state", str(work_dir / "attempt-count")],
+                "preamble": "selected-attempt reviewer",
+                "full_output_schema": schema,
+            }
+        ],
+    )
+    engine_call, artifact_root, frozen_profile = _start_isolated_software_change(
+        engine=engine,
+        provider=provider,
+        profile_source=custom_profile,
+        fixture_root=fixture_root,
+        work_dir=work_dir / "run",
+        run_id="selected-attempt-ledger",
+        extra_bindings={"design-review": binding},
+    )
+    run_id = "selected-attempt-ledger"
+    invoke_until_succeeded(engine_call, run_id, "intent-draft", timeout_s=20.0)
+    _expect_event_state(engine_call, run_id, "intent-ready", "design")
+    _expect_event_state(engine_call, run_id, "design-ready", "design-review")
+    overlay = invoke_until_succeeded(engine_call, run_id, "design-review", timeout_s=20.0)
+    capture = Path(overlay["capture_dir"])
+    manifest = json.loads((capture / "0" / "attempts.json").read_text(encoding="utf-8"))
+    if manifest.get("selected_attempt") != 2 or manifest.get("exhausted") is not False:
+        raise WorkSlotJourneyFailure(
+            f"selected-attempt fixture did not select retry attempt 2: {manifest}"
+        )
+    selected_stdout = (capture / "0" / "attempts" / "2" / "stdout").read_bytes()
+    output_digest = "sha256:" + hashlib.sha256(selected_stdout).hexdigest()
+    selected = json.loads(selected_stdout)
+    if selected.get("result") != "fail" or selected.get("findings") != "selected-attempt finding":
+        raise WorkSlotJourneyFailure(
+            f"selected attempt did not contain the expected candidate finding: {selected}"
+        )
+
+    subject = "design.json"
+    revision = json.loads((artifact_root / subject).read_text(encoding="utf-8"))["revision"]
+    evidence = {
+        "gate": "design-review",
+        "policy_id": "selected-axis",
+        "result": "fail",
+        "findings": "selected-attempt finding",
+        "author": {"name": "selected-reviewer", "kind": "script"},
+        "subject": subject,
+        "subject_revision": revision,
+        "config_version": frozen_profile["config_version"],
+    }
+    evidence_result = engine_call(
+        [
+            "append",
+            "--record-id=selected-attempt-evidence-fail",
+            run_id,
+            "review-evidence",
+            json.dumps(evidence, separators=(",", ":")),
+        ]
+    )
+    if evidence_result.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"selected-attempt fail evidence append failed: {evidence_result}")
+    finding = {
+        "id": "F-selected-attempt",
+        "source": {
+            "kind": "work-slot",
+            "invocation_id": overlay["invocation_id"],
+            "worker_index": 0,
+            "attempt": 2,
+            "output_sha256": output_digest,
+        },
+        "policy_id": "selected-axis",
+        "statement": "selected-attempt finding",
+        "disposition": "accepted",
+        "reason": "driver retained and routed the selected reviewer output",
+        "owner_phase": "design",
+        "task_ids": [],
+        "review_axes": ["selected-axis"],
+        "status": "unresolved",
+    }
+    ledger = {
+        "schema_version": "1",
+        "gate": "design-review",
+        "subject": subject,
+        "subject_revision": revision,
+        "author": {"name": "selected-driver", "kind": "agent"},
+        "repository_state": None,
+        "findings": [finding],
+    }
+    ledger_result = engine_call(
+        [
+            "append",
+            "--record-id=selected-attempt-ledger-fail",
+            run_id,
+            "finding-ledger",
+            json.dumps(ledger, separators=(",", ":")),
+        ]
+    )
+    if ledger_result.get("status") != "completed":
+        raise WorkSlotJourneyFailure(
+            f"selected-attempt ledger append failed: {ledger_result}"
+        )
+    # bookends:LE-92 — a public provider denial reaches evidence only after the driver ledger validates the selected retry attempt's raw bytes and digest.
+    denied = engine_call(["event", run_id, "approved"])
+    if denied.get("status") != "rejected" or denied.get("code") != "software-change-review-incomplete":
+        raise WorkSlotJourneyFailure(
+            f"selected-attempt ledger linkage did not reach review evidence: {denied}"
+        )
+    evidence["result"] = "pass"
+    evidence["findings"] = ""
+    pass_result = engine_call(
+        [
+            "append",
+            "--record-id=selected-attempt-evidence-pass",
+            run_id,
+            "review-evidence",
+            json.dumps(evidence, separators=(",", ":")),
+        ]
+    )
+    if pass_result.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"selected-attempt pass evidence append failed: {pass_result}")
+    finding["status"] = "resolved"
+    ledger["findings"] = [finding]
+    resolved_result = engine_call(
+        [
+            "append",
+            "--record-id=selected-attempt-ledger-resolved",
+            run_id,
+            "finding-ledger",
+            json.dumps(ledger, separators=(",", ":")),
+        ]
+    )
+    if resolved_result.get("status") != "completed":
+        raise WorkSlotJourneyFailure(
+            f"selected-attempt resolved ledger append failed: {resolved_result}"
+        )
+    approved = engine_call(["event", run_id, "approved"])
+    if approved.get("status") != "completed" or approved.get("result", {}).get("run", {}).get("current_state") != "plan":
+        raise WorkSlotJourneyFailure(
+            f"selected-attempt ledger recovery did not advance: {approved}"
+        )
+    return [
+        "selected retry attempt is linked by invocation, worker index, attempt, and raw stdout digest",
+        "provider reaches review evidence only after selected-attempt ledger linkage passes",
+        "resolved driver ledger supersedes the selected candidate without rewriting raw attempts",
         "no live model",
     ]
 
@@ -2343,6 +2905,7 @@ def prove_zero_worker_review_invoke(
 def prove_default_sandbox_argv(*, provider: Path, work_dir: Path) -> list[str]:
     """PATH stub named pi records default sandbox argv. No live model."""
     work_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_git_repository(work_dir)
     artifact_root = work_dir / "artifacts"
     capture_dir = work_dir / "captures" / "inv-default-pi"
     plan = _write_small_plan(artifact_root)
@@ -2432,7 +2995,10 @@ def prove_bound_fan_out_heartbeat(
             engine=engine,
             workers=[
                 stdin_worker_cli(work_dir / "inner-fail.stdin", ("--exit", "7")),
-                stdin_worker_cli(work_dir / "inner-ok.stdin"),
+                stdin_worker_cli(
+                    work_dir / "operating-context.stdin",
+                    ("--inspect-operating-context",),
+                ),
             ],
         )
     }
@@ -2452,11 +3018,71 @@ def prove_bound_fan_out_heartbeat(
         artifact_root=artifact_root,
         target="design-review",
     )
+    context_response = engine_call(
+        [
+            "append",
+            "--record-id=forwarded-ledger-context",
+            run_id,
+            "finding-ledger",
+            json.dumps(
+                {"source": "driver", "proposal": "inert until disposition"},
+                separators=(",", ":"),
+            ),
+        ]
+    )
+    if context_response.get("status") != "completed":
+        raise WorkSlotJourneyFailure(
+            f"finding-ledger context append failed before forwarding proof: {context_response}"
+        )
+    forwarded_record = (context_response.get("result") or {}).get("context")
+    if not isinstance(forwarded_record, dict):
+        raise WorkSlotJourneyFailure(
+            f"append did not return forwarded context record: {context_response}"
+        )
+    # The fresh reviewer process receives the driver's immutable ledger record,
+    # while the worker below reads the frozen operating context from artifact_root.
     first = invoke_until_succeeded(
         engine_call, run_id, "design-review", timeout_s=20.0
     )
     _assert_inner_exit_codes(first, (7, 0))
     _assert_capture_files(Path(first["capture_dir"]), ("0", "1"))
+    for receipt in (
+        work_dir / "inner-fail.stdin",
+        work_dir / "operating-context.stdin",
+    ):
+        try:
+            packet = json.loads(receipt.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise WorkSlotJourneyFailure(
+                f"forwarding worker receipt was not JSON: {receipt}: {error}"
+            ) from error
+        forwarded_context = packet.get("context")
+        if (
+            not isinstance(forwarded_context, list)
+            or forwarded_record not in forwarded_context
+            or forwarded_context[-1] != forwarded_record
+        ):
+            raise WorkSlotJourneyFailure(
+                f"worker {receipt} did not receive appended finding-ledger context in order: {packet}"
+            )
+    try:
+        inspected_context = json.loads(
+            (work_dir / "operating-context.stdin.operating-context.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        intent_context = json.loads(
+            (artifact_root / "intent.json").read_text(encoding="utf-8")
+        )["operating_context"]
+    except (KeyError, OSError, json.JSONDecodeError) as error:
+        raise WorkSlotJourneyFailure(
+            f"bound reviewer did not inspect frozen operating_context: {error}"
+        ) from error
+    # bookends:LE-91 — a fresh bound reviewer process reads the frozen operating context from the public artifact root rather than chat state.
+    if inspected_context != intent_context:
+        raise WorkSlotJourneyFailure(
+            "bound reviewer observed operating_context different from intent.json"
+        )
     second = invoke_until_succeeded(
         engine_call, run_id, "design-review", timeout_s=20.0
     )
@@ -2464,6 +3090,8 @@ def prove_bound_fan_out_heartbeat(
     _assert_capture_isolation(first, second, ("0", "1"))
     return [
         "show heartbeat overlay_meaning elapsed_ms remaining_allowed_ms capture_dir inner_workers",
+        "finding-ledger context forwards unchanged to a fresh bound worker process",
+        "fresh bound reviewer reads frozen operating_context from artifact_root",
         "inner nonzero with collector 0 yields overlay succeeded",
         "second invoke uses a new invocation-id capture_dir and leaves the first intact",
         "no live model",
@@ -3432,6 +4060,7 @@ def prove_overlay_running_bound_graph_runner_progress(
 ) -> list[str]:
     """Bound run-plan-graph yields an overlay-running progress snapshot with dummy workers."""
     work_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_git_repository(work_dir)
     run_id = "overlay-running-bound-graph-runner"
     slot_id = "implement"
     extra = {
@@ -3601,6 +4230,7 @@ def prove_max_active_bound_graph_runner(
 ) -> list[str]:
     """Set --max-active N on bound run-plan-graph with dummy ordinary tasks."""
     work_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_git_repository(work_dir)
     run_id = "max-active-bound-graph-runner"
     slot_id = "implement"
     extra = {
@@ -4065,7 +4695,7 @@ def self_test_helpers() -> None:
         assert_catalog(
             omitted_review,
             ["deterministic-review", "semantic-review"],
-            stdin_context_kinds={"deterministic-review": ["accepted-findings"]},
+            stdin_context_kinds={"deterministic-review": ["finding-ledger"]},
         )
     except WorkSlotJourneyFailure as error:
         if "deterministic-review" not in str(error) or "stdin_context_kinds" not in str(
@@ -4084,7 +4714,7 @@ def self_test_helpers() -> None:
                 "id": "intent-review",
                 "state": "intent-review",
                 "event": "approved",
-                "stdin_context_kinds": ["accepted-findings"],
+                "stdin_context_kinds": ["finding-ledger"],
             },
             {"id": "intent-draft", "state": "explore", "event": "intent-ready"},
         ]
@@ -4092,7 +4722,7 @@ def self_test_helpers() -> None:
     assert_catalog(
         software_change_catalog,
         ["intent-review", "intent-draft"],
-        stdin_context_kinds={"intent-review": ["accepted-findings"]},
+        stdin_context_kinds={"intent-review": ["finding-ledger"]},
     )
     try:
         assert_catalog(
@@ -4102,12 +4732,12 @@ def self_test_helpers() -> None:
                         "id": "intent-draft",
                         "state": "explore",
                         "event": "intent-ready",
-                        "stdin_context_kinds": ["accepted-findings"],
+                        "stdin_context_kinds": ["finding-ledger"],
                     }
                 ]
             },
             ["intent-draft"],
-            stdin_context_kinds={"intent-review": ["accepted-findings"]},
+            stdin_context_kinds={"intent-review": ["finding-ledger"]},
         )
     except WorkSlotJourneyFailure as error:
         if "intent-draft" not in str(error) or "declared stdin_context_kinds" not in str(

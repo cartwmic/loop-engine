@@ -18,6 +18,7 @@ EXPECTED_PROOFS = (
         "fictional-repo/provider/tests/a1.rs::standard_run_progresses_schema_deny_then_evidence_deny_then_allow",
         "fictional-repo/provider/tests/a15.rs::every_shipped_profile_starts_and_exposes_policies_and_schemas",
         "fictional-repo/provider/tests/describe_protocol.rs::describe_matches_committed_snapshot_byte_for_byte",
+        "scripts/production-journey.py::frozen_profile_is_inspectable_before_transition",
     ),
     (
         "schema::tests::instance_collects_object_rules_and_nested_properties",
@@ -26,6 +27,7 @@ EXPECTED_PROOFS = (
         "unparseable_artifact_is_schema_deny",
         "revision_link_mismatch_is_schema_deny_naming_both_artifacts",
         "schema_deny_is_byte_identical_when_only_context_varies",
+        "scripts/production-journey.py::malformed_artifact_denial_names_all_rules",
     ),
     (
         "fictional-repo/provider/src/evidence.rs::stale_revision_does_not_satisfy_and_names_both_revisions",
@@ -33,9 +35,10 @@ EXPECTED_PROOFS = (
         "subject_author_identity_requires_exact_name_and_kind_pair",
         "n_two_requires_distinct_non_subject_authors_and_rejects_standing_fail",
         "fictional-repo/provider/tests/evaluate.rs::evidence_phase_denies_with_configured_axis_diagnostics",
+        "scripts/production-journey.py::evidence_denial_reports_each_configured_reason",
     ),
     (
-        "scripts/production-journey.py",
+        "scripts/production-journey.py::terminal_validation_gate",
         "python3 fictional-repo/scripts/assert-doc-authority.py",
     ),
 )

@@ -45,7 +45,7 @@ fn every_shipped_profile_starts_and_exposes_policies_and_schemas() {
                     OperationOutcome::Rejected(issue) => issue,
                     other => panic!("expected defined review denial for {profile}, got {other:?}"),
                 };
-                assert_eq!(issue.code, "software-change-review-incomplete");
+                assert_eq!(issue.code, "software-change-finding-ledger-invalid");
             }
             _ => unreachable!(),
         }

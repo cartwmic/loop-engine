@@ -1,4 +1,5 @@
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -21,6 +22,22 @@ impl TestDir {
             std::process::id()
         ));
         fs::create_dir_all(&path).expect("create temporary directory");
+        fs::write(path.join(".journey-baseline"), b"baseline\n").expect("write baseline");
+        for args in [
+            vec!["init", "-q"],
+            vec!["config", "user.name", "software-change run-plan-graph"],
+            vec!["config", "user.email", "run-plan@example.invalid"],
+            vec!["config", "commit.gpgsign", "false"],
+            vec!["add", "-A"],
+            vec!["commit", "-qm", "baseline"],
+        ] {
+            assert!(Command::new("git")
+                .args(args)
+                .current_dir(&path)
+                .status()
+                .expect("run git")
+                .success());
+        }
         Self { path }
     }
 
@@ -173,6 +190,12 @@ fn read_summary_at(capture_root: &Path) -> Value {
 }
 
 fn write_plan(artifact_root: &Path, plan: &Value) {
+    for name in ["intent.json", "design.json"] {
+        let path = artifact_root.join(name);
+        if !path.exists() {
+            fs::write(path, br#"{"revision":"1"}"#).expect("write checkpoint document");
+        }
+    }
     let mut plan = plan.clone();
     if plan.get("revision").is_none() {
         plan["revision"] = json!("1");
@@ -210,6 +233,10 @@ fn fixture(label: &str) -> (TestDir, PathBuf, PathBuf) {
     let artifact_root = dir.path().join("artifacts");
     let receipt_dir = dir.path().join("receipts");
     fs::create_dir_all(&artifact_root).expect("artifact root");
+    for name in ["intent.json", "design.json"] {
+        fs::write(artifact_root.join(name), br#"{"revision":"1"}"#)
+            .expect("write checkpoint document");
+    }
     fs::create_dir_all(&receipt_dir).expect("receipt dir");
     (dir, artifact_root, receipt_dir)
 }
@@ -667,6 +694,209 @@ fn task_worker_dummy_records_locked_stdin_layout() {
     );
     let parsed: Value = serde_json::from_str(rest).expect("task JSON");
     assert_eq!(parsed, task);
+}
+
+#[test]
+fn implementation_context_routes_exact_current_findings_without_widening_task_stdin() {
+    let (dir, artifact_root, receipt_dir) = fixture("finding-routing");
+    let task_a = json!({
+        "id": "task-a",
+        "objective": "Do A",
+        "dependencies": [],
+        "source_of_truth": ["plan.json"],
+        "deliverables": ["a"],
+        "out_of_scope": [],
+        "validation": ["public A"],
+        "handoff": "A is done"
+    });
+    let task_b = json!({
+        "id": "task-b",
+        "objective": "Do B",
+        "dependencies": [],
+        "source_of_truth": ["plan.json"],
+        "deliverables": ["b"],
+        "out_of_scope": [],
+        "validation": ["public B"],
+        "handoff": "B is done"
+    });
+    write_plan(
+        &artifact_root,
+        &json!({
+            "revision": "1",
+            "tasks": [task_a, task_b],
+            "dependency_graph": []
+        }),
+    );
+    let raw = b"reviewer stdout\n";
+    fs::write(artifact_root.join("review.stdout"), raw).expect("review source");
+    let digest = format!("sha256:{:x}", Sha256::digest(raw));
+    let source = json!({
+        "kind": "external-artifact",
+        "relative_path": "review.stdout",
+        "output_sha256": digest
+    });
+    let finding =
+        |id: &str, disposition: &str, status: &str, owner: Value, tasks: Value, axes: Value| {
+            json!({
+                "id": id,
+                "source": source.clone(),
+                "policy_id": "task-sized",
+                "statement": id,
+                "disposition": disposition,
+                "reason": "driver decision",
+                "owner_phase": owner,
+                "task_ids": tasks,
+                "review_axes": axes,
+                "status": status
+            })
+        };
+    let ledger = json!({
+        "schema_version": "1",
+        "gate": "plan-review",
+        "subject": "plan.json",
+        "subject_revision": "1",
+        "author": {"name": "driver", "kind": "agent"},
+        "repository_state": null,
+        "findings": [
+            finding("F-route-a", "accepted", "unresolved", json!("implementation"), json!(["task-a"]), json!(["task-sized"])),
+            finding("F-route-b", "accepted", "unresolved", json!("implementation"), json!(["task-b"]), json!(["task-sized"])),
+            finding("F-plan-owned", "accepted", "unresolved", json!("plan"), json!(["task-a"]), json!(["task-sized"])),
+            finding("F-resolved", "accepted", "resolved", json!("implementation"), json!(["task-a"]), json!(["task-sized"])),
+            finding("F-stale", "accepted", "stale", json!("implementation"), json!(["task-a"]), json!(["task-sized"])),
+            finding("F-rejected", "rejected", "recorded", Value::Null, json!([]), json!([])),
+            finding("F-advisory", "advisory", "recorded", Value::Null, json!([]), json!([]))
+        ]
+    });
+    let context = json!([
+        {
+            "id": "ledger-1",
+            "kind": "finding-ledger",
+            "data": ledger,
+            "sequence": 1,
+            "created_at": 1
+        },
+        {
+            "id": "proposal-1",
+            "kind": "advisory-finding-proposal",
+            "data": {"proposals": [{"candidate_source_ids": ["source-1"]}]},
+            "sequence": 2,
+            "created_at": 2
+        }
+    ]);
+    let mut invoke_packet = packet(
+        "run-1",
+        "implement",
+        artifact_root.to_str().unwrap(),
+        "Implement",
+    );
+    invoke_packet["context"] = context;
+    let output = invoke_graph(
+        &task_worker(&receipt_dir, &["--write-report"]),
+        &invoke_packet,
+        Some(dir.path()),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    for (task_id, expected_finding) in
+        [("task-a", Some("F-route-a")), ("task-b", Some("F-route-b"))]
+    {
+        let raw_stdin =
+            fs::read_to_string(receipt_dir.join(format!("{task_id}.stdin"))).expect("task receipt");
+        let (_, task_raw) = raw_stdin.split_once("\n---\n\n").expect("task separator");
+        let task: Value = serde_json::from_str(task_raw).expect("task JSON");
+        let routed = task["finding_context"]
+            .as_array()
+            .expect("finding_context array");
+        assert_eq!(routed.len(), 1, "exact route for {task_id}");
+        assert_eq!(routed[0]["id"], expected_finding.unwrap());
+        assert!(routed.iter().all(|entry| entry["id"] != "F-plan-owned"));
+        assert!(routed.iter().all(|entry| entry["id"] != "F-resolved"));
+        assert!(routed.iter().all(|entry| entry["id"] != "F-stale"));
+        assert!(routed.iter().all(|entry| entry["id"] != "F-rejected"));
+        assert!(routed.iter().all(|entry| entry["id"] != "F-advisory"));
+        let location: Value =
+            serde_json::from_str(raw_stdin.split_once("\n---\n\n").unwrap().0).unwrap();
+        assert_eq!(
+            location
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["artifact_root"]
+        );
+    }
+}
+
+#[test]
+fn finding_routing_empty_context_still_runs_full_dag_and_emits_empty_arrays() {
+    let (dir, artifact_root, receipt_dir) = fixture("finding-routing-empty");
+    write_plan(
+        &artifact_root,
+        &json!({
+            "tasks": [{"id": "task-a"}, {"id": "task-b"}],
+            "dependency_graph": []
+        }),
+    );
+    let mut invoke_packet = packet(
+        "run-1",
+        "implement",
+        artifact_root.to_str().unwrap(),
+        "Implement",
+    );
+    invoke_packet["context"] = json!([]);
+    let output = invoke_graph(
+        &task_worker(&receipt_dir, &["--write-report"]),
+        &invoke_packet,
+        Some(dir.path()),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for task_id in ["task-a", "task-b"] {
+        let raw =
+            fs::read_to_string(receipt_dir.join(format!("{task_id}.stdin"))).expect("task receipt");
+        let (_, task_raw) = raw.split_once("\n---\n\n").expect("task separator");
+        let task: Value = serde_json::from_str(task_raw).expect("task JSON");
+        assert_eq!(task["finding_context"], json!([]));
+    }
+}
+
+#[test]
+fn finding_routing_packet_context_is_optional_for_legacy_five_key_invocation() {
+    let (dir, artifact_root, receipt_dir) = fixture("finding-routing-legacy");
+    write_plan(
+        &artifact_root,
+        &json!({"tasks": [{"id": "task-a"}], "dependency_graph": []}),
+    );
+    let output = invoke_graph(
+        &task_worker(&receipt_dir, &["--write-report"]),
+        &packet(
+            "run-1",
+            "implement",
+            artifact_root.to_str().unwrap(),
+            "Implement",
+        ),
+        Some(dir.path()),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let raw = fs::read_to_string(receipt_dir.join("task-a.stdin")).expect("task receipt");
+    let (_, task_raw) = raw.split_once("\n---\n\n").expect("task separator");
+    let task: Value = serde_json::from_str(task_raw).expect("task JSON");
+    assert!(task.get("finding_context").is_none());
 }
 
 #[test]

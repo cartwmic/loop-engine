@@ -4,6 +4,40 @@
     "name": "change-owner",
     "kind": "human"
   },
+  "operating_context": {
+    "operators": [
+      "trusted sole operator",
+      "repository maintainer"
+    ],
+    "environment": [
+      "local repository checkout",
+      "Loop Engine and software-change provider CLIs",
+      "configured local worker CLIs"
+    ],
+    "threat_boundary": {
+      "in_scope": [
+        "operator-visible software-change runs",
+        "local repository artifacts and configured workers"
+      ],
+      "excluded": [
+        "hostile users",
+        "mutually distrusting tenants",
+        "enterprise authorization or audit infrastructure"
+      ]
+    },
+    "accepted_risks": [
+      {
+        "risk": "A trusted operator can make an immaterial artifact edit without bumping its declared revision.",
+        "rationale": "The local workflow accepts this claim-trust residual; checked gates still inspect the current artifact and outcome proof."
+      }
+    ],
+    "outside_obligations": [
+      {
+        "source": "Loop Engine provider boundary",
+        "obligation": "The provider remains deterministic and external reviewers retain semantic authority."
+      }
+    ]
+  },
   "problem": "Loop Engine software changes can pass checked transitions without an inspectable record of which review obligations exist or whether external review occurred. A fresh actor resuming a run cannot reliably distinguish a reviewed change from a vacuous allow.",
   "outcome": "Software-change runs expose frozen review obligations and refuse checked transitions until the authored artifact satisfies declared structural requirements and independent external evidence satisfies every declared review obligation.",
   "acceptance": [

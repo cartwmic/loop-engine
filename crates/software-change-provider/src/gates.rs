@@ -9,10 +9,10 @@ use crate::artifacts::{
     check_revision_link, extract_metadata, read_artifact, ArtifactReadDeny, ArtifactReadOutcome,
     LinkCheckOutcome, LinkViolation,
 };
+use crate::checkpoint;
 use crate::config::parse_initial_input;
-use crate::evidence::{
-    evaluate_accepted_findings, evaluate_evidence, AuthorIdentity as EvidenceAuthorIdentity,
-};
+use crate::evidence::{evaluate_evidence, AuthorIdentity as EvidenceAuthorIdentity};
+use crate::finding_ledger::evaluate_finding_ledger;
 use crate::overlay;
 use crate::protocol::{allow_response, deny_response, unsupported_response, EvaluateRequest};
 use crate::workflow::{self, TransitionDuties};
@@ -23,11 +23,13 @@ use std::fmt;
 
 const SCHEMA_DENY_CODE: &str = "software-change-schema-invalid";
 const EVIDENCE_DENY_CODE: &str = "software-change-review-incomplete";
-const ACCEPTED_FINDINGS_DENY_CODE: &str = "software-change-accepted-findings-missing";
+const FINDING_LEDGER_DENY_CODE: &str = "software-change-finding-ledger-invalid";
+const CHECKPOINT_DENY_CODE: &str = "software-change-checkpoint-invalid";
 const BOOKENDS_RED_DENY_CODE: &str = "software-change-bookends-red";
 const SCHEMA_DENY_MESSAGE: &str = "not judged: fix shape first";
 const EVIDENCE_DENY_MESSAGE: &str = "review evidence incomplete";
-const ACCEPTED_FINDINGS_DENY_MESSAGE: &str = "accepted findings missing or malformed";
+const FINDING_LEDGER_DENY_MESSAGE: &str = "finding ledger missing or malformed";
+const CHECKPOINT_DENY_MESSAGE: &str = "repository checkpoint missing or stale";
 const BOOKENDS_RED_DENY_MESSAGE: &str = "in-process bookends check is red";
 
 /// Evaluation result consumed by `main.rs` for exit-code handling.
@@ -82,10 +84,14 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
     let axes = gate
         .and_then(|gate| config.axes_for_gate(gate))
         .filter(|axes| !axes.is_empty());
+    let checkpoint_phase = checkpoint::phase_for_subject(subject);
+    let checkpoint_required = checkpoint_phase.is_some();
 
     // §9.4: no configured schema, link, or semantic axis means allow without
-    // requiring artifact_root and without consulting context.
-    if schema.is_none() && links.is_empty() && axes.is_none() {
+    // requiring artifact_root and without consulting context, except that
+    // implementation and validation phases still require their independent
+    // repository checkpoint.
+    if schema.is_none() && links.is_empty() && axes.is_none() && !checkpoint_required {
         if overlay_on && is_passed(request) && !bookends_is_green(bookends_report.as_ref()) {
             return EvaluationOutcome::Response(bookends_red_deny(
                 request,
@@ -152,7 +158,7 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
         }
 
         // B2 guarantees these fields through the configured schema whenever
-        // semantic evidence or accepted-findings is configured.  Schema-only
+        // semantic evidence or a finding ledger is configured. Schema-only
         // draft hops need no metadata extraction.
         if gate.is_some() {
             match extract_metadata(subject, document.value()) {
@@ -183,6 +189,16 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
         }
     }
 
+    if checkpoint_required {
+        if let Err(error) = verify_checkpoint(
+            request,
+            checkpoint_phase.expect("checkpoint phase"),
+            &config,
+        ) {
+            return EvaluationOutcome::Response(error);
+        }
+    }
+
     if overlay_on && is_passed(request) && !bookends_is_green(bookends_report.as_ref()) {
         return EvaluationOutcome::Response(bookends_red_deny(
             request,
@@ -192,59 +208,119 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
         ));
     }
 
-    // §9.6: evidence is consulted only after all deterministic checks pass.
-    if let (Some(gate), Some(axes), Some(metadata)) = (gate, axes, metadata.as_ref()) {
+    // §9.6: review evidence and the driver ledger are consulted only after
+    // all deterministic artifact and revision-link checks pass. The ledger is
+    // checked first so a missing, stale, or mechanically inconsistent driver
+    // snapshot can never be mistaken for a reviewer verdict.
+    if let (Some(gate), Some(metadata)) = (gate, metadata.as_ref()) {
         let subject_author =
             EvidenceAuthorIdentity::new(metadata.author().name(), metadata.author().kind());
-        let evidence = evaluate_evidence(
+        let evidence = axes.map(|axes| {
+            evaluate_evidence(
+                &request.context,
+                gate,
+                subject,
+                metadata.revision(),
+                &subject_author,
+                config.config_version(),
+                axes,
+                config.axis_namespace(),
+            )
+        });
+        let failing_evidence = evidence
+            .as_ref()
+            .map(|evaluation| evaluation.failing_findings())
+            .cloned()
+            .unwrap_or_default();
+        let ledger = evaluate_finding_ledger(
             &request.context,
             gate,
             subject,
             metadata.revision(),
-            &subject_author,
-            config.config_version(),
-            axes,
-            config.axis_namespace(),
+            &config,
+            &failing_evidence,
         );
-        if !evidence.is_satisfied() {
-            let details = evidence.details_value();
-            let details = json!({
-                "phase": "evidence",
-                "diagnostics": details.get("diagnostics").cloned().unwrap_or(Value::Array(Vec::new())),
-                "informational": details.get("informational").cloned().unwrap_or(Value::Array(Vec::new())),
-                "inert_records": details.get("inert_records").cloned().unwrap_or(Value::Array(Vec::new())),
-                "prior_denials": prior_denials(request),
-            });
-            return EvaluationOutcome::Response(deny_response(
-                EVIDENCE_DENY_CODE,
-                EVIDENCE_DENY_MESSAGE,
-                Some(details),
-            ));
-        }
-    }
-
-    // Live review approved/passed also requires a well-formed current-revision
-    // accepted-findings record. This is shape/presence only.
-    if let (Some(gate), Some(metadata)) = (gate, metadata.as_ref()) {
-        let findings =
-            evaluate_accepted_findings(&request.context, gate, subject, metadata.revision());
-        if !findings.is_satisfied() {
-            let mut details = findings
+        if !ledger.is_satisfied() {
+            let mut details = ledger
                 .details_value()
                 .as_object()
                 .cloned()
                 .unwrap_or_default();
-            details.insert("phase".to_owned(), json!("accepted-findings"));
+            details.insert("phase".to_owned(), json!("finding-ledger"));
             details.insert("prior_denials".to_owned(), prior_denials(request));
             return EvaluationOutcome::Response(deny_response(
-                ACCEPTED_FINDINGS_DENY_CODE,
-                ACCEPTED_FINDINGS_DENY_MESSAGE,
+                FINDING_LEDGER_DENY_CODE,
+                FINDING_LEDGER_DENY_MESSAGE,
                 Some(Value::Object(details)),
             ));
+        }
+        if let Some(evidence) = evidence {
+            if !evidence.is_satisfied() {
+                let details = evidence.details_value();
+                let details = json!({
+                    "phase": "evidence",
+                    "diagnostics": details.get("diagnostics").cloned().unwrap_or(Value::Array(Vec::new())),
+                    "informational": details.get("informational").cloned().unwrap_or(Value::Array(Vec::new())),
+                    "inert_records": details.get("inert_records").cloned().unwrap_or(Value::Array(Vec::new())),
+                    "prior_denials": prior_denials(request),
+                });
+                return EvaluationOutcome::Response(deny_response(
+                    EVIDENCE_DENY_CODE,
+                    EVIDENCE_DENY_MESSAGE,
+                    Some(details),
+                ));
+            }
+        }
+    }
+
+    if subject == "implementation-report.json" && request.transition.target.as_str() == "validation"
+    {
+        let Some(root) = config.artifact_root().and_then(Value::as_str) else {
+            return EvaluationOutcome::Response(checkpoint_deny(
+                request,
+                "artifact_root is required to preserve accepted implementation proof".to_owned(),
+            ));
+        };
+        if let Err(error) =
+            checkpoint::record_accepted_implementation_from_cwd(std::path::Path::new(root))
+        {
+            return EvaluationOutcome::EvaluationError(error);
         }
     }
 
     EvaluationOutcome::Response(allow_response())
+}
+
+fn verify_checkpoint(
+    request: &EvaluateRequest,
+    phase: checkpoint::CheckpointPhase,
+    config: &crate::config::ValidatedConfig,
+) -> Result<(), Value> {
+    let Some(root) = config.artifact_root().and_then(Value::as_str) else {
+        return Err(checkpoint_deny(
+            request,
+            "artifact_root is required for implementation and validation checkpoints".to_owned(),
+        ));
+    };
+    checkpoint::verify_from_cwd(phase, std::path::Path::new(root))
+        .map_err(|error| checkpoint_deny(request, error))?;
+    if phase == checkpoint::CheckpointPhase::Validation {
+        checkpoint::verify_accepted_implementation_from_cwd(std::path::Path::new(root))
+            .map_err(|error| checkpoint_deny(request, error))?;
+    }
+    Ok(())
+}
+
+fn checkpoint_deny(request: &EvaluateRequest, diagnostic: String) -> Value {
+    deny_response(
+        CHECKPOINT_DENY_CODE,
+        CHECKPOINT_DENY_MESSAGE,
+        Some(json!({
+            "phase": "checkpoint",
+            "diagnostic": diagnostic,
+            "prior_denials": prior_denials(request),
+        })),
+    )
 }
 
 fn load_bookends_report() -> Result<bookends_check::CheckReport, String> {

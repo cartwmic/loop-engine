@@ -11,7 +11,7 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 
 /// Context kind forwarded on every live review slot's stdin.
-pub(crate) const ACCEPTED_FINDINGS_KIND: &str = "accepted-findings";
+pub(crate) const FINDING_LEDGER_KIND: &str = "finding-ledger";
 
 const BOOKENDS_STATE_GUIDANCE: &str = "Bookends overlay: cite at least one live PRD ID in `requirement_ids`; at every durable e2e/journey or declared contract test boundary, use the same live ID in a citation. Bound workers include that citation in their captured result for driver triage. Never mint an ID.";
 
@@ -35,6 +35,7 @@ pub(crate) struct Phase {
     pub draft_instructions: &'static str,
     pub draft_slot: &'static str,
     pub ready_event: &'static str,
+    pub draft_revises: &'static [OwningRevise],
     pub subject: &'static str,
     /// Parent review state id, gate id, and slot id (the three names match).
     pub parent_review: &'static str,
@@ -72,13 +73,14 @@ pub(crate) const PHASES: &[Phase] = &[
         name: "intent",
         draft_state: "explore",
         draft_title: "Explore",
-        draft_instructions: "Author intent in `crates/software-change-provider/data/templates/intent.md`: state the problem, desired outcome, acceptance boundary, constraints, and non-goals. Do not prescribe an implementation unless an external constraint requires it. Avoid target laundering: do not present a chosen solution as the problem. Before `intent-ready`, read run-frozen obligations via `show` and run configured deterministic checks before commissioning external review.",
+        draft_instructions: "Author intent in `crates/software-change-provider/data/templates/intent.md`: state the problem, desired outcome, acceptance boundary, constraints, and non-goals, plus the required `operating_context` (`operators`, `environment`, `threat_boundary`, `accepted_risks`, and `outside_obligations`). Do not prescribe an implementation unless an external constraint requires it. Avoid target laundering: do not present a chosen solution as the problem. Before `intent-ready`, read run-frozen obligations via `show` and run configured deterministic checks before commissioning external review.",
         draft_slot: "intent-draft",
         ready_event: "intent-ready",
+        draft_revises: &[],
         subject: "intent.json",
         parent_review: "intent-review",
         parent_review_title: "Intent review",
-        parent_review_instructions: "For `intent.json`, run the configured deterministic check first, before commissioning external review. Then read policy obligations via `show` and follow `crates/software-change-provider/data/reviewer-protocol.md`: triage candidate reviewer output before append or mutation, require consequence proof and scope/materiality classification, and append only accepted in-scope material failures or conforming passes. The first review is comprehensive; use focused external reconsideration for disputed candidates and confirmation review for accepted fixes and downstream regressions. Late findings require current evidence, violated obligation, concrete consequence, validation gap, and provenance (`newly exposed`, `fix-introduced`, or `previously overlooked`); previous visibility or reviewer overlook does not waive known material defects. Comprehensive-first and scope/materiality burdens still bar drip-feeding or unrelated reopening. Select the owning phase for accepted defects: use nearest check-free `revise` for intent corrections; do not waive known defects.",
+        parent_review_instructions: "For `intent.json`, run the configured deterministic check first, before commissioning external review. Read the frozen intent `operating_context` before judging; do not demand excluded hostile-user or multi-tenant hardening, and never waive a stated outcome or outside obligation. Then read policy obligations via `show` and follow `crates/software-change-provider/data/reviewer-protocol.md`: triage candidate reviewer output before append or mutation, require consequence proof and scope/materiality classification, and append only accepted in-scope material failures or conforming passes. The first review is comprehensive; use focused external reconsideration for disputed candidates and confirmation review for accepted fixes and downstream regressions. Late findings require current evidence, violated obligation, concrete consequence, validation gap, and provenance (`newly exposed`, `fix-introduced`, or `previously overlooked`); previous visibility or reviewer overlook does not waive known material defects. Comprehensive-first and scope/materiality burdens still bar drip-feeding or unrelated reopening. Select the owning phase for accepted defects: use nearest check-free `revise` for intent corrections; do not waive known defects.",
         adversarial_review: "intent-adversarial-review",
         nearest_revise_target: "explore",
         extra_owning_revises: &[],
@@ -88,13 +90,14 @@ pub(crate) const PHASES: &[Phase] = &[
         name: "design",
         draft_state: "design",
         draft_title: "Design",
-        draft_instructions: "Describe structural shape, boundaries, invariants, and decisions in `crates/software-change-provider/data/templates/design.md`; design is not a work schedule. The `design-ready` event structurally checks `design.json` when the run's configuration supplies a schema for it — read your obligations via `show`.",
+        draft_instructions: "Describe structural shape, boundaries, invariants, and decisions in `crates/software-change-provider/data/templates/design.md`; design is not a work schedule. Preserve the frozen intent `operating_context`, outcomes, and outside obligations while leaving replaceable mechanisms free. The `design-ready` event structurally checks `design.json` when the run's configuration supplies a schema for it — read your obligations via `show`.",
         draft_slot: "design-draft",
         ready_event: "design-ready",
+        draft_revises: &[],
         subject: "design.json",
         parent_review: "design-review",
         parent_review_title: "Design review",
-        parent_review_instructions: "For `design.json`, run the configured deterministic check first, before commissioning external review. Then read policy obligations via `show` and follow `crates/software-change-provider/data/reviewer-protocol.md`: triage candidate reviewer output before append or mutation, require consequence proof and scope/materiality classification, and append only accepted in-scope material failures or conforming passes. The first review is comprehensive; use focused external reconsideration for disputed candidates and confirmation review for accepted fixes and downstream regressions. Late findings require current evidence, violated obligation, concrete consequence, validation gap, and provenance (`newly exposed`, `fix-introduced`, or `previously overlooked`); previous visibility or reviewer overlook does not waive known material defects. Comprehensive-first and scope/materiality burdens still bar drip-feeding or unrelated reopening. Select the owning phase for accepted defects: use nearest check-free `revise` for design corrections or `revise-intent` for intent-owned defects; do not waive known defects.",
+        parent_review_instructions: "For `design.json`, run the configured deterministic check first, before commissioning external review. Read the frozen intent `operating_context` before judging; do not demand excluded hostile-user or multi-tenant hardening, and never waive a stated outcome or outside obligation. Then read policy obligations via `show` and follow `crates/software-change-provider/data/reviewer-protocol.md`: triage candidate reviewer output before append or mutation, require consequence proof and scope/materiality classification, and append only accepted in-scope material failures or conforming passes. The first review is comprehensive; use focused external reconsideration for disputed candidates and confirmation review for accepted fixes and downstream regressions. Late findings require current evidence, violated obligation, concrete consequence, validation gap, and provenance (`newly exposed`, `fix-introduced`, or `previously overlooked`); previous visibility or reviewer overlook does not waive known material defects. Comprehensive-first and scope/materiality burdens still bar drip-feeding or unrelated reopening. Select the owning phase for accepted defects: use nearest check-free `revise` for design corrections or `revise-intent` for intent-owned defects; do not waive known defects.",
         adversarial_review: "design-adversarial-review",
         nearest_revise_target: "design",
         extra_owning_revises: &[REVISE_INTENT],
@@ -104,13 +107,14 @@ pub(crate) const PHASES: &[Phase] = &[
         name: "plan",
         draft_state: "plan",
         draft_title: "Plan",
-        draft_instructions: "Build the dependency graph in `crates/software-change-provider/data/templates/task-packet.md`: include per-task objective, dependencies, source-of-truth references, deliverables, out-of-scope work, validation, and handoff contract. Put contract gates before parallel fan-out; plan shape, not implementation prose, is the target. Before `plan-ready`, read run-frozen obligations via `show`.",
+        draft_instructions: "Build the dependency graph in `crates/software-change-provider/data/templates/task-packet.md`: inspect the frozen intent `operating_context` and include per-task objective, affected user or operator paths, observable completion outcome, dependencies, source-of-truth references, deliverables, out-of-scope work, validation, and handoff contract. Require realistic black-box proof when practical or a concrete impracticality reason and substitute; leave replaceable mechanisms free inside frozen decisions. Put contract gates before parallel fan-out; plan shape, not implementation prose, is the target. Before `plan-ready`, read run-frozen obligations via `show`.",
         draft_slot: "plan-draft",
         ready_event: "plan-ready",
+        draft_revises: &[],
         subject: "plan.json",
         parent_review: "plan-review",
         parent_review_title: "Plan review",
-        parent_review_instructions: "For `plan.json`, run the configured deterministic check first, before commissioning external review. Then read policy obligations via `show` and follow `crates/software-change-provider/data/reviewer-protocol.md`: triage candidate reviewer output before append or mutation, require consequence proof and scope/materiality classification, and append only accepted in-scope material failures or conforming passes. The first review is comprehensive; use focused external reconsideration for disputed candidates and confirmation review for accepted fixes and downstream regressions. Late findings require current evidence, violated obligation, concrete consequence, validation gap, and provenance (`newly exposed`, `fix-introduced`, or `previously overlooked`); previous visibility or reviewer overlook does not waive known material defects. Comprehensive-first and scope/materiality burdens still bar drip-feeding or unrelated reopening. Select the owning phase for accepted defects: use nearest check-free `revise` for plan corrections, `revise-design` for design-owned defects, or `revise-intent` for intent-owned defects; do not waive known defects.",
+        parent_review_instructions: "For `plan.json`, run the configured deterministic check first, before commissioning external review. Read the frozen intent `operating_context` before judging; do not demand excluded hostile-user or multi-tenant hardening, and never waive a stated outcome or outside obligation. Then read policy obligations via `show` and follow `crates/software-change-provider/data/reviewer-protocol.md`: triage candidate reviewer output before append or mutation, require consequence proof and scope/materiality classification, and append only accepted in-scope material failures or conforming passes. The first review is comprehensive; use focused external reconsideration for disputed candidates and confirmation review for accepted fixes and downstream regressions. Late findings require current evidence, violated obligation, concrete consequence, validation gap, and provenance (`newly exposed`, `fix-introduced`, or `previously overlooked`); previous visibility or reviewer overlook does not waive known material defects. Comprehensive-first and scope/materiality burdens still bar drip-feeding or unrelated reopening. Select the owning phase for accepted defects: use nearest check-free `revise` for plan corrections, `revise-design` for design-owned defects, or `revise-intent` for intent-owned defects; do not waive known defects.",
         adversarial_review: "plan-adversarial-review",
         nearest_revise_target: "plan",
         extra_owning_revises: &[REVISE_DESIGN, REVISE_INTENT],
@@ -120,13 +124,14 @@ pub(crate) const PHASES: &[Phase] = &[
         name: "implementation",
         draft_state: "implement",
         draft_title: "Implement",
-        draft_instructions: "Perform external work against the accepted plan. Document the implementation and validation report shapes using `crates/software-change-provider/data/templates/implementation-report.md` and `crates/software-change-provider/data/templates/validation-report.md`. Doc integration is part of this change: update authoritative repository documents rather than leaving a parallel change truth. Before `implementation-ready`, read run-frozen obligations via `show`.",
+        draft_instructions: "Perform external work against the accepted plan and frozen intent `operating_context`; do not add excluded hostile or multi-tenant requirements or waive stated outcomes and outside obligations. Document the implementation and validation report shapes using `crates/software-change-provider/data/templates/implementation-report.md` and `crates/software-change-provider/data/templates/validation-report.md`. Doc integration is part of this change: update authoritative repository documents rather than leaving a parallel change truth. Before `implementation-ready`, read run-frozen obligations via `show`.",
         draft_slot: "implement",
         ready_event: "implementation-ready",
+        draft_revises: &[],
         subject: "implementation-report.json",
         parent_review: "implementation-review",
         parent_review_title: "Implementation review",
-        parent_review_instructions: "For `implementation-report.json`, run the configured deterministic check first, before commissioning external review. Then read policy obligations via `show` and follow `crates/software-change-provider/data/reviewer-protocol.md`: triage candidate reviewer output before append or mutation, require consequence proof and scope/materiality classification, and append only accepted in-scope material failures or conforming passes. The first review is comprehensive; use focused external reconsideration for disputed candidates and confirmation review for accepted fixes and downstream regressions. Late findings require current evidence, violated obligation, concrete consequence, validation gap, and provenance (`newly exposed`, `fix-introduced`, or `previously overlooked`); previous visibility or reviewer overlook does not waive known material defects. Comprehensive-first and scope/materiality burdens still bar drip-feeding or unrelated reopening. Select the owning phase for accepted defects: use nearest check-free `revise` for implementation corrections, `revise-plan` for plan-owned defects, `revise-design` for design-owned defects, or `revise-intent` for intent-owned defects; do not waive known defects. Report coverage must identify repository state and covered document revisions.",
+        parent_review_instructions: "For `implementation-report.json`, run the configured deterministic check first, before commissioning external review. Read the frozen intent `operating_context` before judging; do not demand excluded hostile-user or multi-tenant hardening, and never waive a stated outcome or outside obligation. Then read policy obligations via `show` and follow `crates/software-change-provider/data/reviewer-protocol.md`: triage candidate reviewer output before append or mutation, require consequence proof and scope/materiality classification, and append only accepted in-scope material failures or conforming passes. The first review is comprehensive; use focused external reconsideration for disputed candidates and confirmation review for accepted fixes and downstream regressions. Late findings require current evidence, violated obligation, concrete consequence, validation gap, and provenance (`newly exposed`, `fix-introduced`, or `previously overlooked`); previous visibility or reviewer overlook does not waive known material defects. Comprehensive-first and scope/materiality burdens still bar drip-feeding or unrelated reopening. Select the owning phase for accepted defects: use nearest check-free `revise` for implementation corrections, `revise-plan` for plan-owned defects, `revise-design` for design-owned defects, or `revise-intent` for intent-owned defects; do not waive known defects. Report coverage must identify repository state and covered document revisions.",
         adversarial_review: "implementation-adversarial-review",
         nearest_revise_target: "implement",
         extra_owning_revises: &[REVISE_PLAN, REVISE_DESIGN, REVISE_INTENT],
@@ -136,13 +141,14 @@ pub(crate) const PHASES: &[Phase] = &[
         name: "validation",
         draft_state: "validation",
         draft_title: "Validation",
-        draft_instructions: "Author the validation report in `crates/software-change-provider/data/templates/validation-report.md`. Verify intent delivery and documentation integration. Before the checked hop out of this room (`validation-ready` or `passed`), read run-frozen obligations via `show` and run configured deterministic checks. Validation-report-local defects stay in this draft: edit and recheck `validation-report.json`, then retry the next checked hop.",
+        draft_instructions: "Author the validation report in `crates/software-change-provider/data/templates/validation-report.md`. Inspect the frozen intent `operating_context`, prove observable outcomes and outside obligations rather than activity, and semantically inspect every new or changed Bookends citation. Verify intent delivery and documentation integration. Before the checked hop out of this room (`validation-ready` or `passed`), read run-frozen obligations via `show` and run configured deterministic checks. Validation-report-local defects stay in this draft: edit and recheck `validation-report.json`, then retry the next checked hop.",
         draft_slot: "validation-draft",
         ready_event: "validation-ready",
+        draft_revises: &[REVISE_IMPLEMENTATION],
         subject: "validation-report.json",
         parent_review: "validation-review",
         parent_review_title: "Validation review",
-        parent_review_instructions: "For `validation-report.json`, run the configured deterministic check first, before commissioning external review. Then read policy obligations via `show` and follow `crates/software-change-provider/data/reviewer-protocol.md`: triage candidate reviewer output before append or mutation, require consequence proof and scope/materiality classification, and append only accepted in-scope material failures or conforming passes. The first review is comprehensive; use focused external reconsideration for disputed candidates and confirmation review for accepted fixes and downstream regressions. Late findings require current evidence, violated obligation, concrete consequence, validation gap, and provenance (`newly exposed`, `fix-introduced`, or `previously overlooked`); previous visibility or reviewer overlook does not waive known material defects. Comprehensive-first and scope/materiality burdens still bar drip-feeding or unrelated reopening. Validation-report-local defects use nearest check-free `revise` back to the validation draft, then retry the next checked hop. Select the owning phase for accepted defects: use `revise-implementation` for implementation-owned defects, `revise-plan` for plan-owned defects, `revise-design` for design-owned defects, or `revise-intent` for intent-owned defects. Do not waive known defects. Use the validation report template as the artifact shape.",
+        parent_review_instructions: "For `validation-report.json`, run the configured deterministic check first, before commissioning external review. Read the frozen intent `operating_context` before judging; reject activity-only evidence and token-only Bookends citations, do not demand excluded hostile-user or multi-tenant hardening, and never waive a stated outcome or outside obligation. Then read policy obligations via `show` and follow `crates/software-change-provider/data/reviewer-protocol.md`: triage candidate reviewer output before append or mutation, require consequence proof and scope/materiality classification, and append only accepted in-scope material failures or conforming passes. The first review is comprehensive; use focused external reconsideration for disputed candidates and confirmation review for accepted fixes and downstream regressions. Late findings require current evidence, violated obligation, concrete consequence, validation gap, and provenance (`newly exposed`, `fix-introduced`, or `previously overlooked`); previous visibility or reviewer overlook does not waive known material defects. Comprehensive-first and scope/materiality burdens still bar drip-feeding or unrelated reopening. Validation-report-local defects use nearest check-free `revise` back to the validation draft, then retry the next checked hop. Select the owning phase for accepted defects: use `revise-implementation` for implementation-owned defects, `revise-plan` for plan-owned defects, `revise-design` for design-owned defects, or `revise-intent` for intent-owned defects. Do not waive known defects. Use the validation report template as the artifact shape.",
         adversarial_review: "validation-adversarial-review",
         nearest_revise_target: "validation",
         extra_owning_revises: &[REVISE_IMPLEMENTATION, REVISE_PLAN, REVISE_DESIGN, REVISE_INTENT],
@@ -155,7 +161,7 @@ const END_INSTRUCTIONS: &str = "The software change is complete. Preserve the fi
 /// Duties evaluate applies for a source state plus event, taken from [`PHASES`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TransitionDuties {
-    /// Draft ready/passed: schema and revision links only.
+    /// Draft ready/passed: schema, revision links, and phase evidence.
     Checked {
         subject: &'static str,
         gate: Option<&'static str>,
@@ -173,6 +179,13 @@ pub(crate) fn duties_for(source: &str, event: &str) -> Option<TransitionDuties> 
                     subject: phase.subject,
                     gate: None,
                 });
+            }
+            if phase
+                .draft_revises
+                .iter()
+                .any(|revise| revise.event == event)
+            {
+                return Some(TransitionDuties::CheckFree);
             }
             return None;
         }
@@ -267,6 +280,15 @@ fn stitch(review_policies: Option<&Value>, bookends_enabled: bool) -> Result<Wor
             hops[index + 1].state_id()
         };
         transitions.push(Transition::checked(hop.state_id(), event, target));
+        if let Hop::Draft(phase) = hop {
+            for revise in phase.draft_revises {
+                transitions.push(Transition::check_free(
+                    hop.state_id(),
+                    revise.event,
+                    revise.target,
+                ));
+            }
+        }
         if let Hop::Parent(phase) | Hop::Adversarial(phase) = hop {
             transitions.push(Transition::check_free(
                 hop.state_id(),
@@ -395,9 +417,15 @@ impl Hop {
     fn slot(self, event: &str) -> WorkSlot {
         let slot = WorkSlot::new(self.slot_id(), self.state_id(), event);
         match self {
+            // Implementation workers receive the ledger through the bound
+            // runner so it can enrich each exact task without widening the
+            // inner worker stdin envelope. Other draft workers stay compact.
+            Self::Draft(phase) if phase.name == "implementation" => {
+                slot.with_stdin_context_kinds(vec![FINDING_LEDGER_KIND.to_owned()])
+            }
             Self::Draft(_) => slot,
             Self::Parent(_) | Self::Adversarial(_) => {
-                slot.with_stdin_context_kinds(vec![ACCEPTED_FINDINGS_KIND.to_owned()])
+                slot.with_stdin_context_kinds(vec![FINDING_LEDGER_KIND.to_owned()])
             }
         }
     }
@@ -582,20 +610,20 @@ mod tests {
         }
     }
 
-    fn assert_review_slots_declare_accepted_findings(workflow: &Workflow) {
+    fn assert_review_slots_declare_finding_ledger(workflow: &Workflow) {
         let encoded = serde_json::to_value(workflow).expect("workflow JSON");
         for slot in encoded["work_slots"].as_array().expect("work_slots") {
             let id = slot["id"].as_str().expect("slot id");
-            if is_review_slot_id(id) {
+            if is_review_slot_id(id) || id == "implement" {
                 assert_eq!(
                     slot.get("stdin_context_kinds"),
-                    Some(&json!([ACCEPTED_FINDINGS_KIND])),
-                    "review slot {id} must declare stdin_context_kinds [accepted-findings]"
+                    Some(&json!([FINDING_LEDGER_KIND])),
+                    "ledger-aware slot {id} must declare stdin_context_kinds [finding-ledger]"
                 );
             } else {
                 assert!(
                     slot.get("stdin_context_kinds").is_none(),
-                    "draft slot {id} must omit stdin_context_kinds"
+                    "non-ledger draft slot {id} must omit stdin_context_kinds"
                 );
             }
         }
@@ -1010,27 +1038,31 @@ mod tests {
     }
 
     #[test]
-    fn live_review_slots_declare_accepted_findings_and_draft_slots_omit_the_field() {
+    fn review_and_implementation_slots_declare_finding_ledger_other_drafts_omit_it() {
         let workflow = union();
-        assert_review_slots_declare_accepted_findings(&workflow);
+        assert_review_slots_declare_finding_ledger(&workflow);
         let review_less = stitched(json!({}));
-        assert_review_slots_declare_accepted_findings(&review_less);
+        assert_review_slots_declare_finding_ledger(&review_less);
         let mixed = stitched(json!({
             "intent-review": [axis("problem")],
             "validation-review": [axis("delivery")]
         }));
-        assert_review_slots_declare_accepted_findings(&mixed);
+        assert_review_slots_declare_finding_ledger(&mixed);
         assert_eq!(
             slot(&mixed, "intent-review").stdin_context_kinds,
-            vec![ACCEPTED_FINDINGS_KIND]
+            vec![FINDING_LEDGER_KIND]
         );
         assert!(slot(&mixed, "intent-draft").stdin_context_kinds.is_empty());
         assert!(slot(&mixed, "validation-draft")
             .stdin_context_kinds
             .is_empty());
         assert_eq!(
+            slot(&mixed, "implement").stdin_context_kinds,
+            vec![FINDING_LEDGER_KIND]
+        );
+        assert_eq!(
             slot(&mixed, "validation-review").stdin_context_kinds,
-            vec![ACCEPTED_FINDINGS_KIND]
+            vec![FINDING_LEDGER_KIND]
         );
     }
 

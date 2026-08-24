@@ -143,14 +143,17 @@ fn context_record(data: Value) -> Value {
     })
 }
 
-fn accepted_findings_record(gate: &str, subject: &str, revision: &str, findings: Value) -> Value {
+fn finding_ledger_record(gate: &str, subject: &str, revision: &str, findings: Value) -> Value {
     json!({
-        "id": "accepted-1",
-        "kind": "accepted-findings",
+        "id": "ledger-1",
+        "kind": "finding-ledger",
         "data": {
+            "schema_version": "1",
             "gate": gate,
             "subject": subject,
             "subject_revision": revision,
+            "author": {"name": "driver", "kind": "agent"},
+            "repository_state": null,
             "findings": findings
         },
         "sequence": 2,
@@ -172,7 +175,12 @@ fn passing_evidence() -> Value {
 }
 
 fn run_provider(request: Value) -> Output {
+    run_provider_in(Path::new(env!("CARGO_MANIFEST_DIR")), request)
+}
+
+fn run_provider_in(directory: &Path, request: Value) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_software-change"))
+        .current_dir(directory)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -373,10 +381,17 @@ fn missing_review_policies_is_evaluation_error_naming_shipped_configs() {
 fn evidence_phase_denies_with_configured_axis_diagnostics() {
     let root = TestDir::new();
     root.write_json("intent.json", &valid_metadata("1"));
-    let output = run_provider(base_request(
+    let mut request = base_request(
         config_with_axis(&root),
         checked("intent-review", "approved", "design"),
-    ));
+    );
+    request["context"] = json!([finding_ledger_record(
+        "intent-review",
+        "intent.json",
+        "1",
+        json!([])
+    )]);
+    let output = run_provider(request);
     assert_exit(&output, 0);
     let value = response(&output);
     assert_eq!(
@@ -422,42 +437,71 @@ fn mixed_current_blocker_and_stale_context_separates_feedback_projection() {
             "subject": "intent.json",
             "subject_revision": "1",
             "config_version": "test-1"
-        }))
+        })),
+        finding_ledger_record("intent-review", "intent.json", "2", json!([]))
     ]);
 
     let output = run_provider(request);
     assert_exit(&output, 0);
     let details = &response(&output)["feedback"]["details"];
-    let blocking = details["diagnostics"]
+    assert_eq!(details["phase"], "finding-ledger");
+    assert_eq!(details["status"], "set_mismatch");
+    assert!(details["accepted_unresolved"]
         .as_array()
-        .unwrap()
-        .iter()
-        .find(|axis| axis["axis"] == "axis")
-        .unwrap();
-    assert!(blocking["diagnostics"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|diagnostic| diagnostic["category"] == "failed"
-            && diagnostic["findings"] == "current blocker"));
-    assert!(blocking["diagnostics"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|diagnostic| diagnostic["category"] != "stale"));
-    let informational = details["informational"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|axis| axis["axis"] == "axis")
-        .unwrap();
-    assert_eq!(informational["diagnostics"][0]["category"], "stale");
-    assert_eq!(informational["diagnostics"][0]["evidence_revision"], "1");
-    assert_eq!(informational["diagnostics"][0]["current_revision"], "2");
+        .expect("accepted-unresolved set")
+        .is_empty());
+    assert_eq!(
+        details["failing_evidence"][0]["statement"],
+        "current blocker"
+    );
 }
 
 #[test]
 fn every_checked_reference_route_is_accepted_when_obligations_are_empty() {
+    let artifacts = TestDir::new();
+    for name in ["intent.json", "design.json", "plan.json"] {
+        artifacts.write_json(name, &json!({"revision": "1"}));
+    }
+    artifacts.write_json("implementation-report.json", &json!({"revision": "1"}));
+    artifacts.write_json("validation-report.json", &json!({"revision": "1"}));
+    let repository = TestDir::new();
+    fs::write(repository.path.join("marker.txt"), b"baseline\n").unwrap();
+    for args in [
+        vec!["init", "-q"],
+        vec!["config", "user.name", "software-change evaluate"],
+        vec!["config", "user.email", "evaluate@example.invalid"],
+        vec!["config", "commit.gpgsign", "false"],
+        vec!["add", "-A"],
+        vec!["commit", "-qm", "baseline"],
+    ] {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&repository.path)
+            .status()
+            .unwrap()
+            .success());
+    }
+    for phase in ["implementation", "validation"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_software-change"))
+            .args([
+                "checkpoint",
+                "--phase",
+                phase,
+                "--artifact-root",
+                artifacts.path.to_str().unwrap(),
+                "--working-directory",
+                repository.path.to_str().unwrap(),
+            ])
+            .current_dir(&repository.path)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "checkpoint {phase} failed");
+    }
+    let input = json!({
+        "config_version": "none",
+        "review_policies": {},
+        "artifact_root": artifacts.root_value()
+    });
     let routes = [
         ("explore", "intent-ready", "design"),
         ("design", "design-ready", "plan"),
@@ -466,10 +510,10 @@ fn every_checked_reference_route_is_accepted_when_obligations_are_empty() {
         ("validation", "passed", "end"),
     ];
     for (source, event, target) in routes {
-        let output = run_provider(base_request(
-            json!({"config_version": "none", "review_policies": {}}),
-            checked(source, event, target),
-        ));
+        let output = run_provider_in(
+            &repository.path,
+            base_request(input.clone(), checked(source, event, target)),
+        );
         assert_exit(&output, 0);
         assert_eq!(
             response(&output),
@@ -664,7 +708,7 @@ fn malformed_config_classes_exit_one_without_stdout_result() {
 }
 
 #[test]
-fn check_free_revise_allows_without_evidence_or_accepted_findings() {
+fn check_free_revise_allows_without_evidence_or_finding_ledger() {
     let root = TestDir::new();
     root.write_json("intent.json", &valid_metadata("1"));
     let output = run_provider(base_request(
@@ -676,7 +720,7 @@ fn check_free_revise_allows_without_evidence_or_accepted_findings() {
 }
 
 #[test]
-fn review_approved_denied_without_current_revision_accepted_findings() {
+fn review_approved_denied_without_current_revision_finding_ledger() {
     let root = TestDir::new();
     root.write_json("intent.json", &valid_metadata("1"));
     let mut request = base_request(
@@ -689,13 +733,13 @@ fn review_approved_denied_without_current_revision_accepted_findings() {
     let value = response(&output);
     assert_eq!(
         value["feedback"]["code"],
-        "software-change-accepted-findings-missing"
+        "software-change-finding-ledger-invalid"
     );
     assert_eq!(value["feedback"]["details"]["status"], "missing");
 }
 
 #[test]
-fn empty_accepted_findings_array_allows_review_approved() {
+fn empty_finding_ledger_array_allows_review_approved() {
     let root = TestDir::new();
     root.write_json("intent.json", &valid_metadata("1"));
     let mut request = base_request(
@@ -704,7 +748,7 @@ fn empty_accepted_findings_array_allows_review_approved() {
     );
     request["context"] = json!([
         passing_evidence(),
-        accepted_findings_record("intent-review", "intent.json", "1", json!([]))
+        finding_ledger_record("intent-review", "intent.json", "1", json!([]))
     ]);
     let output = run_provider(request);
     assert_exit(&output, 0);
@@ -712,14 +756,14 @@ fn empty_accepted_findings_array_allows_review_approved() {
 }
 
 #[test]
-fn malformed_accepted_findings_block_until_superseded() {
+fn malformed_finding_ledger_blocks_until_superseded() {
     let root = TestDir::new();
     root.write_json("intent.json", &valid_metadata("1"));
     let config = config_with_axis(&root);
     let transition = checked("intent-review", "approved", "design");
 
     let mut malformed =
-        accepted_findings_record("intent-review", "intent.json", "1", json!("not-an-array"));
+        finding_ledger_record("intent-review", "intent.json", "1", json!("not-an-array"));
     malformed["sequence"] = json!(2);
     let mut blocked = base_request(config.clone(), transition.clone());
     blocked["context"] = json!([passing_evidence(), malformed.clone()]);
@@ -730,7 +774,7 @@ fn malformed_accepted_findings_block_until_superseded() {
         "malformed"
     );
 
-    let mut later = accepted_findings_record("intent-review", "intent.json", "1", json!([]));
+    let mut later = finding_ledger_record("intent-review", "intent.json", "1", json!([]));
     later["id"] = json!("accepted-later");
     later["sequence"] = json!(3);
     later["created_at"] = json!(3);
@@ -743,7 +787,7 @@ fn malformed_accepted_findings_block_until_superseded() {
 }
 
 #[test]
-fn accepted_findings_for_prior_revision_does_not_satisfy_after_bump() {
+fn finding_ledger_for_prior_revision_does_not_satisfy_after_bump() {
     let root = TestDir::new();
     root.write_json("intent.json", &valid_metadata("2"));
     let mut request = base_request(
@@ -754,12 +798,12 @@ fn accepted_findings_for_prior_revision_does_not_satisfy_after_bump() {
     evidence["data"]["subject_revision"] = json!("2");
     request["context"] = json!([
         evidence,
-        accepted_findings_record("intent-review", "intent.json", "1", json!([]))
+        finding_ledger_record("intent-review", "intent.json", "1", json!([]))
     ]);
     let output = run_provider(request);
     assert_exit(&output, 0);
     let details = &response(&output)["feedback"]["details"];
-    assert_eq!(details["status"], "stale");
+    assert_eq!(details["status"], "stale_subject");
     assert_eq!(details["record_revision"], "1");
     assert_eq!(details["current_revision"], "2");
 }
@@ -787,7 +831,9 @@ fn same_policy_id_on_parent_and_adversarial_gates_aggregates_independently() {
         "subject_revision": "1",
         "config_version": "test-1"
     }));
-    let parent_findings = accepted_findings_record("intent-review", "intent.json", "1", json!([]));
+    let parent_findings = finding_ledger_record("intent-review", "intent.json", "1", json!([]));
+    let adversarial_findings =
+        finding_ledger_record("intent-adversarial-review", "intent.json", "1", json!([]));
 
     let mut parent = base_request(
         config.clone(),
@@ -802,7 +848,7 @@ fn same_policy_id_on_parent_and_adversarial_gates_aggregates_independently() {
         config,
         checked("intent-adversarial-review", "approved", "design"),
     );
-    adversarial["context"] = json!([parent_pass, parent_findings]);
+    adversarial["context"] = json!([parent_pass, parent_findings, adversarial_findings]);
     let adversarial_output = run_provider(adversarial);
     assert_exit(&adversarial_output, 0);
     let value = response(&adversarial_output);

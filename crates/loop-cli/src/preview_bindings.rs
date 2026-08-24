@@ -1,7 +1,8 @@
 //! Inspect `work_slot_bindings` without starting a run.
 //!
 //! `preview-bindings` keeps outer bindings and `--task-worker` strict
-//! `{command,args}`, expands the extended nested fan-out `--worker` contract,
+//! `{command,args}`, expands the extended nested fan-out `--worker` contract
+//! including legacy and complete output schemas,
 //! lists `--model` values, and warns on inspectable risks. It opens no database.
 //! Zero-worker fan-out is an error;
 //! warnings alone are not. A pi worker with `--no-extensions`/`-ne` and no
@@ -77,6 +78,8 @@ pub(crate) struct PreviewWorker {
     pub(crate) has_preamble: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) output_schema: Option<crate::fan_out::OutputSchema>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) full_output_schema: Option<Value>,
 }
 
 impl From<WorkerCli> for PreviewWorker {
@@ -86,6 +89,7 @@ impl From<WorkerCli> for PreviewWorker {
             args: worker.args,
             has_preamble: worker.preamble.is_some(),
             output_schema: worker.output_schema,
+            full_output_schema: worker.full_output_schema,
         }
     }
 }
@@ -300,6 +304,7 @@ fn nested_workers(slot_id: &str, args: &[String]) -> Result<Vec<WorkerCli>, Prev
                     args: task_worker.args,
                     preamble: None,
                     output_schema: None,
+                    full_output_schema: None,
                 }
             };
             workers.push(worker);

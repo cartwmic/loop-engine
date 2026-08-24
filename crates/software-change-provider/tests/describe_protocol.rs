@@ -213,21 +213,21 @@ fn describe_empty_review_policies_omits_reviews_and_uses_passed_on_validation_dr
 }
 
 #[test]
-fn describe_live_review_slots_declare_accepted_findings_and_drafts_omit_it() {
+fn describe_live_review_slots_declare_finding_ledger_and_drafts_omit_it() {
     let workflow = describe_workflow(json!({"operation": "describe"}));
     for slot in workflow["work_slots"].as_array().expect("work_slots") {
         let id = slot["id"].as_str().expect("id");
         let is_review = id.ends_with("-review");
-        if is_review {
+        if is_review || id == "implement" {
             assert_eq!(
                 slot.get("stdin_context_kinds"),
-                Some(&json!(["accepted-findings"])),
+                Some(&json!(["finding-ledger"])),
                 "{id}"
             );
         } else {
             assert!(
                 slot.get("stdin_context_kinds").is_none(),
-                "draft slot {id} must omit stdin_context_kinds"
+                "non-ledger draft slot {id} must omit stdin_context_kinds"
             );
         }
     }

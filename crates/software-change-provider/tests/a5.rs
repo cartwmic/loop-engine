@@ -28,8 +28,8 @@ fn revision_bump_retires_old_pass_until_current_revision_is_reviewed() {
         1,
     );
     let accepted_v1 = context_json(
-        "accepted-findings",
-        support::accepted_findings("intent-review", "intent.json", "1", json!([])),
+        "finding-ledger",
+        support::finding_ledger("intent-review", "intent.json", "1", json!([])),
         2,
     );
 
@@ -47,33 +47,18 @@ fn revision_bump_retires_old_pass_until_current_revision_is_reviewed() {
     let stale_value = response(&stale);
     assert_eq!(
         stale_value["feedback"]["code"],
-        "software-change-review-incomplete"
+        "software-change-finding-ledger-invalid"
     );
-    let blocking_axis = stale_value["feedback"]["details"]["diagnostics"]
-        .as_array()
-        .expect("blocking axis diagnostics")
-        .iter()
-        .find(|axis| axis["axis"] == "axis")
-        .expect("blocking axis diagnostic");
-    assert!(blocking_axis["diagnostics"]
-        .as_array()
-        .expect("blocking diagnostics")
-        .iter()
-        .all(|diagnostic| diagnostic["category"] != "stale"));
-    let informational_axis = stale_value["feedback"]["details"]["informational"]
-        .as_array()
-        .expect("informational axis diagnostics")
-        .iter()
-        .find(|axis| axis["axis"] == "axis")
-        .expect("informational axis diagnostic");
-    let stale_diagnostic = informational_axis["diagnostics"]
-        .as_array()
-        .expect("informational diagnostics")
-        .iter()
-        .find(|diagnostic| diagnostic["category"] == "stale")
-        .expect("stale diagnostic");
-    assert_eq!(stale_diagnostic["evidence_revision"], "1");
-    assert_eq!(stale_diagnostic["current_revision"], "2");
+    assert_eq!(
+        stale_value["feedback"]["details"]["phase"],
+        "finding-ledger"
+    );
+    assert_eq!(
+        stale_value["feedback"]["details"]["status"],
+        "stale_subject"
+    );
+    assert_eq!(stale_value["feedback"]["details"]["record_revision"], "1");
+    assert_eq!(stale_value["feedback"]["details"]["current_revision"], "2");
 
     let current_pass = context_json(
         "review-evidence",
@@ -91,8 +76,8 @@ fn revision_bump_retires_old_pass_until_current_revision_is_reviewed() {
         3,
     );
     let accepted_v2 = context_json(
-        "accepted-findings",
-        support::accepted_findings("intent-review", "intent.json", "2", json!([])),
+        "finding-ledger",
+        support::finding_ledger("intent-review", "intent.json", "2", json!([])),
         4,
     );
     let mut current_request = base_request(config, transition);

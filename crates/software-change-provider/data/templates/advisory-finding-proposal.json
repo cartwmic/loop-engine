@@ -1,0 +1,30 @@
+{
+  "kind": "advisory-finding-proposal",
+  "data": {
+    "schema_version": "1",
+    "gate": "plan-review",
+    "subject": "plan.json",
+    "subject_revision": "1",
+    "author": {
+      "name": "classifier",
+      "kind": "agent"
+    },
+    "proposals": [
+      {
+        "candidate_source_ids": [
+          "source-1"
+        ],
+        "proposed_disposition": "accepted",
+        "proposed_reason": "The candidate appears to affect the frozen outcome.",
+        "proposed_owner_phase": "implementation",
+        "proposed_task_ids": [
+          "task-id"
+        ],
+        "proposed_review_axes": [
+          "task-sized"
+        ],
+        "rationale": "This is a suggestion for driver triage, not a gate verdict or ledger decision."
+      }
+    ]
+  }
+}

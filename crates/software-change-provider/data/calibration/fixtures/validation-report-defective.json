@@ -46,11 +46,11 @@
       }
     ]
   },
-  "outcome": "Looks good.",
+  "outcome": "All planned activity completed.",
   "requirements": [
     {
-      "requirement": "Everything works.",
-      "proof": "Tests passed."
+      "requirement": "The public workflow reaches its required outcome.",
+      "proof": "bookends:LE-39"
     }
   ],
   "validation": [

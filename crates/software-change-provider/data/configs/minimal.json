@@ -1,5 +1,5 @@
 {
-  "config_version": "minimal-5",
+  "config_version": "minimal-6",
   "review_policies": {
     "intent-review": [],
     "design-review": [],
@@ -8,8 +8,8 @@
     "validation-review": [
       {
         "id": "intent-delivered",
-        "description": "Validation evidence demonstrates intent outcomes and acceptance boundaries were delivered.",
-        "example_prompt": "Judge intent-delivered only. Confirm validation report maps intent outcomes and acceptance evidence to observable proof, not merely completed work. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/minimal.json#/artifact_schemas/validation-report.json. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings."
+        "description": "Validation evidence demonstrates frozen intent outcomes, acceptance boundaries, and outside obligations through observable proof rather than activity.",
+        "example_prompt": "Judge intent-delivered only. Confirm validation report maps intent outcomes and acceptance evidence to observable proof, not merely completed work. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. Reject activity-only evidence such as completed-work lists, internal tests, or passing commands when it does not demonstrate the frozen observable outcome and acceptance boundary. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/minimal.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings."
       }
     ]
   },
@@ -19,6 +19,7 @@
       "required": [
         "revision",
         "author",
+        "operating_context",
         "problem",
         "outcome",
         "acceptance",
@@ -48,6 +49,105 @@
                 "agent",
                 "script"
               ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "operating_context": {
+          "type": "object",
+          "required": [
+            "operators",
+            "environment",
+            "threat_boundary",
+            "accepted_risks",
+            "outside_obligations"
+          ],
+          "properties": {
+            "operators": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            },
+            "environment": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            },
+            "threat_boundary": {
+              "type": "object",
+              "required": [
+                "in_scope",
+                "excluded"
+              ],
+              "properties": {
+                "in_scope": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                },
+                "excluded": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                }
+              },
+              "additionalProperties": false
+            },
+            "accepted_risks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "risk",
+                  "rationale"
+                ],
+                "properties": {
+                  "risk": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "rationale": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": false
+              },
+              "minItems": 0
+            },
+            "outside_obligations": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "source",
+                  "obligation"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "obligation": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": false
+              },
+              "minItems": 0
             }
           },
           "additionalProperties": false

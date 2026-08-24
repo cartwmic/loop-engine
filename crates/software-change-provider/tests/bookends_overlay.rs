@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use support::{load_fixture, load_profile};
+use support::{load_fixture, load_profile, provider_binary};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -386,6 +386,59 @@ fn overlay_validation_config(root: &TestDir) -> Value {
     })
 }
 
+fn write_checkpoints(repo: &Repo, artifacts: &TestDir) {
+    for name in [
+        "intent.json",
+        "design.json",
+        "plan.json",
+        "implementation-report.json",
+    ] {
+        artifacts.write_json(name, &json!({"revision": "1"}));
+    }
+    for phase in ["implementation", "validation"] {
+        let output = Command::new(provider_binary())
+            .args([
+                "checkpoint",
+                "--phase",
+                phase,
+                "--artifact-root",
+                artifacts.path().to_str().expect("artifact root"),
+                "--working-directory",
+                repo.path().to_str().expect("repository"),
+            ])
+            .current_dir(repo.path())
+            .output()
+            .expect("run checkpoint");
+        assert!(
+            output.status.success(),
+            "checkpoint {phase} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    // Validation proof is admitted only after implementation proof has been
+    // accepted by the provider transition that records its immutable history.
+    let config = json!({
+        "config_version": "test-1",
+        "artifact_root": artifacts.path().to_string_lossy().to_string(),
+        "review_policies": {}
+    });
+    let workflow = described_workflow_in(repo.path(), &config);
+    let output = run_provider_in(
+        repo.path(),
+        json!({
+            "operation": "evaluate",
+            "workflow": workflow,
+            "initial_input": config,
+            "context": [],
+            "transition": support::checked("implement", "implementation-ready", "validation"),
+            "prior_evaluations": []
+        }),
+    );
+    support::assert_exit(&output, 0);
+    assert_eq!(support::response(&output), json!({"result": "allow"}));
+}
+
 fn validation_artifact(ids: Value) -> Value {
     json!({
         "revision": "1",
@@ -403,6 +456,7 @@ fn overlay_on_checker_red_denies_passed() {
         "validation-report.json",
         &validation_artifact(json!(["LE-1"])),
     );
+    write_checkpoints(&repo, &artifacts);
     let value = evaluate_in(
         repo.path(),
         overlay_validation_config(&artifacts),
@@ -423,6 +477,7 @@ fn overlay_on_checker_green_allows_schema_only_passed() {
         "validation-report.json",
         &validation_artifact(json!(["LE-1"])),
     );
+    write_checkpoints(&repo, &artifacts);
     let value = evaluate_in(
         repo.path(),
         overlay_validation_config(&artifacts),
@@ -474,6 +529,7 @@ fn overlay_on_greenwash_fails_bypass_not_green() {
     report["requirement_ids"] = json!(["LE-1"]);
     report["validation"] = json!(["In-process bookends check is green and validation passed"]);
     artifacts.write_json("validation-report.json", &report);
+    write_checkpoints(&repo, &artifacts);
 
     let schema = load_profile("high-rigor")["artifact_schemas"]["validation-report.json"].clone();
     let config = json!({
@@ -506,20 +562,8 @@ fn overlay_on_greenwash_fails_bypass_not_green() {
     assert_eq!(value["result"], "deny");
     assert_eq!(
         value["feedback"]["code"],
-        "software-change-review-incomplete"
+        "software-change-finding-ledger-invalid"
     );
-    let diagnostics = value["feedback"]["details"]["diagnostics"]
-        .as_array()
-        .expect("diagnostics");
-    assert!(
-        diagnostics.iter().any(|axis| {
-            axis["axis"] == "bypass-not-green"
-                && axis["diagnostics"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .any(|diagnostic| diagnostic["category"] == "failed")
-        }),
-        "expected bypass-not-green failure, got {diagnostics:?}"
-    );
+    assert_eq!(value["feedback"]["details"]["phase"], "finding-ledger");
+    assert_eq!(value["feedback"]["details"]["status"], "missing");
 }

@@ -25,7 +25,7 @@
     },
     {
       "name": "speculative plugin registry and cache",
-      "responsibility": "Register optional future plugins and cache design decisions for reuse across unrelated changes; no current acceptance line requires extensibility or caching."
+      "responsibility": "Require a provider-owned registry and persistent cache as over-prescribed mechanisms for optional future plugins and unrelated changes; no current acceptance line or outside obligation forces extensibility or caching."
     }
   ],
   "decisions": [

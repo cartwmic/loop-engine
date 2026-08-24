@@ -1,7 +1,10 @@
 //! Argv and stdin contracts plus the Dagu-backed executor for `run-plan-graph`.
 
+use crate::checkpoint::{self, CheckpointPhase};
 use crate::dagu::{names_for_capture_root, resolve_dagu, write_locator};
+use crate::finding_ledger::project_implementation_findings_at;
 use crate::schema::{self, CheckResult};
+use loop_core::ContextRecord;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -19,6 +22,7 @@ const DEFAULT_WORKER_COMMAND: &str = "pi";
 const DEFAULT_WORKER_ARGS: &[&str] = &["--print", "--no-skills", "--no-extensions"];
 const SUMMARIZER_STEP: &str = "summarizer";
 const REPORT_FILE: &str = "implementation-report.json";
+const CHECKPOINT_FILE: &str = "implementation-checkpoint.json";
 const SUMMARY_FILE: &str = "summary.json";
 const REQUIRED_REPORT_KEYS: &[&str] = &[
     "revision",
@@ -47,7 +51,8 @@ pub(crate) struct RunPlanGraphArgs {
     pub(crate) working_directory: PathBuf,
 }
 
-/// Bound-worker stdin packet.  Exactly the five engine invoke keys; no extras.
+/// Bound-worker stdin packet.  The engine's five invoke keys plus the
+/// optional opaque context selected by the implementation slot.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct InvokePacket {
@@ -56,6 +61,8 @@ pub(crate) struct InvokePacket {
     pub(crate) artifact_root: String,
     pub(crate) instruction_body: String,
     pub(crate) capture_dir: String,
+    #[serde(default)]
+    pub(crate) context: Option<Vec<ContextRecord>>,
 }
 
 /// Parse failure for worker JSON, invoke packets, or `run-plan-graph` argv.
@@ -377,7 +384,6 @@ fn execute_from_packet(args: &RunPlanGraphArgs, raw_packet: &str) -> Result<(), 
     }
     let artifact_root = absolute_from_cwd(&packet.artifact_root)?;
     let capture_root = absolute_from_cwd(&packet.capture_dir)?;
-    delete_stale_report(&artifact_root)?;
     let plan_path = artifact_root.join("plan.json");
     let plan_raw = fs::read_to_string(&plan_path).map_err(|error| {
         ExecuteError::failed(format!("could not read {}: {error}", plan_path.display()))
@@ -391,6 +397,7 @@ fn execute_from_packet(args: &RunPlanGraphArgs, raw_packet: &str) -> Result<(), 
         &plan_path,
         &capture_root,
         &plan,
+        packet.context.as_deref(),
     )
 }
 
@@ -402,6 +409,18 @@ fn delete_stale_report(artifact_root: &Path) -> Result<(), ExecuteError> {
         Err(error) => Err(ExecuteError::failed(format!(
             "could not delete leftover {}: {error}",
             report.display()
+        ))),
+    }
+}
+
+fn delete_stale_checkpoint(artifact_root: &Path) -> Result<(), ExecuteError> {
+    let checkpoint = artifact_root.join(CHECKPOINT_FILE);
+    match fs::remove_file(&checkpoint) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(ExecuteError::failed(format!(
+            "could not delete leftover {}: {error}",
+            checkpoint.display()
         ))),
     }
 }
@@ -537,6 +556,7 @@ fn run_dagu_graph(
     plan_path: &Path,
     capture_root: &Path,
     plan: &PlanGraph,
+    finding_context: Option<&[ContextRecord]>,
 ) -> Result<(), ExecuteError> {
     fs::create_dir_all(capture_root).map_err(|error| {
         ExecuteError::failed(format!(
@@ -560,8 +580,15 @@ fn run_dagu_graph(
             ExecuteError::failed(format!("could not create {}: {error}", out_dir.display()))
         })?;
         let task = plan.tasks.get(id).expect("plan order id exists in tasks");
+        let task = project_task_finding_context(
+            artifact_root,
+            &args.working_directory,
+            task,
+            id,
+            finding_context,
+        )?;
         let stdin_path = out_dir.join("stdin");
-        let stdin_text = task_stdin(artifact_root, task)?;
+        let stdin_text = task_stdin(artifact_root, &task)?;
         fs::write(&stdin_path, stdin_text).map_err(|error| {
             ExecuteError::failed(format!("could not write {}: {error}", stdin_path.display()))
         })?;
@@ -609,6 +636,12 @@ fn run_dagu_graph(
         depends: plan.order.clone(),
     };
 
+    // Keep the previous report/checkpoint available while projecting the
+    // current ledger into task packets. Once every packet is prepared, stale
+    // proof is removed before any graph worker starts.
+    delete_stale_report(artifact_root)?;
+    delete_stale_checkpoint(artifact_root)?;
+
     let yaml = emit_graph_yaml(
         &dag_name,
         &software_change,
@@ -655,9 +688,14 @@ fn run_dagu_graph(
     );
     let start_ok = start_result.is_ok();
     let outcomes = step_outcomes(&home);
+    let ordinary_ok = plan.order.iter().all(|id| {
+        outcomes
+            .get(id)
+            .is_some_and(|outcome| outcome.exit_code == Some(0))
+    });
 
     let summary_error = write_plan_summary(capture_root, &args.worker, plan, &steps, &outcomes);
-    let summarizer_ok = summarizer_succeeded(&outcomes, capture_root, start_ok);
+    let summarizer_ok = ordinary_ok && summarizer_succeeded(&outcomes);
     let report_error = if summarizer_ok {
         validate_fresh_report(artifact_root, &plan.revision)
     } else {
@@ -672,18 +710,20 @@ fn run_dagu_graph(
         }
     }
     start_result?;
-    report_error
+    report_error?;
+    checkpoint::create(
+        CheckpointPhase::Implementation,
+        artifact_root,
+        &args.working_directory,
+    )
+    .map(|_| ())
+    .map_err(ExecuteError::failed)
 }
 
-fn summarizer_succeeded(
-    outcomes: &HashMap<String, StepOutcome>,
-    capture_root: &Path,
-    start_ok: bool,
-) -> bool {
-    if let Some(outcome) = outcomes.get(SUMMARIZER_STEP) {
-        return outcome.exit_code == Some(0);
-    }
-    start_ok && capture_root.join(SUMMARIZER_STEP).join("stdout").is_file()
+fn summarizer_succeeded(outcomes: &HashMap<String, StepOutcome>) -> bool {
+    outcomes
+        .get(SUMMARIZER_STEP)
+        .is_some_and(|outcome| outcome.exit_code == Some(0))
 }
 
 fn write_plan_summary(
@@ -981,6 +1021,29 @@ fn yaml_double_quoted(value: &str) -> String {
     }
     out.push('"');
     out
+}
+
+fn project_task_finding_context(
+    artifact_root: &Path,
+    working_directory: &Path,
+    task: &Value,
+    task_id: &str,
+    context: Option<&[ContextRecord]>,
+) -> Result<Value, ExecuteError> {
+    let Some(context) = context else {
+        return Ok(task.clone());
+    };
+    let mut task = task.clone();
+    let object = task.as_object_mut().ok_or_else(|| {
+        ExecuteError::failed(format!(
+            "plan.json task `{task_id}` must be an object for finding routing"
+        ))
+    })?;
+    let findings =
+        project_implementation_findings_at(context, artifact_root, task_id, working_directory)
+            .map_err(ExecuteError::failed)?;
+    object.insert("finding_context".to_owned(), Value::Array(findings));
+    Ok(task)
 }
 
 fn task_stdin(artifact_root: &Path, task: &Value) -> Result<String, ExecuteError> {

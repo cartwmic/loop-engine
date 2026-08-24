@@ -7,9 +7,11 @@
 use crate::dagu::{names_for_capture_root, resolve_dagu, write_locator};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -19,6 +21,11 @@ static NEXT_ADHOC: AtomicU64 = AtomicU64::new(1);
 const JOIN_COMMAND_OVERRIDE: &str = "LOOP_ENGINE_FAN_OUT_JOIN_COMMAND";
 const SPEC_FILE: &str = "fan-out-spec.json";
 const SUMMARY_FILE: &str = "summary.json";
+const ATTEMPTS_FILE: &str = "attempts.json";
+const MAX_FULL_SCHEMA_ATTEMPTS: u32 = 2;
+const RETRY_PROMPT: &str = "\n\n---\n\nSCHEMA-CONFORMANCE RETRY\nReturn only a schema-conforming reconsideration of the same frozen assignment. Do not add commentary or change the semantic review authority.\n\nFIRST_OUTPUT_BEGIN\n";
+const RETRY_PROMPT_ERRORS: &str = "\nFIRST_OUTPUT_END\n\nEXACT_VALIDATION_ERRORS\n";
+const RETRY_PROMPT_END: &str = "\n\nReturn only the schema-conforming reconsideration.\n";
 
 /// Nested fan-out worker argv and optional, caller-supplied contracts.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -28,9 +35,12 @@ pub(crate) struct WorkerCli {
     pub(crate) args: Vec<String>,
     pub(crate) preamble: Option<String>,
     pub(crate) output_schema: Option<OutputSchema>,
+    /// Additive complete JSON Schema contract. The field name is intentionally
+    /// distinct from the legacy required-key `output_schema` contract.
+    pub(crate) full_output_schema: Option<Value>,
 }
 
-/// The complete supported output contract: presence of required top-level keys.
+/// The legacy output contract: presence of required top-level keys only.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct OutputSchema {
@@ -130,6 +140,14 @@ pub(crate) struct FanOutWorkerResult {
     pub(crate) status: Option<ContractStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) conformance_error: Option<String>,
+    /// Relative to the fan-out capture root.  Present only for the additive
+    /// complete-schema contract.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) attempts_path: Option<String>,
+    /// The outer option preserves the legacy omission while the inner option
+    /// serializes `null` for an exhausted complete-schema contract.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) selected_attempt: Option<Option<u32>>,
 }
 
 /// Mechanical outcome for a worker that declared an output contract.
@@ -152,6 +170,8 @@ struct FanOutSpecWorker {
     args: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     output_schema: Option<OutputSchema>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    full_output_schema: Option<Value>,
     stdin_path: String,
     stdout_path: String,
     stderr_path: String,
@@ -163,6 +183,24 @@ struct SidecarFile {
     exit_code: i32,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AttemptCapture {
+    number: u32,
+    stdout_sha256: String,
+    stderr_sha256: String,
+    validation_errors: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AttemptsManifest {
+    schema_version: String,
+    attempts: Vec<AttemptCapture>,
+    selected_attempt: Option<u32>,
+    exhausted: bool,
+}
+
 #[derive(Serialize)]
 struct CaptureSummary<'a> {
     workers: &'a [FanOutWorkerResult],
@@ -170,13 +208,31 @@ struct CaptureSummary<'a> {
 
 /// Parse one nested worker CLI JSON object and validate its exact output shape.
 pub(crate) fn parse_worker_cli_json(raw: &str) -> Result<WorkerCli, ParseError> {
-    let worker: WorkerCli = serde_json::from_str(raw).map_err(|error| {
+    let raw_value: Value = serde_json::from_str(raw).map_err(|error| {
         ParseError::new(format!(
-            "worker CLI JSON must contain string `command`, array-of-string `args`, and only optional string `preamble` and output_schema {{required}}: {error}"
+            "worker CLI JSON must contain string `command`, array-of-string `args`, and only optional string `preamble`, output_schema {{required}}, or full_output_schema: {error}"
+        ))
+    })?;
+    if raw_value
+        .as_object()
+        .and_then(|object| object.get("full_output_schema"))
+        .is_some_and(Value::is_null)
+    {
+        return Err(ParseError::new(
+            "worker full_output_schema must be a JSON Schema value, not null",
+        ));
+    }
+    let mut worker: WorkerCli = serde_json::from_value(raw_value).map_err(|error| {
+        ParseError::new(format!(
+            "worker CLI JSON must contain string `command`, array-of-string `args`, and only optional string `preamble`, output_schema {{required}}, or full_output_schema: {error}"
         ))
     })?;
     if let Some(schema) = &worker.output_schema {
         validate_output_schema(schema)?;
+    }
+    if let Some(schema) = worker.full_output_schema.as_mut() {
+        normalize_full_output_schema(schema)?;
+        validate_full_schema_declaration(schema)?;
     }
     Ok(worker)
 }
@@ -201,6 +257,67 @@ fn validate_output_schema(schema: &OutputSchema) -> Result<(), ParseError> {
         }
     }
     Ok(())
+}
+
+/// Accept the canonical direct-schema form and the equivalent explicit
+/// `{schema, retry_limit: 1}` form. The retry count is deliberately not
+/// configurable: a complete-schema worker gets at most one correction.
+fn normalize_full_output_schema(schema: &mut Value) -> Result<(), ParseError> {
+    // JSON Schema permits a boolean schema as well as an object schema.
+    if schema.is_boolean() {
+        return Ok(());
+    }
+    let Some(object) = schema.as_object() else {
+        return Err(ParseError::new(
+            "worker full_output_schema must be a JSON Schema value",
+        ));
+    };
+    // `schema` and `retry_limit` are reserved for the explicit wrapper. Do
+    // not let a misspelled or extended wrapper silently become an unrelated
+    // JSON Schema whose unknown keywords would otherwise be ignored.
+    let has_wrapper_key = object.contains_key("schema") || object.contains_key("retry_limit");
+    if has_wrapper_key {
+        if object
+            .keys()
+            .any(|key| !matches!(key.as_str(), "schema" | "retry_limit"))
+        {
+            return Err(ParseError::new(
+                "worker full_output_schema wrapper may contain only schema and retry_limit",
+            ));
+        }
+        let retry_limit = object.get("retry_limit").ok_or_else(|| {
+            ParseError::new("worker full_output_schema wrapper requires retry_limit 1")
+        })?;
+        if retry_limit != &Value::from(1_u64) {
+            return Err(ParseError::new(
+                "worker full_output_schema retry_limit is fixed at 1",
+            ));
+        }
+        let inner = object
+            .get("schema")
+            .ok_or_else(|| ParseError::new("worker full_output_schema wrapper requires schema"))?;
+        if !inner.is_object() && !inner.is_boolean() {
+            return Err(ParseError::new(
+                "worker full_output_schema.schema must be a JSON Schema value",
+            ));
+        }
+        *schema = inner.clone();
+    }
+    Ok(())
+}
+
+fn compile_full_schema(
+    schema: &Value,
+) -> Result<jsonschema::Validator, jsonschema::error::ValidationError<'static>> {
+    jsonschema::options()
+        .should_validate_formats(true)
+        .build(schema)
+}
+
+fn validate_full_schema_declaration(schema: &Value) -> Result<(), ParseError> {
+    compile_full_schema(schema)
+        .map(|_| ())
+        .map_err(|error| ParseError::new(format!("worker full_output_schema is invalid: {error}")))
 }
 
 /// Parse the five-key engine invoke packet from stdin JSON.
@@ -396,6 +513,284 @@ pub(crate) fn run_fan_out_join(capture_dir: &Path) -> Result<(), CollectorError>
     write_summary_json(capture_dir, &workers)
 }
 
+/// Execute one complete-schema worker.  Dagu still owns graph scheduling;
+/// this hidden step owns only the bounded same-worker conformance retry and
+/// its immutable attempt capture.
+pub(crate) fn run_fan_out_worker(
+    capture_dir: &Path,
+    worker_index: usize,
+) -> Result<(), CollectorError> {
+    let spec = read_spec(capture_dir)?;
+    let worker = spec.workers.get(worker_index).ok_or_else(|| {
+        CollectorError::Invalid(format!(
+            "fan-out worker index {worker_index} is not present in {}",
+            capture_dir.join(SPEC_FILE).display()
+        ))
+    })?;
+    let Some(schema) = worker.full_output_schema.as_ref() else {
+        return Err(CollectorError::Invalid(format!(
+            "fan-out worker index {worker_index} has no full_output_schema"
+        )));
+    };
+    let assignment = fs::read(&worker.stdin_path).map_err(|error| {
+        CollectorError::Failed(format!(
+            "could not read complete-schema worker assignment `{}`: {error}",
+            worker.stdin_path
+        ))
+    })?;
+    let worker_dir = Path::new(&worker.stdout_path).parent().ok_or_else(|| {
+        CollectorError::Failed("complete-schema worker has no capture directory".to_owned())
+    })?;
+    let attempts_dir = worker_dir.join("attempts");
+    fs::create_dir_all(&attempts_dir).map_err(|error| {
+        CollectorError::Failed(format!(
+            "could not create complete-schema attempts directory `{}`: {error}",
+            attempts_dir.display()
+        ))
+    })?;
+
+    let mut attempts = Vec::new();
+    let mut selected_attempt = None;
+    let mut selected_bytes = None;
+    let mut next_assignment = assignment.clone();
+    let mut last_exit_code = 1;
+
+    for number in 1..=MAX_FULL_SCHEMA_ATTEMPTS {
+        let (stdout, stderr, exit_code) =
+            run_complete_schema_attempt(worker, &next_assignment, worker_dir)?;
+        last_exit_code = exit_code;
+        let validation_errors =
+            complete_schema_validation_errors(&stdout, schema, worker.output_schema.as_ref());
+        write_attempt_capture(worker_dir, number, &stdout, &stderr).map_err(|error| {
+            CollectorError::Failed(format!(
+                "could not write complete-schema attempt {number}: {error}"
+            ))
+        })?;
+        attempts.push(AttemptCapture {
+            number,
+            stdout_sha256: sha256_digest(&stdout),
+            stderr_sha256: sha256_digest(&stderr),
+            validation_errors: validation_errors.clone(),
+        });
+        if validation_errors.is_empty() {
+            selected_attempt = Some(number);
+            selected_bytes = Some((stdout, stderr));
+            break;
+        }
+        if number == 1 {
+            next_assignment = retry_assignment(&assignment, &stdout, &validation_errors);
+        }
+        selected_bytes = Some((stdout, stderr));
+    }
+
+    let Some((stdout, stderr)) = selected_bytes else {
+        return Err(CollectorError::Failed(
+            "complete-schema worker produced no attempt".to_owned(),
+        ));
+    };
+    fs::write(&worker.stdout_path, &stdout).map_err(|error| {
+        CollectorError::Failed(format!(
+            "could not write selected complete-schema stdout `{}`: {error}",
+            worker.stdout_path
+        ))
+    })?;
+    fs::write(&worker.stderr_path, &stderr).map_err(|error| {
+        CollectorError::Failed(format!(
+            "could not write selected complete-schema stderr `{}`: {error}",
+            worker.stderr_path
+        ))
+    })?;
+
+    let manifest = AttemptsManifest {
+        schema_version: "1".to_owned(),
+        attempts,
+        selected_attempt,
+        exhausted: selected_attempt.is_none(),
+    };
+    let manifest_path = worker_dir.join(ATTEMPTS_FILE);
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(|error| {
+        CollectorError::Failed(format!(
+            "could not serialize complete-schema attempts `{}`: {error}",
+            manifest_path.display()
+        ))
+    })?;
+    fs::write(&manifest_path, manifest_bytes).map_err(|error| {
+        CollectorError::Failed(format!(
+            "could not write complete-schema attempts `{}`: {error}",
+            manifest_path.display()
+        ))
+    })?;
+    write_sidecar_exit(&worker.sidecar_path, last_exit_code)
+}
+
+fn run_complete_schema_attempt(
+    worker: &FanOutSpecWorker,
+    assignment: &[u8],
+    worker_dir: &Path,
+) -> Result<(Vec<u8>, Vec<u8>, i32), CollectorError> {
+    let mut command = Command::new(&worker.command);
+    command
+        .args(&worker.args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if std::env::var_os("PI_CODING_AGENT_SESSION_DIR").is_none() {
+        let sessions = worker_dir.join("sessions");
+        fs::create_dir_all(&sessions).map_err(|error| {
+            CollectorError::Failed(format!(
+                "could not create complete-schema worker sessions `{}`: {error}",
+                sessions.display()
+            ))
+        })?;
+        let sessions = if sessions.is_absolute() {
+            sessions
+        } else {
+            std::env::current_dir()
+                .map_err(|error| {
+                    CollectorError::Failed(format!(
+                        "could not resolve complete-schema worker session directory: {error}"
+                    ))
+                })?
+                .join(sessions)
+        };
+        command.env("PI_CODING_AGENT_SESSION_DIR", sessions);
+    }
+    let mut child = command.spawn().map_err(|error| {
+        CollectorError::Failed(format!(
+            "could not spawn complete-schema worker `{}`: {error}",
+            worker.command
+        ))
+    })?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(assignment).map_err(|error| {
+            CollectorError::Failed(format!(
+                "could not write complete-schema worker stdin: {error}"
+            ))
+        })?;
+    }
+    let output = child.wait_with_output().map_err(|error| {
+        CollectorError::Failed(format!(
+            "could not wait for complete-schema worker `{}`: {error}",
+            worker.command
+        ))
+    })?;
+    Ok((
+        output.stdout,
+        output.stderr,
+        process_exit_code(output.status),
+    ))
+}
+
+fn process_exit_code(status: std::process::ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return signal;
+        }
+    }
+    1
+}
+
+fn write_attempt_capture(
+    worker_dir: &Path,
+    number: u32,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Result<(), std::io::Error> {
+    let attempt_dir = worker_dir.join("attempts").join(number.to_string());
+    fs::create_dir_all(&attempt_dir)?;
+    fs::write(attempt_dir.join("stdout"), stdout)?;
+    fs::write(attempt_dir.join("stderr"), stderr)
+}
+
+fn write_sidecar_exit(path: &str, exit_code: i32) -> Result<(), CollectorError> {
+    let sidecar = Path::new(path);
+    if let Some(parent) = sidecar.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|error| {
+                CollectorError::Failed(format!(
+                    "could not create sidecar directory `{}`: {error}",
+                    parent.display()
+                ))
+            })?;
+        }
+    }
+    let bytes =
+        serde_json::to_vec(&serde_json::json!({"exit_code": exit_code})).map_err(|error| {
+            CollectorError::Failed(format!("could not serialize fan-out sidecar: {error}"))
+        })?;
+    fs::write(sidecar, bytes).map_err(|error| {
+        CollectorError::Failed(format!("could not write fan-out sidecar `{path}`: {error}"))
+    })
+}
+
+fn sha256_digest(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut output = String::from("sha256:");
+    for byte in digest {
+        use std::fmt::Write as _;
+        write!(&mut output, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    output
+}
+
+fn retry_assignment(original_assignment: &[u8], first_stdout: &[u8], errors: &[String]) -> Vec<u8> {
+    let mut assignment = original_assignment.to_vec();
+    assignment.extend_from_slice(RETRY_PROMPT.as_bytes());
+    assignment.extend_from_slice(first_stdout);
+    assignment.extend_from_slice(RETRY_PROMPT_ERRORS.as_bytes());
+    for error in errors {
+        assignment.extend_from_slice(error.as_bytes());
+        assignment.push(b'\n');
+    }
+    assignment.extend_from_slice(RETRY_PROMPT_END.as_bytes());
+    assignment
+}
+
+fn complete_schema_validation_errors(
+    stdout: &[u8],
+    schema: &Value,
+    legacy_schema: Option<&OutputSchema>,
+) -> Vec<String> {
+    let value = match locate_stdout_value(stdout) {
+        Ok(value) => value,
+        Err(error) => return vec![error],
+    };
+    let validator = match compile_full_schema(schema) {
+        Ok(validator) => validator,
+        Err(error) => return vec![format!("full_output_schema is invalid: {error}")],
+    };
+    let mut errors = validator
+        .iter_errors(&value)
+        .map(|error| {
+            format!(
+                "instance {}: {} (schema {})",
+                error.instance_path(),
+                error,
+                error.schema_path()
+            )
+        })
+        .collect::<Vec<_>>();
+    if let Some(legacy_schema) = legacy_schema {
+        match value.as_object() {
+            Some(object) => {
+                if let Err(error) = required_key_conformance(object, legacy_schema) {
+                    errors.push(format!("legacy output_schema: {error}"));
+                }
+            }
+            None => errors.push("legacy output_schema: stdout JSON must be an object".to_owned()),
+        }
+    }
+    errors
+}
+
+// Retained as a small unit-test oracle for the legacy implementation tests;
+// production complete-schema validation uses the full JSON Schema validator.
+#[allow(dead_code)]
 fn strip_option(token: &str, option: &str) -> Option<Option<String>> {
     if token == option {
         return Some(None);
@@ -571,6 +966,7 @@ fn run_dagu_graph(
             command: worker.command.clone(),
             args: worker.args.clone(),
             output_schema: worker.output_schema.clone(),
+            full_output_schema: worker.full_output_schema.clone(),
             stdin_path: path_to_string(&stdin_path),
             stdout_path: path_to_string(&worker_dir.join("stdout")),
             stderr_path: path_to_string(&worker_dir.join("stderr")),
@@ -632,7 +1028,7 @@ fn run_dagu_graph(
     start_result?;
     if conformance_failed {
         return Err(CollectorError::Failed(
-            "one or more workers did not satisfy their declared output_schema; inspect summary.json"
+            "one or more workers did not satisfy their declared output contract; inspect summary.json"
                 .to_owned(),
         ));
     }
@@ -722,18 +1118,30 @@ fn emit_graph_yaml(
         yaml.push_str(&yaml_double_quoted(engine));
         yaml.push('\n');
         yaml.push_str("      args:\n");
-        let mut args = vec![
-            "stdin-exec".to_owned(),
-            "--stdin-file".to_owned(),
-            worker.stdin_path.clone(),
-            "--exit-mode".to_owned(),
-            "sidecar".to_owned(),
-            "--sidecar-file".to_owned(),
-            worker.sidecar_path.clone(),
-            "--".to_owned(),
-            worker.command.clone(),
-        ];
-        args.extend(worker.args.iter().cloned());
+        let mut args = if worker.full_output_schema.is_some() {
+            vec![
+                "fan-out-worker".to_owned(),
+                "--capture-dir".to_owned(),
+                capture_dir.clone(),
+                "--worker-index".to_owned(),
+                index.to_string(),
+            ]
+        } else {
+            vec![
+                "stdin-exec".to_owned(),
+                "--stdin-file".to_owned(),
+                worker.stdin_path.clone(),
+                "--exit-mode".to_owned(),
+                "sidecar".to_owned(),
+                "--sidecar-file".to_owned(),
+                worker.sidecar_path.clone(),
+                "--".to_owned(),
+                worker.command.clone(),
+            ]
+        };
+        if worker.full_output_schema.is_none() {
+            args.extend(worker.args.iter().cloned());
+        }
         for arg in args {
             yaml.push_str("        - ");
             yaml.push_str(&yaml_double_quoted(&arg));
@@ -889,7 +1297,7 @@ fn summary_from_spec(
     started_only: bool,
 ) -> Result<Vec<FanOutWorkerResult>, CollectorError> {
     let mut results = Vec::new();
-    for worker in &spec.workers {
+    for (worker_index, worker) in spec.workers.iter().enumerate() {
         if started_only && !worker_started(worker) {
             continue;
         }
@@ -905,13 +1313,31 @@ fn summary_from_spec(
         if !stderr_path.exists() {
             let _ = fs::write(stderr_path, b"");
         }
-        let (status, conformance_error) = match &worker.output_schema {
-            Some(schema) => match evaluate_output_conformance(stdout_path, schema) {
-                Ok(()) => (Some(ContractStatus::Succeeded), None),
-                Err(error) => (Some(ContractStatus::Failed), Some(error)),
-            },
-            None => (None, None),
-        };
+        let (status, conformance_error, selected_attempt, attempts_path) =
+            if worker.full_output_schema.is_some() {
+                match evaluate_full_contract(worker) {
+                    Ok(selected) => (
+                        Some(ContractStatus::Succeeded),
+                        None,
+                        Some(Some(selected)),
+                        Some(format!("{worker_index}/{ATTEMPTS_FILE}")),
+                    ),
+                    Err(error) => (
+                        Some(ContractStatus::Failed),
+                        Some(error),
+                        Some(None),
+                        Some(format!("{worker_index}/{ATTEMPTS_FILE}")),
+                    ),
+                }
+            } else {
+                match &worker.output_schema {
+                    Some(schema) => match evaluate_output_conformance(stdout_path, schema) {
+                        Ok(()) => (Some(ContractStatus::Succeeded), None, None, None),
+                        Err(error) => (Some(ContractStatus::Failed), Some(error), None, None),
+                    },
+                    None => (None, None, None, None),
+                }
+            };
         results.push(FanOutWorkerResult {
             command: worker.command.clone(),
             args: worker.args.clone(),
@@ -920,9 +1346,151 @@ fn summary_from_spec(
             stderr_path: worker.stderr_path.clone(),
             status,
             conformance_error,
+            attempts_path,
+            selected_attempt,
         });
     }
     Ok(results)
+}
+
+fn evaluate_full_contract(worker: &FanOutSpecWorker) -> Result<u32, String> {
+    let worker_dir = Path::new(&worker.stdout_path)
+        .parent()
+        .ok_or_else(|| "complete-schema worker has no capture directory".to_owned())?;
+    let attempts_path = worker_dir.join(ATTEMPTS_FILE);
+    let manifest: AttemptsManifest = serde_json::from_slice(
+        &fs::read(&attempts_path)
+            .map_err(|error| format!("could not read attempts manifest: {error}"))?,
+    )
+    .map_err(|error| format!("attempts manifest is malformed: {error}"))?;
+    if manifest.schema_version != "1" {
+        return Err(format!(
+            "attempts manifest schema_version must be \"1\", got {:?}",
+            manifest.schema_version
+        ));
+    }
+    if manifest.attempts.is_empty() || manifest.attempts.len() > MAX_FULL_SCHEMA_ATTEMPTS as usize {
+        return Err(format!(
+            "attempts manifest must contain between 1 and {MAX_FULL_SCHEMA_ATTEMPTS} attempts"
+        ));
+    }
+    let mut selected_bytes = None;
+    for (position, attempt) in manifest.attempts.iter().enumerate() {
+        let expected_number = position as u32 + 1;
+        if attempt.number != expected_number {
+            return Err(format!(
+                "attempts manifest numbers must be consecutive starting at 1 (expected {expected_number}, got {})",
+                attempt.number
+            ));
+        }
+        let attempt_dir = worker_dir.join("attempts").join(attempt.number.to_string());
+        let stdout = fs::read(attempt_dir.join("stdout")).map_err(|error| {
+            format!("could not read attempt {} stdout: {error}", attempt.number)
+        })?;
+        let stderr = fs::read(attempt_dir.join("stderr")).map_err(|error| {
+            format!("could not read attempt {} stderr: {error}", attempt.number)
+        })?;
+        if attempt.stdout_sha256 != sha256_digest(&stdout) {
+            return Err(format!(
+                "attempt {} stdout digest does not match raw bytes",
+                attempt.number
+            ));
+        }
+        if attempt.stderr_sha256 != sha256_digest(&stderr) {
+            return Err(format!(
+                "attempt {} stderr digest does not match raw bytes",
+                attempt.number
+            ));
+        }
+        let errors = complete_schema_validation_errors(
+            &stdout,
+            worker
+                .full_output_schema
+                .as_ref()
+                .expect("full contract checked before evaluation"),
+            worker.output_schema.as_ref(),
+        );
+        if errors != attempt.validation_errors {
+            return Err(format!(
+                "attempt {} validation_errors do not match deterministic validation",
+                attempt.number
+            ));
+        }
+        if manifest.selected_attempt == Some(attempt.number) {
+            if !errors.is_empty() {
+                return Err(format!(
+                    "selected attempt {} is not schema-conforming: {}",
+                    attempt.number,
+                    errors.join("; ")
+                ));
+            }
+            selected_bytes = Some((stdout, stderr));
+        }
+    }
+    if manifest.exhausted {
+        if manifest.attempts.len() != MAX_FULL_SCHEMA_ATTEMPTS as usize {
+            return Err(format!(
+                "exhausted attempts manifest must contain exactly {MAX_FULL_SCHEMA_ATTEMPTS} attempts"
+            ));
+        }
+        if manifest
+            .attempts
+            .iter()
+            .any(|attempt| attempt.validation_errors.is_empty())
+        {
+            return Err("exhausted attempts manifest contains a conforming attempt".to_owned());
+        }
+    } else {
+        let Some(selected) = manifest.selected_attempt else {
+            return Err("non-exhausted attempts manifest must select an attempt".to_owned());
+        };
+        if selected as usize != manifest.attempts.len() {
+            return Err(
+                "selected attempt must be the final captured attempt when not exhausted".to_owned(),
+            );
+        }
+    }
+
+    match (
+        manifest.selected_attempt,
+        manifest.exhausted,
+        selected_bytes,
+    ) {
+        (Some(number), false, Some((stdout, stderr))) => {
+            let compatibility_stdout = fs::read(&worker.stdout_path)
+                .map_err(|error| format!("could not read selected stdout: {error}"))?;
+            let compatibility_stderr = fs::read(&worker.stderr_path)
+                .map_err(|error| format!("could not read selected stderr: {error}"))?;
+            if compatibility_stdout != stdout || compatibility_stderr != stderr {
+                return Err(format!(
+                    "selected attempt {number} does not match compatibility stdout/stderr"
+                ));
+            }
+            Ok(number)
+        }
+        (None, true, None) => {
+            let details = manifest
+                .attempts
+                .iter()
+                .map(|attempt| {
+                    if attempt.validation_errors.is_empty() {
+                        format!("attempt {}: no validation error recorded", attempt.number)
+                    } else {
+                        format!(
+                            "attempt {}: {}",
+                            attempt.number,
+                            attempt.validation_errors.join("; ")
+                        )
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" | ");
+            Err(format!(
+                "full output schema conformance exhausted after {MAX_FULL_SCHEMA_ATTEMPTS} attempts: {details}"
+            ))
+        }
+        _ => Err("attempts manifest selected_attempt/exhausted fields are inconsistent".to_owned()),
+    }
 }
 
 fn read_sidecar_exit(path: &str) -> Option<i32> {
@@ -936,6 +1504,13 @@ fn evaluate_output_conformance(stdout_path: &Path, schema: &OutputSchema) -> Res
     let bytes = fs::read(stdout_path)
         .map_err(|error| format!("could not read captured stdout: {error}"))?;
     let object = locate_stdout_object(&bytes)?;
+    required_key_conformance(&object, schema)
+}
+
+fn required_key_conformance(
+    object: &Map<String, Value>,
+    schema: &OutputSchema,
+) -> Result<(), String> {
     let missing = schema
         .required
         .iter()
@@ -952,13 +1527,11 @@ fn evaluate_output_conformance(stdout_path: &Path, schema: &OutputSchema) -> Res
     }
 }
 
-fn locate_stdout_object(bytes: &[u8]) -> Result<Map<String, Value>, String> {
-    if let Ok(value) = serde_json::from_slice::<Value>(bytes) {
-        return value
-            .as_object()
-            .cloned()
-            .ok_or_else(|| "stdout JSON must be an object".to_owned());
-    }
+fn locate_stdout_value(bytes: &[u8]) -> Result<Value, String> {
+    let bare_error = match serde_json::from_slice::<Value>(bytes) {
+        Ok(value) => return Ok(value),
+        Err(error) => error,
+    };
 
     let text = std::str::from_utf8(bytes)
         .map_err(|error| format!("stdout is not valid UTF-8: {error}"))?;
@@ -970,9 +1543,9 @@ fn locate_stdout_object(bytes: &[u8]) -> Result<Map<String, Value>, String> {
         .collect::<Vec<_>>();
     let opening = match openings.as_slice() {
         [] => {
-            return Err(
-                "stdout is not a bare JSON object and contains no JSON fenced block".to_owned(),
-            )
+            return Err(format!(
+                "stdout bare JSON is malformed: {bare_error}; stdout contains no JSON fenced block"
+            ))
         }
         [opening] => *opening,
         _ => return Err("stdout contains multiple JSON fenced blocks".to_owned()),
@@ -984,12 +1557,20 @@ fn locate_stdout_object(bytes: &[u8]) -> Result<Map<String, Value>, String> {
         .find_map(|(index, line)| (line.trim() == "```").then_some(index))
         .ok_or_else(|| "stdout JSON fenced block is not closed".to_owned())?;
     let raw = lines[opening + 1..closing].join("\n");
-    let value: Value = serde_json::from_str(&raw)
-        .map_err(|error| format!("stdout JSON fenced block is malformed: {error}"))?;
-    value
-        .as_object()
-        .cloned()
-        .ok_or_else(|| "stdout JSON fenced block must contain an object".to_owned())
+    serde_json::from_str(&raw)
+        .map_err(|error| format!("stdout JSON fenced block is malformed: {error}"))
+}
+
+fn locate_stdout_object(bytes: &[u8]) -> Result<Map<String, Value>, String> {
+    let value = locate_stdout_value(bytes)?;
+    if let Some(object) = value.as_object() {
+        return Ok(object.clone());
+    }
+    if serde_json::from_slice::<Value>(bytes).is_ok() {
+        Err("stdout JSON must be an object".to_owned())
+    } else {
+        Err("stdout JSON fenced block must contain an object".to_owned())
+    }
 }
 
 fn write_summary_json(
@@ -1055,6 +1636,7 @@ mod tests {
     #[test]
     fn worker_json_rejects_malformed_output_schemas() {
         for raw in [
+            r#"{"command":"echo","args":[],"full_output_schema":null}"#,
             r#"{"command":"echo","args":[],"output_schema":{}}"#,
             r#"{"command":"echo","args":[],"output_schema":{"required":[]}}"#,
             r#"{"command":"echo","args":[],"output_schema":{"required":[""]}}"#,
@@ -1066,10 +1648,141 @@ mod tests {
         }
     }
 
+    fn full_review_schema(axis: &str, author: &str) -> Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["axis", "author", "result", "findings"],
+            "properties": {
+                "axis": {"type": "string", "const": axis},
+                "author": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["name", "kind"],
+                    "properties": {
+                        "name": {"type": "string", "const": author},
+                        "kind": {"type": "string", "enum": ["human", "agent", "script"]}
+                    }
+                },
+                "result": {"type": "string", "enum": ["pass", "fail"]},
+                "findings": {"type": "string"}
+            },
+            "oneOf": [
+                {"properties": {"result": {"const": "pass"}, "findings": {"const": ""}}},
+                {"properties": {"result": {"const": "fail"}, "findings": {"type": "string", "minLength": 1}}}
+            ]
+        })
+    }
+
+    #[test]
+    fn full_schema_checks_assignment_constants_enums_types_and_relation() {
+        let schema = full_review_schema("axis-a", "reviewer-a");
+        let valid = json!({
+            "axis": "axis-a",
+            "author": {"name": "reviewer-a", "kind": "agent"},
+            "result": "pass",
+            "findings": ""
+        });
+        assert!(complete_schema_validation_errors(
+            &serde_json::to_vec(&valid).expect("valid JSON"),
+            &schema,
+            None,
+        )
+        .is_empty());
+        for invalid in [
+            json!({"axis":"axis-b","author":{"name":"reviewer-a","kind":"agent"},"result":"pass","findings":""}),
+            json!({"axis":"axis-a","author":{"name":"reviewer-b","kind":"agent"},"result":"pass","findings":""}),
+            json!({"axis":"axis-a","author":{"name":"reviewer-a","kind":"agent"},"result":"maybe","findings":""}),
+            json!({"axis":"axis-a","author":{"name":"reviewer-a","kind":"agent"},"result":"pass","findings":"not empty"}),
+            json!({"axis":"axis-a","author":{"name":"reviewer-a","kind":"agent"},"result":"fail","findings":[]}),
+            json!({"axis":"axis-a","author":{"name":"reviewer-a","kind":"agent","extra":true},"result":"pass","findings":""}),
+        ] {
+            let errors = complete_schema_validation_errors(
+                &serde_json::to_vec(&invalid).expect("invalid JSON"),
+                &schema,
+                None,
+            );
+            assert!(
+                !errors.is_empty(),
+                "accepted invalid full review output: {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn full_schema_validates_all_declared_json_schema_constraints() {
+        let schema = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "values"],
+            "properties": {
+                "code": {"type": "string", "pattern": "^ok-[0-9]+$"},
+                "values": {
+                    "type": "array",
+                    "minItems": 2,
+                    "uniqueItems": true,
+                    "items": {"type": "integer", "minimum": 1}
+                }
+            }
+        });
+        let valid = br#"{"code":"ok-7","values":[1,2]}"#;
+        assert!(complete_schema_validation_errors(valid, &schema, None).is_empty());
+        let invalid = br#"{"code":"bad","values":[1,1],"extra":true}"#;
+        let errors = complete_schema_validation_errors(invalid, &schema, None);
+        assert!(!errors.is_empty());
+        assert!(errors.iter().any(|error| error.contains("pattern")));
+        assert!(errors.iter().any(|error| error.contains("unique")));
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("Additional properties")));
+    }
+
+    #[test]
+    fn full_schema_retry_limit_is_fixed_at_one() {
+        let schema = full_review_schema("axis-a", "reviewer-a");
+        for wrapper in [
+            json!({"schema": schema.clone(), "retry_limit": 2}),
+            json!({"schema": schema.clone(), "retry_limit": 1, "extra": true}),
+            json!({"retry_limit": 2, "type": "object"}),
+        ] {
+            let raw = json!({
+                "command": "echo",
+                "args": [],
+                "full_output_schema": wrapper,
+            })
+            .to_string();
+            let error = parse_worker_cli_json(&raw).expect_err("malformed retry wrapper");
+            assert!(
+                error.to_string().contains("retry_limit") || error.to_string().contains("wrapper"),
+                "{error}"
+            );
+        }
+
+        let raw = json!({
+            "command": "echo",
+            "args": [],
+            "full_output_schema": {"schema": schema}
+        })
+        .to_string();
+        let error = parse_worker_cli_json(&raw).expect_err("wrapper must declare retry_limit");
+        assert!(error.to_string().contains("retry_limit"), "{error}");
+    }
+
     #[test]
     fn worker_json_unknown_field_fails() {
         let raw = r#"{"command":"echo","args":["hello"],"extra":true}"#;
         assert!(parse_worker_cli_json(raw).is_err());
+        for field in [
+            "output_contract",
+            "output_schema_full",
+            "review_output_schema",
+        ] {
+            let raw = format!(r#"{{"command":"echo","args":[],"{field}":{{}}}}"#);
+            assert!(
+                parse_worker_cli_json(&raw).is_err(),
+                "accepted alias {field}"
+            );
+        }
     }
 
     #[test]
@@ -1255,6 +1968,7 @@ mod tests {
             args: Vec::new(),
             preamble: None,
             output_schema: None,
+            full_output_schema: None,
         };
         assert_eq!(
             bound_worker_payload(&worker, "/tmp/artifacts", None),
@@ -1279,6 +1993,7 @@ mod tests {
             args: Vec::new(),
             preamble: None,
             output_schema: None,
+            full_output_schema: None,
         };
         let records = vec![
             json!({"id": "ctx-old", "kind": "kind-a", "data": {"rev": "1"}}),
@@ -1317,6 +2032,7 @@ mod tests {
             args: Vec::new(),
             preamble: Some("role".to_owned()),
             output_schema: None,
+            full_output_schema: None,
         };
         assert_eq!(
             bound_worker_payload(&worker, "quoted/\"root\\tail", None),
@@ -1354,6 +2070,13 @@ mod tests {
         )
         .expect("fenced object");
         assert!(fenced.contains_key("result"));
+
+        let trailing =
+            locate_stdout_object(br#"{"axis":"a"}}"#).expect_err("trailing brace must fail");
+        assert!(
+            trailing.contains("trailing characters"),
+            "retry error must preserve the exact bare-JSON parser diagnostic: {trailing}"
+        );
 
         for stdout in [
             b"prose {\"axis\":\"a\"}".as_slice(),
@@ -1427,6 +2150,7 @@ mod tests {
                 command: "echo".to_owned(),
                 args: vec!["hi".to_owned()],
                 output_schema: None,
+                full_output_schema: None,
                 stdin_path: "/tmp/stdin".to_owned(),
                 stdout_path: "/tmp/0/stdout".to_owned(),
                 stderr_path: "/tmp/0/stderr".to_owned(),
@@ -1460,6 +2184,7 @@ mod tests {
                     command: "echo".to_owned(),
                     args: vec!["hi".to_owned()],
                     output_schema: None,
+                    full_output_schema: None,
                     stdin_path: "/tmp/0/stdin".to_owned(),
                     stdout_path: "/tmp/0/stdout".to_owned(),
                     stderr_path: "/tmp/0/stderr".to_owned(),
@@ -1469,6 +2194,7 @@ mod tests {
                     command: "cat".to_owned(),
                     args: vec!["-".to_owned()],
                     output_schema: None,
+                    full_output_schema: None,
                     stdin_path: "/tmp/1/stdin".to_owned(),
                     stdout_path: "/tmp/1/stdout".to_owned(),
                     stderr_path: "/tmp/1/stderr".to_owned(),
@@ -1515,6 +2241,7 @@ mod tests {
                 command: "sh".to_owned(),
                 args: vec!["-c".to_owned(), "exit 3".to_owned()],
                 output_schema: None,
+                full_output_schema: None,
                 stdin_path: path_to_string(&worker_dir.join("stdin")),
                 stdout_path: path_to_string(&stdout),
                 stderr_path: path_to_string(&stderr),

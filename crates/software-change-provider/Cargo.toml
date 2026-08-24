@@ -18,7 +18,7 @@ loop-core = { path = "../loop-core" }
 bookends-check = { path = "../bookends-check" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 
 [dev-dependencies]
 loop-integrations = { path = "../loop-integrations" }
-sha2 = "0.10"

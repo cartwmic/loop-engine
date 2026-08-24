@@ -4,9 +4,11 @@
 //! errors use exit 1, and a successfully written result uses exit 0.
 
 mod artifacts;
+mod checkpoint;
 mod config;
 mod dagu;
 mod evidence;
+mod finding_ledger;
 mod gates;
 mod overlay;
 mod protocol;
@@ -60,6 +62,37 @@ fn run() -> i32 {
                 Err(error) => {
                     eprintln!("data-dump failed: {error}");
                     1
+                }
+            };
+        }
+        Some(command) if command == "checkpoint" => {
+            let rest = match args
+                .map(|token| token.into_string())
+                .collect::<Result<Vec<String>, _>>()
+            {
+                Ok(rest) => rest,
+                Err(_) => {
+                    eprintln!("checkpoint arguments must be valid UTF-8");
+                    return 2;
+                }
+            };
+            return match parse_checkpoint_args(&rest) {
+                Ok(parsed) => match checkpoint::create(
+                    parsed.phase,
+                    &parsed.artifact_root,
+                    &parsed.working_directory,
+                ) {
+                    Ok(result) => write_json(&result),
+                    Err(error) => {
+                        eprintln!("checkpoint failed: {error}");
+                        1
+                    }
+                },
+                Err(error) => {
+                    eprintln!(
+                        "{error}; usage: software-change checkpoint --phase implementation|validation --artifact-root ABS --working-directory ABS"
+                    );
+                    2
                 }
             };
         }
@@ -154,7 +187,7 @@ fn run_protocol() -> i32 {
 
 fn provider_help() -> i32 {
     println!(
-        "software-change\n\nUsage:\n  software-change < stdin\n  software-change data-dump DIR\n  software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--max-active N]\n  software-change --help | -h\n  software-change --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nData:\n  data-dump  materialize embedded provider data under DIR\n\nPlan graph:\n  run-plan-graph  requires --working-directory ABS (one existing driver-selected directory for every task and summarizer; no Git/worktree management) and executes plan.json as a Dagu type:graph (--max-active N; omitted means {MAX_CONCURRENCY} ordinary tasks) with a mandatory summarizer"
+        "software-change\n\nUsage:\n  software-change < stdin\n  software-change data-dump DIR\n  software-change checkpoint --phase implementation|validation --artifact-root ABS --working-directory ABS\n  software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--max-active N]\n  software-change --help | -h\n  software-change --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nData:\n  data-dump  materialize embedded provider data under DIR\n\nPlan graph:\n  run-plan-graph  requires --working-directory ABS (one existing driver-selected directory for every task and summarizer; no Git/worktree management) and executes plan.json as a Dagu type:graph (--max-active N; omitted means {MAX_CONCURRENCY} ordinary tasks) with a mandatory summarizer"
     );
     0
 }
@@ -176,6 +209,95 @@ struct StdinExecArgs {
     sidecar_file: Option<PathBuf>,
     command: String,
     args: Vec<String>,
+}
+
+struct CheckpointArgs {
+    phase: checkpoint::CheckpointPhase,
+    artifact_root: PathBuf,
+    working_directory: PathBuf,
+}
+
+fn parse_checkpoint_args(args: &[String]) -> Result<CheckpointArgs, String> {
+    let mut phase = None;
+    let mut artifact_root = None;
+    let mut working_directory = None;
+    let mut index = 0;
+    while index < args.len() {
+        let token = &args[index];
+        let (name, inline) = if let Some(value) = token.strip_prefix("--phase=") {
+            ("--phase", Some(value.to_owned()))
+        } else if token == "--phase" {
+            ("--phase", None)
+        } else if let Some(value) = token.strip_prefix("--artifact-root=") {
+            ("--artifact-root", Some(value.to_owned()))
+        } else if token == "--artifact-root" {
+            ("--artifact-root", None)
+        } else if let Some(value) = token.strip_prefix("--working-directory=") {
+            ("--working-directory", Some(value.to_owned()))
+        } else if token == "--working-directory" {
+            ("--working-directory", None)
+        } else {
+            return Err(format!("unknown or unexpected argument `{token}`"));
+        };
+        let value = match inline {
+            Some(value) => value,
+            None => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| format!("option `{name}` requires a value"))?;
+                if value.starts_with('-') && value != "-" {
+                    return Err(format!("option `{name}` requires a value"));
+                }
+                index += 1;
+                value.clone()
+            }
+        };
+        match name {
+            "--phase" => {
+                if phase.is_some() {
+                    return Err("`--phase` may be supplied at most once".to_owned());
+                }
+                phase = Some(checkpoint::CheckpointPhase::parse(&value)?);
+            }
+            "--artifact-root" => {
+                if artifact_root.is_some() {
+                    return Err("`--artifact-root` may be supplied at most once".to_owned());
+                }
+                artifact_root = Some(PathBuf::from(value));
+            }
+            "--working-directory" => {
+                if working_directory.is_some() {
+                    return Err("`--working-directory` may be supplied at most once".to_owned());
+                }
+                working_directory = Some(PathBuf::from(value));
+            }
+            _ => unreachable!(),
+        }
+        index += 1;
+    }
+    let phase = phase.ok_or_else(|| "missing required option `--phase`".to_owned())?;
+    let artifact_root =
+        artifact_root.ok_or_else(|| "missing required option `--artifact-root`".to_owned())?;
+    let working_directory = working_directory
+        .ok_or_else(|| "missing required option `--working-directory`".to_owned())?;
+    for (label, path) in [
+        ("--artifact-root", &artifact_root),
+        ("--working-directory", &working_directory),
+    ] {
+        if !path.is_absolute() {
+            return Err(format!("{label} must be an absolute directory"));
+        }
+        let metadata = fs::metadata(path)
+            .map_err(|error| format!("{label} must be an existing directory: {error}"))?;
+        if !metadata.is_dir() {
+            return Err(format!("{label} must be an existing directory"));
+        }
+    }
+    Ok(CheckpointArgs {
+        phase,
+        artifact_root,
+        working_directory,
+    })
 }
 
 fn parse_stdin_exec_args(args: &[String]) -> Result<StdinExecArgs, String> {

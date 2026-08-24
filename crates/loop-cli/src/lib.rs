@@ -163,6 +163,10 @@ pub enum ParsedRequest {
     FanOutJoin {
         capture_dir: PathBuf,
     },
+    FanOutWorker {
+        capture_dir: PathBuf,
+        worker_index: usize,
+    },
     PreviewBindings {
         options: CliOptions,
         operand: Option<String>,
@@ -244,6 +248,7 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
     let mut exit_mode = None;
     let mut sidecar_file = None;
     let mut capture_dir = None;
+    let mut worker_index = None;
 
     let mut index = 0;
     while index < args.len() {
@@ -657,6 +662,20 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
                     index += 1;
                     continue;
                 }
+                "--worker-index" => {
+                    worker_index = Some(next_option_value(args, &mut index, token)?);
+                    continue;
+                }
+                value if value.starts_with("--worker-index=") => {
+                    worker_index = Some(
+                        value
+                            .strip_prefix("--worker-index=")
+                            .expect("checked prefix")
+                            .to_owned(),
+                    );
+                    index += 1;
+                    continue;
+                }
                 value if value.starts_with('-') => {
                     return Err(CliError::new(
                         "invalid-invocation",
@@ -700,6 +719,7 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
         }
         reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
         reject_capture_dir_option(&capture_dir)?;
+        reject_worker_index_option(&worker_index)?;
         return parse_wait_invocation(options, positionals);
     }
 
@@ -711,6 +731,7 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
             ));
         }
         reject_capture_dir_option(&capture_dir)?;
+        reject_worker_index_option(&worker_index)?;
         return parse_stdin_exec(stdin_file, exit_mode, sidecar_file, positionals);
     }
 
@@ -722,12 +743,25 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
             ));
         }
         reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
+        reject_worker_index_option(&worker_index)?;
         return parse_fan_out_join(capture_dir, positionals);
+    }
+
+    if command_name == "fan-out-worker" {
+        if let Some(option) = fan_out_tokens.first() {
+            return Err(CliError::new(
+                "invalid-invocation",
+                format!("unknown option `{option}`"),
+            ));
+        }
+        reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
+        return parse_fan_out_worker(capture_dir, worker_index, positionals);
     }
 
     if command_name == "fan-out" {
         reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
         reject_capture_dir_option(&capture_dir)?;
+        reject_worker_index_option(&worker_index)?;
         fan_out_tokens.extend(positionals);
         return parse_fan_out_request(options, fan_out_tokens);
     }
@@ -741,6 +775,7 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
         }
         reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
         reject_capture_dir_option(&capture_dir)?;
+        reject_worker_index_option(&worker_index)?;
         reject_unrelated_options(
             "preview-bindings",
             provider,
@@ -770,6 +805,7 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
         }
         reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
         reject_capture_dir_option(&capture_dir)?;
+        reject_worker_index_option(&worker_index)?;
         reject_unrelated_options(
             "invocation-progress",
             provider,
@@ -798,6 +834,7 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
     }
     reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
     reject_capture_dir_option(&capture_dir)?;
+    reject_worker_index_option(&worker_index)?;
 
     let command = parse_primary_command(
         &command_name,
@@ -1117,6 +1154,16 @@ fn reject_capture_dir_option(capture_dir: &Option<String>) -> Result<(), CliErro
     Ok(())
 }
 
+fn reject_worker_index_option(worker_index: &Option<String>) -> Result<(), CliError> {
+    if worker_index.is_some() {
+        return Err(CliError::new(
+            "invalid-invocation",
+            "unknown option `--worker-index`",
+        ));
+    }
+    Ok(())
+}
+
 fn reject_stdin_exec_options(
     stdin_file: &Option<String>,
     exit_mode: &Option<String>,
@@ -1193,6 +1240,10 @@ where
         ParsedRequest::StdinExec { args } => execute_stdin_exec(args),
         ParsedRequest::FanOut { options, args } => execute_fan_out(options, args),
         ParsedRequest::FanOutJoin { capture_dir } => execute_fan_out_join(capture_dir),
+        ParsedRequest::FanOutWorker {
+            capture_dir,
+            worker_index,
+        } => execute_fan_out_worker(capture_dir, worker_index),
         ParsedRequest::PreviewBindings { options, operand } => {
             execute_preview_bindings(options, operand)
         }
@@ -1222,6 +1273,26 @@ fn parse_fan_out_join(
     })
 }
 
+fn parse_fan_out_worker(
+    capture_dir: Option<String>,
+    worker_index: Option<String>,
+    positionals: Vec<String>,
+) -> Result<ParsedRequest, CliError> {
+    let capture_dir = required(capture_dir, "--capture-dir path")?;
+    let worker_index = required(worker_index, "--worker-index")?;
+    let worker_index = worker_index.parse::<usize>().map_err(|_| {
+        CliError::new(
+            "invalid-invocation",
+            format!("--worker-index must be a non-negative integer, got `{worker_index}`"),
+        )
+    })?;
+    ensure_no_positionals(&positionals, "fan-out-worker")?;
+    Ok(ParsedRequest::FanOutWorker {
+        capture_dir: PathBuf::from(capture_dir),
+        worker_index,
+    })
+}
+
 fn execute_fan_out_join(capture_dir: PathBuf) -> Execution {
     match fan_out::run_fan_out_join(&capture_dir) {
         Ok(()) => Execution {
@@ -1238,6 +1309,26 @@ fn execute_fan_out_join(capture_dir: PathBuf) -> Execution {
             exit_code: EXIT_ERROR,
             stdout: String::new(),
             stderr: format!("fan-out-join error: {message}\n"),
+        },
+    }
+}
+
+fn execute_fan_out_worker(capture_dir: PathBuf, worker_index: usize) -> Execution {
+    match fan_out::run_fan_out_worker(&capture_dir, worker_index) {
+        Ok(()) => Execution {
+            exit_code: EXIT_COMPLETED,
+            stdout: String::new(),
+            stderr: String::new(),
+        },
+        Err(fan_out::CollectorError::Invalid(message)) => Execution {
+            exit_code: EXIT_INVALID_INVOCATION,
+            stdout: String::new(),
+            stderr: format!("fan-out-worker error: {message}\n"),
+        },
+        Err(fan_out::CollectorError::Failed(message)) => Execution {
+            exit_code: EXIT_ERROR,
+            stdout: String::new(),
+            stderr: format!("fan-out-worker error: {message}\n"),
         },
     }
 }
@@ -2560,7 +2651,7 @@ fn usage(command: Option<&str>) -> String {
                 + "database. Callers do not supply Dagu YAML.\n\n"
                 + "Options:\n"
                 + "  --worker JSON            Strict nested worker object with command, args, and\n"
-                + "                           optional preamble and output_schema; repeatable\n"
+                + "                           optional preamble, legacy output_schema, or full_output_schema; repeatable\n"
                 + "  --instructions FILE      Shared instructions file for ad hoc mode.\n"
                 + "                           Bound mode reads the invoke packet from stdin instead.\n"
                 + "  --max-active N           At most N worker steps run at once. Omitted means\n"

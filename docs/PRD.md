@@ -3,7 +3,7 @@
 **Status:** Living
 **Target:** v0.1
 **Compatibility:** Clean-slate successor; no v1 compatibility requirement
-**Amended:** 2026-08-16
+**Amended:** 2026-08-22
 
 ## 1. Product
 
@@ -63,7 +63,7 @@ v0.1 does not provide:
 
 - agent or LLM execution;
 - background workers, scheduling, or timers;
-- automatic retries;
+- automatic workflow retries (bounded same-worker output conformance is a work-slot contract, not workflow progression);
 - claims, leases, heartbeats, or execution attempts;
 - distributed execution;
 - multi-user collaboration or authorization;
@@ -523,17 +523,17 @@ The `loop-engine` binary also exposes `fan-out`. It is **not** a ninth primary o
 loop-engine fan-out [--worker JSON]... [--instructions FILE] [--max-active N]
 ```
 
-Workers come only from repeated `--worker` JSON objects. The nested object is strict: required `command` (string) and `args` (array of strings), plus optional `preamble` (string) and optional `output_schema` whose complete supported shape is `{"required":["key", ...]}` with at least one unique, non-empty top-level key name. Unknown or malformed fields are rejected. This nested type does not change the outer work-slot binding type, which remains exactly `{command,args}`. Zero `--worker` entries fail closed.
+Workers come only from repeated `--worker` JSON objects. The nested object is strict: required `command` (string) and `args` (array of strings), plus optional `preamble` (string), legacy `output_schema` whose complete supported shape is `{"required":["key", ...]}`, and additive `full_output_schema` containing a complete JSON Schema (or the explicit `{schema, retry_limit: 1}` wrapper). The legacy contract remains required-key presence only; the full contract's retry limit is fixed at one. Unknown or malformed fields are rejected. This nested type does not change the outer work-slot binding type, which remains exactly `{command,args}`. Zero `--worker` entries fail closed.
 
 Bound mode reads the existing invoke packet (including `capture_dir`, plus optional `context` when the slot declared nonempty `stdin_context_kinds`) and rejects `--instructions`. Bound stdin does not dump `instruction_body`. A worker without `preamble` receives compact JSON with exactly absolute `artifact_root` plus one LF, and `context` when the invoke packet carried it, including when it declares only `output_schema`. A worker with `preamble` receives, in exact order: the decoded preamble bytes unchanged; exactly one appended LF only when those bytes do not already end in LF; compact JSON serialized from `artifact_root` plus `context` when forwarded; one LF; literal `---\n\n`; and no instruction body. The location object contains no `capture_dir` or duplicate run/slot identity. Digest input and gate matching do not change. Ad hoc mode has no invoke packet: with `preamble` it emits the preamble, the same conditional LF, literal `---\n\n`, then unchanged instruction-file bytes, with no fabricated artifact-root context; without `preamble`, instruction bytes remain byte-identical. Ad-hoc success prints exactly one JSON summary object (`dagu --quiet`). Re-invoke uses a new capture directory and a new home; prior captures are not overwritten.
 
-Bound mode honors `packet.capture_dir`: it writes per-worker stdout/stderr under `0/`, `1/`, … plus `summary.json` in argv order, `fan-out-spec.json`, and the locator. Worker steps `w<index>` start concurrently with no inter-worker depends, no `continue_on`, and no `retry_policy`. Omitted `--max-active` emits no `max_active_steps` (uncapped concurrent worker start); `--max-active N` emits `max_active_steps` N so at most N worker steps run at once. Each is `action:exec` of hidden `stdin-exec --exit-mode sidecar`. Join depends on every worker, runs hidden `fan-out-join --capture-dir ABS`, writes `summary.json`, invokes no model, and does not append `review-evidence`. If the graph stops before join, the facade still writes `summary.json` from spec and sidecars. For a worker with `output_schema`, fan-out accepts stdout only when the entire whitespace-trimmed output is a JSON object or when otherwise arbitrary prose contains exactly one fenced `json` block whose content is a JSON object. Missing, malformed, non-object, or ambiguous candidates fail conformance. Fan-out checks only presence of the declared top-level keys and does not interpret names or values. Every worker summary entry contains `command`, `args`, the true process `exit_code`, `stdout_path`, and `stderr_path`. A worker with `output_schema` additionally receives `status` (`succeeded` or `failed`) and receives `conformance_error` only on failure. Both new fields are omitted for workers without `output_schema`, preserving the uncontracted summary shape. Any conformance failure is a facade failure, but `summary.json` is written first so the driver can inspect it and captured stdout before stderr. Ordinary inner nonzero exits are recorded in the sidecar and do not fail the facade. Overlay success is not a review pass. Exit 0 and mechanical key presence do not establish semantic deliverable validity.
+Bound mode honors `packet.capture_dir`: it writes per-worker stdout/stderr under `0/`, `1/`, … plus `summary.json` in argv order, `fan-out-spec.json`, and the locator. Worker steps `w<index>` start concurrently with no inter-worker depends, no `continue_on`, and no `retry_policy`. Omitted `--max-active` emits no `max_active_steps` (uncapped concurrent worker start); `--max-active N` emits `max_active_steps` N so at most N worker steps run at once. Each is `action:exec` of hidden `stdin-exec --exit-mode sidecar`, except a `full_output_schema` step, whose hidden runner owns the bounded same-worker retry. Join depends on every worker, runs hidden `fan-out-join --capture-dir ABS`, writes `summary.json`, invokes no model, and does not append `review-evidence`. If the graph stops before join, the facade still writes `summary.json` from spec and sidecars. For a worker with `output_schema`, fan-out accepts stdout only when the entire whitespace-trimmed output is a JSON object or when otherwise arbitrary prose contains exactly one fenced `json` block whose content is a JSON object. Missing, malformed, non-object, or ambiguous candidates fail conformance. Fan-out checks only presence of the declared top-level keys and does not interpret names or values. For `full_output_schema`, it validates the extracted JSON candidate against every declared JSON Schema constraint, including assignment-specific constants when the caller declares them, and retries the identical command, args, preamble, assignment, and model once. The retry keeps the original assignment and appends the unchanged first stdout plus exact validation errors, asking only for a schema-conforming reconsideration. Raw bytes for each attempt live at `<worker>/attempts/<N>/stdout` and `stderr`; `<worker>/attempts.json` records schema version `1`, numbered SHA-256 digests, exact validation errors, selected attempt, and exhaustion. On success compatibility stdout/stderr contain the selected attempt; the summary names relative `attempts.json` and `selected_attempt`, which is `null` on exhaustion. Every worker summary entry contains `command`, `args`, the true process `exit_code`, `stdout_path`, and `stderr_path`. A contracted worker additionally receives `status` (`succeeded` or `failed`) and receives `conformance_error` only on failure. Both new fields are omitted for workers without a contract, preserving the uncontracted summary shape. Any conformance failure is a facade failure, but `summary.json` is written first so the driver can inspect it and captured stdout before stderr. Ordinary inner nonzero exits are recorded in the sidecar and do not fail the facade. Overlay success is not a review pass. Exit 0 and mechanical key presence do not establish semantic deliverable validity.
 
 The facade waitpids `dagu start` for the whole graph and on success prints a JSON summary that is not a run-state envelope and not a provider evidence schema. It encodes no harness. `--help` omits hidden `fan-out-join`.
 
 When a work slot is frozen to `loop-engine` args that begin with `fan-out`, the legal start remains `loop-engine invoke RUN_ID SLOT_ID`. `invoke` execs that frozen argv with the existing worker packet on stdin. Callers who want reviewers put `--worker` JSON objects in those frozen binding args at start after `preview-bindings` and lock-in; bindings cannot be patched mid-run. A usable review binding is caller-supplied `--worker` objects frozen at `start` — not a stock zero-worker `fan-out` argv.
 
-`software-change run-plan-graph` is an argv command of the software-change provider binary, not an engine operation. Its required invocation is `software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--max-active N]`; ABS must be one existing absolute directory selected and maintained by the driver. Omission, relative paths, nonexistent paths, and non-directories are rejected before any Dagu graph worker starts. Bound mode honors `packet.capture_dir` (per-task `{task_id}/` plus `summary.json`). The selected directory is the graph-level cwd for every plan task and the summarizer; the provider does not require Git or create, discover, select, reuse, merge, clean, or otherwise manage or suggest worktrees. Hidden `software-change stdin-exec` uses the same argv as `loop-engine stdin-exec` and is omitted from `--help`/`--version`; plan-graph uses `--exit-mode propagate` only. Each invocation emits a local Dagu `type:graph` under `capture_dir/dagu-home/` (fail-fast, no `continue_on`) and waitpids `dagu start`. Omitted `--max-active` remains `max_active_steps` 4 ordinary plan tasks; `--max-active N` is at most N ordinary plan tasks. While overlay is `running`, drivers poll `show` for overlay and `invocation-progress` for inner graph/traces; `dagu status` / `dagu history` remain the underlying surface, not the driver-facing path. Overlay remains the facade process exit. A mandatory `summarizer` still runs after those tasks and is the sole writer of `artifact_root/implementation-report.json`. When `--task-worker` is omitted, the default inner worker is `pi --print --no-skills --no-extensions`; it does not pass `--no-context-files` and does not pass `--tools`, so bash, edit, write, and AGENTS.md remain available. That omitted-`--task-worker` fallback does not add `-e` paths. Bound implement is opt-in; shipped software-change profiles omit `work_slot_bindings`.
+`software-change run-plan-graph` is an argv command of the software-change provider binary, not an engine operation. Its required invocation is `software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--max-active N]`; ABS must be one existing absolute directory selected and maintained by the driver. Omission, relative paths, nonexistent paths, and non-directories are rejected before any Dagu graph worker starts. Bound mode honors `packet.capture_dir` (per-task `{task_id}/` plus `summary.json`). The selected directory is the graph-level cwd for every plan task and the summarizer; a successful implementation graph must be a Git working tree so the provider can write its implementation checkpoint, but the provider does not create, discover, select, reuse, merge, clean, or otherwise manage or suggest worktrees. Hidden `software-change stdin-exec` uses the same argv as `loop-engine stdin-exec` and is omitted from `--help`/`--version`; plan-graph uses `--exit-mode propagate` only. Each invocation emits a local Dagu `type:graph` under `capture_dir/dagu-home/` (fail-fast, no `continue_on`) and waitpids `dagu start`. Omitted `--max-active` remains `max_active_steps` 4 ordinary plan tasks; `--max-active N` is at most N ordinary plan tasks. While overlay is `running`, drivers poll `show` for overlay and `invocation-progress` for inner graph/traces; `dagu status` / `dagu history` remain the underlying surface, not the driver-facing path. Overlay remains the facade process exit. A mandatory `summarizer` still runs after those tasks and is the sole writer of `artifact_root/implementation-report.json`. When `--task-worker` is omitted, the default inner worker is `pi --print --no-skills --no-extensions`; it does not pass `--no-context-files` and does not pass `--tools`, so bash, edit, write, and AGENTS.md remain available. That omitted-`--task-worker` fallback does not add `-e` paths. Bound implement is opt-in; shipped software-change profiles omit `work_slot_bindings`.
 
 ### Non-run-state CLI: `preview-bindings`
 
@@ -543,7 +543,7 @@ The `loop-engine` binary also exposes `preview-bindings` with `fan-out` and `inv
 loop-engine preview-bindings [JSON|@FILE]
 ```
 
-Omitted operand reads stdin; `@FILE` reads that path; otherwise the operand is inline JSON. Accepted JSON is a `work_slot_bindings` map or an object containing that key. The outer binding remains strict `{command,args}`. It expands strict nested `--task-worker` `{command,args}` objects and extended nested fan-out `--worker` objects, reporting `has_preamble` and `output_schema.required` without exposing preamble text. It lists detected `--model` values and warns on unpinned `pi`, PATH versus absolute command, missing `--no-skills`, `--no-extensions` without `-e`, and the 30-second invoke default. Missing `--no-extensions` is not a required warning. It also reports a `dagu` PATH check (minimum 2.14.0): ok with resolved path and version, or a warning naming the path or that PATH lookup found nothing. Warnings alone exit 0; `fan-out` and `software-change run-plan-graph` execute fail-close on the same condition before any worker spawn. Isolated Dagu home is `capture_dir/dagu-home/` with locator `capture_dir/dagu-locator.json` keys `dagu_home`, `dag_name`, and `run_name` (`fanout-<capture-dir-name>` for fan-out, `plan-graph-<capture-dir-name>` for plan-graph). loop-engine and software-change release packages do not contain, vendor, or install `dagu`. It exits nonzero on malformed input and when any `fan-out` binding has zero `--worker` entries. `start` still does not parse `fan-out` argv; preview is the fail-closed check for that freeze.
+Omitted operand reads stdin; `@FILE` reads that path; otherwise the operand is inline JSON. Accepted JSON is a `work_slot_bindings` map or an object containing that key. The outer binding remains strict `{command,args}`. It expands strict nested `--task-worker` `{command,args}` objects and extended nested fan-out `--worker` objects, reporting `has_preamble`, legacy `output_schema.required`, and `full_output_schema` without exposing preamble text. It lists detected `--model` values and warns on unpinned `pi`, PATH versus absolute command, missing `--no-skills`, `--no-extensions` without `-e`, and the 30-second invoke default. Missing `--no-extensions` is not a required warning. It also reports a `dagu` PATH check (minimum 2.14.0): ok with resolved path and version, or a warning naming the path or that PATH lookup found nothing. Warnings alone exit 0; `fan-out` and `software-change run-plan-graph` execute fail-close on the same condition before any worker spawn. Isolated Dagu home is `capture_dir/dagu-home/` with locator `capture_dir/dagu-locator.json` keys `dagu_home`, `dag_name`, and `run_name` (`fanout-<capture-dir-name>` for fan-out, `plan-graph-<capture-dir-name>` for plan-graph). loop-engine and software-change release packages do not contain, vendor, or install `dagu`. It exits nonzero on malformed input and when any `fan-out` binding has zero `--worker` entries. `start` still does not parse `fan-out` argv; preview is the fail-closed check for that freeze.
 
 ## 7. Operation Outcomes
 
@@ -1493,6 +1493,34 @@ durable `allow` and `deny` results.
 - Status: live
 - Coverage: e2e/journey
 
+### LE-91: A software-change run freezes an `operating_context` naming its operators, environment, threat boundary, accepted risks, and outside obligations. Fresh draft, review, implementation, and validation actors inspect that same context; accepted risks never waive a stated outcome or outside obligation, and excluded hostile or multi-tenant scenarios are not silently added to the trusted sole-operator boundary.
+- Status: live
+- Coverage: e2e/journey
+
+### LE-92: Reviewer output is candidate evidence only. The driver owns the append-only current `finding-ledger` disposition and routing view: an advisory classification proposal is inert until accepted or edited, and only current accepted unresolved implementation findings explicitly routed to a task or review axis affect packets or later gates; raw candidate sources and driver decisions remain distinguishable.
+- Status: live
+- Coverage: e2e/journey
+
+### LE-93: A bound reviewer using `full_output_schema` receives at most one correction opportunity under the identical frozen command, arguments, assignment, preamble, and model. The first and second raw stdout/stderr attempts, exact validation errors, selected attempt, and exhaustion state remain retrievable; a second invalid response fails closed without a substitute reviewer or semantic verdict.
+- Status: live
+- Coverage: e2e/journey
+
+### LE-94: `implementation-ready` cannot advance from an author-declared implementation report alone. The provider-generated implementation checkpoint independently binds the report and document revisions to the current repository HEAD, index, status, tracked/non-ignored-untracked entries, and content identity, and the public checkpoint command is read-only with respect to Git.
+- Status: live
+- Coverage: e2e/journey
+
+### LE-95: After implementation or final validation proof is accepted, changing repository HEAD, adding or deleting a tracked or non-ignored untracked entry, renaming an entry, changing status or type, or changing tracked bytes makes the affected checkpoint stale and refuses later checked progression until proof is regenerated. The checked transition that admits implementation to validation records the exact checkpoint under content-addressed `implementation-proof-history/`, whether or not implementation review is configured. Validation requires the sole accepted entry for the current report revision to match the current report, document revisions, and repository state. Appending later context, overwriting history bytes, or replacing both mutable checkpoint files cannot admit bytes that transition did not accept.
+- Status: live
+- Coverage: e2e/journey
+
+### LE-96: When validation exposes a stale repository checkpoint, the validation draft and review states expose a check-free `revise-implementation` recovery route. Final approval requires regenerated implementation and validation checkpoints for the same current tree plus passing review evidence; validation cannot silently replace implementation proof.
+- Status: live
+- Coverage: e2e/journey
+
+### LE-97: Plan and validation review require observable user or operator outcomes, pragmatic black-box proof or a concrete impracticality reason, and semantic inspection of every new or changed Bookends citation. A final validation report maps requirements to observable proof, and passing activity or a matching requirement token alone is not treated as completion.
+- Status: live
+- Coverage: e2e/journey
+
 ## 15. Complexity Guardrails
 
 v0.1 deliberately targets:
@@ -1502,7 +1530,7 @@ provider semantic operations: 2
 primary caller operations:    8
 active states per run:        1
 background services:          0
-automatic retries:            0
+automatic workflow retries:    0
 provider registry APIs:       0
 compatibility APIs:           0
 creation/admission checks:    0
@@ -1544,7 +1572,6 @@ The design should leave room for, but v0.1 should not implement without demonstr
 ```text
 cloud API/service
 executor assignments and active attempts
-checkpoints
 user questions and approvals
 live steering interruption
 claims and leases

@@ -1185,15 +1185,15 @@ mod tests {
     }
 
     #[test]
-    fn review_slot_forwards_accepted_findings_and_draft_slot_omits_context() {
+    fn review_slot_forwards_finding_ledger_and_draft_slot_omits_context() {
         let artifacts = tempfile::tempdir().expect("temp artifact root");
         let artifact_root = artifacts.path().to_string_lossy().into_owned();
         let draft = WorkSlot::new("intent-draft", "explore", "intent-ready");
         let review = WorkSlot::new("intent-review", "intent-review", "approved")
-            .with_stdin_context_kinds(vec!["accepted-findings".to_owned()]);
+            .with_stdin_context_kinds(vec!["finding-ledger".to_owned()]);
         let findings = record(
             "accepted-1",
-            "accepted-findings",
+            "finding-ledger",
             1,
             json!({
                 "gate": "intent-review",

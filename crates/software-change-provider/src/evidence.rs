@@ -12,8 +12,6 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::workflow::ACCEPTED_FINDINGS_KIND;
-
 const REVIEW_EVIDENCE_KIND: &str = "review-evidence";
 const AUTHOR_KINDS: &[&str] = &["human", "agent", "script"];
 
@@ -119,6 +117,10 @@ pub(crate) struct EvidenceEvaluation {
     pub(crate) diagnostics: Vec<AxisDiagnostic>,
     pub(crate) informational: Vec<AxisDiagnostic>,
     pub(crate) inert_records: Vec<InertEvidence>,
+    /// Current conforming failing evidence keyed by policy and exact finding
+    /// text. This is a mechanical projection for finding-ledger set
+    /// agreement; it is not a semantic interpretation of the text.
+    pub(crate) failing_findings: BTreeSet<(String, String)>,
 }
 
 impl EvidenceEvaluation {
@@ -138,171 +140,15 @@ impl EvidenceEvaluation {
         &self.inert_records
     }
 
+    pub(crate) fn failing_findings(&self) -> &BTreeSet<(String, String)> {
+        &self.failing_findings
+    }
+
     /// Convert details to JSON without exposing serialization concerns to the
     /// pipeline itself.  T06 may embed this value in its deny response.
     pub(crate) fn details_value(&self) -> Value {
         serde_json::to_value(self).expect("evidence result is serializable")
     }
-}
-
-/// Presence/shape outcome for one gate's accepted-findings record.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum AcceptedFindingsStatus {
-    Present,
-    Missing,
-    Malformed {
-        reasons: Vec<String>,
-    },
-    Stale {
-        record_revision: String,
-        current_revision: String,
-    },
-}
-
-/// Result of the accepted-findings presence check. Contents, quiet/progress/
-/// thrash, and provenance are not judged.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct AcceptedFindingsEvaluation {
-    pub(crate) status: AcceptedFindingsStatus,
-}
-
-impl AcceptedFindingsEvaluation {
-    pub(crate) fn is_satisfied(&self) -> bool {
-        matches!(self.status, AcceptedFindingsStatus::Present)
-    }
-
-    pub(crate) fn details_value(&self) -> Value {
-        match &self.status {
-            AcceptedFindingsStatus::Present => serde_json::json!({"status": "present"}),
-            AcceptedFindingsStatus::Missing => serde_json::json!({"status": "missing"}),
-            AcceptedFindingsStatus::Malformed { reasons } => {
-                serde_json::json!({"status": "malformed", "reasons": reasons})
-            }
-            AcceptedFindingsStatus::Stale {
-                record_revision,
-                current_revision,
-            } => serde_json::json!({
-                "status": "stale",
-                "record_revision": record_revision,
-                "current_revision": current_revision
-            }),
-        }
-    }
-}
-
-struct WellFormedAcceptedFindings {
-    subject_revision: String,
-}
-
-/// Require a well-formed current-revision accepted-findings record for `gate`.
-///
-/// Attribution is by `data.gate`. Malformed attributable records block until a
-/// later well-formed record for the same gate supersedes them. Optional `author`
-/// is ignored. Statements are not judged.
-pub(crate) fn evaluate_accepted_findings(
-    context: &[ContextRecord],
-    gate: &str,
-    subject: &str,
-    current_revision: &str,
-) -> AcceptedFindingsEvaluation {
-    let mut malformed_reasons: Option<Vec<String>> = None;
-    let mut latest_well_formed: Option<WellFormedAcceptedFindings> = None;
-
-    for record in context {
-        if record.kind != ACCEPTED_FINDINGS_KIND {
-            continue;
-        }
-        let Some(data) = record.data.as_object() else {
-            continue;
-        };
-        let Some(record_gate) = data.get("gate").and_then(Value::as_str) else {
-            continue;
-        };
-        if record_gate != gate {
-            continue;
-        }
-        match parse_well_formed_accepted_findings(data, subject) {
-            Ok(parsed) => {
-                malformed_reasons = None;
-                latest_well_formed = Some(parsed);
-            }
-            Err(reasons) => {
-                malformed_reasons = Some(reasons);
-                latest_well_formed = None;
-            }
-        }
-    }
-
-    if let Some(reasons) = malformed_reasons {
-        return AcceptedFindingsEvaluation {
-            status: AcceptedFindingsStatus::Malformed { reasons },
-        };
-    }
-    match latest_well_formed {
-        None => AcceptedFindingsEvaluation {
-            status: AcceptedFindingsStatus::Missing,
-        },
-        Some(parsed) if parsed.subject_revision != current_revision => AcceptedFindingsEvaluation {
-            status: AcceptedFindingsStatus::Stale {
-                record_revision: parsed.subject_revision,
-                current_revision: current_revision.to_owned(),
-            },
-        },
-        Some(_) => AcceptedFindingsEvaluation {
-            status: AcceptedFindingsStatus::Present,
-        },
-    }
-}
-
-fn parse_well_formed_accepted_findings(
-    data: &Map<String, Value>,
-    expected_subject: &str,
-) -> Result<WellFormedAcceptedFindings, Vec<String>> {
-    let mut reasons = Vec::new();
-    let _gate = non_empty_string(data, "gate", &mut reasons);
-    let subject = non_empty_string(data, "subject", &mut reasons);
-    let subject_revision = non_empty_string(data, "subject_revision", &mut reasons);
-    match data.get("findings") {
-        Some(Value::Array(items)) => {
-            for (index, item) in items.iter().enumerate() {
-                let Some(object) = item.as_object() else {
-                    reasons.push(format!("`findings[{index}]` must be an object"));
-                    continue;
-                };
-                match object.get("policy_id").and_then(Value::as_str) {
-                    Some(id) if !id.is_empty() => {}
-                    Some(_) => {
-                        reasons.push(format!("`findings[{index}].policy_id` must not be empty"))
-                    }
-                    None => reasons.push(format!(
-                        "missing or non-string `findings[{index}].policy_id`"
-                    )),
-                }
-                match object.get("statement").and_then(Value::as_str) {
-                    Some(statement) if !statement.is_empty() => {}
-                    Some(_) => {
-                        reasons.push(format!("`findings[{index}].statement` must not be empty"))
-                    }
-                    None => reasons.push(format!(
-                        "missing or non-string `findings[{index}].statement`"
-                    )),
-                }
-            }
-        }
-        Some(_) => reasons.push("`findings` must be an array".to_owned()),
-        None => reasons.push("missing `findings`".to_owned()),
-    }
-    if subject.as_deref() != Some(expected_subject) {
-        reasons.push(format!(
-            "`subject` must equal expected subject `{expected_subject}`"
-        ));
-    }
-    if !reasons.is_empty() {
-        return Err(reasons);
-    }
-    Ok(WellFormedAcceptedFindings {
-        subject_revision: subject_revision.expect("revision checked by empty-reasons branch"),
-    })
 }
 
 #[derive(Clone, Debug)]
@@ -403,6 +249,7 @@ pub(crate) fn evaluate_evidence(
     let mut diagnostics = Vec::new();
     let mut informational = Vec::new();
     let mut all_axes_satisfied = true;
+    let mut failing_findings = BTreeSet::new();
 
     // Stages 4–6: latest-wins supersession happened above through the full
     // (axis, subject_revision, author) key.  Judge each axis against current
@@ -447,7 +294,10 @@ pub(crate) fn evaluate_evidence(
                 EvidenceResult::Pass => {
                     pass_authors.insert(record.author.clone());
                 }
-                EvidenceResult::Fail => failed_findings.push(record.findings.clone()),
+                EvidenceResult::Fail => {
+                    failing_findings.insert((axis.clone(), record.findings.clone()));
+                    failed_findings.push(record.findings.clone());
+                }
             }
         }
 
@@ -520,6 +370,7 @@ pub(crate) fn evaluate_evidence(
         diagnostics,
         informational,
         inert_records,
+        failing_findings,
     }
 }
 
@@ -1451,115 +1302,5 @@ mod tests {
         let details = result.details_value();
         assert!(details.get("satisfied").is_some());
         assert!(details.get("diagnostics").is_some());
-    }
-
-    fn accepted_findings_data(gate: &str, subject: &str, revision: &str, findings: Value) -> Value {
-        json!({
-            "gate": gate,
-            "subject": subject,
-            "subject_revision": revision,
-            "findings": findings
-        })
-    }
-
-    fn accepted_record(index: u64, data: Value) -> ContextRecord {
-        ContextRecord::new(
-            format!("accepted-{index}"),
-            crate::workflow::ACCEPTED_FINDINGS_KIND,
-            data,
-            SemanticSequence::new(index),
-            Timestamp::from_unix_millis(index as i64),
-        )
-    }
-
-    #[test]
-    fn empty_findings_array_is_well_formed_current_revision_presence() {
-        let result = evaluate_accepted_findings(
-            &[accepted_record(
-                1,
-                accepted_findings_data(GATE, SUBJECT, "1", json!([])),
-            )],
-            GATE,
-            SUBJECT,
-            "1",
-        );
-        assert!(result.is_satisfied());
-    }
-
-    #[test]
-    fn optional_author_is_ignored_for_presence() {
-        let mut data = accepted_findings_data(GATE, SUBJECT, "1", json!([]));
-        data["author"] = json!({"name": "driver", "kind": "human"});
-        let result = evaluate_accepted_findings(&[accepted_record(1, data)], GATE, SUBJECT, "1");
-        assert!(result.is_satisfied());
-    }
-
-    #[test]
-    fn missing_record_is_not_satisfied() {
-        let result = evaluate_accepted_findings(&[], GATE, SUBJECT, "1");
-        assert!(!result.is_satisfied());
-        assert_eq!(result.status, AcceptedFindingsStatus::Missing);
-    }
-
-    #[test]
-    fn malformed_attributable_record_blocks_until_later_well_formed_supersedes() {
-        let mut malformed = accepted_findings_data(GATE, SUBJECT, "1", json!("not-an-array"));
-        let blocked = evaluate_accepted_findings(
-            &[accepted_record(1, malformed.clone())],
-            GATE,
-            SUBJECT,
-            "1",
-        );
-        assert!(!blocked.is_satisfied());
-        assert!(matches!(
-            blocked.status,
-            AcceptedFindingsStatus::Malformed { .. }
-        ));
-
-        malformed["findings"] = json!([{"policy_id": "axis", "statement": "accepted"}]);
-        let superseded = evaluate_accepted_findings(
-            &[
-                accepted_record(1, accepted_findings_data(GATE, SUBJECT, "1", json!("bad"))),
-                accepted_record(2, malformed),
-            ],
-            GATE,
-            SUBJECT,
-            "1",
-        );
-        assert!(superseded.is_satisfied());
-    }
-
-    #[test]
-    fn other_gate_record_does_not_satisfy_or_block() {
-        let result = evaluate_accepted_findings(
-            &[accepted_record(
-                1,
-                accepted_findings_data("intent-adversarial-review", SUBJECT, "1", json!([])),
-            )],
-            GATE,
-            SUBJECT,
-            "1",
-        );
-        assert_eq!(result.status, AcceptedFindingsStatus::Missing);
-    }
-
-    #[test]
-    fn subject_revision_bump_requires_a_new_current_revision_record() {
-        let result = evaluate_accepted_findings(
-            &[accepted_record(
-                1,
-                accepted_findings_data(GATE, SUBJECT, "old", json!([])),
-            )],
-            GATE,
-            SUBJECT,
-            "new",
-        );
-        assert_eq!(
-            result.status,
-            AcceptedFindingsStatus::Stale {
-                record_revision: "old".to_owned(),
-                current_revision: "new".to_owned(),
-            }
-        );
     }
 }

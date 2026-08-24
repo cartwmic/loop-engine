@@ -34,6 +34,7 @@ omitted, last-hop ``passed`` on the live validation review).
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -126,11 +127,18 @@ STITCHED_HOPS = (
     ("implement", "implementation-ready", "validation"),
     ("validation", "validation-ready", "validation-review"),
 )
+CHECKPOINT_MUTATIONS = ("head", "add", "delete", "rename", "status", "type", "bytes")
+COMPANION_SCENARIO_SUBPATH = Path(
+    "crates/software-change-provider/data/calibration/companions/"
+    "fictional-repo/scripts/production-journey.py"
+)
 
 
 def _review_stdin_kinds(slot_ids: Sequence[str]) -> dict[str, list[str]]:
     return {
-        slot_id: ["accepted-findings"] for slot_id in slot_ids if "-review" in slot_id
+        slot_id: ["finding-ledger"]
+        for slot_id in slot_ids
+        if "-review" in slot_id or slot_id == "implement"
     }
 WORK_SLOT_PROOF = [
     "frozen sparse work_slot_bindings in initial_input",
@@ -153,12 +161,16 @@ DUMMY_WORKER_PROOF = [
     "PATH stub pi default argv --print --no-skills --no-extensions without --no-context-files or --tools",
     "bound fan-out show heartbeat overlay_meaning elapsed remaining capture_dir inner_workers",
     "contracted fan-out exit-0 conformance summary and failed-overlay capture persistence",
+    "same-reviewer invalid-then-valid retry and invalid-twice exhaustion preserve raw attempts",
+    "selected retry attempt links into a driver ledger before review evidence",
     "overrun overlay show/retry and distinct captures",
     "stdin-exec sidecar/propagate, spawn failure, and session directory",
     "bound run-plan-graph inner workers in task order plus capture isolation",
     "graph-level run-plan-graph working_dir reaches every task and summarizer",
     "symlink-selected checkout cwd receipts are filesystem-equivalent and see .git",
     "dummy plan-graph summarizer writes implementation-report.json; ordinary dummy tasks do not",
+    "implementation ledger routing enriches exact tasks, keeps proposal inert, and preserves task stdin envelope",
+    "bound reviewer reads frozen operating_context from artifact_root",
     "overlay-running bound fan-out invocation-progress names invocation capture_dir graph steps; show inner_workers empty",
     "overlay-running bound run-plan-graph invocation-progress names task ids plus summarizer; show inner_workers empty",
     "omitted fan-out yaml has no max_active_steps; omitted run-plan-graph yaml has max_active_steps: 4",
@@ -186,6 +198,86 @@ class JourneyFailure(RuntimeError):
         self.axis = axis
 
 
+def assert_semantic_outcome_proof_contract(
+    plan: Dict[str, Any], validation: Dict[str, Any], scenario_source: str
+) -> None:
+    """Check objective outcome-proof markers at the public journey boundary.
+
+    This is deliberately not a semantic reviewer.  It rejects activity-only
+    reports and token-only citations by requiring the frozen policy's named
+    outcome/proof shape and by resolving each cited scenario to executable
+    public CLI assertions.
+    """
+    objective = plan.get("objective")
+    if not isinstance(objective, str):
+        raise JourneyFailure("plan objective is not a string")
+    objective_text = objective.lower()
+    for term in ("operator", "observable", "black-box", "impracticality"):
+        if term not in objective_text:
+            raise JourneyFailure(
+                f"plan objective omitted required outcome-proof policy term {term!r}"
+            )
+
+    outcome = validation.get("outcome")
+    requirements = validation.get("requirements")
+    if not isinstance(outcome, str) or len(outcome.split()) < 6:
+        raise JourneyFailure("validation outcome is not a named observable outcome")
+    outcome_text = outcome.lower()
+    if "operator" not in outcome_text and "user" not in outcome_text:
+        raise JourneyFailure("validation outcome names neither a user nor an operator")
+    if not any(term in outcome_text for term in ("observe", "reach", "use", "deny", "allow")):
+        raise JourneyFailure("validation outcome has no observable result")
+    if not isinstance(requirements, list) or not requirements:
+        raise JourneyFailure("validation report omitted requirement proof entries")
+
+    citation_prefix = "scripts/production-journey.py::"
+    for index, item in enumerate(requirements):
+        if not isinstance(item, dict):
+            raise JourneyFailure(f"validation requirement {index} is not an object")
+        requirement = item.get("requirement")
+        proof = item.get("proof")
+        if (
+            not isinstance(requirement, str)
+            or len(requirement.split()) < 5
+            or not isinstance(proof, str)
+            or len(proof.split()) < 12
+            or requirement == proof
+        ):
+            raise JourneyFailure(
+                f"validation requirement {index} is activity/token-only rather than outcome proof"
+            )
+        citation_start = proof.find(citation_prefix)
+        if citation_start < 0:
+            raise JourneyFailure(
+                f"validation requirement {index} omitted a public scenario citation"
+            )
+        scenario_start = citation_start + len(citation_prefix)
+        scenario_end = scenario_start
+        while scenario_end < len(proof) and (
+            proof[scenario_end].isalnum() or proof[scenario_end] == "_"
+        ):
+            scenario_end += 1
+        scenario = proof[scenario_start:scenario_end]
+        if not scenario or f"def {scenario}(" not in scenario_source:
+            raise JourneyFailure(
+                f"validation requirement {index} cited an unknown public scenario {scenario!r}"
+            )
+        function_start = scenario_source.index(f"def {scenario}(")
+        function_end = scenario_source.find("\ndef ", function_start + 1)
+        function_source = scenario_source[
+            function_start : function_end if function_end >= 0 else len(scenario_source)
+        ]
+        if "invoke(" not in function_source or "assert " not in function_source:
+            raise JourneyFailure(
+                f"validation requirement {index} cited {scenario} without executable CLI assertions"
+            )
+        proof_text = proof.lower()
+        if not any(term in proof_text for term in ("scenario", "assert", "observes", "denial")):
+            raise JourneyFailure(
+                f"validation requirement {index} proof does not describe observable assertions"
+            )
+
+
 class Journey:
     def __init__(self, args: argparse.Namespace) -> None:
         self.mode = args.mode
@@ -203,6 +295,7 @@ class Journey:
         self.provider_config: Optional[Path] = None
         self.profile_path: Optional[Path] = None
         self.artifact_root: Optional[Path] = None
+        self.repository_root: Optional[Path] = None
         self.work_slot_bindings: Dict[str, Any] = {}
         self.dummy_worker_proof: List[str] = []
         self.engine_boundary_proof: List[str] = []
@@ -354,9 +447,9 @@ class Journey:
         missing = sorted(required.difference(profile))
         if missing:
             raise JourneyFailure(f"high-rigor profile is missing fields: {', '.join(missing)}")
-        if profile.get("config_version") != "high-rigor-6":
+        if profile.get("config_version") != "high-rigor-7":
             raise JourneyFailure(
-                f"journey requires high-rigor-6, got {profile.get('config_version')!r}"
+                f"journey requires high-rigor-7, got {profile.get('config_version')!r}"
             )
         schemas = profile.get("artifact_schemas")
         if not isinstance(schemas, dict) or set(schemas) != set(SUBJECTS):
@@ -907,22 +1000,25 @@ class Journey:
                         axis=axis,
                     )
 
-    def _append_accepted_findings_for(
+    def _append_finding_ledger_for(
         self, run_id: str, gate: str, *, state: str, record_prefix: str = ""
     ) -> None:
         subject = GATE_SUBJECT[gate]
         revision = self._fixture_revision(subject)
-        record_id = f"{record_prefix}accepted-findings-{gate}"
+        record_id = f"{record_prefix}finding-ledger-{gate}"
         data = {
+            "schema_version": "1",
             "gate": gate,
             "subject": subject,
             "subject_revision": revision,
+            "author": {"name": "journey-driver", "kind": "agent"},
+            "repository_state": self._checkpoint_state_for_subject(subject),
             "findings": [],
         }
         record = json.dumps(data, separators=(",", ":"))
         response = self._engine_for(
             run_id,
-            ["append", f"--record-id={record_id}", run_id, "accepted-findings", record],
+            ["append", f"--record-id={record_id}", run_id, "finding-ledger", record],
             state=state,
             event="append",
             axis=gate,
@@ -932,11 +1028,32 @@ class Journey:
         )
         if response.get("result", {}).get("context", {}).get("id") != record_id:
             raise JourneyFailure(
-                f"accepted-findings record ID was changed for {gate}",
+                f"finding-ledger record ID was changed for {gate}",
                 state=state,
                 event="append",
                 axis=gate,
             )
+
+    def _checkpoint_state_for_subject(self, subject: str) -> Optional[str]:
+        if subject in {"intent.json", "design.json", "plan.json"}:
+            return None
+        assert self.artifact_root is not None
+        checkpoint_name = (
+            "implementation-checkpoint.json"
+            if subject == "implementation-report.json"
+            else "validation-checkpoint.json"
+        )
+        checkpoint = self._read_json(
+            self.artifact_root / checkpoint_name, f"{subject} checkpoint"
+        )
+        state = checkpoint.get("repository", {}).get("state_sha256")
+        if not isinstance(state, str) or not state:
+            raise JourneyFailure(
+                f"{checkpoint_name} omitted repository.state_sha256",
+                state=self.state,
+                event="append",
+            )
+        return state
 
     def _expect_denial_for(
         self, run_id: str, state: str, event: str, axis: str, code: str
@@ -989,13 +1106,13 @@ class Journey:
         # bookends:LE-45 — the provider validates evidence; it does not author a review.
         # bookends:LE-52 — prior evidence and denial lineage are carried into the next check.
         first_denial = self._expect_denial_for(
-            run_id, state, event, gate, "software-change-review-incomplete"
+            run_id, state, event, gate, "software-change-finding-ledger-invalid"
         )
         self._append_evidence_for(
             run_id, gate, state=state, record_prefix=record_prefix
         )
         second_denial = self._expect_denial_for(
-            run_id, state, event, gate, "software-change-accepted-findings-missing"
+            run_id, state, event, gate, "software-change-finding-ledger-invalid"
         )
         prior_denials = second_denial.get("details", {}).get("prior_denials", [])
         if not isinstance(prior_denials, list) or not any(
@@ -1008,7 +1125,7 @@ class Journey:
                 event=event,
             )
         # bookends:LE-31 — the second checked request observes the prior denial in durable order.
-        self._append_accepted_findings_for(
+        self._append_finding_ledger_for(
             run_id, gate, state=state, record_prefix=record_prefix
         )
         final = self._expect_allow_for(run_id, state, event, target)
@@ -1203,6 +1320,543 @@ class Journey:
             raise JourneyFailure(f"fixture {subject} has no revision")
         return revision
 
+    def _prepare_real_repository(self) -> Path:
+        """Create the driver-selected repository used by checkpoint gates."""
+        assert self.run_dir is not None
+        repository = self.run_dir / "checkpoint-repository"
+        repository.mkdir(parents=True, exist_ok=True)
+        for name, contents in (
+            ("tracked.txt", "tracked baseline\n"),
+            ("second.txt", "second baseline\n"),
+            ("status.txt", "status baseline\n"),
+            ("rename.txt", "rename baseline\n"),
+            ("delete.txt", "delete baseline\n"),
+            ("bytes.txt", "bytes baseline\n"),
+        ):
+            (repository / name).write_text(contents, encoding="utf-8")
+        for git_args in (
+            ["init", "-q"],
+            ["config", "user.name", "software-change journey"],
+            ["config", "user.email", "journey@example.invalid"],
+            ["config", "commit.gpgsign", "false"],
+            ["add", "-A"],
+            ["commit", "-qm", "checkpoint baseline"],
+        ):
+            completed = subprocess.run(
+                ["git", *git_args],
+                cwd=repository,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if completed.returncode != 0:
+                raise JourneyFailure(
+                    f"checkpoint repository git {' '.join(git_args)} failed: "
+                    f"{completed.stderr.strip() or completed.stdout.strip()}"
+                )
+        self.repository_root = repository
+        self.command_cwd = repository
+        return repository
+
+    def _create_checkpoint(self, phase: str) -> Dict[str, Any]:
+        assert self.artifact_root is not None
+        assert self.repository_root is not None
+        return self._create_checkpoint_at(
+            self.provider, phase, self.artifact_root, self.repository_root
+        )
+
+    @staticmethod
+    def _repository_snapshot(repository: Path) -> tuple[Any, ...]:
+        """Capture the public Git/worktree boundary before and after checkpoint CLI."""
+        environment = {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}
+
+        def git_bytes(*args: str) -> bytes:
+            completed = subprocess.run(
+                ["git", *args],
+                cwd=repository,
+                env=environment,
+                capture_output=True,
+                check=False,
+            )
+            if completed.returncode != 0:
+                raise JourneyFailure(
+                    f"checkpoint snapshot git {' '.join(args)} failed: "
+                    f"{completed.stderr.decode('utf-8', 'replace')}"
+                )
+            return completed.stdout
+
+        tracked = set(filter(None, git_bytes("ls-files", "-z", "--cached").split(b"\0")))
+        untracked = set(
+            filter(
+                None,
+                git_bytes(
+                    "ls-files", "-z", "--others", "--exclude-standard"
+                ).split(b"\0"),
+            )
+        )
+        entries = []
+        for raw_path in sorted(tracked | untracked):
+            try:
+                relative = raw_path.decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise JourneyFailure(
+                    f"checkpoint snapshot found a non-UTF-8 path: {raw_path!r}"
+                ) from error
+            path = repository / relative
+            if path.is_symlink():
+                entry = (
+                    relative,
+                    raw_path in tracked,
+                    "symlink",
+                    path.stat().st_mode & 0o777,
+                    os.readlink(path),
+                )
+            elif path.is_file():
+                entry = (
+                    relative,
+                    raw_path in tracked,
+                    "regular",
+                    path.stat().st_mode & 0o777,
+                    path.read_bytes(),
+                )
+            elif not path.exists():
+                entry = (relative, raw_path in tracked, "missing", None, None)
+            else:
+                entry = (
+                    relative,
+                    raw_path in tracked,
+                    "other",
+                    path.stat().st_mode & 0o777,
+                    None,
+                )
+            entries.append(entry)
+        return (
+            git_bytes("rev-parse", "HEAD"),
+            git_bytes("ls-files", "--stage", "-z"),
+            git_bytes(
+                "status",
+                "--porcelain=v2",
+                "-z",
+                "--untracked-files=all",
+                "--ignored=no",
+            ),
+            tuple(entries),
+        )
+
+    @staticmethod
+    def _create_checkpoint_at(
+        provider: Path, phase: str, artifact_root: Path, repository: Path
+    ) -> Dict[str, Any]:
+        before = Journey._repository_snapshot(repository)
+        completed = subprocess.run(
+            [
+                str(provider),
+                "checkpoint",
+                "--phase",
+                phase,
+                "--artifact-root",
+                str(artifact_root),
+                "--working-directory",
+                str(repository),
+            ],
+            cwd=repository,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise JourneyFailure(
+                f"checkpoint {phase} failed: "
+                f"{completed.stderr.strip() or completed.stdout.strip()}"
+            )
+        after = Journey._repository_snapshot(repository)
+        if after != before:
+            raise JourneyFailure(
+                f"checkpoint {phase} CLI mutated the Git/worktree boundary"
+            )
+        try:
+            result = json.loads(completed.stdout)
+        except json.JSONDecodeError as error:
+            raise JourneyFailure(
+                f"checkpoint {phase} returned non-JSON: {completed.stdout!r}"
+            ) from error
+        if not isinstance(result, dict):
+            raise JourneyFailure(f"checkpoint {phase} result is not an object: {result}")
+        repository_identity = result.get("repository")
+        if not isinstance(repository_identity, dict) or not repository_identity.get("state_sha256"):
+            raise JourneyFailure(f"checkpoint {phase} omitted repository identity: {result}")
+        Journey._assert_checkpoint_payload(result, phase, artifact_root, repository)
+        return result
+
+    @staticmethod
+    def _assert_checkpoint_payload(
+        checkpoint: Dict[str, Any],
+        phase: str,
+        artifact_root: Path,
+        repository: Path,
+    ) -> None:
+        expected_files = {"schema_version", "phase", "report", "documents", "repository"}
+        if set(checkpoint) != expected_files or checkpoint.get("schema_version") != "1":
+            raise JourneyFailure(f"checkpoint {phase} did not use the closed schema: {checkpoint}")
+        report = checkpoint.get("report")
+        documents = checkpoint.get("documents")
+        repository_value = checkpoint.get("repository")
+        if not isinstance(report, dict) or set(report) != {"file", "revision", "sha256"}:
+            raise JourneyFailure(f"checkpoint {phase} report fields changed: {checkpoint}")
+        if not isinstance(documents, dict) or set(documents) != {
+            "intent_revision",
+            "design_revision",
+            "plan_revision",
+        }:
+            raise JourneyFailure(f"checkpoint {phase} document fields changed: {checkpoint}")
+        if not isinstance(repository_value, dict) or set(repository_value) != {
+            "head",
+            "index_sha256",
+            "status_sha256",
+            "entries",
+            "state_sha256",
+        }:
+            raise JourneyFailure(f"checkpoint {phase} repository fields changed: {checkpoint}")
+        expected_report = (
+            "implementation-report.json"
+            if phase == "implementation"
+            else "validation-report.json"
+        )
+        if checkpoint.get("phase") != phase or report.get("file") != expected_report:
+            raise JourneyFailure(f"checkpoint {phase} named the wrong phase/report: {checkpoint}")
+        def is_digest(value: Any) -> bool:
+            return (
+                isinstance(value, str)
+                and len(value) == 71
+                and value.startswith("sha256:")
+                and all(character in "0123456789abcdef" for character in value[7:])
+            )
+        for name in ("sha256",):
+            if not is_digest(report.get(name)):
+                raise JourneyFailure(f"checkpoint {phase} report digest is malformed: {checkpoint}")
+        for name in ("index_sha256", "status_sha256", "state_sha256"):
+            if not is_digest(repository_value.get(name)):
+                raise JourneyFailure(f"checkpoint {phase} repository digest is malformed: {checkpoint}")
+        head = repository_value.get("head")
+        if not isinstance(head, str) or len(head) not in (40, 64) or any(
+            character not in "0123456789abcdef" for character in head
+        ):
+            raise JourneyFailure(f"checkpoint {phase} HEAD identity is malformed: {checkpoint}")
+        report_bytes = (artifact_root / expected_report).read_bytes()
+        if report.get("sha256") != "sha256:" + hashlib.sha256(report_bytes).hexdigest():
+            raise JourneyFailure(f"checkpoint {phase} report digest did not hash report bytes")
+        def git_bytes(*args: str) -> bytes:
+            completed = subprocess.run(
+                ["git", *args],
+                cwd=repository,
+                env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
+                capture_output=True,
+                check=False,
+            )
+            if completed.returncode != 0:
+                raise JourneyFailure(
+                    f"checkpoint {phase} digest source git {' '.join(args)} failed: "
+                    f"{completed.stderr.decode('utf-8', 'replace')}"
+                )
+            return completed.stdout
+        index_bytes = git_bytes("ls-files", "--stage", "-z")
+        status_bytes = git_bytes(
+            "status", "--porcelain=v2", "-z", "--untracked-files=all", "--ignored=no"
+        )
+        if repository_value["index_sha256"] != "sha256:" + hashlib.sha256(index_bytes).hexdigest():
+            raise JourneyFailure(f"checkpoint {phase} index digest source changed")
+        if repository_value["status_sha256"] != "sha256:" + hashlib.sha256(status_bytes).hexdigest():
+            raise JourneyFailure(f"checkpoint {phase} status digest source changed")
+        without_state = {
+            "head": repository_value["head"],
+            "index_sha256": repository_value["index_sha256"],
+            "status_sha256": repository_value["status_sha256"],
+            "entries": repository_value["entries"],
+        }
+        serialized = json.dumps(without_state, separators=(",", ":"), ensure_ascii=False).encode()
+        if repository_value["state_sha256"] != "sha256:" + hashlib.sha256(serialized).hexdigest():
+            raise JourneyFailure(f"checkpoint {phase} state digest source changed")
+        checkpoint_path = artifact_root / (
+            "implementation-checkpoint.json"
+            if phase == "implementation"
+            else "validation-checkpoint.json"
+        )
+        if json.loads(checkpoint_path.read_text(encoding="utf-8")) != checkpoint:
+            raise JourneyFailure(f"checkpoint {phase} CLI output differed from persisted JSON")
+
+    @staticmethod
+    def _checkpoint_case_mutate(repository: Path, mutation: str, round_number: int) -> str:
+        if mutation == "head":
+            path = repository / f"head-{round_number}.txt"
+            path.write_text(f"HEAD mutation {round_number}\n", encoding="utf-8")
+            subprocess.run(["git", "add", path.name], cwd=repository, check=True)
+            subprocess.run(
+                ["git", "commit", "-qm", f"HEAD mutation {round_number}"],
+                cwd=repository,
+                check=True,
+            )
+            return "repository HEAD changed"
+        if mutation == "add":
+            path = repository / f"added-{round_number}.txt"
+            path.write_text(f"untracked addition {round_number}\n", encoding="utf-8")
+            return f"repository entry added at `{path.name}`"
+        if mutation == "delete":
+            path = repository / f"deleted-{round_number}.txt"
+            path.unlink()
+            return f"repository deleted changed at `{path.name}`"
+        if mutation == "rename":
+            old = repository / f"rename-{round_number}.txt"
+            new = repository / f"renamed-{round_number}.txt"
+            subprocess.run(["git", "mv", old.name, new.name], cwd=repository, check=True)
+            return f"repository entry added at `{new.name}`"
+        if mutation == "status":
+            path = repository / f"status-{round_number}.txt"
+            os.chmod(path, 0o755)
+            return f"repository status changed at `{path.name}`"
+        if mutation == "type":
+            path = repository / f"type-{round_number}.txt"
+            path.unlink()
+            path.symlink_to("head-1.txt")
+            return f"repository file type changed at `{path.name}`"
+        if mutation == "bytes":
+            path = repository / f"bytes-{round_number}.txt"
+            path.write_text(f"changed bytes {round_number}\n", encoding="utf-8")
+            return f"repository bytes changed at `{path.name}`"
+        raise JourneyFailure(f"unknown checkpoint mutation {mutation}")
+
+    def _run_checkpoint_case(self, mutation: str) -> None:
+        """Exercise one real repository mutation against both checkpoint gates."""
+        assert self.run_dir is not None
+        assert self.fixture_root is not None
+        case_dir = self.run_dir / "checkpoint-cases" / mutation
+        repository = case_dir / "repository"
+        artifacts = case_dir / "artifacts"
+        profile_path = case_dir / "minimal.json"
+        provider_config = case_dir / "providers.toml"
+        database = case_dir / "loop.sqlite"
+        case_dir.mkdir(parents=True, exist_ok=True)
+        repository.mkdir()
+        artifacts.mkdir()
+        for name, contents in (
+            ("head-1.txt", "head baseline 1\n"),
+            ("head-2.txt", "head baseline 2\n"),
+            ("deleted-1.txt", "delete baseline 1\n"),
+            ("deleted-2.txt", "delete baseline 2\n"),
+            ("rename-1.txt", "rename baseline 1\n"),
+            ("rename-2.txt", "rename baseline 2\n"),
+            ("status-1.txt", "status baseline 1\n"),
+            ("status-2.txt", "status baseline 2\n"),
+            ("type-1.txt", "type baseline 1\n"),
+            ("type-2.txt", "type baseline 2\n"),
+            ("bytes-1.txt", "bytes baseline 1\n"),
+            ("bytes-2.txt", "bytes baseline 2\n"),
+        ):
+            (repository / name).write_text(contents, encoding="utf-8")
+            if name.startswith("status-"):
+                os.chmod(repository / name, 0o644)
+        for git_args in (
+            ["init", "-q"],
+            ["config", "user.name", "software-change journey"],
+            ["config", "user.email", "journey@example.invalid"],
+            ["config", "commit.gpgsign", "false"],
+            ["config", "core.filemode", "true"],
+            ["add", "-A"],
+            ["commit", "-qm", f"{mutation} baseline"],
+        ):
+            completed = subprocess.run(
+                ["git", *git_args],
+                cwd=repository,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if completed.returncode != 0:
+                raise JourneyFailure(
+                    f"{mutation} fixture git {' '.join(git_args)} failed: "
+                    f"{completed.stderr.strip() or completed.stdout.strip()}"
+                )
+        for subject, fixture in SUBJECTS.items():
+            shutil.copy2(self.fixture_root / fixture, artifacts / subject)
+        profile = self._read_json(
+            self.data_root / STITCHED_PROFILE_SUBPATH, f"{mutation} minimal profile"
+        )
+        profile["artifact_root"] = str(artifacts)
+        profile.pop("work_slot_bindings", None)
+        _write_json(profile_path, profile)
+        self._write_scenario_provider_config(provider_config, str(self.provider), [])
+        run_id = f"checkpoint-{mutation}"
+
+        def call(operation: Sequence[str]) -> Dict[str, Any]:
+            return self._scenario_engine_call(database, operation, cwd=repository)
+
+        started = call(
+            [
+                "--config",
+                str(provider_config),
+                "--timeout-ms",
+                "30000",
+                "start",
+                "--id",
+                run_id,
+                "software-change",
+                "@" + str(profile_path),
+                f"checkpoint {mutation}",
+            ]
+        )
+        self._expect_status(started, "completed", event="start", state="explore")
+        for event, target in (
+            ("intent-ready", "design"),
+            ("design-ready", "plan"),
+            ("plan-ready", "implement"),
+        ):
+            response = call(["event", run_id, event])
+            self._expect_status(response, "completed", event=event, state=target)
+            if response.get("result", {}).get("run", {}).get("current_state") != target:
+                raise JourneyFailure(f"{mutation} did not reach {target}: {response}")
+
+        # bookends:LE-94 — a truthful implementation report without the provider-generated checkpoint is rejected on the public event path.
+        report_only = call(["event", run_id, "implementation-ready"])
+        self._expect_status(report_only, "rejected", event="implementation-ready", state="implement")
+        if report_only.get("code") != "software-change-checkpoint-invalid" or "report-only" not in str(report_only.get("details", {}).get("diagnostic", "")):
+            raise JourneyFailure(f"{mutation} report-only completion was not denied: {report_only}")
+
+        self._create_checkpoint_at(self.provider, "implementation", artifacts, repository)
+        expected_implementation = self._checkpoint_case_mutate(repository, mutation, 1)
+        stale_implementation = call(["event", run_id, "implementation-ready"])
+        self._expect_status(stale_implementation, "rejected", event="implementation-ready", state="implement")
+        diagnostic = str(stale_implementation.get("details", {}).get("diagnostic", ""))
+        # bookends:LE-95 — each named HEAD/add/delete/rename/status/type/bytes mutation is named by the stale implementation denial.
+        if expected_implementation not in diagnostic:
+            raise JourneyFailure(
+                f"{mutation} implementation checkpoint denial omitted {expected_implementation!r}: {stale_implementation}"
+            )
+        self._create_checkpoint_at(self.provider, "implementation", artifacts, repository)
+        ready = call(["event", run_id, "implementation-ready"])
+        self._expect_status(ready, "completed", event="implementation-ready", state="implement")
+        if ready.get("result", {}).get("run", {}).get("current_state") != "validation":
+            raise JourneyFailure(f"{mutation} implementation recovery missed validation: {ready}")
+
+        self._create_checkpoint_at(self.provider, "validation", artifacts, repository)
+        validation_ready = call(["event", run_id, "validation-ready"])
+        self._expect_status(validation_ready, "completed", event="validation-ready", state="validation")
+        validation_revision = self._fixture_revision("validation-report.json")
+        evidence = {
+            "gate": "validation-review",
+            "policy_id": "intent-delivered",
+            "result": "pass",
+            "findings": "",
+            "author": {"name": f"checkpoint-reviewer-{mutation}", "kind": "script"},
+            "subject": "validation-report.json",
+            "subject_revision": validation_revision,
+            "config_version": "minimal-6",
+        }
+        evidence_result = call(
+            [
+                "append",
+                f"--record-id={run_id}-evidence-1",
+                run_id,
+                "review-evidence",
+                json.dumps(evidence, separators=(",", ":")),
+            ]
+        )
+        self._expect_status(evidence_result, "completed", event="append", state="validation-review")
+        ledger = {
+            "schema_version": "1",
+            "gate": "validation-review",
+            "subject": "validation-report.json",
+            "subject_revision": validation_revision,
+            "author": {"name": f"checkpoint-driver-{mutation}", "kind": "agent"},
+            "repository_state": self._create_checkpoint_at(
+                self.provider, "validation", artifacts, repository
+            )["repository"]["state_sha256"],
+            "findings": [],
+        }
+        ledger_result = call(
+            [
+                "append",
+                f"--record-id={run_id}-ledger-1",
+                run_id,
+                "finding-ledger",
+                json.dumps(ledger, separators=(",", ":")),
+            ]
+        )
+        self._expect_status(ledger_result, "completed", event="append", state="validation-review")
+
+        expected_validation = self._checkpoint_case_mutate(repository, mutation, 2)
+        stale_validation = call(["event", run_id, "passed"])
+        self._expect_status(stale_validation, "rejected", event="passed", state="validation-review")
+        validation_diagnostic = str(stale_validation.get("details", {}).get("diagnostic", ""))
+        # bookends:LE-95 — the same current passing review evidence cannot rescue a stale validation checkpoint after each named repository-state mutation.
+        if expected_validation not in validation_diagnostic:
+            raise JourneyFailure(
+                f"{mutation} validation checkpoint denial omitted {expected_validation!r}: {stale_validation}"
+            )
+
+        recovery = call(["event", run_id, "revise-implementation"])
+        self._expect_status(recovery, "completed", event="revise-implementation", state="validation-review")
+        if recovery.get("result", {}).get("run", {}).get("current_state") != "implement":
+            raise JourneyFailure(f"{mutation} validation recovery missed implement: {recovery}")
+        implementation_report_path = artifacts / "implementation-report.json"
+        implementation_report = self._read_json(
+            implementation_report_path, f"{mutation} recovered implementation report"
+        )
+        implementation_report["revision"] = (
+            str(implementation_report["revision"]) + "-recovered"
+        )
+        implementation_report_path.write_text(
+            json.dumps(implementation_report, indent=2) + "\n", encoding="utf-8"
+        )
+        self._create_checkpoint_at(self.provider, "implementation", artifacts, repository)
+        implementation_recovered = call(["event", run_id, "implementation-ready"])
+        self._expect_status(implementation_recovered, "completed", event="implementation-ready", state="implement")
+        self._create_checkpoint_at(self.provider, "validation", artifacts, repository)
+        validation_recovered = call(["event", run_id, "validation-ready"])
+        self._expect_status(validation_recovered, "completed", event="validation-ready", state="validation")
+        fresh_evidence = dict(evidence)
+        fresh_evidence["author"] = {"name": f"checkpoint-reviewer-{mutation}-fresh", "kind": "script"}
+        fresh_result = call(
+            [
+                "append",
+                f"--record-id={run_id}-evidence-2",
+                run_id,
+                "review-evidence",
+                json.dumps(fresh_evidence, separators=(",", ":")),
+            ]
+        )
+        self._expect_status(fresh_result, "completed", event="append", state="validation-review")
+        fresh_ledger = dict(ledger)
+        fresh_ledger["author"] = {"name": f"checkpoint-driver-{mutation}-fresh", "kind": "agent"}
+        fresh_ledger["repository_state"] = self._create_checkpoint_at(
+            self.provider, "validation", artifacts, repository
+        )["repository"]["state_sha256"]
+        fresh_ledger_result = call(
+            [
+                "append",
+                f"--record-id={run_id}-ledger-2",
+                run_id,
+                "finding-ledger",
+                json.dumps(fresh_ledger, separators=(",", ":")),
+            ]
+        )
+        self._expect_status(fresh_ledger_result, "completed", event="append", state="validation-review")
+        final = call(["event", run_id, "passed"])
+        self._expect_status(final, "completed", event="passed", state="validation-review")
+        shown = call(["show", run_id])
+        self._expect_status(shown, "completed", event="show", state="end")
+        result = shown.get("result", {})
+        if result.get("current_state") != "end" or result.get("lifecycle") != "final":
+            raise JourneyFailure(f"{mutation} did not finish after checkpoint recovery: {shown}")
+
+    def _run_checkpoint_scenarios(self) -> None:
+        """Use separate CLI processes and real temporary Git repositories."""
+        for mutation in CHECKPOINT_MUTATIONS:
+            self._run_checkpoint_case(mutation)
+        # bookends:LE-96 — validation exposes stale proof, takes the check-free revise-implementation route, and final approval succeeds only after both checkpoints are regenerated.
+        print(
+            "checkpoint source scenarios passed: report-only denial, seven implementation/validation "
+            "state invalidations, validation recovery, and current-tree final proof"
+        )
+
     def _run_checked_prefix(self) -> None:
         if self.mode == "source":
             self._expect_denial("intent-ready", "intent", "software-change-schema-invalid")
@@ -1219,6 +1873,7 @@ class Journey:
             self._assert_show("intent-review", "packaged-prefix-end")
 
     def _run_full_source(self) -> None:
+        self._prepare_real_repository()
         self._expect_denial("intent-ready", "intent", "software-change-schema-invalid")
         assert self.artifact_root is not None
         assert self.fixture_root is not None
@@ -1226,6 +1881,31 @@ class Journey:
             self.fixture_root / SUBJECTS["intent.json"],
             self.artifact_root / "intent.json",
         )
+        intent_context = self._read_json(
+            self.artifact_root / "intent.json", "operating-context intent"
+        ).get("operating_context")
+        # bookends:LE-91 — the public run exposes one frozen operating context before the first checked transition and later worker/reviewer commissions inspect it.
+        if (
+            not isinstance(intent_context, dict)
+            or set(intent_context) != {
+                "operators",
+                "environment",
+                "threat_boundary",
+                "accepted_risks",
+                "outside_obligations",
+            }
+            or not all(
+                isinstance(intent_context.get(name), (list, dict))
+                and intent_context.get(name)
+                for name in intent_context
+            )
+        ):
+            raise JourneyFailure(
+                f"intent did not expose the closed operating_context: {intent_context}",
+                state=self.state,
+                event="intent-ready",
+            )
+        self._assert_show("explore", "operating-context-show")
         # bookends:LE-83 — this checked edge is requested only after the public bound invocation has succeeded with the matching digest and visit subject.
         self._expect_allow("intent-ready", "intent-review")
         self._pass_review("intent-review", "approved", "intent-adversarial-review")
@@ -1260,6 +1940,8 @@ class Journey:
         self._pass_review("plan-review", "approved", "plan-adversarial-review")
         self._pass_review("plan-adversarial-review", "approved", "implement")
 
+        # bookends:LE-94 — implementation-ready refuses report-only completion until the public checkpoint command binds the report to the selected Git tree.
+        self._create_checkpoint("implementation")
         self._expect_allow("implementation-ready", "implementation-review")
         self._pass_review(
             "implementation-review", "approved", "implementation-adversarial-review"
@@ -1268,6 +1950,122 @@ class Journey:
             "implementation-adversarial-review", "approved", "validation"
         )
 
+        # Overwriting both mutable checkpoint files after implementation review
+        # must not let validation accept repository bytes that no implementation
+        # reviewer saw. The immutable implementation-review ledger is the anchor.
+        assert self.repository_root is not None
+        unreviewed = self.repository_root / "unreviewed-after-implementation-review.txt"
+        unreviewed.write_text("not reviewed\n", encoding="utf-8")
+        self._create_checkpoint("implementation")
+        self._create_checkpoint("validation")
+        late_ledger = {
+            "schema_version": "1",
+            "gate": "implementation-adversarial-review",
+            "subject": "implementation-report.json",
+            "subject_revision": self._fixture_revision("implementation-report.json"),
+            "author": {"name": "late-validation-driver", "kind": "agent"},
+            "repository_state": self._checkpoint_state_for_subject(
+                "implementation-report.json"
+            ),
+            "findings": [],
+        }
+        late_append = self._engine(
+            [
+                "append",
+                "--record-id=late-implementation-ledger-after-review",
+                self.run_id,
+                "finding-ledger",
+                json.dumps(late_ledger, separators=(",", ":")),
+            ],
+            state="validation",
+            event="append",
+        )
+        self._expect_status(late_append, "completed", event="append", state="validation")
+        assert self.artifact_root is not None
+        history_entries = list(
+            (self.artifact_root / "implementation-proof-history").glob("*.json")
+        )
+        if len(history_entries) != 1:
+            raise JourneyFailure(
+                f"implementation proof history had {len(history_entries)} entries before overwrite test",
+                state=self.state,
+                event="validation-ready",
+            )
+        accepted_path = history_entries[0]
+        accepted_bytes = accepted_path.read_bytes()
+        accepted_path.write_bytes(
+            (self.artifact_root / "implementation-checkpoint.json").read_bytes()
+        )
+        unreviewed_denial = self._expect_denial(
+            "validation-ready", "validation", "software-change-checkpoint-invalid"
+        )
+        accepted_path.write_bytes(accepted_bytes)
+        unreviewed_diagnostic = str(
+            unreviewed_denial.get("details", {}).get("diagnostic", "")
+        )
+        if "does not match its content digest" not in unreviewed_diagnostic:
+            raise JourneyFailure(
+                "validation accepted an overwritten immutable implementation-proof entry",
+                state=self.state,
+                event="validation-ready",
+            )
+
+        history = accepted_path.parent
+        missing_history = history.with_name("implementation-proof-history-missing-test")
+        history.rename(missing_history)
+        missing_denial = self._expect_denial(
+            "validation-ready", "validation", "software-change-checkpoint-invalid"
+        )
+        missing_history.rename(history)
+        if "validation requires accepted implementation proof" not in str(
+            missing_denial.get("details", {}).get("diagnostic", "")
+        ):
+            raise JourneyFailure(
+                "validation accepted missing implementation-proof history",
+                state=self.state,
+                event="validation-ready",
+            )
+
+        accepted = json.loads(accepted_bytes)
+        differing = copy.deepcopy(accepted)
+        differing["report"]["sha256"] = "sha256:" + hashlib.sha256(
+            b"different accepted implementation report"
+        ).hexdigest()
+        differing_bytes = json.dumps(differing, separators=(",", ":")).encode("utf-8")
+        differing_path = history / (hashlib.sha256(differing_bytes).hexdigest() + ".json")
+        accepted_backup = self.artifact_root / "accepted-implementation-proof.backup"
+        accepted_path.rename(accepted_backup)
+        differing_path.write_bytes(differing_bytes)
+        differing_denial = self._expect_denial(
+            "validation-ready", "validation", "software-change-checkpoint-invalid"
+        )
+        differing_path.unlink()
+        accepted_backup.rename(accepted_path)
+        if "checkpoint mismatch:" not in str(
+            differing_denial.get("details", {}).get("diagnostic", "")
+        ):
+            raise JourneyFailure(
+                "validation did not reject a unique differing implementation proof",
+                state=self.state,
+                event="validation-ready",
+            )
+
+        differing_path.write_bytes(differing_bytes)
+        ambiguous_denial = self._expect_denial(
+            "validation-ready", "validation", "software-change-checkpoint-invalid"
+        )
+        differing_path.unlink()
+        if "is ambiguous for report revision" not in str(
+            ambiguous_denial.get("details", {}).get("diagnostic", "")
+        ):
+            raise JourneyFailure(
+                "validation selected an ambiguous implementation proof",
+                state=self.state,
+                event="validation-ready",
+            )
+        unreviewed.unlink()
+        self._create_checkpoint("implementation")
+        self._create_checkpoint("validation")
         self._expect_allow("validation-ready", "validation-review")
         self._pass_review("validation-review", "approved", "validation-adversarial-review")
         self._pass_review("validation-adversarial-review", "passed", "end")
@@ -1279,9 +2077,31 @@ class Journey:
         intent = self._read_json(self.artifact_root / "intent.json", "completed intent")
         design = self._read_json(self.artifact_root / "design.json", "completed design")
         plan = self._read_json(self.artifact_root / "plan.json", "completed plan")
+        validation = self._read_json(
+            self.artifact_root / "validation-report.json", "completed validation report"
+        )
+        # bookends:LE-97 — _run_full_source requires the plan's operator outcome/black-box policy and validates each final citation against a real production-journey scenario with executable CLI assertions; token-only or activity-only proof is refused.
+        scenario_path = self.data_root / COMPANION_SCENARIO_SUBPATH
+        try:
+            scenario_source = scenario_path.read_text(encoding="utf-8")
+        except OSError as error:
+            raise JourneyFailure(
+                f"could not read cited public outcome scenarios: {error}",
+                state=self.state,
+                event="passed",
+            ) from error
+        try:
+            assert_semantic_outcome_proof_contract(plan, validation, scenario_source)
+        except JourneyFailure as error:
+            raise JourneyFailure(
+                f"final validation report did not provide semantic outcome proof: {error}",
+                state=self.state,
+                event="passed",
+            ) from error
         # bookends:LE-40 — the same completed public run consumes already-known intent, design, and plan artifacts with their revision links intact.
         if (
             len(shown.get("context", [])) < 4
+            or intent.get("operating_context") != intent_context
             or design.get("intent_revision") != intent.get("revision")
             or plan.get("design_revision") != design.get("revision")
         ):
@@ -1314,6 +2134,7 @@ class Journey:
         self._run_stitched_source()
         self._run_engine_boundary_scenarios()
         self._run_dummy_worker_proofs()
+        self._run_checkpoint_scenarios()
         self._run_bookends_enabled_source()
 
     def _scenario_engine_call(
@@ -2452,6 +3273,7 @@ else:
             "profile": self.profile,
             "state": self.state,
             "command_cwd": self.command_cwd,
+            "repository_root": self.repository_root,
             "command_env": self.command_env,
         }
         try:
@@ -2492,7 +3314,6 @@ else:
             artifacts.mkdir()
             for subject, fixture in SUBJECTS.items():
                 shutil.copy2(self.fixture_root / fixture, artifacts / subject)
-
             shipped_profile = self.data_root / BOOKENDS_SCENARIO_PROFILE
             shutil.copy2(shipped_profile, profile_path)
             scenario_profile = self._read_json(profile_path, "Bookends scenario profile")
@@ -2510,11 +3331,13 @@ else:
             self.profile = scenario_profile
             self.state = "not-started"
             self.command_cwd = checkout
+            self.repository_root = checkout
             # An explicit empty value prevents a caller's ambient bypass from
             # changing the normal scenario while still allowing the next case.
             self.command_env = {"BOOKENDS_BYPASS": ""}
             self._write_provider_config()
             self._start()
+            self._create_checkpoint("implementation")
 
             shown = self._assert_show("explore", "bookends-enabled-show")
             initial_input = shown.get("initial_input", {})
@@ -2584,9 +3407,6 @@ else:
             self._expect_allow("intent-ready", "design")
             self._expect_allow("design-ready", "plan")
             self._expect_allow("plan-ready", "implement")
-            self._expect_allow("implementation-ready", "validation")
-            self._expect_allow("validation-ready", "validation-review")
-
             green_prd = (checkout / "docs/PRD.md").read_text(encoding="utf-8")
             (checkout / "docs/PRD.md").write_text(
                 green_prd
@@ -2594,6 +3414,11 @@ else:
                 + "- Status: live\n- Coverage: e2e/journey\n",
                 encoding="utf-8",
             )
+            self._create_checkpoint("implementation")
+            self._expect_allow("implementation-ready", "validation")
+            self._create_checkpoint("validation")
+            self._expect_allow("validation-ready", "validation-review")
+
             red = self._expect_denial(
                 "passed", "bookends", "software-change-bookends-red"
             )
@@ -2623,6 +3448,19 @@ else:
 
             (checkout / "docs/PRD.md").write_text(green_prd, encoding="utf-8")
             self.command_env = {"BOOKENDS_BYPASS": ""}
+            self._expect_allow("revise-implementation", "implement")
+            implementation_path = artifacts / "implementation-report.json"
+            implementation = self._read_json(
+                implementation_path, "Bookends recovered implementation report"
+            )
+            implementation["revision"] = str(implementation["revision"]) + "-recovered"
+            implementation_path.write_text(
+                json.dumps(implementation, indent=2) + "\n", encoding="utf-8"
+            )
+            self._create_checkpoint("implementation")
+            self._expect_allow("implementation-ready", "validation")
+            self._create_checkpoint("validation")
+            self._expect_allow("validation-ready", "validation-review")
             validation_revision = self._fixture_revision("validation-report.json")
             for index, axis in enumerate(
                 ("intent-delivered", "ids-grounded", "bypass-not-green")
@@ -2656,7 +3494,7 @@ else:
                     axis=axis,
                     state=self.state,
                 )
-            self._append_accepted_findings_for(
+            self._append_finding_ledger_for(
                 self.run_id, "validation-review", state=self.state, record_prefix="bookends-"
             )
             self._expect_allow("passed", "end")
@@ -2707,6 +3545,7 @@ else:
             self.profile = saved["profile"]
             self.state = saved["state"]
             self.command_cwd = saved["command_cwd"]
+            self.repository_root = saved["repository_root"]
             self.command_env = saved["command_env"]
 
     def _run_stitched_source(self) -> None:
@@ -2748,7 +3587,7 @@ else:
             # bookends:LE-43 — the same production provider mechanism starts a materially different minimal topology profile.
             if (
                 shown.get("workflow_id") != "software-change"
-                or shown.get("initial_input", {}).get("config_version") != "minimal-5"
+                or shown.get("initial_input", {}).get("config_version") != "minimal-6"
                 or shown.get("initial_input", {}).get("review_policies")
                 == saved_profile.get("review_policies")
             ):
@@ -2786,6 +3625,10 @@ else:
                         state=self.state,
                         event=event,
                     )
+                if event == "implementation-ready":
+                    self._create_checkpoint("implementation")
+                if event == "validation-ready":
+                    self._create_checkpoint("validation")
                 self._expect_allow(event, target)
             self._pass_review("validation-review", "passed", "end")
             shown = self._assert_show("end", "stitched-terminal-show")
@@ -2854,6 +3697,7 @@ else:
             # bookends:LE-85 — shipped profiles leave driver-performed slots unbound.
             # bookends:LE-86 — the same public binding contract is exercised for this provider.
             work_slot_journey.prove_shipped_software_change_profiles(self.data_root)
+            # bookends:LE-92 — proposal-only data is inert and only the driver ledger routes exact implementation tasks.
             work_slot_journey.prove_graph_runner(
                 provider=self.provider,
                 work_dir=proof_root / "graph-runner",
@@ -2876,6 +3720,7 @@ else:
                 provider=self.provider,
                 work_dir=proof_root / "default-sandbox-argv",
             )
+            # bookends:LE-91 — the public bound-worker scenario reads the frozen operating context from artifact_root in a fresh CLI process.
             work_slot_journey.prove_bound_fan_out_heartbeat(
                 engine=self.engine,
                 provider=self.provider,
@@ -2899,6 +3744,20 @@ else:
                 profile_source=self.profile_source,
                 fixture_root=self.fixture_root,
                 work_dir=proof_root / "bound-contracted-fan-out-failure",
+            )
+            # bookends:LE-90 — the public fan-out scenarios cover both legacy key-presence and additive full-schema worker contracts.
+            # bookends:LE-93 — the public fan-out scenario preserves both bounded same-worker conformance attempts.
+            work_slot_journey.prove_full_schema_retry(
+                engine=self.engine,
+                work_dir=proof_root / "full-schema-retry",
+            )
+            # bookends:LE-92 — selected retry output remains candidate data until the driver links and dispositions it.
+            work_slot_journey.prove_selected_attempt_ledger_linkage(
+                engine=self.engine,
+                provider=self.provider,
+                profile_source=self.profile_source,
+                fixture_root=self.fixture_root,
+                work_dir=proof_root / "selected-attempt-ledger",
             )
             work_slot_journey.prove_stdin_exec(
                 provider=self.provider,
@@ -2950,8 +3809,10 @@ else:
         print(
             "dummy worker proofs passed: shipped profiles, graph-runner, fan-out, "
             "preview-bindings fail-closed, missing -e warning, default sandbox argv, bound heartbeats, "
-            "overrun retry, stdin-exec, graph working-directory cwd/marker proof, "
-            "overlay-running invocation-progress, omitted vs set --max-active, "
+            "overrun retry, bounded reviewer retry/exhaustion and selected-attempt ledger linkage, "
+            "stdin-exec, graph working-directory cwd/marker proof, implementation finding routing, "
+            "bound operating-context inspection, overlay-running invocation-progress, "
+            "omitted vs set --max-active, "
             "progress-query overlay-untouched"
         )
         print("contracted fan-out failure")
@@ -3087,12 +3948,28 @@ def _assert_worker_assignment(
     schema: Dict[str, Any],
     pi_command: str,
     fragments: Sequence[str],
+    schema_field: str = "output_schema",
 ) -> None:
     if worker.get("command") != pi_command:
         raise JourneyFailure(f"worker command {worker.get('command')!r} != {pi_command!r}")
-    if worker.get("output_schema") != schema:
+    expected_schema = schema
+    if schema_field == "full_output_schema":
+        expected_schema = copy.deepcopy(schema)
+        expected_schema["properties"]["axis"]["const"] = policy["id"]
+        expected_schema["properties"]["author"]["const"] = {
+            "name": roster_entry["author"],
+            "kind": "agent",
+        }
+    if worker.get(schema_field) != expected_schema:
         raise JourneyFailure(
-            f"worker output_schema {worker.get('output_schema')} != {schema}"
+            f"worker {schema_field} {worker.get(schema_field)} != {expected_schema}"
+        )
+    other_schema_field = (
+        "output_schema" if schema_field == "full_output_schema" else "full_output_schema"
+    )
+    if other_schema_field in worker:
+        raise JourneyFailure(
+            f"worker unexpectedly emitted both output contracts: {worker}"
         )
     preamble = worker.get("preamble")
     if not isinstance(preamble, str) or not preamble.startswith(base_preamble):
@@ -3118,15 +3995,19 @@ def _assert_worker_assignment(
 
 
 def _assert_preview_visibility(
-    repository: Path, bindings: Dict[str, Any], workers: Sequence[Dict[str, Any]]
+    repository: Path,
+    bindings: Dict[str, Any],
+    workers: Sequence[Dict[str, Any]],
+    *,
+    schema_field: str = "output_schema",
 ) -> None:
     if len(workers) == 0:
         raise JourneyFailure("constructor preview input had no workers")
     full_preambles = []
     for worker in workers:
-        if "preamble" not in worker or "output_schema" not in worker:
+        if "preamble" not in worker or schema_field not in worker:
             raise JourneyFailure(f"preview input omitted preamble/schema: {worker}")
-        required = (worker.get("output_schema") or {}).get("required")
+        required = (worker.get(schema_field) or {}).get("required")
         if required != ["axis", "author", "result", "findings"]:
             raise JourneyFailure(f"preview input omitted required keys: {worker}")
         preamble = worker.get("preamble")
@@ -3189,10 +4070,10 @@ def _assert_preview_visibility(
             raise JourneyFailure(
                 f"preview-bindings omitted has_preamble: {preview_worker}"
             )
-        required = (preview_worker.get("output_schema") or {}).get("required")
+        required = (preview_worker.get(schema_field) or {}).get("required")
         if required != ["axis", "author", "result", "findings"]:
             raise JourneyFailure(
-                f"preview-bindings omitted output_schema.required: {preview_worker}"
+                f"preview-bindings omitted {schema_field}.required: {preview_worker}"
             )
         if "preamble" in preview_worker and preview_worker.get("preamble") not in (
             None,
@@ -3240,6 +4121,29 @@ def assert_worker_data_skill_and_root_policy() -> None:
         {"author": "reviewer-b", "model": "model-b"},
     ]
     schema_required = {"required": ["axis", "author", "result", "findings"]}
+    full_review_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["axis", "author", "result", "findings"],
+        "properties": {
+            "axis": {"type": "string", "minLength": 1},
+            "author": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["name", "kind"],
+                "properties": {
+                    "name": {"type": "string", "minLength": 1},
+                    "kind": {"type": "string", "enum": ["human", "agent", "script"]},
+                },
+            },
+            "result": {"type": "string", "enum": ["pass", "fail"]},
+            "findings": {"type": "string"},
+        },
+        "oneOf": [
+            {"properties": {"result": {"const": "pass"}, "findings": {"const": ""}}},
+            {"properties": {"result": {"const": "fail"}, "findings": {"type": "string", "minLength": 1}}},
+        ],
+    }
 
     sc_skill_path = (
         repository
@@ -3300,19 +4204,55 @@ def assert_worker_data_skill_and_root_policy() -> None:
             raise JourneyFailure(f"shipped worker data is missing: {path}")
     sc_preamble = sc_preamble_path.read_text(encoding="utf-8")
     for clause in (
+        "operating_context",
         "extra mechanism, unlisted requirements, and hypothetical-future",
-        "Confirmation consumes the durable set",
+        "Confirmation consumes the durable finding-ledger history",
         "does not search again except for fix-introduced holes",
         "Bound workers do not use previously overlooked",
     ):
         if clause.lower() not in sc_preamble.lower():
             raise JourneyFailure(f"review-worker preamble omitted {clause!r}")
+    high_rigor = repository / "crates/software-change-provider/data/configs/high-rigor.json"
+    high_rigor_schema = _load_json(high_rigor).get("artifact_schemas", {}).get("intent.json", {})
+    operating_context_schema = high_rigor_schema.get("properties", {}).get("operating_context", {})
+    if (
+        high_rigor_schema.get("additionalProperties") is not False
+        or set(operating_context_schema.get("required", []))
+        != {
+            "operators",
+            "environment",
+            "threat_boundary",
+            "accepted_risks",
+            "outside_obligations",
+        }
+        or operating_context_schema.get("additionalProperties") is not False
+    ):
+        raise JourneyFailure(
+            "high-rigor intent schema did not lock the closed operating_context contract"
+        )
+    engine_skill = (
+        repository / "skills/using-loop-engine/SKILL.md"
+    ).read_text(encoding="utf-8")
+    contract_text = sc_skill + "\n" + engine_skill
+    for contract_clause in (
+        "full_output_schema",
+        "attempts.json",
+        "finding-ledger",
+        "revise-implementation",
+        "never stages, commits, branches, pushes",
+    ):
+        if contract_clause.lower() not in contract_text.lower():
+            raise JourneyFailure(
+                f"software-change skill omitted constructor/workflow contract {contract_clause!r}"
+            )
     pd_preamble = pd_preamble_path.read_text(encoding="utf-8")
     research_preamble = research_preamble_path.read_text(encoding="utf-8")
     sc_schema = _load_json(sc_schema_path)
     pd_schema = _load_json(pd_schema_path)
     research_schema = _load_json(research_schema_path)
-    if sc_schema != schema_required or pd_schema != schema_required or research_schema != schema_required:
+    if sc_schema != full_review_schema:
+        raise JourneyFailure("software-change complete output schema bytes are unsupported")
+    if pd_schema != schema_required or research_schema != schema_required:
         raise JourneyFailure("provider output_schema bytes do not require axis/author/result/findings")
 
     sc_jq = _extract_jq_after(sc_skill, '--slurpfile roster "$ROSTER" ')
@@ -3321,7 +4261,6 @@ def assert_worker_data_skill_and_root_policy() -> None:
     research_jq = _extract_jq_after(
         research_skill, '--slurpfile output_schema "$OUTPUT_SCHEMA_PATH" '
     )
-    high_rigor = repository / "crates/software-change-provider/data/configs/high-rigor.json"
     readme_profile = repository / "crates/policy-document-provider/data/readme.json"
     agents_profile = repository / "crates/policy-document-provider/data/agents.json"
     research_profile = repository / "crates/research-provider/data/configs/standard.json"
@@ -3474,8 +4413,11 @@ def assert_worker_data_skill_and_root_policy() -> None:
                     "artifact_root",
                     f"required_author_claim: {entry['author']}",
                 ),
+                schema_field="full_output_schema",
             )
-        _assert_preview_visibility(repository, bindings, workers)
+        _assert_preview_visibility(
+            repository, bindings, workers, schema_field="full_output_schema"
+        )
         _assert_hash_guard(design_profile)
 
         plan_profile = root / "high-rigor-plan-review.json"
@@ -3506,9 +4448,13 @@ def assert_worker_data_skill_and_root_policy() -> None:
                 schema=sc_schema,
                 pi_command=dummy_pi,
                 fragments=("software-change", "plan-review", "artifact_root"),
+                schema_field="full_output_schema",
             )
         _assert_preview_visibility(
-            repository, plan_result["work_slot_bindings"], plan_workers
+            repository,
+            plan_result["work_slot_bindings"],
+            plan_workers,
+            schema_field="full_output_schema",
         )
         _assert_hash_guard(plan_profile)
 
@@ -3556,6 +4502,7 @@ def assert_worker_data_skill_and_root_policy() -> None:
                     "artifact_root",
                     f"required_author_claim: {entry['author']}",
                 ),
+                schema_field="full_output_schema",
             )
 
         adv_profile = root / "high-rigor-design-adversarial.json"
@@ -3598,6 +4545,7 @@ def assert_worker_data_skill_and_root_policy() -> None:
                     "design-adversarial-review",
                     "artifact_root",
                 ),
+                schema_field="full_output_schema",
             )
 
         for draft in (
@@ -3861,6 +4809,26 @@ def assert_worker_data_skill_and_root_policy() -> None:
 
 def assert_focused_boundary_scenarios() -> None:
     """Keep the focused citations beside their public assertions."""
+    repository = Path(__file__).resolve().parent.parent
+    fixture_root = repository / FIXTURE_SUBPATH
+    scenario_path = repository / COMPANION_SCENARIO_SUBPATH
+    scenario_source = scenario_path.read_text(encoding="utf-8")
+    plan = _load_json(fixture_root / "plan-good.json")
+    good_validation = _load_json(fixture_root / "validation-report-good.json")
+    assert_semantic_outcome_proof_contract(plan, good_validation, scenario_source)
+    for invalid_validation in (
+        _load_json(fixture_root / "validation-report-defective.json"),
+        {"outcome": "done", "requirements": [{"requirement": "LE-97", "proof": "LE-97"}]},
+    ):
+        try:
+            assert_semantic_outcome_proof_contract(plan, invalid_validation, scenario_source)
+        except JourneyFailure:
+            pass
+        else:
+            raise JourneyFailure(
+                "activity/token-only validation proof unexpectedly satisfied LE-97"
+            )
+
     source = Path(__file__).read_text(encoding="utf-8")
     citation_prefix = "".join(("bookends", ":LE-"))
     probe_start = source.index("    def _probe_startup")
@@ -3903,6 +4871,56 @@ def assert_focused_boundary_scenarios() -> None:
     ):
         if marker not in source:
             raise JourneyFailure(f"focused public scenario marker missing: {marker}")
+
+    requirement_scenarios = {
+        90: (
+            "_run_dummy_worker_proofs",
+            ("prove_fan_out", "prove_full_schema_retry"),
+        ),
+        91: (
+            "_run_full_source",
+            ("operating_context", "operating-context-show"),
+        ),
+        92: (
+            "_run_dummy_worker_proofs",
+            ("prove_graph_runner", "prove_selected_attempt_ledger_linkage"),
+        ),
+        93: (
+            "_run_dummy_worker_proofs",
+            ("prove_full_schema_retry", "bound-contracted-fan-out-failure"),
+        ),
+        94: ("_run_checkpoint_case", ("report-only", "checkpoint")),
+        95: (
+            "_run_checkpoint_case",
+            ("expected_implementation", "expected_validation"),
+        ),
+        96: (
+            "_run_checkpoint_scenarios",
+            ("revise-implementation", "current-tree final proof"),
+        ),
+        97: (
+            "_run_full_source",
+            (
+                "assert_semantic_outcome_proof_contract",
+                "executable CLI assertions",
+                "token-only or activity-only proof is refused",
+            ),
+        ),
+    }
+    for number, (function_name, assertions) in requirement_scenarios.items():
+        token = f"{citation_prefix}{number} —"
+        if token not in source:
+            raise JourneyFailure(f"{token} has no public source-journey citation")
+        function_start = source.index(f"    def {function_name}")
+        function_end = source.find("\n    def ", function_start + len(f"    def {function_name}"))
+        function_source = source[function_start:function_end + 1 if function_end >= 0 else len(source)]
+        if token not in function_source:
+            raise JourneyFailure(f"{token} is not beside {function_name}'s assertions")
+        for assertion in assertions:
+            if assertion not in function_source:
+                raise JourneyFailure(
+                    f"{token} scenario omitted observable assertion marker {assertion!r}"
+                )
 
     print("focused citation scenarios remain bound to public assertions")
 

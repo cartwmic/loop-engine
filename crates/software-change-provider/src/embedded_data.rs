@@ -113,6 +113,13 @@ pub static FILES: &[EmbeddedFile] = &[
         )),
     },
     EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/companions/fictional-repo/scripts/production-journey.py",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/companions/fictional-repo/scripts/production-journey.py"
+        )),
+    },
+    EmbeddedFile {
         path: "crates/software-change-provider/data/calibration/companions/fictional-repo/docs/review-contract.md",
         bytes: include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -257,10 +264,17 @@ pub static FILES: &[EmbeddedFile] = &[
         )),
     },
     EmbeddedFile {
-        path: "crates/software-change-provider/data/templates/accepted-findings.json",
+        path: "crates/software-change-provider/data/templates/finding-ledger.json",
         bytes: include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/data/templates/accepted-findings.json"
+            "/data/templates/finding-ledger.json"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/templates/advisory-finding-proposal.json",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/templates/advisory-finding-proposal.json"
         )),
     },
     EmbeddedFile {

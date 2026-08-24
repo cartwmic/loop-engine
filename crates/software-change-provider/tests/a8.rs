@@ -25,7 +25,7 @@ fn engine_show_projects_allow_over_prior_deny_for_same_transition() {
         OperationOutcome::Rejected(issue) => issue,
         other => panic!("expected first evidence denial, got {other:?}"),
     };
-    assert_eq!(denied_issue.code, "software-change-review-incomplete");
+    assert_eq!(denied_issue.code, "software-change-finding-ledger-invalid");
     let first_show = engine.show("a8");
     assert!(first_show
         .latest_evaluations
@@ -45,7 +45,7 @@ fn engine_show_projects_allow_over_prior_deny_for_same_transition() {
         "1",
         "test-1",
     );
-    engine.append_accepted_findings(
+    engine.append_finding_ledger(
         "a8",
         "a8-accepted",
         "intent-review",

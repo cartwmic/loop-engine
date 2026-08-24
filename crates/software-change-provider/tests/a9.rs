@@ -50,7 +50,7 @@ fn engine_distinguishes_inaccessible_root_provider_failure_from_review_deny_and_
         OperationOutcome::Rejected(issue) => issue,
         other => panic!("expected review denial, got {other:?}"),
     };
-    assert_eq!(review_issue.code, "software-change-review-incomplete");
+    assert_eq!(review_issue.code, "software-change-finding-ledger-invalid");
     assert_eq!(
         review.current_state("review-deny").as_str(),
         "intent-review"
@@ -102,6 +102,14 @@ fn engine_classifies_stale_config_evidence_as_review_denial() {
         "intent.json",
         "1",
         "stale-test-version",
+    );
+    engine.append_finding_ledger(
+        "stale-config",
+        "stale-config-ledger",
+        "intent-review",
+        "intent.json",
+        "1",
+        json!([]),
     );
 
     assert!(matches!(

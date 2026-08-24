@@ -20,11 +20,18 @@ fn shipped_example_evidence_record_is_consumed_by_production_evaluation_parser()
         config,
         checked("intent-review", "approved", "intent-adversarial-review"),
     );
-    request["context"] = json!([context_json(
-        fixture["kind"].as_str().expect("fixture kind"),
-        fixture["data"].clone(),
-        1,
-    )]);
+    request["context"] = json!([
+        context_json(
+            fixture["kind"].as_str().expect("fixture kind"),
+            fixture["data"].clone(),
+            1,
+        ),
+        context_json(
+            "finding-ledger",
+            support::finding_ledger("intent-review", "intent.json", "r15", json!([])),
+            2,
+        )
+    ]);
     let output = invoke(request);
 
     support::assert_exit(&output, 0);

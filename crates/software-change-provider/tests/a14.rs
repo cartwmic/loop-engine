@@ -5,7 +5,8 @@ use loop_core::{OperationOutcome, TransitionKind};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
-use support::{metadata_schema, valid_metadata, Engine, TestDir};
+use std::process::Command;
+use support::{metadata_schema, provider_binary, valid_metadata, Engine, TestDir};
 
 const EXPECTED_STATES: &[(&str, bool)] = &[
     ("explore", false),
@@ -169,6 +170,12 @@ const EXPECTED_TRANSITIONS: &[(&str, &str, &str, &str)] = &[
         "checked",
     ),
     (
+        "validation",
+        "revise-implementation",
+        "implement",
+        "check-free",
+    ),
+    (
         "validation-review",
         "approved",
         "validation-adversarial-review",
@@ -318,7 +325,38 @@ fn owning_phase_routes_are_requestable_committed_and_persisted_on_fresh_runs() {
 
     for (index, &(source, event, target)) in OWNING_PHASE_ROUTES.iter().enumerate() {
         let state = TestDir::new(&format!("a14-route-state-{index}"));
-        let engine = Engine::new(state.path().join("route.sqlite"));
+        let repository = state.path().join("repository");
+        fs::create_dir_all(&repository).expect("create route repository");
+        fs::write(repository.join("marker.txt"), b"baseline\n").expect("write route marker");
+        for args in [
+            vec!["init", "-q"],
+            vec!["config", "user.name", "software-change a14"],
+            vec!["config", "user.email", "a14@example.invalid"],
+            vec!["config", "commit.gpgsign", "false"],
+            vec!["add", "-A"],
+            vec!["commit", "-qm", "baseline"],
+        ] {
+            assert!(Command::new("git")
+                .args(args)
+                .current_dir(&repository)
+                .status()
+                .expect("run git")
+                .success());
+        }
+        let wrapper = state.path().join("provider-wrapper.py");
+        fs::write(
+            &wrapper,
+            format!(
+                "#!/usr/bin/env python3\nimport os\nos.chdir({repository:?})\nos.execv({provider:?}, [{provider:?}] + os.sys.argv[1:])\n",
+                repository = repository.to_string_lossy(),
+                provider = provider_binary().to_string_lossy(),
+            ),
+        )
+        .expect("write provider wrapper");
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755))
+            .expect("chmod provider wrapper");
+        let engine = Engine::with_command(state.path().join("route.sqlite"), &wrapper);
         let run_id = format!("a14-route-{index}");
         let mut policies = serde_json::Map::new();
         policies.insert(
@@ -345,6 +383,52 @@ fn owning_phase_routes_are_requestable_committed_and_persisted_on_fresh_runs() {
             serde_json::to_vec(&valid_metadata("1")).expect("serialize subject"),
         )
         .expect("write subject artifact");
+        if matches!(source, "implementation-review" | "validation-review") {
+            fs::write(Path::new(root).join("intent.json"), br#"{"revision":"1"}"#)
+                .expect("write checkpoint intent");
+            fs::write(Path::new(root).join("design.json"), br#"{"revision":"1"}"#)
+                .expect("write checkpoint design");
+            fs::write(Path::new(root).join("plan.json"), br#"{"revision":"1"}"#)
+                .expect("write checkpoint plan");
+            fs::write(
+                Path::new(root).join("implementation-report.json"),
+                serde_json::to_vec(&valid_metadata("1")).expect("serialize implementation report"),
+            )
+            .expect("write implementation report");
+        }
+        if source == "validation-review" {
+            fs::write(
+                Path::new(root).join("validation-report.json"),
+                serde_json::to_vec(&valid_metadata("1")).expect("serialize validation report"),
+            )
+            .expect("write validation report");
+        }
+        let create_checkpoint = |phase: &str| {
+            let output = Command::new(provider_binary())
+                .args([
+                    "checkpoint",
+                    "--phase",
+                    phase,
+                    "--artifact-root",
+                    root,
+                    "--working-directory",
+                    repository.to_str().expect("repository path"),
+                ])
+                .current_dir(&repository)
+                .output()
+                .expect("run checkpoint");
+            assert!(
+                output.status.success(),
+                "checkpoint {phase} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        if matches!(source, "implementation-review" | "validation-review") {
+            create_checkpoint("implementation");
+        }
+        if source == "validation-review" {
+            create_checkpoint("validation");
+        }
 
         for progress_event in draft_events_to_review(source) {
             let outcome = engine.event(&run_id, progress_event);

@@ -66,7 +66,12 @@ pub fn provider_binary() -> PathBuf {
 }
 
 pub fn invoke(request: Value) -> Output {
+    invoke_in_dir(request, Path::new(env!("CARGO_MANIFEST_DIR")))
+}
+
+pub fn invoke_in_dir(request: Value, directory: &Path) -> Output {
     let mut child = Command::new(provider_binary())
+        .current_dir(directory)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -205,21 +210,23 @@ pub fn evidence_context(
     )
 }
 
-pub fn accepted_findings(
-    gate: &str,
-    subject: &str,
-    subject_revision: &str,
-    findings: Value,
-) -> Value {
+pub fn finding_ledger(gate: &str, subject: &str, subject_revision: &str, findings: Value) -> Value {
     json!({
+        "schema_version": "1",
         "gate": gate,
         "subject": subject,
         "subject_revision": subject_revision,
+        "author": {"name": "driver", "kind": "agent"},
+        "repository_state": if matches!(subject, "implementation-report.json" | "validation-report.json") {
+            json!("sha256:0000000000000000000000000000000000000000000000000000000000000000")
+        } else {
+            Value::Null
+        },
         "findings": findings
     })
 }
 
-pub fn accepted_findings_context(
+pub fn finding_ledger_context(
     id: &str,
     gate: &str,
     subject: &str,
@@ -228,8 +235,8 @@ pub fn accepted_findings_context(
 ) -> ContextRecord {
     ContextRecord::new(
         id,
-        "accepted-findings",
-        accepted_findings(gate, subject, subject_revision, findings),
+        "finding-ledger",
+        finding_ledger(gate, subject, subject_revision, findings),
         0_u64.into(),
         Timestamp::from_unix_millis(0),
     )
@@ -469,7 +476,7 @@ impl Engine {
         );
     }
 
-    pub fn append_accepted_findings(
+    pub fn append_finding_ledger(
         &self,
         run_id: &str,
         id: &str,
@@ -478,10 +485,31 @@ impl Engine {
         subject_revision: &str,
         findings: Value,
     ) {
-        self.append(
-            run_id,
-            accepted_findings_context(id, gate, subject, subject_revision, findings),
-        );
+        let mut record = finding_ledger_context(id, gate, subject, subject_revision, findings);
+        if matches!(
+            subject,
+            "implementation-report.json" | "validation-report.json"
+        ) {
+            let artifact_root = self
+                .show(run_id)
+                .initial_input
+                .get("artifact_root")
+                .and_then(Value::as_str)
+                .expect("artifact_root for report ledger")
+                .to_owned();
+            let checkpoint_name = if subject == "implementation-report.json" {
+                "implementation-checkpoint.json"
+            } else {
+                "validation-checkpoint.json"
+            };
+            let checkpoint: Value = serde_json::from_slice(
+                &fs::read(Path::new(&artifact_root).join(checkpoint_name))
+                    .expect("read report checkpoint"),
+            )
+            .expect("parse report checkpoint");
+            record.data["repository_state"] = checkpoint["repository"]["state_sha256"].clone();
+        }
+        self.append(run_id, record);
     }
 
     pub fn current_state(&self, run_id: &str) -> StateId {

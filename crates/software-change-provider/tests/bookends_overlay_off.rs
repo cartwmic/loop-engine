@@ -3,7 +3,9 @@ mod support;
 
 use loop_core::{Lifecycle, OperationOutcome};
 use serde_json::{json, Value};
-use support::{config_artifact_root, load_fixture, load_profile, Engine, TestDir};
+use std::fs;
+use std::process::Command;
+use support::{config_artifact_root, load_fixture, load_profile, provider_binary, Engine, TestDir};
 
 const PROFILES: &[&str] = &["minimal", "standard", "high-rigor"];
 
@@ -63,7 +65,7 @@ fn pass_gate(
             );
         }
     }
-    engine.append_accepted_findings(
+    engine.append_finding_ledger(
         run_id,
         &format!("{run_id}-{gate}-accepted"),
         gate,
@@ -100,7 +102,58 @@ fn walk_shipped_profile_to_end(profile_name: &str) {
     }
 
     let state = TestDir::new(&format!("overlay-off-{profile_name}-state"));
-    let engine = Engine::new(state.path().join("run.sqlite"));
+    let repository = state.path().join("repository");
+    fs::create_dir_all(&repository).expect("create overlay-off repository");
+    fs::write(repository.join("marker.txt"), b"baseline\n").expect("write overlay-off marker");
+    for args in [
+        vec!["init", "-q"],
+        vec!["config", "user.name", "software-change overlay"],
+        vec!["config", "user.email", "overlay@example.invalid"],
+        vec!["config", "commit.gpgsign", "false"],
+        vec!["add", "-A"],
+        vec!["commit", "-qm", "baseline"],
+    ] {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&repository)
+            .status()
+            .expect("run git")
+            .success());
+    }
+    let wrapper = state.path().join("provider-wrapper.py");
+    fs::write(
+        &wrapper,
+        format!(
+            "#!/usr/bin/env python3\nimport os\nos.chdir({repository:?})\nos.execv({provider:?}, [{provider:?}] + os.sys.argv[1:])\n",
+            repository = repository.to_string_lossy(),
+            provider = provider_binary().to_string_lossy(),
+        ),
+    )
+    .expect("write provider wrapper");
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755))
+        .expect("chmod provider wrapper");
+    for phase in ["implementation", "validation"] {
+        let output = Command::new(provider_binary())
+            .args([
+                "checkpoint",
+                "--phase",
+                phase,
+                "--artifact-root",
+                artifacts.path().to_str().expect("artifact path"),
+                "--working-directory",
+                repository.to_str().expect("repository path"),
+            ])
+            .current_dir(&repository)
+            .output()
+            .expect("run checkpoint");
+        assert!(
+            output.status.success(),
+            "checkpoint {phase} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let engine = Engine::with_command(state.path().join("run.sqlite"), &wrapper);
     let input = config_artifact_root(load_profile(profile_name), &artifacts);
     assert!(
         input

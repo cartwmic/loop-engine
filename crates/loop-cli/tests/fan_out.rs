@@ -1,4 +1,6 @@
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -25,6 +27,50 @@ fn contracted_worker_json(
         worker["preamble"] = Value::String(preamble.to_owned());
     }
     worker.to_string()
+}
+
+fn full_review_schema(axis: &str, author: &str) -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["axis", "author", "result", "findings"],
+        "properties": {
+            "axis": {"type": "string", "const": axis},
+            "author": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "kind"],
+                "properties": {
+                    "name": {"type": "string", "const": author},
+                    "kind": {"type": "string", "enum": ["human", "agent", "script"]}
+                }
+            },
+            "result": {"type": "string", "enum": ["pass", "fail"]},
+            "findings": {"type": "string"}
+        },
+        "oneOf": [
+            {"properties": {"result": {"const": "pass"}, "findings": {"const": ""}}},
+            {"properties": {"result": {"const": "fail"}, "findings": {"type": "string", "minLength": 1}}}
+        ]
+    })
+}
+
+fn full_worker_json(command: &str, args: &[&str], preamble: Option<&str>) -> String {
+    let mut worker = json!({
+        "command": command,
+        "args": args,
+        "full_output_schema": full_review_schema("axis-a", "reviewer-a")
+    });
+    if let Some(preamble) = preamble {
+        worker["preamble"] = Value::String(preamble.to_owned());
+    }
+    worker.to_string()
+}
+
+fn digest(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("sha256:{:x}", hasher.finalize())
 }
 
 fn output_worker(
@@ -450,6 +496,219 @@ fn bound_preamble_has_exact_context_separator_and_no_instruction_body() {
     assert_eq!(summary["workers"][0]["status"], "succeeded");
     assert_eq!(summary["workers"][0]["exit_code"], 0);
     assert!(summary["workers"][0].get("conformance_error").is_none());
+}
+
+#[test]
+fn full_schema_retry_preserves_attempt_bytes_and_selects_same_worker_success() {
+    let directory = tempdir().expect("tempdir");
+    let artifact_root = directory.path().join("artifacts");
+    let capture_dir = directory.path().join("captures").join("inv-1");
+    let packet = invoke_packet(&artifact_root, &capture_dir, "review assignment\n");
+    let counter = directory.path().join("counter");
+    fs::write(&counter, b"0").expect("counter");
+    let input_root = directory.path().join("inputs");
+    fs::create_dir_all(&input_root).expect("input root");
+    let script = r#"
+number=$(cat "$1")
+number=$((number + 1))
+printf '%s' "$number" > "$1"
+cat > "$2/input-$number"
+printf 'stderr-%s' "$number" >&2
+if [ "$number" = 1 ]; then
+  printf '%s' '{"axis":"wrong","author":{"name":"wrong","kind":"agent"},"result":"pass","findings":"not empty"}'
+else
+  printf '%s' '{"axis":"axis-a","author":{"name":"reviewer-a","kind":"agent"},"result":"pass","findings":""}'
+fi
+"#;
+    let worker = full_worker_json(
+        "sh",
+        &[
+            "-c",
+            script,
+            "_",
+            counter.to_str().expect("counter path"),
+            input_root.to_str().expect("input root"),
+            "--model",
+            "model-a",
+        ],
+        Some("frozen review preamble"),
+    );
+    let output = run_fan_out(
+        directory.path(),
+        &["fan-out", "--worker", &worker],
+        packet.as_bytes(),
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let summary = parse_summary(&output.stdout);
+    let worker_summary = &summary["workers"][0];
+    assert_eq!(worker_summary["status"], "succeeded");
+    assert_eq!(worker_summary["selected_attempt"], 2);
+    assert_eq!(worker_summary["attempts_path"], "0/attempts.json");
+    assert_eq!(
+        worker_summary["args"][worker_summary["args"].as_array().unwrap().len() - 1],
+        "model-a"
+    );
+
+    let capture_dir = Path::new(summary["output_dir"].as_str().expect("output_dir"));
+    let worker_dir = capture_dir.join("0");
+    let manifest: Value = serde_json::from_slice(
+        &fs::read(worker_dir.join("attempts.json")).expect("attempts manifest"),
+    )
+    .expect("attempts JSON");
+    assert_eq!(manifest["schema_version"], "1");
+    assert_eq!(manifest["selected_attempt"], 2);
+    assert_eq!(manifest["exhausted"], false);
+    assert_eq!(manifest["attempts"].as_array().unwrap().len(), 2);
+    for number in [1, 2] {
+        let attempt = &manifest["attempts"][number - 1];
+        assert_eq!(attempt["number"], number);
+        for key in ["stdout_sha256", "stderr_sha256"] {
+            let value = attempt[key].as_str().expect("digest");
+            assert_eq!(value.len(), 71, "{key}: {value}");
+            assert!(value.starts_with("sha256:"), "{key}: {value}");
+            assert!(value[7..].bytes().all(|byte| byte.is_ascii_hexdigit()));
+        }
+    }
+    let first_stdout = br#"{"axis":"wrong","author":{"name":"wrong","kind":"agent"},"result":"pass","findings":"not empty"}"#;
+    let second_stdout = br#"{"axis":"axis-a","author":{"name":"reviewer-a","kind":"agent"},"result":"pass","findings":""}"#;
+    let first_stderr = b"stderr-1";
+    let second_stderr = b"stderr-2";
+    assert_eq!(
+        fs::read(worker_dir.join("attempts/1/stdout")).unwrap(),
+        first_stdout
+    );
+    assert_eq!(
+        fs::read(worker_dir.join("attempts/1/stderr")).unwrap(),
+        first_stderr
+    );
+    assert_eq!(
+        fs::read(worker_dir.join("attempts/2/stdout")).unwrap(),
+        second_stdout
+    );
+    assert_eq!(
+        fs::read(worker_dir.join("attempts/2/stderr")).unwrap(),
+        second_stderr
+    );
+    assert_eq!(fs::read(worker_dir.join("stdout")).unwrap(), second_stdout);
+    assert_eq!(fs::read(worker_dir.join("stderr")).unwrap(), second_stderr);
+    assert_eq!(
+        manifest["attempts"][0]["stdout_sha256"],
+        digest(first_stdout)
+    );
+    assert_eq!(
+        manifest["attempts"][0]["stderr_sha256"],
+        digest(first_stderr)
+    );
+    assert_eq!(
+        manifest["attempts"][1]["stdout_sha256"],
+        digest(second_stdout)
+    );
+    assert_eq!(
+        manifest["attempts"][1]["stderr_sha256"],
+        digest(second_stderr)
+    );
+
+    let first_input = fs::read(input_root.join("input-1")).expect("first assignment");
+    let retry_input = fs::read(input_root.join("input-2")).expect("retry assignment");
+    let expected_assignment = format!(
+        "frozen review preamble\n{}\n---\n\n",
+        serde_json::to_string(&json!({"artifact_root": artifact_root.to_string_lossy()}))
+            .expect("location JSON")
+    );
+    assert_eq!(first_input, expected_assignment.as_bytes());
+    assert!(retry_input.starts_with(expected_assignment.as_bytes()));
+    assert!(retry_input
+        .windows(first_stdout.len())
+        .any(|window| window == first_stdout));
+    for error in manifest["attempts"][0]["validation_errors"]
+        .as_array()
+        .expect("validation errors")
+        .iter()
+        .map(|value| value.as_str().expect("error"))
+    {
+        assert!(
+            retry_input
+                .windows(error.len())
+                .any(|window| window == error.as_bytes()),
+            "missing retry error: {error}"
+        );
+    }
+    let retry_text = String::from_utf8(retry_input).expect("retry prompt UTF-8");
+    assert!(retry_text.contains("SCHEMA-CONFORMANCE RETRY"));
+    assert!(retry_text.contains("Return only the schema-conforming reconsideration"));
+}
+
+#[test]
+fn full_schema_retry_exhaustion_preserves_both_attempts_and_fails_closed() {
+    let directory = tempdir().expect("tempdir");
+    let instructions = directory.path().join("instructions.txt");
+    fs::write(&instructions, b"review assignment").expect("instructions");
+    let stderr_fixture = directory.path().join("stderr.txt");
+    let worker = full_worker_json(
+        "sh",
+        &[
+            "-c",
+            "cat >/dev/null; printf '%s' '{\"axis\":\"wrong\"}'; cat \"$1\" >&2",
+            "_",
+            stderr_fixture.to_str().expect("stderr path"),
+        ],
+        None,
+    );
+    fs::write(&stderr_fixture, b"raw stderr").expect("stderr fixture");
+    let output = run_fan_out(
+        directory.path(),
+        &[
+            "fan-out",
+            "--instructions",
+            instructions.to_str().expect("instructions path"),
+            "--worker",
+            &worker,
+        ],
+        b"",
+    );
+    assert_eq!(output.status.code(), Some(20), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("summary.json"));
+    let capture_dir = find_latest_adhoc_capture(directory.path());
+    let summary = capture_summary(capture_dir.to_str().expect("capture path"));
+    let worker_summary = &summary["workers"][0];
+    assert_eq!(worker_summary["status"], "failed");
+    assert_eq!(worker_summary["selected_attempt"], Value::Null);
+    assert_eq!(worker_summary["attempts_path"], "0/attempts.json");
+    assert!(worker_summary["conformance_error"]
+        .as_str()
+        .expect("conformance error")
+        .contains("exhausted after 2 attempts"));
+    assert!(worker_summary.get("result").is_none());
+
+    let worker_dir = capture_dir.join("0");
+    let manifest: Value = serde_json::from_slice(
+        &fs::read(worker_dir.join("attempts.json")).expect("attempts manifest"),
+    )
+    .expect("attempts JSON");
+    assert_eq!(manifest["selected_attempt"], Value::Null);
+    assert_eq!(manifest["exhausted"], true);
+    assert_eq!(manifest["attempts"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        fs::read(worker_dir.join("attempts/1/stdout")).unwrap(),
+        fs::read(worker_dir.join("attempts/2/stdout")).unwrap()
+    );
+    assert_eq!(
+        fs::read(worker_dir.join("attempts/1/stderr")).unwrap(),
+        fs::read(worker_dir.join("attempts/2/stderr")).unwrap()
+    );
+    assert_eq!(
+        manifest["attempts"][0]["stdout_sha256"],
+        digest(&fs::read(worker_dir.join("attempts/1/stdout")).unwrap())
+    );
+}
+
+fn find_latest_adhoc_capture(directory: &Path) -> std::path::PathBuf {
+    let mut captures = fs::read_dir(directory.join("fan-out-adhoc"))
+        .expect("fan-out captures")
+        .map(|entry| entry.expect("capture entry").path())
+        .collect::<Vec<_>>();
+    captures.sort();
+    captures.pop().expect("one ad-hoc capture")
 }
 
 #[test]

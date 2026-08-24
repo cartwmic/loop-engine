@@ -18,6 +18,8 @@ loop-core = { path = "../loop-core" }
 loop-integrations = { path = "../loop-integrations" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
+jsonschema = { version = "0.50.1", default-features = false }
 
 [dev-dependencies]
 tempfile = "3"

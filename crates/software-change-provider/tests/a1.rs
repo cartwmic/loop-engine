@@ -26,7 +26,7 @@ fn standard_run_progresses_schema_deny_then_evidence_deny_then_allow() {
     assert_eq!(shown.current_state.as_str(), "explore");
 
     // Draft ready is schema and links only; missing artifact denies before
-    // review evidence or accepted-findings are consulted.
+    // review evidence or finding-ledger records are consulted.
     let schema_denial = engine.event("a1", "intent-ready");
     let schema_issue = match schema_denial {
         OperationOutcome::Rejected(issue) => issue,
@@ -49,12 +49,18 @@ fn standard_run_progresses_schema_deny_then_evidence_deny_then_allow() {
         OperationOutcome::Rejected(issue) => issue,
         other => panic!("expected evidence denial, got {other:?}"),
     };
-    assert_eq!(evidence_issue.code, "software-change-review-incomplete");
-    assert_eq!(evidence_issue.message, "review evidence incomplete");
-    let diagnostics = evidence_issue.details.as_ref().expect("evidence details")["diagnostics"]
-        .as_array()
-        .expect("axis diagnostics");
-    assert_eq!(diagnostics.len(), 5);
+    assert_eq!(
+        evidence_issue.code,
+        "software-change-finding-ledger-invalid"
+    );
+    assert_eq!(
+        evidence_issue.message,
+        "finding ledger missing or malformed"
+    );
+    assert_eq!(
+        evidence_issue.details.as_ref().expect("ledger details")["status"],
+        "missing"
+    );
 
     let axes = [
         "solution-agnostic",
@@ -83,14 +89,14 @@ fn standard_run_progresses_schema_deny_then_evidence_deny_then_allow() {
     let findings_denial = engine.event("a1", "approved");
     let findings_issue = match findings_denial {
         OperationOutcome::Rejected(issue) => issue,
-        other => panic!("expected accepted-findings denial, got {other:?}"),
+        other => panic!("expected finding-ledger denial, got {other:?}"),
     };
     assert_eq!(
         findings_issue.code,
-        "software-change-accepted-findings-missing"
+        "software-change-finding-ledger-invalid"
     );
 
-    engine.append_accepted_findings(
+    engine.append_finding_ledger(
         "a1",
         "a1-accepted",
         "intent-review",
