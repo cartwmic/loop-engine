@@ -92,13 +92,29 @@ Do not turn this into an unbounded history-authority scan.
 
 **Done when:** A later auditor can move from the final run evidence to the landed commit without relying on chat history, while the original reports remain unchanged.
 
-## Software-change run candidate triage
+## Software-change run roadmap
 
-These items came from operating the Bookends run and subsequent software-change runs. They are ordered by perceived implementation complexity, not priority. Each entry is a candidate for later intent/design work, not an accepted requirement.
+These items came from operating the Bookends run and subsequent software-change runs. Each entry is a candidate for later intent/design work, not an accepted requirement. The packages below order the work by dependency and dogfood value. Candidate details remain in rough size bands afterward only to avoid obscuring their evidence and boundaries.
 
 Apply one provenance rule across this section: Loop Engine serves a trusted sole owner and well-intentioned, instruction-following drivers. Provenance is durable memory for resume, focused invalidation, honest bypass, and debugging; it is not a hostile-agent security system or a generic semantic dependency graph. Store work and captures once under engine-owned IDs, then reference those IDs instead of asking drivers to repeat commands, paths, digests, and binding fields. Rich metadata is acceptable when generated mechanically and hidden from ordinary operation; driver-authored metadata must stay small. Trust explicit driver materiality and carry declarations, reject cheap mechanical mismatches such as a wrong run, state visit, artifact revision, checkpoint, task, criterion, or invocation, and do not replay otherwise valid work merely to produce a denser provenance trail.
 
-### Bounded candidates
+### Recommended run packages
+
+Use the high-rigor profile with unbound review and implementation work slots while dogfooding these packages. Every run uses at least two distinct ordinary review authors plus a third distinct adversarial-review author. Ask the owner to select every implementation, subagent, and reviewer model before start; this roadmap prescribes no model. Unless a package says otherwise, treat each linked candidate as a separate surgical software-change run and confirm its intent before combining it with adjacent work.
+
+1. **Authorize the product constraint.** Run [Make the minimum-provenance product mandate authoritative](#make-the-minimum-provenance-product-mandate-authoritative) first. It gives every later design a binding YAGNI/KISS burden and is the first dogfood run.
+2. **Make the current workflow easier to drive.** Compose [Confirm the rigor profile before start](#confirm-the-rigor-profile-before-start), [Make late-phase backtracking proportional and explicit](#make-late-phase-backtracking-proportional-and-explicit), and [Reframe adversarial review terminology](#reframe-adversarial-review-terminology) only if intent confirms one documentation-and-procedure surface. These changes reduce avoidable operator mistakes without waiting for engine mechanics.
+3. **Add bound surgical repair in two runs.** First implement only invocation-time plan-task selection from [Support surgical implementation rework without replaying completed work](#support-surgical-implementation-rework-without-replaying-completed-work). After that composed path reaches terminal completion, add captured ad hoc repair for findings with no honest existing task. Do not pull criterion redesign, carry redesign, binding correction, or generalized replay into either run.
+4. **Expose the resulting state.** Implement [Add a concise CLI status and progress view](#add-a-concise-cli-status-and-progress-view) after task selection so the compact view covers the durable selection and inner-task behavior actually shipped.
+5. **Simplify evidence handling.** Implement [Reduce driver-authored provenance to stable references](#reduce-driver-authored-provenance-to-stable-references), then decide whether [Normalize mechanically exposed reviewer candidates for driver triage](#normalize-mechanically-exposed-reviewer-candidates-for-driver-triage) still saves meaningful work. Keep normalization inert until the driver accepts it.
+6. **Create one criterion spine.** Implement [Thread acceptance criteria through live or candidate PRD requirements](#thread-acceptance-criteria-through-live-or-candidate-prd-requirements) before [Orchestrate final validation per frozen criterion](#orchestrate-final-validation-per-frozen-criterion). The second run must reuse the first run's keyspace rather than create another.
+7. **Deliver prior findings where they are needed.** Treat [Deliver steering mechanically to later software-change work](#deliver-steering-mechanically-to-later-software-change-work) and [Route policy-document findings into later review work](#route-policy-document-findings-into-later-review-work) as separate provider runs sharing the stable-reference rule, not as a generic engine finding subsystem.
+8. **Add exceptional continuation only after ordinary repair works.** Implement [Keep run policy frozen and execution controls simple](#keep-run-policy-frozen-and-execution-controls-simple) before [Add a signed owner override](#add-a-signed-owner-override). Then revisit [Defer generalized replay for replacement runs](#defer-generalized-replay-for-replacement-runs) only from observed remaining replacement-run cost.
+9. **Improve repository handoff and proof cost independently.** [Add a driver-owned implementation commit checkpoint](#add-a-driver-owned-implementation-commit-checkpoint) and [Speed up workspace tests and black-box journeys](#speed-up-workspace-tests-and-black-box-journeys) are independent runs after the minimum-provenance mandate. Neither should block surgical repair.
+10. **Keep public-proof corrections in a parallel lane.** Run [Reject citations outside approved Bookends surfaces](#reject-citations-outside-approved-bookends-surfaces), [Reconcile LE-38 requirement wording and public proof](#reconcile-le-38-requirement-wording-and-public-proof), and [Add public contract tests with Bookends IDs](#add-public-contract-tests-with-bookends-ids) separately as their product decisions become ready. They do not belong in provider-repair runs.
+11. **Leave strategic reshaping until operating evidence justifies it.** [Separate enduring product requirements from implementation specifications](#separate-enduring-product-requirements-from-implementation-specifications), [Generalize provider evaluation and calibration](#generalize-provider-evaluation-and-calibration), and [Create a prototype-to-spec workflow](#create-a-prototype-to-spec-workflow) are later standalone initiatives, not cleanup to bundle into the packages above.
+
+### Candidate detail: bounded scope
 
 #### Make the minimum-provenance product mandate authoritative
 
@@ -148,7 +164,7 @@ Apply one provenance rule across this section: Loop Engine serves a trusted sole
 - **Candidate:** Use “challenge review,” “devil's-advocate review,” or “weakness-exposure review” in human-facing titles and instructions. Preserve existing state and gate IDs in the first iteration to avoid a topology/config migration for a wording change.
 - **Open questions:** Pick one term, test whether it changes review quality, and decide later whether internal IDs merit migration.
 
-### Moderate candidates
+### Candidate detail: moderate scope
 
 #### Orchestrate final validation per frozen criterion
 
@@ -198,7 +214,7 @@ Apply one provenance rule across this section: Loop Engine serves a trusted sole
 - **Candidate:** Keep public coverage and fail-closed assertions. Parallelize independent black-box proofs that already use distinct work-roots. Give concurrent cargo and journey processes isolated compiler directories so they do not wait on one `target/` lock. Do not parallelize hops that must share one run's journal. Do not treat graph-local same-revision `exit 0` as remainder-carry. Measure and record wall-clock for `cargo test --workspace`, clippy, and each public source journey before and after.
 - **Open questions:** Which `prove_*` functions are independent versus sharing fixtures or profile mutation; whether CI preflight should batch journeys; whether implement-plan task workers should be forbidden from re-running the full journey suite when a designated `docs-prd-journeys` node owns that proof; and what rustc/linker RAM bound is safe for parallel cargo on this machine.
 
-### High-complexity candidates
+### Candidate detail: high complexity
 
 #### Keep run policy frozen and execution controls simple
 
