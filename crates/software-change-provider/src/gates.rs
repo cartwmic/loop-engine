@@ -225,6 +225,7 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
                 config.config_version(),
                 axes,
                 config.axis_namespace(),
+                config.artifact_root(),
             )
         });
         let failing_evidence = evidence

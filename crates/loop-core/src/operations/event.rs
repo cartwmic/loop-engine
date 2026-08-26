@@ -5,7 +5,7 @@
 //! provider evaluation.  Core chooses the edge and computes the resulting
 //! lifecycle; persistence owns the atomic conditional mutation boundary.
 
-use super::{persistence_error, provider_error};
+use super::{persistence_error, provider_error, require_current_observation};
 use crate::{
     instruction_digest, project_invocation_status, request_from_snapshot, resolve_transition,
     CheckedEvaluationSnapshotRequest, CommitTransitionRequest, CommitTransitionResult,
@@ -99,11 +99,27 @@ where
         Err(error) => return transition_resolution_error(error),
     };
 
+    // Preserve the pre-existing bound-slot refusal before adding the
+    // observation guard. A caller missing both prerequisites must still see
+    // the actionable bound-slot reason that made the event invalid already.
+    if transition.kind.is_checked() {
+        if let Some(rejected) = enforce_bound_slot_gate(&run, &transition, persistence, request.now)
+        {
+            return rejected;
+        }
+    }
+
+    if let Err(outcome) =
+        require_current_observation::<P, Result>(persistence, &run.id, run.control_revision)
+    {
+        return outcome;
+    }
+
     if transition.kind.is_check_free() {
         return commit_check_free(&run, &transition, persistence);
     }
 
-    evaluate_checked(run, &transition, gateway, persistence, request.now)
+    evaluate_checked(run, &transition, gateway, persistence)
 }
 
 /// Execute `event` with ports first, which is convenient for composition
@@ -212,7 +228,6 @@ fn evaluate_checked<G, P>(
     transition: &Transition,
     gateway: &G,
     persistence: &P,
-    now: Timestamp,
 ) -> OperationOutcome<Result>
 where
     G: ProviderGateway + ?Sized,
@@ -224,10 +239,6 @@ where
         Ok(snapshot) => snapshot,
         Err(error) => return persistence_error(error),
     };
-
-    if let Some(rejected) = enforce_bound_slot_gate(&run, transition, persistence, now) {
-        return rejected;
-    }
 
     // The persistence contract returns the exact edge requested at the
     // snapshot boundary.  Keep the provider-facing request and subsequent

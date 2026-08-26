@@ -1,13 +1,14 @@
 //! `invoke` work-slot delegation.
 
-use super::persistence_error;
+use super::{persistence_error, require_current_observation, show};
 use crate::{
     instruction_digest, project_invocation_status, ContextRecord, CreateWorkSlotInvocationRequest,
     InvocationId, OperationOutcome, Persistence, ProcessError, ProjectedInvocationStatus, RunId,
     Timestamp, WaiterSpawnArgs, WorkSlotBinding, WorkSlotId, WorkSlotProcess,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 const WORK_SLOT_BINDINGS_KEY: &str = "work_slot_bindings";
@@ -19,6 +20,10 @@ pub struct Request {
     pub slot_id: WorkSlotId,
     pub invocation_id: InvocationId,
     pub database: PathBuf,
+    /// Optional assignment identities to run. `None` means all enumerable
+    /// assignments (and preserves the historical full-execution path).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment_selection: Option<Vec<String>>,
 }
 
 impl Request {
@@ -33,7 +38,13 @@ impl Request {
             slot_id: slot_id.into(),
             invocation_id: invocation_id.into(),
             database: database.into(),
+            assignment_selection: None,
         }
+    }
+
+    pub fn with_assignment_selection(mut self, selection: Option<Vec<String>>) -> Self {
+        self.assignment_selection = selection;
+        self
     }
 }
 
@@ -58,6 +69,10 @@ struct WorkerPacket {
     capture_dir: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     context: Option<Vec<ContextRecord>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    assignment_selection: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    standing_assignment_ids: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -89,6 +104,15 @@ where
         Err(error) => return persistence_error(error),
     };
 
+    // Preserve the operation's existing lifecycle refusal before any invoke
+    // preflight (including assignment enumeration) or observation check.
+    if !run.lifecycle.is_active() {
+        return OperationOutcome::rejected(
+            "run-not-active",
+            format!("run `{}` is not active ({:?})", run.id, run.lifecycle),
+        );
+    }
+
     let Some(slot) = run
         .workflow
         .work_slots
@@ -118,6 +142,15 @@ where
         Err(message) => {
             return OperationOutcome::rejected("invalid-work-slot-binding", message);
         }
+    };
+
+    let assignment_selection = match validate_assignment_selection(
+        process,
+        &binding,
+        request.assignment_selection.as_deref(),
+    ) {
+        Ok(selection) => selection,
+        Err(outcome) => return outcome,
     };
 
     let invocations = match persistence.load_work_slot_invocations(&request.run_id) {
@@ -197,6 +230,13 @@ where
             "cannot allocate capture_dir because artifact_root is empty",
         );
     }
+
+    if let Err(outcome) =
+        require_current_observation::<P, Result>(persistence, &run.id, run.control_revision)
+    {
+        return outcome;
+    }
+
     let capture_dir_path =
         capture_dir_path(&artifact_root, &request.slot_id, &request.invocation_id);
     let capture_dir = capture_dir_path.to_string_lossy().into_owned();
@@ -227,10 +267,63 @@ where
         now,
         allowed_time_ms,
         capture_dir.clone(),
-    );
-    if let Err(error) = persistence.create_work_slot_invocation(create) {
-        return persistence_error(error);
-    }
+    )
+    .with_routed_inputs(forwarded_context.clone().unwrap_or_default())
+    .with_frozen_run_identity(json!({
+        "provider": run.provider_association.as_json(),
+        "input": run.initial_input,
+    }))
+    .with_assignment_selection(assignment_selection.clone());
+    let created = match persistence.create_work_slot_invocation(create) {
+        Ok(created) => created,
+        Err(error) => return persistence_error(error),
+    };
+
+    // Compute standing identities only after the new invocation is durable.
+    // This deliberately reuses the public show projection: a prior successful
+    // sidecar result is not enough unless that assignment is standing there.
+    let standing_assignment_ids = if forwarded_context.is_some() && invocations.is_empty() {
+        Some(Vec::new())
+    } else if forwarded_context.is_some() {
+        let context = match persistence.load_context_records(&request.run_id) {
+            Ok(context) => context,
+            Err(error) => return persistence_error(error),
+        };
+        let mut invocations = invocations;
+        invocations.push(created.invocation.clone());
+        let data = crate::ShowData {
+            run: run.clone(),
+            context,
+            checked_evaluations: Vec::new(),
+        };
+        let mut current_subjects = std::collections::BTreeMap::new();
+        for slot_id in invocations
+            .iter()
+            .map(|item| item.slot_id.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+        {
+            match persistence.get_current_slot_subject(&request.run_id, &slot_id) {
+                Ok(Some(subject)) => {
+                    current_subjects.insert(slot_id, subject);
+                }
+                Ok(None) => {}
+                Err(error) => return persistence_error(error),
+            }
+        }
+        let projection = match show::project_with_invocations_and_subjects(
+            data,
+            &invocations,
+            now,
+            |_| false,
+            &current_subjects,
+        ) {
+            Ok(projection) => projection,
+            Err(error) => return OperationOutcome::error(error.code(), error.to_string()),
+        };
+        Some(show::standing_assignment_ids(&projection))
+    } else {
+        None
+    };
 
     let envelope = WaiterEnvelope {
         command: binding.command,
@@ -242,6 +335,8 @@ where
             instruction_body,
             capture_dir: capture_dir.clone(),
             context: forwarded_context,
+            assignment_selection,
+            standing_assignment_ids,
         },
     };
     let envelope_json = match serde_json::to_vec(&envelope) {
@@ -264,6 +359,55 @@ where
         allowed_time_ms,
         capture_dir,
     })
+}
+
+fn validate_assignment_selection<P: WorkSlotProcess + ?Sized>(
+    process: &P,
+    binding: &WorkSlotBinding,
+    requested: Option<&[String]>,
+) -> std::result::Result<Option<Vec<String>>, OperationOutcome<Result>> {
+    let Some(requested) = requested else {
+        return Ok(None);
+    };
+    if requested.is_empty() {
+        return Err(OperationOutcome::rejected(
+            "empty-assignment-selection",
+            "assignment selection must contain at least one identity",
+        ));
+    }
+    let available = match process.enumerate_assignments(binding) {
+        Ok(Some(available)) if !available.is_empty() => available,
+        Ok(Some(_)) | Ok(None) => {
+            return Err(OperationOutcome::rejected(
+                "assignments-not-enumerable",
+                "the bound work slot does not expose enumerable assignments",
+            ));
+        }
+        Err(error) => return Err(process_error(error)),
+    };
+    let available = available.into_iter().collect::<BTreeSet<_>>();
+    let mut seen = BTreeSet::new();
+    for identity in requested {
+        if identity.is_empty() {
+            return Err(OperationOutcome::rejected(
+                "empty-assignment-identity",
+                "assignment identities must be non-empty",
+            ));
+        }
+        if !seen.insert(identity) {
+            return Err(OperationOutcome::rejected(
+                "duplicate-assignment-selection",
+                format!("assignment `{identity}` was selected more than once"),
+            ));
+        }
+        if !available.contains(identity) {
+            return Err(OperationOutcome::rejected(
+                "unknown-assignment",
+                format!("assignment `{identity}` is not in the bound work slot"),
+            ));
+        }
+    }
+    Ok(Some(requested.to_vec()))
 }
 
 fn bound_worker(
@@ -618,6 +762,7 @@ mod tests {
         next_pid: Cell<u32>,
         alive: RefCell<HashMap<u32, bool>>,
         default_alive: bool,
+        assignments: Option<Vec<String>>,
         waited: Cell<bool>,
     }
 
@@ -630,12 +775,18 @@ mod tests {
                 next_pid: Cell::new(4242),
                 alive: RefCell::new(HashMap::new()),
                 default_alive: true,
+                assignments: None,
                 waited: Cell::new(false),
             }
         }
 
         fn set_alive(&self, pid: u32, alive: bool) {
             self.alive.borrow_mut().insert(pid, alive);
+        }
+
+        fn with_assignments(mut self, assignments: &[&str]) -> Self {
+            self.assignments = Some(assignments.iter().map(|id| (*id).to_owned()).collect());
+            self
         }
     }
 
@@ -648,6 +799,13 @@ mod tests {
                 .get(&pid)
                 .copied()
                 .unwrap_or(self.default_alive)
+        }
+
+        fn enumerate_assignments(
+            &self,
+            _binding: &WorkSlotBinding,
+        ) -> std::result::Result<Option<Vec<String>>, ProcessError> {
+            Ok(self.assignments.clone())
         }
 
         fn spawn_wait_invocation(
@@ -697,6 +855,28 @@ mod tests {
         assert!(persistence.created.borrow().is_empty());
         assert!(log.borrow().is_empty());
         assert!(!process.waited.get());
+    }
+
+    #[test]
+    fn terminal_run_keeps_run_not_active_refusal_before_observation_guard() {
+        let mut run = sample_run(bound_input("/tmp/artifacts"));
+        run.lifecycle = crate::Lifecycle::Final;
+        let (persistence, process, log) = harness(run);
+        let persistence = persistence.with_subject("slot-1", "visit-1");
+
+        let outcome = execute(
+            invoke_request(),
+            &persistence,
+            &process,
+            Timestamp::from_unix_millis(1_000),
+            30_000,
+        );
+
+        assert!(outcome.is_rejected());
+        assert_eq!(outcome.issue().unwrap().code, "run-not-active");
+        assert!(process.spawn_args.borrow().is_empty());
+        assert!(persistence.created.borrow().is_empty());
+        assert!(log.borrow().is_empty());
     }
 
     #[test]
@@ -887,6 +1067,92 @@ mod tests {
         assert_eq!(packet["instruction_body"], "Do the slot work");
         assert_eq!(packet["capture_dir"], expected_dir);
         assert!(packet.get("command").is_none());
+    }
+
+    #[test]
+    fn selected_assignments_are_recorded_and_forwarded_without_rewriting_binding() {
+        let artifacts = tempfile::tempdir().expect("temp artifact root");
+        let artifact_root = artifacts.path().to_string_lossy().into_owned();
+        let (persistence, process, _log) = harness(sample_run(bound_input(&artifact_root)));
+        let persistence = persistence.with_subject("slot-1", "visit-1");
+        let process = process.with_assignments(&["worker-0", "worker-1"]);
+        let request = invoke_request().with_assignment_selection(Some(vec!["worker-1".to_owned()]));
+
+        let outcome = execute(
+            request,
+            &persistence,
+            &process,
+            Timestamp::from_unix_millis(1_000),
+            30_000,
+        );
+
+        assert!(outcome.is_completed(), "{outcome:?}");
+        assert_eq!(
+            persistence.created.borrow()[0].assignment_selection,
+            Some(vec!["worker-1".to_owned()])
+        );
+        assert_eq!(
+            persistence.created.borrow()[0].binding,
+            WorkSlotBinding::new("echo", vec!["hello".to_owned()])
+        );
+        let envelope: Value =
+            serde_json::from_slice(&process.envelopes.borrow()[0]).expect("envelope");
+        assert_eq!(
+            envelope["worker_packet"]["assignment_selection"],
+            json!(["worker-1"])
+        );
+    }
+
+    #[test]
+    fn invalid_assignment_selection_is_rejected_before_waiter_spawn() {
+        for selection in [
+            Vec::new(),
+            vec!["unknown".to_owned()],
+            vec!["worker-0".to_owned(), "worker-0".to_owned()],
+        ] {
+            let artifacts = tempfile::tempdir().expect("temp artifact root");
+            let artifact_root = artifacts.path().to_string_lossy().into_owned();
+            let (persistence, process, log) = harness(sample_run(bound_input(&artifact_root)));
+            let persistence = persistence.with_subject("slot-1", "visit-1");
+            let process = process.with_assignments(&["worker-0", "worker-1"]);
+            let request = invoke_request().with_assignment_selection(Some(selection));
+
+            let outcome = execute(
+                request,
+                &persistence,
+                &process,
+                Timestamp::from_unix_millis(1_000),
+                30_000,
+            );
+
+            assert!(outcome.is_rejected(), "{outcome:?}");
+            assert!(process.spawn_args.borrow().is_empty());
+            assert!(persistence.created.borrow().is_empty());
+            assert!(log.borrow().is_empty());
+        }
+    }
+
+    #[test]
+    fn selection_on_opaque_binding_is_rejected_before_waiter_spawn() {
+        let artifacts = tempfile::tempdir().expect("temp artifact root");
+        let artifact_root = artifacts.path().to_string_lossy().into_owned();
+        let (persistence, process, log) = harness(sample_run(bound_input(&artifact_root)));
+        let persistence = persistence.with_subject("slot-1", "visit-1");
+        let request = invoke_request().with_assignment_selection(Some(vec!["worker-0".to_owned()]));
+
+        let outcome = execute(
+            request,
+            &persistence,
+            &process,
+            Timestamp::from_unix_millis(1_000),
+            30_000,
+        );
+
+        assert!(outcome.is_rejected(), "{outcome:?}");
+        assert_eq!(outcome.issue().unwrap().code, "assignments-not-enumerable");
+        assert!(process.spawn_args.borrow().is_empty());
+        assert!(persistence.created.borrow().is_empty());
+        assert!(log.borrow().is_empty());
     }
 
     #[test]
@@ -1150,6 +1416,7 @@ mod tests {
         assert!(outcome.is_completed(), "{outcome:?}");
         let packet = worker_packet(&process);
         let forwarded = packet["context"].as_array().expect("context array");
+        assert_eq!(packet["standing_assignment_ids"], json!([]));
         assert_eq!(forwarded.len(), 3);
         assert_eq!(forwarded[0], serde_json::to_value(&older).unwrap());
         assert_eq!(forwarded[1], serde_json::to_value(&between).unwrap());
@@ -1182,6 +1449,7 @@ mod tests {
         assert!(outcome.is_completed(), "{outcome:?}");
         let packet = worker_packet(&process);
         assert_eq!(packet["context"], json!([]));
+        assert_eq!(packet["standing_assignment_ids"], json!([]));
     }
 
     #[test]

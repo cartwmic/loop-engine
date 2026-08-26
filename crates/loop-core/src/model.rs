@@ -367,22 +367,62 @@ pub enum ProjectedInvocationStatus {
     Overrun,
 }
 
-/// Inner worker identity and process exit copied from a helper `summary.json`.
+/// Identity, process exit, and inert output linkage copied from a helper
+/// `summary.json`.
 ///
-/// Identity is `command` plus argv order. There is no label field.
+/// `assignment_id` is an opaque stable name supplied by the engine for direct
+/// fan-out workers or by a provider for work it enumerates. It is not a role.
+/// The selected-output fields identify bytes in the capture tree; core never
+/// interprets those bytes.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct InnerWorker {
+    #[serde(default)]
+    pub assignment_id: String,
     pub command: String,
     pub args: Vec<String>,
     pub exit_code: i32,
+    #[serde(default)]
+    pub selected_attempt: Option<u32>,
+    #[serde(default)]
+    pub selected_output_sha256: Option<String>,
+    #[serde(default)]
+    pub selected_output_path: Option<String>,
+    /// Opaque, caller-declared output contract. Core transports it but does
+    /// not inspect or interpret it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_output_contract: Option<Value>,
+    /// Opaque routed-input identity for this assignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routed_inputs: Option<Value>,
+    /// The following fields are populated by plan-task workers. Keeping them
+    /// on the inert worker record lets show render a completed result without
+    /// opening capture files or provider artifacts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_definition: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_packet: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependencies: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository_effect: Option<Value>,
 }
 
 impl InnerWorker {
     pub fn new(command: impl Into<String>, args: Vec<String>, exit_code: i32) -> Self {
         Self {
+            assignment_id: String::new(),
             command: command.into(),
             args,
             exit_code,
+            selected_attempt: None,
+            selected_output_sha256: None,
+            selected_output_path: None,
+            declared_output_contract: None,
+            routed_inputs: None,
+            task_definition: None,
+            task_packet: None,
+            dependencies: None,
+            repository_effect: None,
         }
     }
 }
@@ -407,6 +447,22 @@ pub struct WorkSlotInvocation {
     pub completed_at: Option<Timestamp>,
     pub capture_dir: String,
     pub inner_workers: Vec<InnerWorker>,
+    /// Exact context records forwarded to the worker packet. This is a
+    /// durable snapshot; show never reconstructs it from capture files.
+    #[serde(default)]
+    pub routed_inputs: Vec<ContextRecord>,
+    /// Durable snapshot of the run-level identity used for the assignment.
+    /// `None` is an unknown legacy value and therefore fails closed in show.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frozen_run_identity: Option<Value>,
+    /// Immutable completion snapshot used to detect mutation of a recorded
+    /// result without consulting captures.
+    #[serde(default)]
+    pub recorded_inner_workers: Vec<InnerWorker>,
+    /// Assignment identities selected for this invocation. `None` means the
+    /// frozen binding ran in full; `Some` is a validated non-empty subset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment_selection: Option<Vec<String>>,
 }
 
 impl WorkSlotInvocation {
@@ -440,7 +496,31 @@ impl WorkSlotInvocation {
             completed_at,
             capture_dir: capture_dir.into(),
             inner_workers,
+            routed_inputs: Vec::new(),
+            frozen_run_identity: None,
+            recorded_inner_workers: Vec::new(),
+            assignment_selection: None,
         }
+    }
+
+    pub fn with_frozen_run_identity(mut self, identity: Value) -> Self {
+        self.frozen_run_identity = Some(identity);
+        self
+    }
+
+    pub fn with_recorded_inner_workers(mut self, workers: Vec<InnerWorker>) -> Self {
+        self.recorded_inner_workers = workers;
+        self
+    }
+
+    pub fn with_routed_inputs(mut self, routed_inputs: Vec<ContextRecord>) -> Self {
+        self.routed_inputs = routed_inputs;
+        self
+    }
+
+    pub fn with_assignment_selection(mut self, selection: Option<Vec<String>>) -> Self {
+        self.assignment_selection = selection;
+        self
     }
 }
 

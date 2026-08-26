@@ -288,6 +288,187 @@ fn max_overlap(intervals: &[(f64, f64)]) -> usize {
 }
 
 #[test]
+fn subset_plan_graph_refuses_missing_prerequisite_and_runs_dependants() {
+    let (_dir, artifact_root, receipt_dir) = fixture("subset-selection");
+    write_plan(
+        &artifact_root,
+        &json!({
+            "tasks": [{"id": "a"}, {"id": "b"}, {"id": "c"}],
+            "dependency_graph": [
+                {"from": "a", "to": "b"},
+                {"from": "a", "to": "c"}
+            ]
+        }),
+    );
+
+    let refused = invoke_graph_with(
+        &task_worker(&receipt_dir, &["--write-report"]),
+        &packet(
+            "run-subset",
+            "implement",
+            &artifact_root.to_string_lossy(),
+            "Do the work",
+        ),
+        None,
+        &["--task", "b"],
+    );
+    assert_eq!(refused.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("missing standing prerequisites"));
+    assert!(!receipt_dir.join("b.stdin").exists());
+
+    let first_receipts = artifact_root.parent().unwrap().join("receipts-first");
+    fs::create_dir_all(&first_receipts).expect("first receipts");
+    let first_capture = artifact_root.parent().unwrap().join("captures/inv-first");
+    let first = invoke_graph_with(
+        &task_worker(&first_receipts, &["--write-report"]),
+        &packet_with_capture(
+            "run-subset",
+            "implement",
+            &artifact_root.to_string_lossy(),
+            "Do the work",
+            &first_capture,
+        ),
+        None,
+        &["--task", "a"],
+    );
+    assert_eq!(
+        first.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    for task in ["a", "b", "c"] {
+        assert!(first_receipts.join(format!("{task}.stdin")).is_file());
+    }
+
+    let second_receipts = artifact_root.parent().unwrap().join("receipts-second");
+    fs::create_dir_all(&second_receipts).expect("second receipts");
+    let second_capture = artifact_root.parent().unwrap().join("captures/inv-second");
+    let second = invoke_graph_with(
+        &task_worker(&second_receipts, &["--write-report"]),
+        &packet_with_capture(
+            "run-subset",
+            "implement",
+            &artifact_root.to_string_lossy(),
+            "Do the work",
+            &second_capture,
+        ),
+        None,
+        &["--task", "c"],
+    );
+    assert_eq!(
+        second.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert!(second_receipts.join("c.stdin").is_file());
+    assert!(!second_receipts.join("a.stdin").exists());
+    assert!(!second_receipts.join("b.stdin").exists());
+    let selection: Value = serde_json::from_slice(
+        &fs::read(second_capture.join("selection.json")).expect("selection record"),
+    )
+    .expect("selection JSON");
+    assert_eq!(selection["tasks"], json!(["c"]));
+    let summary = read_summary_at(&second_capture);
+    assert_eq!(summary["workers"][0]["assignment_id"], "c");
+    assert_eq!(summary["workers"][0]["selected_attempt"], 1);
+    let selected_output = PathBuf::from(
+        summary["workers"][0]["selected_output_path"]
+            .as_str()
+            .expect("selected output path"),
+    );
+    assert!(selected_output.is_file());
+    let mut hasher = Sha256::new();
+    hasher.update(fs::read(&selected_output).expect("selected output bytes"));
+    assert_eq!(
+        summary["workers"][0]["selected_output_sha256"],
+        format!("sha256:{:x}", hasher.finalize())
+    );
+    assert_eq!(
+        summary["workers"][0]["dependencies"],
+        json!(["a"]),
+        "recorded dependencies must retain standing prerequisites even when no Dagu step is spawned"
+    );
+    assert!(artifact_root.join("plan-task-results.json").is_file());
+}
+
+#[test]
+fn plan_graph_rejects_invalid_selection_and_missing_auto_dependant_prerequisites() {
+    let cases = [
+        (vec!["--tasks", ""], "empty selection"),
+        (vec!["--task", "unknown"], "unknown selection"),
+        (vec!["--task", "a", "--task", "a"], "duplicate selection"),
+    ];
+    for (extra, label) in cases {
+        let fixture_label = label.replace(' ', "-");
+        let (_dir, artifact_root, receipt_dir) = fixture(&fixture_label);
+        write_plan(
+            &artifact_root,
+            &json!({
+                "tasks": [{"id": "a"}, {"id": "b"}, {"id": "c"}],
+                "dependency_graph": [
+                    {"from": "a", "to": "c"},
+                    {"from": "b", "to": "c"}
+                ]
+            }),
+        );
+        let output = invoke_graph_with(
+            &task_worker(&receipt_dir, &["--write-report"]),
+            &packet(
+                "run-invalid-selection",
+                "implement",
+                &artifact_root.to_string_lossy(),
+                "Do the work",
+            ),
+            None,
+            &extra,
+        );
+        assert_eq!(output.status.code(), Some(2), "{label}: {output:?}");
+        assert!(
+            receipt_dir
+                .read_dir()
+                .expect("receipt directory")
+                .next()
+                .is_none(),
+            "{label} started a worker"
+        );
+    }
+
+    // Selecting A adds C as a dependant, but C also requires B.  B is not
+    // auto-included, so the whole selection is refused before Dagu starts.
+    let (_dir, artifact_root, receipt_dir) = fixture("missing-auto-dependant-prerequisite");
+    write_plan(
+        &artifact_root,
+        &json!({
+            "tasks": [{"id": "a"}, {"id": "b"}, {"id": "c"}],
+            "dependency_graph": [
+                {"from": "a", "to": "c"},
+                {"from": "b", "to": "c"}
+            ]
+        }),
+    );
+    let output = invoke_graph_with(
+        &task_worker(&receipt_dir, &["--write-report"]),
+        &packet(
+            "run-missing-auto-dependant-prerequisite",
+            "implement",
+            &artifact_root.to_string_lossy(),
+            "Do the work",
+        ),
+        None,
+        &["--task", "a"],
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("c"));
+    assert!(receipt_dir
+        .read_dir()
+        .expect("receipt directory")
+        .next()
+        .is_none());
+}
+
+#[test]
 fn invalid_working_directory_fails_before_dagu_or_worker_launch() {
     let (dir, _artifact_root, receipt_dir) = fixture("invalid-working-directory");
     let marker = dir.path().join("worker-started");

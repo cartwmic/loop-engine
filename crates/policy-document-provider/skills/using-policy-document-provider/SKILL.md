@@ -25,6 +25,8 @@ Workflow: `prepare → deterministic-review → semantic-review → end`. `ready
 
 **Overlay meaning:** overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. You still triage worker output, append provider-shaped records, and request the shown event.
 
+**Observation before mutation:** `show` of the current state and instructions arms that state visit for `append`, `event`, `invoke`, and `terminate`. Run it again after every transition, including a transition back to the same state. `list`, `history`, and `invocation-progress` do not arm mutation. Completed invocation views expose assignment/selected-attempt identity and a provider-free change report; those records remain inert until the driver appends provider-shaped evidence.
+
 **Lock-in-before-start:** do not call `start` until the user confirms (1) bind or not (which slot IDs), (2) exact `{command, args}` per bound slot, and (3) model identity in those frozen args (nested `--worker` / `--task-worker` count) or explicit unpinned-default acceptance. Bindings freeze and cannot be patched.
 
 Run `loop-engine preview-bindings` on the JSON you will freeze before `start`. `describe` and `evaluate` remain deterministic and do not invoke a model. Provider contract: `crates/policy-document-provider/README.md`. Target constraints: `crates/policy-document-provider/data/target-guidance.md`. Semantic evidence contract: `crates/policy-document-provider/data/reviewer-protocol.md`.
@@ -243,7 +245,7 @@ Heading aliases are case-insensitive; profiles do not require exact heading spel
 
 ## Run loop
 
-1. `show` and read current instructions plus immutable `initial_input` (including `work_slot_bindings` when present), `work_slots`, and `work_slot_invocations` (`overlay_meaning`, `elapsed_ms`, `remaining_allowed_ms`, `capture_dir`, `inner_workers`), especially `mode`, target, profile version, deterministic policies, and semantic policies.
+1. `show` and read current instructions plus immutable `initial_input` (including `work_slot_bindings` when present), `work_slots`, and `work_slot_invocations` (`assignment_selection`, per-worker assignment/selected-attempt identity, `overlay_meaning`, `elapsed_ms`, `remaining_allowed_ms`, `capture_dir`, `inner_workers`), plus the provider-free `change_report`; especially inspect `mode`, target, profile version, deterministic policies, and semantic policies. This observation arms only the current state visit. Repeat this step after every transition before the next append, event, invoke, or terminate.
 2. In `prepare`, author or revise target externally. Request `ready` to enter deterministic review.
 3. In `deterministic-review`, if that slot is bound, `invoke` it and poll overlay until `succeeded` / `failed` / `overrun`; on `overrun`, run `show` immediately before re-invoking; on failure, inspect `capture_dir/summary.json` and captured stdout before stderr. Overlay `succeeded` is worker exit 0, not provider acceptance. Request `passed` only after overlay `succeeded`, or immediately if unbound. On `policy-document-nonconforming`, fix every reported violation, request check-free `revise`, then repeat from `prepare`.
 4. After deterministic approval, compute lowercase SHA-256 over exact current bytes:

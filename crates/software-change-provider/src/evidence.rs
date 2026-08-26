@@ -1,8 +1,10 @@
-//! Pure review-evidence aggregation.
+//! Review-evidence aggregation and selected-output linkage checks.
 //!
-//! This module owns no filesystem access and no transition routing.  It
-//! consumes already-validated configuration projections and engine-supplied
-//! context records, then applies technical-design §7's six stages in order.
+//! This module owns no transition routing. It consumes already-validated
+//! configuration projections and engine-supplied context records, then applies
+//! technical-design §7's six stages in order. When a driver links a claim to
+//! selected worker output, it reads and verifies those named bytes; the engine
+//! core remains opaque to their meaning.
 
 #![allow(dead_code)]
 
@@ -10,7 +12,10 @@ use crate::config::PolicyAxis;
 use loop_core::ContextRecord;
 use serde::Serialize;
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::PathBuf;
 
 const REVIEW_EVIDENCE_KIND: &str = "review-evidence";
 const AUTHOR_KINDS: &[&str] = &["human", "agent", "script"];
@@ -65,6 +70,9 @@ pub(crate) enum EvidenceDiagnostic {
         evidence_version: String,
         run_version: String,
     },
+    Unverified {
+        reason: String,
+    },
     Independence {
         required: u64,
         distinct_present: usize,
@@ -79,6 +87,7 @@ impl EvidenceDiagnostic {
             Self::Malformed { .. } => "malformed",
             Self::Stale { .. } => "stale",
             Self::StaleConfig { .. } => "stale_config",
+            Self::Unverified { .. } => "unverified",
             Self::Independence { .. } => "independence",
         }
     }
@@ -175,9 +184,10 @@ enum Attribution {
 
 /// Run §7's six-stage evidence pipeline.
 ///
-/// `context` is already in engine-supplied sequence order.  This function
-/// deliberately trusts that order and never sorts by timestamps or performs
-/// any filesystem access.
+/// `context` is already in engine-supplied sequence order. This function
+/// deliberately trusts that order and never sorts by timestamps. When a
+/// driver links evidence to selected worker output, the provider verifies
+/// those named bytes here; the engine core does not participate.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn evaluate_evidence(
     context: &[ContextRecord],
@@ -188,8 +198,14 @@ pub(crate) fn evaluate_evidence(
     config_version: &str,
     axes: &BTreeMap<String, PolicyAxis>,
     axis_namespace: &BTreeMap<String, BTreeSet<String>>,
+    artifact_root: Option<&Value>,
 ) -> EvidenceEvaluation {
     let mut malformed: BTreeMap<String, Vec<String>> = axes
+        .keys()
+        .cloned()
+        .map(|axis| (axis, Vec::new()))
+        .collect();
+    let mut unverified: BTreeMap<String, Vec<String>> = axes
         .keys()
         .cloned()
         .map(|axis| (axis, Vec::new()))
@@ -211,11 +227,15 @@ pub(crate) fn evaluate_evidence(
             .expect("object check above guarantees object data");
         match classify_attribution(data, context_index, gate, axis_namespace) {
             Attribution::Current { axis } => {
-                match parse_conforming(data, subject) {
+                match parse_conforming(data, subject, artifact_root) {
                     Ok(conforming) => {
                         // Any later conforming record clears the malformed
                         // block, regardless of author/revision/config.
                         malformed
+                            .get_mut(&axis)
+                            .expect("attribution only returns configured axis")
+                            .clear();
+                        unverified
                             .get_mut(&axis)
                             .expect("attribution only returns configured axis")
                             .clear();
@@ -228,10 +248,19 @@ pub(crate) fn evaluate_evidence(
                             conforming,
                         );
                     }
-                    Err(reasons) => {
+                    Err(EvidenceParseError::Malformed(reasons)) => {
                         // A malformed attributable record blocks only its own
                         // axis until a later conforming record for that axis.
                         malformed
+                            .get_mut(&axis)
+                            .expect("attribution only returns configured axis")
+                            .extend(reasons);
+                    }
+                    Err(EvidenceParseError::Unverified(reasons)) => {
+                        // A linked claim whose source cannot be verified is
+                        // not a reviewer disposition. It blocks only its own
+                        // axis until a later conforming record for that axis.
+                        unverified
                             .get_mut(&axis)
                             .expect("attribution only returns configured axis")
                             .extend(reasons);
@@ -304,10 +333,14 @@ pub(crate) fn evaluate_evidence(
         let malformed_reasons = malformed
             .get(axis)
             .expect("all configured axes have malformed state");
+        let unverified_reasons = unverified
+            .get(axis)
+            .expect("all configured axes have unverified state");
         let has_malformed = !malformed_reasons.is_empty();
+        let has_unverified = !unverified_reasons.is_empty();
         let has_fail = !failed_findings.is_empty();
         let enough_passes = pass_authors.len() as u64 >= policy.required_authors();
-        let satisfied = !has_malformed && !has_fail && enough_passes;
+        let satisfied = !has_malformed && !has_unverified && !has_fail && enough_passes;
 
         if !satisfied {
             all_axes_satisfied = false;
@@ -327,6 +360,12 @@ pub(crate) fn evaluate_evidence(
                     reasons: malformed_reasons.clone(),
                 });
             }
+            axis_diagnostics.extend(
+                unverified_reasons
+                    .iter()
+                    .cloned()
+                    .map(|reason| EvidenceDiagnostic::Unverified { reason }),
+            );
             if (distinct_present.len() as u64) < policy.required_authors() {
                 axis_diagnostics.push(EvidenceDiagnostic::Independence {
                     required: policy.required_authors(),
@@ -418,10 +457,27 @@ fn classify_attribution(
     }
 }
 
+#[derive(Clone, Debug)]
+enum EvidenceParseError {
+    Malformed(Vec<String>),
+    Unverified(Vec<String>),
+}
+
+#[derive(Clone, Debug)]
+struct OriginatingOutput {
+    invocation_id: String,
+    assignment_id: String,
+    selected_attempt: Option<u32>,
+    identity_required: bool,
+    digest: String,
+    path: PathBuf,
+}
+
 fn parse_conforming(
     data: &Map<String, Value>,
     expected_subject: &str,
-) -> Result<ConformingEvidence, Vec<String>> {
+    artifact_root: Option<&Value>,
+) -> Result<ConformingEvidence, EvidenceParseError> {
     let mut reasons = Vec::new();
     let _gate = non_empty_string(data, "gate", &mut reasons);
     let _policy_id = non_empty_string(data, "policy_id", &mut reasons);
@@ -461,16 +517,217 @@ fn parse_conforming(
     }
 
     if !reasons.is_empty() {
-        return Err(reasons);
+        return Err(EvidenceParseError::Malformed(reasons));
+    }
+
+    let result = result.expect("result checked by empty-reasons branch");
+    let findings = findings.expect("findings checked by empty-reasons branch");
+    let author = author.expect("author checked by empty-reasons branch");
+    let subject_revision = subject_revision.expect("revision checked by empty-reasons branch");
+    let config_version = config_version.expect("config version checked by empty-reasons branch");
+
+    if let Some(link) = originating_output(data) {
+        if let Err(reason) =
+            verify_originating_output(&link, data, &author, &result, &findings, artifact_root)
+        {
+            return Err(EvidenceParseError::Unverified(vec![reason]));
+        }
     }
 
     Ok(ConformingEvidence {
-        result: result.expect("result checked by empty-reasons branch"),
-        findings: findings.expect("findings checked by empty-reasons branch"),
-        author: author.expect("author checked by empty-reasons branch"),
-        subject_revision: subject_revision.expect("revision checked by empty-reasons branch"),
-        config_version: config_version.expect("config version checked by empty-reasons branch"),
+        result,
+        findings,
+        author,
+        subject_revision,
+        config_version,
     })
+}
+
+/// A linked claim is driver-shaped evidence that names the selected stdout
+/// bytes which originated the judgment.  Ordinary hand-authored evidence has
+/// no linkage and remains valid; worker invocation records never enter this
+/// function and therefore cannot satisfy an axis by themselves.
+fn originating_output(data: &Map<String, Value>) -> Option<OriginatingOutput> {
+    let carry = data.get("loop_engine_carry").and_then(Value::as_object);
+    let nested = data.get("originating_output").and_then(Value::as_object);
+    let linkage_present = carry.is_some()
+        || nested.is_some()
+        || data.contains_key("originating_output_sha256")
+        || data.contains_key("originating_output_path");
+    if !linkage_present {
+        return None;
+    }
+
+    let string = |object: Option<&Map<String, Value>>, name: &str| {
+        object
+            .and_then(|object| object.get(name))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    if carry.is_some() {
+        return Some(OriginatingOutput {
+            invocation_id: string(carry, "invocation_id"),
+            assignment_id: string(carry, "assignment_id"),
+            selected_attempt: carry
+                .and_then(|object| object.get("originating_attempt"))
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok()),
+            identity_required: true,
+            digest: string(carry, "originating_output_sha256"),
+            path: PathBuf::from(string(carry, "originating_output_path")),
+        });
+    }
+    if nested.is_some() {
+        return Some(OriginatingOutput {
+            invocation_id: string(nested, "invocation_id"),
+            assignment_id: string(nested, "assignment_id"),
+            selected_attempt: nested
+                .and_then(|object| object.get("selected_attempt"))
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok()),
+            identity_required: true,
+            digest: string(nested, "sha256"),
+            path: PathBuf::from(string(nested, "path")),
+        });
+    }
+    Some(OriginatingOutput {
+        invocation_id: String::new(),
+        assignment_id: String::new(),
+        selected_attempt: None,
+        identity_required: false,
+        digest: data
+            .get("originating_output_sha256")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        path: PathBuf::from(
+            data.get("originating_output_path")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        ),
+    })
+}
+
+fn verify_originating_output(
+    link: &OriginatingOutput,
+    data: &Map<String, Value>,
+    author: &AuthorIdentity,
+    result: &EvidenceResult,
+    findings: &str,
+    artifact_root: Option<&Value>,
+) -> Result<(), String> {
+    if link.identity_required
+        && (link.invocation_id.is_empty()
+            || link.assignment_id.is_empty()
+            || link.selected_attempt.is_none())
+    {
+        return Err(
+            "originating selected output must name its invocation, assignment, and selected attempt"
+                .to_owned(),
+        );
+    }
+    if !valid_digest(&link.digest) {
+        return Err("originating selected output has an invalid sha256 digest".to_owned());
+    }
+    let Some(root_value) = artifact_root.and_then(Value::as_str) else {
+        return Err("artifact_root is required to verify originating selected output".to_owned());
+    };
+    let root = fs::canonicalize(root_value).map_err(|error| {
+        format!("could not resolve artifact_root for originating output: {error}")
+    })?;
+    if !root.is_dir() {
+        return Err("artifact_root for originating output must be a directory".to_owned());
+    }
+    if link.path.as_os_str().is_empty() {
+        return Err("originating selected output path is missing".to_owned());
+    }
+    let path = if link.path.is_absolute() {
+        link.path.clone()
+    } else {
+        root.join(&link.path)
+    };
+    let canonical = fs::canonicalize(&path)
+        .map_err(|error| format!("originating selected output is unavailable: {error}"))?;
+    if !canonical.starts_with(&root) || canonical == root || !canonical.is_file() {
+        return Err("originating selected output is outside artifact_root".to_owned());
+    }
+    let bytes = fs::read(&canonical)
+        .map_err(|error| format!("originating selected output is unavailable: {error}"))?;
+    let actual = sha256_digest(&bytes);
+    if actual != link.digest {
+        return Err("originating selected output digest does not match raw bytes".to_owned());
+    }
+    let value = parse_originating_judgment(&bytes)?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "originating selected output is not a JSON object".to_owned())?;
+    let expected_result = match result {
+        EvidenceResult::Pass => "pass",
+        EvidenceResult::Fail => "fail",
+    };
+    if object.get("result").and_then(Value::as_str) != Some(expected_result) {
+        return Err("judgment result disagrees with originating selected output".to_owned());
+    }
+    if object.get("findings").and_then(Value::as_str) != Some(findings) {
+        return Err("judgment findings disagree with originating selected output".to_owned());
+    }
+    if let Some(axis) = object.get("axis").and_then(Value::as_str) {
+        if data.get("policy_id").and_then(Value::as_str) != Some(axis) {
+            return Err("judgment axis disagrees with originating selected output".to_owned());
+        }
+    } else if let Some(policy_id) = object.get("policy_id").and_then(Value::as_str) {
+        if data.get("policy_id").and_then(Value::as_str) != Some(policy_id) {
+            return Err("judgment policy disagrees with originating selected output".to_owned());
+        }
+    } else {
+        return Err("originating selected output has no judgment axis".to_owned());
+    }
+    let Some(output_author) = object.get("author").and_then(Value::as_object) else {
+        return Err("originating selected output has no judgment author".to_owned());
+    };
+    if output_author.get("name").and_then(Value::as_str) != Some(author.name())
+        || output_author.get("kind").and_then(Value::as_str) != Some(author.kind())
+    {
+        return Err("judgment author disagrees with originating selected output".to_owned());
+    }
+    Ok(())
+}
+
+fn parse_originating_judgment(bytes: &[u8]) -> Result<Value, String> {
+    if let Ok(value) = serde_json::from_slice::<Value>(bytes) {
+        return Ok(value);
+    }
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| "originating selected output is not valid UTF-8 JSON".to_owned())?;
+    let marker = "```json";
+    let start = text
+        .find(marker)
+        .ok_or_else(|| "originating selected output is not JSON".to_owned())?
+        + marker.len();
+    let end = text[start..]
+        .find("```")
+        .map(|offset| start + offset)
+        .ok_or_else(|| "originating selected output has an unterminated JSON fence".to_owned())?;
+    let candidate = text[start..end].trim();
+    serde_json::from_str(candidate)
+        .map_err(|_| "originating selected output contains invalid fenced JSON".to_owned())
+}
+
+fn valid_digest(value: &str) -> bool {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return false;
+    };
+    hex.len() == 64
+        && hex
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn sha256_digest(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("sha256:{:x}", hasher.finalize())
 }
 
 fn non_empty_string(
@@ -661,6 +918,7 @@ mod tests {
             config.config_version(),
             config.axes_for_gate(GATE).expect("intent axes"),
             config.axis_namespace(),
+            config.artifact_root(),
         )
     }
 

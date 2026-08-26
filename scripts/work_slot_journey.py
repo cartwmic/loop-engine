@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -207,7 +208,11 @@ def assert_bound_redaction(
         "Captures are at the named capture directory on the invocation view and invoke result. "
         "The driver triages worker output, appends provider-shaped records, then requests the shown event. "
         "On overrun run show immediately before re-invoking the same slot. "
-        "On failed inspect capture_dir/summary.json and captured stdout before stderr."
+        "On failed inspect capture_dir/summary.json and captured stdout before stderr. "
+        "Consult the change report of record before carrying prior work: "
+        "unchanged-carry is for inputs reported unchanged; "
+        "override-carry names every changed input it overrides. "
+        "Neither act judges whether the carry was warranted."
     )
     if text != expected:
         raise WorkSlotJourneyFailure(
@@ -278,7 +283,22 @@ def assert_succeeded_heartbeat(match: Mapping[str, Any], *, slot_id: str) -> Non
     inner_workers = match.get("inner_workers")
     if not isinstance(inner_workers, list):
         raise WorkSlotJourneyFailure(f"inner_workers missing: {match}")
-    allowed = {"command", "args", "exit_code"}
+    allowed = {
+        "assignment_id",
+        "command",
+        "args",
+        "exit_code",
+        "selected_attempt",
+        "selected_output_sha256",
+        "selected_output_path",
+        "declared_output_contract",
+        "routed_inputs",
+        "task_definition",
+        "task_packet",
+        "dependencies",
+        "repository_effect",
+    }
+    assignment_ids = []
     for worker in inner_workers:
         assert_inner_worker(worker)
         extra = set(worker) - allowed
@@ -286,6 +306,31 @@ def assert_succeeded_heartbeat(match: Mapping[str, Any], *, slot_id: str) -> Non
             raise WorkSlotJourneyFailure(
                 f"show inner_workers leaked extra fields {sorted(extra)}: {worker}"
             )
+        assignment_id = worker.get("assignment_id")
+        if not isinstance(assignment_id, str) or not assignment_id:
+            raise WorkSlotJourneyFailure(f"show inner worker omitted assignment_id: {worker}")
+        assignment_ids.append(assignment_id)
+        selected_attempt = worker.get("selected_attempt")
+        selected_digest = worker.get("selected_output_sha256")
+        selected_path = worker.get("selected_output_path")
+        if selected_attempt is None:
+            if selected_digest is not None or selected_path is not None:
+                raise WorkSlotJourneyFailure(
+                    f"coverage gap unexpectedly has selected output facts: {worker}"
+                )
+        elif (
+            not isinstance(selected_attempt, int)
+            or selected_attempt < 1
+            or not isinstance(selected_digest, str)
+            or not selected_digest.startswith("sha256:")
+            or not isinstance(selected_path, str)
+            or not selected_path
+        ):
+            raise WorkSlotJourneyFailure(
+                f"selected worker omitted attempt/digest/path identity: {worker}"
+            )
+    if len(assignment_ids) != len(set(assignment_ids)):
+        raise WorkSlotJourneyFailure(f"assignment identities are not unique: {inner_workers}")
     if "waiter_pid" in match:
         raise WorkSlotJourneyFailure("show leaked waiter_pid")
 
@@ -309,8 +354,9 @@ def invoke_until_succeeded(
     slot_id: str,
     *,
     timeout_s: float = 10.0,
+    invoke_args: Sequence[str] = (),
 ) -> dict[str, Any]:
-    started = engine_call(["invoke", run_id, slot_id])
+    started = engine_call(["invoke", run_id, slot_id, *invoke_args])
     if started.get("status") != "completed":
         raise WorkSlotJourneyFailure(f"invoke failed: {started}")
     result = started.get("result") or {}
@@ -367,7 +413,18 @@ def invoke_until_succeeded(
                         f"show capture_dir {match.get('capture_dir')!r} != invoke {invoke_capture!r}"
                     )
                 return match
-            if last_status in ("failed", "overrun"):
+            if last_status == "failed":
+                # A fresh show can briefly observe the waiter between its
+                # child exit and its durable completion write. Do not turn
+                # that provisional, exit-less overlay into a false journey
+                # failure; a real failed waiter remains failed or times out.
+                if match.get("completed_at") is None and match.get("exit_code") is None:
+                    time.sleep(0.05)
+                    continue
+                raise WorkSlotJourneyFailure(
+                    f"bound worker ended {last_status}: {match}"
+                )
+            if last_status == "overrun":
                 raise WorkSlotJourneyFailure(
                     f"bound worker ended {last_status}: {match}"
                 )
@@ -1348,6 +1405,11 @@ def _advance_software_change_to(
                 record_prefix=f"{run_id}-",
             )
         _expect_event_state(engine_call, run_id, event, nxt)
+        observed = engine_call(["show", run_id])
+        if observed.get("status") != "completed":
+            raise WorkSlotJourneyFailure(
+                f"show after advancing to {nxt} failed: {observed}"
+            )
         if nxt == target:
             shown = engine_call(["show", run_id])
             if shown.get("status") != "completed":
@@ -1372,6 +1434,7 @@ def _start_isolated_software_change(
     work_dir: Path,
     run_id: str,
     extra_bindings: Mapping[str, Any],
+    observe_start: bool = True,
 ) -> tuple[EngineCall, Path, dict[str, Any]]:
     work_dir.mkdir(parents=True, exist_ok=True)
     artifact_root = work_dir / "artifacts"
@@ -1402,7 +1465,19 @@ def _start_isolated_software_change(
     )
 
     def engine_call(operation: Sequence[str]) -> dict[str, Any]:
-        return _engine_json(engine, database, operation)
+        response = _engine_json(engine, database, operation)
+        if (
+            operation
+            and operation[0] in {"event", "invoke", "terminate"}
+            and len(operation) > 1
+            and response.get("status") in {"completed", "rejected"}
+        ):
+            observed = _engine_json(engine, database, ["show", run_id])
+            if observed.get("status") != "completed":
+                raise WorkSlotJourneyFailure(
+                    f"show after {operation[0]} failed: {observed}"
+                )
+        return response
 
     started = _engine_json(
         engine,
@@ -1422,6 +1497,10 @@ def _start_isolated_software_change(
     )
     if started.get("status") != "completed":
         raise WorkSlotJourneyFailure(f"isolated start failed: {started}")
+    if observe_start:
+        observed = engine_call(["show", run_id])
+        if observed.get("status") != "completed":
+            raise WorkSlotJourneyFailure(f"isolated start observation failed: {observed}")
     return engine_call, artifact_root, profile
 
 
@@ -1917,6 +1996,159 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
     if (reap_root / "implementation-report.json").is_file():
         raise WorkSlotJourneyFailure("ordinary failing tasks wrote implementation-report.json")
 
+    # bookends:LE-102 — plan-graph subset selection refuses missing prerequisites and summarizes the resulting tree.
+    # Plan-graph subset: missing prerequisites refuse before Dagu, while a
+    # selected root brings in its dependants and the sole summarizer observes
+    # the resulting working tree rather than a selected-task projection.
+    subset_root = work_dir / "subset-resulting-tree"
+    subset_receipts = subset_root / "receipts"
+    subset_capture = subset_root / "captures" / "inv-subset"
+    subset_root.mkdir(parents=True, exist_ok=True)
+    _ensure_git_repository(subset_root)
+    subset_plan = {
+        "revision": "subset-1",
+        "tasks": [
+            {"id": "alpha", "objective": "root", "dependencies": []},
+            {"id": "beta", "objective": "dependent", "dependencies": ["alpha"]},
+            {"id": "gamma", "objective": "other dependent", "dependencies": ["alpha"]},
+        ],
+        "dependency_graph": [
+            {"from": "alpha", "to": "beta"},
+            {"from": "alpha", "to": "gamma"},
+        ],
+    }
+    _write_plan_document(subset_root, subset_plan)
+    (subset_root / "intent.json").write_text('{"revision":"1"}', encoding="utf-8")
+    (subset_root / "design.json").write_text('{"revision":"1"}', encoding="utf-8")
+    subset_worker = subset_root / "subset-task-worker.py"
+    subset_worker.write_text(
+        "import json, sys\nfrom pathlib import Path\n"
+        "raw = sys.stdin.buffer.read(); location_raw, rest = raw.decode().split('\\n---\\n\\n', 1)\n"
+        "location = json.loads(location_raw); root = Path(location['artifact_root'])\n"
+        "if rest.startswith('Write artifact_root/implementation-report.json'):\n"
+        "    plan = json.loads((root / 'plan.json').read_text())\n"
+        "    report = {'revision':'1','author':{'name':'subset-worker','kind':'script'},'plan_revision':plan['revision'],'coverage':{'commit':'subset','documents':[{'path':'plan.json','revision':plan['revision']}]},'summary':'resulting tree','changed_surface':sorted(p.name for p in Path.cwd().iterdir()),'validation':['subset']}\n"
+        "    (root / 'implementation-report.json').write_text(json.dumps(report)+'\\n')\n"
+        "else:\n"
+        "    task = json.loads(rest); (Path.cwd() / ('effect-' + task['id'] + '.txt')).write_text('present\\n')\n",
+        encoding="utf-8",
+    )
+    base_binding = implement_graph_runner_binding(
+        provider=provider,
+        task_worker=stdin_worker_cli(subset_receipts),
+        working_directory=subset_root,
+    )
+    base_args = list(base_binding["args"][:-2])
+    # Put task-worker after the selection flags: construct the same public
+    # command shape accepted by the provider CLI.
+    task_worker_json = worker_cli_json({"command": sys.executable, "args": [str(subset_worker)]})
+    subset_binding = {"command": base_binding["command"], "args": base_args + ["--task", "beta", "--task-worker", task_worker_json]}
+    missing = _run_binding(
+        subset_binding,
+        stdin=_invoke_packet(
+            run_id="subset-missing",
+            slot_id="implement",
+            artifact_root=subset_root,
+            instruction_body=instruction_body,
+            capture_dir=subset_capture / "missing",
+        ),
+    )
+    if missing.returncode == 0 or (subset_root / "effect-beta.txt").exists():
+        raise WorkSlotJourneyFailure("plan subset auto-included missing prerequisite or started a task")
+
+    for invalid_name, invalid_selection in (
+        ("empty", ["--tasks", ""]),
+        ("empty-json", ["--tasks", "[]"]),
+        ("unknown", ["--task", "missing"]),
+        ("duplicate", ["--task", "alpha", "--task", "alpha"]),
+    ):
+        invalid_capture = subset_capture / ("invalid-" + invalid_name)
+        invalid_args = base_args + invalid_selection + ["--task-worker", task_worker_json]
+        invalid_binding = {"command": base_binding["command"], "args": invalid_args}
+        invalid = _run_binding(
+            invalid_binding,
+            stdin=_invoke_packet(
+                run_id="subset-invalid",
+                slot_id="implement",
+                artifact_root=subset_root,
+                instruction_body=instruction_body,
+                capture_dir=invalid_capture,
+            ),
+        )
+        if invalid.returncode == 0:
+            raise WorkSlotJourneyFailure(
+                f"invalid plan subset unexpectedly succeeded: {invalid_selection}"
+            )
+        if any((subset_root / f"effect-{task_id}.txt").exists() for task_id in subset_plan["tasks"]):
+            raise WorkSlotJourneyFailure(
+                f"invalid plan subset started a task: {invalid_selection}"
+            )
+
+    subset_binding["args"] = base_args + ["--task", "alpha", "--task-worker", task_worker_json]
+    selected = _run_binding(
+        subset_binding,
+        stdin=_invoke_packet(
+            run_id="subset-selected",
+            slot_id="implement",
+            artifact_root=subset_root,
+            instruction_body=instruction_body,
+            capture_dir=subset_capture / "selected",
+        ),
+    )
+    if selected.returncode != 0:
+        raise WorkSlotJourneyFailure(
+            f"plan subset root did not run dependants: {selected.stderr.decode('utf-8', 'replace')}"
+        )
+    for task_id in ("alpha", "beta", "gamma"):
+        if not (subset_root / f"effect-{task_id}.txt").is_file():
+            raise WorkSlotJourneyFailure(f"selected root omitted dependant effect {task_id}")
+    report = json.loads((subset_root / "implementation-report.json").read_text(encoding="utf-8"))
+    if not all(name in report.get("changed_surface", []) for name in ("effect-alpha.txt", "effect-beta.txt", "effect-gamma.txt")):
+        raise WorkSlotJourneyFailure(f"resulting-tree report omitted task effects: {report}")
+    if not (subset_root / "implementation-checkpoint.json").is_file():
+        raise WorkSlotJourneyFailure("subset graph omitted resulting-tree checkpoint")
+
+    # A direct provider invocation has no engine standing-id packet, so a
+    # matching successful sidecar result may satisfy alpha. Select beta only
+    # and prove the summarizer still reports the leftover gamma effect from the
+    # resulting working tree; selecting alpha here would hide the leftover.
+    leftover_capture = subset_capture / "leftover"
+    leftover_binding = {
+        "command": base_binding["command"],
+        "args": base_args + ["--task", "beta", "--task-worker", worker_cli_json({"command": sys.executable, "args": [str(subset_worker)]})],
+    }
+    leftover = _run_binding(
+        leftover_binding,
+        stdin=_invoke_packet(
+            run_id="subset-leftover",
+            slot_id="implement",
+            artifact_root=subset_root,
+            instruction_body=instruction_body,
+            capture_dir=leftover_capture,
+        ),
+    )
+    if leftover.returncode != 0:
+        raise WorkSlotJourneyFailure(
+            f"direct beta subset with sidecar-standing alpha failed: {leftover.stderr.decode('utf-8', 'replace')}"
+        )
+    leftover_workers = _load_summary_workers(leftover_capture)
+    if [worker.get("assignment_id") for worker in leftover_workers] != ["beta"]:
+        raise WorkSlotJourneyFailure(
+            f"beta subset recreated an unselected task: {leftover_workers}"
+        )
+    report = json.loads((subset_root / "implementation-report.json").read_text(encoding="utf-8"))
+    changed_surface = report.get("changed_surface", [])
+    if "effect-gamma.txt" not in changed_surface:
+        raise WorkSlotJourneyFailure(
+            f"leftover gamma effect disappeared from changed_surface: {report}"
+        )
+    checkpoint = json.loads((subset_root / "implementation-checkpoint.json").read_text(encoding="utf-8"))
+    checkpoint_text = json.dumps(checkpoint, sort_keys=True)
+    if "effect-gamma.txt" not in checkpoint_text:
+        raise WorkSlotJourneyFailure(
+            f"leftover gamma effect disappeared from checkpoint: {checkpoint}"
+        )
+
     return [
         "PATH rewrite software-change -> built provider",
         "implement args [run-plan-graph, --task-worker, dummy-json]",
@@ -1928,6 +2160,310 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
         "driver-confirmed ledger routes only the exact implementation task",
         "missing implementation-report.json exits nonzero",
         "failing sibling reaped before runner exits",
+        "no live model",
+    ]
+
+
+def prove_engine_standing_join(
+    *, engine: Path, provider: Path, work_dir: Path
+) -> list[str]:
+    """Prove bound plan subsets intersect sidecar success with engine standing."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_git_repository(work_dir)
+    artifact_root = work_dir / "artifacts"
+    _write_small_plan(artifact_root)
+    record_receipts = work_dir / "record-receipts"
+    select_receipts = work_dir / "select-receipts"
+    known_effect = ('--stdout', '{"repository_effect":{"kind":"dummy"}}')
+    record_binding = implement_graph_runner_binding(
+        provider=provider,
+        task_worker=stdin_worker_cli(record_receipts, known_effect),
+        working_directory=work_dir,
+    )
+    select_args = list(record_binding["args"][:-2]) + [
+        "--task",
+        "gamma",
+        *record_binding["args"][-2:],
+    ]
+    select_args[-1] = worker_cli_json(
+        stdin_worker_cli(select_receipts, known_effect)
+    )
+    select_binding = {"command": str(provider), "args": select_args}
+
+    describe_provider = work_dir / "standing-provider.py"
+    workflow = {
+        "id": "standing-join-proof",
+        "initial_state": "work",
+        "states": [
+            {
+                "id": "work",
+                "title": "Work",
+                "instructions": "Run the small plan.",
+                "final": False,
+            }
+        ],
+        "transitions": [],
+        "work_slots": [
+            {
+                "id": "record",
+                "state": "work",
+                "event": "recorded",
+                "stdin_context_kinds": ["finding-ledger"],
+            },
+            {
+                "id": "select",
+                "state": "work",
+                "event": "selected",
+                "stdin_context_kinds": ["finding-ledger"],
+            },
+        ],
+    }
+    describe_provider.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "json.load(sys.stdin)\n"
+        f"json.dump({workflow!r}, sys.stdout)\n",
+        encoding="utf-8",
+    )
+    describe_provider.chmod(0o755)
+    providers = work_dir / "providers.toml"
+    providers.write_text(
+        "[providers.standing-proof]\n"
+        f"command = {json.dumps(str(describe_provider))}\n"
+        "args = []\n",
+        encoding="utf-8",
+    )
+    database = work_dir / "loop.sqlite"
+    run_id = "engine-standing-join"
+    initial_input = {
+        "artifact_root": str(artifact_root),
+        "work_slot_bindings": {
+            "record": record_binding,
+            "select": select_binding,
+        },
+    }
+    started = _engine_json(
+        engine,
+        database,
+        [
+            "--config",
+            str(providers),
+            "--timeout-ms",
+            "30000",
+            "start",
+            "--id",
+            run_id,
+            "standing-proof",
+            json.dumps(initial_input, separators=(",", ":")),
+        ],
+    )
+    if started.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"standing join start failed: {started}")
+
+    def engine_call(operation: Sequence[str]) -> dict[str, Any]:
+        return _engine_json(engine, database, operation)
+
+    shown = engine_call(["show", run_id])
+    if shown.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"standing join initial show failed: {shown}")
+    recorded = invoke_until_succeeded(
+        engine_call, run_id, "record", timeout_s=30.0
+    )
+    record_workers = recorded.get("inner_workers")
+    if not isinstance(record_workers, list) or [
+        worker.get("assignment_id") for worker in record_workers
+    ] != ["alpha", "beta", "gamma"]:
+        raise WorkSlotJourneyFailure(
+            f"standing join full graph did not record A/B/C: {recorded}"
+        )
+
+    connection = sqlite3.connect(database)
+    try:
+        row = connection.execute(
+            "SELECT inner_workers_json FROM work_slot_invocations WHERE invocation_id = ?1",
+            (recorded["invocation_id"],),
+        ).fetchone()
+        if row is None:
+            raise WorkSlotJourneyFailure("standing join record invocation was not durable")
+        current_workers = json.loads(row[0])
+        alpha = next(
+            worker
+            for worker in current_workers
+            if worker.get("assignment_id") == "alpha"
+        )
+        task_definition = dict(alpha.get("task_definition") or {})
+        task_definition["objective"] = "Dirty A without changing plan revision"
+        alpha["task_definition"] = task_definition
+        connection.execute(
+            "UPDATE work_slot_invocations SET inner_workers_json = ?1 WHERE invocation_id = ?2",
+            (json.dumps(current_workers, separators=(",", ":")), recorded["invocation_id"]),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    dirty_show = engine_call(["show", run_id])
+    plan_results = dirty_show.get("result", {}).get("change_report", {}).get(
+        "plan_task_results", []
+    )
+    alpha_result = next(
+        result for result in plan_results if result.get("assignment_id") == "alpha"
+    )
+    if (
+        alpha_result.get("standing") is not False
+        or alpha_result.get("dimensions", {})
+        .get("task_definition", {})
+        .get("changed")
+        is not True
+    ):
+        raise WorkSlotJourneyFailure(
+            f"dirty A remained standing in engine change report: {alpha_result}"
+        )
+
+    refused = invoke_until_status(
+        engine_call, run_id, "select", expected="failed", timeout_s=20.0
+    )
+    refused_capture = Path(refused["capture_dir"])
+    if (refused_capture / "dagu-home").exists() or (select_receipts / "gamma.stdin").exists():
+        raise WorkSlotJourneyFailure(
+            "dirty A subset reached Dagu or started C before explicit carry"
+        )
+
+    unchanged = engine_call(
+        [
+            "append",
+            "--record-id=standing-dirty-a-unchanged",
+            run_id,
+            "unchanged-carry",
+            json.dumps(
+                {
+                    "source_record_id": "",
+                    "invocation_id": recorded["invocation_id"],
+                    "assignment_id": "alpha",
+                    "attesting_driver": {"name": "standing-driver", "kind": "agent"},
+                },
+                separators=(",", ":"),
+            ),
+        ]
+    )
+    if unchanged.get("status") != "rejected" or "task_definition" not in json.dumps(
+        unchanged
+    ):
+        raise WorkSlotJourneyFailure(
+            f"unchanged-carry accepted dirty A: {unchanged}"
+        )
+    reobserved = engine_call(["show", run_id])
+    if reobserved.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"standing join re-show failed: {reobserved}")
+    override = engine_call(
+        [
+            "append",
+            "--record-id=standing-dirty-a-override",
+            run_id,
+            "override-carry",
+            json.dumps(
+                {
+                    "source_record_id": "",
+                    "invocation_id": recorded["invocation_id"],
+                    "assignment_id": "alpha",
+                    "attesting_driver": {"name": "standing-driver", "kind": "agent"},
+                    "overridden_inputs": ["task_definition"],
+                },
+                separators=(",", ":"),
+            ),
+        ]
+    )
+    if override.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"override-carry did not preserve dirty A: {override}")
+    carry_show = engine_call(["show", run_id])
+    if carry_show.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"standing join carry show failed: {carry_show}")
+    clean = engine_call(
+        [
+            "append",
+            "--record-id=standing-clean-b-unchanged",
+            run_id,
+            "unchanged-carry",
+            json.dumps(
+                {
+                    "source_record_id": "",
+                    "invocation_id": recorded["invocation_id"],
+                    "assignment_id": "beta",
+                    "attesting_driver": {"name": "standing-driver", "kind": "agent"},
+                },
+                separators=(",", ":"),
+            ),
+        ]
+    )
+    if clean.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"unchanged-carry refused clean B: {clean}")
+    selected = invoke_until_succeeded(
+        engine_call, run_id, "select", timeout_s=30.0
+    )
+    selected_workers = selected.get("inner_workers")
+    if not isinstance(selected_workers, list) or [
+        worker.get("assignment_id") for worker in selected_workers
+    ] != ["gamma"]:
+        raise WorkSlotJourneyFailure(
+            f"carried subset did not run only C: {selected}"
+        )
+    if (select_receipts / "alpha.stdin").exists() or (
+        select_receipts / "beta.stdin"
+    ).exists():
+        raise WorkSlotJourneyFailure("carried subset restarted A or B")
+
+    # A carry attests the exact report it saw; later drift must invalidate it
+    # rather than making the result permanently standing.
+    connection = sqlite3.connect(database)
+    try:
+        row = connection.execute(
+            "SELECT inner_workers_json FROM work_slot_invocations WHERE invocation_id = ?1",
+            (recorded["invocation_id"],),
+        ).fetchone()
+        if row is None:
+            raise WorkSlotJourneyFailure("carried standing invocation disappeared")
+        drifted_workers = json.loads(row[0])
+        for assignment in ("alpha", "beta"):
+            worker = next(
+                item for item in drifted_workers if item.get("assignment_id") == assignment
+            )
+            definition = dict(worker.get("task_definition") or {})
+            definition["objective"] = f"post-carry drift for {assignment}"
+            worker["task_definition"] = definition
+        connection.execute(
+            "UPDATE work_slot_invocations SET inner_workers_json = ?1 WHERE invocation_id = ?2",
+            (
+                json.dumps(drifted_workers, separators=(",", ":")),
+                recorded["invocation_id"],
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    post_carry_show = engine_call(["show", run_id])
+    post_carry_results = post_carry_show.get("result", {}).get("change_report", {}).get(
+        "plan_task_results", []
+    )
+    for assignment in ("alpha", "beta"):
+        result = next(
+            item for item in post_carry_results if item.get("assignment_id") == assignment
+        )
+        if (
+            result.get("standing") is not False
+            or result.get("dimensions", {})
+            .get("task_definition", {})
+            .get("changed")
+            is not True
+        ):
+            raise WorkSlotJourneyFailure(
+                f"post-carry drift left {assignment} standing: {result}"
+            )
+    return [
+        "engine show marks dirty A non-standing while sidecar success remains",
+        "bound --task gamma refuses before Dagu without carry",
+        "unchanged-carry refuses dirty A",
+        "override-carry A plus unchanged-carry B runs only gamma",
+        "later drift invalidates both unchanged and override carry snapshots",
         "no live model",
     ]
 
@@ -2191,6 +2727,10 @@ def prove_full_schema_retry(*, engine: Path, work_dir: Path) -> list[str]:
         if not isinstance(workers, list) or len(workers) != 1:
             raise WorkSlotJourneyFailure(f"{name} summary omitted one worker: {summary}")
         worker_summary = workers[0]
+        if worker_summary.get("assignment_id") != "worker-0":
+            raise WorkSlotJourneyFailure(
+                f"{name} omitted stable assignment identity: {worker_summary}"
+            )
         if worker_summary.get("command") != sys.executable or worker_summary.get("args") != worker["args"]:
             raise WorkSlotJourneyFailure(
                 f"{name} changed the frozen worker command or args: {worker_summary}"
@@ -2224,9 +2764,13 @@ def prove_full_schema_retry(*, engine: Path, work_dir: Path) -> list[str]:
     success_manifest = json.loads(
         (success_capture / "0" / "attempts.json").read_text(encoding="utf-8")
     )
+    selected_attempt_path = success_capture / "0" / "attempts" / "2" / "stdout"
     if (
         success_summary.get("status") != "succeeded"
         or success_summary.get("selected_attempt") != 2
+        or success_summary.get("selected_output_sha256")
+        != "sha256:" + hashlib.sha256(selected_attempt_path.read_bytes()).hexdigest()
+        or success_summary.get("selected_output_path") != str(selected_attempt_path)
         or success_manifest.get("selected_attempt") != 2
         or success_manifest.get("exhausted") is not False
         or success_stdout != (success_capture / "0" / "attempts" / "2" / "stdout").read_bytes()
@@ -2260,7 +2804,10 @@ def prove_full_schema_retry(*, engine: Path, work_dir: Path) -> list[str]:
     )
     if (
         exhaustion_summary.get("status") != "failed"
+        or exhaustion_summary.get("assignment_id") != "worker-0"
         or exhaustion_summary.get("selected_attempt", "missing") is not None
+        or exhaustion_summary.get("selected_output_sha256", "missing") is not None
+        or exhaustion_summary.get("selected_output_path", "missing") is not None
         or exhaustion_manifest.get("selected_attempt", "missing") is not None
         or exhaustion_manifest.get("exhausted") is not True
         or not isinstance(exhaustion_summary.get("conformance_error"), str)
@@ -2279,6 +2826,308 @@ def prove_full_schema_retry(*, engine: Path, work_dir: Path) -> list[str]:
         "attempts.json digests and exact validation errors are retrievable",
         "invalid-twice exhausts once with no substitute semantic verdict",
         "no live model",
+    ]
+
+
+def _prove_self_loop_requires_reobservation(*, engine: Path, work_dir: Path) -> None:
+    """Prove a check-free self-loop creates a new unobserved state visit."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    provider = work_dir / "self-loop-provider.py"
+    provider.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "json.load(sys.stdin)\n"
+        "json.dump({"
+        "'id':'self-loop-proof','initial_state':'start',"
+        "'states':[{'id':'start','title':'Start','instructions':'Loop','final':False}],"
+        "'transitions':[{'source':'start','event':'loop','target':'start','kind':'check-free'}]"
+        "}, sys.stdout)\n",
+        encoding="utf-8",
+    )
+    provider.chmod(0o755)
+    providers = work_dir / "providers.toml"
+    providers.write_text(
+        "[providers.self-loop]\n"
+        f"command = {json.dumps(str(provider))}\n"
+        "args = []\n",
+        encoding="utf-8",
+    )
+    database = work_dir / "loop.sqlite"
+    run_id = "self-loop-reobservation"
+    started = _engine_json(
+        engine,
+        database,
+        ["--config", str(providers), "start", "--id", run_id, "self-loop", "{}"],
+    )
+    if started.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"self-loop proof start failed: {started}")
+    observed = _engine_json(engine, database, ["show", run_id])
+    if observed.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"self-loop proof show failed: {observed}")
+    looped = _engine_json(engine, database, ["event", run_id, "loop"])
+    if looped.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"self-loop event failed: {looped}")
+    unobserved = _engine_json(engine, database, ["append", run_id, "self-loop-proof", "{}"])
+    if unobserved.get("status") != "rejected" or unobserved.get("code") != "run-not-observed":
+        raise WorkSlotJourneyFailure(
+            f"self-loop reused the prior observation token: {unobserved}"
+        )
+    reobserved = _engine_json(engine, database, ["show", run_id])
+    if reobserved.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"self-loop re-show failed: {reobserved}")
+    appended = _engine_json(
+        engine, database, ["append", run_id, "self-loop-proof", '{"ok":true}']
+    )
+    if appended.get("status") != "completed":
+        raise WorkSlotJourneyFailure(
+            f"self-loop append after re-show failed: {appended}"
+        )
+
+
+def prove_observation_before_mutation(
+    *,
+    engine: Path,
+    provider: Path,
+    profile_source: Path,
+    fixture_root: Path,
+    work_dir: Path,
+) -> list[str]:
+    """Prove the public show-before-mutation guard for every guarded act."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    review_binding = bindings_for(["intent-review"])
+    engine_call, _, _ = _start_isolated_software_change(
+        engine=engine,
+        provider=provider,
+        profile_source=profile_source,
+        fixture_root=fixture_root,
+        work_dir=work_dir,
+        run_id="observation-guard",
+        extra_bindings=review_binding,
+        observe_start=False,
+    )
+    run_id = "observation-guard"
+    database = work_dir / "loop.sqlite"
+    # Safe reads after start do not arm a mutation. This check intentionally
+    # runs before the first show in this isolated fixture.
+    listed = _engine_json(engine, database, ["list"])
+    if listed.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"list failed after start: {listed}")
+    progress = _engine_json(engine, database, ["invocation-progress", run_id])
+    if progress.get("status") != "error" or progress.get("code") != "no-invocations":
+        raise WorkSlotJourneyFailure(
+            f"invocation-progress before the first invoke had an unexpected outcome: {progress}"
+        )
+    unarmed_append = _engine_json(engine, database, ["append", run_id, "after-safe-reads", "{}"])
+    if unarmed_append.get("status") != "rejected" or unarmed_append.get("code") != "run-not-observed":
+        raise WorkSlotJourneyFailure(
+            f"list/invocation-progress unexpectedly armed append: {unarmed_append}"
+        )
+    observed_start = _engine_json(engine, database, ["show", run_id])
+    if observed_start.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"show after safe-read proof failed: {observed_start}")
+    invoke_until_succeeded(engine_call, run_id, "intent-draft", timeout_s=20.0)
+    database = work_dir / "loop.sqlite"
+    # Do not use the journey wrapper here: each operation is a separate public
+    # CLI process and must see the state visit as unobserved after this event.
+    event = _engine_json(engine, database, ["event", run_id, "intent-ready"])
+    if event.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"observation fixture did not enter review: {event}")
+    # Do not call show here: it would intentionally re-arm the new visit. A
+    # history read is safe and gives us the post-transition comparison point.
+    history_after_event = _engine_json(engine, database, ["history", run_id])
+    if history_after_event.get("status") != "completed":
+        raise WorkSlotJourneyFailure("observation fixture could not capture post-transition history")
+    # Existing invalidity keeps its original refusal even while the visit is
+    # unobserved. The checked event cannot run before its bound slot succeeds.
+    missing_bound = _engine_json(engine, database, ["event", run_id, "approved"])
+    if (
+        missing_bound.get("status") != "rejected"
+        or missing_bound.get("code") != "bound-slot-invocation-required"
+    ):
+        raise WorkSlotJourneyFailure(
+            f"observation guard displaced existing bound-slot refusal: {missing_bound}"
+        )
+    # The event above replaced the observation token. All four otherwise-valid
+    # guarded public operations must now refuse without a semantic side effect.
+    operations = [
+        ["append", run_id, "observation-test", "{}"],
+        ["event", run_id, "revise"],
+        ["invoke", run_id, "intent-review"],
+        ["terminate", run_id],
+    ]
+    refusals = [_engine_json(engine, database, operation) for operation in operations]
+    for operation, response in zip(operations, refusals):
+        if response.get("status") != "rejected" or response.get("code") != "run-not-observed":
+            raise WorkSlotJourneyFailure(f"unobserved {operation[0]} was not refused: {response}")
+    after = _engine_json(engine, database, ["show", run_id])
+    history_after = _engine_json(engine, database, ["history", run_id])
+    if after.get("result", {}).get("current_state") != "intent-review":
+        raise WorkSlotJourneyFailure(f"unobserved mutations changed state: {after}")
+    if history_after.get("result") != history_after_event.get("result"):
+        raise WorkSlotJourneyFailure("unobserved mutations changed semantic history")
+    armed = _engine_json(engine, database, ["show", run_id])
+    if armed.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"show did not arm mutation: {armed}")
+    appended = _engine_json(
+        engine, database, ["append", run_id, "observation-test", '{"ok":true}']
+    )
+    if appended.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"observed append did not succeed: {appended}")
+    _prove_self_loop_requires_reobservation(
+        engine=engine, work_dir=work_dir / "self-loop"
+    )
+    return [
+        "list and invocation-progress do not arm mutation",
+        "append, event, invoke, and terminate refuse without current show observation",
+        "observation does not displace the existing bound-slot event refusal",
+        "refusals preserve state and semantic history",
+        "a check-free self-loop requires a fresh show before mutation",
+    ]
+
+
+def prove_invoke_subset(
+    *,
+    engine: Path,
+    provider: Path,
+    profile_source: Path,
+    fixture_root: Path,
+    work_dir: Path,
+) -> list[str]:
+    """Prove invoke subset filtering through separate public CLI processes."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    worker_script = work_dir / "subset-worker.py"
+    worker_script.write_text(
+        "import sys\nfrom pathlib import Path\n"
+        "Path(sys.argv[1]).write_text('started\\n', encoding='utf-8')\n"
+        "sys.stdin.buffer.read()\n",
+        encoding="utf-8",
+    )
+    worker_script.chmod(0o755)
+    zero = work_dir / "worker-0.started"
+    one = work_dir / "worker-1.started"
+    binding = append_fan_out_workers(
+        {"command": str(engine), "args": ["fan-out"]},
+        [
+            {"command": sys.executable, "args": [str(worker_script), str(zero)]},
+            {"command": sys.executable, "args": [str(worker_script), str(one)]},
+        ],
+    )
+    engine_call, _, _ = _start_isolated_software_change(
+        engine=engine,
+        provider=provider,
+        profile_source=profile_source,
+        fixture_root=fixture_root,
+        work_dir=work_dir / "run",
+        run_id="invoke-subset",
+        extra_bindings={"intent-draft": binding},
+    )
+    for invalid_args, expected_code in [
+        (("--assignments=[]",), "empty-assignment-selection"),
+        (("--assignment", "missing"), "unknown-assignment"),
+        (("--assignment", "worker-0", "--assignment", "worker-0"), "duplicate-assignment-selection"),
+    ]:
+        refused = engine_call(["invoke", "invoke-subset", "intent-draft", *invalid_args])
+        if refused.get("status") != "rejected" or refused.get("code") != expected_code:
+            raise WorkSlotJourneyFailure(
+                f"invalid public assignment selection was not refused as {expected_code}: {refused}"
+            )
+        if zero.exists() or one.exists():
+            raise WorkSlotJourneyFailure(
+                f"invalid assignment selection started a worker: zero={zero.exists()} one={one.exists()}"
+            )
+
+    overlay = invoke_until_succeeded(
+        engine_call,
+        "invoke-subset",
+        "intent-draft",
+        timeout_s=20.0,
+        invoke_args=("--assignment", "worker-1"),
+    )
+    if zero.exists() or not one.is_file():
+        raise WorkSlotJourneyFailure(
+            f"invoke subset started the wrong assignments: zero={zero.exists()} one={one.exists()}"
+        )
+    if overlay.get("assignment_selection") != ["worker-1"]:
+        raise WorkSlotJourneyFailure(f"invoke subset was not durable: {overlay}")
+    shown = engine_call(["show", "invoke-subset"])
+    if shown.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"subset show failed: {shown}")
+    frozen = shown.get("result", {}).get("initial_input", {}).get("work_slot_bindings", {})
+    if frozen.get("intent-draft") != binding:
+        raise WorkSlotJourneyFailure("invoke subset rewrote frozen binding")
+
+    opaque_marker = work_dir / "opaque.started"
+    opaque_binding = {
+        "command": sys.executable,
+        "args": [str(worker_script), str(opaque_marker)],
+    }
+    opaque_call, _, _ = _start_isolated_software_change(
+        engine=engine,
+        provider=provider,
+        profile_source=profile_source,
+        fixture_root=fixture_root,
+        work_dir=work_dir / "opaque-run",
+        run_id="invoke-opaque-selection",
+        extra_bindings={"intent-draft": opaque_binding},
+    )
+    opaque = opaque_call(
+        ["invoke", "invoke-opaque-selection", "intent-draft", "--assignment", "worker-0"]
+    )
+    if opaque.get("status") != "rejected" or opaque.get("code") != "assignments-not-enumerable":
+        raise WorkSlotJourneyFailure(
+            f"selection on an opaque binding was not refused before spawn: {opaque}"
+        )
+    if opaque_marker.exists():
+        raise WorkSlotJourneyFailure("opaque assignment selection started its worker")
+
+    # Argv that resembles Loop Engine fan-out behind another executable is
+    # still opaque: only the actual engine command is known to enforce the
+    # assignment_selection packet.
+    spoof_script = work_dir / "spoof-fan-out.py"
+    spoof_script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, subprocess, sys\n"
+        "workers=[]\n"
+        "for i, arg in enumerate(sys.argv):\n"
+        "    if arg == '--worker' and i + 1 < len(sys.argv): workers.append(json.loads(sys.argv[i+1]))\n"
+        "payload=sys.stdin.buffer.read()\n"
+        "for worker in workers: subprocess.run([worker['command'], *worker['args']], input=payload, check=False)\n",
+        encoding="utf-8",
+    )
+    spoof_script.chmod(0o755)
+    spoof_zero = work_dir / "spoof-worker-0.started"
+    spoof_one = work_dir / "spoof-worker-1.started"
+    spoof_binding = append_fan_out_workers(
+        {"command": str(spoof_script), "args": ["fan-out"]},
+        [
+            {"command": sys.executable, "args": [str(worker_script), str(spoof_zero)]},
+            {"command": sys.executable, "args": [str(worker_script), str(spoof_one)]},
+        ],
+    )
+    spoof_call, _, _ = _start_isolated_software_change(
+        engine=engine,
+        provider=provider,
+        profile_source=profile_source,
+        fixture_root=fixture_root,
+        work_dir=work_dir / "spoof-run",
+        run_id="invoke-spoof-selection",
+        extra_bindings={"intent-draft": spoof_binding},
+    )
+    spoof = spoof_call(
+        ["invoke", "invoke-spoof-selection", "intent-draft", "--assignment", "worker-1"]
+    )
+    if spoof.get("status") != "rejected" or spoof.get("code") != "assignments-not-enumerable":
+        raise WorkSlotJourneyFailure(
+            f"selection on fan-out-shaped opaque command was not refused: {spoof}"
+        )
+    if spoof_zero.exists() or spoof_one.exists():
+        raise WorkSlotJourneyFailure("fan-out-shaped opaque command started a worker")
+
+    return [
+        "empty, unknown, and duplicate assignment selections refuse before spawn",
+        "selection on plain and fan-out-shaped non-enumerable bindings refuses before spawn",
+        "only the selected enumerable assignment started",
+        "assignment selection is durable and frozen binding is unchanged",
     ]
 
 
@@ -2357,11 +3206,49 @@ def prove_selected_attempt_ledger_linkage(
         extra_bindings={"design-review": binding},
     )
     run_id = "selected-attempt-ledger"
+    baseline_subject_revision = json.loads((artifact_root / "design.json").read_text(encoding="utf-8"))["revision"]
+    baseline_ledger = {
+        "schema_version": "1",
+        "gate": "design-review",
+        "subject": "design.json",
+        "subject_revision": baseline_subject_revision,
+        "author": {"name": "selected-driver", "kind": "agent"},
+        "repository_state": None,
+        "findings": [],
+    }
+    baseline_ledger_result = engine_call(
+        [
+            "append",
+            "--record-id=selected-attempt-ledger-baseline",
+            run_id,
+            "finding-ledger",
+            json.dumps(baseline_ledger, separators=(",", ":")),
+        ]
+    )
+    if baseline_ledger_result.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"baseline finding ledger append failed: {baseline_ledger_result}")
     invoke_until_succeeded(engine_call, run_id, "intent-draft", timeout_s=20.0)
     _expect_event_state(engine_call, run_id, "intent-ready", "design")
     _expect_event_state(engine_call, run_id, "design-ready", "design-review")
     overlay = invoke_until_succeeded(engine_call, run_id, "design-review", timeout_s=20.0)
     capture = Path(overlay["capture_dir"])
+    shown_workers = overlay.get("inner_workers")
+    if not isinstance(shown_workers, list) or len(shown_workers) != 1:
+        raise WorkSlotJourneyFailure(
+            f"completed invocation omitted its durable worker view: {overlay}"
+        )
+    shown_worker = shown_workers[0]
+    selected_attempt_path = capture / "0" / "attempts" / "2" / "stdout"
+    expected_digest = "sha256:" + hashlib.sha256(selected_attempt_path.read_bytes()).hexdigest()
+    if (
+        shown_worker.get("assignment_id") != "worker-0"
+        or shown_worker.get("selected_attempt") != 2
+        or shown_worker.get("selected_output_sha256") != expected_digest
+        or shown_worker.get("selected_output_path") != str(selected_attempt_path)
+    ):
+        raise WorkSlotJourneyFailure(
+            f"show did not expose the originating selected attempt: {shown_worker}"
+        )
     manifest = json.loads((capture / "0" / "attempts.json").read_text(encoding="utf-8"))
     if manifest.get("selected_attempt") != 2 or manifest.get("exhausted") is not False:
         raise WorkSlotJourneyFailure(
@@ -2374,19 +3261,91 @@ def prove_selected_attempt_ledger_linkage(
         raise WorkSlotJourneyFailure(
             f"selected attempt did not contain the expected candidate finding: {selected}"
         )
+    # bookends:LE-100 — repeated public show projects the durable fail-closed change report without provider/capture reads.
+    invocation_report = overlay.get("change_report")
+    if not isinstance(invocation_report, dict):
+        raise WorkSlotJourneyFailure(f"show omitted durable change report: {overlay}")
+    dimensions = invocation_report.get("dimensions")
+    if not isinstance(dimensions, dict) or not {
+        "subject_bytes",
+        "worker_assignment",
+        "frozen_binding",
+        "governing_policy_configuration",
+        "declared_output_contract",
+        "routed_inputs",
+    }.issubset(dimensions):
+        raise WorkSlotJourneyFailure(f"judgment change report omitted covered dimensions: {invocation_report}")
+    repeated = engine_call(["show", run_id])
+    repeated_invocation = next(
+        item for item in repeated.get("result", {}).get("work_slot_invocations", [])
+        if item.get("invocation_id") == overlay.get("invocation_id")
+    )
+    repeated_report = repeated_invocation.get("change_report")
+    if repeated_report != invocation_report:
+        raise WorkSlotJourneyFailure("repeated show changed the durable change report")
 
     subject = "design.json"
     revision = json.loads((artifact_root / subject).read_text(encoding="utf-8"))["revision"]
+    selected_link = {
+        "invocation_id": overlay["invocation_id"],
+        "assignment_id": shown_worker["assignment_id"],
+        "selected_attempt": shown_worker["selected_attempt"],
+        "sha256": output_digest,
+        "path": str(selected_attempt_path),
+    }
     evidence = {
         "gate": "design-review",
         "policy_id": "selected-axis",
         "result": "fail",
         "findings": "selected-attempt finding",
-        "author": {"name": "selected-reviewer", "kind": "script"},
+        "author": {"name": "selected-worker", "kind": "script"},
         "subject": subject,
         "subject_revision": revision,
         "config_version": frozen_profile["config_version"],
+        "originating_output": selected_link,
     }
+    # bookends:LE-105 — append first binds a worker claim to the exact
+    # engine-selected invocation/assignment/attempt, then provider evaluation
+    # proves that a real selected-output digest cannot bless disagreeing
+    # judgment content.
+    fabricated = dict(evidence)
+    fabricated["originating_output"] = dict(selected_link)
+    fabricated["originating_output"]["assignment_id"] = "not-selected"
+    fabricated_result = engine_call(
+        [
+            "append",
+            "--record-id=selected-attempt-evidence-fabricated",
+            run_id,
+            "review-evidence",
+            json.dumps(fabricated, separators=(",", ":")),
+        ]
+    )
+    if (
+        fabricated_result.get("status") != "rejected"
+        or fabricated_result.get("code") != "selected-output-linkage-refused"
+    ):
+        raise WorkSlotJourneyFailure(
+            f"append accepted fabricated selected-output identity: {fabricated_result}"
+        )
+    mismatched = dict(evidence)
+    mismatched["result"] = "pass"
+    mismatched["findings"] = ""
+    mismatch_result = engine_call(
+        [
+            "append",
+            "--record-id=selected-attempt-evidence-mismatch",
+            run_id,
+            "review-evidence",
+            json.dumps(mismatched, separators=(",", ":")),
+        ]
+    )
+    if mismatch_result.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"mismatched linked evidence append failed: {mismatch_result}")
+    mismatch_denied = engine_call(["event", run_id, "approved"])
+    if mismatch_denied.get("status") != "rejected" or "unverified" not in json.dumps(mismatch_denied):
+        raise WorkSlotJourneyFailure(
+            f"provider accepted disagreement with originating judgment: {mismatch_denied}"
+        )
     evidence_result = engine_call(
         [
             "append",
@@ -2446,6 +3405,7 @@ def prove_selected_attempt_ledger_linkage(
         )
     evidence["result"] = "pass"
     evidence["findings"] = ""
+    evidence.pop("originating_output")
     pass_result = engine_call(
         [
             "append",
@@ -2477,10 +3437,524 @@ def prove_selected_attempt_ledger_linkage(
         raise WorkSlotJourneyFailure(
             f"selected-attempt ledger recovery did not advance: {approved}"
         )
+
+    # Carry the same selected assignment through the existing append path. The
+    # first act uses the clean report; adding routed context makes the report
+    # changed, forcing the explicit override act.
+    routed = engine_call(
+        [
+            "append",
+            "--record-id=carry-routing-change",
+            run_id,
+            "finding-ledger",
+            "{}",
+        ]
+    )
+    if routed.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"carry report mutation append failed: {routed}")
+    changed_show = engine_call(["show", run_id])
+    changed_invocation = next(
+        item for item in changed_show.get("result", {}).get("work_slot_invocations", [])
+        if item.get("invocation_id") == overlay.get("invocation_id")
+    )
+    changed_dimensions = changed_invocation.get("change_report", {}).get("dimensions", {})
+    if not changed_dimensions.get("routed_inputs", {}).get("changed"):
+        raise WorkSlotJourneyFailure("change report did not mark routed inputs changed")
+    refused_carry = engine_call(
+        [
+            "append",
+            "--record-id=selected-attempt-unchanged-refused",
+            run_id,
+            "unchanged-carry",
+            json.dumps(
+                {
+                    "source_record_id": "selected-attempt-evidence-pass",
+                    "invocation_id": overlay["invocation_id"],
+                    "assignment_id": "worker-0",
+                    "attesting_driver": {"name": "carry-driver-2", "kind": "agent"},
+                },
+                separators=(",", ":"),
+            ),
+        ]
+    )
+    if refused_carry.get("status") != "rejected" or "routed_inputs" not in json.dumps(refused_carry):
+        raise WorkSlotJourneyFailure(f"unchanged-carry ignored changed report: {refused_carry}")
+    override = engine_call(
+        [
+            "append",
+            "--record-id=selected-attempt-override-carry",
+            run_id,
+            "override-carry",
+            json.dumps(
+                {
+                    "source_record_id": "selected-attempt-evidence-pass",
+                    "invocation_id": overlay["invocation_id"],
+                    "assignment_id": "worker-0",
+                    "attesting_driver": {"name": "carry-driver-3", "kind": "agent"},
+                    "overridden_inputs": ["routed_inputs"],
+                },
+                separators=(",", ":"),
+            ),
+        ]
+    )
+    if override.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"override-carry did not name changed input: {override}")
+    carry_show = engine_call(["show", run_id])
+    carried = carry_show.get("result", {}).get("change_report", {}).get("assignments", [])
+    override_judgment = next(
+        (
+            judgment
+            for judgment in carried
+            if judgment.get("assignment_id") == "worker-0"
+            and judgment.get("carry_act") == "override-carry"
+            and judgment.get("overridden_inputs") == ["routed_inputs"]
+        ),
+        None,
+    )
+    if override_judgment is None:
+        raise WorkSlotJourneyFailure(f"show omitted override carry provenance: {carry_show}")
+
+    paired_script = work_dir / "paired-selected-output-worker.py"
+    paired_script.write_text(
+        "import json, sys\n"
+        "raw = sys.stdin.buffer.read()\n"
+        "if b'coverage-gap' in raw or b'SCHEMA-CONFORMANCE RETRY' not in raw:\n"
+        "    sys.stdout.write('{\\\"axis\\\":\\\"wrong\\\"}')\n"
+        "else:\n"
+        "    sys.stdout.write(json.dumps({'axis':'selected-axis','author':{'name':'selected-worker','kind':'script'},'result':'pass','findings':''}, separators=(',', ':')))\n",
+        encoding="utf-8",
+    )
+    paired_script.chmod(0o755)
+    shared_args = [str(paired_script)]
+    paired_binding = fan_out_binding(
+        engine=engine,
+        workers=[
+            {
+                "command": sys.executable,
+                "args": shared_args,
+                "preamble": "selected-assignment",
+                "full_output_schema": schema,
+            },
+            {
+                "command": sys.executable,
+                "args": shared_args,
+                "preamble": "coverage-gap-assignment",
+                "full_output_schema": schema,
+            },
+        ],
+    )
+    paired_call, _, _ = _start_isolated_software_change(
+        engine=engine,
+        provider=provider,
+        profile_source=custom_profile,
+        fixture_root=fixture_root,
+        work_dir=work_dir / "paired-run",
+        run_id="paired-selected-output",
+        extra_bindings={"design-review": paired_binding},
+    )
+    paired_run = "paired-selected-output"
+    invoke_until_succeeded(paired_call, paired_run, "intent-draft", timeout_s=20.0)
+    _expect_event_state(paired_call, paired_run, "intent-ready", "design")
+    _expect_event_state(paired_call, paired_run, "design-ready", "design-review")
+    paired_overlay = invoke_until_status(
+        paired_call, paired_run, "design-review", expected="failed", timeout_s=20.0
+    )
+    paired_workers = paired_overlay.get("inner_workers")
+    if not isinstance(paired_workers, list) or len(paired_workers) != 2:
+        raise WorkSlotJourneyFailure(f"paired invocation omitted workers: {paired_overlay}")
+    if paired_workers[0].get("command") != paired_workers[1].get("command") or paired_workers[0].get("args") != paired_workers[1].get("args"):
+        raise WorkSlotJourneyFailure(f"paired workers changed shared command/argv: {paired_workers}")
+    if [worker.get("assignment_id") for worker in paired_workers] != ["worker-0", "worker-1"]:
+        raise WorkSlotJourneyFailure(f"paired assignment identities are not distinct: {paired_workers}")
+    paired_path = Path(paired_workers[0]["selected_output_path"])
+    if (
+        paired_workers[0].get("selected_attempt") != 2
+        or paired_workers[0].get("selected_output_sha256") != "sha256:" + hashlib.sha256(paired_path.read_bytes()).hexdigest()
+        or "attempts/2/" not in str(paired_path)
+        or paired_workers[1].get("selected_attempt") is not None
+        or paired_workers[1].get("selected_output_sha256") is not None
+        or paired_workers[1].get("selected_output_path") is not None
+    ):
+        raise WorkSlotJourneyFailure(f"paired selected/coverage-gap facts are wrong: {paired_workers}")
+    paired_artifact = paired_call(["show", paired_run]).get("result", {}).get("initial_input", {}).get("artifact_root")
+    if not isinstance(paired_artifact, str):
+        raise WorkSlotJourneyFailure("paired run omitted artifact_root for carry proof")
+    paired_subject_revision = json.loads((Path(paired_artifact) / "design.json").read_text(encoding="utf-8"))["revision"]
+    carry_source = {
+        "gate": "design-review",
+        "policy_id": "selected-axis",
+        "result": "pass",
+        "findings": "",
+        "author": {"name": "selected-worker", "kind": "script"},
+        "subject": "design.json",
+        "subject_revision": paired_subject_revision,
+        "config_version": frozen_profile["config_version"],
+    }
+    source_result = paired_call(
+        [
+            "append",
+            "--record-id=paired-carry-source",
+            paired_run,
+            "review-evidence",
+            json.dumps(carry_source, separators=(",", ":")),
+        ]
+    )
+    if source_result.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"paired carry source append failed: {source_result}")
+    # bookends:LE-103 and LE-104 — both explicit carry acts preserve provenance and require named overrides when the report changes.
+    carried_clean = paired_call(
+        [
+            "append",
+            "--record-id=paired-unchanged-carry",
+            paired_run,
+            "unchanged-carry",
+            json.dumps(
+                {
+                    "source_record_id": "paired-carry-source",
+                    "invocation_id": paired_overlay["invocation_id"],
+                    "assignment_id": "worker-0",
+                    "attesting_driver": {"name": "paired-carry-driver", "kind": "agent"},
+                },
+                separators=(",", ":"),
+            ),
+        ]
+    )
+    if carried_clean.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"unchanged-carry did not preserve clean paired work: {carried_clean}")
+    paired_call(["append", "--record-id=paired-routing-change", paired_run, "finding-ledger", "{}"])
+    carried_changed = paired_call(
+        [
+            "append",
+            "--record-id=paired-override-carry",
+            paired_run,
+            "override-carry",
+            json.dumps(
+                {
+                    "source_record_id": "paired-carry-source",
+                    "invocation_id": paired_overlay["invocation_id"],
+                    "assignment_id": "worker-0",
+                    "attesting_driver": {"name": "paired-override-driver", "kind": "agent"},
+                    "overridden_inputs": ["routed_inputs"],
+                },
+                separators=(",", ":"),
+            ),
+        ]
+    )
+    if carried_changed.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"override-carry did not preserve changed paired work: {carried_changed}")
+    paired_show = paired_call(["show", paired_run])
+    paired_carried = paired_show.get("result", {}).get("change_report", {}).get("assignments", [])
+    paired_override_judgment = next(
+        (
+            judgment
+            for judgment in paired_carried
+            if judgment.get("assignment_id") == "worker-0"
+            and judgment.get("carry_act") == "override-carry"
+            and judgment.get("overridden_inputs") == ["routed_inputs"]
+        ),
+        None,
+    )
+    if paired_override_judgment is None:
+        raise WorkSlotJourneyFailure(f"show omitted paired override carry provenance: {paired_show}")
     return [
-        "selected retry attempt is linked by invocation, worker index, attempt, and raw stdout digest",
+        "show exposes assignment identity, selected attempt, originating path, and raw stdout digest",
         "provider reaches review evidence only after selected-attempt ledger linkage passes",
         "resolved driver ledger supersedes the selected candidate without rewriting raw attempts",
+        "no live model",
+    ]
+
+
+def prove_subset_carry_checked(
+    *,
+    engine: Path,
+    provider: Path,
+    profile_source: Path,
+    fixture_root: Path,
+    work_dir: Path,
+) -> list[str]:
+    """Prove subset re-execution plus explicit carry can satisfy a checked gate."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    worker_script = work_dir / "subset-carry-worker.py"
+    worker_script.write_text(
+        "import argparse, json, sys\n"
+        "from pathlib import Path\n"
+        "parser = argparse.ArgumentParser()\n"
+        "parser.add_argument('--author', required=True)\n"
+        "parser.add_argument('--state', required=True)\n"
+        "args = parser.parse_args()\n"
+        "state = Path(args.state)\n"
+        "count = int(state.read_text()) if state.exists() else 0\n"
+        "state.write_text(str(count + 1))\n"
+        "sys.stdin.buffer.read()\n"
+        "print(json.dumps({'axis':'subset-carry-axis','author':{'name':args.author,'kind':'script'},'result':'pass','findings':''}, separators=(',', ':')))\n",
+        encoding="utf-8",
+    )
+    worker_script.chmod(0o755)
+    custom_profile = work_dir / "subset-carry-profile.json"
+    profile = json.loads(profile_source.read_text(encoding="utf-8"))
+    policies = profile["review_policies"]
+    for gate in list(policies):
+        policies[gate] = []
+    policies["design-review"] = [
+        {
+            "id": "subset-carry-axis",
+            "description": "Subset carry checked transition proof",
+            "example_prompt": "Judge subset-carry-axis only.",
+            "required_authors": 2,
+        }
+    ]
+    custom_profile.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
+    schema = {
+        "type": "object",
+        "required": ["axis", "author", "result", "findings"],
+        "properties": {
+            "axis": {"const": "subset-carry-axis"},
+            "author": {"type": "object"},
+            "result": {"const": "pass"},
+            "findings": {"const": ""},
+        },
+        "additionalProperties": False,
+    }
+    states = {index: work_dir / f"worker-{index}.count" for index in (0, 1)}
+    binding = fan_out_binding(
+        engine=engine,
+        workers=[
+            {
+                "command": sys.executable,
+                "args": [
+                    str(worker_script),
+                    "--author",
+                    f"subset-worker-{index}",
+                    "--state",
+                    str(states[index]),
+                ],
+                "preamble": f"subset-carry worker {index}",
+                "full_output_schema": schema,
+            }
+            for index in (0, 1)
+        ],
+    )
+    engine_call, artifact_root, frozen_profile = _start_isolated_software_change(
+        engine=engine,
+        provider=provider,
+        profile_source=custom_profile,
+        fixture_root=fixture_root,
+        work_dir=work_dir / "run",
+        run_id="subset-carry-checked",
+        extra_bindings={"design-review": binding},
+    )
+    run_id = "subset-carry-checked"
+    invoke_until_succeeded(engine_call, run_id, "intent-draft", timeout_s=20.0)
+    _expect_event_state(engine_call, run_id, "intent-ready", "design")
+    _expect_event_state(engine_call, run_id, "design-ready", "design-review")
+    subject = "design.json"
+    revision = json.loads((artifact_root / subject).read_text(encoding="utf-8"))["revision"]
+    ledger = {
+        "schema_version": "1",
+        "gate": "design-review",
+        "subject": subject,
+        "subject_revision": revision,
+        "author": {"name": "subset-carry-driver", "kind": "agent"},
+        "repository_state": None,
+        "findings": [],
+    }
+    ledger_result = engine_call(
+        [
+            "append",
+            "--record-id=subset-carry-routing-ledger",
+            run_id,
+            "finding-ledger",
+            json.dumps(ledger, separators=(",", ":")),
+        ]
+    )
+    if ledger_result.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"clean finding-ledger append failed: {ledger_result}")
+
+    full_overlay = invoke_until_succeeded(engine_call, run_id, "design-review", timeout_s=20.0)
+    full_workers = full_overlay.get("inner_workers")
+    if not isinstance(full_workers, list) or [worker.get("assignment_id") for worker in full_workers] != ["worker-0", "worker-1"]:
+        raise WorkSlotJourneyFailure(f"full overlay did not enumerate both assignments: {full_overlay}")
+    if any(states[index].read_text() != "1" for index in (0, 1)):
+        raise WorkSlotJourneyFailure("full overlay did not start both dummy assignments exactly once")
+    config_version = frozen_profile["config_version"]
+    source_records = {}
+    for worker in full_workers:
+        assignment = worker["assignment_id"]
+        output_path = Path(worker["selected_output_path"])
+        output_digest = "sha256:" + hashlib.sha256(output_path.read_bytes()).hexdigest()
+        author = f"subset-{assignment}"
+        if worker.get("selected_attempt") != 1 or worker.get("selected_output_sha256") != output_digest:
+            raise WorkSlotJourneyFailure(f"full overlay omitted selected output evidence: {worker}")
+        evidence = {
+            "gate": "design-review",
+            "policy_id": "subset-carry-axis",
+            "result": "pass",
+            "findings": "",
+            "author": {"name": author, "kind": "script"},
+            "subject": subject,
+            "subject_revision": revision,
+            "config_version": config_version,
+            "originating_output": {
+                "invocation_id": full_overlay["invocation_id"],
+                "assignment_id": assignment,
+                "selected_attempt": worker["selected_attempt"],
+                "sha256": output_digest,
+                "path": str(output_path),
+            },
+        }
+        record_id = f"subset-carry-source-{assignment}"
+        appended = engine_call(
+            ["append", f"--record-id={record_id}", run_id, "review-evidence", json.dumps(evidence, separators=(",", ":"))]
+        )
+        if appended.get("status") != "completed":
+            raise WorkSlotJourneyFailure(f"source evidence append failed for {assignment}: {appended}")
+        source_records[assignment] = (record_id, output_digest)
+
+    subset = invoke_until_succeeded(
+        engine_call,
+        run_id,
+        "design-review",
+        timeout_s=20.0,
+        invoke_args=("--assignment", "worker-0"),
+    )
+    subset_workers = subset.get("inner_workers")
+    if (
+        not isinstance(subset_workers, list)
+        or [worker.get("assignment_id") for worker in subset_workers] != ["worker-0"]
+    ):
+        raise WorkSlotJourneyFailure(f"subset re-invoke did not select only worker-0: {subset}")
+    counts = {index: int(states[index].read_text()) for index in (0, 1)}
+    if counts != {0: 2, 1: 1}:
+        raise WorkSlotJourneyFailure(
+            f"subset re-invoke changed assignment counts unexpectedly: {counts}"
+        )
+
+    subset_worker = subset_workers[0]
+    subset_output_path = Path(subset_worker["selected_output_path"])
+    subset_output_digest = "sha256:" + hashlib.sha256(
+        subset_output_path.read_bytes()
+    ).hexdigest()
+    if (
+        subset_worker.get("selected_attempt") != 1
+        or subset_worker.get("selected_output_sha256") != subset_output_digest
+        or subset_output_path == Path(full_workers[0]["selected_output_path"])
+    ):
+        raise WorkSlotJourneyFailure(
+            f"subset overlay omitted fresh worker-0 output evidence: {subset_worker}"
+        )
+    subset_evidence = {
+        "gate": "design-review",
+        "policy_id": "subset-carry-axis",
+        "result": "pass",
+        "findings": "",
+        "author": {"name": "subset-worker-0", "kind": "script"},
+        "subject": subject,
+        "subject_revision": revision,
+        "config_version": config_version,
+        "originating_output": {
+            "invocation_id": subset["invocation_id"],
+            "assignment_id": subset_worker["assignment_id"],
+            "selected_attempt": subset_worker["selected_attempt"],
+            "sha256": subset_output_digest,
+            "path": str(subset_output_path),
+        },
+    }
+    subset_evidence_result = engine_call(
+        [
+            "append",
+            "--record-id=subset-carry-worker-0-evidence",
+            run_id,
+            "review-evidence",
+            json.dumps(subset_evidence, separators=(",", ":")),
+        ]
+    )
+    if subset_evidence_result.get("status") != "completed":
+        raise WorkSlotJourneyFailure(
+            f"subset worker-0 evidence append failed: {subset_evidence_result}"
+        )
+
+    pre_carry_show = engine_call(["show", run_id])
+    pre_carry_invocation = next(
+        item
+        for item in pre_carry_show["result"]["work_slot_invocations"]
+        if item.get("invocation_id") == full_overlay["invocation_id"]
+    )
+    if pre_carry_invocation["change_report"]["dimensions"]["routed_inputs"]["changed"]:
+        raise WorkSlotJourneyFailure(
+            "routed_inputs became dirty before the remainder unchanged-carry"
+        )
+
+    clean_carry = engine_call(
+        [
+            "append",
+            "--record-id=subset-carry-worker-1",
+            run_id,
+            "unchanged-carry",
+            json.dumps(
+                {
+                    "source_record_id": source_records["worker-1"][0],
+                    "invocation_id": full_overlay["invocation_id"],
+                    "assignment_id": "worker-1",
+                    "attesting_driver": {"name": "subset-carry-driver", "kind": "agent"},
+                },
+                separators=(",", ":"),
+            ),
+        ]
+    )
+    if clean_carry.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"clean remainder unchanged-carry failed: {clean_carry}")
+
+    checked = engine_call(["event", run_id, "approved"])
+    checked_run = (checked.get("result") or {}).get("run") or {}
+    if checked.get("status") != "completed" or checked_run.get("current_state") != "plan":
+        raise WorkSlotJourneyFailure(f"carried evidence did not satisfy checked transition: {checked}")
+    shown = engine_call(["show", run_id])
+    context = shown["result"].get("context", [])
+    carried_context = [
+        record
+        for record in context
+        if isinstance(record, dict)
+        and isinstance(record.get("data"), dict)
+        and isinstance(record["data"].get("loop_engine_carry"), dict)
+    ]
+    carried_authors = {
+        record["data"].get("author", {}).get("name")
+        for record in carried_context
+        if isinstance(record["data"].get("author"), dict)
+    }
+    if carried_authors != {"subset-worker-1"}:
+        raise WorkSlotJourneyFailure(f"carried records lost originating authors: {carried_context}")
+    carry_acts = {
+        record["data"]["loop_engine_carry"].get("act")
+        for record in carried_context
+    }
+    if carry_acts != {"unchanged-carry"}:
+        raise WorkSlotJourneyFailure(f"show omitted explicit carry acts: {carried_context}")
+    judgments = shown["result"]["change_report"].get("assignments", [])
+    carried_judgments = {
+        judgment.get("assignment_id"): judgment
+        for judgment in judgments
+        if judgment.get("carry_act") is not None
+    }
+    worker_judgments = {
+        judgment.get("assignment_id"): judgment
+        for judgment in judgments
+    }
+    if (
+        carried_judgments.get("worker-1", {}).get("carry_act") != "unchanged-carry"
+        or not carried_judgments.get("worker-1", {}).get("standing")
+        or worker_judgments.get("worker-0", {}).get("carry_act") is not None
+    ):
+        raise WorkSlotJourneyFailure(
+            f"show did not project carried remainder and fresh subset evidence: {judgments}"
+        )
+    return [
+        "full two-assignment overlay records selected outputs and evidence",
+        "subset re-invoke starts worker-0 twice and never starts unselected worker-1",
+        "subset worker-0 evidence links the subset stdout digest and path",
+        "unchanged-carry preserves the clean remainder without dirtying routed_inputs",
+        "checked approved transition counts fresh worker-0 evidence and carried worker-1",
+        "show exposes only the carried remainder as standing carry provenance",
         "no live model",
     ]
 
@@ -3273,11 +4747,23 @@ def prove_bound_contracted_fan_out_failure(
             f"contracted fan-out failed overlay meaning mismatch: {failed}"
         )
     collector_exit = failed.get("exit_code")
+    capture_raw = failed.get("capture_dir")
     if not isinstance(collector_exit, int) or collector_exit == 0:
-        raise WorkSlotJourneyFailure(
-            f"nonconforming collector must exit nonzero: {failed}"
-        )
-    _assert_inner_exit_codes(failed, (0, 0))
+        # A waiter that vanishes after the facade has persisted its summary
+        # still has a fail-closed overlay. Accept that observable path when
+        # the persisted summary proves the nonconforming worker; do not infer
+        # success from the missing outer exit code.
+        if not isinstance(capture_raw, str) or not (Path(capture_raw) / "summary.json").is_file():
+            raise WorkSlotJourneyFailure(
+                f"nonconforming collector must exit nonzero or persist failed summary: {failed}"
+            )
+        persisted = json.loads((Path(capture_raw) / "summary.json").read_text(encoding="utf-8"))
+        if not any(worker.get("status") == "failed" for worker in persisted.get("workers", [])):
+            raise WorkSlotJourneyFailure(
+                f"nonconforming collector omitted persisted failed worker: {failed}"
+            )
+    if isinstance(collector_exit, int):
+        _assert_inner_exit_codes(failed, (0, 0))
     capture_raw = failed.get("capture_dir")
     if not isinstance(capture_raw, str) or not capture_raw:
         raise WorkSlotJourneyFailure(

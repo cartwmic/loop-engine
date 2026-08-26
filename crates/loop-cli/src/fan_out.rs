@@ -21,6 +21,7 @@ static NEXT_ADHOC: AtomicU64 = AtomicU64::new(1);
 const JOIN_COMMAND_OVERRIDE: &str = "LOOP_ENGINE_FAN_OUT_JOIN_COMMAND";
 const SPEC_FILE: &str = "fan-out-spec.json";
 const SUMMARY_FILE: &str = "summary.json";
+const JOIN_COMPLETE_FILE: &str = "join-complete";
 const ATTEMPTS_FILE: &str = "attempts.json";
 const MAX_FULL_SCHEMA_ATTEMPTS: u32 = 2;
 const RETRY_PROMPT: &str = "\n\n---\n\nSCHEMA-CONFORMANCE RETRY\nReturn only a schema-conforming reconsideration of the same frozen assignment. Do not add commentary or change the semantic review authority.\n\nFIRST_OUTPUT_BEGIN\n";
@@ -47,10 +48,13 @@ pub(crate) struct OutputSchema {
     pub(crate) required: Vec<String>,
 }
 
-/// Bound-worker stdin packet. Engine invoke keys plus optional `context`.
+/// Bound-worker stdin packet. Engine invoke keys plus optional routed context,
+/// assignment selection, and generic standing identities.
 ///
 /// Omitted `context` keeps today's compact `{artifact_root}` worker stdin.
 /// A present `context` array is forwarded unmodified onto that compact JSON.
+/// Fan-out does not interpret standing identities; accepting the engine-owned
+/// field keeps review-slot packets compatible with the shared invoke envelope.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct InvokePacket {
@@ -61,6 +65,10 @@ pub(crate) struct InvokePacket {
     pub(crate) capture_dir: String,
     #[serde(default)]
     pub(crate) context: Option<Vec<Value>>,
+    #[serde(default)]
+    pub(crate) assignment_selection: Option<Vec<String>>,
+    #[serde(default, rename = "standing_assignment_ids")]
+    pub(crate) _standing_assignment_ids: Option<Vec<String>>,
 }
 
 /// Collected `fan-out` flags after the command name.  Zero `--worker` entries
@@ -131,6 +139,9 @@ pub(crate) struct FanOutSummary {
 /// One reaped worker in `--worker` order.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct FanOutWorkerResult {
+    /// Stable within this invocation's slot; this is an assignment identity,
+    /// not a worker role.
+    pub(crate) assignment_id: String,
     pub(crate) command: String,
     pub(crate) args: Vec<String>,
     pub(crate) exit_code: i32,
@@ -140,14 +151,22 @@ pub(crate) struct FanOutWorkerResult {
     pub(crate) status: Option<ContractStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) conformance_error: Option<String>,
-    /// Relative to the fan-out capture root.  Present only for the additive
-    /// complete-schema contract.
+    /// Relative to the fan-out capture root. Present for retry ledgers and
+    /// omitted for single-attempt workers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) attempts_path: Option<String>,
-    /// The outer option preserves the legacy omission while the inner option
-    /// serializes `null` for an exhausted complete-schema contract.
+    /// The outer option preserves compatibility while the inner option
+    /// serializes `null` whenever no output was selected.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) selected_attempt: Option<Option<u32>>,
+    /// Digest and location of the selected attempt's originating stdout bytes.
+    /// They serialize as null for a coverage gap.
+    pub(crate) selected_output_sha256: Option<String>,
+    pub(crate) selected_output_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) declared_output_contract: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) routed_inputs: Option<Value>,
 }
 
 /// Mechanical outcome for a worker that declared an output contract.
@@ -166,12 +185,16 @@ struct FanOutSpec {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct FanOutSpecWorker {
+    #[serde(default)]
+    assignment_id: String,
     command: String,
     args: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     output_schema: Option<OutputSchema>,
     #[serde(skip_serializing_if = "Option::is_none")]
     full_output_schema: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    routed_inputs: Option<Value>,
     stdin_path: String,
     stdout_path: String,
     stderr_path: String,
@@ -207,6 +230,30 @@ struct CaptureSummary<'a> {
 }
 
 /// Parse one nested worker CLI JSON object and validate its exact output shape.
+/// Return the stable identities exposed by a frozen bound fan-out command.
+/// Other commands remain opaque to the engine and therefore cannot be
+/// selected safely.
+pub(crate) fn enumerate_bound_assignments(
+    binding: &loop_core::WorkSlotBinding,
+) -> Option<Vec<String>> {
+    if binding.args.first().map(String::as_str) != Some("fan-out") {
+        return None;
+    }
+    let parsed = parse_fan_out_args(binding.args.iter().skip(1).map(String::as_str)).ok()?;
+    if parsed.instructions_path.is_some() {
+        return None;
+    }
+    Some(
+        (0..parsed.workers.len())
+            .map(assignment_id)
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn assignment_id(index: usize) -> String {
+    format!("worker-{index}")
+}
+
 pub(crate) fn parse_worker_cli_json(raw: &str) -> Result<WorkerCli, ParseError> {
     let raw_value: Value = serde_json::from_str(raw).map_err(|error| {
         ParseError::new(format!(
@@ -461,6 +508,8 @@ pub(crate) fn run_collector(
     let mode = detect_mode(parsed_args, stdin_bytes)?;
     match mode {
         FanOutMode::Bound { packet, workers } => {
+            let (workers, assignment_ids) =
+                select_bound_workers(&workers, packet.assignment_selection.as_deref())?;
             ensure_workers(&workers)?;
             if packet.capture_dir.is_empty() {
                 return Err(CollectorError::Invalid(
@@ -478,7 +527,15 @@ pub(crate) fn run_collector(
                 })
                 .collect::<Vec<_>>();
             let output_dir = absolute_from_cwd(cwd, Path::new(&packet.capture_dir));
-            run_dagu_graph(&dagu, &engine, &workers, &payloads, &output_dir, max_active)
+            run_dagu_graph(
+                &dagu,
+                &engine,
+                &workers,
+                &assignment_ids,
+                &payloads,
+                &output_dir,
+                max_active,
+            )
         }
         FanOutMode::AdHoc {
             instructions_path,
@@ -500,7 +557,16 @@ pub(crate) fn run_collector(
                 .collect::<Vec<_>>();
             let unique = unique_adhoc_id();
             let output_dir = cwd.join("fan-out-adhoc").join(unique);
-            run_dagu_graph(&dagu, &engine, &workers, &payloads, &output_dir, max_active)
+            let assignment_ids = (0..workers.len()).map(assignment_id).collect::<Vec<_>>();
+            run_dagu_graph(
+                &dagu,
+                &engine,
+                &workers,
+                &assignment_ids,
+                &payloads,
+                &output_dir,
+                max_active,
+            )
         }
     }
 }
@@ -510,7 +576,13 @@ pub(crate) fn run_collector(
 pub(crate) fn run_fan_out_join(capture_dir: &Path) -> Result<(), CollectorError> {
     let spec = read_spec(capture_dir)?;
     let workers = summary_from_spec(&spec, false)?;
-    write_summary_json(capture_dir, &workers)
+    write_summary_json(capture_dir, &workers)?;
+    fs::write(capture_dir.join(JOIN_COMPLETE_FILE), b"complete\n").map_err(|error| {
+        CollectorError::Failed(format!(
+            "could not write fan-out join marker `{}`: {error}",
+            capture_dir.join(JOIN_COMPLETE_FILE).display()
+        ))
+    })
 }
 
 /// Execute one complete-schema worker.  Dagu still owns graph scheduling;
@@ -837,6 +909,48 @@ fn ensure_workers(workers: &[WorkerCli]) -> Result<(), CollectorError> {
     Ok(())
 }
 
+fn select_bound_workers(
+    workers: &[WorkerCli],
+    selection: Option<&[String]>,
+) -> Result<(Vec<WorkerCli>, Vec<String>), CollectorError> {
+    let all_ids = (0..workers.len()).map(assignment_id).collect::<Vec<_>>();
+    let Some(selection) = selection else {
+        return Ok((workers.to_vec(), all_ids));
+    };
+    if selection.is_empty() {
+        return Err(CollectorError::Invalid(
+            "assignment selection must contain at least one identity".to_owned(),
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    let mut selected = Vec::new();
+    for identity in selection {
+        if identity.is_empty() {
+            return Err(CollectorError::Invalid(
+                "assignment identities must be non-empty".to_owned(),
+            ));
+        }
+        if !seen.insert(identity) {
+            return Err(CollectorError::Invalid(format!(
+                "assignment `{identity}` was selected more than once"
+            )));
+        }
+        let Some(index) = all_ids.iter().position(|id| id == identity) else {
+            return Err(CollectorError::Invalid(format!(
+                "assignment `{identity}` is not in the bound fan-out"
+            )));
+        };
+        selected.push((index, identity.clone()));
+    }
+    Ok((
+        selected
+            .iter()
+            .map(|(index, _)| workers[*index].clone())
+            .collect(),
+        selected.into_iter().map(|(_, id)| id).collect(),
+    ))
+}
+
 fn compact_location_json(artifact_root: &str, context: Option<&[Value]>) -> Vec<u8> {
     #[derive(Serialize)]
     struct Location<'a> {
@@ -922,11 +1036,13 @@ fn run_dagu_graph(
     dagu: &Path,
     engine: &Path,
     workers: &[WorkerCli],
+    assignment_ids: &[String],
     payloads: &[Vec<u8>],
     output_dir: &Path,
     max_active: Option<u32>,
 ) -> Result<FanOutSummary, CollectorError> {
     debug_assert_eq!(workers.len(), payloads.len());
+    debug_assert_eq!(workers.len(), assignment_ids.len());
     fs::create_dir_all(output_dir).map_err(|error| {
         CollectorError::Failed(format!(
             "could not create fan-out output directory `{}`: {error}",
@@ -963,10 +1079,14 @@ fn run_dagu_graph(
             ))
         })?;
         spec_workers.push(FanOutSpecWorker {
+            assignment_id: assignment_ids[index].clone(),
             command: worker.command.clone(),
             args: worker.args.clone(),
             output_schema: worker.output_schema.clone(),
             full_output_schema: worker.full_output_schema.clone(),
+            routed_inputs: serde_json::from_slice::<Value>(&payloads[index])
+                .ok()
+                .and_then(|value| value.get("context").cloned()),
             stdin_path: path_to_string(&stdin_path),
             stdout_path: path_to_string(&worker_dir.join("stdout")),
             stderr_path: path_to_string(&worker_dir.join("stderr")),
@@ -1020,12 +1140,19 @@ fn run_dagu_graph(
         ],
         true,
     );
-
+    // A completed graph can have a nonzero aggregate status when a nested
+    // worker reports a nonzero exit through its sidecar. The join writes the
+    // authoritative summary in that case. If no summary exists, the graph
+    // itself failed before collection (or the join failed), which remains a
+    // collector error after the fallback summary is written.
+    let join_completed = output_dir.join(JOIN_COMPLETE_FILE).is_file();
     let workers = ensure_summary(&output_dir, &spec)?;
     let conformance_failed = workers
         .iter()
         .any(|worker| matches!(worker.status, Some(ContractStatus::Failed)));
-    start_result?;
+    if start_result.is_err() && !join_completed {
+        start_result?;
+    }
     if conformance_failed {
         return Err(CollectorError::Failed(
             "one or more workers did not satisfy their declared output contract; inspect summary.json"
@@ -1253,11 +1380,14 @@ fn ensure_summary(
 ) -> Result<Vec<FanOutWorkerResult>, CollectorError> {
     let existing = read_summary_workers(output_dir);
     if let Some(workers) = existing {
-        if summary_covers_started(spec, &workers) {
+        if summary_covers_spec(spec, &workers) {
             return Ok(workers);
         }
     }
-    let workers = summary_from_spec(spec, true)?;
+    // A failed graph can stop before every configured worker starts. Keep one
+    // durable record per assignment so an outside observer sees explicit
+    // coverage gaps rather than silently missing workers.
+    let workers = summary_from_spec(spec, false)?;
     write_summary_json(output_dir, &workers)?;
     Ok(workers)
 }
@@ -1274,16 +1404,16 @@ fn read_summary_workers(output_dir: &Path) -> Option<Vec<FanOutWorkerResult>> {
         .map(|loaded| loaded.workers)
 }
 
-fn summary_covers_started(spec: &FanOutSpec, workers: &[FanOutWorkerResult]) -> bool {
-    let started = spec
-        .workers
-        .iter()
-        .filter(|worker| worker_started(worker))
-        .count();
-    if started == 0 {
-        return !workers.is_empty() || spec.workers.is_empty();
-    }
-    workers.len() >= started
+fn summary_covers_spec(spec: &FanOutSpec, workers: &[FanOutWorkerResult]) -> bool {
+    workers.len() == spec.workers.len()
+        && workers.iter().enumerate().all(|(index, worker)| {
+            worker.assignment_id
+                == if spec.workers[index].assignment_id.is_empty() {
+                    assignment_id(index)
+                } else {
+                    spec.workers[index].assignment_id.clone()
+                }
+        })
 }
 
 fn worker_started(worker: &FanOutSpecWorker) -> bool {
@@ -1298,10 +1428,45 @@ fn summary_from_spec(
 ) -> Result<Vec<FanOutWorkerResult>, CollectorError> {
     let mut results = Vec::new();
     for (worker_index, worker) in spec.workers.iter().enumerate() {
-        if started_only && !worker_started(worker) {
+        let started = worker_started(worker);
+        if started_only && !started {
             continue;
         }
         let exit_code = read_sidecar_exit(&worker.sidecar_path).unwrap_or(1);
+        if !started {
+            results.push(FanOutWorkerResult {
+                assignment_id: if worker.assignment_id.is_empty() {
+                    assignment_id(worker_index)
+                } else {
+                    worker.assignment_id.clone()
+                },
+                command: worker.command.clone(),
+                args: worker.args.clone(),
+                exit_code,
+                stdout_path: worker.stdout_path.clone(),
+                stderr_path: worker.stderr_path.clone(),
+                status: (worker.output_schema.is_some() || worker.full_output_schema.is_some())
+                    .then_some(ContractStatus::Failed),
+                conformance_error: (worker.output_schema.is_some()
+                    || worker.full_output_schema.is_some())
+                .then(|| "worker did not start".to_owned()),
+                attempts_path: worker
+                    .full_output_schema
+                    .as_ref()
+                    .map(|_| format!("{worker_index}/{ATTEMPTS_FILE}")),
+                selected_attempt: Some(None),
+                selected_output_sha256: None,
+                selected_output_path: None,
+                declared_output_contract: worker.full_output_schema.clone().or_else(|| {
+                    worker
+                        .output_schema
+                        .as_ref()
+                        .map(|schema| serde_json::to_value(schema).unwrap_or(Value::Null))
+                }),
+                routed_inputs: worker.routed_inputs.clone(),
+            });
+            continue;
+        }
         let stdout_path = Path::new(&worker.stdout_path);
         if let Some(parent) = stdout_path.parent() {
             let _ = fs::create_dir_all(parent);
@@ -1313,32 +1478,84 @@ fn summary_from_spec(
         if !stderr_path.exists() {
             let _ = fs::write(stderr_path, b"");
         }
-        let (status, conformance_error, selected_attempt, attempts_path) =
-            if worker.full_output_schema.is_some() {
-                match evaluate_full_contract(worker) {
-                    Ok(selected) => (
-                        Some(ContractStatus::Succeeded),
-                        None,
-                        Some(Some(selected)),
-                        Some(format!("{worker_index}/{ATTEMPTS_FILE}")),
-                    ),
+        let (
+            status,
+            conformance_error,
+            selected_attempt,
+            attempts_path,
+            selected_output_sha256,
+            selected_output_path,
+        ) = if worker.full_output_schema.is_some() {
+            match evaluate_full_contract(worker) {
+                Ok(selected) => (
+                    Some(ContractStatus::Succeeded),
+                    None,
+                    Some(Some(selected.number)),
+                    Some(format!("{worker_index}/{ATTEMPTS_FILE}")),
+                    Some(selected.sha256),
+                    Some(selected.path),
+                ),
+                Err(error) => (
+                    Some(ContractStatus::Failed),
+                    Some(error),
+                    Some(None),
+                    Some(format!("{worker_index}/{ATTEMPTS_FILE}")),
+                    None,
+                    None,
+                ),
+            }
+        } else {
+            match &worker.output_schema {
+                Some(schema) => match evaluate_output_conformance(stdout_path, schema) {
+                    Ok(()) => {
+                        let bytes = fs::read(stdout_path).map_err(|error| {
+                            CollectorError::Failed(format!(
+                                "could not read selected worker output `{}`: {error}",
+                                stdout_path.display()
+                            ))
+                        })?;
+                        (
+                            Some(ContractStatus::Succeeded),
+                            None,
+                            Some(Some(1)),
+                            None,
+                            Some(sha256_digest(&bytes)),
+                            Some(format!("{worker_index}/stdout")),
+                        )
+                    }
                     Err(error) => (
                         Some(ContractStatus::Failed),
                         Some(error),
                         Some(None),
-                        Some(format!("{worker_index}/{ATTEMPTS_FILE}")),
+                        None,
+                        None,
+                        None,
                     ),
+                },
+                None => {
+                    let bytes = fs::read(stdout_path).map_err(|error| {
+                        CollectorError::Failed(format!(
+                            "could not read selected worker output `{}`: {error}",
+                            stdout_path.display()
+                        ))
+                    })?;
+                    (
+                        None,
+                        None,
+                        Some(Some(1)),
+                        None,
+                        Some(sha256_digest(&bytes)),
+                        Some(format!("{worker_index}/stdout")),
+                    )
                 }
-            } else {
-                match &worker.output_schema {
-                    Some(schema) => match evaluate_output_conformance(stdout_path, schema) {
-                        Ok(()) => (Some(ContractStatus::Succeeded), None, None, None),
-                        Err(error) => (Some(ContractStatus::Failed), Some(error), None, None),
-                    },
-                    None => (None, None, None, None),
-                }
-            };
+            }
+        };
         results.push(FanOutWorkerResult {
+            assignment_id: if worker.assignment_id.is_empty() {
+                assignment_id(worker_index)
+            } else {
+                worker.assignment_id.clone()
+            },
             command: worker.command.clone(),
             args: worker.args.clone(),
             exit_code,
@@ -1348,12 +1565,27 @@ fn summary_from_spec(
             conformance_error,
             attempts_path,
             selected_attempt,
+            selected_output_sha256,
+            selected_output_path,
+            declared_output_contract: worker.full_output_schema.clone().or_else(|| {
+                worker
+                    .output_schema
+                    .as_ref()
+                    .map(|schema| serde_json::to_value(schema).unwrap_or(Value::Null))
+            }),
+            routed_inputs: worker.routed_inputs.clone(),
         });
     }
     Ok(results)
 }
 
-fn evaluate_full_contract(worker: &FanOutSpecWorker) -> Result<u32, String> {
+struct SelectedOutput {
+    number: u32,
+    sha256: String,
+    path: String,
+}
+
+fn evaluate_full_contract(worker: &FanOutSpecWorker) -> Result<SelectedOutput, String> {
     let worker_dir = Path::new(&worker.stdout_path)
         .parent()
         .ok_or_else(|| "complete-schema worker has no capture directory".to_owned())?;
@@ -1466,7 +1698,16 @@ fn evaluate_full_contract(worker: &FanOutSpecWorker) -> Result<u32, String> {
                     "selected attempt {number} does not match compatibility stdout/stderr"
                 ));
             }
-            Ok(number)
+            Ok(SelectedOutput {
+                number,
+                sha256: sha256_digest(&stdout),
+                path: path_to_string(
+                    &worker_dir
+                        .join("attempts")
+                        .join(number.to_string())
+                        .join("stdout"),
+                ),
+            })
         }
         (None, true, None) => {
             let details = manifest
@@ -1820,10 +2061,11 @@ mod tests {
             "artifact_root": "/tmp/artifacts",
             "instruction_body": "Do the work",
             "capture_dir": "/tmp/captures/inv-1",
-            "context": [{"id": "ctx-old", "kind": "kind-a", "data": {"rev": "1"}}]
+            "context": [{"id": "ctx-old", "kind": "kind-a", "data": {"rev": "1"}}],
+            "standing_assignment_ids": ["worker-0"]
         })
         .to_string();
-        let packet = parse_invoke_packet(&raw).expect("packet with context");
+        let packet = parse_invoke_packet(&raw).expect("packet with context and standing IDs");
         assert_eq!(
             packet.context,
             Some(vec![json!({
@@ -1831,6 +2073,10 @@ mod tests {
                 "kind": "kind-a",
                 "data": {"rev": "1"}
             })])
+        );
+        assert_eq!(
+            packet._standing_assignment_ids,
+            Some(vec!["worker-0".to_owned()])
         );
     }
 
@@ -2147,10 +2393,12 @@ mod tests {
     fn emitted_yaml_is_type_graph_without_continue_on_or_retry() {
         let spec = FanOutSpec {
             workers: vec![FanOutSpecWorker {
+                assignment_id: "worker-0".to_owned(),
                 command: "echo".to_owned(),
                 args: vec!["hi".to_owned()],
                 output_schema: None,
                 full_output_schema: None,
+                routed_inputs: None,
                 stdin_path: "/tmp/stdin".to_owned(),
                 stdout_path: "/tmp/0/stdout".to_owned(),
                 stderr_path: "/tmp/0/stderr".to_owned(),
@@ -2181,20 +2429,24 @@ mod tests {
         let spec = FanOutSpec {
             workers: vec![
                 FanOutSpecWorker {
+                    assignment_id: "worker-0".to_owned(),
                     command: "echo".to_owned(),
                     args: vec!["hi".to_owned()],
                     output_schema: None,
                     full_output_schema: None,
+                    routed_inputs: None,
                     stdin_path: "/tmp/0/stdin".to_owned(),
                     stdout_path: "/tmp/0/stdout".to_owned(),
                     stderr_path: "/tmp/0/stderr".to_owned(),
                     sidecar_path: "/tmp/0/inner_exit.json".to_owned(),
                 },
                 FanOutSpecWorker {
+                    assignment_id: "worker-1".to_owned(),
                     command: "cat".to_owned(),
                     args: vec!["-".to_owned()],
                     output_schema: None,
                     full_output_schema: None,
+                    routed_inputs: None,
                     stdin_path: "/tmp/1/stdin".to_owned(),
                     stdout_path: "/tmp/1/stdout".to_owned(),
                     stderr_path: "/tmp/1/stderr".to_owned(),
@@ -2236,23 +2488,54 @@ mod tests {
         fs::write(&stdout, b"out").expect("stdout");
         fs::write(&stderr, b"").expect("stderr");
         fs::write(&sidecar, br#"{"exit_code":3}"#).expect("sidecar");
+        let unstarted_dir = directory.path().join("1");
         let spec = FanOutSpec {
-            workers: vec![FanOutSpecWorker {
-                command: "sh".to_owned(),
-                args: vec!["-c".to_owned(), "exit 3".to_owned()],
-                output_schema: None,
-                full_output_schema: None,
-                stdin_path: path_to_string(&worker_dir.join("stdin")),
-                stdout_path: path_to_string(&stdout),
-                stderr_path: path_to_string(&stderr),
-                sidecar_path: path_to_string(&sidecar),
-            }],
+            workers: vec![
+                FanOutSpecWorker {
+                    assignment_id: "worker-0".to_owned(),
+                    command: "sh".to_owned(),
+                    args: vec!["-c".to_owned(), "exit 3".to_owned()],
+                    output_schema: None,
+                    full_output_schema: None,
+                    routed_inputs: None,
+                    stdin_path: path_to_string(&worker_dir.join("stdin")),
+                    stdout_path: path_to_string(&stdout),
+                    stderr_path: path_to_string(&stderr),
+                    sidecar_path: path_to_string(&sidecar),
+                },
+                FanOutSpecWorker {
+                    assignment_id: "worker-1".to_owned(),
+                    command: "never-started".to_owned(),
+                    args: Vec::new(),
+                    output_schema: Some(OutputSchema {
+                        required: vec!["result".to_owned()],
+                    }),
+                    full_output_schema: None,
+                    routed_inputs: None,
+                    stdin_path: path_to_string(&unstarted_dir.join("stdin")),
+                    stdout_path: path_to_string(&unstarted_dir.join("stdout")),
+                    stderr_path: path_to_string(&unstarted_dir.join("stderr")),
+                    sidecar_path: path_to_string(&unstarted_dir.join("inner_exit.json")),
+                },
+            ],
         };
         write_spec(directory.path(), &spec).expect("spec");
         let workers = ensure_summary(directory.path(), &spec).expect("summary");
-        assert_eq!(workers.len(), 1);
+        assert_eq!(workers.len(), 2);
         assert_eq!(workers[0].exit_code, 3);
         assert_eq!(workers[0].command, "sh");
+        assert_eq!(workers[0].selected_attempt, Some(Some(1)));
+        assert_eq!(
+            workers[0].selected_output_sha256,
+            Some(sha256_digest(b"out"))
+        );
+        assert_eq!(workers[0].selected_output_path.as_deref(), Some("0/stdout"));
+        assert_eq!(workers[1].assignment_id, "worker-1");
+        assert_eq!(workers[1].selected_attempt, Some(None));
+        assert_eq!(workers[1].selected_output_sha256, None);
+        assert_eq!(workers[1].selected_output_path, None);
+        assert_eq!(workers[1].status, Some(ContractStatus::Failed));
+        assert!(!unstarted_dir.exists());
         assert!(directory.path().join(SUMMARY_FILE).is_file());
     }
 }

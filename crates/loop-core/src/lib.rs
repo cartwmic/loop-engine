@@ -29,7 +29,7 @@ pub use operations::{
 };
 pub use outcome::{OperationOutcome, OperationStatus, OutcomeIssue};
 pub use ports::{
-    AppendContextRequest, AppendContextResult, CheckedEvaluationSnapshot,
+    AppendContextRequest, AppendContextResult, CarryAct, CarryRequest, CheckedEvaluationSnapshot,
     CheckedEvaluationSnapshotRequest, CommitTransitionRequest, CommitTransitionResult,
     CompleteWorkSlotInvocationRequest, CompleteWorkSlotInvocationResult, CreateRunRequest,
     CreateRunResult, CreateWorkSlotInvocationRequest, CreateWorkSlotInvocationResult, Persistence,

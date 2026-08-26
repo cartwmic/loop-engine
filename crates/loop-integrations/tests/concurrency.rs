@@ -53,6 +53,7 @@ fn create_run(
         "blocking-test-gateway",
         Some("/allocated/concurrency".to_owned()),
     ))?;
+    adapter.load_show_data(&run_id.into())?;
     Ok(created.run)
 }
 

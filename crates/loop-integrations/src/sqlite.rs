@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS runs (
     current_state                TEXT NOT NULL,
     lifecycle                    TEXT NOT NULL CHECK (lifecycle IN ('active', 'final', 'terminated')),
     control_revision             INTEGER NOT NULL CHECK (control_revision >= 0),
+    observed_control_revision    INTEGER CHECK (observed_control_revision >= 0),
     last_sequence                INTEGER NOT NULL CHECK (last_sequence >= 1),
     created_at                   INTEGER NOT NULL,
     provider                     TEXT,
@@ -86,6 +87,10 @@ CREATE TABLE IF NOT EXISTS work_slot_invocations (
     completed_at                 INTEGER,
     capture_dir                  TEXT NOT NULL DEFAULT '',
     inner_workers_json           TEXT NOT NULL DEFAULT '[]',
+    assignment_selection_json    TEXT,
+    routed_inputs_json           TEXT NOT NULL DEFAULT '[]',
+    frozen_run_identity_json     TEXT,
+    completion_snapshot_json     TEXT NOT NULL DEFAULT '[]',
     PRIMARY KEY (run_id, invocation_id),
     FOREIGN KEY (run_id) REFERENCES runs (id) ON DELETE CASCADE
 );
@@ -170,8 +175,9 @@ impl Persistence for SqlitePersistence {
                         id, label, workflow_id, workflow_json,
                         provider_association_json, initial_input_json,
                         current_state, lifecycle, control_revision,
-                        last_sequence, created_at, provider, artifact_root
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                        observed_control_revision, last_sequence, created_at,
+                        provider, artifact_root
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, ?11, ?12, ?13)",
                     params![
                         request.id.as_str(),
                         request.label,
@@ -219,8 +225,9 @@ impl Persistence for SqlitePersistence {
         let result = (|| {
             let raw = load_raw_run(&transaction, &request.run_id)?
                 .ok_or_else(|| PersistenceError::not_found(request.run_id.clone()))?;
-            let run = decode_run(raw)?;
+            let run = decode_run(raw.clone())?;
             require_active(&run)?;
+            require_observed(&raw)?;
 
             let sequence = next_sequence(run.last_sequence)?;
             let context = ContextRecord::new(
@@ -272,7 +279,7 @@ impl Persistence for SqlitePersistence {
         let result = (|| {
             let raw = load_raw_run(&transaction, &request.run_id)?
                 .ok_or_else(|| PersistenceError::not_found(request.run_id.clone()))?;
-            let run = decode_run(raw)?;
+            let run = decode_run(raw.clone())?;
             if !run.lifecycle.is_active() {
                 return Err(PersistenceError::conflict(
                     PersistenceConflict::LifecycleMismatch {
@@ -286,6 +293,8 @@ impl Persistence for SqlitePersistence {
                 request.expected_control_revision,
                 &request.expected_source_state,
             )?;
+
+            require_observed(&raw)?;
 
             let sequence = next_sequence(run.last_sequence)?;
             let revision = next_revision(run.control_revision)?;
@@ -330,7 +339,7 @@ impl Persistence for SqlitePersistence {
         let result = (|| {
             let raw = load_raw_run(&transaction, &request.run_id)?
                 .ok_or_else(|| PersistenceError::not_found(request.run_id.clone()))?;
-            let run = decode_run(raw)?;
+            let run = decode_run(raw.clone())?;
             if !run.lifecycle.is_active() {
                 return Err(PersistenceError::conflict(
                     PersistenceConflict::LifecycleMismatch {
@@ -344,6 +353,7 @@ impl Persistence for SqlitePersistence {
                 request.expected_control_revision,
                 &request.expected_source_state,
             )?;
+            require_observed(&raw)?;
 
             let sequence = next_sequence(run.last_sequence)?;
             let occurred_at = current_timestamp()?;
@@ -378,8 +388,9 @@ impl Persistence for SqlitePersistence {
         let result = (|| {
             let raw = load_raw_run(&transaction, &request.run_id)?
                 .ok_or_else(|| PersistenceError::not_found(request.run_id.clone()))?;
-            let run = decode_run(raw)?;
+            let run = decode_run(raw.clone())?;
             require_active(&run)?;
+            require_observed(&raw)?;
 
             let sequence = next_sequence(run.last_sequence)?;
             let revision = next_revision(run.control_revision)?;
@@ -404,6 +415,27 @@ impl Persistence for SqlitePersistence {
             Ok(TerminateResult { run, history })
         })();
         finish_transaction(transaction, result)
+    }
+
+    fn observation_is_current(
+        &self,
+        run_id: &RunId,
+        control_revision: loop_core::ControlRevision,
+    ) -> Result<bool, PersistenceError> {
+        let connection = self.lock()?;
+        let observed = connection
+            .query_row(
+                "SELECT observed_control_revision = control_revision
+                 FROM runs WHERE id = ?1 AND control_revision = ?2",
+                params![
+                    run_id.as_str(),
+                    to_sqlite_i64(control_revision.as_u64(), "control revision")?,
+                ],
+                |row| row.get::<_, Option<bool>>(0),
+            )
+            .optional()
+            .map_err(sqlite_failure)?;
+        Ok(observed.flatten().unwrap_or(false))
     }
 
     fn load_authoritative_run(&self, run_id: &RunId) -> Result<Run, PersistenceError> {
@@ -514,12 +546,21 @@ impl Persistence for SqlitePersistence {
     fn load_show_data(&self, run_id: &RunId) -> Result<ShowData, PersistenceError> {
         let mut connection = self.lock()?;
         let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sqlite_failure)?;
         let result = (|| {
-            let run = load_required_run(&transaction, run_id)?;
+            let _run = load_required_run(&transaction, run_id)?;
             let context = read_context_records(&transaction, run_id)?;
             let checked_evaluations = read_checked_evaluations(&transaction, run_id)?;
+            transaction
+                .execute(
+                    "UPDATE runs
+                     SET observed_control_revision = control_revision
+                     WHERE id = ?1",
+                    params![run_id.as_str()],
+                )
+                .map_err(sqlite_failure)?;
+            let run = load_required_run(&transaction, run_id)?;
             Ok(ShowData {
                 run,
                 context,
@@ -539,8 +580,9 @@ impl Persistence for SqlitePersistence {
         let result = (|| {
             let raw = load_raw_run(&transaction, &request.run_id)?
                 .ok_or_else(|| PersistenceError::not_found(request.run_id.clone()))?;
-            let run = decode_run(raw)?;
+            let run = decode_run(raw.clone())?;
             require_active(&run)?;
+            require_observed(&raw)?;
 
             let sequence = next_sequence(run.last_sequence)?;
             let invocation = WorkSlotInvocation::new(
@@ -557,15 +599,23 @@ impl Persistence for SqlitePersistence {
                 None,
                 request.capture_dir.clone(),
                 Vec::new(),
-            );
+            )
+            .with_routed_inputs(request.routed_inputs.clone())
+            .with_assignment_selection(request.assignment_selection.clone());
+            let invocation = match request.frozen_run_identity.clone() {
+                Some(identity) => invocation.with_frozen_run_identity(identity),
+                None => invocation,
+            };
             transaction
                 .execute(
                     "INSERT INTO work_slot_invocations (
                         run_id, invocation_id, slot_id, binding_json,
                         instruction_digest, subject, waiter_pid, started_at,
                         allowed_time_ms, status, exit_code, completed_at,
-                        capture_dir, inner_workers_json
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL, NULL, ?10, ?11)",
+                        capture_dir, inner_workers_json, assignment_selection_json,
+                        routed_inputs_json, frozen_run_identity_json,
+                        completion_snapshot_json
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL, NULL, ?10, ?11, ?12, ?13, ?14, ?15)",
                     params![
                         request.run_id.as_str(),
                         request.invocation_id.as_str(),
@@ -578,6 +628,18 @@ impl Persistence for SqlitePersistence {
                         to_sqlite_i64(request.allowed_time_ms, "allowed time ms")?,
                         request.capture_dir,
                         encode_json(&Vec::<InnerWorker>::new(), "inner workers")?,
+                        request
+                            .assignment_selection
+                            .as_ref()
+                            .map(|selection| encode_json(selection, "assignment selection"))
+                            .transpose()?,
+                        encode_json(&request.routed_inputs, "routed inputs")?,
+                        request
+                            .frozen_run_identity
+                            .as_ref()
+                            .map(|identity| encode_json(identity, "frozen run identity"))
+                            .transpose()?,
+                        encode_json(&Vec::<InnerWorker>::new(), "completion snapshot")?,
                     ],
                 )
                 .map_err(sqlite_failure)?;
@@ -611,13 +673,15 @@ impl Persistence for SqlitePersistence {
             let changed = transaction
                 .execute(
                     "UPDATE work_slot_invocations
-                     SET status = ?1, exit_code = ?2, completed_at = ?3, inner_workers_json = ?4
-                     WHERE run_id = ?5 AND invocation_id = ?6 AND status IS NULL",
+                     SET status = ?1, exit_code = ?2, completed_at = ?3, inner_workers_json = ?4,
+                         completion_snapshot_json = ?5
+                     WHERE run_id = ?6 AND invocation_id = ?7 AND status IS NULL",
                     params![
                         waiter_status_name(request.status),
                         request.exit_code,
                         request.completed_at.as_unix_millis(),
                         encode_json(&request.inner_workers, "inner workers")?,
+                        encode_json(&request.inner_workers, "completion snapshot")?,
                         request.run_id.as_str(),
                         request.invocation_id.as_str(),
                     ],
@@ -772,6 +836,17 @@ fn ensure_run_catalog_columns(connection: &Connection) -> Result<(), Persistence
             .execute("ALTER TABLE runs ADD COLUMN artifact_root TEXT", [])
             .map_err(sqlite_failure)?;
     }
+    if !columns
+        .iter()
+        .any(|name| name == "observed_control_revision")
+    {
+        connection
+            .execute(
+                "ALTER TABLE runs ADD COLUMN observed_control_revision INTEGER",
+                [],
+            )
+            .map_err(sqlite_failure)?;
+    }
     Ok(())
 }
 
@@ -789,6 +864,47 @@ fn ensure_work_slot_invocation_columns(connection: &Connection) -> Result<(), Pe
         connection
             .execute(
                 "ALTER TABLE work_slot_invocations ADD COLUMN inner_workers_json TEXT NOT NULL DEFAULT '[]'",
+                [],
+            )
+            .map_err(sqlite_failure)?;
+    }
+    if !columns
+        .iter()
+        .any(|name| name == "assignment_selection_json")
+    {
+        connection
+            .execute(
+                "ALTER TABLE work_slot_invocations ADD COLUMN assignment_selection_json TEXT",
+                [],
+            )
+            .map_err(sqlite_failure)?;
+    }
+    if !columns.iter().any(|name| name == "routed_inputs_json") {
+        connection
+            .execute(
+                "ALTER TABLE work_slot_invocations ADD COLUMN routed_inputs_json TEXT NOT NULL DEFAULT '[]'",
+                [],
+            )
+            .map_err(sqlite_failure)?;
+    }
+    if !columns
+        .iter()
+        .any(|name| name == "frozen_run_identity_json")
+    {
+        connection
+            .execute(
+                "ALTER TABLE work_slot_invocations ADD COLUMN frozen_run_identity_json TEXT",
+                [],
+            )
+            .map_err(sqlite_failure)?;
+    }
+    if !columns
+        .iter()
+        .any(|name| name == "completion_snapshot_json")
+    {
+        connection
+            .execute(
+                "ALTER TABLE work_slot_invocations ADD COLUMN completion_snapshot_json TEXT NOT NULL DEFAULT '[]'",
                 [],
             )
             .map_err(sqlite_failure)?;
@@ -837,7 +953,7 @@ fn finish_transaction<T>(
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct StoredRun {
     id: String,
     label: Option<String>,
@@ -849,6 +965,7 @@ struct StoredRun {
     control_revision: i64,
     last_sequence: i64,
     created_at: i64,
+    observed_control_revision: Option<i64>,
 }
 
 fn load_raw_run(
@@ -859,7 +976,8 @@ fn load_raw_run(
         .query_row(
             "SELECT id, label, workflow_json, provider_association_json,
                     initial_input_json, current_state, lifecycle,
-                    control_revision, last_sequence, created_at
+                    control_revision, last_sequence, created_at,
+                    observed_control_revision
              FROM runs WHERE id = ?1",
             params![run_id.as_str()],
             |row| {
@@ -874,6 +992,7 @@ fn load_raw_run(
                     control_revision: row.get(7)?,
                     last_sequence: row.get(8)?,
                     created_at: row.get(9)?,
+                    observed_control_revision: row.get(10)?,
                 })
             },
         )
@@ -905,6 +1024,22 @@ fn decode_run(raw: StoredRun) -> Result<Run, PersistenceError> {
         last_sequence.into(),
         Timestamp::from_unix_millis(raw.created_at),
     ))
+}
+
+fn require_observed(raw: &StoredRun) -> Result<(), PersistenceError> {
+    let observed = raw
+        .observed_control_revision
+        .and_then(|value| u64::try_from(value).ok());
+    let current = u64::try_from(raw.control_revision).ok();
+    if observed == current {
+        Ok(())
+    } else {
+        Err(PersistenceError::rejected(
+            PersistenceRejection::RunNotObserved {
+                run_id: RunId::new(raw.id.clone()),
+            },
+        ))
+    }
 }
 
 fn require_active(run: &Run) -> Result<(), PersistenceError> {
@@ -1222,6 +1357,10 @@ fn decode_work_slot_invocation(
     completed_at: Option<i64>,
     capture_dir: String,
     inner_workers_json: String,
+    assignment_selection_json: Option<String>,
+    routed_inputs_json: String,
+    frozen_run_identity_json: Option<String>,
+    completion_snapshot_json: String,
 ) -> Result<WorkSlotInvocation, PersistenceError> {
     let waiter_pid = u32::try_from(from_sqlite_u64(waiter_pid, "waiter pid")?).map_err(|_| {
         PersistenceError::failure(PersistenceFailure::new(
@@ -1241,7 +1380,7 @@ fn decode_work_slot_invocation(
             })
         })
         .transpose()?;
-    Ok(WorkSlotInvocation::new(
+    let mut invocation = WorkSlotInvocation::new(
         InvocationId::new(invocation_id),
         WorkSlotId::new(slot_id),
         decode_json(&binding_json, "work slot binding")?,
@@ -1255,7 +1394,22 @@ fn decode_work_slot_invocation(
         completed_at.map(Timestamp::from_unix_millis),
         capture_dir,
         decode_json(&inner_workers_json, "inner workers")?,
-    ))
+    )
+    .with_routed_inputs(decode_json(&routed_inputs_json, "routed inputs")?)
+    .with_recorded_inner_workers(decode_json(
+        &completion_snapshot_json,
+        "completion snapshot",
+    )?)
+    .with_assignment_selection(
+        assignment_selection_json
+            .map(|json| decode_json(&json, "assignment selection"))
+            .transpose()?,
+    );
+    if let Some(identity_json) = frozen_run_identity_json {
+        invocation = invocation
+            .with_frozen_run_identity(decode_json(&identity_json, "frozen run identity")?);
+    }
+    Ok(invocation)
 }
 
 type InvocationRow = (
@@ -1271,6 +1425,10 @@ type InvocationRow = (
     Option<i64>,
     Option<i64>,
     String,
+    String,
+    Option<String>,
+    String,
+    Option<String>,
     String,
 );
 
@@ -1289,6 +1447,10 @@ fn invocation_row_from_query(row: &rusqlite::Row<'_>) -> rusqlite::Result<Invoca
         row.get(10)?,
         row.get(11)?,
         row.get(12)?,
+        row.get(13)?,
+        row.get(14)?,
+        row.get(15)?,
+        row.get(16)?,
     ))
 }
 
@@ -1301,7 +1463,9 @@ fn load_one_work_slot_invocation(
         .query_row(
             "SELECT invocation_id, slot_id, binding_json, instruction_digest, subject,
                     waiter_pid, started_at, allowed_time_ms, status, exit_code, completed_at,
-                    capture_dir, inner_workers_json
+                    capture_dir, inner_workers_json, assignment_selection_json,
+                    routed_inputs_json, frozen_run_identity_json,
+                    completion_snapshot_json
              FROM work_slot_invocations
              WHERE run_id = ?1 AND invocation_id = ?2",
             params![run_id.as_str(), invocation_id.as_str()],
@@ -1324,6 +1488,10 @@ fn load_one_work_slot_invocation(
                 completed_at,
                 capture_dir,
                 inner_workers_json,
+                assignment_selection_json,
+                routed_inputs_json,
+                frozen_run_identity_json,
+                completion_snapshot_json,
             )| {
                 decode_work_slot_invocation(
                     invocation_id,
@@ -1339,6 +1507,10 @@ fn load_one_work_slot_invocation(
                     completed_at,
                     capture_dir,
                     inner_workers_json,
+                    assignment_selection_json,
+                    routed_inputs_json,
+                    frozen_run_identity_json,
+                    completion_snapshot_json,
                 )
             },
         )
@@ -1353,7 +1525,9 @@ fn read_work_slot_invocations(
         .prepare(
             "SELECT invocation_id, slot_id, binding_json, instruction_digest, subject,
                     waiter_pid, started_at, allowed_time_ms, status, exit_code, completed_at,
-                    capture_dir, inner_workers_json
+                    capture_dir, inner_workers_json, assignment_selection_json,
+                    routed_inputs_json, frozen_run_identity_json,
+                    completion_snapshot_json
              FROM work_slot_invocations
              WHERE run_id = ?1
              ORDER BY started_at ASC, invocation_id ASC",
@@ -1378,6 +1552,10 @@ fn read_work_slot_invocations(
             completed_at,
             capture_dir,
             inner_workers_json,
+            assignment_selection_json,
+            routed_inputs_json,
+            frozen_run_identity_json,
+            completion_snapshot_json,
         ) = row.map_err(sqlite_failure)?;
         decode_work_slot_invocation(
             invocation_id,
@@ -1393,6 +1571,10 @@ fn read_work_slot_invocations(
             completed_at,
             capture_dir,
             inner_workers_json,
+            assignment_selection_json,
+            routed_inputs_json,
+            frozen_run_identity_json,
+            completion_snapshot_json,
         )
     })
     .collect()
@@ -1442,6 +1624,9 @@ mod tests {
         adapter
             .create_run(create_run("run-capture-roundtrip"))
             .expect("create run");
+        adapter
+            .load_show_data(&"run-capture-roundtrip".into())
+            .expect("observe run");
         let created = adapter
             .create_work_slot_invocation(CreateWorkSlotInvocationRequest::new(
                 "run-capture-roundtrip",
@@ -1538,6 +1723,9 @@ mod tests {
         adapter
             .create_run(create_run("run-legacy-alter"))
             .expect("create run after alter");
+        adapter
+            .load_show_data(&"run-legacy-alter".into())
+            .expect("observe run");
         let created = adapter
             .create_work_slot_invocation(CreateWorkSlotInvocationRequest::new(
                 "run-legacy-alter",

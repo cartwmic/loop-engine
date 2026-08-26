@@ -43,16 +43,18 @@ loop-engine --json --config /tmp/policy-document-providers.toml \
   start --id docs-audit policy-document @/tmp/readme.json "README audit"
 loop-engine --json show docs-audit
 loop-engine --json event docs-audit ready
+loop-engine --json show docs-audit
 loop-engine --json event docs-audit passed
 ```
 
-`start` returns the run ID at `result.run.id`. Request `ready` after authoring the target, then checked `passed` for deterministic review. On `policy-document-nonconforming`, fix every reported violation, request check-free `revise`, and repeat from `prepare`.
+`start` returns the run ID at `result.run.id`. `show` of the current state and instructions arms only that state visit for `append`, `event`, `invoke`, and `terminate`; call it again after every transition, including a return to the same state. `list`, `history`, and `invocation-progress` do not arm mutation. Completed invocation views expose assignment and selected-attempt identity plus a provider-free change report, but those records are inert until the driver appends policy-document evidence. Request `ready` after authoring the target, then checked `passed` for deterministic review. On `policy-document-nonconforming`, fix every reported violation, request check-free `revise`, and repeat from `prepare`.
 
 ## External evidence
 
 Provider never invokes reviewer/model and never edits target. Compute digest over exact bytes (for example `shasum -a 256 /absolute/path/to/README.md`) and append one evidence record per configured semantic axis:
 
 ```sh
+loop-engine --json show docs-audit
 loop-engine --json append \
   --record-id product-fidelity-review docs-audit review-evidence \
   '{"gate":"semantic-review","policy_id":"product-fidelity","result":"pass","findings":"","author":{"name":"reviewer","kind":"agent"},"target_id":"README.md","target_sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","profile_version":"readme-2"}'

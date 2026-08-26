@@ -700,6 +700,9 @@ mod tests {
             ))
             .expect("create run");
         persistence
+            .load_show_data(&run_id.into())
+            .expect("observe run");
+        persistence
             .create_work_slot_invocation(CreateWorkSlotInvocationRequest::new(
                 run_id,
                 invocation_id,

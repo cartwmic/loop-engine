@@ -26,14 +26,15 @@ pub use invoke::{execute as execute_invoke, Request as InvokeRequest, Result as 
 pub use list::{execute as execute_list, Request as ListRequest};
 pub use show::{
     execute as execute_show, latest_evaluations, project as project_show, ProjectionError,
-    Request as ShowRequest, RequestableEvent, ShowProjection, WorkSlotInvocationView,
+    Request as ShowRequest, RequestableEvent, RunChangeReport, ShowProjection,
+    WorkSlotInvocationView,
 };
 pub use start::{execute as execute_start, Request as StartRequest};
 pub use terminate::{execute as execute_terminate, Request as TerminateRunRequest};
 
 use crate::{
-    OperationOutcome, OutcomeIssue, PersistenceError, ProviderError, ProviderResolutionError,
-    WorkflowValidationError,
+    ControlRevision, OperationOutcome, OutcomeIssue, Persistence, PersistenceError, ProviderError,
+    ProviderResolutionError, RunId, WorkflowValidationError,
 };
 
 /// Classify a provider-resolution failure as an operation error.
@@ -57,6 +58,24 @@ pub(crate) fn workflow_error<T>(error: WorkflowValidationError) -> OperationOutc
 /// Persistence owns lifecycle and conditional-write checks.  A rejected
 /// request is therefore surfaced as `Rejected`; missing runs, conflicts, and
 /// adapter failures are all operation `Error`s.
+pub(crate) fn require_current_observation<P, T>(
+    persistence: &P,
+    run_id: &RunId,
+    control_revision: ControlRevision,
+) -> Result<(), OperationOutcome<T>>
+where
+    P: Persistence + ?Sized,
+{
+    match persistence.observation_is_current(run_id, control_revision) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(OperationOutcome::rejected(
+            "run-not-observed",
+            format!("run `{run_id}` must be observed with `show` before it can be mutated"),
+        )),
+        Err(error) => Err(persistence_error(error)),
+    }
+}
+
 pub(crate) fn persistence_error<T>(error: PersistenceError) -> OperationOutcome<T> {
     let rejected = error.is_rejected();
     let code = error.code().to_owned();

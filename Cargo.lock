@@ -541,6 +541,7 @@ dependencies = [
  "jsonschema",
  "loop-core",
  "loop-integrations",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",

@@ -245,10 +245,71 @@ pub struct CreateRunResult {
     pub history: HistoryEntry,
 }
 
+/// The explicit driver act used to carry a recorded worker result forward.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CarryAct {
+    Unchanged,
+    Override,
+}
+
+impl CarryAct {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unchanged => "unchanged-carry",
+            Self::Override => "override-carry",
+        }
+    }
+}
+
+/// Opaque-to-provider request metadata for an explicit carry append.
+///
+/// Core uses only the durable invocation/change-report identity and transports
+/// `attesting_driver` without interpreting it. When a source context exists,
+/// its kind and data remain the record of record; plan-task results may omit
+/// the source context because their durable worker record is the source.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CarryRequest {
+    pub source_record_id: ContextRecordId,
+    pub invocation_id: InvocationId,
+    pub assignment_id: String,
+    pub act: CarryAct,
+    pub attesting_driver: Value,
+    #[serde(default)]
+    pub overridden_inputs: Vec<String>,
+}
+
+impl CarryRequest {
+    pub fn new(
+        source_record_id: impl Into<ContextRecordId>,
+        invocation_id: impl Into<InvocationId>,
+        assignment_id: impl Into<String>,
+        act: CarryAct,
+        attesting_driver: Value,
+    ) -> Self {
+        Self {
+            source_record_id: source_record_id.into(),
+            invocation_id: invocation_id.into(),
+            assignment_id: assignment_id.into(),
+            act,
+            attesting_driver,
+            overridden_inputs: Vec::new(),
+        }
+    }
+
+    pub fn with_overridden_inputs(mut self, inputs: Vec<String>) -> Self {
+        self.overridden_inputs = inputs;
+        self
+    }
+}
+
 /// Semantic input for an atomic context append.
 ///
 /// The adapter allocates the context record's semantic sequence.  The
 /// supplied record ID, kind, data, and timestamp remain caller-owned data.
+/// When `carry` is present, core replaces kind/data from the named source
+/// record after checking the durable change report.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AppendContextRequest {
     pub run_id: RunId,
@@ -256,6 +317,8 @@ pub struct AppendContextRequest {
     pub kind: String,
     pub data: Value,
     pub created_at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carry: Option<CarryRequest>,
 }
 
 impl AppendContextRequest {
@@ -272,7 +335,13 @@ impl AppendContextRequest {
             kind: kind.into(),
             data,
             created_at,
+            carry: None,
         }
+    }
+
+    pub fn with_carry(mut self, carry: CarryRequest) -> Self {
+        self.carry = Some(carry);
+        self
     }
 }
 
@@ -418,6 +487,15 @@ pub struct CreateWorkSlotInvocationRequest {
     pub started_at: Timestamp,
     pub allowed_time_ms: u64,
     pub capture_dir: String,
+    /// Exact context records routed to the worker packet.
+    #[serde(default)]
+    pub routed_inputs: Vec<ContextRecord>,
+    /// Snapshot of the opaque run identity at admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frozen_run_identity: Option<Value>,
+    /// Optional validated assignment subset. `None` preserves full execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment_selection: Option<Vec<String>>,
 }
 
 impl CreateWorkSlotInvocationRequest {
@@ -445,7 +523,25 @@ impl CreateWorkSlotInvocationRequest {
             started_at,
             allowed_time_ms,
             capture_dir: capture_dir.into(),
+            routed_inputs: Vec::new(),
+            frozen_run_identity: None,
+            assignment_selection: None,
         }
+    }
+
+    pub fn with_frozen_run_identity(mut self, identity: Value) -> Self {
+        self.frozen_run_identity = Some(identity);
+        self
+    }
+
+    pub fn with_routed_inputs(mut self, routed_inputs: Vec<ContextRecord>) -> Self {
+        self.routed_inputs = routed_inputs;
+        self
+    }
+
+    pub fn with_assignment_selection(mut self, selection: Option<Vec<String>>) -> Self {
+        self.assignment_selection = selection;
+        self
     }
 }
 
@@ -587,9 +683,9 @@ pub trait Persistence {
     /// Atomically create a run and its `run created` history entry.
     fn create_run(&self, request: CreateRunRequest) -> Result<CreateRunResult, PersistenceError>;
 
-    /// Atomically verify activity, append one immutable context record, and
-    /// append its matching history entry.  This does not advance control
-    /// revision.
+    /// Atomically verify activity and current observation, append one
+    /// immutable context record, and append its matching history entry. This
+    /// does not advance control revision.
     fn append_context(
         &self,
         request: AppendContextRequest,
@@ -610,9 +706,24 @@ pub trait Persistence {
         request: RecordDenialRequest,
     ) -> Result<RecordDenialResult, PersistenceError>;
 
-    /// Atomically verify activity, mark the run terminated, advance control
-    /// revision, and append termination history.
+    /// Atomically verify activity and current observation, mark the run
+    /// terminated, advance control revision, and append termination history.
     fn terminate(&self, request: TerminateRequest) -> Result<TerminateResult, PersistenceError>;
+
+    /// Check whether `show` has armed the current control-state visit.
+    ///
+    /// This is a preflight for operations that must avoid external side
+    /// effects before their atomic mutation boundary (notably `invoke`). The
+    /// mutation methods enforce the same condition inside their transaction.
+    /// Lightweight test and non-SQL adapters may use the default permissive
+    /// implementation; durable adapters must override it.
+    fn observation_is_current(
+        &self,
+        _run_id: &RunId,
+        _control_revision: ControlRevision,
+    ) -> Result<bool, PersistenceError> {
+        Ok(true)
+    }
 
     /// Load the authoritative current run state.  Missing runs are returned
     /// as `PersistenceError::NotFound`, not as an empty successful value.
@@ -647,8 +758,10 @@ pub trait Persistence {
     ) -> Result<CheckedEvaluationSnapshot, PersistenceError>;
 
     /// Return the durable inputs needed for `show` without invoking a
-    /// provider.  Checked evaluations include transitions no longer
-    /// requestable so core can preserve latest results across revision edges.
+    /// provider, and arm the current state visit as part of that read. Checked
+    /// evaluations include transitions no longer requestable so core can
+    /// preserve latest results across revision edges. Arming does not append
+    /// semantic history.
     fn load_show_data(&self, run_id: &RunId) -> Result<ShowData, PersistenceError>;
 
     /// Create a running engine-authored invocation record (stored status
@@ -697,12 +810,14 @@ pub trait Persistence {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PersistenceRejection {
     RunNotActive { run_id: RunId, lifecycle: Lifecycle },
+    RunNotObserved { run_id: RunId },
 }
 
 impl PersistenceRejection {
     pub const fn code(&self) -> &'static str {
         match self {
             Self::RunNotActive { .. } => "run-not-active",
+            Self::RunNotObserved { .. } => "run-not-observed",
         }
     }
 }
@@ -713,6 +828,10 @@ impl fmt::Display for PersistenceRejection {
             Self::RunNotActive { run_id, lifecycle } => {
                 write!(formatter, "run `{run_id}` is not active ({lifecycle:?})")
             }
+            Self::RunNotObserved { run_id } => write!(
+                formatter,
+                "run `{run_id}` must be observed with `show` before it can be mutated"
+            ),
         }
     }
 }
@@ -951,6 +1070,16 @@ pub trait WorkSlotProcess {
     type Handle;
 
     fn waiter_alive(&self, pid: u32) -> bool;
+
+    /// Enumerate assignment identities for a bound worker when the adapter
+    /// knows how to do so. `None` means the binding is opaque and cannot be
+    /// selected safely. This is only a preflight; it does not start a process.
+    fn enumerate_assignments(
+        &self,
+        _binding: &WorkSlotBinding,
+    ) -> std::result::Result<Option<Vec<String>>, ProcessError> {
+        Ok(None)
+    }
 
     /// Spawn `loop-engine wait-invocation RUN_ID INVOCATION_ID` with piped stdin.
     /// Do not waitpid. Do not write stdin yet.

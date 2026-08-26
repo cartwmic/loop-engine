@@ -22,6 +22,17 @@ Provider checks evidence shape and aggregation. Reviewer decides truth externall
 
 All eight fields are required. `result` is exactly `pass` or `fail`; `findings` is a string and is non-empty for `fail`. Author identity is exact `(name, kind)`. `subject` must match gate subject. `subject_revision` and `config_version` must name what was reviewed and which frozen config judged it.
 
+A driver-recorded claim that stands for a bound worker judgment may additionally carry
+`loop_engine_carry` (the engine-generated carry metadata), or the equivalent
+`originating_output_sha256` and `originating_output_path` fields. When either linkage
+field is present, both are required. The provider reads the named selected stdout
+under `artifact_root`, checks its raw SHA-256, and compares the mechanical judgment
+fields (`axis`/`policy_id`, `author`, `result`, and `findings`) with the claim. A
+missing, changed, unavailable, non-JSON, or disagreeing origin is **unverified** and
+cannot satisfy the axis. This is field agreement, not a semantic disposition; the
+driver remains responsible for triage, disposition, and the carry decision. An
+invocation's worker record alone is inert and never satisfies an axis.
+
 ## Finding-ledger snapshot
 
 The driver appends context records with kind `finding-ledger`; Loop Engine stores them unchanged and ordinary `show` returns the immutable history. The latest well-formed record for an exact gate/subject pair is the current snapshot. The snapshot data is closed and uses exactly these top-level fields: `schema_version: "1"`, `gate`, `subject`, `subject_revision`, `author: {name, kind}`, `repository_state`, and `findings`.

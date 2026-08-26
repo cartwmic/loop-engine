@@ -13,8 +13,8 @@ use crate::{
     WorkSlotInvocation, WorkSlotProcess, WorkflowId,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::fmt;
+use serde_json::{json, Value};
+use std::{collections::BTreeMap, fmt};
 
 const WORK_SLOT_BINDINGS_KEY: &str = "work_slot_bindings";
 
@@ -110,6 +110,10 @@ pub struct WorkSlotInvocationView {
     pub remaining_allowed_ms: u64,
     pub capture_dir: String,
     pub inner_workers: Vec<InnerWorker>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment_selection: Option<Vec<String>>,
+    /// Provider-free change report projected from durable invocation records.
+    pub change_report: InvocationChangeReport,
 }
 
 const OVERLAY_MEANING_SUCCEEDED: &str =
@@ -174,11 +178,26 @@ impl WorkSlotInvocationView {
             remaining_allowed_ms,
             capture_dir: record.capture_dir.clone(),
             inner_workers,
+            assignment_selection: record.assignment_selection.clone(),
+            change_report: InvocationChangeReport {
+                identity: record.invocation_id.clone(),
+                standing: false,
+                subject_revision: record.subject.clone(),
+                dimensions: Value::Null,
+                assignments: Vec::new(),
+                plan_task_results: Vec::new(),
+            },
         }
     }
 }
 
 /// Complete provider-free continuation projection returned by `show`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RunChangeReport {
+    pub assignments: Vec<AssignmentVisibility>,
+    pub plan_task_results: Vec<PlanTaskVisibility>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ShowProjection {
     pub run_id: RunId,
@@ -198,6 +217,9 @@ pub struct ShowProjection {
     pub latest_evaluations: Vec<DurableEvaluation>,
     /// Catalog snapshot from `run.workflow.work_slots` (`id`, `state`, `event`).
     pub work_slots: Vec<WorkSlot>,
+    /// Deterministic report of durable worker assignments and plan-task
+    /// results. It is projected from the run record only.
+    pub change_report: RunChangeReport,
     /// Overlay-projected invocations.  Never includes `waiter_pid`.
     pub work_slot_invocations: Vec<WorkSlotInvocationView>,
 }
@@ -271,18 +293,476 @@ fn bound_slot_for_current_state(run: &Run) -> Option<(&WorkSlot, WorkSlotBinding
     None
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct InvocationChangeReport {
+    pub identity: InvocationId,
+    pub standing: bool,
+    pub subject_revision: String,
+    pub dimensions: Value,
+    pub assignments: Vec<AssignmentVisibility>,
+    pub plan_task_results: Vec<PlanTaskVisibility>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AssignmentVisibility {
+    pub assignment_id: String,
+    pub subject_revision: String,
+    pub standing: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carry_act: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overridden_inputs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attesting_driver: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub originating_output_sha256: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PlanTaskVisibility {
+    pub assignment_id: String,
+    pub standing: bool,
+    pub dimensions: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carry_act: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overridden_inputs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attesting_driver: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub originating_output_sha256: Option<String>,
+}
+
+fn binding_for_slot(run: &Run, slot_id: &WorkSlotId) -> Option<WorkSlotBinding> {
+    let Value::Object(map) = &run.initial_input else {
+        return None;
+    };
+    let Value::Object(bindings) = map.get(WORK_SLOT_BINDINGS_KEY)? else {
+        return None;
+    };
+    serde_json::from_value(bindings.get(slot_id.as_str())?.clone()).ok()
+}
+
+fn current_routed_inputs(
+    run: &Run,
+    context: &[crate::ContextRecord],
+    slot_id: &WorkSlotId,
+) -> Option<Vec<crate::ContextRecord>> {
+    let slot = run
+        .workflow
+        .work_slots
+        .iter()
+        .find(|slot| slot.id == *slot_id)?;
+    let mut routed = if slot.stdin_context_kinds.is_empty() {
+        Vec::new()
+    } else {
+        context
+            .iter()
+            .filter(|record| {
+                slot.stdin_context_kinds
+                    .iter()
+                    .any(|kind| kind == &record.kind)
+            })
+            .cloned()
+            .collect()
+    };
+    routed.sort_by_key(|record| record.sequence);
+    Some(routed)
+}
+
+fn carry_metadata_for(
+    context: &[crate::ContextRecord],
+    invocation_id: &InvocationId,
+    assignment_id: &str,
+) -> Option<Value> {
+    context
+        .iter()
+        .filter_map(|record| {
+            let object = record.data.as_object()?;
+            let carry = object.get("loop_engine_carry")?.as_object()?;
+            (carry.get("invocation_id").and_then(Value::as_str) == Some(invocation_id.as_str())
+                && carry.get("assignment_id").and_then(Value::as_str) == Some(assignment_id))
+            .then(|| (record.sequence, Value::Object(carry.clone())))
+        })
+        .max_by_key(|(sequence, _)| *sequence)
+        .map(|(_, carry)| carry)
+}
+
+fn changed_dimension_names(dimensions: &Value) -> Vec<String> {
+    dimensions
+        .as_object()
+        .into_iter()
+        .flat_map(|object| object.iter())
+        .filter_map(|(name, value)| {
+            value
+                .get("changed")
+                .and_then(Value::as_bool)
+                .filter(|changed| *changed)
+                .map(|_| name.clone())
+        })
+        .collect()
+}
+
+struct CarryFields {
+    act: Option<String>,
+    overridden_inputs: Vec<String>,
+    attesting_driver: Option<Value>,
+    originating_output_sha256: Option<String>,
+    attested_dimensions: Option<Value>,
+}
+
+fn carry_fields(carry: Option<&Value>) -> CarryFields {
+    let Some(carry) = carry.and_then(Value::as_object) else {
+        return CarryFields {
+            act: None,
+            overridden_inputs: Vec::new(),
+            attesting_driver: None,
+            originating_output_sha256: None,
+            attested_dimensions: None,
+        };
+    };
+    CarryFields {
+        act: carry.get("act").and_then(Value::as_str).map(str::to_owned),
+        overridden_inputs: carry
+            .get("overridden_inputs")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        attesting_driver: carry.get("attesting_driver").cloned(),
+        originating_output_sha256: carry
+            .get("originating_output_sha256")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        attested_dimensions: carry.get("attested_dimensions").cloned(),
+    }
+}
+
+fn carry_still_covers(
+    carry_act: Option<&str>,
+    overridden_inputs: &[String],
+    attested_dimensions: Option<&Value>,
+    current_dimensions: &Value,
+) -> bool {
+    let Some(attested) = attested_dimensions else {
+        // Carries written before dimension snapshots existed cannot
+        // positively establish that later drift is still covered.
+        return false;
+    };
+    if attested != current_dimensions {
+        return false;
+    }
+    let changed: std::collections::BTreeSet<_> = changed_dimension_names(current_dimensions)
+        .into_iter()
+        .collect();
+    match carry_act {
+        Some("unchanged-carry") => changed.is_empty(),
+        Some("override-carry") => {
+            let named: std::collections::BTreeSet<_> = overridden_inputs.iter().cloned().collect();
+            changed.is_subset(&named)
+        }
+        _ => false,
+    }
+}
+
+fn changed_dimension(changed: bool, recorded: Value, current: Value) -> Value {
+    json!({"changed": changed, "recorded": recorded, "current": current})
+}
+
+fn worker_assignment(worker: &InnerWorker) -> Value {
+    json!({
+        "assignment_id": worker.assignment_id,
+        "command": worker.command,
+        "args": worker.args,
+    })
+}
+
+fn output_contract(worker: &InnerWorker) -> Value {
+    worker
+        .declared_output_contract
+        .clone()
+        .unwrap_or(Value::Null)
+}
+
+fn known_json(value: Option<&Value>) -> bool {
+    value.is_some_and(|value| !value.is_null())
+}
+
+fn known_packet(value: Option<&Value>) -> bool {
+    value.is_some_and(|value| value.as_str().is_some_and(|packet| !packet.is_empty()))
+}
+
+fn unknown_dimensions() -> Value {
+    let unknown = || changed_dimension(true, Value::Null, Value::Null);
+    json!({
+        "subject_bytes": unknown(),
+        "worker_assignment": unknown(),
+        "frozen_binding": unknown(),
+        "governing_policy_configuration": unknown(),
+        "declared_output_contract": unknown(),
+        "routed_inputs": unknown(),
+        "task_definition": unknown(),
+        "task_packet": unknown(),
+        "dependencies": unknown(),
+        "worker_binding": unknown(),
+        "repository_effect": unknown(),
+    })
+}
+
+pub(crate) fn invocation_change_report(
+    run: &Run,
+    context: &[crate::ContextRecord],
+    record: &WorkSlotInvocation,
+    invocations: &[WorkSlotInvocation],
+    current_subjects: &BTreeMap<WorkSlotId, String>,
+) -> InvocationChangeReport {
+    let latest_for_subject = invocations
+        .iter()
+        .filter(|item| item.slot_id == record.slot_id && item.subject == record.subject)
+        .max_by_key(|item| (item.started_at, item.invocation_id.clone()));
+    let invocation_is_latest =
+        latest_for_subject.is_some_and(|item| item.invocation_id == record.invocation_id);
+    // Never infer a current subject from an older invocation. A missing
+    // durable visit subject is unknown, and therefore changed.
+    let current_subject = current_subjects.get(&record.slot_id).cloned();
+    let baseline_known = !record.recorded_inner_workers.is_empty();
+    let current_assignments: Vec<_> = record.inner_workers.iter().map(worker_assignment).collect();
+    let recorded_assignments: Vec<_> = record
+        .recorded_inner_workers
+        .iter()
+        .map(worker_assignment)
+        .collect();
+    let assignment_known = baseline_known
+        && !record.inner_workers.is_empty()
+        && record
+            .recorded_inner_workers
+            .iter()
+            .chain(record.inner_workers.iter())
+            .all(|worker| !worker.assignment_id.is_empty() && !worker.command.is_empty());
+    // `None` is a known statement that this worker declared no output
+    // contract. The completion snapshot makes that absence durable; only a
+    // missing snapshot is unknown.
+    let contract_known = baseline_known && !record.inner_workers.is_empty();
+    let routed_current = current_routed_inputs(run, context, &record.slot_id);
+    let binding_current = binding_for_slot(run, &record.slot_id);
+    let routed_changed = record.frozen_run_identity.is_none()
+        || routed_current
+            .as_ref()
+            .is_none_or(|current| current != &record.routed_inputs);
+    let binding_changed = binding_current
+        .as_ref()
+        .is_none_or(|current| current != &record.binding);
+    let current_identity = json!({
+        "provider": run.provider_association.as_json(),
+        "input": run.initial_input,
+    });
+    let identity_changed = record
+        .frozen_run_identity
+        .as_ref()
+        .is_none_or(|recorded| recorded != &current_identity);
+    let dimensions = json!({
+        "subject_bytes": changed_dimension(
+            current_subject.as_ref().is_none_or(|current| current != &record.subject),
+            json!(record.subject),
+            current_subject.map_or(Value::Null, |subject| json!(subject)),
+        ),
+        "worker_assignment": changed_dimension(
+            !assignment_known || current_assignments != recorded_assignments,
+            json!(recorded_assignments),
+            json!(current_assignments),
+        ),
+        "frozen_binding": changed_dimension(
+            binding_changed,
+            json!(record.binding),
+            binding_current.map_or(Value::Null, |binding| json!(binding)),
+        ),
+        "governing_policy_configuration": changed_dimension(
+            identity_changed,
+            record.frozen_run_identity.clone().unwrap_or(Value::Null),
+            current_identity,
+        ),
+        "declared_output_contract": changed_dimension(
+            !contract_known
+                || record
+                    .inner_workers
+                    .iter()
+                    .map(output_contract)
+                    .collect::<Vec<_>>()
+                    != record
+                        .recorded_inner_workers
+                        .iter()
+                        .map(output_contract)
+                        .collect::<Vec<_>>(),
+            json!(record
+                .recorded_inner_workers
+                .iter()
+                .map(output_contract)
+                .collect::<Vec<_>>()),
+            json!(record
+                .inner_workers
+                .iter()
+                .map(output_contract)
+                .collect::<Vec<_>>()),
+        ),
+        "routed_inputs": changed_dimension(
+            routed_changed,
+            json!(record.routed_inputs),
+            routed_current.clone().map_or(Value::Null, |inputs| json!(inputs)),
+        )
+    });
+
+    let worker_count = record
+        .inner_workers
+        .len()
+        .max(record.recorded_inner_workers.len());
+    let mut assignments = Vec::new();
+    let mut plan_task_results = Vec::new();
+    for index in 0..worker_count {
+        let current = record.inner_workers.get(index);
+        let baseline = record.recorded_inner_workers.get(index);
+        let is_plan_task = current
+            .into_iter()
+            .chain(baseline)
+            .any(|worker| worker.task_definition.is_some() || worker.repository_effect.is_some());
+        let assignment_id = current
+            .or(baseline)
+            .map(|worker| worker.assignment_id.clone())
+            .unwrap_or_default();
+        let carry = carry_metadata_for(context, &record.invocation_id, &assignment_id);
+        let CarryFields {
+            act: carry_act,
+            overridden_inputs,
+            attesting_driver,
+            originating_output_sha256,
+            attested_dimensions,
+        } = carry_fields(carry.as_ref());
+        if is_plan_task {
+            let task_dimensions = json!({
+                "task_definition": changed_dimension(
+                    baseline.is_none()
+                        || !known_json(baseline.and_then(|worker| worker.task_definition.as_ref()))
+                        || !known_json(current.and_then(|worker| worker.task_definition.as_ref()))
+                        || current.and_then(|worker| worker.task_definition.as_ref())
+                            != baseline.and_then(|worker| worker.task_definition.as_ref()),
+                    baseline.and_then(|worker| worker.task_definition.clone()).unwrap_or(Value::Null),
+                    current.and_then(|worker| worker.task_definition.clone()).unwrap_or(Value::Null),
+                ),
+                "task_packet": changed_dimension(
+                    baseline.is_none()
+                        || !known_packet(baseline.and_then(|worker| worker.task_packet.as_ref()))
+                        || !known_packet(current.and_then(|worker| worker.task_packet.as_ref()))
+                        || current.and_then(|worker| worker.task_packet.as_ref())
+                            != baseline.and_then(|worker| worker.task_packet.as_ref()),
+                    baseline.and_then(|worker| worker.task_packet.clone()).unwrap_or(Value::Null),
+                    current.and_then(|worker| worker.task_packet.clone()).unwrap_or(Value::Null),
+                ),
+                "dependencies": changed_dimension(
+                    baseline.is_none()
+                        || baseline.and_then(|worker| worker.dependencies.as_ref()).is_none()
+                        || current.and_then(|worker| worker.dependencies.as_ref())
+                            != baseline.and_then(|worker| worker.dependencies.as_ref()),
+                    baseline.and_then(|worker| worker.dependencies.clone()).map_or(Value::Null, |value| json!(value)),
+                    current.and_then(|worker| worker.dependencies.clone()).map_or(Value::Null, |value| json!(value)),
+                ),
+                "routed_inputs": changed_dimension(
+                    baseline.is_none()
+                        || !known_json(baseline.and_then(|worker| worker.routed_inputs.as_ref()))
+                        || !known_json(current.and_then(|worker| worker.routed_inputs.as_ref()))
+                        || current.and_then(|worker| worker.routed_inputs.as_ref())
+                            != baseline.and_then(|worker| worker.routed_inputs.as_ref()),
+                    baseline.and_then(|worker| worker.routed_inputs.clone()).unwrap_or(Value::Null),
+                    current.and_then(|worker| worker.routed_inputs.clone()).unwrap_or(Value::Null),
+                ),
+                "worker_binding": changed_dimension(
+                    baseline.is_none()
+                        || current.is_none()
+                        || baseline.is_some_and(|worker| worker.command.is_empty())
+                        || current.map(worker_assignment) != baseline.map(worker_assignment),
+                    baseline.map(worker_assignment).unwrap_or(Value::Null),
+                    current.map(worker_assignment).unwrap_or(Value::Null),
+                ),
+                "repository_effect": changed_dimension(
+                    baseline.is_none()
+                        || !known_json(baseline.and_then(|worker| worker.repository_effect.as_ref()))
+                        || !known_json(current.and_then(|worker| worker.repository_effect.as_ref()))
+                        || current.and_then(|worker| worker.repository_effect.as_ref())
+                            != baseline.and_then(|worker| worker.repository_effect.as_ref()),
+                    baseline.and_then(|worker| worker.repository_effect.clone()).unwrap_or(Value::Null),
+                    current.and_then(|worker| worker.repository_effect.clone()).unwrap_or(Value::Null),
+                )
+            });
+            let carried = carry_still_covers(
+                carry_act.as_deref(),
+                &overridden_inputs,
+                attested_dimensions.as_ref(),
+                &task_dimensions,
+            );
+            plan_task_results.push(PlanTaskVisibility {
+                assignment_id,
+                standing: carried
+                    || (invocation_is_latest
+                        && changed_dimension_names(&task_dimensions).is_empty()),
+                dimensions: task_dimensions,
+                carry_act,
+                overridden_inputs,
+                attesting_driver,
+                originating_output_sha256,
+            });
+        } else if let Some(worker) = current.or(baseline) {
+            let standing = carry_still_covers(
+                carry_act.as_deref(),
+                &overridden_inputs,
+                attested_dimensions.as_ref(),
+                &dimensions,
+            ) || (invocation_is_latest
+                && changed_dimension_names(&dimensions).is_empty());
+            assignments.push(AssignmentVisibility {
+                assignment_id: worker.assignment_id.clone(),
+                subject_revision: record.subject.clone(),
+                standing,
+                carry_act,
+                overridden_inputs,
+                attesting_driver,
+                originating_output_sha256,
+            });
+        }
+    }
+    let dimensions = if worker_count == 0 {
+        unknown_dimensions()
+    } else {
+        dimensions
+    };
+    let standing = assignments.iter().any(|item| item.standing)
+        || plan_task_results.iter().any(|item| item.standing);
+    InvocationChangeReport {
+        identity: record.invocation_id.clone(),
+        standing,
+        subject_revision: record.subject.clone(),
+        dimensions,
+        assignments,
+        plan_task_results,
+    }
+}
+
 fn current_state_instructions_for(run: &Run, stored: &str) -> String {
     match bound_slot_for_current_state(run) {
         Some((slot, binding)) => {
             let args = serde_json::to_string(&binding.args).unwrap_or_else(|_| "[]".to_owned());
             format!(
-                "Bound work slot `{slot_id}` is configured. Frozen worker CLI: command={command} args={args}. Legal start: loop-engine invoke {run_id} {slot_id}. Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. Captures are at the named capture directory on the invocation view and invoke result. The driver triages worker output, appends provider-shaped records, then requests the shown event. On overrun run show immediately before re-invoking the same slot. On failed inspect capture_dir/summary.json and captured stdout before stderr.",
+                "Bound work slot `{slot_id}` is configured. Frozen worker CLI: command={command} args={args}. Legal start: loop-engine invoke {run_id} {slot_id}. Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. Captures are at the named capture directory on the invocation view and invoke result. The driver triages worker output, appends provider-shaped records, then requests the shown event. On overrun run show immediately before re-invoking the same slot. On failed inspect capture_dir/summary.json and captured stdout before stderr. Consult the change report of record before carrying prior work: unchanged-carry is for inputs reported unchanged; override-carry names every changed input it overrides. Neither act judges whether the carry was warranted.",
                 slot_id = slot.id,
                 command = binding.command,
                 run_id = run.id,
             )
         }
-        None => stored.to_owned(),
+        None => format!(
+            "{stored} Consult the change report of record before carrying prior work: unchanged-carry is for inputs reported unchanged; override-carry names every changed input it overrides. Neither act judges whether the carry was warranted."
+        ),
     }
 }
 
@@ -297,6 +777,40 @@ pub fn project_with_invocations(
     invocations: &[WorkSlotInvocation],
     now: Timestamp,
     waiter_alive: impl Fn(u32) -> bool,
+) -> std::result::Result<ShowProjection, ProjectionError> {
+    project_with_invocations_and_subjects(data, invocations, now, waiter_alive, &BTreeMap::new())
+}
+
+/// Return the assignment identities whose durable show projection permits
+/// standing carry. This keeps packet admission on the same projection used by
+/// the public `show` operation rather than reimplementing dimension rules.
+pub fn standing_assignment_ids(projection: &ShowProjection) -> Vec<String> {
+    let mut ids = std::collections::BTreeSet::new();
+    ids.extend(
+        projection
+            .change_report
+            .assignments
+            .iter()
+            .filter(|assignment| assignment.standing)
+            .map(|assignment| assignment.assignment_id.clone()),
+    );
+    ids.extend(
+        projection
+            .change_report
+            .plan_task_results
+            .iter()
+            .filter(|result| result.standing)
+            .map(|result| result.assignment_id.clone()),
+    );
+    ids.into_iter().collect()
+}
+
+pub fn project_with_invocations_and_subjects(
+    data: ShowData,
+    invocations: &[WorkSlotInvocation],
+    now: Timestamp,
+    waiter_alive: impl Fn(u32) -> bool,
+    current_subjects: &BTreeMap<WorkSlotId, String>,
 ) -> std::result::Result<ShowProjection, ProjectionError> {
     let current_state = data
         .run
@@ -326,12 +840,31 @@ pub fn project_with_invocations(
     let current_state_instructions =
         current_state_instructions_for(&data.run, &current_state.instructions);
     let work_slots = data.run.workflow.work_slots.clone();
-    let work_slot_invocations = invocations
+    let work_slot_invocations: Vec<_> = invocations
         .iter()
         .map(|record| {
-            WorkSlotInvocationView::from_record(record, now, waiter_alive(record.waiter_pid))
+            let mut view =
+                WorkSlotInvocationView::from_record(record, now, waiter_alive(record.waiter_pid));
+            view.change_report = invocation_change_report(
+                &data.run,
+                &context,
+                record,
+                invocations,
+                current_subjects,
+            );
+            view
         })
         .collect();
+    let change_report = RunChangeReport {
+        assignments: work_slot_invocations
+            .iter()
+            .flat_map(|view| view.change_report.assignments.clone())
+            .collect(),
+        plan_task_results: work_slot_invocations
+            .iter()
+            .flat_map(|view| view.change_report.plan_task_results.clone())
+            .collect(),
+    };
 
     Ok(ShowProjection {
         run_id: data.run.id,
@@ -346,6 +879,7 @@ pub fn project_with_invocations(
         requestable_events,
         latest_evaluations: latest_evaluations(&data.checked_evaluations),
         work_slots,
+        change_report,
         work_slot_invocations,
     })
 }
@@ -369,7 +903,27 @@ where
         Ok(invocations) => invocations,
         Err(error) => return persistence_error(error),
     };
-    match project_with_invocations(data, &invocations, now, |pid| process.waiter_alive(pid)) {
+    let mut current_subjects = BTreeMap::new();
+    for slot_id in invocations
+        .iter()
+        .map(|item| item.slot_id.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+    {
+        match persistence.get_current_slot_subject(&request.run_id, &slot_id) {
+            Ok(Some(subject)) => {
+                current_subjects.insert(slot_id, subject);
+            }
+            Ok(None) => {}
+            Err(error) => return persistence_error(error),
+        }
+    }
+    match project_with_invocations_and_subjects(
+        data,
+        &invocations,
+        now,
+        |pid| process.waiter_alive(pid),
+        &current_subjects,
+    ) {
         Ok(projection) => OperationOutcome::completed(projection),
         Err(error) => OperationOutcome::error(error.code(), error.to_string()),
     }
@@ -706,7 +1260,12 @@ mod tests {
         assert_eq!(projection.lifecycle, Lifecycle::Active);
         assert_eq!(projection.current_state, StateId::from("start"));
         assert_eq!(projection.current_state_title, "Start");
-        assert_eq!(projection.current_state_instructions, "Do the work");
+        assert!(projection
+            .current_state_instructions
+            .starts_with("Do the work"));
+        assert!(projection
+            .current_state_instructions
+            .contains("change report of record"));
         assert_eq!(
             projection.initial_input,
             json!({"objective": "ship safely"})
@@ -807,6 +1366,7 @@ mod tests {
             "allowed_time_ms",
             "binding",
             "capture_dir",
+            "change_report",
             "completed_at",
             "elapsed_ms",
             "exit_code",
@@ -923,10 +1483,12 @@ mod tests {
             !instructions.contains(SUPERSEDED_TRIAGE),
             "superseded retry/failure order must not return: {instructions}"
         );
-        assert_eq!(
-            instructions,
-            "Bound work slot `slot-1` is configured. Frozen worker CLI: command=worker args=[\"--flag\",\"value\"]. Legal start: loop-engine invoke run-1 slot-1. Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. Captures are at the named capture directory on the invocation view and invoke result. The driver triages worker output, appends provider-shaped records, then requests the shown event. On overrun run show immediately before re-invoking the same slot. On failed inspect capture_dir/summary.json and captured stdout before stderr."
-        );
+        assert!(instructions.starts_with(
+            "Bound work slot `slot-1` is configured. Frozen worker CLI: command=worker args=[\"--flag\",\"value\"]. Legal start: loop-engine invoke run-1 slot-1."
+        ));
+        assert!(instructions.contains("change report of record"));
+        assert!(instructions.contains("unchanged-carry"));
+        assert!(instructions.contains("override-carry"));
         let triage = [
             "Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work.",
             "Captures are at the named capture directory on the invocation view and invoke result.",
@@ -951,7 +1513,12 @@ mod tests {
     fn work_slot_unbound_current_state_keeps_stored_instructions_without_invoke_cli() {
         let projection = project(show_data("start", Lifecycle::Active, vec![], vec![])).unwrap();
 
-        assert_eq!(projection.current_state_instructions, "Do the work");
+        assert!(projection
+            .current_state_instructions
+            .starts_with("Do the work"));
+        assert!(projection
+            .current_state_instructions
+            .contains("change report of record"));
         assert!(!projection
             .current_state_instructions
             .contains("loop-engine invoke"));
@@ -974,7 +1541,12 @@ mod tests {
         };
         let projection = project(data).unwrap();
 
-        assert_eq!(projection.current_state_instructions, "SECRET BODY");
+        assert!(projection
+            .current_state_instructions
+            .starts_with("SECRET BODY"));
+        assert!(projection
+            .current_state_instructions
+            .contains("change report of record"));
         assert!(!projection
             .current_state_instructions
             .contains("loop-engine invoke"));
@@ -993,7 +1565,12 @@ mod tests {
             checked_evaluations: vec![],
         };
         let empty_projection = project(empty_bindings).unwrap();
-        assert_eq!(empty_projection.current_state_instructions, "SECRET BODY");
+        assert!(empty_projection
+            .current_state_instructions
+            .starts_with("SECRET BODY"));
+        assert!(empty_projection
+            .current_state_instructions
+            .contains("change report of record"));
         assert!(!empty_projection
             .current_state_instructions
             .contains("loop-engine invoke"));

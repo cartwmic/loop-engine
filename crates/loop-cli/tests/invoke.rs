@@ -72,6 +72,9 @@ fn seed_run(
     persistence
         .create_run(create_request(run_id, bindings, artifact_root))
         .expect("create run");
+    persistence
+        .load_show_data(&run_id.into())
+        .expect("observe run");
     if let Some(subject) = subject {
         persistence
             .set_current_slot_subject(&run_id.into(), &"slot-1".into(), subject.to_owned())
@@ -144,6 +147,255 @@ fn now_millis() -> i64 {
         .expect("system clock")
         .as_millis()
         .min(i64::MAX as u128) as i64
+}
+
+#[test]
+fn invoke_fan_out_subset_starts_only_selected_assignment_and_records_it() {
+    let directory = tempdir().expect("tempdir");
+    let database = directory.path().join("loop.db");
+    let worker_zero = directory.path().join("worker-zero.started");
+    let worker_one = directory.path().join("worker-one.started");
+    let worker = |label: &str, receipt: &Path| {
+        json!({
+            "command": "/bin/sh",
+            "args": [
+                "-c",
+                format!(r#"printf '%s' '{label}' > "$1"; exit 0"#),
+                "_",
+                receipt.to_string_lossy(),
+            ]
+        })
+        .to_string()
+    };
+    let binding = json!({
+        "slot-1": {
+            "command": env!("CARGO_BIN_EXE_loop-engine"),
+            "args": [
+                "fan-out",
+                "--worker", worker("zero", &worker_zero),
+                "--worker", worker("one", &worker_one),
+            ]
+        }
+    });
+    seed_run(
+        &database,
+        "run-subset",
+        Some(binding.clone()),
+        &directory.path().to_string_lossy(),
+        Some("subject-1"),
+    );
+
+    let output = run_invoke(
+        &database,
+        &["--assignment", "worker-1"],
+        "run-subset",
+        "slot-1",
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let invocation = wait_until_terminal(&database, "run-subset", 1, Duration::from_secs(10));
+    assert_eq!(
+        invocation.assignment_selection,
+        Some(vec!["worker-1".to_owned()])
+    );
+    assert_eq!(
+        invocation.binding,
+        loop_core::WorkSlotBinding::new(
+            env!("CARGO_BIN_EXE_loop-engine"),
+            vec![
+                "fan-out".to_owned(),
+                "--worker".to_owned(),
+                worker("zero", &worker_zero),
+                "--worker".to_owned(),
+                worker("one", &worker_one),
+            ],
+        )
+    );
+    assert!(!worker_zero.exists(), "unselected worker started");
+    assert_eq!(
+        std::fs::read_to_string(&worker_one).expect("selected receipt"),
+        "one"
+    );
+    assert_eq!(invocation.inner_workers.len(), 1);
+    assert_eq!(invocation.inner_workers[0].assignment_id, "worker-1");
+
+    let shown = Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+        .args([
+            "--database",
+            database.to_str().expect("utf-8 database path"),
+            "--json",
+            "show",
+            "run-subset",
+        ])
+        .output()
+        .expect("show subset invocation");
+    assert!(shown.status.success(), "{shown:?}");
+    let shown: Value = serde_json::from_slice(&shown.stdout).expect("show json");
+    assert_eq!(
+        shown["result"]["work_slot_invocations"][0]["assignment_selection"],
+        json!(["worker-1"])
+    );
+}
+
+#[test]
+fn invoke_fan_out_omitted_selection_starts_every_assignment() {
+    let directory = tempdir().expect("tempdir");
+    let database = directory.path().join("loop.db");
+    let worker_zero = directory.path().join("worker-zero.started");
+    let worker_one = directory.path().join("worker-one.started");
+    let worker = |label: &str, receipt: &Path| {
+        json!({
+            "command": "/bin/sh",
+            "args": [
+                "-c",
+                format!(r#"printf '%s' '{label}' > "$1"; exit 0"#),
+                "_",
+                receipt.to_string_lossy(),
+            ]
+        })
+        .to_string()
+    };
+    let binding = json!({
+        "slot-1": {
+            "command": env!("CARGO_BIN_EXE_loop-engine"),
+            "args": [
+                "fan-out",
+                "--worker", worker("zero", &worker_zero),
+                "--worker", worker("one", &worker_one),
+            ]
+        }
+    });
+    seed_run(
+        &database,
+        "run-full-selection",
+        Some(binding),
+        &directory.path().to_string_lossy(),
+        Some("subject-1"),
+    );
+
+    let output = run_invoke(&database, &[], "run-full-selection", "slot-1");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let invocation =
+        wait_until_terminal(&database, "run-full-selection", 1, Duration::from_secs(10));
+    assert_eq!(invocation.assignment_selection, None);
+    assert_eq!(std::fs::read_to_string(&worker_zero).unwrap(), "zero");
+    assert_eq!(std::fs::read_to_string(&worker_one).unwrap(), "one");
+    assert_eq!(
+        invocation
+            .inner_workers
+            .iter()
+            .map(|worker| worker.assignment_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["worker-0", "worker-1"]
+    );
+}
+
+#[test]
+fn invoke_invalid_assignment_selections_refuse_before_any_process_starts() {
+    for (run_id, extra, expected_code) in [
+        (
+            "run-empty-selection",
+            vec!["--assignments=[]"],
+            "empty-assignment-selection",
+        ),
+        (
+            "run-unknown-selection",
+            vec!["--assignment", "missing"],
+            "unknown-assignment",
+        ),
+        (
+            "run-duplicate-selection",
+            vec!["--assignment", "worker-0", "--assignment", "worker-0"],
+            "duplicate-assignment-selection",
+        ),
+    ] {
+        let directory = tempdir().expect("tempdir");
+        let database = directory.path().join("loop.db");
+        let worker_zero = directory.path().join("worker-zero.started");
+        let worker_one = directory.path().join("worker-one.started");
+        let worker = |receipt: &Path| {
+            json!({
+                "command": "/bin/sh",
+                "args": [
+                    "-c",
+                    "printf started > \"$1\"; exit 0",
+                    "_",
+                    receipt.to_string_lossy(),
+                ]
+            })
+            .to_string()
+        };
+        let binding = json!({
+            "slot-1": {
+                "command": env!("CARGO_BIN_EXE_loop-engine"),
+                "args": [
+                    "fan-out",
+                    "--worker", worker(&worker_zero),
+                    "--worker", worker(&worker_one),
+                ]
+            }
+        });
+        seed_run(
+            &database,
+            run_id,
+            Some(binding),
+            &directory.path().to_string_lossy(),
+            Some("subject-1"),
+        );
+
+        let output = run_invoke(&database, &extra, run_id, "slot-1");
+        assert_eq!(output.status.code(), Some(10), "{output:?}");
+        let parsed: Value = serde_json::from_slice(&output.stdout).expect("json stdout");
+        assert_eq!(parsed["status"], "rejected");
+        assert_eq!(parsed["code"], expected_code);
+        assert!(load_invocations(&database, run_id).is_empty());
+        assert!(
+            !worker_zero.exists(),
+            "worker zero started for {expected_code}"
+        );
+        assert!(
+            !worker_one.exists(),
+            "worker one started for {expected_code}"
+        );
+    }
+}
+
+#[test]
+fn invoke_selection_on_opaque_binding_refuses_before_process_start() {
+    let directory = tempdir().expect("tempdir");
+    let database = directory.path().join("loop.db");
+    let receipt = directory.path().join("opaque.started");
+    let binding = slot_binding(
+        "/bin/sh",
+        vec![
+            "-c".to_owned(),
+            "printf started > \"$1\"; exit 0".to_owned(),
+            "_".to_owned(),
+            receipt.to_string_lossy().into_owned(),
+        ],
+    );
+    seed_run(
+        &database,
+        "run-opaque-selection",
+        Some(binding),
+        &directory.path().to_string_lossy(),
+        Some("subject-1"),
+    );
+
+    let output = run_invoke(
+        &database,
+        &["--assignment", "worker-0"],
+        "run-opaque-selection",
+        "slot-1",
+    );
+    assert_eq!(output.status.code(), Some(10), "{output:?}");
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("json stdout");
+    assert_eq!(parsed["status"], "rejected");
+    assert_eq!(parsed["code"], "assignments-not-enumerable");
+    assert!(load_invocations(&database, "run-opaque-selection").is_empty());
+    assert!(
+        !receipt.exists(),
+        "opaque worker started before selection refusal"
+    );
 }
 
 #[test]

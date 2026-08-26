@@ -14,16 +14,18 @@ pub use dagu::{names_for_capture_root, resolve_dagu, write_locator, DaguError, D
 pub use fan_out::FanOutArgs;
 
 use loop_core::{
-    self as core, AppendContextRequest, CompleteWorkSlotInvocationRequest, EventRequest,
-    HistoryRequest, InnerWorker, InvocationId, InvokeRequest, OperationOutcome, Persistence,
-    ProcessError, ProviderResolutionError, RunId, ShowRequest, StartRequest, StartedWaiter,
-    TerminateRunRequest, Timestamp, WaiterSpawnArgs, WaiterWrittenStatus, WorkSlotProcess,
+    self as core, AppendContextRequest, CarryAct, CarryRequest, CompleteWorkSlotInvocationRequest,
+    EventRequest, HistoryRequest, InnerWorker, InvocationId, InvokeRequest, OperationOutcome,
+    Persistence, ProcessError, ProviderResolutionError, RunId, ShowRequest, StartRequest,
+    StartedWaiter, TerminateRunRequest, Timestamp, WaiterSpawnArgs, WaiterWrittenStatus,
+    WorkSlotProcess,
 };
 use loop_integrations::{
     ConfiguredProviderResolver, ProviderConfiguration, SqlitePersistence, SubprocessProviderGateway,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
@@ -97,10 +99,17 @@ pub enum PrimaryCommand {
     List,
     Show(RunId),
     Append(AppendArgs),
-    Event { run_id: RunId, event: String },
+    Event {
+        run_id: RunId,
+        event: String,
+    },
     History(RunId),
     Terminate(RunId),
-    Invoke { run_id: RunId, slot_id: String },
+    Invoke {
+        run_id: RunId,
+        slot_id: String,
+        assignment_selection: Option<Vec<String>>,
+    },
 }
 
 impl PrimaryCommand {
@@ -249,6 +258,9 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
     let mut sidecar_file = None;
     let mut capture_dir = None;
     let mut worker_index = None;
+    let mut assignment_selection: Option<Vec<String>> = None;
+    let mut assignment_flags_seen = false;
+    let mut assignments_option_seen = false;
 
     let mut index = 0;
     while index < args.len() {
@@ -676,6 +688,64 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
                     index += 1;
                     continue;
                 }
+                "--assignment" => {
+                    if assignments_option_seen {
+                        return Err(CliError::new(
+                            "invalid-invocation",
+                            "`--assignment` may not be combined with `--assignments`",
+                        ));
+                    }
+                    assignment_flags_seen = true;
+                    assignment_selection
+                        .get_or_insert_with(Vec::new)
+                        .push(next_option_value(args, &mut index, token)?);
+                    continue;
+                }
+                value if value.starts_with("--assignment=") => {
+                    if assignments_option_seen {
+                        return Err(CliError::new(
+                            "invalid-invocation",
+                            "`--assignment` may not be combined with `--assignments`",
+                        ));
+                    }
+                    assignment_flags_seen = true;
+                    assignment_selection.get_or_insert_with(Vec::new).push(
+                        value
+                            .strip_prefix("--assignment=")
+                            .expect("checked prefix")
+                            .to_owned(),
+                    );
+                    index += 1;
+                    continue;
+                }
+                "--assignments" => {
+                    if assignment_flags_seen || assignments_option_seen {
+                        return Err(CliError::new(
+                            "invalid-invocation",
+                            "`--assignments` may be supplied at most once and may not be combined with `--assignment`",
+                        ));
+                    }
+                    assignments_option_seen = true;
+                    let raw = next_option_value(args, &mut index, token)?;
+                    assignment_selection = Some(parse_assignment_selection_value(&raw)?);
+                    continue;
+                }
+                value if value.starts_with("--assignments=") => {
+                    if assignment_flags_seen || assignments_option_seen {
+                        return Err(CliError::new(
+                            "invalid-invocation",
+                            "`--assignments` may be supplied at most once and may not be combined with `--assignment`",
+                        ));
+                    }
+                    assignments_option_seen = true;
+                    assignment_selection = Some(parse_assignment_selection_value(
+                        value
+                            .strip_prefix("--assignments=")
+                            .expect("checked prefix"),
+                    )?);
+                    index += 1;
+                    continue;
+                }
                 value if value.starts_with('-') => {
                     return Err(CliError::new(
                         "invalid-invocation",
@@ -709,6 +779,13 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
             "a primary operation is required (start, list, show, append, event, history, terminate, or invoke)",
         )
     })?;
+
+    if command_name != "invoke" && assignment_selection.is_some() {
+        return Err(CliError::new(
+            "invalid-invocation",
+            "assignment selection is only valid for invoke",
+        ));
+    }
 
     if command_name == "wait-invocation" {
         if let Some(option) = fan_out_tokens.first() {
@@ -848,6 +925,7 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
         data,
         record_id,
         event,
+        assignment_selection,
     )?;
 
     Ok(ParsedRequest::Operation { options, command })
@@ -882,6 +960,49 @@ fn parse_output_format(value: &str) -> Result<OutputFormat, CliError> {
     }
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CarryInput {
+    #[serde(default)]
+    source_record_id: String,
+    invocation_id: String,
+    assignment_id: String,
+    attesting_driver: Value,
+    #[serde(default)]
+    overridden_inputs: Vec<String>,
+}
+
+fn parse_carry_request(data: Value, act: CarryAct) -> Result<CarryRequest, CliError> {
+    let input = serde_json::from_value::<CarryInput>(data).map_err(|error| {
+        CliError::new(
+            "invalid-carry-request",
+            format!(
+                "{act:?} data must name invocation_id, assignment_id, and attesting_driver; source_record_id is optional for plan-task results: {error}"
+            ),
+        )
+    })?;
+    Ok(CarryRequest::new(
+        input.source_record_id,
+        input.invocation_id,
+        input.assignment_id,
+        act,
+        input.attesting_driver,
+    )
+    .with_overridden_inputs(input.overridden_inputs))
+}
+
+fn parse_assignment_selection_value(raw: &str) -> Result<Vec<String>, CliError> {
+    if raw.trim_start().starts_with('[') {
+        return serde_json::from_str::<Vec<String>>(raw).map_err(|error| {
+            CliError::new(
+                "invalid-invocation",
+                format!("`--assignments` must be comma-separated or a JSON string array: {error}"),
+            )
+        });
+    }
+    Ok(raw.split(',').map(str::to_owned).collect())
+}
+
 fn parse_timeout(value: &str) -> Result<Duration, CliError> {
     let milliseconds = value.parse::<u64>().map_err(|_| {
         CliError::new(
@@ -905,6 +1026,7 @@ fn parse_primary_command(
     data: Option<String>,
     record_id: Option<String>,
     event: Option<String>,
+    assignment_selection: Option<Vec<String>>,
 ) -> Result<PrimaryCommand, CliError> {
     match name {
         "start" => {
@@ -1077,6 +1199,7 @@ fn parse_primary_command(
             Ok(PrimaryCommand::Invoke {
                 run_id: run.into(),
                 slot_id: slot,
+                assignment_selection,
             })
         }
         _ => Err(CliError::new(
@@ -1800,14 +1923,126 @@ fn inner_workers_from_capture_dir(capture_dir: &str) -> Vec<InnerWorker> {
     parse_summary_inner_workers(&bytes).unwrap_or_default()
 }
 
+#[derive(Deserialize)]
+struct SummaryFile {
+    workers: Vec<SummaryWorker>,
+}
+
+#[derive(Deserialize)]
+struct SummaryWorker {
+    #[serde(default)]
+    assignment_id: Option<String>,
+    command: String,
+    args: Vec<String>,
+    exit_code: i32,
+    #[serde(default)]
+    selected_attempt: Option<Option<u32>>,
+    #[serde(default)]
+    selected_output_sha256: Option<String>,
+    #[serde(default)]
+    selected_output_path: Option<String>,
+    #[serde(default)]
+    declared_output_contract: Option<Value>,
+    #[serde(default)]
+    routed_inputs: Option<Value>,
+    #[serde(default)]
+    task_definition: Option<Value>,
+    #[serde(default)]
+    task_packet: Option<Value>,
+    #[serde(default)]
+    dependencies: Option<Vec<String>>,
+    #[serde(default)]
+    repository_effect: Option<Value>,
+}
+
 fn parse_summary_inner_workers(bytes: &[u8]) -> Option<Vec<InnerWorker>> {
-    #[derive(Deserialize)]
-    struct SummaryFile {
-        workers: Vec<InnerWorker>,
-    }
     serde_json::from_slice::<SummaryFile>(bytes)
         .ok()
-        .map(|summary| summary.workers)
+        .and_then(|summary| normalize_summary_inner_workers(summary.workers))
+}
+
+fn normalize_summary_inner_workers(workers: Vec<SummaryWorker>) -> Option<Vec<InnerWorker>> {
+    let any_assignment_ids = workers.iter().any(|worker| {
+        worker
+            .assignment_id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty())
+    });
+    let mut assignment_ids = BTreeSet::new();
+    let mut normalized = Vec::with_capacity(workers.len());
+    for worker in workers {
+        // A summary produced by the current fan-out and plan-graph paths has
+        // an identity for every worker. Preserve the legacy all-omitted shape,
+        // but never persist a partial or colliding provider-supplied set.
+        let assignment_id = worker.assignment_id.unwrap_or_default();
+        if any_assignment_ids
+            && (assignment_id.is_empty() || !assignment_ids.insert(assignment_id.clone()))
+        {
+            return None;
+        }
+
+        let selected_attempt = worker.selected_attempt.flatten();
+        let has_digest = worker.selected_output_sha256.is_some();
+        let has_path = worker.selected_output_path.is_some();
+        // A selected attempt must carry both durable linkage facts. A
+        // coverage gap carries neither; a half-linked record is not a result.
+        if has_digest != has_path || selected_attempt.is_some() != has_digest {
+            return None;
+        }
+        if let (Some(attempt), Some(path)) =
+            (selected_attempt, worker.selected_output_path.as_deref())
+        {
+            // Fan-out retries store selected bytes below attempts/<n>/stdout.
+            // Plan-graph tasks have one provider-owned attempt and retain
+            // their direct task stdout path; task_definition distinguishes
+            // that shape from the compatibility worker-level stdout copy.
+            let mut components = Path::new(path).components().rev();
+            let is_originating_attempt =
+                matches!(
+                    components.next(),
+                    Some(std::path::Component::Normal(name)) if name == "stdout"
+                ) && components.next().and_then(|component| match component {
+                    std::path::Component::Normal(name) => name.to_str()?.parse::<u32>().ok(),
+                    _ => None,
+                }) == Some(attempt)
+                    && matches!(
+                        components.next(),
+                        Some(std::path::Component::Normal(name)) if name == "attempts"
+                    );
+            let single_components = Path::new(path).components().rev().collect::<Vec<_>>();
+            let is_single_attempt_output = attempt == 1
+                && matches!(
+                    single_components.first(),
+                    Some(std::path::Component::Normal(name)) if *name == "stdout"
+                )
+                && matches!(
+                    single_components.get(1),
+                    Some(std::path::Component::Normal(name))
+                        if name.to_str().is_some_and(|value| value.parse::<usize>().is_ok())
+                );
+            let is_plan_task_output = worker.task_definition.is_some();
+            if !is_originating_attempt && !is_single_attempt_output && !is_plan_task_output {
+                return None;
+            }
+        }
+
+        normalized.push(InnerWorker {
+            assignment_id,
+            command: worker.command,
+            args: worker.args,
+            exit_code: worker.exit_code,
+            selected_attempt,
+            selected_output_sha256: worker.selected_output_sha256,
+            selected_output_path: worker.selected_output_path,
+            declared_output_contract: worker.declared_output_contract,
+            routed_inputs: worker.routed_inputs,
+            task_definition: worker.task_definition,
+            task_packet: worker.task_packet,
+            dependencies: worker.dependencies,
+            repository_effect: worker.repository_effect,
+        });
+    }
+    Some(normalized)
 }
 
 struct CliWorkSlotProcess {
@@ -1816,6 +2051,29 @@ struct CliWorkSlotProcess {
 
 struct CliWaiterHandle {
     child: process::Child,
+}
+
+fn same_executable_file(left: &Path, right: &Path) -> bool {
+    if let (Ok(left), Ok(right)) = (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        if left == right {
+            return true;
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let Ok(left) = std::fs::metadata(left) else {
+            return false;
+        };
+        let Ok(right) = std::fs::metadata(right) else {
+            return false;
+        };
+        left.dev() == right.dev() && left.ino() == right.ino()
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
 }
 
 #[cfg(unix)]
@@ -1838,6 +2096,19 @@ impl WorkSlotProcess for CliWorkSlotProcess {
             let _ = pid;
             false
         }
+    }
+
+    fn enumerate_assignments(
+        &self,
+        binding: &loop_core::WorkSlotBinding,
+    ) -> std::result::Result<Option<Vec<String>>, ProcessError> {
+        // Only this executable's bound `fan-out` command is known to consume
+        // and enforce the engine's assignment-selection packet. Argv that
+        // merely resembles fan-out behind another executable is opaque.
+        if !same_executable_file(&self.binary, Path::new(&binding.command)) {
+            return Ok(None);
+        }
+        Ok(fan_out::enumerate_bound_assignments(binding))
     }
 
     fn spawn_wait_invocation(
@@ -1965,10 +2236,24 @@ fn execute_operation(options: CliOptions, command: PrimaryCommand) -> Execution 
             let request = AppendContextRequest::new(
                 args.run_id.clone(),
                 args.record_id.unwrap_or_else(new_context_id),
-                args.kind,
-                args.data,
+                args.kind.clone(),
+                args.data.clone(),
                 now_timestamp(),
             );
+            let request = if matches!(args.kind.as_str(), "unchanged-carry" | "override-carry") {
+                let act = if args.kind == "unchanged-carry" {
+                    CarryAct::Unchanged
+                } else {
+                    CarryAct::Override
+                };
+                let carry = match parse_carry_request(args.data, act) {
+                    Ok(carry) => carry,
+                    Err(error) => return render_invalid_invocation_with_format(error, output),
+                };
+                request.with_carry(carry)
+            } else {
+                request
+            };
             let outcome =
                 core::execute_append(request, &persistence).map(CliAppendContextResult::from);
             render_operation(operation, output, &outcome)
@@ -1994,7 +2279,11 @@ fn execute_operation(options: CliOptions, command: PrimaryCommand) -> Execution 
                 .map(CliTerminateResult::from);
             render_operation(operation, output, &outcome)
         }
-        PrimaryCommand::Invoke { run_id, slot_id } => {
+        PrimaryCommand::Invoke {
+            run_id,
+            slot_id,
+            assignment_selection,
+        } => {
             let binary = match std::env::current_exe() {
                 Ok(binary) => binary,
                 Err(error) => {
@@ -2011,7 +2300,8 @@ fn execute_operation(options: CliOptions, command: PrimaryCommand) -> Execution 
             let process = CliWorkSlotProcess { binary };
             let allowed_time_ms = timeout.as_millis().min(u64::MAX as u128) as u64;
             let request =
-                InvokeRequest::new(run_id, slot_id, new_invocation_id(), paths.database.clone());
+                InvokeRequest::new(run_id, slot_id, new_invocation_id(), paths.database.clone())
+                    .with_assignment_selection(assignment_selection);
             let outcome = core::execute_invoke(
                 request,
                 &persistence,
@@ -2328,14 +2618,28 @@ struct CliAppendContextResult {
     run: CliRun,
     context: core::ContextRecord,
     history: core::HistoryEntry,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    guidance: Option<String>,
 }
 
 impl From<core::AppendContextResult> for CliAppendContextResult {
     fn from(result: core::AppendContextResult) -> Self {
+        let guidance = result
+            .context
+            .data
+            .get("loop_engine_carry")
+            .and_then(|value| value.get("act"))
+            .and_then(Value::as_str)
+            .map(|act| {
+                format!(
+                    "Consult the change report of record; this append used {act}. Unchanged-carry requires every covered input to be unchanged. Override-carry must name every changed input it overrides."
+                )
+            });
         Self {
             run: result.run.into(),
             context: result.context,
             history: result.history,
+            guidance,
         }
     }
 }
@@ -2430,6 +2734,7 @@ struct CliShowProjection {
     requestable_events: Vec<core::RequestableEvent>,
     latest_evaluations: Vec<core::DurableEvaluation>,
     work_slots: Vec<core::WorkSlot>,
+    change_report: core::operations::RunChangeReport,
     work_slot_invocations: Vec<core::operations::WorkSlotInvocationView>,
 }
 
@@ -2448,6 +2753,7 @@ impl From<core::ShowProjection> for CliShowProjection {
             requestable_events: projection.requestable_events,
             latest_evaluations: projection.latest_evaluations,
             work_slots: projection.work_slots,
+            change_report: projection.change_report,
             work_slot_invocations: projection.work_slot_invocations,
         }
     }
@@ -2639,7 +2945,10 @@ fn usage(command: Option<&str>) -> String {
         Some("show") => "Usage: loop-engine [options] show <run-id>\n".to_owned(),
         Some("history") => "Usage: loop-engine [options] history <run-id>\n".to_owned(),
         Some("terminate") => "Usage: loop-engine [options] terminate <run-id>\n".to_owned(),
-        Some("invoke") => "Usage: loop-engine [options] invoke <run-id> <slot-id>\n".to_owned(),
+        Some("invoke") => {
+            "Usage: loop-engine [options] invoke <run-id> <slot-id> [--assignment ID ... | --assignments ID,...]\n"
+                .to_owned()
+        }
         Some("list") => "Usage: loop-engine [options] list\n".to_owned(),
         Some("fan-out") => {
             "Usage: loop-engine [options] fan-out [--worker JSON]... [--instructions FILE] [--max-active N]\n\n"
@@ -2920,7 +3229,9 @@ mod tests {
     fn invoke_run_slot_parses() {
         let parsed = parse_args(["invoke", "run-1", "slot-1"]).expect("invoke should parse");
         let ParsedRequest::Operation {
-            command: PrimaryCommand::Invoke { run_id, slot_id },
+            command: PrimaryCommand::Invoke {
+                run_id, slot_id, ..
+            },
             options,
         } = parsed
         else {
@@ -2931,6 +3242,72 @@ mod tests {
         assert_eq!(options.output, OutputFormat::Human);
         assert!(options.database.is_none());
         assert!(options.provider_timeout.is_none());
+    }
+
+    #[test]
+    fn invoke_assignment_selection_parses_repeated_and_comma_forms() {
+        let parsed = parse_args([
+            "invoke",
+            "run-1",
+            "slot-1",
+            "--assignment",
+            "worker-1",
+            "--assignment=worker-2",
+        ])
+        .expect("repeated assignment selection should parse");
+        let ParsedRequest::Operation {
+            command:
+                PrimaryCommand::Invoke {
+                    assignment_selection,
+                    ..
+                },
+            ..
+        } = parsed
+        else {
+            panic!("expected invoke operation");
+        };
+        assert_eq!(
+            assignment_selection,
+            Some(vec!["worker-1".to_owned(), "worker-2".to_owned()])
+        );
+
+        let parsed = parse_args([
+            "invoke",
+            "run-1",
+            "slot-1",
+            "--assignments=worker-1,worker-2",
+        ])
+        .expect("comma assignment selection should parse");
+        let ParsedRequest::Operation {
+            command:
+                PrimaryCommand::Invoke {
+                    assignment_selection,
+                    ..
+                },
+            ..
+        } = parsed
+        else {
+            panic!("expected invoke operation");
+        };
+        assert_eq!(
+            assignment_selection,
+            Some(vec!["worker-1".to_owned(), "worker-2".to_owned()])
+        );
+
+        let parsed = parse_args(["invoke", "run-1", "slot-1", "--assignments=[]"])
+            .expect("an explicitly empty selection should reach core validation");
+        let ParsedRequest::Operation {
+            command:
+                PrimaryCommand::Invoke {
+                    assignment_selection,
+                    ..
+                },
+            ..
+        } = parsed
+        else {
+            panic!("expected invoke operation");
+        };
+        assert_eq!(assignment_selection, Some(Vec::new()));
     }
 
     #[test]
@@ -2959,7 +3336,9 @@ mod tests {
         .expect("globals before invoke should parse");
         let ParsedRequest::Operation {
             options,
-            command: PrimaryCommand::Invoke { run_id, slot_id },
+            command: PrimaryCommand::Invoke {
+                run_id, slot_id, ..
+            },
         } = parsed
         else {
             panic!("expected invoke operation");
@@ -3575,6 +3954,14 @@ printf '%s' '{"id":"cli-fixture","initial_state":"start","states":[{"id":"start"
         assert!(history_ids.contains(&"caller-record-separate"));
         assert!(history_ids.contains(&"caller-record-equals"));
 
+        let human_observation = execute([
+            "show".to_owned(),
+            human_run_id.clone(),
+            "--database".to_owned(),
+            database.clone(),
+        ]);
+        assert_eq!(human_observation.exit_code, EXIT_COMPLETED);
+
         let human_append = execute([
             "append".to_owned(),
             human_run_id.clone(),
@@ -3630,6 +4017,15 @@ printf '%s' '{"id":"cli-fixture","initial_state":"start","states":[{"id":"start"
         assert_eq!(history_json["status"], "completed");
         assert_internal_metadata_absent(&history_json);
         assert_eq!(history_json["result"][0]["action"]["kind"], "run_created");
+
+        let termination_observation = execute([
+            "--json".to_owned(),
+            "show".to_owned(),
+            run_id.clone(),
+            "--database".to_owned(),
+            database.clone(),
+        ]);
+        assert_eq!(termination_observation.exit_code, EXIT_COMPLETED);
 
         let terminate = execute([
             "--json".to_owned(),
@@ -3941,6 +4337,58 @@ printf '%s' '{"id":"cli-fixture","initial_state":"start","states":[{"id":"start"
         assert_eq!(
             artifact_root,
             allocated_run_dir(&database, &run_id).to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn summary_worker_linkage_requires_distinct_ids_and_complete_selected_facts() {
+        let valid = serde_json::json!({
+            "workers": [
+                {
+                    "assignment_id": "axis-a",
+                    "command": "worker",
+                    "args": ["--shared"],
+                    "exit_code": 0,
+                    "selected_attempt": 2,
+                    "selected_output_sha256": "sha256:selected",
+                    "selected_output_path": "/capture/axis-a/attempts/2/stdout"
+                },
+                {
+                    "assignment_id": "axis-b",
+                    "command": "worker",
+                    "args": ["--shared"],
+                    "exit_code": 0,
+                    "selected_attempt": null,
+                    "selected_output_sha256": null,
+                    "selected_output_path": null
+                }
+            ]
+        });
+        let workers = parse_summary_inner_workers(&serde_json::to_vec(&valid).unwrap())
+            .expect("valid selected and coverage-gap workers");
+        assert_eq!(workers[0].assignment_id, "axis-a");
+        assert_eq!(workers[0].selected_attempt, Some(2));
+        assert_eq!(
+            workers[0].selected_output_sha256.as_deref(),
+            Some("sha256:selected")
+        );
+        assert_eq!(workers[1].assignment_id, "axis-b");
+        assert_eq!(workers[1].selected_attempt, None);
+        assert!(workers[1].selected_output_sha256.is_none());
+
+        let mut duplicate = valid.clone();
+        duplicate["workers"][1]["assignment_id"] = json!("axis-a");
+        assert!(parse_summary_inner_workers(&serde_json::to_vec(&duplicate).unwrap()).is_none());
+
+        let mut half_linked = valid.clone();
+        half_linked["workers"][0]["selected_output_path"] = Value::Null;
+        assert!(parse_summary_inner_workers(&serde_json::to_vec(&half_linked).unwrap()).is_none());
+
+        let mut worker_level_path = valid;
+        worker_level_path["workers"][0]["selected_output_path"] = json!("/capture/axis-a/stdout");
+        assert!(
+            parse_summary_inner_workers(&serde_json::to_vec(&worker_level_path).unwrap()).is_none(),
+            "selected attempt must not be linked to the worker-level stdout copy"
         );
     }
 

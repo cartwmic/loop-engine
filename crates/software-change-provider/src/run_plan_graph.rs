@@ -6,7 +6,8 @@ use crate::finding_ledger::project_implementation_findings_at;
 use crate::schema::{self, CheckResult};
 use loop_core::ContextRecord;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
@@ -24,6 +25,7 @@ const SUMMARIZER_STEP: &str = "summarizer";
 const REPORT_FILE: &str = "implementation-report.json";
 const CHECKPOINT_FILE: &str = "implementation-checkpoint.json";
 const SUMMARY_FILE: &str = "summary.json";
+const PLAN_TASK_RESULTS_FILE: &str = "plan-task-results.json";
 const REQUIRED_REPORT_KEYS: &[&str] = &[
     "revision",
     "author",
@@ -36,7 +38,7 @@ const REQUIRED_REPORT_KEYS: &[&str] = &[
 const SUMMARIZER_ASSIGNMENT: &str = "Write artifact_root/implementation-report.json for this invocation only. You are the sole writer of that filename. plan_revision must equal the revision of the plan.json at plan_path. Do not concatenate worker stdout. Do not append review-evidence. Ordinary plan tasks must not write that filename.";
 
 /// Worker argv: JSON object with exactly string `command` and array-of-string `args`.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct WorkerCli {
     pub(crate) command: String,
@@ -49,6 +51,9 @@ pub(crate) struct RunPlanGraphArgs {
     pub(crate) worker: WorkerCli,
     pub(crate) max_active: usize,
     pub(crate) working_directory: PathBuf,
+    /// Explicit plan-task roots. Their transitive dependants are added after
+    /// prerequisite validation. `None` means the existing full execution.
+    pub(crate) task_selection: Option<Vec<String>>,
 }
 
 /// Bound-worker stdin packet.  The engine's five invoke keys plus the
@@ -63,6 +68,10 @@ pub(crate) struct InvokePacket {
     pub(crate) capture_dir: String,
     #[serde(default)]
     pub(crate) context: Option<Vec<ContextRecord>>,
+    /// Present on engine-bound packets; omitted by direct public CLI calls.
+    /// When present, sidecar standing results must also be members.
+    #[serde(default)]
+    pub(crate) standing_assignment_ids: Option<Vec<String>>,
 }
 
 /// Parse failure for worker JSON, invoke packets, or `run-plan-graph` argv.
@@ -153,9 +162,11 @@ pub(crate) fn parse_invoke_packet(raw: &str) -> Result<InvokePacket, ParseError>
 /// Required once: `--working-directory ABS`, an existing absolute directory
 /// selected and maintained by the caller.  The supplied path is preserved.
 /// Optional once: `--task-worker JSON`.  Omitted flag yields [`default_task_worker`].
-/// Optional once: `--max-active N` with decimal integer N >= 1.  Omitted flag
-/// yields [`MAX_CONCURRENCY`].  Unknown flags, leftover positionals, and
-/// repeated flags are errors.  There is no `--max-concurrency` flag.
+/// Optional once: `--max-active N` with decimal integer N >= 1. Omitted flag
+/// yields [`MAX_CONCURRENCY`]. Optional repeated `--task ID` or once-only
+/// `--tasks ID,ID,...` selects plan-task roots; their dependants are added by
+/// the graph runner. Unknown flags, leftover positionals, and repeated
+/// `--tasks` are errors. There is no `--max-concurrency` flag.
 pub(crate) fn parse_run_plan_graph_args<I, S>(args: I) -> Result<RunPlanGraphArgs, ParseError>
 where
     I: IntoIterator<Item = S>,
@@ -168,6 +179,9 @@ where
     let mut worker = None;
     let mut max_active = None;
     let mut working_directory = None;
+    let mut task_selection = None;
+    let mut task_flags_seen = false;
+    let mut tasks_option_seen = false;
     let mut index = 0;
     while index < args.len() {
         let token = &args[index];
@@ -203,6 +217,43 @@ where
             worker = Some(parse_worker_cli_json(&raw)?);
             continue;
         }
+        if let Some(raw) = strip_option(token, "--task") {
+            if tasks_option_seen {
+                return Err(ParseError::new(
+                    "`--task` may not be combined with `--tasks`",
+                ));
+            }
+            let raw = match raw {
+                Some(raw) => {
+                    index += 1;
+                    raw
+                }
+                None => option_value(&args, &mut index, "--task")?.to_owned(),
+            };
+            task_flags_seen = true;
+            task_selection
+                .get_or_insert_with(Vec::new)
+                .extend(parse_task_selection_value(&raw)?);
+            continue;
+        }
+        if let Some(raw) = strip_option(token, "--tasks") {
+            if task_flags_seen {
+                return Err(ParseError::new(
+                    "`--tasks` may not be combined with repeated `--task`",
+                ));
+            }
+            let raw = match raw {
+                Some(raw) => {
+                    index += 1;
+                    raw
+                }
+                None => option_value(&args, &mut index, "--tasks")?.to_owned(),
+            };
+            task_flags_seen = true;
+            tasks_option_seen = true;
+            task_selection = Some(parse_task_selection_value(&raw)?);
+            continue;
+        }
         if let Some(raw) = strip_option(token, "--max-active") {
             if max_active.is_some() {
                 return Err(ParseError::new(
@@ -235,7 +286,20 @@ where
         worker: worker.unwrap_or_else(default_task_worker),
         max_active: max_active.unwrap_or(MAX_CONCURRENCY),
         working_directory,
+        task_selection,
     })
+}
+
+fn parse_task_selection_value(raw: &str) -> Result<Vec<String>, ParseError> {
+    if raw.trim_start().starts_with('[') {
+        let values = serde_json::from_str::<Vec<String>>(raw).map_err(|error| {
+            ParseError::new(format!(
+                "`--tasks` must be a comma-separated list or JSON string array: {error}"
+            ))
+        })?;
+        return Ok(values);
+    }
+    Ok(raw.split(',').map(str::to_owned).collect())
 }
 
 fn validate_working_directory(raw: &str) -> Result<PathBuf, ParseError> {
@@ -331,6 +395,27 @@ struct PlanGraph {
     order: Vec<String>,
     tasks: HashMap<String, Value>,
     predecessors: HashMap<String, HashSet<String>>,
+    successors: HashMap<String, Vec<String>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct PlanTaskResultsFile {
+    schema_version: String,
+    plan_revision: String,
+    results: Vec<PlanTaskResult>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct PlanTaskResult {
+    assignment_id: String,
+    plan_revision: String,
+    task: Value,
+    packet: String,
+    dependencies: Vec<String>,
+    worker: WorkerCli,
+    exit_code: i32,
+    repository_effect: Value,
+    capture_dir: String,
 }
 
 struct PreparedStep {
@@ -338,16 +423,42 @@ struct PreparedStep {
     stdin_path: String,
     stdout_path: String,
     stderr_path: String,
+    /// Dependencies emitted to Dagu for this invocation. Standing
+    /// prerequisites are intentionally absent because no step is spawned for
+    /// them.
     depends: Vec<String>,
+    /// The complete provider-owned dependency set for the recorded task
+    /// result. This remains stable when a prerequisite is satisfied by a
+    /// standing result rather than by a step in this graph.
+    recorded_dependencies: Vec<String>,
 }
 
 #[derive(Serialize)]
 struct CaptureWorker<'a> {
+    /// Provider-owned plan-task identity. The engine treats this as opaque
+    /// assignment identity and does not classify the task by role.
+    assignment_id: &'a str,
     command: &'a str,
     args: &'a [String],
     exit_code: i32,
+    /// Plan tasks have one selected attempt. Keep its digest and direct
+    /// stdout path in the same inert linkage shape as fan-out workers so a
+    /// recorded task can be explicitly carried later.
+    selected_attempt: u32,
+    selected_output_sha256: String,
+    selected_output_path: &'a str,
     stdout_path: &'a str,
     stderr_path: &'a str,
+    /// The exact durable task packet and graph edge data are copied into the
+    /// invocation record by the waiter. Show consequently needs no capture
+    /// file to render a completed result.
+    task_definition: Value,
+    task_packet: Value,
+    dependencies: Vec<String>,
+    routed_inputs: Value,
+    /// Opaque repository effect recorded with this task result. Consumers
+    /// must use this recorded value rather than scanning the shared checkout.
+    repository_effect: Value,
 }
 
 #[derive(Serialize)]
@@ -389,6 +500,19 @@ fn execute_from_packet(args: &RunPlanGraphArgs, raw_packet: &str) -> Result<(), 
         ExecuteError::failed(format!("could not read {}: {error}", plan_path.display()))
     })?;
     let plan = parse_plan(&plan_raw)?;
+    // Resolve explicit selection before even probing Dagu.  Invalid caller
+    // input must be a usage refusal, not a dependency/PATH failure, and no
+    // external graph process should be involved in that refusal.
+    let standing_assignment_ids = packet
+        .standing_assignment_ids
+        .as_ref()
+        .map(|ids| ids.iter().cloned().collect::<HashSet<_>>());
+    let selected_order = resolve_plan_selection(
+        args,
+        &artifact_root,
+        &plan,
+        standing_assignment_ids.as_ref(),
+    )?;
     let dagu = resolve_dagu().map_err(|error| ExecuteError::failed(error.to_string()))?;
     run_dagu_graph(
         args,
@@ -397,6 +521,7 @@ fn execute_from_packet(args: &RunPlanGraphArgs, raw_packet: &str) -> Result<(), 
         &plan_path,
         &capture_root,
         &plan,
+        &selected_order,
         packet.context.as_deref(),
     )
 }
@@ -514,6 +639,7 @@ fn parse_plan(raw: &str) -> Result<PlanGraph, ExecuteError> {
         order,
         tasks,
         predecessors,
+        successors,
     })
 }
 
@@ -549,6 +675,122 @@ fn has_cycle(order: &[String], successors: &HashMap<String, Vec<String>>) -> boo
         .any(|id| visit(id, successors, &mut visiting, &mut visited))
 }
 
+fn resolve_plan_selection(
+    args: &RunPlanGraphArgs,
+    artifact_root: &Path,
+    plan: &PlanGraph,
+    standing_assignment_ids: Option<&HashSet<String>>,
+) -> Result<Vec<String>, ExecuteError> {
+    let Some(requested) = args.task_selection.as_ref() else {
+        return Ok(plan.order.clone());
+    };
+    if requested.is_empty() || requested.iter().any(|id| id.is_empty()) {
+        return Err(ExecuteError::usage(
+            "plan-task selection must contain at least one non-empty task id",
+        ));
+    }
+    let known = plan.order.iter().collect::<HashSet<_>>();
+    let mut roots = HashSet::new();
+    for id in requested {
+        if !known.contains(id) {
+            return Err(ExecuteError::usage(format!(
+                "plan-task selection names unknown task `{id}`"
+            )));
+        }
+        if !roots.insert(id.as_str()) {
+            return Err(ExecuteError::usage(format!(
+                "plan-task selection names duplicate task `{id}`"
+            )));
+        }
+    }
+
+    let standing =
+        load_standing_plan_tasks(artifact_root, &plan.revision, standing_assignment_ids)?;
+    let mut selected = roots
+        .iter()
+        .map(|id| (*id).to_owned())
+        .collect::<HashSet<_>>();
+    let mut stack = selected.iter().cloned().collect::<Vec<_>>();
+    while let Some(id) = stack.pop() {
+        for successor in plan.successors.get(&id).into_iter().flatten() {
+            if selected.insert(successor.clone()) {
+                stack.push(successor.clone());
+            }
+        }
+    }
+
+    // Validate the complete execution closure, not just the roots named by
+    // the driver.  A dependant can have another predecessor outside the
+    // closure (for example A -> C and B -> C); starting C after selecting A
+    // would otherwise silently run it without B.  Dependants are selected,
+    // but their missing prerequisites are never auto-included.
+    let selected_order = plan
+        .order
+        .iter()
+        .filter(|id| selected.contains(*id))
+        .cloned()
+        .collect::<Vec<_>>();
+    for id in &selected_order {
+        let mut missing = plan
+            .predecessors
+            .get(id)
+            .into_iter()
+            .flatten()
+            .filter(|predecessor| {
+                !selected.contains(*predecessor) && !standing.contains(*predecessor)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        missing.sort();
+        if !missing.is_empty() {
+            return Err(ExecuteError::usage(format!(
+                "plan-task selection for `{id}` is missing standing prerequisites: {}",
+                missing.join(", ")
+            )));
+        }
+    }
+
+    Ok(selected_order)
+}
+
+fn load_standing_plan_tasks(
+    artifact_root: &Path,
+    plan_revision: &str,
+    standing_assignment_ids: Option<&HashSet<String>>,
+) -> Result<HashSet<String>, ExecuteError> {
+    let path = artifact_root.join(PLAN_TASK_RESULTS_FILE);
+    let raw = match fs::read(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(HashSet::new()),
+        Err(error) => {
+            return Err(ExecuteError::failed(format!(
+                "could not read {}: {error}",
+                path.display()
+            )))
+        }
+    };
+    let file: PlanTaskResultsFile = serde_json::from_slice(&raw).map_err(|error| {
+        ExecuteError::failed(format!(
+            "{} is not a valid plan-task result file: {error}",
+            path.display()
+        ))
+    })?;
+    if file.schema_version != "1" || file.plan_revision != plan_revision {
+        return Ok(HashSet::new());
+    }
+    let mut standing = HashSet::new();
+    for result in file.results {
+        if result.plan_revision == plan_revision
+            && result.exit_code == 0
+            && standing_assignment_ids.is_none_or(|ids| ids.contains(&result.assignment_id))
+        {
+            standing.insert(result.assignment_id);
+        }
+    }
+    Ok(standing)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_dagu_graph(
     args: &RunPlanGraphArgs,
     dagu: &Path,
@@ -556,6 +798,7 @@ fn run_dagu_graph(
     plan_path: &Path,
     capture_root: &Path,
     plan: &PlanGraph,
+    selected_order: &[String],
     finding_context: Option<&[ContextRecord]>,
 ) -> Result<(), ExecuteError> {
     fs::create_dir_all(capture_root).map_err(|error| {
@@ -574,7 +817,7 @@ fn run_dagu_graph(
     let software_change = path_to_string(&software_change);
 
     let mut steps = Vec::new();
-    for id in &plan.order {
+    for id in selected_order {
         let out_dir = task_capture_dir(capture_root, id)?;
         fs::create_dir_all(&out_dir).map_err(|error| {
             ExecuteError::failed(format!("could not create {}: {error}", out_dir.display()))
@@ -592,7 +835,7 @@ fn run_dagu_graph(
         fs::write(&stdin_path, stdin_text).map_err(|error| {
             ExecuteError::failed(format!("could not write {}: {error}", stdin_path.display()))
         })?;
-        let mut depends: Vec<String> = plan
+        let mut recorded_dependencies: Vec<String> = plan
             .predecessors
             .get(id)
             .map(|preds| {
@@ -603,13 +846,19 @@ fn run_dagu_graph(
                     .collect()
             })
             .unwrap_or_default();
-        depends.sort();
+        recorded_dependencies.sort();
+        let depends = recorded_dependencies
+            .iter()
+            .filter(|pred| selected_order.contains(*pred))
+            .cloned()
+            .collect();
         steps.push(PreparedStep {
-            name: id.clone(),
+            name: id.to_owned(),
             stdin_path: path_to_string(&stdin_path),
             stdout_path: path_to_string(&out_dir.join("stdout")),
             stderr_path: path_to_string(&out_dir.join("stderr")),
             depends,
+            recorded_dependencies,
         });
     }
 
@@ -633,7 +882,8 @@ fn run_dagu_graph(
         stdin_path: path_to_string(&summarizer_stdin_path),
         stdout_path: path_to_string(&summarizer_dir.join("stdout")),
         stderr_path: path_to_string(&summarizer_dir.join("stderr")),
-        depends: plan.order.clone(),
+        depends: selected_order.to_vec(),
+        recorded_dependencies: Vec::new(),
     };
 
     // Keep the previous report/checkpoint available while projecting the
@@ -651,6 +901,7 @@ fn run_dagu_graph(
         &summarizer,
         args.max_active,
     );
+    write_selection_record(capture_root, args.task_selection.as_deref(), selected_order)?;
     let dags_dir = home.join("dags");
     fs::create_dir_all(&dags_dir).map_err(|error| {
         ExecuteError::failed(format!("could not create {}: {error}", dags_dir.display()))
@@ -688,13 +939,27 @@ fn run_dagu_graph(
     );
     let start_ok = start_result.is_ok();
     let outcomes = step_outcomes(&home);
-    let ordinary_ok = plan.order.iter().all(|id| {
+    let ordinary_ok = selected_order.iter().all(|id| {
         outcomes
             .get(id)
             .is_some_and(|outcome| outcome.exit_code == Some(0))
     });
 
-    let summary_error = write_plan_summary(capture_root, &args.worker, plan, &steps, &outcomes);
+    let summary_error = write_plan_summary(
+        capture_root,
+        &args.worker,
+        &args.working_directory,
+        &steps,
+        &outcomes,
+    );
+    let results_error = write_plan_task_results(
+        artifact_root,
+        &args.worker,
+        &args.working_directory,
+        plan,
+        &steps,
+        &outcomes,
+    );
     let summarizer_ok = ordinary_ok && summarizer_succeeded(&outcomes);
     let report_error = if summarizer_ok {
         validate_fresh_report(artifact_root, &plan.revision)
@@ -709,7 +974,14 @@ fn run_dagu_graph(
             return Err(error);
         }
     }
-    start_result?;
+    if let Err(error) = results_error {
+        if start_ok && report_error.is_ok() {
+            return Err(error);
+        }
+    }
+    if start_result.is_err() && !(ordinary_ok && summarizer_ok && report_error.is_ok()) {
+        start_result?;
+    }
     report_error?;
     checkpoint::create(
         CheckpointPhase::Implementation,
@@ -726,15 +998,147 @@ fn summarizer_succeeded(outcomes: &HashMap<String, StepOutcome>) -> bool {
         .is_some_and(|outcome| outcome.exit_code == Some(0))
 }
 
-fn write_plan_summary(
+fn write_selection_record(
     capture_root: &Path,
+    requested: Option<&[String]>,
+    selected_order: &[String],
+) -> Result<(), ExecuteError> {
+    let path = capture_root.join("selection.json");
+    let value = json!({
+        "schema_version": "1",
+        "requested": requested,
+        "tasks": selected_order,
+    });
+    let bytes = serde_json::to_vec_pretty(&value).map_err(|error| {
+        ExecuteError::failed(format!(
+            "could not serialize plan selection {}: {error}",
+            path.display()
+        ))
+    })?;
+    fs::write(&path, bytes).map_err(|error| {
+        ExecuteError::failed(format!(
+            "could not write plan selection {}: {error}",
+            path.display()
+        ))
+    })
+}
+
+fn write_plan_task_results(
+    artifact_root: &Path,
     worker: &WorkerCli,
+    _working_directory: &Path,
     plan: &PlanGraph,
     steps: &[PreparedStep],
     outcomes: &HashMap<String, StepOutcome>,
 ) -> Result<(), ExecuteError> {
+    let path = artifact_root.join(PLAN_TASK_RESULTS_FILE);
+    let mut previous = match fs::read(&path) {
+        Ok(raw) => serde_json::from_slice::<PlanTaskResultsFile>(&raw).map_err(|error| {
+            ExecuteError::failed(format!(
+                "{} is not a valid plan-task result file: {error}",
+                path.display()
+            ))
+        })?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => PlanTaskResultsFile {
+            schema_version: "1".to_owned(),
+            plan_revision: plan.revision.clone(),
+            results: Vec::new(),
+        },
+        Err(error) => {
+            return Err(ExecuteError::failed(format!(
+                "could not read {}: {error}",
+                path.display()
+            )))
+        }
+    };
+    if previous.schema_version != "1" || previous.plan_revision != plan.revision {
+        previous = PlanTaskResultsFile {
+            schema_version: "1".to_owned(),
+            plan_revision: plan.revision.clone(),
+            results: Vec::new(),
+        };
+    }
+    let replaced = steps
+        .iter()
+        .map(|step| step.name.as_str())
+        .collect::<HashSet<_>>();
+    previous
+        .results
+        .retain(|result| !replaced.contains(result.assignment_id.as_str()));
+
+    for step in steps {
+        let Some(outcome) = outcomes.get(&step.name) else {
+            continue;
+        };
+        let Some(exit_code) = outcome.exit_code else {
+            continue;
+        };
+        let packet = fs::read_to_string(&step.stdin_path).map_err(|error| {
+            ExecuteError::failed(format!("could not read {}: {error}", step.stdin_path))
+        })?;
+        let task = packet
+            .split_once("\n---\n\n")
+            .and_then(|(_, task)| serde_json::from_str::<Value>(task).ok())
+            .ok_or_else(|| {
+                ExecuteError::failed(format!(
+                    "task packet {} is not a location plus JSON task",
+                    step.stdin_path
+                ))
+            })?;
+        let repository_effect = recorded_repository_effect(step)
+            .or_else(|| task.get("repository_effect").cloned())
+            .unwrap_or(Value::Null);
+        previous.results.push(PlanTaskResult {
+            assignment_id: step.name.clone(),
+            plan_revision: plan.revision.clone(),
+            task,
+            packet,
+            dependencies: step.recorded_dependencies.clone(),
+            worker: worker.clone(),
+            exit_code,
+            repository_effect,
+            capture_dir: path_to_string(
+                Path::new(&step.stdout_path)
+                    .parent()
+                    .unwrap_or_else(|| Path::new(".")),
+            ),
+        });
+    }
+    previous
+        .results
+        .sort_by(|left, right| left.assignment_id.cmp(&right.assignment_id));
+    let bytes = serde_json::to_vec_pretty(&previous).map_err(|error| {
+        ExecuteError::failed(format!("could not serialize {}: {error}", path.display()))
+    })?;
+    fs::write(&path, bytes).map_err(|error| {
+        ExecuteError::failed(format!("could not write {}: {error}", path.display()))
+    })?;
+    Ok(())
+}
+
+fn recorded_repository_effect(step: &PreparedStep) -> Option<Value> {
+    let bytes = fs::read(&step.stdout_path).ok()?;
+    let value = serde_json::from_slice::<Value>(&bytes).ok()?;
+    value.get("repository_effect").cloned()
+}
+
+fn sha256_digest_file(path: &Path) -> io::Result<String> {
+    let bytes = fs::read(path)?;
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn write_plan_summary(
+    capture_root: &Path,
+    worker: &WorkerCli,
+    _working_directory: &Path,
+    steps: &[PreparedStep],
+    outcomes: &HashMap<String, StepOutcome>,
+) -> Result<(), ExecuteError> {
     let mut workers = Vec::new();
-    for (id, step) in plan.order.iter().zip(steps.iter()) {
+    for step in steps {
+        let id = &step.name;
         let stdout_path = Path::new(&step.stdout_path);
         let stderr_path = Path::new(&step.stderr_path);
         let outcome = outcomes.get(id).copied();
@@ -754,12 +1158,41 @@ fn write_plan_summary(
             let _ = fs::write(stderr_path, b"");
         }
         let exit_code = outcome.and_then(|item| item.exit_code).unwrap_or(1);
+        let packet = fs::read_to_string(&step.stdin_path).unwrap_or_default();
+        let task = packet
+            .split_once("\n---\n\n")
+            .and_then(|(_, task)| serde_json::from_str::<Value>(task).ok())
+            .unwrap_or(Value::Null);
+        let routed_inputs = task
+            .get("routed_inputs")
+            .or_else(|| task.get("finding_context"))
+            .cloned()
+            .unwrap_or_else(|| json!([]));
+        let repository_effect = recorded_repository_effect(step)
+            .or_else(|| task.get("repository_effect").cloned())
+            .unwrap_or(Value::Null);
+        let selected_output_sha256 = sha256_digest_file(stdout_path).map_err(|error| {
+            ExecuteError::failed(format!(
+                "could not read selected output {}: {error}",
+                stdout_path.display()
+            ))
+        })?;
+        let selected_output_sha256 = format!("sha256:{selected_output_sha256}");
         workers.push(CaptureWorker {
+            assignment_id: id,
             command: &worker.command,
             args: &worker.args,
             exit_code,
+            selected_attempt: 1,
+            selected_output_sha256,
+            selected_output_path: &step.stdout_path,
             stdout_path: &step.stdout_path,
             stderr_path: &step.stderr_path,
+            task_definition: task,
+            task_packet: Value::String(packet),
+            dependencies: step.recorded_dependencies.clone(),
+            routed_inputs,
+            repository_effect,
         });
     }
     let path = capture_root.join(SUMMARY_FILE);
@@ -1525,6 +1958,7 @@ mod tests {
             stdout_path: "/tmp/cap/task-a/stdout".to_owned(),
             stderr_path: "/tmp/cap/task-a/stderr".to_owned(),
             depends: Vec::new(),
+            recorded_dependencies: Vec::new(),
         };
         let summarizer = PreparedStep {
             name: "summarizer".to_owned(),
@@ -1532,6 +1966,7 @@ mod tests {
             stdout_path: "/tmp/cap/summarizer/stdout".to_owned(),
             stderr_path: "/tmp/cap/summarizer/stderr".to_owned(),
             depends: vec!["task-a".to_owned()],
+            recorded_dependencies: Vec::new(),
         };
         let yaml = emit_graph_yaml(
             "plan-graph-inv-1",
@@ -1651,6 +2086,7 @@ mod tests {
                 stdout_path: format!("/tmp/cap/{name}/stdout"),
                 stderr_path: format!("/tmp/cap/{name}/stderr"),
                 depends: Vec::new(),
+                recorded_dependencies: Vec::new(),
             })
             .collect();
         let summarizer = PreparedStep {
@@ -1659,6 +2095,7 @@ mod tests {
             stdout_path: "/tmp/cap/summarizer/stdout".to_owned(),
             stderr_path: "/tmp/cap/summarizer/stderr".to_owned(),
             depends: task_names.iter().map(|name| (*name).to_owned()).collect(),
+            recorded_dependencies: Vec::new(),
         };
         emit_graph_yaml(
             "plan-graph-inv-1",

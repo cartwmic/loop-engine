@@ -418,6 +418,7 @@ impl Engine {
     }
 
     pub fn event(&self, run_id: &str, event: &str) -> OperationOutcome<EventResult> {
+        let _ = self.show(run_id);
         let persistence = self.persistence();
         core::execute_event(
             core::EventRequest::new(run_id, event),
@@ -427,6 +428,7 @@ impl Engine {
     }
 
     pub fn append(&self, run_id: &str, record: ContextRecord) -> ContextRecord {
+        let _ = self.show(run_id);
         let persistence = self.persistence();
         let result: OperationOutcome<AppendContextResult> = core::execute_append(
             core::AppendRequest::new(

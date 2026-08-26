@@ -32,6 +32,8 @@ Fan-out spawn/capture/conformance mechanics belong to the engine. `software-chan
 
 Plan-graph Do: before invocation, use unique task IDs matching `[A-Za-z0-9_-]+` except reserved `summarizer`, and ensure `dependency_graph` is acyclic and every endpoint names a declared task.
 
+Before any mutating run operation, the driver must call `show` for the current state and instructions. `show` arms the current state visit; `append`, `event`, `invoke`, and `terminate` refuse otherwise, while `list`, `history`, and `invocation-progress` do not arm it. After a state transition, observe again before the next mutation. Completed invocation records expose selected assignment/attempt identity and a durable fail-closed change report; consult that report before reusing prior work. Use only the explicit `unchanged-carry` and `override-carry` acts: the first requires unchanged covered inputs, the second names every changed input it overrides, and neither substitutes for provider evaluation. Bound invoke and `software-change run-plan-graph` support validated subsets without rewriting frozen bindings; plan-graph still summarizes and checkpoints the resulting tree.
+
 ## Workflow
 
 Build the engine and the reference providers, then run the repository baseline:

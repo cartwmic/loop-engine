@@ -9,7 +9,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "99d41a683e4974f29ca00ddcba7a8a6f988adac4fd97d28e3c5da687d1cd378b"
+    "input_sha256": "cba44dab5c66a4bfa0864f2fcb18dfa91a8f91229d1e2f30076b7f23f73083aa"
   },
   {
     "fixture_id": "validation-report-defective",
@@ -21,7 +21,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "cb8b9f07ea8b1d4e835be17d3feffd4659a5764ab83425f0dee9380318d581fb"
+    "input_sha256": "809ee89d2115dd1a278cb1eb82c77b9efbe4099937435b600e582bf5cd290b84"
   },
   {
     "fixture_id": "intent-good",
@@ -33,7 +33,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "209743b049d3aa29cba6cee71a5132e7d47934d5eb01483c41a855f3c113f2e5"
+    "input_sha256": "3de621cd15dbfb7f3bdc3866980805a4cd1c065be65390c309aa98be8866f9b8"
   },
   {
     "fixture_id": "intent-defective",
@@ -45,7 +45,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "68acda3716bd30fab34a896dfea16ee5186cfcb760bd220ea287f4cd414898aa"
+    "input_sha256": "c435fda0c161c61500d3b615f2e5be890f137a24e0b08c9da6420fd1f2717360"
   },
   {
     "fixture_id": "intent-good",
@@ -57,7 +57,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "4d5d16cd89ae7799b1d2a374dac0f86643d82c4b753042dd39a8a92d507955fb"
+    "input_sha256": "66e2171b0851a72af66666bd67b2ba46367d5d9605dbeb99546fe4c33c393349"
   },
   {
     "fixture_id": "intent-defective",
@@ -69,7 +69,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "ffc31dfd0c1814c711a88138153d5d0f4919410a24a8d879238f31c4dedd4f58"
+    "input_sha256": "4b33cdc4b4843ecd0c4407a9f8f34ac25a6d52597a6ce20f259b7f73c19ced65"
   },
   {
     "fixture_id": "intent-good",
@@ -81,7 +81,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "42395ee65f0161e047a9c7264f902e1f3eecb22c7171fc3d9c191be39189a7a2"
+    "input_sha256": "6f9728416c4c4d06bfdf1b5e8791a391d3e5f50f19b96bc6889518dffa76d4c8"
   },
   {
     "fixture_id": "intent-defective",
@@ -93,7 +93,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "3a1114d72f99d79965ddd8d5427dd8190fea952011aef706686bcde038d9f68a"
+    "input_sha256": "140eaa907c423798b32f363b2016ce982d19c5c90b7c64295d6d9233291aeac6"
   },
   {
     "fixture_id": "intent-good",
@@ -105,7 +105,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "086e6bb5540b4eaad9dcbfa8333b6bf6e58fc0cca0ab4c7817d3173256382249"
+    "input_sha256": "771fbde20aaa4efac64cd11fb6e84f81d5466d87c032d3670af515d6f231f784"
   },
   {
     "fixture_id": "intent-defective",
@@ -117,7 +117,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "31667623c024059f862cbb824cf0bfd58cce06c9757e0c7173658ff36921db99"
+    "input_sha256": "623db59bd61b45d2f28376047f9273a54e1c7f37c50c0fe6187e9718ebe77218"
   },
   {
     "fixture_id": "intent-good",
@@ -129,7 +129,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "a6de0df1c70f3c1d2ff1a4f9822ee786a16e7e78a21064d114ec940469cbbc63"
+    "input_sha256": "a4cab11e267c29bbd6e835cb7929cd37819e4321b7584e45f844ddbb6abb8835"
   },
   {
     "fixture_id": "intent-defective",
@@ -141,7 +141,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "ce2ca24060a3bb9bb5ad456144bb716b6fdf6e9a1b9ea5504d5db992a0c1a9b2"
+    "input_sha256": "381793ca3fb77b58259a894fb582f83e25141ff8d4223872c6ace63510180ac0"
   },
   {
     "fixture_id": "intent-good",
@@ -153,7 +153,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "36369f61ed9ba87510a28062fe19d87757cb37c26a76acfd90dbdce20e9efb16"
+    "input_sha256": "96c417bf83a1b3199a951165e3765004c0bcba544ef22540fb9c099746839061"
   },
   {
     "fixture_id": "intent-defective",
@@ -165,7 +165,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "61bc091d873fbb249d73fee38ef6019bb59b23f0a9328f4825ee78650b323e09"
+    "input_sha256": "4036455b674f98e23bb00fa6d2e725f7afea5176a0a4a25d85ddcf6304ea2356"
   },
   {
     "fixture_id": "intent-good",
@@ -177,7 +177,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "f03d2677ee9321205df77a15d65246f3cac3b9623d96a1df41590105d35823b6"
+    "input_sha256": "fb141b19c2f7acd4669a4dde19436b829108ef3f0aa27479494eecf0e8d135b1"
   },
   {
     "fixture_id": "intent-defective",
@@ -189,7 +189,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "99a7aa99a24b23b2fea07b4287beb170463c50ee10d1c7557848bd65e49e7ae0"
+    "input_sha256": "d9341118df7619eb900fe721571e30a8815b46fa61b42b5b1b74fd6cb991a407"
   },
   {
     "fixture_id": "intent-good",
@@ -201,7 +201,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "50e1ab550d100cc62befd4ffddd7a873e4d088e88fbafa6af8ae6fa7cb9efec5"
+    "input_sha256": "04d8fc855172616482c2d1659a9639fa62444f072a5928d6163680cd4d42374e"
   },
   {
     "fixture_id": "intent-defective",
@@ -213,7 +213,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "f3603d81d80ce020dc9dfa68829b662fe2064303cb78c6d77aa2883a22608a37"
+    "input_sha256": "f12814f1747eeb9d054273655373ea80655e0df33e8fe709656d651ac5262bb7"
   },
   {
     "fixture_id": "intent-good",
@@ -225,7 +225,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "06a6ec65c4686c7b8ea877ad4f93aec9e7bfde792818895132882dbd107ea6d9"
+    "input_sha256": "c91b0748e8d1e1bd06d120e59e3b3de0e41818bf777f27ac46b4336c870927c9"
   },
   {
     "fixture_id": "intent-defective",
@@ -237,7 +237,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "39453c89407f7fa6ac922c904019b759c0b66ae0aefe38db3f55471f513f40aa"
+    "input_sha256": "89e059424b2c18a6e8298653846c004748f30e17138b83b4876f119f1e5cc45e"
   },
   {
     "fixture_id": "intent-good",
@@ -249,7 +249,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "f3f41720fbf26ebd4849148021c49c0eeb0dec5e370552a658b0282d89454cdb"
+    "input_sha256": "3357a750537fb558fe96f541f43c80e2bc023824f8d8d53fd8501d0eb3f19fa1"
   },
   {
     "fixture_id": "intent-defective",
@@ -261,7 +261,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "af873118ac70fbe5d97e1066839523270e049f96ae89c063b25ff3db7de97546"
+    "input_sha256": "2e94f8e61e6837d36af26b33427ee2601b103fddff99af24df7e39d3830efa44"
   },
   {
     "fixture_id": "design-good",
@@ -273,7 +273,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "18345b9a0fb9257b7e1a557ee5a3df716ff017b5be9ac7322929c4872473c5f8"
+    "input_sha256": "6a4244497e5f8ba3564de9ee3efefefc6601fd65d1132f5476afa362e073b5ed"
   },
   {
     "fixture_id": "design-defective",
@@ -285,7 +285,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "251d26b3381d276221c815220d5ed0daa2f62c0dcbe3127517133416a7bd0c32"
+    "input_sha256": "dd57aaadcdf21f28292a0d54b2f58ebd12c7aa61bf449bf7db15e9e24d54f476"
   },
   {
     "fixture_id": "design-good",
@@ -297,7 +297,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "8938ef508d31444cc4a749f370af824cd138e23f2220980729560b195e8289bb"
+    "input_sha256": "3bd8fb382a2790b2b49f6511475c7c5aa08f011c5c3265f3d22beb4c591fe018"
   },
   {
     "fixture_id": "design-defective",
@@ -309,7 +309,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "123659a2ab5add71f913daf4d7d6322e8e6b5c7e41b75b5dc3e185a08db35544"
+    "input_sha256": "888db185472bccce5d1ea1855884038d46dcaf53cdf386b4463680acfbec54b6"
   },
   {
     "fixture_id": "design-good",
@@ -321,7 +321,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "9c183ce90f4876987bc34f57c7941e179f5136ea2597a6314f99355e5460c063"
+    "input_sha256": "177bb660fe951e79ae49ef2ae978c7773b0f8cf317ee8e54c88c3189f413fcc4"
   },
   {
     "fixture_id": "design-defective",
@@ -333,7 +333,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "5774bc226cd0014418eaae8ba5b03b69c6343904359a8a8445f0c67f37808793"
+    "input_sha256": "f53267e61cb87d99f4e289f613d09250eabb17cf1e2ebed8d766327cda3f3699"
   },
   {
     "fixture_id": "design-good",
@@ -345,7 +345,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "6652f471e1ad59a24adfa10aa781bb9d0decdf0ab9675d7fa8b1c05466760408"
+    "input_sha256": "aca45024ce0df98cf441280e3fbdce53e610b933bcde2fe9afe34591c59a22cf"
   },
   {
     "fixture_id": "design-overbuilt",
@@ -357,7 +357,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "944e0227b7899c4f574d03395fdc74ff22c22d137171cdbca43162d7d893fb14"
+    "input_sha256": "8bb8b179887be692886e895fe5a00a51bdd8199fdcd77d58a4bf362238d0f5e9"
   },
   {
     "fixture_id": "design-good",
@@ -369,7 +369,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "980dbe522ae1198d66af4d70c7c498e0bace77304e2cfc76375fbf4dc0cb5989"
+    "input_sha256": "1a60630bacd59484f34f039f5b26390ee6273368b43d7d8dc9db767cf3fd2409"
   },
   {
     "fixture_id": "design-defective",
@@ -381,7 +381,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "b3b2d740d7e85a8fd0c6e0be9ea499461736b5bda04578125f0599773bdc1a7f"
+    "input_sha256": "d303a29d3252f82410d4cc38a33fc754ce317b1c0ea29076d0d68d9cea4aa026"
   },
   {
     "fixture_id": "design-good",
@@ -393,7 +393,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "c5ffe0d78b2b8c2e52b4efa52849e4b33d4f48c1b7efe3d574041f01c59b16f1"
+    "input_sha256": "b68a63119a0f03cdb769ea80fa439580bcd21cdca27ae18226e70dae2e399ccb"
   },
   {
     "fixture_id": "design-defective",
@@ -405,7 +405,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "0a840faae1d7a553a8cec13d092f4a50fba321442d280f6c4154b9f62ca44e00"
+    "input_sha256": "b30606d7f9a2dd0ef124c66a477637a6fa0704813f2174ec7361ec42d4a01590"
   },
   {
     "fixture_id": "design-good",
@@ -417,7 +417,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "dbb1e7e006d05d494080666813c3778c5f06502d93d714a4d7ee74f66db49291"
+    "input_sha256": "3543bfc686b9f4492c1845b71e0b7f6862e45d3f1af3253c36983d002a06fee7"
   },
   {
     "fixture_id": "design-defective",
@@ -429,7 +429,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "9e8d361da7f368a5ac4921bd4bc07e89acf3ec85d73b66af0d7fe611b0190dae"
+    "input_sha256": "d3ca5ec491f55b46e2504dca14f831d78f3feea59c40859c9f75eb251c105dcd"
   },
   {
     "fixture_id": "design-good",
@@ -441,7 +441,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "9217132dfe8034ca27e0289737eeab36e470a701af5a22eefd82dd9e50980f59"
+    "input_sha256": "c4bb03beaf30dad23899c4e6c8e043167ec64789ffe84e62220b26bf1b62cbc3"
   },
   {
     "fixture_id": "design-overbuilt",
@@ -453,7 +453,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "4c07b1e57563652f8749efb7c34ac0a656a82aca46030bde00dd59b6e57da38d"
+    "input_sha256": "3b4dd57708550289920fb397f815af81c6657ee30549f39e821148a0e7899304"
   },
   {
     "fixture_id": "validation-report-good",
@@ -465,7 +465,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "bfd6209eb6008bb86332d45b5b4810110cc2dc898891c7e06fd7f5e19ef60e74"
+    "input_sha256": "d361b59f331592bf36555160558ec493caa81e951dd9950fce13e39281e152e4"
   },
   {
     "fixture_id": "validation-report-defective",
@@ -477,7 +477,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "75d7a1ecb88f92e19e67ebcd0744e3c87a37ced48e3ae3a69bca00fb1216bb4e"
+    "input_sha256": "7bbeff84d7a22d04b74147d347631990975b0f324ac97d0b6149c1902af6e1b7"
   },
   {
     "fixture_id": "validation-report-good",
@@ -489,7 +489,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "8c39e7cc1d9ba54407bb51ca0e56543b5c2f2336259f2b70b42a6225f6aba62b"
+    "input_sha256": "78c554f715271321359c838a48146eabf3a077edfbc188ab9e55b60b4441921a"
   },
   {
     "fixture_id": "validation-report-defective",
@@ -501,7 +501,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "8f8bd45e98556fe924e1d3e4889b581731b61e6fef7e11783cd360620509c751"
+    "input_sha256": "5fba01e2b8def0fab7f33625ca03cbc843f213c7200aef9ab146724289eff3b3"
   },
   {
     "fixture_id": "validation-report-good",
@@ -513,7 +513,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "2ea40bafbae9757e06b9a241a86d541cec60cc7e9b2e541317cbadaac77f85fd"
+    "input_sha256": "a8a95a4f28a43f92f2cf36b9365bd7a0f4a2344e96e7277a10702ccbad814ffc"
   },
   {
     "fixture_id": "validation-report-defective",
@@ -525,7 +525,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "5822cbc5f3d11d4a2c3a8dc6ecb00285a7063da13fa913f24f13cfb795126820"
+    "input_sha256": "a136d4cfe574dc3c1c2e1b08c03002bf5b6ef064eea1b4469e98b842e2e67ea5"
   },
   {
     "fixture_id": "validation-report-good",
@@ -537,7 +537,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "4ae658f41210c55cc3c6e95b3304b6c36f371bccf7595ed237f398391f2c35bd"
+    "input_sha256": "48a53246f92a238e1ee8b56fdeaca8f10b83b60fafd931a2721b583c41d80944"
   },
   {
     "fixture_id": "validation-report-defective",
@@ -549,7 +549,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "93f1395731bbd316d6f3da32275c18d64b8279c3c6cfb31406ca9483b23b14ca"
+    "input_sha256": "292c735f3f4b2f42de3c6dde7accc3670a3206ec1ddd17e5febbb9052a8d826a"
   },
   {
     "fixture_id": "intent-good",
@@ -561,7 +561,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "2b8fc702d374c438c7925c862db77dddcf011a112f9fae9af0022932def79c84"
+    "input_sha256": "5766a27626757dbed8f33ce14bcf4da81a4c62582bbc3d6eb65e6b806dbc4d33"
   },
   {
     "fixture_id": "intent-defective",
@@ -573,7 +573,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "ed99a278f17ce8040134030cda933e438a1fd9b16f470aee18008f7662be1b2c"
+    "input_sha256": "9354c359aab87e643328f93cb6edfdac532b4b8435767054d0272e5a54f0955c"
   },
   {
     "fixture_id": "intent-good",
@@ -585,7 +585,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "9cc3ba9a2aa1a05c8ee88b41fbfc9a280c93ed6d8d38b0c259b7919237dd7194"
+    "input_sha256": "9703094d76027d55b4189387df0036d73ef75097bb9afda5fb23f472c4b8061e"
   },
   {
     "fixture_id": "intent-defective",
@@ -597,7 +597,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "355d77894f3113337337b6cfdf5e93f38a7cc3765a9b9503313a4ca2f781c2e5"
+    "input_sha256": "a88e1c93743388b4954a39b0a2e7d4dea4ac15273921723730c98f072a343a92"
   },
   {
     "fixture_id": "intent-good",
@@ -609,7 +609,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "401143e91ab76a408995016d859ee57788904830f695112cf76af7069d374971"
+    "input_sha256": "f2ba8e11a22c00286363ea8c8a6676095f4a2074c9ff597620f3db19692642d4"
   },
   {
     "fixture_id": "intent-defective",
@@ -621,7 +621,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "d5f8551c70ac10d38d2eb14b5fca16450979288a05ef9c0bf2083e279bc76387"
+    "input_sha256": "6fdf7942e288b74adf5c78301fc22b7fa499c9f79dce73b2d36a49b7f13275cf"
   },
   {
     "fixture_id": "intent-good",
@@ -633,7 +633,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "30be2e7bc1a984eeb5a21d7fececf03822c6f5d97dd40d88a786096367cb815a"
+    "input_sha256": "a70eb0c04a95c981cadb75e63b90cbf5e744765a01158236eee8af1e1d66d161"
   },
   {
     "fixture_id": "intent-defective",
@@ -645,7 +645,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "7617232ae354d2ebf08951bdcd3c190f74b3799b2061e53208712d555c32919c"
+    "input_sha256": "f25ee88ea3d8ad7617bc733b43129c0cc1a5ed25746ca1ed5b11a8f21289835e"
   },
   {
     "fixture_id": "intent-good",
@@ -657,7 +657,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "33b67f2f4d3bbba81f1402400c234dbde255e474c1f2b9e7598e070ae7320ec2"
+    "input_sha256": "c5cd80eaece6ebfaecced12a10b71abb73ebefab726b123623263afe90a1d053"
   },
   {
     "fixture_id": "intent-defective",
@@ -669,7 +669,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "34c483ad7cdedd8bfb695390b101ee764dbc3af10b7265aa0a72029dab9ec92c"
+    "input_sha256": "46115072f864e5eca80e601ac4cadae3bd46391fe69f2407c492cad987dc231f"
   },
   {
     "fixture_id": "intent-good",
@@ -681,7 +681,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "30e1288f07f07c3af07377faa71fd74b7495fa6e944958f590274f7b2827f015"
+    "input_sha256": "8ed59c52f28b1db289efbbb6657be18b6fdce25d1f4e26eb831bfa5d0bda261b"
   },
   {
     "fixture_id": "intent-defective",
@@ -693,7 +693,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "17bd6797437523f2eb96b42d0b1265460d4d6d0f06b3954263f4fd3b057c02f2"
+    "input_sha256": "c7aa378f149778b5aad651349d29a86b6d5413a5de365f0df3738c90218f85f0"
   },
   {
     "fixture_id": "intent-good",
@@ -705,7 +705,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "c883e20794637875e4fd2843875ac207b0f234f0d5aa804334d51d28ddf5e059"
+    "input_sha256": "c4028743506d31fcce883b0296e04d0d3b78f051bae626bada93002256957b8b"
   },
   {
     "fixture_id": "intent-defective",
@@ -717,7 +717,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "6723190755584f74c3651f2635c1db176c0f8b42fe1d2ba6bf0987f2ebda2dbc"
+    "input_sha256": "1a665049b22ef8a63f555c30910498547cfa9b6238b915b233462f4ce3a50dec"
   },
   {
     "fixture_id": "intent-good",
@@ -729,7 +729,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "b4065d0742df8f4a8936465d8afa34751002048f1b559b264c236aefe955784c"
+    "input_sha256": "f602396e6e531290e6f028c5bd852aecb52858956a3541504eea52bcbbb0fba9"
   },
   {
     "fixture_id": "intent-defective",
@@ -741,7 +741,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "32c2d614a37d2521eeb3df7f7f87d8c2dadd3fd742924377c35f982d40c55e9c"
+    "input_sha256": "20b3ec2e97484442ba2a0af1e4d74bd2bf7d1c8c68b18e1ed722962e1248390d"
   },
   {
     "fixture_id": "intent-good",
@@ -753,7 +753,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "61eb5a66788fe451b008c37fcbe748cb2cebeeec9e8c11800b0b78992685895d"
+    "input_sha256": "6f0bbe027afcb3c5249ba0e372d4fef4654b0341f8aee817cd93511278602b75"
   },
   {
     "fixture_id": "intent-defective",
@@ -765,7 +765,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "eabf51ac1547a8b8561dc490b0019f94219d0d7a3f456ba1add0783995bb5b4c"
+    "input_sha256": "f4e4c5fe04b8fd5645ea4e7da5b9711b52c9315da166b33a91087c3e698a59cb"
   },
   {
     "fixture_id": "intent-good",
@@ -777,7 +777,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "5f32d118e7c0ba8935275cf07e3cbc0739b950c7653433421eecfcf6ebc58bbe"
+    "input_sha256": "17c5267e9fd7a70c1f4edb2bf2d6345993e765d0bd52475738785d066b6bfd3c"
   },
   {
     "fixture_id": "intent-defective",
@@ -789,7 +789,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "49a653691a709fb9aa7a0665933a666c1012d003e929122a841449b55d2afe8e"
+    "input_sha256": "162102389d5781baf1b472b8078e701682827379c59f85622aa670684f87ac64"
   },
   {
     "fixture_id": "design-good",
@@ -801,7 +801,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "705ec82dcbf8a554dae7dc39b22bc356422fd436ec3fb9cccc25fde99df69f20"
+    "input_sha256": "02cb336a77702cfdd21c0d1937486324635682f901298b83a24785a11e69f79b"
   },
   {
     "fixture_id": "design-defective",
@@ -813,7 +813,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "acd163a2f74cb5f00bc54d61062facdcdadd10fcae98210f2f39aa48f4a83173"
+    "input_sha256": "86324046eb978ca18903e2c13a92d09bd6615da0d5763622a8d0aa78c1536a30"
   },
   {
     "fixture_id": "design-good",
@@ -825,7 +825,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "0f31ea157705fa595573c728e6f49e0668c01f8f46a320c3c8675595cff95cd2"
+    "input_sha256": "1f40a06b3458908bb133234fe43b28ae6c2db5f12c7b5d56e52f13d3d4d4f394"
   },
   {
     "fixture_id": "design-defective",
@@ -837,7 +837,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "6b4932220e38a48083081ba88b8c4eeeb66a7782414124f14a2e1941ce40f808"
+    "input_sha256": "50ad8dec55fd0678d6e941f87931968fd4ea5743bd8b3c33a7f1e2d65d174162"
   },
   {
     "fixture_id": "design-good",
@@ -849,7 +849,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "38b9ecac1db71cb334e9dcf06f046095dc11a493d476bd69ad891a27d89081b1"
+    "input_sha256": "3d275b060a23224dbd829820832b052ef88af01365cf35328c5474824ee45db3"
   },
   {
     "fixture_id": "design-defective",
@@ -861,7 +861,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "793aa61e1fba30fcbb2b6bd3db1aeec33eac00e3c4b5e2973465b1c4815b3f84"
+    "input_sha256": "3598d8af374b5bf95224a2f4141b6d495cd3bb68469218ce14b83e6af27a8a6a"
   },
   {
     "fixture_id": "design-good",
@@ -873,7 +873,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "d174336ec40f329149b3ab5b296b7ba9c0f313ef4a31bdd2155db9fa95b6023a"
+    "input_sha256": "10fc9eca59a3723a05a02a316cfaf4906f2d0c7892a6e275eb53ccb983e18a5b"
   },
   {
     "fixture_id": "design-defective",
@@ -885,7 +885,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "ba76627d54ccaabaf4e3a734ae52f506ff388ed160607d8ad386b5e90812e797"
+    "input_sha256": "4139f5ccc1c2b9b31b403701ee524a1b7afbbc87cf77dfa755467d0510460634"
   },
   {
     "fixture_id": "design-good",
@@ -897,7 +897,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "5e51d0ce017f3c4eb2b3fbd9df2249ffa2e91ec0c8765a022545070bd46455a7"
+    "input_sha256": "1d4fefa424f7c580b625472d8f1e9ea9e77b1b8f19a8eb8e8e73d3550fb9accf"
   },
   {
     "fixture_id": "design-defective",
@@ -909,7 +909,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "1f2beabcf066fff691b0934f40d7e7f65029c025185fb0ab9a56201abb99ab3e"
+    "input_sha256": "48f58d379a73039fef7ab041893b92ce63bc5a43ffc480b2efc7e86604778324"
   },
   {
     "fixture_id": "design-good",
@@ -921,7 +921,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "c0aec403bd565ad8a5aa0ffa329e518ec931713f140396782e1e4b88ae721596"
+    "input_sha256": "b221093a62dd8248af694e10fe41e1c04efdc6961326fc7378646e5cdab88b2d"
   },
   {
     "fixture_id": "design-overbuilt",
@@ -933,7 +933,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "740cbe97bca40687752dc31f147c4591f418f822fc1884a4f5a0e37b656c68aa"
+    "input_sha256": "4d34177007d8cb78aec71267e034e26808a7c4f452147bd20102264abe4c9bc6"
   },
   {
     "fixture_id": "design-good",
@@ -945,7 +945,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "0df3d7552e0997410513aef5d69a44f93d5c1d05a13584a57c4ce3bab9ea7d4c"
+    "input_sha256": "3f1dfd79f28b7f8e2599c2dc7fc805c13c07ced18a686315f9e387608b6be3c3"
   },
   {
     "fixture_id": "design-defective",
@@ -957,7 +957,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "586d69b17942dbc0997af6f76d93118f254574c9a7779673abb8478cbbc34720"
+    "input_sha256": "d62b69debb338e67e06d1ac870bc4c27042a53ea6e5b6c707ca90f3c43ed45a4"
   },
   {
     "fixture_id": "design-good",
@@ -969,7 +969,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "a165774d6a7ad4b296c2b5264435c5d3ea2bbd5c0059892b8acb1642c028e57f"
+    "input_sha256": "6d6694955e42c00117a6e88d11f5aa25804c5b7a68e587ba3cbc9c631652ab67"
   },
   {
     "fixture_id": "design-defective",
@@ -981,7 +981,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "c807372c5edeb48296cd8b2cdb8f3424ae86f8dd68d33c085e79077abde8242f"
+    "input_sha256": "70daa42acf1ab0c8cca5624d98e8e9217cdb13de23c559d8b6d247d59af1bdff"
   },
   {
     "fixture_id": "design-good",
@@ -993,7 +993,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "a727d8b5b20fba97c4f4e52a62335c1d0a7666aedf289cff59c99a2bff1fdf47"
+    "input_sha256": "a9b5419795b07ad411c237d34b732cb7651332b6de7c669c69a7971f6aba96b4"
   },
   {
     "fixture_id": "design-defective",
@@ -1005,7 +1005,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "85d7409bd8f4195635e60f90fee2576366ecb2fa7ee61c25758511f91ca8bbf2"
+    "input_sha256": "ed0129787f8abb0bfb296c7611839e611ec1ec77d2e9d568453f7597a002a0a8"
   },
   {
     "fixture_id": "design-good",
@@ -1017,7 +1017,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "9429e816a16d4eca0eef741373432061699eb8eb3d0fc9bfa002441fb7653181"
+    "input_sha256": "ddce43e823b4e82e26563af26c7e7b97aad9a0419e507561920713e09b39c480"
   },
   {
     "fixture_id": "design-defective",
@@ -1029,7 +1029,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "853ffe876842ef352006557e14477c8cb69558341d3eb33c26652ada7aa05b6c"
+    "input_sha256": "f91ed0da58d6b51011ebd1660c302fa7ebf9ecfd7e61376e689bb81abd7e7900"
   },
   {
     "fixture_id": "design-good",
@@ -1041,7 +1041,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "6cc4c6fe02c4348cd735dc5a587e0df35480f53b8362053a8ec5fc2fabb43b9b"
+    "input_sha256": "a7f23da2a340e6602929f1d25cdebef3de97e5bfaf94a113920dc5c773207b0c"
   },
   {
     "fixture_id": "design-defective",
@@ -1053,7 +1053,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "8043266690b0ac4b712995265b074c88f5b9bbd2dcf08202059a526686910afa"
+    "input_sha256": "8bd736f04b6d91e4d166bd209fee4bc00c1c86ef72d611bb9881d156c1731f9f"
   },
   {
     "fixture_id": "design-good",
@@ -1065,7 +1065,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "fe387cc769c6b425929372c832d119bc4d1a6222e3d3acfbab31f4c7cfab809e"
+    "input_sha256": "1d664347cf4daba94af322cf5281cc3595d34c94ad25a50094b79701b72f865a"
   },
   {
     "fixture_id": "design-overbuilt",
@@ -1077,7 +1077,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "3fa0d4e04e65948f0b4bab48a208eec4de9bf5c29379f0da8af18541cd189055"
+    "input_sha256": "feb264777bb71b0e430abdb79d2a3898c623cc9b73404e51fbb4a3d188773e07"
   },
   {
     "fixture_id": "plan-good",
@@ -1089,7 +1089,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "63072d15e342077c771b92484fc4a0705623fa7e25020ea1b5e2411cdadd6deb"
+    "input_sha256": "0b642c8972986321520fec7164a2d3e881ceedf4603a8471f34f1c77fde84425"
   },
   {
     "fixture_id": "plan-defective",
@@ -1101,7 +1101,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "b1ad7263b5f1ff293979eaaf9d3ebedec0180dab478241a908f0861797f45e26"
+    "input_sha256": "5767ba8cc5987795e381e941a3dbf7d71f170fb3233b47711432f187def9858a"
   },
   {
     "fixture_id": "plan-good",
@@ -1113,7 +1113,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "c985fb5054d8eb95a07a77fc1d54fe69463c1d7e9faae9337ca3ebe627ecb286"
+    "input_sha256": "1d7b6477b9238d12d8be6794c1906706e5211205199027af1a71b1771d898e46"
   },
   {
     "fixture_id": "plan-defective",
@@ -1125,7 +1125,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "25c991dbdadaa5aecb6540d7923fc2bde47e9c555eaf72d7ca8e0801dc6aa806"
+    "input_sha256": "28a5e8375ddfd82fc3113df3092e8d5bc1c3093eb531e11fe433afcb2fb7a0ac"
   },
   {
     "fixture_id": "plan-good",
@@ -1137,7 +1137,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "518686f909a5fa67c92504070a9974ed1e6a5f5dee794c1b44a7b86c739dee17"
+    "input_sha256": "f96017627d6657cf22ec3cf8c0ce18e568b5973990d5ecddc9fd2015cb077234"
   },
   {
     "fixture_id": "plan-defective",
@@ -1149,7 +1149,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "9f74d906769454e7e0fcb18aec418444fad6afe940e09296afd17a7ea7ea9c33"
+    "input_sha256": "9b7aec94beed2e69a965ba17080316dd5af94ce3f5f97901b242cc3d9b0c9a15"
   },
   {
     "fixture_id": "plan-good",
@@ -1161,7 +1161,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "cbfba690e0044d24906d3b6d8bb827f39e16347d8fa1a5ec7ad738908e1908bc"
+    "input_sha256": "ff50a44e1744bfd03b668fd1fe8f2fac575da6b9266109d5923307588cebe9ee"
   },
   {
     "fixture_id": "plan-defective",
@@ -1173,7 +1173,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "a3d3944c41c84d86f49048bdae4d0a1cfa5ef5fb2a934b8c6b5690c5109fe23b"
+    "input_sha256": "a3d702bc580f93b2b9e4da435be8425b32bb8e34642fdb6c36c362d8283197ca"
   },
   {
     "fixture_id": "plan-good",
@@ -1185,7 +1185,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "8e1e4516247ee45b3f904d21b3fa62a430b8397d1d3ec2bd3c4dec67f24d40a6"
+    "input_sha256": "eb0001bebd1a42e946af7f7a155169be94fcfa8f35e894ae1d21cc741d3e47d2"
   },
   {
     "fixture_id": "plan-defective",
@@ -1197,7 +1197,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "6f746e03068e94304cf0ecb9a993635aafba50d05374b8652509588c4d39a7af"
+    "input_sha256": "271273250c964207a493131afc7e36fb51d9751df24ef6ea3388743313335b94"
   },
   {
     "fixture_id": "plan-good",
@@ -1209,7 +1209,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "96ef9f796c641cce86eb94108cdb203c4eb8863355739c86bc34b215658b1790"
+    "input_sha256": "f86a4c8e79675b5103e2eab6c709e64db482144d0dbb6960e921c85eb0e4f3e8"
   },
   {
     "fixture_id": "plan-defective",
@@ -1221,7 +1221,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "4968a89714544a37e82b7f6b92b6a01c0ddfb51a62ff8dedeaff2b41406aeced"
+    "input_sha256": "bfdab97d5433a573007dacbeb710f71c16c749f0a3e8591b1f31f6de07320563"
   },
   {
     "fixture_id": "plan-good",
@@ -1233,7 +1233,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "bc36aa4056e876e356264b328361b00a88d0e01e046f0b8c80a9117b7e889799"
+    "input_sha256": "fb14002d9e56490f0d7fed1fe49bdbda6fc015ad758baf51bbd8e55abf6128f2"
   },
   {
     "fixture_id": "plan-defective",
@@ -1245,7 +1245,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "befb9dde378a9763b1679b18e23fc235097c2ae30fb62bd4172e556256e9fd3d"
+    "input_sha256": "0a855b4cac8b82f36aaae4341d4b3ca98325b6f2719e87712d5ce17683a0ce77"
   },
   {
     "fixture_id": "plan-good",
@@ -1257,7 +1257,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "f55e2196557705684fc96332fc70c4597acf56397b30d3dca08d474a48b0649d"
+    "input_sha256": "2254a982185b74a78feab8222ef21b6fa9759d9eb81cc4426d2dd8e7cee0f98e"
   },
   {
     "fixture_id": "plan-defective",
@@ -1269,7 +1269,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "13f4cca234e7f2da8325db733bd41c1147649725572a1c2439d4b74b28ed9ee8"
+    "input_sha256": "59e9317097b4c72d7dd3b8892fa546df6c420e5b0a360e7577bec6e77f861ba8"
   },
   {
     "fixture_id": "plan-good",
@@ -1281,7 +1281,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "a20aae804c2bbf29bcddf75f5ddd6ed9d53e76eef8fb73818fc66fc1df27e4eb"
+    "input_sha256": "d8e142b55040957ffb0addb6bf1dc8a8929c1eb39086d35b391827d9e15e1bce"
   },
   {
     "fixture_id": "plan-defective",
@@ -1293,7 +1293,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "e533b29a20d78b34ac29e6f1341b3c04647625f7af597ddbdacd5ed2372b57d9"
+    "input_sha256": "0c51f7b844b751a38ffecb0b1f68492f27bfa1d48c868c34faa8165c8c0e67f8"
   },
   {
     "fixture_id": "plan-good",
@@ -1305,7 +1305,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "1acd8e65e27b184695f69b296617f0e5cb07fc423316e5a42c326be826352cf7"
+    "input_sha256": "a81c00c2db828b77bd9e7cf123117c0de9ab3defa5b8d81420a5d88bb2372fca"
   },
   {
     "fixture_id": "plan-defective",
@@ -1317,7 +1317,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "4bc85d3a8c9b97cbe4bde5657ea10d9351b14a8e0696f38eecf29f43ac334d7f"
+    "input_sha256": "0f3cd43e44b6af2bfbb2d3f22731e2af2ad7eb7c01b3627d0fc313f7ba5a9241"
   },
   {
     "fixture_id": "plan-good",
@@ -1329,7 +1329,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "1e6290db3f429add8b031bb09b2131122e50b0da735dbfbe7e44b7073543db07"
+    "input_sha256": "88037a36e0181186ecb36b9302891786215d8b658a2e1914f8619c89474cb91b"
   },
   {
     "fixture_id": "plan-defective",
@@ -1341,7 +1341,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "8a8704a97d3dcfbaa701ea1760edd77cc9d2f3341d78d03925cf7947b064494b"
+    "input_sha256": "c3489c5769713759477087739319c2719a0ba3f0ffe76085727ddcf9ec603047"
   },
   {
     "fixture_id": "plan-good",
@@ -1353,7 +1353,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "7f188c1739e1d56a2267dd708bffd4e6a13d2de41a80b1d91a9dc9c6d23892b3"
+    "input_sha256": "9744d3c85c04b56861bec20da57c4f74700f5a1a590b0186a1cd79f932fad7a2"
   },
   {
     "fixture_id": "plan-defective",
@@ -1365,7 +1365,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "d9adcdb3e39de013f3b009c64657c692266b768f8f40bb24d5914c0ccba97f19"
+    "input_sha256": "d359370a58f03b0cde87a65c09da6112146d6342a12a5f509de0c6bf09eff9ee"
   },
   {
     "fixture_id": "implementation-report-good",
@@ -1377,7 +1377,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "e5633f8d177abfec1b949a921104de32439af4879de53d4b092f85649d442c03"
+    "input_sha256": "5d03847bc9f9a83e24ae2200c4b16d80a03afc3ff39849ef808cfbeecb598c77"
   },
   {
     "fixture_id": "implementation-report-defective",
@@ -1389,7 +1389,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "29ea5723732c950086e1e9be9d428618f5ba3712905d1ffff95af076e75b4e1d"
+    "input_sha256": "e1ad4dbf49d14a48f0f15e2ec53c5a27b7b86a5f581df8e7f2f33ccbc5984653"
   },
   {
     "fixture_id": "implementation-report-good",
@@ -1401,7 +1401,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "0b776cb21f68759a393ba3931c937534ac8d361d1fae268b96ec66297897993b"
+    "input_sha256": "a240f75c030d91563e63c00903f6b69ed98a0f7548caa0d775a9d1c97d9238df"
   },
   {
     "fixture_id": "implementation-report-defective",
@@ -1413,7 +1413,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "e4fceab7fb67489faec0cf429bc87f353b478686af391ca0b66f0bcf25ddbf4f"
+    "input_sha256": "7608f2e5e93569d5e8e989c43c5e42da73dcf135fe84a966e8cb0106d1fe25c6"
   },
   {
     "fixture_id": "implementation-report-good",
@@ -1425,7 +1425,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "0c8e26fa4a775e05032cd3fd5e521c1fcf50c70f8f3acd62fe0035944711a23c"
+    "input_sha256": "75ed0a8144a18b9f44244d09781d83da448ef1e545975dc92c08a5627a60a68a"
   },
   {
     "fixture_id": "implementation-report-defective",
@@ -1437,7 +1437,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "c1b47e611b018c585195c814285428fb2de326c260f10260a2d2ff3e739be325"
+    "input_sha256": "bf9358b53fff22272335ed62de10c218f0ad8a6bd730f754dfd2bc253efdad10"
   },
   {
     "fixture_id": "implementation-report-good",
@@ -1449,7 +1449,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "db5eba1a6ca233b2d336b7fc5c7c57aae384c115dc63540aed6f988891620505"
+    "input_sha256": "a7909d8fdd1cc8ea45b5bdae26b512a2abc37f7a1595e8e80dea2d4208006561"
   },
   {
     "fixture_id": "implementation-report-defective",
@@ -1461,7 +1461,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "9d95db3dad3000f83541eb1fa27e4089a498fab70e478865412f0c6ad558deeb"
+    "input_sha256": "d03c2d19c8632a1c3e55db592aac35a669a62bd29d5bf240fce6f30d459868aa"
   },
   {
     "fixture_id": "implementation-report-good",
@@ -1473,7 +1473,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "cf0383e2aed5f4c7d77f7b5fca9edb02c6d81244e86abfd15ef55a7e742a9cd3"
+    "input_sha256": "c3117b4fbf507e3d10fbd3866635f428d72c7deed0afe645c830c01ff7265db2"
   },
   {
     "fixture_id": "implementation-report-defective",
@@ -1485,7 +1485,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "6837c3032b601df202abf12a49077fcf30e73b6f81ba2751f1923b6b1ea98e4f"
+    "input_sha256": "613989e70661fdf3a28060fc05380e3d87ad5f1d94f86632a2f555791df02695"
   },
   {
     "fixture_id": "implementation-report-good",
@@ -1497,7 +1497,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "34ff4280582aa03e1dcbe52623c48222aebb5219bf5e2f6c8951128ef476c3ec"
+    "input_sha256": "2da6db068e101c978e63e311da07294f32d96a42641bd05e73f1a1c7d76316c4"
   },
   {
     "fixture_id": "implementation-report-defective",
@@ -1509,7 +1509,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "47b4929b84d43aa5fffa3fb1c07b916a2960bc82dc6b5b8dd024b92e936f9caa"
+    "input_sha256": "0f401a1e5c6aeca029af8916c1db19fe21bf3e554a957403b832ee1e22a5e1d3"
   },
   {
     "fixture_id": "validation-report-good",
@@ -1521,7 +1521,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "ad78c0c0910b7e45322a484390fa435db56dfeb132dd27adb891ca7d0074931a"
+    "input_sha256": "899f8d776804c0cd0f4545e8cda034324ec8f405f3631df4dcf376a72626e531"
   },
   {
     "fixture_id": "validation-report-defective",
@@ -1533,7 +1533,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "7747a815d2358587629d03d2bbcde16522c9b909365afb76d074e43899036752"
+    "input_sha256": "94ddf2841568b2d5e3fb3074018ae76d6ea401f433b2e135eeec3ec8529b8885"
   },
   {
     "fixture_id": "validation-report-good",
@@ -1545,7 +1545,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "a06fcd1e931699746eb4f563d43d02628a6f92960d54f59cd330ee029cbd419d"
+    "input_sha256": "e46d312edfac66cd8874d3c4ba10c12fcfc309a300014a1d597c6e28fcaadc6d"
   },
   {
     "fixture_id": "validation-report-defective",
@@ -1557,7 +1557,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "916072d7a00154279e946d2c459d752a1a44c38f90e8bdf15c04f5620a3ef4e1"
+    "input_sha256": "9807e09c1adbd6bc8ca8335370ef41e2d6cde953dc67c41f918241687c9e70c2"
   },
   {
     "fixture_id": "validation-report-good",
@@ -1569,7 +1569,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "03d8f88d4295cef75d8ea408eac8b37ed2b75dc0c2c05bed9c76f302ffaad4ed"
+    "input_sha256": "254360147bb631a9b5e0f45fbc6e4d03fdf9b1ab4ec376c00f63f7a217f0da12"
   },
   {
     "fixture_id": "validation-report-defective",
@@ -1581,7 +1581,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "7172125b97b3c9f0d8178d42e8d54e7e928b419693484f7f01b1341547ac748d"
+    "input_sha256": "1349501492eb8d31f88f02c98557f0692bdaf7be37498193926096651186c4f9"
   },
   {
     "fixture_id": "validation-report-good",
@@ -1593,7 +1593,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "5d2636ac52fd1886a8876313baea592fdcf789cea5530b39d99405f4b944abe2"
+    "input_sha256": "35ba15ddab6c660e0d62d82bb21d93f0726241bc2650189ec3d8362884c4357d"
   },
   {
     "fixture_id": "validation-report-defective",
@@ -1605,7 +1605,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "4dcc7004c0444fe84da792f51ab652bdd92b7ead6cc7cd197545c9acb074ac9d"
+    "input_sha256": "ea781e8a359c0fe7985869cc702a9fecb78e98ed96bdbfed59b262237c7a185a"
   },
   {
     "fixture_id": "validation-report-good",
@@ -1617,7 +1617,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "f0bd3bcdf091b77adca1fc4f89cd8aa1e4fdc2be9a2030fc80ffe50a169c3b20"
+    "input_sha256": "2a86ad9c3c19ac4063acea68c52bd05053b6d128fe6ce7e94844df6eb6c4e631"
   },
   {
     "fixture_id": "validation-report-defective",
@@ -1629,7 +1629,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "79de6219e4dda8417d2d080b2a9629b41a00eeecee3e8d04978939698757713a"
+    "input_sha256": "5e5a171eb74de5cd717480cebae9bdb2e754d5df9c40a8d537c1e4405668cf01"
   },
   {
     "fixture_id": "validation-report-good",
@@ -1641,7 +1641,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "7eb7d99026f9997a535f8d460d01adafe4e7e7ad21ef9c26e955940bdc90c4ee"
+    "input_sha256": "54233596719dc96f859501a65eb8c6dd0996e039857448c00638fe0fa52ee8ee"
   },
   {
     "fixture_id": "validation-report-defective",
@@ -1653,6 +1653,6 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
     "attested_by": "cartwmic",
-    "input_sha256": "33c1806cbcbc6e0885fac21c77529846e0652a1610885c0308e2c85333ba57cc"
+    "input_sha256": "6dc914a6db0e2647259271bb4f320a5225c42fdf52fdf8f8dfde920a77d46a84"
   }
 ]

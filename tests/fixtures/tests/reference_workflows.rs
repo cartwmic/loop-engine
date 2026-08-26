@@ -85,7 +85,9 @@ impl Composition {
             &self.gateway,
             &persistence,
         );
-        require_completed(outcome).run
+        let run = require_completed(outcome).run;
+        self.show(run_id);
+        run
     }
 
     fn show(&self, run_id: &str) -> ShowProjection {
@@ -173,11 +175,13 @@ impl Composition {
         G: ProviderGateway + ?Sized,
     {
         let persistence = self.persistence();
-        core::execute_event(
+        let outcome = core::execute_event(
             EventRequest::new(RunId::from(run_id), event),
             gateway,
             &persistence,
-        )
+        );
+        self.show(run_id);
+        outcome
     }
 
     fn history(&self, run_id: &str) -> Vec<HistoryEntry> {

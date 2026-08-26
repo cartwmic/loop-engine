@@ -74,6 +74,9 @@ fn seed_running_invocation_with_capture(
         .create_run(create_request(run_id))
         .expect("create run");
     persistence
+        .load_show_data(&run_id.into())
+        .expect("observe run");
+    persistence
         .create_work_slot_invocation(CreateWorkSlotInvocationRequest::new(
             run_id,
             invocation_id,

@@ -163,6 +163,11 @@ DUMMY_WORKER_PROOF = [
     "contracted fan-out exit-0 conformance summary and failed-overlay capture persistence",
     "same-reviewer invalid-then-valid retry and invalid-twice exhaustion preserve raw attempts",
     "selected retry attempt links into a driver ledger before review evidence",
+    "show exposes durable change report and provider content-agreement refusal",
+    "observation-before-mutation refuses all four guarded acts",
+    "invoke subset starts only selected assignments",
+    "unchanged-carry and override-carry preserve explicit provenance",
+    "plan-graph subset refuses missing prerequisites and summarizes resulting tree",
     "overrun overlay show/retry and distinct captures",
     "stdin-exec sidecar/propagate, spawn failure, and session directory",
     "bound run-plan-graph inner workers in task order plus capture isolation",
@@ -478,6 +483,7 @@ class Journey:
                     raise JourneyFailure(f"high-rigor profile has malformed {gate} axis")
 
     def _dump_packaged_data(self) -> None:
+        # bookends:LE-106 — packaged data-dump feeds describe/evaluate without checkout profile lookup.
         assert self.data_root is not None
         self.data_root.parent.mkdir(parents=True, exist_ok=True)
         command = [str(self.provider), "data-dump", str(self.data_root)]
@@ -766,6 +772,9 @@ class Journey:
             raise JourneyFailure(
                 "start did not freeze the caller input", state="explore", event="start"
             )
+        # Observation-before-mutation: arm the newly created state visit before
+        # the journey invokes its bound work slot.
+        self._show_for(run_id, state="explore", event="start-observation")
 
     def _show_for(self, run_id: str, *, state: str, event: str) -> Dict[str, Any]:
         response = self._engine_for(
@@ -1704,6 +1713,8 @@ class Journey:
             ]
         )
         self._expect_status(started, "completed", event="start", state="explore")
+        initial_observed = call(["show", run_id])
+        self._expect_status(initial_observed, "completed", event="show", state="explore")
         for event, target in (
             ("intent-ready", "design"),
             ("design-ready", "plan"),
@@ -1711,6 +1722,8 @@ class Journey:
         ):
             response = call(["event", run_id, event])
             self._expect_status(response, "completed", event=event, state=target)
+            observed = call(["show", run_id])
+            self._expect_status(observed, "completed", event="show", state=target)
             if response.get("result", {}).get("run", {}).get("current_state") != target:
                 raise JourneyFailure(f"{mutation} did not reach {target}: {response}")
 
@@ -2162,6 +2175,15 @@ class Journey:
             ) from error
         if not isinstance(response, dict):
             raise JourneyFailure(f"boundary scenario response is not an object: {response}")
+        if (
+            operation
+            and operation[0] in {"event", "invoke", "terminate"}
+            and len(operation) > 1
+            and response.get("status") in {"completed", "rejected"}
+        ):
+            # Keep the scenario callers on the same public path as a resumed
+            # actor: every completed mutation is followed by a fresh show.
+            self._scenario_show(database, operation[1])
         return response
 
     def _scenario_start_and_ready(
@@ -2177,6 +2199,7 @@ class Journey:
             database, ["event", run_id, "intent-ready"], cwd=self.data_root
         )
         self._expect_status(ready, "completed", event="intent-ready", state="explore")
+        self._scenario_show(database, run_id)
 
     def _scenario_event_call(
         self, database: Path, run_id: str, event: str
@@ -2339,7 +2362,7 @@ else:
         run_id: str,
         input_path: Path,
     ) -> Dict[str, Any]:
-        return self._scenario_engine_call(
+        response = self._scenario_engine_call(
             database,
             [
                 "--config",
@@ -2355,6 +2378,9 @@ else:
             ],
             cwd=self.data_root,
         )
+        if response.get("status") == "completed":
+            self._scenario_show(database, run_id)
+        return response
 
     def _scenario_show(self, database: Path, run_id: str) -> Dict[str, Any]:
         response = self._scenario_engine_call(
@@ -3698,9 +3724,15 @@ else:
             # bookends:LE-86 — the same public binding contract is exercised for this provider.
             work_slot_journey.prove_shipped_software_change_profiles(self.data_root)
             # bookends:LE-92 — proposal-only data is inert and only the driver ledger routes exact implementation tasks.
+            # bookends:LE-102 — the public run-plan-graph command refuses missing prerequisites and summarizes the resulting tree.
             work_slot_journey.prove_graph_runner(
                 provider=self.provider,
                 work_dir=proof_root / "graph-runner",
+            )
+            work_slot_journey.prove_engine_standing_join(
+                engine=self.engine,
+                provider=self.provider,
+                work_dir=proof_root / "engine-standing-join",
             )
             # bookends:LE-89 — review fan-out remains entered through invoke and frozen workers.
             # bookends:LE-90 — nested worker stdin/output and Dagu graph shape are asserted.
@@ -3752,12 +3784,41 @@ else:
                 work_dir=proof_root / "full-schema-retry",
             )
             # bookends:LE-92 — selected retry output remains candidate data until the driver links and dispositions it.
+            # bookends:LE-98 — every guarded mutation refuses until the current state was observed.
+            work_slot_journey.prove_observation_before_mutation(
+                engine=self.engine,
+                provider=self.provider,
+                profile_source=self.profile_source,
+                fixture_root=self.fixture_root,
+                work_dir=proof_root / "observation-before-mutation",
+            )
+            # bookends:LE-99 — the selected-attempt journey exposes durable assignment identity, digest, path, and coverage gap.
+            # bookends:LE-100 — the selected invocation's public show asserts deterministic change-report dimensions.
+            # bookends:LE-105 — the public provider gate refuses content disagreement with selected bytes.
+            # bookends:LE-104 — override-carry names changed inputs on the public append path.
             work_slot_journey.prove_selected_attempt_ledger_linkage(
                 engine=self.engine,
                 provider=self.provider,
                 profile_source=self.profile_source,
                 fixture_root=self.fixture_root,
                 work_dir=proof_root / "selected-attempt-ledger",
+            )
+            # bookends:LE-103 — unchanged-carry consults the public change report.
+            # A38 — subset re-execution, explicit remainder carry, and a later checked transition.
+            work_slot_journey.prove_subset_carry_checked(
+                engine=self.engine,
+                provider=self.provider,
+                profile_source=self.profile_source,
+                fixture_root=self.fixture_root,
+                work_dir=proof_root / "subset-carry-checked",
+            )
+            # bookends:LE-101 — invoke subset starts only the selected fan-out assignment.
+            work_slot_journey.prove_invoke_subset(
+                engine=self.engine,
+                provider=self.provider,
+                profile_source=self.profile_source,
+                fixture_root=self.fixture_root,
+                work_dir=proof_root / "invoke-subset",
             )
             work_slot_journey.prove_stdin_exec(
                 provider=self.provider,
@@ -3809,8 +3870,8 @@ else:
         print(
             "dummy worker proofs passed: shipped profiles, graph-runner, fan-out, "
             "preview-bindings fail-closed, missing -e warning, default sandbox argv, bound heartbeats, "
-            "overrun retry, bounded reviewer retry/exhaustion and selected-attempt ledger linkage, "
-            "stdin-exec, graph working-directory cwd/marker proof, implementation finding routing, "
+            "overrun retry, bounded reviewer retry/exhaustion, selected-attempt linkage, observation guard, "
+            "subset invoke, change report, carry acts, and content-agreement refusal, stdin-exec, graph working-directory cwd/marker proof, implementation finding routing, "
             "bound operating-context inspection, overlay-running invocation-progress, "
             "omitted vs set --max-active, "
             "progress-query overlay-untouched"
