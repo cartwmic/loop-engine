@@ -68,10 +68,22 @@ pub(crate) struct InvokePacket {
     pub(crate) capture_dir: String,
     #[serde(default)]
     pub(crate) context: Option<Vec<ContextRecord>>,
+    /// Optional provider-owned input for selecting plan-task roots on a bound
+    /// implementation invocation.
+    #[serde(default)]
+    pub(crate) invocation_input: Option<Value>,
     /// Present on engine-bound packets; omitted by direct public CLI calls.
     /// When present, sidecar standing results must also be members.
     #[serde(default)]
     pub(crate) standing_assignment_ids: Option<Vec<String>>,
+}
+
+/// The closed provider-owned selection object carried by a bound invocation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct InvocationSelection {
+    plan_revision: String,
+    task_roots: Vec<String>,
 }
 
 /// Parse failure for worker JSON, invoke packets, or `run-plan-graph` argv.
@@ -148,13 +160,55 @@ pub(crate) fn parse_worker_cli_json(raw: &str) -> Result<WorkerCli, ParseError> 
     })
 }
 
-/// Parse the five-key engine invoke packet from stdin JSON.
+/// Parse the engine invoke packet from stdin JSON.
 pub(crate) fn parse_invoke_packet(raw: &str) -> Result<InvokePacket, ParseError> {
-    serde_json::from_str(raw).map_err(|error| {
+    let value = serde_json::from_str::<Value>(raw).map_err(|error| {
+        ParseError::new(format!(
+            "invoke packet must be a JSON object with exactly `run_id`, `slot_id`, `artifact_root`, `instruction_body`, and `capture_dir`: {error}"
+        ))
+    })?;
+    if value
+        .as_object()
+        .and_then(|object| object.get("invocation_input"))
+        .is_some_and(Value::is_null)
+    {
+        return Err(ParseError::new(
+            "invoke packet `invocation_input` must be an object when present",
+        ));
+    }
+    serde_json::from_value(value).map_err(|error| {
         ParseError::new(format!(
             "invoke packet must be a JSON object with exactly `run_id`, `slot_id`, `artifact_root`, `instruction_body`, and `capture_dir`: {error}"
         ))
     })
+}
+
+fn parse_invocation_selection(value: &Value) -> Result<InvocationSelection, ExecuteError> {
+    let selection = serde_json::from_value::<InvocationSelection>(value.clone()).map_err(|error| {
+        ExecuteError::usage(format!(
+            "invocation_input must be exactly {{plan_revision,task_roots}} with a nonempty string plan_revision and nonempty string-array task_roots: {error}"
+        ))
+    })?;
+    if selection.plan_revision.is_empty() {
+        return Err(ExecuteError::usage(
+            "invocation_input plan_revision must be a non-empty string",
+        ));
+    }
+    if selection.task_roots.is_empty() {
+        return Err(ExecuteError::usage(
+            "invocation_input task_roots must be a non-empty string array",
+        ));
+    }
+    if selection
+        .task_roots
+        .iter()
+        .any(|task_id| task_id.trim().is_empty())
+    {
+        return Err(ExecuteError::usage(
+            "invocation_input task_roots must not contain blank task ids",
+        ));
+    }
+    Ok(selection)
 }
 
 /// Parse argv tokens after the `run-plan-graph` command name.
@@ -487,6 +541,16 @@ struct StepOutcome {
 fn execute_from_packet(args: &RunPlanGraphArgs, raw_packet: &str) -> Result<(), ExecuteError> {
     let packet =
         parse_invoke_packet(raw_packet).map_err(|error| ExecuteError::usage(error.to_string()))?;
+    let invocation_selection = packet
+        .invocation_input
+        .as_ref()
+        .map(parse_invocation_selection)
+        .transpose()?;
+    if invocation_selection.is_some() && args.task_selection.is_some() {
+        return Err(ExecuteError::usage(
+            "invocation_input task_roots may not be combined with frozen --task/--tasks selection",
+        ));
+    }
     let _ = (&packet.run_id, &packet.slot_id, &packet.instruction_body);
     if packet.capture_dir.is_empty() {
         return Err(ExecuteError::usage(
@@ -512,7 +576,12 @@ fn execute_from_packet(args: &RunPlanGraphArgs, raw_packet: &str) -> Result<(), 
         &artifact_root,
         &plan,
         standing_assignment_ids.as_ref(),
+        invocation_selection.as_ref(),
     )?;
+    let requested_selection = invocation_selection
+        .as_ref()
+        .map(|selection| selection.task_roots.as_slice())
+        .or(args.task_selection.as_deref());
     let dagu = resolve_dagu().map_err(|error| ExecuteError::failed(error.to_string()))?;
     run_dagu_graph(
         args,
@@ -521,6 +590,7 @@ fn execute_from_packet(args: &RunPlanGraphArgs, raw_packet: &str) -> Result<(), 
         &plan_path,
         &capture_root,
         &plan,
+        requested_selection,
         &selected_order,
         packet.context.as_deref(),
     )
@@ -680,11 +750,23 @@ fn resolve_plan_selection(
     artifact_root: &Path,
     plan: &PlanGraph,
     standing_assignment_ids: Option<&HashSet<String>>,
+    invocation_selection: Option<&InvocationSelection>,
 ) -> Result<Vec<String>, ExecuteError> {
-    let Some(requested) = args.task_selection.as_ref() else {
+    let requested = if let Some(selection) = invocation_selection {
+        if selection.plan_revision != plan.revision {
+            return Err(ExecuteError::usage(format!(
+                "invocation_input plan_revision `{}` does not match plan.json revision `{}`",
+                selection.plan_revision, plan.revision
+            )));
+        }
+        Some(selection.task_roots.as_slice())
+    } else {
+        args.task_selection.as_deref()
+    };
+    let Some(requested) = requested else {
         return Ok(plan.order.clone());
     };
-    if requested.is_empty() || requested.iter().any(|id| id.is_empty()) {
+    if requested.is_empty() || requested.iter().any(|id| id.trim().is_empty()) {
         return Err(ExecuteError::usage(
             "plan-task selection must contain at least one non-empty task id",
         ));
@@ -704,8 +786,12 @@ fn resolve_plan_selection(
         }
     }
 
-    let standing =
-        load_standing_plan_tasks(artifact_root, &plan.revision, standing_assignment_ids)?;
+    let standing = load_standing_plan_tasks(
+        artifact_root,
+        &plan.revision,
+        standing_assignment_ids,
+        invocation_selection.is_some(),
+    )?;
     let mut selected = roots
         .iter()
         .map(|id| (*id).to_owned())
@@ -757,6 +843,7 @@ fn load_standing_plan_tasks(
     artifact_root: &Path,
     plan_revision: &str,
     standing_assignment_ids: Option<&HashSet<String>>,
+    require_packet_standing: bool,
 ) -> Result<HashSet<String>, ExecuteError> {
     let path = artifact_root.join(PLAN_TASK_RESULTS_FILE);
     let raw = match fs::read(&path) {
@@ -780,10 +867,12 @@ fn load_standing_plan_tasks(
     }
     let mut standing = HashSet::new();
     for result in file.results {
-        if result.plan_revision == plan_revision
-            && result.exit_code == 0
-            && standing_assignment_ids.is_none_or(|ids| ids.contains(&result.assignment_id))
-        {
+        let listed_as_standing = if require_packet_standing {
+            standing_assignment_ids.is_some_and(|ids| ids.contains(&result.assignment_id))
+        } else {
+            standing_assignment_ids.is_none_or(|ids| ids.contains(&result.assignment_id))
+        };
+        if result.plan_revision == plan_revision && result.exit_code == 0 && listed_as_standing {
             standing.insert(result.assignment_id);
         }
     }
@@ -798,6 +887,7 @@ fn run_dagu_graph(
     plan_path: &Path,
     capture_root: &Path,
     plan: &PlanGraph,
+    requested_selection: Option<&[String]>,
     selected_order: &[String],
     finding_context: Option<&[ContextRecord]>,
 ) -> Result<(), ExecuteError> {
@@ -901,7 +991,7 @@ fn run_dagu_graph(
         &summarizer,
         args.max_active,
     );
-    write_selection_record(capture_root, args.task_selection.as_deref(), selected_order)?;
+    write_selection_record(capture_root, requested_selection, selected_order)?;
     let dags_dir = home.join("dags");
     fs::create_dir_all(&dags_dir).map_err(|error| {
         ExecuteError::failed(format!("could not create {}: {error}", dags_dir.display()))
@@ -968,7 +1058,6 @@ fn run_dagu_graph(
             "summarizer step did not exit 0".to_owned(),
         ))
     };
-
     if let Err(error) = summary_error {
         if start_ok && report_error.is_ok() {
             return Err(error);

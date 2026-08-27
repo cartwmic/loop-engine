@@ -463,6 +463,10 @@ pub struct WorkSlotInvocation {
     /// frozen binding ran in full; `Some` is a validated non-empty subset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignment_selection: Option<Vec<String>>,
+    /// Optional opaque JSON supplied for this bound invocation. Core stores
+    /// and transports it without interpreting provider semantics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation_input: Option<Value>,
 }
 
 impl WorkSlotInvocation {
@@ -500,6 +504,7 @@ impl WorkSlotInvocation {
             frozen_run_identity: None,
             recorded_inner_workers: Vec::new(),
             assignment_selection: None,
+            invocation_input: None,
         }
     }
 
@@ -520,6 +525,11 @@ impl WorkSlotInvocation {
 
     pub fn with_assignment_selection(mut self, selection: Option<Vec<String>>) -> Self {
         self.assignment_selection = selection;
+        self
+    }
+
+    pub fn with_invocation_input(mut self, input: Option<Value>) -> Self {
+        self.invocation_input = input;
         self
     }
 }

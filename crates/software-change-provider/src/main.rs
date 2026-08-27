@@ -110,13 +110,7 @@ fn run() -> i32 {
                 }
             };
             return match parse_run_plan_graph_args(&rest) {
-                Ok(parsed) => {
-                    if let Err(error) = dagu::resolve_dagu() {
-                        eprintln!("{error}");
-                        return 1;
-                    }
-                    run_plan_graph::execute(&parsed)
-                }
+                Ok(parsed) => run_plan_graph::execute(&parsed),
                 Err(error) => {
                     eprintln!(
                         "{error}; usage: software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--task ID ... | --tasks ID,ID,...] [--max-active N]"

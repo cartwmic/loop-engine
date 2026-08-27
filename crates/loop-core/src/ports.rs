@@ -496,6 +496,10 @@ pub struct CreateWorkSlotInvocationRequest {
     /// Optional validated assignment subset. `None` preserves full execution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignment_selection: Option<Vec<String>>,
+    /// Optional opaque JSON supplied for this bound invocation. Core stores
+    /// and transports it without interpreting provider semantics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation_input: Option<Value>,
 }
 
 impl CreateWorkSlotInvocationRequest {
@@ -526,6 +530,7 @@ impl CreateWorkSlotInvocationRequest {
             routed_inputs: Vec::new(),
             frozen_run_identity: None,
             assignment_selection: None,
+            invocation_input: None,
         }
     }
 
@@ -541,6 +546,11 @@ impl CreateWorkSlotInvocationRequest {
 
     pub fn with_assignment_selection(mut self, selection: Option<Vec<String>>) -> Self {
         self.assignment_selection = selection;
+        self
+    }
+
+    pub fn with_invocation_input(mut self, input: Option<Value>) -> Self {
+        self.invocation_input = input;
         self
     }
 }

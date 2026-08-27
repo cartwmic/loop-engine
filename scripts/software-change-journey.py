@@ -387,6 +387,8 @@ class Journey:
         else:
             assert self.profile_source is not None
 
+        if self.mode == "source" and self.depth == "full":
+            self._prepare_real_repository()
         self._prepare_profile()
         self._write_provider_config()
         self._probe_startup()
@@ -514,9 +516,28 @@ class Journey:
             work_slot_journey.assert_shipped_path_names(shipped)
         except work_slot_journey.WorkSlotJourneyFailure as error:
             raise JourneyFailure(str(error), state="explore", event="start") from error
-        # Keep the existing sparse dummy overlay: only intent-draft is bound so
-        # implement and review slots stay unbound on this full-journey start.
-        self.work_slot_bindings = work_slot_journey.bindings_for([BOUND_SLOT_ID])
+        # Keep the existing sparse dummy overlay. Full source additionally
+        # binds implement to the provider's graph runner before the profile is
+        # frozen; review slots remain unbound.
+        bindings = work_slot_journey.bindings_for([BOUND_SLOT_ID])
+        if (
+            self.mode == "source"
+            and self.depth == "full"
+            and self.run_id == "journey-production-run"
+        ):
+            assert self.repository_root is not None
+            assert self.run_dir is not None
+            implementation_receipts = self.run_dir / "implementation-receipts"
+            implementation_worker = work_slot_journey.stdin_worker_cli(
+                implementation_receipts,
+                ("--stdout", '{"repository_effect":{"kind":"dummy"}}'),
+            )
+            bindings["implement"] = work_slot_journey.implement_graph_runner_binding(
+                provider=self.provider,
+                task_worker=implementation_worker,
+                working_directory=self.repository_root,
+            )
+        self.work_slot_bindings = bindings
         profile["work_slot_bindings"] = self.work_slot_bindings
         self.profile_path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
         # All five artifact files are the shipped good calibration shapes.  A
@@ -783,6 +804,14 @@ class Journey:
     def _start_run(self, run_id: str) -> None:
         assert self.profile_path is not None
         assert self.provider_config is not None
+        start_profile = self.profile_path
+        if run_id != self.run_id and "implement" in self.work_slot_bindings:
+            assert self.run_dir is not None
+            start_profile = self.run_dir / "high-rigor-secondary.json"
+            if not start_profile.exists():
+                secondary = self._read_json(self.profile_path, "primary started profile")
+                secondary["work_slot_bindings"].pop("implement", None)
+                _write_json(start_profile, secondary)
         response = self._engine_for(
             run_id,
             [
@@ -794,7 +823,7 @@ class Journey:
                 "--id",
                 run_id,
                 "software-change",
-                "@" + str(self.profile_path),
+                "@" + str(start_profile),
                 "software-change journey",
             ],
             state="explore",
@@ -807,7 +836,7 @@ class Journey:
                 "start did not preserve the caller-owned run ID", state="explore", event="start"
             )
         # bookends:LE-41 — the committed start response freezes the selected review-policy configuration.
-        expected_initial_input = self._read_json(self.profile_path, "started profile")
+        expected_initial_input = self._read_json(start_profile, "started profile")
         if result.get("run", {}).get("initial_input") != expected_initial_input:
             raise JourneyFailure(
                 "start did not freeze the caller input", state="explore", event="start"
@@ -1001,14 +1030,25 @@ class Journey:
         self.state = target
         return response
 
-    def _append_evidence(self, gate: str) -> None:
-        self._append_evidence_for(self.run_id, gate, state=self.state)
+    def _append_evidence(self, gate: str, *, subject_revision: Optional[str] = None) -> None:
+        self._append_evidence_for(
+            self.run_id,
+            gate,
+            state=self.state,
+            subject_revision=subject_revision,
+        )
 
     def _append_evidence_for(
-        self, run_id: str, gate: str, *, state: str, record_prefix: str = ""
+        self,
+        run_id: str,
+        gate: str,
+        *,
+        state: str,
+        record_prefix: str = "",
+        subject_revision: Optional[str] = None,
     ) -> None:
         subject = GATE_SUBJECT[gate]
-        revision = self._fixture_revision(subject)
+        revision = subject_revision or self._fixture_revision(subject)
         axes = self.profile["review_policies"][gate]
         for entry in axes:
             axis = entry["id"]
@@ -1050,10 +1090,16 @@ class Journey:
                     )
 
     def _append_finding_ledger_for(
-        self, run_id: str, gate: str, *, state: str, record_prefix: str = ""
+        self,
+        run_id: str,
+        gate: str,
+        *,
+        state: str,
+        record_prefix: str = "",
+        subject_revision: Optional[str] = None,
     ) -> None:
         subject = GATE_SUBJECT[gate]
-        revision = self._fixture_revision(subject)
+        revision = subject_revision or self._fixture_revision(subject)
         record_id = f"{record_prefix}finding-ledger-{gate}"
         data = {
             "schema_version": "1",
@@ -1149,6 +1195,7 @@ class Journey:
         target: str,
         *,
         record_prefix: str = "",
+        subject_revision: Optional[str] = None,
     ) -> None:
         # bookends:LE-6 — this provider-denied checked approval does not advance without allow.
         # bookends:LE-44 — the driver appends externally produced review evidence.
@@ -1158,7 +1205,11 @@ class Journey:
             run_id, state, event, gate, "software-change-finding-ledger-invalid"
         )
         self._append_evidence_for(
-            run_id, gate, state=state, record_prefix=record_prefix
+            run_id,
+            gate,
+            state=state,
+            record_prefix=record_prefix,
+            subject_revision=subject_revision,
         )
         second_denial = self._expect_denial_for(
             run_id, state, event, gate, "software-change-finding-ledger-invalid"
@@ -1175,7 +1226,11 @@ class Journey:
             )
         # bookends:LE-31 — the second checked request observes the prior denial in durable order.
         self._append_finding_ledger_for(
-            run_id, gate, state=state, record_prefix=record_prefix
+            run_id,
+            gate,
+            state=state,
+            record_prefix=record_prefix,
+            subject_revision=subject_revision,
         )
         final = self._expect_allow_for(run_id, state, event, target)
         shown = self._show_for(run_id, state=target, event=event + "-latest")
@@ -1202,9 +1257,23 @@ class Journey:
                 event=event,
             )
 
-    def _pass_review(self, gate: str, event: str, target: str) -> None:
+    def _pass_review(
+        self,
+        gate: str,
+        event: str,
+        target: str,
+        *,
+        subject_revision: Optional[str] = None,
+        record_prefix: str = "",
+    ) -> None:
         self._pass_review_for(
-            self.run_id, self.state, gate, event, target, record_prefix=""
+            self.run_id,
+            self.state,
+            gate,
+            event,
+            target,
+            record_prefix=record_prefix,
+            subject_revision=subject_revision,
         )
         self.state = target
 
@@ -1926,7 +1995,6 @@ class Journey:
             self._assert_show("intent-review", "packaged-prefix-end")
 
     def _run_full_source(self) -> None:
-        self._prepare_real_repository()
         self._expect_denial("intent-ready", "intent", "software-change-schema-invalid")
         assert self.artifact_root is not None
         assert self.fixture_root is not None
@@ -1992,6 +2060,66 @@ class Journey:
         self._expect_allow("plan-ready", "plan-review")
         self._pass_review("plan-review", "approved", "plan-adversarial-review")
         self._pass_review("plan-adversarial-review", "approved", "implement")
+
+        assert self.run_dir is not None
+        assert self.repository_root is not None
+        implementation_receipts = self.run_dir / "implementation-receipts"
+        frozen_implement_binding = copy.deepcopy(self.work_slot_bindings["implement"])
+        plan_document = self._read_json(self.artifact_root / "plan.json", "accepted plan")
+        plan_revision = str(plan_document["revision"])
+        full_task_ids = [task["id"] for task in plan_document["tasks"]]
+        self._assert_show("implement", "full-implementation-invoke")
+        try:
+            full_invocation = work_slot_journey.invoke_until_succeeded(
+                self._engine_call(self.run_id, state="implement"),
+                self.run_id,
+                "implement",
+                timeout_s=120.0,
+            )
+        except work_slot_journey.WorkSlotJourneyFailure as error:
+            raise JourneyFailure(str(error), state="implement", event="invoke") from error
+        if (
+            full_invocation.get("binding") != frozen_implement_binding
+            or "invocation_input" in full_invocation
+            or [worker.get("assignment_id") for worker in full_invocation.get("inner_workers", [])]
+            != full_task_ids
+        ):
+            raise JourneyFailure(
+                f"full bound implementation did not preserve the frozen full-plan path: {full_invocation}",
+                state="implement",
+                event="invoke",
+            )
+        full_selection = self._read_json(
+            Path(full_invocation["capture_dir"]) / "selection.json",
+            "full implementation selection",
+        )
+        if full_selection.get("requested") is not None or full_selection.get("tasks") != full_task_ids:
+            raise JourneyFailure(
+                f"omitted invocation input did not record full-plan execution: {full_selection}",
+                state="implement",
+                event="invoke",
+            )
+        for task_id in (*full_task_ids, "summarizer"):
+            if not (implementation_receipts / f"{task_id}.stdin").is_file():
+                raise JourneyFailure(
+                    f"full implementation omitted worker receipt {task_id}",
+                    state="implement",
+                    event="invoke",
+                )
+        full_receipts = self.run_dir / "implementation-receipts-full"
+        implementation_receipts.rename(full_receipts)
+        implementation_receipts.mkdir()
+
+        implementation_report_path = self.artifact_root / "implementation-report.json"
+        implementation_report = self._read_json(
+            implementation_report_path, "full implementation report"
+        )
+        implementation_report["revision"] = self._fixture_revision(
+            "implementation-report.json"
+        )
+        implementation_report_path.write_text(
+            json.dumps(implementation_report, indent=2) + "\n", encoding="utf-8"
+        )
 
         # bookends:LE-94 — implementation-ready refuses report-only completion until the public checkpoint command binds the report to the selected Git tree.
         self._create_checkpoint("implementation")
@@ -2120,7 +2248,337 @@ class Journey:
         self._create_checkpoint("implementation")
         self._create_checkpoint("validation")
         self._expect_allow("validation-ready", "validation-review")
-        self._pass_review("validation-review", "approved", "validation-adversarial-review")
+
+        validation_revision = self._fixture_revision("validation-report.json")
+        repair_policy = self.profile["review_policies"]["validation-review"][0]["id"]
+        repair_author = f"synthetic-validation-review-{repair_policy}-a"
+        repair_source_path = self.artifact_root / "focused-repair-review.stdout"
+        repair_source_bytes = b"accepted focused implementation repair finding\n"
+        repair_source_path.write_bytes(repair_source_bytes)
+        repair_source = {
+            "kind": "external-artifact",
+            "relative_path": repair_source_path.name,
+            "output_sha256": "sha256:"
+            + hashlib.sha256(repair_source_bytes).hexdigest(),
+        }
+        repair_finding = {
+            "id": "F-focused-implementation-repair",
+            "source": repair_source,
+            "policy_id": repair_policy,
+            "statement": "The checked-transition task requires focused rework.",
+            "disposition": "accepted",
+            "reason": "The driver accepted the current validation finding and routed it to its implementation owner.",
+            "owner_phase": "implementation",
+            "task_ids": ["checked-transition-evaluator"],
+            "review_axes": [repair_policy],
+            "status": "unresolved",
+        }
+        failing_evidence = {
+            "gate": "validation-review",
+            "policy_id": repair_policy,
+            "result": "fail",
+            "findings": repair_finding["statement"],
+            "author": {"name": repair_author, "kind": "script"},
+            "subject": "validation-report.json",
+            "subject_revision": validation_revision,
+            "config_version": self.profile["config_version"],
+        }
+        self._assert_show("validation-review", "focused-repair-fail-evidence")
+        failed_append = self._engine(
+            [
+                "append",
+                "--record-id=focused-repair-fail-evidence",
+                self.run_id,
+                "review-evidence",
+                json.dumps(failing_evidence, separators=(",", ":")),
+            ],
+            state="validation-review",
+            event="append",
+            axis=repair_policy,
+        )
+        self._expect_status(
+            failed_append,
+            "completed",
+            event="append",
+            axis=repair_policy,
+            state="validation-review",
+        )
+        unresolved_ledger = {
+            "schema_version": "1",
+            "gate": "validation-review",
+            "subject": "validation-report.json",
+            "subject_revision": validation_revision,
+            "author": {"name": "focused-repair-driver", "kind": "agent"},
+            "repository_state": self._checkpoint_state_for_subject(
+                "validation-report.json"
+            ),
+            "findings": [repair_finding],
+        }
+        self._assert_show("validation-review", "focused-repair-ledger")
+        ledger_append = self._engine(
+            [
+                "append",
+                "--record-id=focused-repair-ledger-unresolved",
+                self.run_id,
+                "finding-ledger",
+                json.dumps(unresolved_ledger, separators=(",", ":")),
+            ],
+            state="validation-review",
+            event="append",
+            axis=repair_policy,
+        )
+        self._expect_status(
+            ledger_append,
+            "completed",
+            event="append",
+            axis=repair_policy,
+            state="validation-review",
+        )
+        self._assert_show("validation-review", "focused-repair-denial")
+        repair_denial = self._event("approved", repair_policy)
+        self._expect_status(
+            repair_denial,
+            "rejected",
+            event="approved",
+            axis=repair_policy,
+            state="validation-review",
+        )
+        if repair_denial.get("code") == "software-change-finding-ledger-invalid":
+            raise JourneyFailure(
+                f"accepted focused repair finding produced an invalid ledger: {repair_denial}",
+                state="validation-review",
+                event="approved",
+                axis=repair_policy,
+            )
+        self._assert_show("validation-review", "focused-repair-revise")
+        self._expect_allow("revise-implementation", "implement")
+
+        focused_input = {
+            "plan_revision": plan_revision,
+            "task_roots": ["checked-transition-evaluator"],
+        }
+        focused_task_ids = [
+            "checked-transition-evaluator",
+            "acceptance-proof",
+            "authoritative-doc-integration",
+        ]
+        pre_focused_show = self._assert_show(
+            "implement", "focused-implementation-invoke"
+        )
+        standing_before_focused = {
+            result.get("assignment_id")
+            for result in pre_focused_show.get("change_report", {}).get(
+                "plan_task_results", []
+            )
+            if result.get("standing") is True
+        }
+        required_standing = {
+            dependency
+            for task in plan_document["tasks"]
+            if task["id"] in focused_task_ids
+            for dependency in task.get("dependencies", [])
+            if dependency not in focused_task_ids
+        }
+        if not required_standing or not required_standing.issubset(
+            standing_before_focused
+        ):
+            raise JourneyFailure(
+                "focused invocation prerequisites were not visibly standing before invoke: "
+                f"required={sorted(required_standing)} standing={sorted(standing_before_focused)}",
+                state="implement",
+                event="show",
+            )
+        try:
+            focused_invocation = work_slot_journey.invoke_until_succeeded(
+                self._engine_call(self.run_id, state="implement"),
+                self.run_id,
+                "implement",
+                timeout_s=120.0,
+                invoke_args=[
+                    "--input",
+                    json.dumps(focused_input, separators=(",", ":")),
+                ],
+            )
+        except work_slot_journey.WorkSlotJourneyFailure as error:
+            raise JourneyFailure(str(error), state="implement", event="invoke") from error
+        if (
+            focused_invocation.get("binding") != frozen_implement_binding
+            or focused_invocation.get("invocation_input") != focused_input
+            or [
+                worker.get("assignment_id")
+                for worker in focused_invocation.get("inner_workers", [])
+            ]
+            != focused_task_ids
+        ):
+            raise JourneyFailure(
+                f"focused bound implementation widened or changed its frozen binding: {focused_invocation}",
+                state="implement",
+                event="invoke",
+            )
+        focused_selection = self._read_json(
+            Path(focused_invocation["capture_dir"]) / "selection.json",
+            "focused implementation selection",
+        )
+        if (
+            focused_selection.get("requested")
+            != ["checked-transition-evaluator"]
+            or focused_selection.get("tasks") != focused_task_ids
+        ):
+            raise JourneyFailure(
+                f"focused selection record did not identify the selected closure: {focused_selection}",
+                state="implement",
+                event="invoke",
+            )
+        focused_receipt_ids = sorted(
+            path.name.removesuffix(".stdin")
+            for path in implementation_receipts.glob("*.stdin")
+        )
+        if focused_receipt_ids != sorted([*focused_task_ids, "summarizer"]):
+            raise JourneyFailure(
+                f"focused invocation started unrelated or omitted workers: {focused_receipt_ids}",
+                state="implement",
+                event="invoke",
+            )
+        focused_packet = work_slot_journey.parse_graph_runner_stdin(
+            (
+                implementation_receipts
+                / "checked-transition-evaluator.stdin"
+            ).read_text(encoding="utf-8")
+        )["task"]
+        routed_finding_ids = [
+            finding.get("id")
+            for finding in focused_packet.get("finding_context", [])
+            if isinstance(finding, dict)
+        ]
+        if repair_finding["id"] not in routed_finding_ids:
+            raise JourneyFailure(
+                f"focused task packet omitted the routed finding: {focused_packet}",
+                state="implement",
+                event="invoke",
+            )
+        durable_invocations = self._assert_show(
+            "implement", "focused-implementation-durable"
+        ).get("work_slot_invocations", [])
+        durable_by_id = {
+            invocation.get("invocation_id"): invocation
+            for invocation in durable_invocations
+            if isinstance(invocation, dict)
+        }
+        durable_full = durable_by_id.get(full_invocation["invocation_id"])
+        durable_focused = durable_by_id.get(focused_invocation["invocation_id"])
+        if (
+            not isinstance(durable_full, dict)
+            or "invocation_input" in durable_full
+            or not isinstance(durable_focused, dict)
+            or durable_focused.get("invocation_input") != focused_input
+            or durable_full.get("capture_dir") == durable_focused.get("capture_dir")
+            or durable_full.get("binding") != durable_focused.get("binding")
+        ):
+            raise JourneyFailure(
+                "durable show did not distinguish full and focused invocations while preserving the binding",
+                state="implement",
+                event="show",
+            )
+        full_task_results = durable_full.get("change_report", {}).get(
+            "plan_task_results", []
+        )
+        focused_task_results = durable_focused.get("change_report", {}).get(
+            "plan_task_results", []
+        )
+        if [result.get("assignment_id") for result in full_task_results] != full_task_ids:
+            raise JourneyFailure(
+                f"durable full invocation omitted or reordered plan-task results: {full_task_results}",
+                state="implement",
+                event="show",
+            )
+        if [result.get("assignment_id") for result in focused_task_results] != focused_task_ids:
+            raise JourneyFailure(
+                "durable focused invocation included unrelated or omitted plan-task results: "
+                f"{focused_task_results}",
+                state="implement",
+                event="show",
+            )
+        for label, task_results in (
+            ("full", full_task_results),
+            ("focused", focused_task_results),
+        ):
+            for result in task_results:
+                effect = result.get("dimensions", {}).get("repository_effect", {})
+                if (
+                    effect.get("changed") is not False
+                    or effect.get("recorded") != {"kind": "dummy"}
+                    or effect.get("current") != {"kind": "dummy"}
+                ):
+                    raise JourneyFailure(
+                        f"durable {label} plan-task result omitted its repository effect: {result}",
+                        state="implement",
+                        event="show",
+                    )
+
+        focused_report_revision = (
+            self._fixture_revision("implementation-report.json") + "-focused"
+        )
+        focused_report = self._read_json(
+            implementation_report_path, "focused implementation report"
+        )
+        focused_report["revision"] = focused_report_revision
+        focused_report["summary"] = "dummy focused repair summarizer wrote this report"
+        implementation_report_path.write_text(
+            json.dumps(focused_report, indent=2) + "\n", encoding="utf-8"
+        )
+        self._create_checkpoint("implementation")
+        self._expect_allow("implementation-ready", "implementation-review")
+        self._pass_review(
+            "implementation-review",
+            "approved",
+            "implementation-adversarial-review",
+            subject_revision=focused_report_revision,
+            record_prefix="focused-",
+        )
+        self._pass_review(
+            "implementation-adversarial-review",
+            "approved",
+            "validation",
+            subject_revision=focused_report_revision,
+            record_prefix="focused-",
+        )
+
+        self._create_checkpoint("validation")
+        self._expect_allow("validation-ready", "validation-review")
+        self._assert_show("validation-review", "focused-repair-pass-evidence")
+        self._append_evidence("validation-review")
+        resolved_finding = dict(repair_finding)
+        resolved_finding["status"] = "resolved"
+        resolved_ledger = {
+            **unresolved_ledger,
+            "author": {"name": "focused-repair-driver-confirmation", "kind": "agent"},
+            "repository_state": self._checkpoint_state_for_subject(
+                "validation-report.json"
+            ),
+            "findings": [resolved_finding],
+        }
+        self._assert_show("validation-review", "focused-repair-resolved-ledger")
+        resolved_append = self._engine(
+            [
+                "append",
+                "--record-id=focused-repair-ledger-resolved",
+                self.run_id,
+                "finding-ledger",
+                json.dumps(resolved_ledger, separators=(",", ":")),
+            ],
+            state="validation-review",
+            event="append",
+            axis=repair_policy,
+        )
+        self._expect_status(
+            resolved_append,
+            "completed",
+            event="append",
+            axis=repair_policy,
+            state="validation-review",
+        )
+        self._assert_show("validation-review", "focused-repair-reviewed")
+        self._expect_allow("approved", "validation-adversarial-review")
         self._pass_review("validation-adversarial-review", "passed", "end")
         shown = self._assert_show("end", "terminal-show")
         if shown.get("lifecycle") != "final":
@@ -2182,6 +2640,22 @@ class Journey:
             for entry in transitions
         ):
             raise JourneyFailure("history omitted expected denial lineage", state=self.state, event="history")
+
+        # Later route fixtures reuse this artifact root with unbound implement.
+        # Restore their calibration revision after the primary focused run has
+        # durably completed and regenerate the two current-tree checkpoints.
+        restored_report = self._read_json(
+            implementation_report_path, "post-focused implementation report"
+        )
+        restored_report["revision"] = self._fixture_revision(
+            "implementation-report.json"
+        )
+        restored_report["summary"] = "dummy summarizer wrote this report"
+        implementation_report_path.write_text(
+            json.dumps(restored_report, indent=2) + "\n", encoding="utf-8"
+        )
+        self._create_checkpoint("implementation")
+        self._create_checkpoint("validation")
 
         self._run_successor_route_proof()
         self._run_stitched_source()

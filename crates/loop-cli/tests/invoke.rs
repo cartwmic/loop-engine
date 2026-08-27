@@ -857,3 +857,168 @@ fn elapsed_time_overrun_then_retry_show_history_gate() {
     assert_eq!(parsed_second["status"], "completed");
     assert_ne!(parsed_second["code"], "work-slot-already-running");
 }
+
+#[test]
+fn invoke_opaque_input_is_received_and_survives_sqlite_reopen() {
+    let directory = tempdir().expect("tempdir");
+    let database = directory.path().join("loop.db");
+    let packet_file = directory.path().join("packet.json");
+    let binding = slot_binding(
+        "/bin/sh",
+        vec![
+            "-c".to_owned(),
+            "cat > \"$1\"; exit 0".to_owned(),
+            "_".to_owned(),
+            packet_file.to_string_lossy().into_owned(),
+        ],
+    );
+    seed_run(
+        &database,
+        "run-opaque-input",
+        Some(binding.clone()),
+        &directory.path().to_string_lossy(),
+        Some("subject-1"),
+    );
+    let invocation_input = json!({
+        "plan_revision": "plan-r2",
+        "task_roots": ["task-b"],
+        "opaque": [true, {"n": 3}]
+    });
+
+    let output = run_invoke(
+        &database,
+        &["--input", &invocation_input.to_string()],
+        "run-opaque-input",
+        "slot-1",
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let invocation = wait_until_terminal(&database, "run-opaque-input", 1, Duration::from_secs(5));
+    assert_eq!(invocation.invocation_input, Some(invocation_input.clone()));
+    assert_eq!(
+        invocation.binding,
+        loop_core::WorkSlotBinding::new(
+            "/bin/sh",
+            vec![
+                "-c".to_owned(),
+                "cat > \"$1\"; exit 0".to_owned(),
+                "_".to_owned(),
+                packet_file.to_string_lossy().into_owned(),
+            ],
+        )
+    );
+
+    let packet: Value = serde_json::from_str(
+        &std::fs::read_to_string(&packet_file).expect("read bound worker packet"),
+    )
+    .expect("bound worker packet JSON");
+    assert_eq!(packet["invocation_input"], invocation_input);
+
+    let reopened = load_invocations(&database, "run-opaque-input");
+    assert_eq!(reopened[0].invocation_input, Some(invocation_input.clone()));
+    let shown = Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+        .args([
+            "--database",
+            database.to_str().expect("utf-8 database path"),
+            "--json",
+            "show",
+            "run-opaque-input",
+        ])
+        .output()
+        .expect("show opaque invocation");
+    assert_eq!(shown.status.code(), Some(0), "{shown:?}");
+    let shown: Value = serde_json::from_slice(&shown.stdout).expect("show JSON");
+    assert_eq!(
+        shown["result"]["work_slot_invocations"][0]["invocation_input"],
+        invocation_input
+    );
+    assert_eq!(
+        shown["result"]["work_slot_invocations"][0]["binding"],
+        json!({
+            "command": "/bin/sh",
+            "args": [
+                "-c",
+                "cat > \"$1\"; exit 0",
+                "_",
+                packet_file.to_string_lossy().into_owned(),
+            ]
+        })
+    );
+}
+
+#[test]
+fn invoke_input_refusals_happen_before_bound_worker_and_are_not_persisted() {
+    for (run_id, extra, expected_exit, expected_code) in [
+        (
+            "run-malformed-input",
+            vec!["--input", "not-json"],
+            2,
+            Some("invalid-json-input"),
+        ),
+        (
+            "run-input-assignment",
+            vec!["--input", "{}", "--assignment", "worker-0"],
+            2,
+            Some("invalid-invocation"),
+        ),
+    ] {
+        let directory = tempdir().expect("tempdir");
+        let database = directory.path().join("loop.db");
+        let sentinel = directory.path().join("started");
+        let binding = slot_binding(
+            "/bin/sh",
+            vec![
+                "-c".to_owned(),
+                "printf started > \"$1\"; exit 0".to_owned(),
+                "_".to_owned(),
+                sentinel.to_string_lossy().into_owned(),
+            ],
+        );
+        seed_run(
+            &database,
+            run_id,
+            Some(binding),
+            &directory.path().to_string_lossy(),
+            Some("subject-1"),
+        );
+
+        let output = run_invoke(&database, &extra, run_id, "slot-1");
+        assert_eq!(output.status.code(), Some(expected_exit), "{output:?}");
+        let parsed: Value = serde_json::from_slice(&output.stdout).expect("JSON refusal");
+        assert!(
+            parsed["status"] == "invalid-invocation" || parsed["status"] == "rejected",
+            "unexpected refusal envelope: {parsed}"
+        );
+        if let Some(expected_code) = expected_code {
+            assert_eq!(parsed["code"], expected_code, "{parsed}");
+        }
+        assert!(!sentinel.exists(), "bound worker started for {run_id}");
+        assert!(load_invocations(&database, run_id).is_empty());
+    }
+}
+
+#[test]
+fn invoke_input_on_unbound_slot_refuses_before_worker_start() {
+    let directory = tempdir().expect("tempdir");
+    let database = directory.path().join("loop.db");
+    let sentinel = directory.path().join("started");
+    seed_run(
+        &database,
+        "run-unbound-input",
+        None,
+        &directory.path().to_string_lossy(),
+        Some("subject-1"),
+    );
+
+    let output = run_invoke(
+        &database,
+        &["--input", &json!({"opaque": true}).to_string()],
+        "run-unbound-input",
+        "slot-1",
+    );
+    assert_eq!(output.status.code(), Some(10), "{output:?}");
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("JSON refusal");
+    assert_eq!(parsed["status"], "rejected");
+    assert_eq!(parsed["code"], "unbound-work-slot");
+    assert!(!sentinel.exists());
+    assert!(load_invocations(&database, "run-unbound-input").is_empty());
+}

@@ -24,6 +24,10 @@ pub struct Request {
     /// assignments (and preserves the historical full-execution path).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignment_selection: Option<Vec<String>>,
+    /// Optional opaque JSON for the bound worker. Core only frames, stores,
+    /// and transports this value; the provider owns its meaning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation_input: Option<Value>,
 }
 
 impl Request {
@@ -39,11 +43,17 @@ impl Request {
             invocation_id: invocation_id.into(),
             database: database.into(),
             assignment_selection: None,
+            invocation_input: None,
         }
     }
 
     pub fn with_assignment_selection(mut self, selection: Option<Vec<String>>) -> Self {
         self.assignment_selection = selection;
+        self
+    }
+
+    pub fn with_invocation_input(mut self, input: Option<Value>) -> Self {
+        self.invocation_input = input;
         self
     }
 }
@@ -71,6 +81,8 @@ struct WorkerPacket {
     context: Option<Vec<ContextRecord>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     assignment_selection: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    invocation_input: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     standing_assignment_ids: Option<Vec<String>>,
 }
@@ -143,6 +155,13 @@ where
             return OperationOutcome::rejected("invalid-work-slot-binding", message);
         }
     };
+
+    if request.assignment_selection.is_some() && request.invocation_input.is_some() {
+        return OperationOutcome::rejected(
+            "assignment-input-conflict",
+            "`assignment_selection` may not be combined with `invocation_input`",
+        );
+    }
 
     let assignment_selection = match validate_assignment_selection(
         process,
@@ -273,7 +292,8 @@ where
         "provider": run.provider_association.as_json(),
         "input": run.initial_input,
     }))
-    .with_assignment_selection(assignment_selection.clone());
+    .with_assignment_selection(assignment_selection.clone())
+    .with_invocation_input(request.invocation_input.clone());
     let created = match persistence.create_work_slot_invocation(create) {
         Ok(created) => created,
         Err(error) => return persistence_error(error),
@@ -336,6 +356,7 @@ where
             capture_dir: capture_dir.clone(),
             context: forwarded_context,
             assignment_selection,
+            invocation_input: request.invocation_input,
             standing_assignment_ids,
         },
     };
@@ -1101,6 +1122,63 @@ mod tests {
             envelope["worker_packet"]["assignment_selection"],
             json!(["worker-1"])
         );
+    }
+
+    #[test]
+    fn opaque_invocation_input_is_recorded_and_forwarded_without_binding_changes() {
+        let artifacts = tempfile::tempdir().expect("temp artifact root");
+        let artifact_root = artifacts.path().to_string_lossy().into_owned();
+        let (persistence, process, _log) = harness(sample_run(bound_input(&artifact_root)));
+        let persistence = persistence.with_subject("slot-1", "visit-1");
+        let invocation_input = json!({"plan_revision": "r2", "task_roots": ["task-b"]});
+        let request = invoke_request().with_invocation_input(Some(invocation_input.clone()));
+
+        let outcome = execute(
+            request,
+            &persistence,
+            &process,
+            Timestamp::from_unix_millis(1_000),
+            30_000,
+        );
+
+        assert!(outcome.is_completed(), "{outcome:?}");
+        let created = &persistence.created.borrow()[0];
+        assert_eq!(created.invocation_input, Some(invocation_input.clone()));
+        assert_eq!(
+            created.binding,
+            WorkSlotBinding::new("echo", vec!["hello".to_owned()])
+        );
+        let envelope: Value =
+            serde_json::from_slice(&process.envelopes.borrow()[0]).expect("envelope");
+        assert_eq!(
+            envelope["worker_packet"]["invocation_input"],
+            invocation_input
+        );
+    }
+
+    #[test]
+    fn invocation_input_and_assignment_selection_are_rejected_before_waiter_spawn() {
+        let artifacts = tempfile::tempdir().expect("temp artifact root");
+        let artifact_root = artifacts.path().to_string_lossy().into_owned();
+        let (persistence, process, log) = harness(sample_run(bound_input(&artifact_root)));
+        let persistence = persistence.with_subject("slot-1", "visit-1");
+        let process = process.with_assignments(&["worker-0"]);
+        let request = invoke_request()
+            .with_assignment_selection(Some(vec!["worker-0".to_owned()]))
+            .with_invocation_input(Some(json!({"opaque": true})));
+
+        let outcome = execute(
+            request,
+            &persistence,
+            &process,
+            Timestamp::from_unix_millis(1_000),
+            30_000,
+        );
+
+        assert!(outcome.is_rejected(), "{outcome:?}");
+        assert!(process.spawn_args.borrow().is_empty());
+        assert!(persistence.created.borrow().is_empty());
+        assert!(log.borrow().is_empty());
     }
 
     #[test]

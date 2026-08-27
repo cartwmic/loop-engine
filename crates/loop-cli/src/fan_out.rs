@@ -67,6 +67,10 @@ pub(crate) struct InvokePacket {
     pub(crate) context: Option<Vec<Value>>,
     #[serde(default)]
     pub(crate) assignment_selection: Option<Vec<String>>,
+    /// Accepted only for compatibility with the shared invoke envelope.
+    /// Fan-out has no provider-specific invocation-input semantics.
+    #[serde(default, rename = "invocation_input")]
+    pub(crate) _invocation_input: Option<Value>,
     #[serde(default, rename = "standing_assignment_ids")]
     pub(crate) _standing_assignment_ids: Option<Vec<String>>,
 }

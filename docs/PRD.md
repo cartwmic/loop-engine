@@ -1542,9 +1542,13 @@ durable `allow` and `deny` results.
 - Status: live
 - Coverage: e2e/journey
 
+Here, selection means engine-owned `--assignment`/`--assignments` selection. A bound invocation may additionally accept one distinct optional opaque JSON value through `invoke --input`; core validates only JSON framing, rejects `--input` together with assignment selection, durably stores and transports the exact value, preserves the frozen command and args, and does not interpret provider semantics. Omitted input remains full execution.
+
 ### LE-102: `software-change run-plan-graph` may select plan-task roots plus their dependants without auto-including missing prerequisites. Invalid selections refuse before Dagu or a task starts; omitted selection remains full execution; every successful invocation still runs the summarizer and repository checkpoint against the resulting working tree, including effects left by unselected tasks.
 - Status: live
 - Coverage: e2e/journey
+
+Direct `--task`/`--tasks` selection and bound software-change implement invocations may use their respective selection forms; the bound path interprets `invocation_input` exactly as `{plan_revision,task_roots}`. It rejects malformed, empty, duplicate, unknown, stale-plan, missing-prerequisite, or ambiguous selection before Dagu, any plan-task worker, the summarizer, or repository checkpoint starts. A valid selected invocation requires each prerequisite to be selected or already standing for the same plan revision under the existing durable projection; roots include transitive dependants. Omitted direct selection and omitted input remain full execution.
 
 ### LE-103: `unchanged-carry` on the existing append path consults the durable change report and refuses when any covered input changed. A successful carry preserves the originating author's identity and selected-output digest, records the attesting driver and carry act separately, and makes the result distinguishable from a fresh worker judgment. It attests the exact report snapshot it saw; later drift makes the contribution non-standing until another explicit act.
 - Status: tombstone

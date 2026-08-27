@@ -2149,6 +2149,293 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
             f"leftover gamma effect disappeared from checkpoint: {checkpoint}"
         )
 
+    # bookends:LE-102 — bound invocation_input selects plan-task roots through
+    # the provider boundary and refuses malformed or ambiguous packets before
+    # any graph process, worker, summarizer, report, or checkpoint starts.
+    invalid_input_root = work_dir / "bound-invocation-input-invalid"
+
+    def packet_with_invocation_input(
+        *,
+        case_run_id: str,
+        artifact_root: Path,
+        capture_dir: Path,
+        invocation_input: Any,
+    ) -> bytes:
+        packet = json.loads(
+            _invoke_packet(
+                run_id=case_run_id,
+                slot_id=slot_id,
+                artifact_root=artifact_root,
+                instruction_body=instruction_body,
+                capture_dir=capture_dir,
+            )
+        )
+        packet["invocation_input"] = invocation_input
+        return json.dumps(packet, separators=(",", ":")).encode("utf-8")
+
+    def tree_entries(path: Path) -> list[str]:
+        return sorted(
+            item.relative_to(path).as_posix()
+            for item in path.rglob("*")
+        )
+
+    def assert_invalid_invocation_input(
+        label: str,
+        invocation_input: Any,
+        *,
+        frozen_selection_args: Sequence[str] = (),
+        expected_error: str,
+    ) -> None:
+        case_root = invalid_input_root / label
+        case_capture = case_root / "captures" / "invocation"
+        case_receipts = case_root / "receipts"
+        _write_small_plan(case_root)
+        case_capture.mkdir(parents=True, exist_ok=True)
+        case_receipts.mkdir(parents=True, exist_ok=True)
+        artifact_sentinel = case_root / "artifact-sentinel"
+        artifact_sentinel.write_text(f"artifact:{label}\n", encoding="utf-8")
+        report_sentinel = b'{"sentinel":"implementation-report"}\n'
+        checkpoint_sentinel = b'{"sentinel":"implementation-checkpoint"}\n'
+        report_path = case_root / "implementation-report.json"
+        checkpoint_path = case_root / "implementation-checkpoint.json"
+        report_path.write_bytes(report_sentinel)
+        checkpoint_path.write_bytes(checkpoint_sentinel)
+        capture_sentinel = case_capture / "capture-sentinel"
+        receipt_sentinel = case_receipts / "receipt-sentinel"
+        capture_sentinel.write_text(f"capture:{label}\n", encoding="utf-8")
+        receipt_sentinel.write_text(f"receipt:{label}\n", encoding="utf-8")
+
+        dagu_bin = case_root / "fake-dagu-bin"
+        dagu_bin.mkdir(parents=True, exist_ok=True)
+        dagu = dagu_bin / "dagu"
+        dagu.write_text(
+            "#!/bin/sh\n"
+            "printf 'probed\\n' >> \"$(dirname \"$0\")/probed\"\n"
+            "if [ \"$1\" = version ]; then printf '2.14.0\\n'; fi\n"
+            "exit 99\n",
+            encoding="utf-8",
+        )
+        dagu.chmod(0o755)
+        probe_marker = dagu_bin / "probed"
+
+        base_binding = implement_graph_runner_binding(
+            provider=provider,
+            task_worker=stdin_worker_cli(case_receipts),
+            working_directory=work_dir,
+        )
+        worker_json = base_binding["args"][-1]
+        case_binding = {
+            "command": base_binding["command"],
+            "args": list(base_binding["args"][:-2])
+            + list(frozen_selection_args)
+            + ["--task-worker", worker_json],
+        }
+        environment = os.environ.copy()
+        environment["PATH"] = str(dagu_bin)
+        refused = _run_binding(
+            case_binding,
+            stdin=packet_with_invocation_input(
+                case_run_id=f"bound-invalid-{label}",
+                artifact_root=case_root,
+                capture_dir=case_capture,
+                invocation_input=invocation_input,
+            ),
+            env=environment,
+        )
+        stderr = refused.stderr.decode("utf-8", "replace")
+        if refused.returncode != 2:
+            raise WorkSlotJourneyFailure(
+                f"bound invocation_input {label} returned {refused.returncode}, "
+                f"expected usage refusal: {stderr}"
+            )
+        if expected_error not in stderr:
+            raise WorkSlotJourneyFailure(
+                f"bound invocation_input {label} omitted {expected_error!r}: {stderr}"
+            )
+        if probe_marker.exists():
+            raise WorkSlotJourneyFailure(
+                f"bound invocation_input {label} probed Dagu: {stderr}"
+            )
+        if artifact_sentinel.read_text(encoding="utf-8") != f"artifact:{label}\n":
+            raise WorkSlotJourneyFailure(
+                f"bound invocation_input {label} modified artifact sentinel"
+            )
+        if report_path.read_bytes() != report_sentinel:
+            raise WorkSlotJourneyFailure(
+                f"bound invocation_input {label} modified implementation-report.json"
+            )
+        if checkpoint_path.read_bytes() != checkpoint_sentinel:
+            raise WorkSlotJourneyFailure(
+                f"bound invocation_input {label} modified implementation checkpoint"
+            )
+        if tree_entries(case_capture) != ["capture-sentinel"]:
+            raise WorkSlotJourneyFailure(
+                f"bound invocation_input {label} created capture output: "
+                f"{tree_entries(case_capture)}"
+            )
+        if tree_entries(case_receipts) != ["receipt-sentinel"]:
+            raise WorkSlotJourneyFailure(
+                f"bound invocation_input {label} started an ordinary worker: "
+                f"{tree_entries(case_receipts)}"
+            )
+        if (case_root / "plan-task-results.json").exists():
+            raise WorkSlotJourneyFailure(
+                f"bound invocation_input {label} wrote plan-task-results.json"
+            )
+
+    for label, invocation_input, frozen_selection_args, expected_error in (
+        ("malformed", "not an object", (), "invocation_input must be exactly"),
+        ("null", None, (), "must be an object when present"),
+        (
+            "wrong-types",
+            {"plan_revision": 7, "task_roots": ["alpha"]},
+            (),
+            "invocation_input must be exactly",
+        ),
+        (
+            "extra",
+            {"plan_revision": plan_revision, "task_roots": ["alpha"], "extra": True},
+            (),
+            "invocation_input must be exactly",
+        ),
+        (
+            "empty-roots",
+            {"plan_revision": plan_revision, "task_roots": []},
+            (),
+            "task_roots must be a non-empty",
+        ),
+        (
+            "duplicate-roots",
+            {"plan_revision": plan_revision, "task_roots": ["alpha", "alpha"]},
+            (),
+            "duplicate task",
+        ),
+        (
+            "unknown-root",
+            {"plan_revision": plan_revision, "task_roots": ["missing"]},
+            (),
+            "unknown task",
+        ),
+        (
+            "stale-plan-revision",
+            {"plan_revision": "stale-plan", "task_roots": ["alpha"]},
+            (),
+            "does not match plan.json revision",
+        ),
+        (
+            "missing-prerequisite",
+            {"plan_revision": plan_revision, "task_roots": ["gamma"]},
+            (),
+            "missing standing prerequisites",
+        ),
+        (
+            "packet-plus-task",
+            {"plan_revision": plan_revision, "task_roots": ["alpha"]},
+            ("--task", "alpha"),
+            "may not be combined",
+        ),
+        (
+            "packet-plus-tasks",
+            {"plan_revision": plan_revision, "task_roots": ["alpha"]},
+            ("--tasks", "alpha"),
+            "may not be combined",
+        ),
+    ):
+        assert_invalid_invocation_input(
+            label,
+            invocation_input,
+            frozen_selection_args=frozen_selection_args,
+            expected_error=expected_error,
+        )
+
+    selection_root = work_dir / "bound-invocation-input-selection"
+    selection_capture = selection_root / "captures" / "invocation-selected"
+    selection_receipts = selection_root / "receipts"
+    selection_plan = {
+        "revision": "invocation-selection-1",
+        "tasks": [
+            {"id": "root", "objective": "selected root", "dependencies": []},
+            {
+                "id": "dependent",
+                "objective": "transitive dependant",
+                "dependencies": ["root"],
+            },
+            {
+                "id": "leaf",
+                "objective": "transitive leaf",
+                "dependencies": ["dependent"],
+            },
+            {"id": "unselected", "objective": "outside closure", "dependencies": []},
+        ],
+        "dependency_graph": [
+            {"from": "root", "to": "dependent"},
+            {"from": "dependent", "to": "leaf"},
+        ],
+    }
+    _write_plan_document(selection_root, selection_plan)
+    (selection_root / "intent.json").write_text('{"revision":"1"}', encoding="utf-8")
+    (selection_root / "design.json").write_text('{"revision":"1"}', encoding="utf-8")
+    selection_binding = implement_graph_runner_binding(
+        provider=provider,
+        task_worker=stdin_worker_cli(selection_receipts),
+        working_directory=work_dir,
+    )
+    selection_input = {
+        "plan_revision": selection_plan["revision"],
+        "task_roots": ["root"],
+    }
+    selected = _run_binding(
+        selection_binding,
+        stdin=packet_with_invocation_input(
+            case_run_id="bound-selection",
+            artifact_root=selection_root,
+            capture_dir=selection_capture,
+            invocation_input=selection_input,
+        ),
+    )
+    if selected.returncode != 0:
+        raise WorkSlotJourneyFailure(
+            "bound invocation_input selected graph exited "
+            f"{selected.returncode}: {selected.stderr.decode('utf-8', 'replace')}"
+        )
+    selected_ids = ["root", "dependent", "leaf"]
+    for task_id in (*selected_ids, "summarizer"):
+        if not (selection_receipts / f"{task_id}.stdin").is_file():
+            raise WorkSlotJourneyFailure(
+                f"bound invocation_input selection omitted {task_id} receipt"
+            )
+    if (selection_receipts / "unselected.stdin").exists():
+        raise WorkSlotJourneyFailure(
+            "bound invocation_input selection started an unselected task"
+        )
+    _assert_capture_files(selection_capture, (*selected_ids, "summarizer"))
+    selected_workers = _load_summary_workers(selection_capture)
+    if [worker.get("assignment_id") for worker in selected_workers] != selected_ids:
+        raise WorkSlotJourneyFailure(
+            f"bound invocation_input selection summary mismatch: {selected_workers}"
+        )
+    selection_path = selection_capture / "selection.json"
+    try:
+        selection_record = json.loads(selection_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise WorkSlotJourneyFailure(
+            f"bound invocation_input selection omitted durable selection.json: {error}"
+        ) from error
+    expected_selection = {
+        "schema_version": "1",
+        "requested": ["root"],
+        "tasks": selected_ids,
+    }
+    if selection_record != expected_selection:
+        raise WorkSlotJourneyFailure(
+            f"bound invocation_input selection record mismatch: {selection_record}"
+        )
+    _assert_dummy_report(selection_root, selection_plan["revision"])
+    if not (selection_root / "implementation-checkpoint.json").is_file():
+        raise WorkSlotJourneyFailure(
+            "bound invocation_input selection omitted implementation checkpoint"
+        )
+
     return [
         "PATH rewrite software-change -> built provider",
         "implement args [run-plan-graph, --task-worker, dummy-json]",
@@ -2160,6 +2447,10 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
         "driver-confirmed ledger routes only the exact implementation task",
         "missing implementation-report.json exits nonzero",
         "failing sibling reaped before runner exits",
+        "legacy --task/--tasks selection remains covered",
+        "bound invocation_input invalid packets refuse before Dagu and all workers",
+        "bound invocation_input selected root expands through transitive dependants",
+        "bound invocation_input selection.json records the durable selection",
         "no live model",
     ]
 

@@ -112,6 +112,10 @@ pub struct WorkSlotInvocationView {
     pub inner_workers: Vec<InnerWorker>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignment_selection: Option<Vec<String>>,
+    /// Optional opaque JSON supplied for this bound invocation. The show
+    /// projection carries it without interpreting provider semantics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation_input: Option<Value>,
     /// Provider-free change report projected from durable invocation records.
     pub change_report: InvocationChangeReport,
 }
@@ -179,6 +183,7 @@ impl WorkSlotInvocationView {
             capture_dir: record.capture_dir.clone(),
             inner_workers,
             assignment_selection: record.assignment_selection.clone(),
+            invocation_input: record.invocation_input.clone(),
             change_report: InvocationChangeReport {
                 identity: record.invocation_id.clone(),
                 standing: false,

@@ -109,6 +109,7 @@ pub enum PrimaryCommand {
         run_id: RunId,
         slot_id: String,
         assignment_selection: Option<Vec<String>>,
+        invocation_input: Option<Value>,
     },
 }
 
@@ -1185,10 +1186,19 @@ fn parse_primary_command(
             let slot = take_positional(&mut positionals);
             let slot = required(slot, "slot ID")?;
             ensure_no_positionals(&positionals, name)?;
+            if input.is_some() && assignment_selection.is_some() {
+                return Err(CliError::new(
+                    "invalid-invocation",
+                    "`--input` may not be combined with `--assignment` or `--assignments`",
+                ));
+            }
+            let invocation_input = input
+                .map(|raw| parse_json_source(&raw, "invocation input"))
+                .transpose()?;
             reject_unrelated_options(
                 name,
                 provider,
-                input,
+                None,
                 label,
                 start_id,
                 kind,
@@ -1200,6 +1210,7 @@ fn parse_primary_command(
                 run_id: run.into(),
                 slot_id: slot,
                 assignment_selection,
+                invocation_input,
             })
         }
         _ => Err(CliError::new(
@@ -2283,6 +2294,7 @@ fn execute_operation(options: CliOptions, command: PrimaryCommand) -> Execution 
             run_id,
             slot_id,
             assignment_selection,
+            invocation_input,
         } => {
             let binary = match std::env::current_exe() {
                 Ok(binary) => binary,
@@ -2301,7 +2313,8 @@ fn execute_operation(options: CliOptions, command: PrimaryCommand) -> Execution 
             let allowed_time_ms = timeout.as_millis().min(u64::MAX as u128) as u64;
             let request =
                 InvokeRequest::new(run_id, slot_id, new_invocation_id(), paths.database.clone())
-                    .with_assignment_selection(assignment_selection);
+                    .with_assignment_selection(assignment_selection)
+                    .with_invocation_input(invocation_input);
             let outcome = core::execute_invoke(
                 request,
                 &persistence,

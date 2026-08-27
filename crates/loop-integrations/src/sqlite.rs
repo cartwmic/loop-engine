@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS work_slot_invocations (
     capture_dir                  TEXT NOT NULL DEFAULT '',
     inner_workers_json           TEXT NOT NULL DEFAULT '[]',
     assignment_selection_json    TEXT,
+    invocation_input_json        TEXT,
     routed_inputs_json           TEXT NOT NULL DEFAULT '[]',
     frozen_run_identity_json     TEXT,
     completion_snapshot_json     TEXT NOT NULL DEFAULT '[]',
@@ -613,9 +614,9 @@ impl Persistence for SqlitePersistence {
                         instruction_digest, subject, waiter_pid, started_at,
                         allowed_time_ms, status, exit_code, completed_at,
                         capture_dir, inner_workers_json, assignment_selection_json,
-                        routed_inputs_json, frozen_run_identity_json,
+                        invocation_input_json, routed_inputs_json, frozen_run_identity_json,
                         completion_snapshot_json
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL, NULL, ?10, ?11, ?12, ?13, ?14, ?15)",
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL, NULL, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
                     params![
                         request.run_id.as_str(),
                         request.invocation_id.as_str(),
@@ -632,6 +633,11 @@ impl Persistence for SqlitePersistence {
                             .assignment_selection
                             .as_ref()
                             .map(|selection| encode_json(selection, "assignment selection"))
+                            .transpose()?,
+                        request
+                            .invocation_input
+                            .as_ref()
+                            .map(|input| encode_json(input, "invocation input"))
                             .transpose()?,
                         encode_json(&request.routed_inputs, "routed inputs")?,
                         request
@@ -875,6 +881,14 @@ fn ensure_work_slot_invocation_columns(connection: &Connection) -> Result<(), Pe
         connection
             .execute(
                 "ALTER TABLE work_slot_invocations ADD COLUMN assignment_selection_json TEXT",
+                [],
+            )
+            .map_err(sqlite_failure)?;
+    }
+    if !columns.iter().any(|name| name == "invocation_input_json") {
+        connection
+            .execute(
+                "ALTER TABLE work_slot_invocations ADD COLUMN invocation_input_json TEXT",
                 [],
             )
             .map_err(sqlite_failure)?;
@@ -1358,6 +1372,7 @@ fn decode_work_slot_invocation(
     capture_dir: String,
     inner_workers_json: String,
     assignment_selection_json: Option<String>,
+    invocation_input_json: Option<String>,
     routed_inputs_json: String,
     frozen_run_identity_json: Option<String>,
     completion_snapshot_json: String,
@@ -1404,6 +1419,11 @@ fn decode_work_slot_invocation(
         assignment_selection_json
             .map(|json| decode_json(&json, "assignment selection"))
             .transpose()?,
+    )
+    .with_invocation_input(
+        invocation_input_json
+            .map(|json| decode_json(&json, "invocation input"))
+            .transpose()?,
     );
     if let Some(identity_json) = frozen_run_identity_json {
         invocation = invocation
@@ -1426,6 +1446,7 @@ type InvocationRow = (
     Option<i64>,
     String,
     String,
+    Option<String>,
     Option<String>,
     String,
     Option<String>,
@@ -1451,6 +1472,7 @@ fn invocation_row_from_query(row: &rusqlite::Row<'_>) -> rusqlite::Result<Invoca
         row.get(14)?,
         row.get(15)?,
         row.get(16)?,
+        row.get(17)?,
     ))
 }
 
@@ -1464,7 +1486,7 @@ fn load_one_work_slot_invocation(
             "SELECT invocation_id, slot_id, binding_json, instruction_digest, subject,
                     waiter_pid, started_at, allowed_time_ms, status, exit_code, completed_at,
                     capture_dir, inner_workers_json, assignment_selection_json,
-                    routed_inputs_json, frozen_run_identity_json,
+                    invocation_input_json, routed_inputs_json, frozen_run_identity_json,
                     completion_snapshot_json
              FROM work_slot_invocations
              WHERE run_id = ?1 AND invocation_id = ?2",
@@ -1489,6 +1511,7 @@ fn load_one_work_slot_invocation(
                 capture_dir,
                 inner_workers_json,
                 assignment_selection_json,
+                invocation_input_json,
                 routed_inputs_json,
                 frozen_run_identity_json,
                 completion_snapshot_json,
@@ -1508,6 +1531,7 @@ fn load_one_work_slot_invocation(
                     capture_dir,
                     inner_workers_json,
                     assignment_selection_json,
+                    invocation_input_json,
                     routed_inputs_json,
                     frozen_run_identity_json,
                     completion_snapshot_json,
@@ -1526,7 +1550,7 @@ fn read_work_slot_invocations(
             "SELECT invocation_id, slot_id, binding_json, instruction_digest, subject,
                     waiter_pid, started_at, allowed_time_ms, status, exit_code, completed_at,
                     capture_dir, inner_workers_json, assignment_selection_json,
-                    routed_inputs_json, frozen_run_identity_json,
+                    invocation_input_json, routed_inputs_json, frozen_run_identity_json,
                     completion_snapshot_json
              FROM work_slot_invocations
              WHERE run_id = ?1
@@ -1553,6 +1577,7 @@ fn read_work_slot_invocations(
             capture_dir,
             inner_workers_json,
             assignment_selection_json,
+            invocation_input_json,
             routed_inputs_json,
             frozen_run_identity_json,
             completion_snapshot_json,
@@ -1572,6 +1597,7 @@ fn read_work_slot_invocations(
             capture_dir,
             inner_workers_json,
             assignment_selection_json,
+            invocation_input_json,
             routed_inputs_json,
             frozen_run_identity_json,
             completion_snapshot_json,

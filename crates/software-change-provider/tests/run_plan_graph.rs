@@ -98,6 +98,16 @@ fn invoke_graph_with(
     current_dir: Option<&Path>,
     extra: &[&str],
 ) -> Output {
+    invoke_graph_with_env(worker, packet, current_dir, extra, None)
+}
+
+fn invoke_graph_with_env(
+    worker: &str,
+    packet: &Value,
+    current_dir: Option<&Path>,
+    extra: &[&str],
+    path: Option<&Path>,
+) -> Output {
     let working_directory = current_dir
         .map(Path::to_path_buf)
         .or_else(|| {
@@ -124,6 +134,9 @@ fn invoke_graph_with(
         .stderr(Stdio::piped());
     if let Some(dir) = current_dir {
         command.current_dir(dir);
+    }
+    if let Some(path) = path {
+        command.env("PATH", path);
     }
     let mut child = command.spawn().expect("run-plan-graph should spawn");
     let write_result = child
@@ -241,6 +254,52 @@ fn fixture(label: &str) -> (TestDir, PathBuf, PathBuf) {
     (dir, artifact_root, receipt_dir)
 }
 
+#[cfg(unix)]
+fn dagu_sentinel(bin_dir: &Path) -> PathBuf {
+    fs::create_dir_all(bin_dir).expect("dagu sentinel directory");
+    fs::write(
+        bin_dir.join("dagu"),
+        b"#!/bin/sh\nprintf 'probed\\n' >> \"$(dirname \"$0\")/probed\"\nprintf '2.14.0\\n'\n",
+    )
+    .expect("write dagu sentinel");
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = fs::metadata(bin_dir.join("dagu"))
+        .expect("dagu sentinel metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(bin_dir.join("dagu"), permissions).expect("chmod dagu sentinel");
+    bin_dir.join("probed")
+}
+
+fn write_standing_plan_task(artifact_root: &Path, plan_revision: &str, task_id: &str) {
+    let task = json!({"id": task_id});
+    let packet = format!(
+        "{{\"artifact_root\":\"{}\"}}\\n---\\n\\n{}",
+        artifact_root.display(),
+        task
+    );
+    let file = json!({
+        "schema_version": "1",
+        "plan_revision": plan_revision,
+        "results": [{
+            "assignment_id": task_id,
+            "plan_revision": plan_revision,
+            "task": task,
+            "packet": packet,
+            "dependencies": [],
+            "worker": {"command": "python3", "args": []},
+            "exit_code": 0,
+            "repository_effect": null,
+            "capture_dir": artifact_root.join("standing").to_string_lossy()
+        }]
+    });
+    fs::write(
+        artifact_root.join("plan-task-results.json"),
+        serde_json::to_vec_pretty(&file).expect("standing result JSON"),
+    )
+    .expect("write standing result");
+}
+
 fn emitted_yaml(capture_root: &Path) -> String {
     let dags = capture_root.join("dagu-home").join("dags");
     let entry = fs::read_dir(&dags)
@@ -285,6 +344,297 @@ fn max_overlap(intervals: &[(f64, f64)]) -> usize {
         max = max.max(current as usize);
     }
     max
+}
+
+#[cfg(unix)]
+#[test]
+fn bound_invocation_selection_refuses_every_invalid_shape_before_dagu_or_graph() {
+    let cases = vec![
+        ("malformed", json!("not an object"), Vec::<&str>::new()),
+        (
+            "extra",
+            json!({
+                "plan_revision": "plan-r1",
+                "task_roots": ["a"],
+                "extra": true
+            }),
+            Vec::<&str>::new(),
+        ),
+        ("null", Value::Null, Vec::<&str>::new()),
+        (
+            "wrong-types",
+            json!({"plan_revision": 7, "task_roots": ["a"]}),
+            Vec::<&str>::new(),
+        ),
+        (
+            "empty-roots",
+            json!({"plan_revision": "plan-r1", "task_roots": []}),
+            Vec::<&str>::new(),
+        ),
+        (
+            "blank-root",
+            json!({"plan_revision": "plan-r1", "task_roots": ["  "]}),
+            Vec::<&str>::new(),
+        ),
+        (
+            "duplicate-root",
+            json!({"plan_revision": "plan-r1", "task_roots": ["a", "a"]}),
+            Vec::<&str>::new(),
+        ),
+        (
+            "unknown-root",
+            json!({"plan_revision": "plan-r1", "task_roots": ["missing"]}),
+            Vec::<&str>::new(),
+        ),
+        (
+            "stale-plan",
+            json!({"plan_revision": "old-plan", "task_roots": ["a"]}),
+            Vec::<&str>::new(),
+        ),
+        (
+            "missing-predecessor",
+            json!({"plan_revision": "plan-r1", "task_roots": ["b"]}),
+            Vec::<&str>::new(),
+        ),
+        (
+            "mixed-selector",
+            json!({"plan_revision": "plan-r1", "task_roots": ["a"]}),
+            vec!["--task", "a"],
+        ),
+    ];
+
+    for (label, invocation_input, extra) in cases {
+        let (_dir, artifact_root, receipt_dir) = fixture(&format!("bound-invalid-{label}"));
+        write_plan(
+            &artifact_root,
+            &json!({
+                "revision": "plan-r1",
+                "tasks": [{"id": "a"}, {"id": "b"}],
+                "dependency_graph": [{"from": "a", "to": "b"}]
+            }),
+        );
+        let fake_dagu = artifact_root.parent().unwrap().join("fake-dagu-bin");
+        let probe_marker = dagu_sentinel(&fake_dagu);
+        let mut invoke_packet = packet(
+            "run-bound-invalid",
+            "implement",
+            artifact_root.to_str().unwrap(),
+            "Implement",
+        );
+        invoke_packet["invocation_input"] = invocation_input;
+        let output = invoke_graph_with_env(
+            &task_worker(&receipt_dir, &["--write-report"]),
+            &invoke_packet,
+            None,
+            &extra,
+            Some(&fake_dagu),
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{label}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !probe_marker.exists(),
+            "{label} probed Dagu: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !capture_dir_for_root(&artifact_root).exists(),
+            "{label} emitted a capture graph"
+        );
+        assert!(!artifact_root.join("implementation-report.json").exists());
+        assert!(!artifact_root
+            .join("implementation-checkpoint.json")
+            .exists());
+        assert!(
+            receipt_dir
+                .read_dir()
+                .expect("receipt directory")
+                .next()
+                .is_none(),
+            "{label} started a task worker"
+        );
+    }
+}
+
+#[test]
+fn bound_invocation_selection_runs_dependants_with_standing_prerequisite() {
+    let (_dir, artifact_root, receipt_dir) = fixture("bound-selection-standing");
+    write_plan(
+        &artifact_root,
+        &json!({
+            "revision": "plan-r1",
+            "tasks": [{"id": "a"}, {"id": "b"}, {"id": "c"}, {"id": "unselected"}],
+            "dependency_graph": [
+                {"from": "a", "to": "b"},
+                {"from": "b", "to": "c"}
+            ]
+        }),
+    );
+    write_standing_plan_task(&artifact_root, "plan-r1", "a");
+    let mut invoke_packet = packet(
+        "run-bound-selection",
+        "implement",
+        artifact_root.to_str().unwrap(),
+        "Implement",
+    );
+    invoke_packet["invocation_input"] = json!({"plan_revision": "plan-r1", "task_roots": ["b"]});
+    invoke_packet["standing_assignment_ids"] = json!(["a"]);
+    let output = invoke_graph(
+        &task_worker(&receipt_dir, &["--write-report"]),
+        &invoke_packet,
+        None,
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(receipt_dir.join("b.stdin").is_file());
+    assert!(receipt_dir.join("c.stdin").is_file());
+    assert!(receipt_dir.join("summarizer.stdin").is_file());
+    assert!(!receipt_dir.join("a.stdin").exists());
+    assert!(!receipt_dir.join("unselected.stdin").exists());
+    assert!(artifact_root.join("implementation-report.json").is_file());
+    assert!(artifact_root
+        .join("implementation-checkpoint.json")
+        .is_file());
+
+    let selection: Value = serde_json::from_slice(
+        &fs::read(capture_dir_for_root(&artifact_root).join("selection.json"))
+            .expect("selection record"),
+    )
+    .expect("selection JSON");
+    assert_eq!(selection["requested"], json!(["b"]));
+    assert_eq!(selection["tasks"], json!(["b", "c"]));
+}
+
+#[test]
+fn bound_invocation_input_omitted_runs_full_graph() {
+    let (_dir, artifact_root, receipt_dir) = fixture("bound-selection-omitted");
+    write_plan(
+        &artifact_root,
+        &json!({
+            "revision": "plan-r1",
+            "tasks": [{"id": "a"}, {"id": "b"}],
+            "dependency_graph": []
+        }),
+    );
+    let output = invoke_graph(
+        &task_worker(&receipt_dir, &["--write-report"]),
+        &packet(
+            "run-bound-full",
+            "implement",
+            artifact_root.to_str().unwrap(),
+            "Implement",
+        ),
+        None,
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for task in ["a", "b", "summarizer"] {
+        assert!(receipt_dir.join(format!("{task}.stdin")).is_file());
+    }
+    let selection: Value = serde_json::from_slice(
+        &fs::read(capture_dir_for_root(&artifact_root).join("selection.json"))
+            .expect("selection record"),
+    )
+    .expect("selection JSON");
+    assert!(selection["requested"].is_null());
+    assert_eq!(selection["tasks"], json!(["a", "b"]));
+}
+
+#[test]
+fn bound_selection_routes_only_matching_current_implementation_findings() {
+    let (dir, artifact_root, receipt_dir) = fixture("bound-selection-findings");
+    write_plan(
+        &artifact_root,
+        &json!({
+            "revision": "plan-r1",
+            "tasks": [{"id": "a"}, {"id": "b"}, {"id": "c"}],
+            "dependency_graph": [{"from": "b", "to": "c"}]
+        }),
+    );
+    let source_bytes = b"bound selection review output\n";
+    let source_path = artifact_root.join("review.stdout");
+    fs::write(&source_path, source_bytes).expect("finding source");
+    let source = json!({
+        "kind": "external-artifact",
+        "relative_path": "review.stdout",
+        "output_sha256": format!("sha256:{:x}", Sha256::digest(source_bytes))
+    });
+    let finding = |id: &str, task_id: &str| {
+        json!({
+            "id": id,
+            "source": source.clone(),
+            "policy_id": "task-sized",
+            "statement": id,
+            "disposition": "accepted",
+            "reason": "driver decision",
+            "owner_phase": "implementation",
+            "task_ids": [task_id],
+            "review_axes": ["task-sized"],
+            "status": "unresolved"
+        })
+    };
+    let context = json!([{
+        "id": "ledger-1",
+        "kind": "finding-ledger",
+        "data": {
+            "schema_version": "1",
+            "gate": "plan-review",
+            "subject": "plan.json",
+            "subject_revision": "plan-r1",
+            "author": {"name": "driver", "kind": "agent"},
+            "repository_state": null,
+            "findings": [
+                finding("F-a", "a"),
+                finding("F-b", "b"),
+                finding("F-c", "c")
+            ]
+        },
+        "sequence": 1,
+        "created_at": 1
+    }]);
+    let mut invoke_packet = packet(
+        "run-bound-findings",
+        "implement",
+        artifact_root.to_str().unwrap(),
+        "Implement",
+    );
+    invoke_packet["context"] = context;
+    invoke_packet["invocation_input"] = json!({"plan_revision": "plan-r1", "task_roots": ["b"]});
+    let output = invoke_graph(
+        &task_worker(&receipt_dir, &["--write-report"]),
+        &invoke_packet,
+        Some(dir.path()),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for (task_id, expected_finding) in [("b", "F-b"), ("c", "F-c")] {
+        let raw =
+            fs::read_to_string(receipt_dir.join(format!("{task_id}.stdin"))).expect("task packet");
+        let (_, task_raw) = raw.split_once("\n---\n\n").expect("task separator");
+        let task: Value = serde_json::from_str(task_raw).expect("task JSON");
+        let routed = task["finding_context"]
+            .as_array()
+            .expect("finding_context array");
+        assert_eq!(routed.len(), 1);
+        assert_eq!(routed[0]["id"], expected_finding);
+        assert!(routed.iter().all(|entry| entry["id"] != "F-a"));
+    }
+    assert!(!receipt_dir.join("a.stdin").exists());
 }
 
 #[test]
