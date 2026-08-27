@@ -50,6 +50,15 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
+Use focused stock Cargo commands while iterating; they do not replace the workspace completion gate. `--test NAME` names a retained suite root, not a former source module:
+
+```sh
+cargo test -p loop-cli --lib
+cargo test -p loop-cli --test engine       # engine, workers, or dagu
+cargo test -p software-change-provider --lib
+cargo test -p software-change-provider --test contracts  # contracts, provider, cli, or plan_graph
+```
+
 For an enabled repository, run `scripts/bookends-check-gate.sh` from the repository root in pre-push and required CI. It emits `GREEN`, `RED`, or `BYPASS`; only an explicit `BOOKENDS_BYPASS=<class>:<reason>` may bypass a red repository gate, and that output is the invocation evidence. The parser-only candidate command is `bookends-check candidate PRD.md`. Bookends does not load README.md or AGENTS.md as coverage classes. The optional software-change overlay is off unless a per-run profile sets `extra.bookends.enabled` to JSON `true`; its driver and bound-worker citation procedure is in the provider skill.
 
 CI preflight also runs `scripts/bookends-check-gate.sh` without a bypass, `dist generate --check`, `scripts/assert-dist-plan.py`, `scripts/assert-release-gates.py`, `scripts/assert-push-main-preflight.py`, `scripts/assert-generate-prd-profile.py`, `scripts/generate-prd-journey.py --self-test`, the software-change, policy-document, and research journey interface self-tests, a locked build of the four release packages plus `bookends-check`, the software-change source journey (`--mode source --traversal-depth full` against high-rigor), both policy-document source journey modes, the research source journey, and the Generate-PRD source journey.

@@ -27,3 +27,4 @@ loop-core = { path = "../loop-core" }
 loop-integrations = { path = "../loop-integrations" }
 serde_json = "1"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
+libc = "0.2"

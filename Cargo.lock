@@ -539,6 +539,7 @@ name = "loop-cli"
 version = "0.18.0"
 dependencies = [
  "jsonschema",
+ "libc",
  "loop-core",
  "loop-integrations",
  "rusqlite",
@@ -1001,6 +1002,7 @@ name = "software-change-provider"
 version = "0.18.0"
 dependencies = [
  "bookends-check",
+ "libc",
  "loop-core",
  "loop-integrations",
  "serde",

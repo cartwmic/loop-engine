@@ -11,9 +11,8 @@ use loop_integrations::{
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -70,21 +69,16 @@ pub fn invoke(request: Value) -> Output {
 }
 
 pub fn invoke_in_dir(request: Value, directory: &Path) -> Output {
-    let mut child = Command::new(provider_binary())
-        .current_dir(directory)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn software-change provider");
+    let mut command = Command::new(provider_binary());
+    command.current_dir(directory);
     let bytes = serde_json::to_vec(&request).expect("serialize provider request");
-    child
-        .stdin
-        .take()
-        .expect("provider stdin")
-        .write_all(&bytes)
-        .expect("write provider request");
-    child.wait_with_output().expect("wait for provider")
+    let completed = super::bounded_process::run_with_stdin(
+        &mut command,
+        "software-change provider protocol",
+        &bytes,
+    )
+    .expect("wait for provider");
+    completed.output
 }
 
 pub fn response(output: &Output) -> Value {
