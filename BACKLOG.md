@@ -100,7 +100,32 @@ Apply one provenance rule across this section: Loop Engine serves a trusted sole
 
 ### Recommended run packages
 
-Use the high-rigor profile with unbound review and implementation work slots while dogfooding these packages. Every run uses at least two distinct ordinary review authors plus a third distinct adversarial-review author. Ask the owner to select every implementation, subagent, and reviewer model before start; this roadmap prescribes no model. Unless a package says otherwise, treat each linked candidate as a separate surgical software-change run and confirm its intent before combining it with adjacent work.
+Use the high-rigor profile with unbound review and implementation work slots while dogfooding these packages. Every run uses at least two distinct ordinary review authors plus a third distinct adversarial-review author. The owner-prescribed fleet is `openai-codex/gpt-5.6-sol` for the driver, `openai-codex/gpt-5.6-luna:max` for the sole implementation writer, `cursor/grok-4.6` and `cursor/kimi-k3` for ordinary read-only review, and `openai-codex/gpt-5.6-sol` for challenge review. Verify the exact current model IDs before each start; do not substitute models or reduce Luna reasoning without owner approval. Unless a package says otherwise, treat each linked candidate as a separate surgical software-change run and confirm its intent before combining it with adjacent work.
+
+#### Execution order after Package 3a
+
+Package 3a completed at terminal `end` in replacement run `run-1787854920653695000-1-49537` and landed as `21b133cfdbc899b3bfc7e35bc76166b3fd0b9ee5`. Execute the remaining owner-approved queue below serially. A lettered item is a separate run; do not combine it with its neighbor merely because they share a package number.
+
+1. **4 — Cargo integration-test compile fan-out.** Reduce iterative compile/link cost first. Preserve coverage and the full workspace completion gate; exclude nextest, sccache, CI caching, journey parallelism, runtime-hang work, and per-session target policy.
+2. **5 — Captured ad hoc bound repair.** Add only the no-honest-existing-task path on top of Package 3a's invocation-time selection.
+3. **6 — Concise status/progress.** Expose the durable repair and invocation state that Packages 3a and 5 actually shipped.
+4. **7a — Stable provenance references.** Remove duplicated driver-authored mechanical metadata. **7b — Reviewer candidate normalization** follows only if 7a's operating evidence still shows material driver effort; otherwise record the deferral and skip it.
+5. **8a — Acceptance-criterion keyspace.** Establish one run-local keyspace. **8b — Criterion-based validation** must reuse it.
+6. **9a — Software-change steering delivery.** **9b — Policy-document finding delivery.** Keep these as separate provider runs; do not create a generic engine finding subsystem.
+7. **10a — Frozen policy versus execution controls.** **10b — Minimal signed owner override.** **10c — Generalized replay** runs only if measured residual replacement-run cost still justifies it; otherwise retain the deferral.
+8. **11a — Driver-owned implementation commit checkpoint.** **11b — Workspace/journey scheduling.** Keep Git ownership outside provider semantics, and address journey parallelism only after Package 4 addresses Cargo integration-crate compilation.
+
+Stop after Package 11 unless the owner explicitly authorizes later roadmap work.
+
+#### Operating discipline for the remaining runs
+
+Every item above is a fresh high-rigor software-change run with unbound implementation and review slots. Keep one checkout writer at a time. Use one bounded Luna implementation handoff when useful; the Sol driver integrates and owns narrow corrections. Do not start a second broad writer after a timeout.
+
+Give reviewers compact, self-contained evidence packets containing the accepted intent, current report/checkpoint, relevant diff and public-proof excerpts, exact policy text, and output schema. Reviewers do not edit files or rerun tests. Target 2–4 turns and about two minutes for ordinary review and 3–6 turns and about five minutes for challenge review; interrupt obvious loops and retry once with the same model and a smaller packet.
+
+During implementation, run focused package, library, and named-integration-test commands. Before review, map every acceptance claim to an exact public observable assertion, compare changed operator documentation for contradictions, run formatting, `git diff --check`, report assertions, and changed-surface checks. After the implementation stabilizes, run the full workspace baseline and only the public source journeys and release checks required by the touched-boundary matrix. Do not commission duplicate workspace runs from reviewers or add packaged/reconstructed proof when the changed boundary does not require it.
+
+Drive every run through both ordinary and challenge implementation review, fresh validation, ordinary and challenge validation review, and terminal `end`. Preserve accepted and resolved findings in the current ledger rather than replacing history with an empty snapshot. Use Package 3a focused invocation for task-owned repair; after Package 5 ships, use captured ad hoc repair only when no frozen task honestly owns the finding. Stage only the accepted package surface, inspect the staged paths and diff, commit, push `main`, verify the push, and only then launch the successor.
 
 1. **Authorize the product constraint.** Run [Make the minimum-provenance product mandate authoritative](#make-the-minimum-provenance-product-mandate-authoritative) first. It gives every later design a binding YAGNI/KISS burden and is the first dogfood run.
 2. **Make the current workflow easier to drive.** Compose [Confirm the rigor profile before start](#confirm-the-rigor-profile-before-start), [Make late-phase backtracking proportional and explicit](#make-late-phase-backtracking-proportional-and-explicit), and [Reframe adversarial review terminology](#reframe-adversarial-review-terminology) only if intent confirms one documentation-and-procedure surface. These changes reduce avoidable operator mistakes without waiting for engine mechanics.
