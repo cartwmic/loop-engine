@@ -417,7 +417,7 @@ Appending:
 - does not invoke the provider;
 - cannot create or alter engine-authored invocation records.
 
-The existing append path also exposes two explicit driver acts, `unchanged-carry` and `override-carry`. Both consult the durable change report; unchanged-carry refuses changed covered inputs, while override-carry requires the driver to name every changed input it overrides. A carry preserves originating author and selected-output identity while recording the attesting driver and act separately. The engine does not decide whether the carry was warranted.
+> **Non-normative transition note:** The existing append path currently exposes two shipped driver acts, `unchanged-carry` and `override-carry`. Both consult the durable change report; unchanged-carry refuses changed covered inputs, while override-carry requires the driver to name every changed input it overrides. This current shipped behavior is not an exception to proposed LE-107 and does not authorize new carry requirements. This note chooses no future carry fields, schemas, or mechanics. A carry preserves originating author and selected-output identity while recording the attesting driver and act separately. The engine does not decide whether the carry was warranted.
 
 Only active runs accept context records.
 
@@ -1547,20 +1547,30 @@ durable `allow` and `deny` results.
 - Coverage: e2e/journey
 
 ### LE-103: `unchanged-carry` on the existing append path consults the durable change report and refuses when any covered input changed. A successful carry preserves the originating author's identity and selected-output digest, records the attesting driver and carry act separately, and makes the result distinguishable from a fresh worker judgment. It attests the exact report snapshot it saw; later drift makes the contribution non-standing until another explicit act.
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
+
+> **Non-normative transition note — current shipped behavior:** The existing append path still exposes `unchanged-carry` with the behavior described above until the separate carry/stable-reference redesign replaces it. This note records the shipped transition only; it is not an exception to LE-107 and does not authorize new carry requirements.
 
 ### LE-104: `override-carry` on the existing append path is distinct from `unchanged-carry` and requires the driver to name every changed covered input. The durable run exposes the act and overridden inputs; the engine records the attestation but does not decide whether the carry was warranted.
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
+
+> **Non-normative transition note — current shipped behavior:** The existing append path still exposes `override-carry` with the behavior described above until the separate carry/stable-reference redesign replaces it. This note records the shipped transition only; it is not an exception to LE-107 and does not authorize new carry requirements.
 
 ### LE-105: A software-change evidence record linked to selected originating bytes is accepted only when its invocation, assignment, selected attempt, digest, and path match the engine-selected durable record and its availability and mechanical judgment fields agree with those bytes. Fabricated identity is refused at append; missing, changed, unavailable, or disagreeing bytes are unverified and cannot satisfy a checked transition; worker invocation records alone remain inert.
 - Status: live
 - Coverage: e2e/journey
 
+Its identity checks are a cheap mechanical origin boundary, not a precedent for adding new driver-authored provenance duplication under LE-107.
+
 ### LE-106: Released provider binaries retain sufficient embedded data for `data-dump`, shipped profiles, templates, and reviewer protocol, and a described/evaluated run can use that data without a checkout at runtime.
 - Status: live
 - Coverage: e2e/journey
+
+### LE-107: Minimum provenance is a paramount product constraint.
+- Status: live
+- Coverage: e2e/journey
+
+> **Amendment history — this proposal was accepted through owner-delegated artifact review on 2026-08-26; its authority is established only by a separate commit.** For Loop Engine and the software-change provider, assume a trusted sole owner and well-intentioned, instruction-following drivers. Provenance serves only fresh resume, focused invalidation, honest bypass, debugging, and visible history. Capture each fact once under a stable engine-owned identity and reference that origin; keep ordinary driver-authored metadata small. Trust explicit driver declarations of materiality and carry applicability except for cheap mechanical identity mismatches. Prefer the narrowest honest correction, preserve valid work, and do not replay still-valid work merely for ceremony. Actual failures, findings, overrides, evidence, checkpoints, and terminal history remain visible. Every proposed provenance field, identity dimension, gate, state, or replay rule must identify the observed ordinary-use failure it prevents and explain why existing durable state, history, capture, or driver judgment is insufficient. This preserves LE-18 and the engine/caller/provider ownership boundary: core assigns context no truth or provenance, callers perform work externally, and providers evaluate the exact selected transition without routing or judging semantic truth. It adds no engine truth model, gate, state, replay system, or provenance framework.
 
 ## 15. Complexity Guardrails
 

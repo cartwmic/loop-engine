@@ -3601,7 +3601,6 @@ def prove_selected_attempt_ledger_linkage(
     )
     if source_result.get("status") != "completed":
         raise WorkSlotJourneyFailure(f"paired carry source append failed: {source_result}")
-    # bookends:LE-103 and LE-104 — both explicit carry acts preserve provenance and require named overrides when the report changes.
     carried_clean = paired_call(
         [
             "append",

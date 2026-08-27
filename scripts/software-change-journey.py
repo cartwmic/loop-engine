@@ -3795,7 +3795,6 @@ else:
             # bookends:LE-99 — the selected-attempt journey exposes durable assignment identity, digest, path, and coverage gap.
             # bookends:LE-100 — the selected invocation's public show asserts deterministic change-report dimensions.
             # bookends:LE-105 — the public provider gate refuses content disagreement with selected bytes.
-            # bookends:LE-104 — override-carry names changed inputs on the public append path.
             work_slot_journey.prove_selected_attempt_ledger_linkage(
                 engine=self.engine,
                 provider=self.provider,
@@ -3803,7 +3802,6 @@ else:
                 fixture_root=self.fixture_root,
                 work_dir=proof_root / "selected-attempt-ledger",
             )
-            # bookends:LE-103 — unchanged-carry consults the public change report.
             # A38 — subset re-execution, explicit remainder carry, and a later checked transition.
             work_slot_journey.prove_subset_carry_checked(
                 engine=self.engine,
@@ -4851,6 +4849,9 @@ def assert_worker_data_skill_and_root_policy() -> None:
         )
 
     policy = (repository / "AGENTS.md").read_text(encoding="utf-8")
+    provider_policy = (repository / "crates/software-change-provider/AGENTS.md").read_text(
+        encoding="utf-8"
+    )
     policy_fragments = (
         "Fan-out spawn/capture/conformance mechanics belong to the engine.",
         "Providers/callers own role framing and output content",
@@ -4860,10 +4861,39 @@ def assert_worker_data_skill_and_root_policy() -> None:
         "overrun re-show and zero-axis review-binding rules",
         "[skills/using-loop-engine/SKILL.md](skills/using-loop-engine/SKILL.md)",
         "[docs/agent-usage.md](docs/agent-usage.md)",
+        "before the commit introducing `LE-107`, the owner-accepted wording is a proposal; once it is present in committed `docs/PRD.md`, that PRD is authoritative.",
+        "This AGENTS summary is subordinate and referential, not a second product policy",
+        "observed ordinary-use failure and why a smaller mechanism using existing durable state, history, capture, or driver judgment is insufficient",
+        "Keep driver-authored metadata small, trust explicit materiality and carry declarations except for cheap mechanical identity mismatches",
+        "prefer the narrowest honest correction, and preserve rich engine-generated history",
+        "[`docs/PRD.md`](docs/PRD.md) LE-107",
     )
-    for fragment in policy_fragments:
-        if fragment not in policy:
-            raise JourneyFailure(f"root AGENTS.md omitted policy fragment {fragment!r}")
+    provider_policy_fragments = (
+        "before the commit introducing engine `LE-107`, the owner-accepted wording is a proposal; once it is present in committed `docs/PRD.md`, it is authoritative.",
+        "subordinate to that engine PRD and this provider PRD, and is referential rather than a second authority",
+        "Apply LE-107's observed-ordinary-failure/smaller-mechanism burden",
+        "retain R8 and R13 freshness and subject/identity checks, but do not repeat mechanically available invocation, attempt, digest, path, or coverage facts in driver-authored records",
+        "Preserve R16's independent-author aggregation and visible verdict history",
+        "R21's retained review, materiality, triage, source-visibility, and no-waiver rules remain",
+        "stable-reference and carry runtime redesign is separate work",
+    )
+    # bookends:LE-107 — the public self-test checks referential root/provider operational summaries against the PRD authority boundary.
+    for label, text, fragments in (
+        ("root", policy, policy_fragments),
+        ("software-change provider", provider_policy, provider_policy_fragments),
+    ):
+        for fragment in fragments:
+            if fragment not in text:
+                raise JourneyFailure(f"{label} AGENTS.md omitted policy fragment {fragment!r}")
+        lowered = text.lower()
+        for reversal in (
+            "agents.md is authoritative",
+            "agents.md is the requirement authority",
+            "this summary is authoritative",
+            "this summary is a product policy",
+        ):
+            if reversal in lowered:
+                raise JourneyFailure(f"{label} AGENTS.md reverses PRD authority with {reversal!r}")
     assert_focused_boundary_scenarios()
     print("worker-data skill/root policy assertions passed")
 
