@@ -588,6 +588,46 @@ class Journey:
             raise JourneyFailure(f"provider describe did not return JSON: {error}") from error
         if workflow.get("id") != "software-change" or workflow.get("initial_state") != "explore":
             raise JourneyFailure("provider startup probe returned the wrong workflow")
+        self._assert_challenge_review_contract(workflow)
+
+    @staticmethod
+    def _assert_challenge_review_contract(workflow: Dict[str, Any]) -> None:
+        expected = {
+            "intent-adversarial-review": "Intent challenge review",
+            "design-adversarial-review": "Design challenge review",
+            "plan-adversarial-review": "Plan challenge review",
+            "implementation-adversarial-review": "Implementation challenge review",
+            "validation-adversarial-review": "Validation challenge review",
+        }
+        states = {
+            state.get("id"): state
+            for state in workflow.get("states", [])
+            if isinstance(state, dict)
+        }
+        for state_id, title in expected.items():
+            state = states.get(state_id)
+            if not isinstance(state, dict):
+                raise JourneyFailure(f"challenge-review state missing machine ID {state_id}")
+            if state.get("title") != title:
+                raise JourneyFailure(
+                    f"{state_id} exposed human title {state.get('title')!r}, expected {title!r}"
+                )
+            instructions = str(state.get("instructions", "")).lower()
+            for clause in (
+                "challenge review",
+                "meaningfully falsify",
+                "current supplied evidence",
+                "violated frozen obligation",
+                "concrete consequence",
+                "why existing validation does not resolve",
+                "hypothetical threats",
+                "invented requirements",
+                "mechanism-for-its-own-sake",
+            ):
+                if clause not in instructions:
+                    raise JourneyFailure(f"{state_id} challenge guidance omitted {clause!r}")
+            if "adversarial review" in instructions:
+                raise JourneyFailure(f"{state_id} leaked machine wording into instructions")
 
     def _engine_for(
         self,
@@ -2124,7 +2164,7 @@ class Journey:
                 event="show",
             )
         print(
-            "full software-change journey passed: parent and adversarial reviews walked, last-hop passed"
+            "full software-change journey passed: parent and challenge reviews walked, last-hop passed"
         )
 
         history = self._engine(["history", self.run_id], state=self.state, event="history")
@@ -4894,8 +4934,89 @@ def assert_worker_data_skill_and_root_policy() -> None:
         ):
             if reversal in lowered:
                 raise JourneyFailure(f"{label} AGENTS.md reverses PRD authority with {reversal!r}")
+    assert_operator_contract_surfaces()
     assert_focused_boundary_scenarios()
     print("worker-data skill/root policy assertions passed")
+
+
+def assert_operator_contract_surfaces() -> None:
+    """Assert the existing public procedure exposes the accepted operator contract."""
+    repository = Path(__file__).resolve().parent.parent
+    root_policy = (repository / "AGENTS.md").read_text(encoding="utf-8")
+    engine_skill = (repository / "skills/using-loop-engine/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    provider_skill = (
+        repository / "crates/software-change-provider/skills/using-software-change-provider/SKILL.md"
+    ).read_text(encoding="utf-8")
+    protocol = (
+        repository / "crates/software-change-provider/data/reviewer-protocol.md"
+    ).read_text(encoding="utf-8")
+    contract = "\n".join((root_policy, engine_skill, provider_skill, protocol))
+    for clause in (
+        "Exact profile and external-fleet preflight",
+        "config_version",
+        "live review states",
+        "normalized `required_authors`",
+        "Bookends enabled/disabled state",
+        "PROFILE_SHA256",
+        "rehash that same file immediately",
+        "two separate authorities",
+        "role-to-model manifest",
+        "separate owner confirmation",
+        "pi --list-models",
+        "preserve launch evidence",
+        "never fall back",
+        "validation-report-only",
+        "revise-implementation",
+        "revise-plan",
+        "revise-design",
+        "revise-intent",
+        "captured ad hoc repair",
+        "override-carry",
+        "challenge review",
+        "meaningfully falsify",
+        "current supplied evidence",
+        "concrete consequence",
+    ):
+        if clause.lower() not in contract.lower():
+            raise JourneyFailure(f"operator procedure omitted {clause!r}")
+
+    # Shipped profile bytes are the immutable source of profile-derived facts;
+    # comparing against HEAD catches accidental edits without hard-coding any
+    # run-specific model or profile values into the journey.
+    for profile in sorted((repository / "crates/software-change-provider/data/configs").glob("*.json")):
+        relative = profile.relative_to(repository).as_posix()
+        try:
+            committed = subprocess.check_output(
+                ["git", "show", f"HEAD:{relative}"], cwd=repository
+            )
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise JourneyFailure(f"could not read committed profile bytes for {relative}: {error}") from error
+        if profile.read_bytes() != committed:
+            raise JourneyFailure(f"shipped profile/config bytes changed: {relative}")
+
+    workflow_source = (
+        repository / "crates/software-change-provider/src/workflow.rs"
+    ).read_text(encoding="utf-8")
+    for identifier in (
+        "intent-adversarial-review",
+        "design-adversarial-review",
+        "plan-adversarial-review",
+        "implementation-adversarial-review",
+        "validation-adversarial-review",
+    ):
+        if identifier not in workflow_source:
+            raise JourneyFailure(f"machine review identifier was removed: {identifier}")
+    for clause in (
+        "challenge review",
+        "meaningfully falsify",
+        "current supplied evidence",
+        "concrete consequence",
+    ):
+        if clause not in workflow_source:
+            raise JourneyFailure(f"runtime challenge wording omitted {clause!r}")
+
 
 
 def assert_focused_boundary_scenarios() -> None:

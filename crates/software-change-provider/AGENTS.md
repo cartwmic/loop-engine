@@ -18,7 +18,7 @@ Per-run obligations are frozen in immutable `initial_input` (`review_policies`, 
 
 Operationally, before the commit introducing engine `LE-107`, the owner-accepted wording is a proposal; once it is present in committed `docs/PRD.md`, it is authoritative. This summary remains subordinate to that engine PRD and this provider PRD, and is referential rather than a second authority. Apply LE-107's observed-ordinary-failure/smaller-mechanism burden; retain R8 and R13 freshness and subject/identity checks, but do not repeat mechanically available invocation, attempt, digest, path, or coverage facts in driver-authored records. Preserve R16's independent-author aggregation and visible verdict history. R21's retained review, materiality, triage, source-visibility, and no-waiver rules remain; stable-reference and carry runtime redesign is separate work, so this summary chooses no future fields, schemas, or mechanics.
 
-Shipped profile versions currently in-tree: `minimal-6`, `standard-7`, `high-rigor-7`. Evidence `config_version` must match the run's frozen value, not whatever file is currently shipped. Shipped profiles omit `work_slot_bindings`; bound workers are opt-in, and review bindings use the skill's deterministic per-axis constructor. Gate keys are `intent-review` and `validation-review` (not `intent` or `validation`). Standard and high-rigor ship 1:1 adversarial counterparts (`required_authors` 1) on every parent review list; minimal ships no adversarial lists.
+Shipped profile versions currently in-tree: `minimal-6`, `standard-7`, `high-rigor-7`. Evidence `config_version` must match the run's frozen value, not whatever file is currently shipped. Shipped profiles omit `work_slot_bindings`; bound workers are opt-in, and review bindings use the skill's deterministic per-axis constructor. Gate keys are `intent-review` and `validation-review` (not `intent` or `validation`). Standard and high-rigor ship 1:1 challenge counterparts (`required_authors` 1) on every parent review list under unchanged `*-adversarial-review` IDs; minimal ships no challenge lists.
 
 ## Workflow
 
@@ -27,7 +27,7 @@ cargo test -p software-change-provider
 cargo fmt --all -- --check
 ```
 
-Crate tests are not a substitute for the public-boundary journey. After any crate change, also run the repository source journey from the repo root (build `loop-engine` and `software-change` first). `python3 scripts/software-change-journey.py --self-test` must print `worker-data skill/root policy assertions passed`. Source full mode must print `full software-change journey passed` after walking parent and adversarial reviews, `stitched software-change journey passed` after a second run on shipped `minimal.json`, and `contracted fan-out failure` after the bound nonconforming-worker overlay proof:
+Crate tests are not a substitute for the public-boundary journey. After any crate change, also run the repository source journey from the repo root (build `loop-engine` and `software-change` first). `python3 scripts/software-change-journey.py --self-test` must print `worker-data skill/root policy assertions passed`. Source full mode must print `full software-change journey passed` after walking parent and challenge reviews, `stitched software-change journey passed` after a second run on shipped `minimal.json`, and `contracted fan-out failure` after the bound nonconforming-worker overlay proof:
 
 ```sh
 python3 scripts/software-change-journey.py \

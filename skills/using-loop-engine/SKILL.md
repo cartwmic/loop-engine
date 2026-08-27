@@ -33,6 +33,12 @@ args = []
 
 `start` initial input and `append` data accept JSON inline, `@FILE`, or `-` (stdin).
 
+## Confirm profile and external fleet before start
+
+For a software-change run, confirm two separate authorities immediately before `start`: the exact selected per-run profile file and, when work is unbound, an owner-confirmed external role-to-model manifest. The profile supplies `config_version`, every nonempty live review state and axis, normalized `required_authors` (missing means one), Bookends enabled/disabled state, and frozen `work_slot_bindings` plus any nested model arguments. Derive and display those facts from the same file passed as `@$PROFILE`; print its exact bytes and SHA-256, run `preview-bindings` on its exact bindings, obtain explicit owner confirmation, and rehash that file immediately before `start`. Never substitute a shipped default or claim the profile hash covers unbound assignments.
+
+Keep the external manifest separate from the profile and bindings, with generic per-run entries such as `{"ordinary-reviewer":"MODEL_ID","challenge-reviewer":"MODEL_ID"}` plus every other role actually launched (for example, analyst, writer, or implementer). Print its exact bytes and SHA-256 and obtain separate owner confirmation. For each unbound launch, run `pi --list-models`, require the exact confirmed model ID, pass that ID in the launch arguments, and preserve evidence of the role, manifest hash, and actual model argument. If the exact model cannot launch or differs from the manifest, stop; never fall back, substitute, or silently use a default. With all slots unbound, this manifest governs external launches while the profile still governs workflow obligations.
+
 ## Commands
 
 ```text

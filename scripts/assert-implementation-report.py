@@ -14,7 +14,7 @@ from typing import Any, NoReturn, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# Plan revision 7 final-integration-proof command matrix, stored as Python
+# Plan revision 3 final-integration-proof command matrix, stored as Python
 # data so quoted pipefail commands are not re-encoded through a shell.
 FINAL_MATRIX_COMMANDS = [
     "cargo test --workspace",
@@ -46,7 +46,7 @@ FINAL_MATRIX_COMMANDS = [
     "git diff --check",
     "outside-checkout public binary smoke for fan-out retry, checkpoint, and help",
     "software-change checkpoint --phase implementation --artifact-root <artifact_root> --working-directory <checkout>",
-    "python3 scripts/assert-implementation-report.py --report <artifact_root>/implementation-report.json --revision 1 --plan-revision 7",
+    "python3 scripts/assert-implementation-report.py --report <artifact_root>/implementation-report.json --revision 1 --plan-revision 3",
 ]
 PROOF_MARKERS = [
     "worker-data skill/root policy assertions passed",
@@ -58,7 +58,7 @@ PROOF_MARKERS = [
     "LE-13 final-state scenario passed: outgoing transition rejected before run creation",
     "LE-14 initially-final scenario passed: run created final",
     "LE-15 terminal-mutation scenario passed: append/event/terminate rejected without history change",
-    "full software-change journey passed: parent and adversarial reviews walked, last-hop passed",
+    "full software-change journey passed: parent and challenge reviews walked, last-hop passed",
     "stitched software-change journey passed: empty review lists omitted, last-hop passed",
     "checkpoint source scenarios passed: report-only denial, seven implementation/validation state invalidations, validation recovery, and current-tree final proof",
     "current and isolated-index Bookends gates returned GREEN with BOOKENDS_BYPASS unset",

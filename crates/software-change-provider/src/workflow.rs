@@ -451,15 +451,15 @@ fn hop_event(hop: Hop, last: bool) -> &'static str {
 
 fn adversarial_title(parent_title: &str) -> String {
     match parent_title.strip_suffix(" review") {
-        Some(stem) => format!("{stem} adversarial review"),
-        None => format!("{parent_title} adversarial review"),
+        Some(stem) => format!("{stem} challenge review"),
+        None => format!("{parent_title} challenge review"),
     }
 }
 
 fn adversarial_instructions(phase: &Phase, bookends_enabled: bool) -> String {
     with_bookends_guidance(
         &format!(
-            "This counterpart adversarial review follows parent `{}` and falsifies that parent's pass claim against named obligations. {}",
+            "This challenge review follows parent `{}` and must meaningfully falsify that parent's pass claim only with current supplied evidence, a violated frozen obligation, a concrete consequence for change success, and why existing validation does not resolve the issue. Reject hypothetical threats, invented requirements, silence or style complaints, and mechanism-for-its-own-sake findings; do not waive material failures. {}",
             phase.parent_review, phase.parent_review_instructions
         ),
         bookends_enabled,
@@ -1077,6 +1077,57 @@ mod tests {
         }
         assert!(!crate::config::GATE_IDS.contains(&"intent"));
         assert!(!crate::config::GATE_IDS.contains(&"validation"));
+    }
+
+    #[test]
+    fn challenge_review_wording_preserves_machine_ids_and_failure_burden() {
+        let workflow = union();
+        for phase in PHASES {
+            let state = workflow
+                .states
+                .iter()
+                .find(|state| state.id == phase.adversarial_review.into())
+                .unwrap_or_else(|| panic!("missing {}", phase.adversarial_review));
+            assert_eq!(
+                state.title,
+                format!(
+                    "{} challenge review",
+                    phase.parent_review_title.trim_end_matches(" review")
+                )
+            );
+            let instructions = state.instructions.to_ascii_lowercase();
+            for clause in [
+                "challenge review",
+                "meaningfully falsify",
+                "current supplied evidence",
+                "violated frozen obligation",
+                "concrete consequence",
+                "why existing validation does not resolve",
+                "hypothetical threats",
+                "invented requirements",
+                "mechanism-for-its-own-sake",
+            ] {
+                assert!(
+                    instructions.contains(clause),
+                    "{} challenge guidance missing {clause:?}",
+                    phase.adversarial_review
+                );
+            }
+            assert!(
+                !state
+                    .title
+                    .to_ascii_lowercase()
+                    .contains("adversarial review")
+                    && !instructions.contains("adversarial review"),
+                "{} leaked machine terminology into human-facing wording",
+                phase.adversarial_review
+            );
+            assert!(
+                phase.adversarial_review.contains("adversarial"),
+                "machine review ID changed: {}",
+                phase.adversarial_review
+            );
+        }
     }
 
     #[test]
