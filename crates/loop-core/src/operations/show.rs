@@ -759,14 +759,14 @@ fn current_state_instructions_for(run: &Run, stored: &str) -> String {
         Some((slot, binding)) => {
             let args = serde_json::to_string(&binding.args).unwrap_or_else(|_| "[]".to_owned());
             format!(
-                "Bound work slot `{slot_id}` is configured. Frozen worker CLI: command={command} args={args}. Legal start: loop-engine invoke {run_id} {slot_id}. Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. Captures are at the named capture directory on the invocation view and invoke result. The driver triages worker output, appends provider-shaped records, then requests the shown event. On overrun run show immediately before re-invoking the same slot. On failed inspect capture_dir/summary.json and captured stdout before stderr. Consult the change report of record before carrying prior work: unchanged-carry is for inputs reported unchanged; override-carry names every changed input it overrides. Neither act judges whether the carry was warranted.",
+                "Bound work slot `{slot_id}` is configured. Frozen worker CLI: command={command} args={args}. Legal start: loop-engine invoke {run_id} {slot_id}. Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. Captures are at the named capture directory on the invocation view and invoke result. The driver triages worker output, appends provider-shaped records, then requests the shown event. On overrun run show immediately before re-invoking the same slot. On failed inspect capture_dir/summary.json and captured stdout before stderr. Consult the change report of record before reuse. For review reuse, append one evidence-applicability record referencing the original evidence, current target, attesting driver, and short reason; semantic applicability remains the driver's judgment.",
                 slot_id = slot.id,
                 command = binding.command,
                 run_id = run.id,
             )
         }
         None => format!(
-            "{stored} Consult the change report of record before carrying prior work: unchanged-carry is for inputs reported unchanged; override-carry names every changed input it overrides. Neither act judges whether the carry was warranted."
+            "{stored} Consult the change report of record before reuse. For review reuse, append one evidence-applicability record referencing the original evidence, current target, attesting driver, and short reason; semantic applicability remains the driver's judgment."
         ),
     }
 }
@@ -1492,8 +1492,10 @@ mod tests {
             "Bound work slot `slot-1` is configured. Frozen worker CLI: command=worker args=[\"--flag\",\"value\"]. Legal start: loop-engine invoke run-1 slot-1."
         ));
         assert!(instructions.contains("change report of record"));
-        assert!(instructions.contains("unchanged-carry"));
-        assert!(instructions.contains("override-carry"));
+        assert!(instructions.contains("evidence-applicability"));
+        assert!(instructions.contains("attesting driver"));
+        assert!(!instructions.contains("unchanged-carry"));
+        assert!(!instructions.contains("override-carry"));
         let triage = [
             "Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work.",
             "Captures are at the named capture directory on the invocation view and invoke result.",

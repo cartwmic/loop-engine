@@ -17,12 +17,19 @@ fn ledger() -> Value {
         "subject": "intent.json",
         "subject_revision": "1",
         "author": {"name": "driver", "kind": "agent"},
-        "repository_state": null,
         "findings": []
     })
 }
 
+fn selected_path(root: &TestDir) -> std::path::PathBuf {
+    root.path()
+        .join("selected-capture/worker-0/attempts/1/stdout")
+}
+
 fn linked_evidence(root: &TestDir, result: &str, findings: &str) -> Value {
+    let capture = root.path().join("selected-capture");
+    let selected = selected_path(root);
+    std::fs::create_dir_all(selected.parent().unwrap()).unwrap();
     let bytes = serde_json::to_vec(&json!({
         "axis": "axis",
         "author": {"name": "reviewer", "kind": "agent"},
@@ -30,8 +37,8 @@ fn linked_evidence(root: &TestDir, result: &str, findings: &str) -> Value {
         "findings": findings
     }))
     .unwrap();
-    root.write_text("review.stdout", std::str::from_utf8(&bytes).unwrap());
-    let data = json!({
+    std::fs::write(&selected, &bytes).unwrap();
+    json!({
         "gate": "intent-review",
         "policy_id": "axis",
         "result": result,
@@ -40,15 +47,23 @@ fn linked_evidence(root: &TestDir, result: &str, findings: &str) -> Value {
         "subject": "intent.json",
         "subject_revision": "1",
         "config_version": "test-1",
-        "originating_output": {
+        "origin": {
+            "kind": "selected-assignment-output",
+            "id": "invocation-1",
+            "assignment_id": "worker-0"
+        },
+        "loop_engine_origin": {
             "invocation_id": "invocation-1",
             "assignment_id": "worker-0",
             "selected_attempt": 1,
-            "sha256": digest(&bytes),
-            "path": root.path().join("review.stdout").to_string_lossy()
+            "selected_output_sha256": digest(&bytes),
+            "selected_output_path": selected.to_string_lossy(),
+            "capture_dir": capture.to_string_lossy(),
+            "command": "/bin/worker",
+            "args": ["--review"],
+            "binding": {"command": "/bin/worker", "args": ["--review"]}
         }
-    });
-    data
+    })
 }
 
 fn evaluate(root: &TestDir, evidence: Value) -> Value {
@@ -66,7 +81,7 @@ fn evaluate(root: &TestDir, evidence: Value) -> Value {
 }
 
 #[test]
-fn linked_judgment_must_agree_with_originating_bytes() {
+fn concise_origin_judgment_must_agree_with_engine_selected_bytes() {
     let root = TestDir::new("linkage-agreement");
     root.write_json(
         "intent.json",
@@ -92,14 +107,14 @@ fn linked_judgment_must_agree_with_originating_bytes() {
 }
 
 #[test]
-fn linked_judgment_fails_unverified_when_origin_bytes_change_or_disappear() {
+fn concise_origin_fails_unverified_when_selected_bytes_change_or_disappear() {
     let root = TestDir::new("linkage-unverified");
     root.write_json(
         "intent.json",
         &json!({"revision": "1", "author": {"name": "owner", "kind": "human"}}),
     );
     let evidence = linked_evidence(&root, "pass", "");
-    root.write_text("review.stdout", "changed");
+    std::fs::write(selected_path(&root), b"changed").unwrap();
     let refused = evaluate(&root, evidence.clone());
     assert!(refused["feedback"]["details"]["diagnostics"]
         .as_array()
@@ -109,7 +124,7 @@ fn linked_judgment_fails_unverified_when_origin_bytes_change_or_disappear() {
         .any(|diagnostic| diagnostic["category"] == "unverified"));
 
     let evidence = linked_evidence(&root, "pass", "");
-    std::fs::remove_file(root.path().join("review.stdout")).unwrap();
+    std::fs::remove_file(selected_path(&root)).unwrap();
     let refused = evaluate(&root, evidence);
     assert!(refused["feedback"]["details"]["diagnostics"]
         .as_array()
@@ -117,4 +132,121 @@ fn linked_judgment_fails_unverified_when_origin_bytes_change_or_disappear() {
         .iter()
         .flat_map(|axis| axis["diagnostics"].as_array().unwrap())
         .any(|diagnostic| diagnostic["category"] == "unverified"));
+}
+
+#[test]
+fn legacy_verbose_evidence_linkage_is_not_a_parallel_provider_path() {
+    let root = TestDir::new("legacy-linkage");
+    root.write_json(
+        "intent.json",
+        &json!({"revision": "1", "author": {"name": "owner", "kind": "human"}}),
+    );
+    let mut evidence = linked_evidence(&root, "pass", "");
+    evidence["originating_output"] = json!({
+        "invocation_id": "invocation-1",
+        "assignment_id": "worker-0",
+        "selected_attempt": 1,
+        "sha256": evidence["loop_engine_origin"]["selected_output_sha256"],
+        "path": selected_path(&root).to_string_lossy()
+    });
+    evidence.as_object_mut().unwrap().remove("origin");
+    evidence
+        .as_object_mut()
+        .unwrap()
+        .remove("loop_engine_origin");
+    let refused = evaluate(&root, evidence);
+    assert!(refused["feedback"]["details"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|axis| axis["diagnostics"].as_array().unwrap())
+        .any(|diagnostic| diagnostic["category"] == "unverified"));
+}
+
+#[test]
+fn applicability_resolves_original_evidence_and_keeps_attestation_separate() {
+    let root = TestDir::new("applicability");
+    root.write_json(
+        "intent.json",
+        &json!({"revision": "1", "author": {"name": "owner", "kind": "human"}}),
+    );
+    let mut request = base_request(
+        axis_config(&root, "axis"),
+        checked("intent-review", "approved", "design"),
+    );
+    request["context"] = json!([
+        context_json(
+            "review-evidence",
+            json!({
+                "gate": "intent-review",
+                "policy_id": "axis",
+                "result": "pass",
+                "findings": "",
+                "author": {"name": "original-reviewer", "kind": "agent"},
+                "subject": "intent.json",
+                "subject_revision": "1",
+                "config_version": "test-1"
+            }),
+            1,
+        ),
+        context_json(
+            "evidence-applicability",
+            json!({
+                "origin": {"kind": "context-record", "id": "context-1"},
+                "target": {"subject": "intent.json", "revision": "1", "checkpoint": null},
+                "attesting_driver": {"name": "driver", "kind": "human"},
+                "reason": "The original review still applies to this target."
+            }),
+            2,
+        ),
+        context_json("finding-ledger", ledger(), 3)
+    ]);
+    // Keep the declared revision while changing ordinary artifact content:
+    // applicability is accepted because the driver declared it, not because
+    // the provider inferred semantic equivalence from this edit.
+    root.write_json(
+        "intent.json",
+        &json!({"revision": "1", "author": {"name": "owner-after-edit", "kind": "human"}}),
+    );
+    let output = invoke(request);
+    support::assert_exit(&output, 0);
+    assert_eq!(response(&output), json!({"result": "allow"}));
+
+    let mut stale = base_request(
+        axis_config(&root, "axis"),
+        checked("intent-review", "approved", "design"),
+    );
+    stale["context"] = json!([
+        context_json(
+            "review-evidence",
+            json!({
+                "gate": "intent-review",
+                "policy_id": "axis",
+                "result": "pass",
+                "findings": "",
+                "author": {"name": "original-reviewer", "kind": "agent"},
+                "subject": "intent.json",
+                "subject_revision": "1",
+                "config_version": "test-1"
+            }),
+            1,
+        ),
+        context_json(
+            "evidence-applicability",
+            json!({
+                "origin": {"kind": "context-record", "id": "context-1"},
+                "target": {"subject": "design.json", "revision": "1", "checkpoint": null},
+                "attesting_driver": {"name": "driver", "kind": "human"},
+                "reason": "wrong target"
+            }),
+            2,
+        ),
+        context_json("finding-ledger", ledger(), 3)
+    ]);
+    let output = invoke(stale);
+    support::assert_exit(&output, 0);
+    assert_eq!(
+        response(&output)["feedback"]["code"],
+        "software-change-review-incomplete"
+    );
 }

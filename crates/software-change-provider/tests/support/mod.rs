@@ -211,11 +211,6 @@ pub fn finding_ledger(gate: &str, subject: &str, subject_revision: &str, finding
         "subject": subject,
         "subject_revision": subject_revision,
         "author": {"name": "driver", "kind": "agent"},
-        "repository_state": if matches!(subject, "implementation-report.json" | "validation-report.json") {
-            json!("sha256:0000000000000000000000000000000000000000000000000000000000000000")
-        } else {
-            Value::Null
-        },
         "findings": findings
     })
 }
@@ -481,30 +476,7 @@ impl Engine {
         subject_revision: &str,
         findings: Value,
     ) {
-        let mut record = finding_ledger_context(id, gate, subject, subject_revision, findings);
-        if matches!(
-            subject,
-            "implementation-report.json" | "validation-report.json"
-        ) {
-            let artifact_root = self
-                .show(run_id)
-                .initial_input
-                .get("artifact_root")
-                .and_then(Value::as_str)
-                .expect("artifact_root for report ledger")
-                .to_owned();
-            let checkpoint_name = if subject == "implementation-report.json" {
-                "implementation-checkpoint.json"
-            } else {
-                "validation-checkpoint.json"
-            };
-            let checkpoint: Value = serde_json::from_slice(
-                &fs::read(Path::new(&artifact_root).join(checkpoint_name))
-                    .expect("read report checkpoint"),
-            )
-            .expect("parse report checkpoint");
-            record.data["repository_state"] = checkpoint["repository"]["state_sha256"].clone();
-        }
+        let record = finding_ledger_context(id, gate, subject, subject_revision, findings);
         self.append(run_id, record);
     }
 

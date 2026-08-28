@@ -16,20 +16,17 @@ fn digest(bytes: &[u8]) -> String {
     format!("sha256:{:x}", hasher.finalize())
 }
 
-fn source(root: &TestDir) -> Value {
-    let bytes = b"raw reviewer stdout\n";
-    root.write_text("review.stdout", std::str::from_utf8(bytes).unwrap());
+fn source(id: &str) -> Value {
     json!({
-        "kind": "external-artifact",
-        "relative_path": "review.stdout",
-        "output_sha256": digest(bytes)
+        "kind": "context-record",
+        "id": format!("source-{id}"),
     })
 }
 
-fn finding(root: &TestDir, id: &str, statement: &str) -> Value {
+fn finding(_root: &TestDir, id: &str, statement: &str) -> Value {
     json!({
         "id": id,
-        "source": source(root),
+        "source": source(id),
         "policy_id": "axis",
         "statement": statement,
         "disposition": "rejected",
@@ -48,7 +45,6 @@ fn ledger(gate: &str, subject: &str, revision: &str, findings: Value) -> Value {
         "subject": subject,
         "subject_revision": revision,
         "author": {"name": "driver", "kind": "agent"},
-        "repository_state": null,
         "findings": findings
     })
 }
@@ -66,7 +62,48 @@ fn pass_evidence() -> Value {
     })
 }
 
-fn evaluate(root: &TestDir, records: Vec<Value>) -> Value {
+fn evaluate(root: &TestDir, mut records: Vec<Value>) -> Value {
+    let mut source_records = Vec::new();
+    let mut source_ids = std::collections::BTreeSet::new();
+    for record in &records {
+        let Some(data) = record["data"].as_object() else {
+            continue;
+        };
+        let Some(findings) = data.get("findings").and_then(Value::as_array) else {
+            continue;
+        };
+        let gate = data["gate"].as_str().unwrap_or("intent-review");
+        let subject = data["subject"].as_str().unwrap_or("intent.json");
+        let revision = data["subject_revision"].as_str().unwrap_or("1");
+        for finding in findings {
+            let Some(source_id) = finding["source"]["id"].as_str() else {
+                continue;
+            };
+            if !source_id.starts_with("source-") || !source_ids.insert(source_id.to_owned()) {
+                continue;
+            }
+            let statement = finding["statement"].as_str().unwrap_or("candidate");
+            let accepted_unresolved =
+                finding["disposition"] == "accepted" && finding["status"] == "unresolved";
+            source_records.push(json!({
+                "id": source_id,
+                "kind": "review-evidence",
+                "data": {
+                    "gate": gate,
+                    "policy_id": finding["policy_id"],
+                    "result": if accepted_unresolved { "fail" } else { "pass" },
+                    "findings": if accepted_unresolved { statement } else { "" },
+                    "author": {"name": "reviewer", "kind": "agent"},
+                    "subject": subject,
+                    "subject_revision": revision,
+                    "config_version": "test-1"
+                },
+                "sequence": 0,
+                "created_at": 0
+            }));
+        }
+    }
+    records.splice(0..0, source_records);
     let mut request = base_request(
         axis_config(root, "axis"),
         checked("intent-review", "approved", "design"),
@@ -222,7 +259,7 @@ fn omitted_accepted_unresolved_finding_requires_explicit_disposition() {
                     "1",
                     json!([{
                         "id": "F-two",
-                        "source": source(&root),
+                        "source": source("F-two"),
                         "policy_id": "axis",
                         "statement": "candidate",
                         "disposition": "accepted",
@@ -364,7 +401,34 @@ fn stale_subject_unknown_identifiers_and_raw_digest_fail_closed() {
 }
 
 #[test]
-fn work_slot_source_requires_selected_attempt_and_manifest_digest() {
+fn missing_finding_source_context_is_rejected_before_progression() {
+    let root = TestDir::new("ledger-missing-source");
+    root.write_json(
+        "intent.json",
+        &json!({"revision": "1", "author": {"name": "owner", "kind": "human"}}),
+    );
+    let mut missing = finding(&root, "F-missing", "candidate");
+    missing["source"] = json!({"kind": "context-record", "id": "missing-evidence"});
+    let result = evaluate(
+        &root,
+        vec![
+            context_json("review-evidence", pass_evidence(), 1),
+            ledger_record(
+                2,
+                ledger("intent-review", "intent.json", "1", json!([missing])),
+            ),
+        ],
+    );
+    assert_eq!(result["feedback"]["details"]["status"], "malformed");
+    assert!(result["feedback"]["details"]["reasons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|reason| reason.as_str().unwrap().contains("missing context record")));
+}
+
+#[test]
+fn legacy_verbose_finding_source_is_rejected() {
     let root = TestDir::new("ledger-attempts");
     root.write_json(
         "intent.json",
@@ -436,10 +500,10 @@ fn work_slot_source_requires_selected_attempt_and_manifest_digest() {
             ),
         ],
     );
-    assert_eq!(result, json!({"result": "allow"}));
+    assert_eq!(result["feedback"]["details"]["status"], "malformed");
 
-    // A non-selected attempt is still part of the immutable capture. Its
-    // bytes must remain digest-linked even when the ledger cites attempt 1.
+    // The old per-finding attempt/digest coordinate is not a second source
+    // path, even when its capture bytes happen to be present.
     fs::write(worker.join("attempts/2/stdout"), b"tampered").unwrap();
     let result = evaluate(
         &root,
@@ -455,7 +519,7 @@ fn work_slot_source_requires_selected_attempt_and_manifest_digest() {
 }
 
 #[test]
-fn report_repository_state_must_match_the_current_checkpoint() {
+fn report_ledger_derives_current_checkpoint_instead_of_copying_state() {
     let root = TestDir::new("ledger-checkpoint");
     for (subject, fixture) in [
         ("intent.json", "intent-good.json"),
@@ -505,11 +569,6 @@ fn report_repository_state_must_match_the_current_checkpoint() {
         "checkpoint stderr: {:?}",
         checkpoint.stderr
     );
-    let checkpoint: Value = serde_json::from_slice(&checkpoint.stdout).unwrap();
-    let state = checkpoint["repository"]["state_sha256"]
-        .as_str()
-        .unwrap()
-        .to_owned();
     let config = config_artifact_root(load_profile("high-rigor"), &root);
     let mut request = base_request(
         config,
@@ -544,13 +603,12 @@ fn report_repository_state_must_match_the_current_checkpoint() {
             (sequence + 1) as u64,
         ));
     }
-    let mut report_ledger = ledger(
+    let report_ledger = ledger(
         "implementation-review",
         "implementation-report.json",
         "r15",
         json!([]),
     );
-    report_ledger["repository_state"] = json!(state);
     context.push(context_json("finding-ledger", report_ledger, 10));
     request["context"] = Value::Array(context);
     let output = invoke_in_dir(request.clone(), &repository);
@@ -558,31 +616,16 @@ fn report_repository_state_must_match_the_current_checkpoint() {
     assert_eq!(response(&output), json!({"result": "allow"}));
 
     fs::write(repository.join("marker.txt"), b"changed\n").unwrap();
-    let checkpoint = Command::new(provider_binary())
-        .args([
-            "checkpoint",
-            "--phase",
-            "implementation",
-            "--artifact-root",
-            root.path().to_str().unwrap(),
-            "--working-directory",
-            repository.to_str().unwrap(),
-        ])
-        .current_dir(&repository)
-        .bounded_output("software-change finding-ledger checkpoint")
-        .unwrap();
-    assert!(
-        checkpoint.status.success(),
-        "checkpoint stderr: {:?}",
-        checkpoint.stderr
-    );
+    // Do not regenerate the checkpoint: its immutable repository identity is
+    // the evidence that the report/ledger is stale after this edit.
     let output = invoke_in_dir(request, &repository);
     support::assert_exit(&output, 0);
     let value = response(&output);
     assert_eq!(
-        value["feedback"]["details"]["status"],
-        "stale_repository_state"
+        value["feedback"]["code"],
+        "software-change-checkpoint-invalid"
     );
+    assert_eq!(value["feedback"]["details"]["phase"], "checkpoint");
 }
 
 #[test]

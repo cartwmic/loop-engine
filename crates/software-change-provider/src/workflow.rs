@@ -10,8 +10,12 @@ use loop_core::{State, Transition, WorkSlot, Workflow};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
-/// Context kind forwarded on every live review slot's stdin.
+/// Context kinds forwarded to review and implementation slots. The
+/// implementation slot also receives immutable review-evidence sources so
+/// provider-side stable references can be resolved without copying them into
+/// finding-ledger records.
 pub(crate) const FINDING_LEDGER_KIND: &str = "finding-ledger";
+pub(crate) const REVIEW_EVIDENCE_KIND: &str = "review-evidence";
 
 const BOOKENDS_STATE_GUIDANCE: &str = "Bookends overlay: cite at least one live PRD ID in `requirement_ids`; at every durable e2e/journey or declared contract test boundary, use the same live ID in a citation. Bound workers include that citation in their captured result for driver triage. Never mint an ID.";
 
@@ -421,7 +425,11 @@ impl Hop {
             // runner so it can enrich each exact task without widening the
             // inner worker stdin envelope. Other draft workers stay compact.
             Self::Draft(phase) if phase.name == "implementation" => {
-                slot.with_stdin_context_kinds(vec![FINDING_LEDGER_KIND.to_owned()])
+                slot.with_stdin_context_kinds(vec![
+                    FINDING_LEDGER_KIND.to_owned(),
+                    REVIEW_EVIDENCE_KIND.to_owned(),
+                    loop_core::EVIDENCE_APPLICABILITY_KIND.to_owned(),
+                ])
             }
             Self::Draft(_) => slot,
             Self::Parent(_) | Self::Adversarial(_) => {
@@ -615,10 +623,19 @@ mod tests {
         for slot in encoded["work_slots"].as_array().expect("work_slots") {
             let id = slot["id"].as_str().expect("slot id");
             if is_review_slot_id(id) || id == "implement" {
+                let expected = if id == "implement" {
+                    json!([
+                        FINDING_LEDGER_KIND,
+                        REVIEW_EVIDENCE_KIND,
+                        loop_core::EVIDENCE_APPLICABILITY_KIND
+                    ])
+                } else {
+                    json!([FINDING_LEDGER_KIND])
+                };
                 assert_eq!(
                     slot.get("stdin_context_kinds"),
-                    Some(&json!([FINDING_LEDGER_KIND])),
-                    "ledger-aware slot {id} must declare stdin_context_kinds [finding-ledger]"
+                    Some(&expected),
+                    "ledger-aware slot {id} has unexpected stdin_context_kinds"
                 );
             } else {
                 assert!(
@@ -1058,7 +1075,11 @@ mod tests {
             .is_empty());
         assert_eq!(
             slot(&mixed, "implement").stdin_context_kinds,
-            vec![FINDING_LEDGER_KIND]
+            vec![
+                FINDING_LEDGER_KIND,
+                REVIEW_EVIDENCE_KIND,
+                loop_core::EVIDENCE_APPLICABILITY_KIND,
+            ]
         );
         assert_eq!(
             slot(&mixed, "validation-review").stdin_context_kinds,

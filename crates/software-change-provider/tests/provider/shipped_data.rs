@@ -932,16 +932,31 @@ fn reviewer_protocol_defines_convergence_contract() {
         "validation-local `validation-report.json` corrections stay in validation",
         "retry the next checked hop",
         "`revise-implementation`",
+        "evidence-applicability",
+        "selected-assignment-output",
+        "context-record",
+        "engine-resolved",
+        "current target",
     ] {
         assert!(
             protocol.to_ascii_lowercase().contains(clause),
             "reviewer protocol missing convergence clause: {clause}"
         );
     }
-    for forbidden in ["three-round", "circuit breaker", "verdict cap"] {
+    for forbidden in [
+        "three-round",
+        "circuit breaker",
+        "verdict cap",
+        "loop_engine_carry",
+        "originating_output",
+        "external-artifact",
+        "repository_state",
+        "unchanged-carry",
+        "override-carry",
+    ] {
         assert!(
             !protocol.to_ascii_lowercase().contains(forbidden),
-            "reviewer protocol retained breaker-as-verdict language: {forbidden}"
+            "reviewer protocol retained retired linkage language: {forbidden}"
         );
     }
     assert!(!protocol.contains(
@@ -1031,7 +1046,7 @@ fn finding_ledger_template_matches_well_formed_shape() {
         string(&author["kind"], "author.kind"),
         "human" | "agent"
     ));
-    assert!(data["repository_state"].is_null());
+    assert!(data.get("repository_state").is_none());
     let findings = array(&data["findings"], "findings");
     for (index, item) in findings.iter().enumerate() {
         let object = object(item, &format!("findings[{index}]"));
@@ -1049,6 +1064,8 @@ fn finding_ledger_template_matches_well_formed_shape() {
         ] {
             assert!(object.get(key).is_some(), "findings[{index}] missing {key}");
         }
+        assert_eq!(object["source"]["kind"], "context-record");
+        assert!(object["source"]["id"].as_str().is_some());
     }
 }
 

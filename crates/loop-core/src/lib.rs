@@ -32,11 +32,12 @@ pub use ports::{
     AppendContextRequest, AppendContextResult, CarryAct, CarryRequest, CheckedEvaluationSnapshot,
     CheckedEvaluationSnapshotRequest, CommitTransitionRequest, CommitTransitionResult,
     CompleteWorkSlotInvocationRequest, CompleteWorkSlotInvocationResult, CreateRunRequest,
-    CreateRunResult, CreateWorkSlotInvocationRequest, CreateWorkSlotInvocationResult, Persistence,
-    PersistenceConflict, PersistenceError, PersistenceFailure, PersistenceRejection, ProcessError,
-    ProviderError, ProviderGateway, ProviderResolutionError, ProviderResolver, RecordDenialRequest,
-    RecordDenialResult, RunSummary, ShowData, StartedWaiter, TerminateRequest, TerminateResult,
-    WaiterSpawnArgs, WorkSlotProcess,
+    CreateRunResult, CreateWorkSlotInvocationRequest, CreateWorkSlotInvocationResult, EngineOrigin,
+    EvidenceApplicability, OriginReference, Persistence, PersistenceConflict, PersistenceError,
+    PersistenceFailure, PersistenceRejection, ProcessError, ProviderError, ProviderGateway,
+    ProviderResolutionError, ProviderResolver, RecordDenialRequest, RecordDenialResult, RunSummary,
+    ShowData, StartedWaiter, TerminateRequest, TerminateResult, WaiterSpawnArgs, WorkSlotProcess,
+    ENGINE_ORIGIN_KEY, EVIDENCE_APPLICABILITY_KIND, ORIGIN_KEY,
 };
 pub use workflow::{
     resolve_transition, validate_workflow, workflow_validation_errors, TransitionResolutionError,

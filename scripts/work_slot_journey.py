@@ -209,10 +209,10 @@ def assert_bound_redaction(
         "The driver triages worker output, appends provider-shaped records, then requests the shown event. "
         "On overrun run show immediately before re-invoking the same slot. "
         "On failed inspect capture_dir/summary.json and captured stdout before stderr. "
-        "Consult the change report of record before carrying prior work: "
-        "unchanged-carry is for inputs reported unchanged; "
-        "override-carry names every changed input it overrides. "
-        "Neither act judges whether the carry was warranted."
+        "Consult the change report of record before reuse. "
+        "For review reuse, append one evidence-applicability record referencing the "
+        "original evidence, current target, attesting driver, and short reason; "
+        "semantic applicability remains the driver's judgment."
     )
     if text != expected:
         raise WorkSlotJourneyFailure(
@@ -1327,11 +1327,6 @@ def _append_synthetic_finding_ledger(
         "subject": subject,
         "subject_revision": revision,
         "author": {"name": "journey-driver", "kind": "agent"},
-        "repository_state": (
-            None
-            if subject in {"intent.json", "design.json", "plan.json"}
-            else "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-        ),
         "findings": [],
     }
     appended = engine_call(
@@ -1814,17 +1809,9 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
     routing_receipts = routing_root / "receipts"
     routing_capture = routing_root / "captures" / "inv-routing"
     _write_small_plan(routing_root)
-    raw_source = b"routing reviewer stdout\\n"
-    (routing_root / "review.stdout").write_bytes(raw_source)
-    source_digest = "sha256:" + hashlib.sha256(raw_source).hexdigest()
-    routing_source = {
-        "kind": "external-artifact",
-        "relative_path": "review.stdout",
-        "output_sha256": source_digest,
-    }
     routing_finding = {
         "id": "F-route-alpha",
-        "source": routing_source,
+        "source": {"kind": "context-record", "id": "routing-evidence-1"},
         "policy_id": "axis",
         "statement": "route alpha",
         "disposition": "accepted",
@@ -1836,6 +1823,22 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
     }
     routing_context = [
         {
+            "id": "routing-evidence-1",
+            "kind": "review-evidence",
+            "data": {
+                "gate": "plan-review",
+                "policy_id": "axis",
+                "result": "fail",
+                "findings": "route alpha",
+                "author": {"name": "routing-reviewer", "kind": "agent"},
+                "subject": "plan.json",
+                "subject_revision": "1",
+                "config_version": "test-1",
+            },
+            "sequence": 1,
+            "created_at": 1,
+        },
+        {
             "id": "routing-ledger-1",
             "kind": "finding-ledger",
             "data": {
@@ -1844,18 +1847,17 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
                 "subject": "plan.json",
                 "subject_revision": "1",
                 "author": {"name": "driver", "kind": "agent"},
-                "repository_state": None,
                 "findings": [routing_finding],
             },
-            "sequence": 1,
-            "created_at": 1,
+            "sequence": 2,
+            "created_at": 2,
         },
         {
             "id": "routing-proposal-1",
             "kind": "advisory-finding-proposal",
             "data": {"proposals": [{"candidate_source_ids": ["source-1"]}]},
-            "sequence": 2,
-            "created_at": 2,
+            "sequence": 3,
+            "created_at": 3,
         },
     ]
     routing = _run_binding(
@@ -2620,141 +2622,50 @@ def prove_engine_standing_join(
             "dirty A subset reached Dagu or started C before explicit carry"
         )
 
-    unchanged = engine_call(
-        [
-            "append",
-            "--record-id=standing-dirty-a-unchanged",
-            run_id,
-            "unchanged-carry",
-            json.dumps(
-                {
-                    "source_record_id": "",
-                    "invocation_id": recorded["invocation_id"],
-                    "assignment_id": "alpha",
-                    "attesting_driver": {"name": "standing-driver", "kind": "agent"},
-                },
-                separators=(",", ":"),
-            ),
-        ]
-    )
-    if unchanged.get("status") != "rejected" or "task_definition" not in json.dumps(
-        unchanged
-    ):
-        raise WorkSlotJourneyFailure(
-            f"unchanged-carry accepted dirty A: {unchanged}"
+    # A dirty engine-generated task result remains non-standing. The stable
+    # reference contract does not turn generic plan results into semantic
+    # carry acts or ask the driver to enumerate changed inputs.
+    for kind in ("unchanged-carry", "override-carry"):
+        retired = engine_call(
+            [
+                "append",
+                f"--record-id=standing-retired-{kind}",
+                run_id,
+                kind,
+                json.dumps(
+                    {
+                        "source_record_id": "",
+                        "invocation_id": recorded["invocation_id"],
+                        "assignment_id": "alpha",
+                        "attesting_driver": {"name": "standing-driver", "kind": "agent"},
+                    },
+                    separators=(",", ":"),
+                ),
+            ]
         )
-    reobserved = engine_call(["show", run_id])
-    if reobserved.get("status") != "completed":
-        raise WorkSlotJourneyFailure(f"standing join re-show failed: {reobserved}")
-    override = engine_call(
-        [
-            "append",
-            "--record-id=standing-dirty-a-override",
-            run_id,
-            "override-carry",
-            json.dumps(
-                {
-                    "source_record_id": "",
-                    "invocation_id": recorded["invocation_id"],
-                    "assignment_id": "alpha",
-                    "attesting_driver": {"name": "standing-driver", "kind": "agent"},
-                    "overridden_inputs": ["task_definition"],
-                },
-                separators=(",", ":"),
-            ),
-        ]
-    )
-    if override.get("status") != "completed":
-        raise WorkSlotJourneyFailure(f"override-carry did not preserve dirty A: {override}")
-    carry_show = engine_call(["show", run_id])
-    if carry_show.get("status") != "completed":
-        raise WorkSlotJourneyFailure(f"standing join carry show failed: {carry_show}")
-    clean = engine_call(
-        [
-            "append",
-            "--record-id=standing-clean-b-unchanged",
-            run_id,
-            "unchanged-carry",
-            json.dumps(
-                {
-                    "source_record_id": "",
-                    "invocation_id": recorded["invocation_id"],
-                    "assignment_id": "beta",
-                    "attesting_driver": {"name": "standing-driver", "kind": "agent"},
-                },
-                separators=(",", ":"),
-            ),
-        ]
-    )
-    if clean.get("status") != "completed":
-        raise WorkSlotJourneyFailure(f"unchanged-carry refused clean B: {clean}")
-    selected = invoke_until_succeeded(
-        engine_call, run_id, "select", timeout_s=30.0
-    )
-    selected_workers = selected.get("inner_workers")
-    if not isinstance(selected_workers, list) or [
-        worker.get("assignment_id") for worker in selected_workers
-    ] != ["gamma"]:
-        raise WorkSlotJourneyFailure(
-            f"carried subset did not run only C: {selected}"
-        )
-    if (select_receipts / "alpha.stdin").exists() or (
-        select_receipts / "beta.stdin"
-    ).exists():
-        raise WorkSlotJourneyFailure("carried subset restarted A or B")
-
-    # A carry attests the exact report it saw; later drift must invalidate it
-    # rather than making the result permanently standing.
-    connection = sqlite3.connect(database)
-    try:
-        row = connection.execute(
-            "SELECT inner_workers_json FROM work_slot_invocations WHERE invocation_id = ?1",
-            (recorded["invocation_id"],),
-        ).fetchone()
-        if row is None:
-            raise WorkSlotJourneyFailure("carried standing invocation disappeared")
-        drifted_workers = json.loads(row[0])
-        for assignment in ("alpha", "beta"):
-            worker = next(
-                item for item in drifted_workers if item.get("assignment_id") == assignment
+        if retired.get("status") != "rejected" or retired.get("code") != "carry-refused":
+            raise WorkSlotJourneyFailure(
+                f"retired {kind} operation was not rejected: {retired}"
             )
-            definition = dict(worker.get("task_definition") or {})
-            definition["objective"] = f"post-carry drift for {assignment}"
-            worker["task_definition"] = definition
-        connection.execute(
-            "UPDATE work_slot_invocations SET inner_workers_json = ?1 WHERE invocation_id = ?2",
-            (
-                json.dumps(drifted_workers, separators=(",", ":")),
-                recorded["invocation_id"],
-            ),
-        )
-        connection.commit()
-    finally:
-        connection.close()
-    post_carry_show = engine_call(["show", run_id])
-    post_carry_results = post_carry_show.get("result", {}).get("change_report", {}).get(
+
+    post_retirement_show = engine_call(["show", run_id])
+    if post_retirement_show.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"standing join re-show failed: {post_retirement_show}")
+    post_results = post_retirement_show.get("result", {}).get("change_report", {}).get(
         "plan_task_results", []
     )
-    for assignment in ("alpha", "beta"):
-        result = next(
-            item for item in post_carry_results if item.get("assignment_id") == assignment
+    post_alpha = next(
+        result for result in post_results if result.get("assignment_id") == "alpha"
+    )
+    if post_alpha.get("standing") is not False:
+        raise WorkSlotJourneyFailure(
+            f"retired carry attempt changed dirty task standing: {post_alpha}"
         )
-        if (
-            result.get("standing") is not False
-            or result.get("dimensions", {})
-            .get("task_definition", {})
-            .get("changed")
-            is not True
-        ):
-            raise WorkSlotJourneyFailure(
-                f"post-carry drift left {assignment} standing: {result}"
-            )
     return [
         "engine show marks dirty A non-standing while sidecar success remains",
-        "bound --task gamma refuses before Dagu without carry",
-        "unchanged-carry refuses dirty A",
-        "override-carry A plus unchanged-carry B runs only gamma",
-        "later drift invalidates both unchanged and override carry snapshots",
+        "bound --task gamma refuses before Dagu when a prerequisite is dirty",
+        "historical carry acts are rejected rather than retained as an ordinary path",
+        "retired carry attempts do not change engine standing or durable task results",
         "no live model",
     ]
 
@@ -3504,7 +3415,6 @@ def prove_selected_attempt_ledger_linkage(
         "subject": "design.json",
         "subject_revision": baseline_subject_revision,
         "author": {"name": "selected-driver", "kind": "agent"},
-        "repository_state": None,
         "findings": [],
     }
     baseline_ledger_result = engine_call(
@@ -3577,12 +3487,10 @@ def prove_selected_attempt_ledger_linkage(
 
     subject = "design.json"
     revision = json.loads((artifact_root / subject).read_text(encoding="utf-8"))["revision"]
-    selected_link = {
-        "invocation_id": overlay["invocation_id"],
+    selected_origin = {
+        "kind": "selected-assignment-output",
+        "id": overlay["invocation_id"],
         "assignment_id": shown_worker["assignment_id"],
-        "selected_attempt": shown_worker["selected_attempt"],
-        "sha256": output_digest,
-        "path": str(selected_attempt_path),
     }
     evidence = {
         "gate": "design-review",
@@ -3593,15 +3501,14 @@ def prove_selected_attempt_ledger_linkage(
         "subject": subject,
         "subject_revision": revision,
         "config_version": frozen_profile["config_version"],
-        "originating_output": selected_link,
+        "origin": selected_origin,
     }
-    # bookends:LE-105 — append first binds a worker claim to the exact
-    # engine-selected invocation/assignment/attempt, then provider evaluation
-    # proves that a real selected-output digest cannot bless disagreeing
-    # judgment content.
+    # bookends:LE-105 — append accepts only the concise invocation/assignment
+    # origin; core resolves the selected attempt and provider evaluation proves
+    # that raw selected bytes cannot bless disagreeing judgment content.
     fabricated = dict(evidence)
-    fabricated["originating_output"] = dict(selected_link)
-    fabricated["originating_output"]["assignment_id"] = "not-selected"
+    fabricated["origin"] = dict(selected_origin)
+    fabricated["origin"]["assignment_id"] = "not-selected"
     fabricated_result = engine_call(
         [
             "append",
@@ -3651,11 +3558,8 @@ def prove_selected_attempt_ledger_linkage(
     finding = {
         "id": "F-selected-attempt",
         "source": {
-            "kind": "work-slot",
-            "invocation_id": overlay["invocation_id"],
-            "worker_index": 0,
-            "attempt": 2,
-            "output_sha256": output_digest,
+            "kind": "context-record",
+            "id": "selected-attempt-evidence-fail",
         },
         "policy_id": "selected-axis",
         "statement": "selected-attempt finding",
@@ -3672,7 +3576,6 @@ def prove_selected_attempt_ledger_linkage(
         "subject": subject,
         "subject_revision": revision,
         "author": {"name": "selected-driver", "kind": "agent"},
-        "repository_state": None,
         "findings": [finding],
     }
     ledger_result = engine_call(
@@ -3688,15 +3591,76 @@ def prove_selected_attempt_ledger_linkage(
         raise WorkSlotJourneyFailure(
             f"selected-attempt ledger append failed: {ledger_result}"
         )
-    # bookends:LE-92 — a public provider denial reaches evidence only after the driver ledger validates the selected retry attempt's raw bytes and digest.
+    # bookends:LE-92 — a public provider denial reaches evidence only after the driver ledger validates the selected retry attempt through its immutable context-record source.
     denied = engine_call(["event", run_id, "approved"])
     if denied.get("status") != "rejected" or denied.get("code") != "software-change-review-incomplete":
         raise WorkSlotJourneyFailure(
             f"selected-attempt ledger linkage did not reach review evidence: {denied}"
         )
+    failure_show = engine_call(["show", run_id])
+    failure_context = failure_show.get("result", {}).get("context", [])
+    failure_ledger = next(
+        (
+            record
+            for record in failure_context
+            if isinstance(record, dict)
+            and record.get("id") == "selected-attempt-ledger-fail"
+        ),
+        None,
+    )
+    if failure_ledger is None:
+        raise WorkSlotJourneyFailure("fresh show omitted the current finding ledger")
+    findings = failure_ledger.get("data", {}).get("findings", [])
+    if (
+        not isinstance(findings, list)
+        or len(findings) != 1
+        or findings[0].get("source")
+        != {"kind": "context-record", "id": "selected-attempt-evidence-fail"}
+    ):
+        raise WorkSlotJourneyFailure(
+            f"fresh show did not expose the stable finding source: {failure_ledger}"
+        )
+    selected_evidence = next(
+        (
+            record
+            for record in failure_context
+            if isinstance(record, dict)
+            and record.get("id") == "selected-attempt-evidence-fail"
+        ),
+        None,
+    )
+    selected_data = selected_evidence.get("data", {}) if selected_evidence else {}
+    resolved_origin = selected_data.get("loop_engine_origin", {})
+    if (
+        selected_evidence is None
+        or selected_data.get("origin") != selected_origin
+        or not isinstance(resolved_origin, dict)
+        or resolved_origin.get("selected_attempt") != 2
+        or resolved_origin.get("selected_output_path") != str(selected_attempt_path)
+        or resolved_origin.get("selected_output_sha256") != output_digest
+    ):
+        raise WorkSlotJourneyFailure(
+            f"fresh show did not retain the engine-resolved selected capture origin: {selected_evidence}"
+        )
+    expected_evidence_fields = {
+        "gate",
+        "policy_id",
+        "result",
+        "findings",
+        "author",
+        "subject",
+        "subject_revision",
+        "config_version",
+        "origin",
+        "loop_engine_origin",
+    }
+    if set(selected_data) != expected_evidence_fields:
+        raise WorkSlotJourneyFailure(
+            f"fresh evidence duplicated or omitted mechanical provenance: {selected_evidence}"
+        )
     evidence["result"] = "pass"
     evidence["findings"] = ""
-    evidence.pop("originating_output")
+    evidence.pop("origin")
     pass_result = engine_call(
         [
             "append",
@@ -3723,238 +3687,319 @@ def prove_selected_attempt_ledger_linkage(
         raise WorkSlotJourneyFailure(
             f"selected-attempt resolved ledger append failed: {resolved_result}"
         )
-    approved = engine_call(["event", run_id, "approved"])
-    if approved.get("status") != "completed" or approved.get("result", {}).get("run", {}).get("current_state") != "plan":
-        raise WorkSlotJourneyFailure(
-            f"selected-attempt ledger recovery did not advance: {approved}"
-        )
-
-    # Carry the same selected assignment through the existing append path. The
-    # first act uses the clean report; adding routed context makes the report
-    # changed, forcing the explicit override act.
-    routed = engine_call(
-        [
-            "append",
-            "--record-id=carry-routing-change",
-            run_id,
-            "finding-ledger",
-            "{}",
-        ]
-    )
-    if routed.get("status") != "completed":
-        raise WorkSlotJourneyFailure(f"carry report mutation append failed: {routed}")
-    changed_show = engine_call(["show", run_id])
-    changed_invocation = next(
-        item for item in changed_show.get("result", {}).get("work_slot_invocations", [])
-        if item.get("invocation_id") == overlay.get("invocation_id")
-    )
-    changed_dimensions = changed_invocation.get("change_report", {}).get("dimensions", {})
-    if not changed_dimensions.get("routed_inputs", {}).get("changed"):
-        raise WorkSlotJourneyFailure("change report did not mark routed inputs changed")
-    refused_carry = engine_call(
-        [
-            "append",
-            "--record-id=selected-attempt-unchanged-refused",
-            run_id,
-            "unchanged-carry",
-            json.dumps(
-                {
-                    "source_record_id": "selected-attempt-evidence-pass",
-                    "invocation_id": overlay["invocation_id"],
-                    "assignment_id": "worker-0",
-                    "attesting_driver": {"name": "carry-driver-2", "kind": "agent"},
-                },
-                separators=(",", ":"),
-            ),
-        ]
-    )
-    if refused_carry.get("status") != "rejected" or "routed_inputs" not in json.dumps(refused_carry):
-        raise WorkSlotJourneyFailure(f"unchanged-carry ignored changed report: {refused_carry}")
-    override = engine_call(
-        [
-            "append",
-            "--record-id=selected-attempt-override-carry",
-            run_id,
-            "override-carry",
-            json.dumps(
-                {
-                    "source_record_id": "selected-attempt-evidence-pass",
-                    "invocation_id": overlay["invocation_id"],
-                    "assignment_id": "worker-0",
-                    "attesting_driver": {"name": "carry-driver-3", "kind": "agent"},
-                    "overridden_inputs": ["routed_inputs"],
-                },
-                separators=(",", ":"),
-            ),
-        ]
-    )
-    if override.get("status") != "completed":
-        raise WorkSlotJourneyFailure(f"override-carry did not name changed input: {override}")
-    carry_show = engine_call(["show", run_id])
-    carried = carry_show.get("result", {}).get("change_report", {}).get("assignments", [])
-    override_judgment = next(
+    # Stable invocation/assignment references are resolved by core before any
+    # context record is written. Exercise missing, wrong-run, and unknown
+    # references as public append refusals.
+    for label, origin in (
         (
-            judgment
-            for judgment in carried
-            if judgment.get("assignment_id") == "worker-0"
-            and judgment.get("carry_act") == "override-carry"
-            and judgment.get("overridden_inputs") == ["routed_inputs"]
+            "missing-invocation",
+            {"kind": "selected-assignment-output", "id": "missing", "assignment_id": "worker-0"},
         ),
-        None,
-    )
-    if override_judgment is None:
-        raise WorkSlotJourneyFailure(f"show omitted override carry provenance: {carry_show}")
+        (
+            "missing-assignment",
+            {"kind": "selected-assignment-output", "id": overlay["invocation_id"]},
+        ),
+        (
+            "unknown-assignment",
+            {
+                "kind": "selected-assignment-output",
+                "id": overlay["invocation_id"],
+                "assignment_id": "missing-assignment",
+            },
+        ),
+    ):
+        invalid = dict(evidence)
+        invalid["origin"] = origin
+        refused = engine_call(
+            [
+                "append",
+                f"--record-id=selected-attempt-{label}",
+                run_id,
+                "review-evidence",
+                json.dumps(invalid, separators=(",", ":")),
+            ]
+        )
+        if refused.get("status") != "rejected" or refused.get("code") != "selected-output-linkage-refused":
+            raise WorkSlotJourneyFailure(f"{label} reference was not refused: {refused}")
 
-    paired_script = work_dir / "paired-selected-output-worker.py"
-    paired_script.write_text(
-        "import json, sys\n"
-        "raw = sys.stdin.buffer.read()\n"
-        "if b'coverage-gap' in raw or b'SCHEMA-CONFORMANCE RETRY' not in raw:\n"
-        "    sys.stdout.write('{\\\"axis\\\":\\\"wrong\\\"}')\n"
-        "else:\n"
-        "    sys.stdout.write(json.dumps({'axis':'selected-axis','author':{'name':'selected-worker','kind':'script'},'result':'pass','findings':''}, separators=(',', ':')))\n",
-        encoding="utf-8",
-    )
-    paired_script.chmod(0o755)
-    shared_args = [str(paired_script)]
-    paired_binding = fan_out_binding(
-        engine=engine,
-        workers=[
-            {
-                "command": sys.executable,
-                "args": shared_args,
-                "preamble": "selected-assignment",
-                "full_output_schema": schema,
-            },
-            {
-                "command": sys.executable,
-                "args": shared_args,
-                "preamble": "coverage-gap-assignment",
-                "full_output_schema": schema,
-            },
-        ],
-    )
-    paired_call, _, _ = _start_isolated_software_change(
+    foreign_call, _, _ = _start_isolated_software_change(
         engine=engine,
         provider=provider,
         profile_source=custom_profile,
         fixture_root=fixture_root,
-        work_dir=work_dir / "paired-run",
-        run_id="paired-selected-output",
-        extra_bindings={"design-review": paired_binding},
+        work_dir=work_dir / "foreign-run",
+        run_id="selected-attempt-foreign-run",
+        extra_bindings={"design-review": binding},
     )
-    paired_run = "paired-selected-output"
-    invoke_until_succeeded(paired_call, paired_run, "intent-draft", timeout_s=20.0)
-    _expect_event_state(paired_call, paired_run, "intent-ready", "design")
-    _expect_event_state(paired_call, paired_run, "design-ready", "design-review")
-    paired_overlay = invoke_until_status(
-        paired_call, paired_run, "design-review", expected="failed", timeout_s=20.0
+    foreign_overlay = invoke_until_succeeded(
+        foreign_call, "selected-attempt-foreign-run", "intent-draft", timeout_s=20.0
     )
-    paired_workers = paired_overlay.get("inner_workers")
-    if not isinstance(paired_workers, list) or len(paired_workers) != 2:
-        raise WorkSlotJourneyFailure(f"paired invocation omitted workers: {paired_overlay}")
-    if paired_workers[0].get("command") != paired_workers[1].get("command") or paired_workers[0].get("args") != paired_workers[1].get("args"):
-        raise WorkSlotJourneyFailure(f"paired workers changed shared command/argv: {paired_workers}")
-    if [worker.get("assignment_id") for worker in paired_workers] != ["worker-0", "worker-1"]:
-        raise WorkSlotJourneyFailure(f"paired assignment identities are not distinct: {paired_workers}")
-    paired_path = Path(paired_workers[0]["selected_output_path"])
-    if (
-        paired_workers[0].get("selected_attempt") != 2
-        or paired_workers[0].get("selected_output_sha256") != "sha256:" + hashlib.sha256(paired_path.read_bytes()).hexdigest()
-        or "attempts/2/" not in str(paired_path)
-        or paired_workers[1].get("selected_attempt") is not None
-        or paired_workers[1].get("selected_output_sha256") is not None
-        or paired_workers[1].get("selected_output_path") is not None
-    ):
-        raise WorkSlotJourneyFailure(f"paired selected/coverage-gap facts are wrong: {paired_workers}")
-    paired_artifact = paired_call(["show", paired_run]).get("result", {}).get("initial_input", {}).get("artifact_root")
-    if not isinstance(paired_artifact, str):
-        raise WorkSlotJourneyFailure("paired run omitted artifact_root for carry proof")
-    paired_subject_revision = json.loads((Path(paired_artifact) / "design.json").read_text(encoding="utf-8"))["revision"]
-    carry_source = {
-        "gate": "design-review",
-        "policy_id": "selected-axis",
-        "result": "pass",
-        "findings": "",
-        "author": {"name": "selected-worker", "kind": "script"},
-        "subject": "design.json",
-        "subject_revision": paired_subject_revision,
-        "config_version": frozen_profile["config_version"],
+    wrong_run = dict(evidence)
+    wrong_run["origin"] = {
+        "kind": "selected-assignment-output",
+        "id": foreign_overlay["invocation_id"],
+        "assignment_id": "worker-0",
     }
-    source_result = paired_call(
+    wrong_run_result = engine_call(
         [
             "append",
-            "--record-id=paired-carry-source",
-            paired_run,
+            "--record-id=selected-attempt-wrong-run",
+            run_id,
             "review-evidence",
-            json.dumps(carry_source, separators=(",", ":")),
+            json.dumps(wrong_run, separators=(",", ":")),
         ]
     )
-    if source_result.get("status") != "completed":
-        raise WorkSlotJourneyFailure(f"paired carry source append failed: {source_result}")
-    carried_clean = paired_call(
-        [
-            "append",
-            "--record-id=paired-unchanged-carry",
-            paired_run,
-            "unchanged-carry",
-            json.dumps(
-                {
-                    "source_record_id": "paired-carry-source",
-                    "invocation_id": paired_overlay["invocation_id"],
-                    "assignment_id": "worker-0",
-                    "attesting_driver": {"name": "paired-carry-driver", "kind": "agent"},
-                },
-                separators=(",", ":"),
-            ),
-        ]
-    )
-    if carried_clean.get("status") != "completed":
-        raise WorkSlotJourneyFailure(f"unchanged-carry did not preserve clean paired work: {carried_clean}")
-    paired_call(["append", "--record-id=paired-routing-change", paired_run, "finding-ledger", "{}"])
-    carried_changed = paired_call(
-        [
-            "append",
-            "--record-id=paired-override-carry",
-            paired_run,
-            "override-carry",
-            json.dumps(
-                {
-                    "source_record_id": "paired-carry-source",
-                    "invocation_id": paired_overlay["invocation_id"],
-                    "assignment_id": "worker-0",
-                    "attesting_driver": {"name": "paired-override-driver", "kind": "agent"},
-                    "overridden_inputs": ["routed_inputs"],
-                },
-                separators=(",", ":"),
-            ),
-        ]
-    )
-    if carried_changed.get("status") != "completed":
-        raise WorkSlotJourneyFailure(f"override-carry did not preserve changed paired work: {carried_changed}")
-    paired_show = paired_call(["show", paired_run])
-    paired_carried = paired_show.get("result", {}).get("change_report", {}).get("assignments", [])
-    paired_override_judgment = next(
+    if (
+        wrong_run_result.get("status") != "rejected"
+        or wrong_run_result.get("code") != "selected-output-linkage-refused"
+        or "not found on run" not in json.dumps(wrong_run_result)
+    ):
+        raise WorkSlotJourneyFailure(f"cross-run origin was not refused: {wrong_run_result}")
+
+    # Provider identity checks remain distinct from core's same-run locator
+    # check. These malformed applicability targets are durable denials until a
+    # later conforming declaration is appended.
+    for label, target in (
         (
-            judgment
-            for judgment in paired_carried
-            if judgment.get("assignment_id") == "worker-0"
-            and judgment.get("carry_act") == "override-carry"
-            and judgment.get("overridden_inputs") == ["routed_inputs"]
+            "stale-subject",
+            {"subject": "plan.json", "revision": revision, "checkpoint": None},
+        ),
+        (
+            "stale-revision",
+            {"subject": subject, "revision": "stale-revision", "checkpoint": None},
+        ),
+        (
+            "stale-checkpoint",
+            {
+                "subject": subject,
+                "revision": revision,
+                "checkpoint": {"phase": "design", "report_revision": "stale"},
+            },
+        ),
+    ):
+        invalid = {
+            "origin": {"kind": "context-record", "id": "selected-attempt-evidence-pass"},
+            "target": target,
+            "attesting_driver": {"name": "selected-driver", "kind": "agent"},
+            "reason": f"negative {label} reference",
+        }
+        appended = engine_call(
+            [
+                "append",
+                f"--record-id=selected-attempt-{label}",
+                run_id,
+                "evidence-applicability",
+                json.dumps(invalid, separators=(",", ":")),
+            ]
+        )
+        if appended.get("status") != "completed":
+            raise WorkSlotJourneyFailure(f"{label} applicability append failed: {appended}")
+        denied = engine_call(["event", run_id, "approved"])
+        if denied.get("status") != "rejected" or "evidence-applicability" not in json.dumps(denied):
+            raise WorkSlotJourneyFailure(f"{label} applicability was not denied: {denied}")
+
+    # A later conforming declaration clears the mechanical applicability
+    # blockers. The driver still owns the semantic reason; the provider only
+    # checks the named source and current target.
+    applicability_reset = {
+        "origin": {"kind": "context-record", "id": "selected-attempt-evidence-pass"},
+        "target": {"subject": subject, "revision": revision, "checkpoint": None},
+        "attesting_driver": {"name": "selected-driver", "kind": "agent"},
+        "reason": "The original pass remains applicable to the current design.",
+    }
+    reset = engine_call(
+        [
+            "append",
+            "--record-id=selected-attempt-applicability-reset",
+            run_id,
+            "evidence-applicability",
+            json.dumps(applicability_reset, separators=(",", ":")),
+        ]
+    )
+    if reset.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"applicability reset append failed: {reset}")
+
+    # The provider rejects current-looking ledgers that name missing policy,
+    # task, or source identities before a worker can be selected. Restore the
+    # empty current ledger after each negative record.
+    negative_findings = (
+        (
+            "unknown-policy",
+            {
+                "id": "F-unknown-policy",
+                "source": {"kind": "context-record", "id": "selected-attempt-evidence-fail"},
+                "policy_id": "missing-policy",
+                "statement": "selected-attempt finding",
+                "disposition": "rejected",
+                "reason": "negative policy reference",
+                "owner_phase": None,
+                "task_ids": [],
+                "review_axes": [],
+                "status": "recorded",
+            },
+            "not configured",
+        ),
+        (
+            "unknown-task",
+            {
+                "id": "F-unknown-task",
+                "source": {"kind": "context-record", "id": "selected-attempt-evidence-fail"},
+                "policy_id": "selected-axis",
+                "statement": "selected-attempt finding",
+                "disposition": "rejected",
+                "reason": "negative task reference",
+                "owner_phase": None,
+                "task_ids": ["missing-task"],
+                "review_axes": [],
+                "status": "recorded",
+            },
+            "missing-task",
+        ),
+        (
+            "missing-finding",
+            {
+                "id": "F-missing-source",
+                "source": {"kind": "context-record", "id": "missing-evidence"},
+                "policy_id": "selected-axis",
+                "statement": "selected-attempt finding",
+                "disposition": "rejected",
+                "reason": "negative finding reference",
+                "owner_phase": None,
+                "task_ids": [],
+                "review_axes": [],
+                "status": "recorded",
+            },
+            "missing-evidence",
+        ),
+    )
+    for label, negative_finding, needle in negative_findings:
+        invalid_ledger = dict(baseline_ledger)
+        invalid_ledger["findings"] = [negative_finding]
+        appended = engine_call(
+            [
+                "append",
+                f"--record-id=selected-attempt-{label}-ledger",
+                run_id,
+                "finding-ledger",
+                json.dumps(invalid_ledger, separators=(",", ":")),
+            ]
+        )
+        if appended.get("status") != "completed":
+            raise WorkSlotJourneyFailure(f"{label} ledger append failed: {appended}")
+        denied = engine_call(["event", run_id, "approved"])
+        if (
+            denied.get("status") != "rejected"
+            or denied.get("code") != "software-change-finding-ledger-invalid"
+            or needle not in json.dumps(denied)
+        ):
+            raise WorkSlotJourneyFailure(f"{label} ledger reference was not denied: {denied}")
+        restored = engine_call(
+            [
+                "append",
+                f"--record-id=selected-attempt-{label}-ledger-restored",
+                run_id,
+                "finding-ledger",
+                json.dumps(baseline_ledger, separators=(",", ":")),
+            ]
+        )
+        if restored.get("status") != "completed":
+            raise WorkSlotJourneyFailure(f"{label} ledger restore failed: {restored}")
+
+    # A fresh actor can reuse the original pass judgment with one concise,
+    # current applicability declaration. The declaration carries no command,
+    # binding, path, digest, attempt, coverage, or changed-input inventory.
+    applicability = {
+        "origin": {
+            "kind": "context-record",
+            "id": "selected-attempt-evidence-pass",
+        },
+        "target": {
+            "subject": subject,
+            "revision": revision,
+            "checkpoint": None,
+        },
+        "attesting_driver": {"name": "selected-driver", "kind": "agent"},
+        "reason": "The original pass remains applicable to the current design.",
+    }
+    applicability_result = engine_call(
+        [
+            "append",
+            "--record-id=selected-attempt-applicability",
+            run_id,
+            "evidence-applicability",
+            json.dumps(applicability, separators=(",", ":")),
+        ]
+    )
+    if applicability_result.get("status") != "completed":
+        raise WorkSlotJourneyFailure(
+            f"current applicability declaration was not appended: {applicability_result}"
+        )
+    resumed = engine_call(["show", run_id])
+    contexts = resumed.get("result", {}).get("context", [])
+    applicability_record = next(
+        (
+            record
+            for record in contexts
+            if isinstance(record, dict)
+            and record.get("id") == "selected-attempt-applicability"
         ),
         None,
     )
-    if paired_override_judgment is None:
-        raise WorkSlotJourneyFailure(f"show omitted paired override carry provenance: {paired_show}")
+    if applicability_record is None:
+        raise WorkSlotJourneyFailure(
+            "fresh show omitted the evidence-applicability declaration"
+        )
+    if applicability_record.get("data") != applicability:
+        raise WorkSlotJourneyFailure(
+            f"applicability declaration was rewritten: {applicability_record}"
+        )
+    if any(
+        field in applicability_record.get("data", {})
+        for field in (
+            "command",
+            "args",
+            "binding",
+            "selected_attempt",
+            "selected_output_sha256",
+            "selected_output_path",
+            "capture_dir",
+            "overridden_inputs",
+            "changed_inputs",
+        )
+    ):
+        raise WorkSlotJourneyFailure(
+            f"applicability declaration duplicated mechanical provenance: {applicability_record}"
+        )
+    source_record = next(
+        (
+            record
+            for record in contexts
+            if isinstance(record, dict)
+            and record.get("id") == "selected-attempt-evidence-pass"
+        ),
+        None,
+    )
+    if source_record is None or source_record.get("kind") != "review-evidence":
+        raise WorkSlotJourneyFailure(
+            "fresh show omitted the immutable evidence source for applicability"
+        )
+    approved = engine_call(["event", run_id, "approved"])
+    if approved.get("status") != "completed" or approved.get("result", {}).get("run", {}).get("current_state") != "plan":
+        raise WorkSlotJourneyFailure(
+            f"selected-attempt ledger and applicability recovery did not advance: {approved}"
+        )
+
     return [
-        "show exposes assignment identity, selected attempt, originating path, and raw stdout digest",
-        "provider reaches review evidence only after selected-attempt ledger linkage passes",
-        "resolved driver ledger supersedes the selected candidate without rewriting raw attempts",
+        "show exposes rich engine-owned assignment, attempt, capture, and output identity",
+        "concise invocation/assignment evidence links selected raw output without duplicated coordinates",
+        "finding-ledger source uses an immutable context-record reference",
+        "one current evidence-applicability declaration preserves the original judgment and driver attestation",
+        "fresh show resumes the run with original failure, capture, context, and history visible",
         "no live model",
     ]
 
 
-def prove_subset_carry_checked(
+def prove_subset_applicability_checked(
     *,
     engine: Path,
     provider: Path,
@@ -3962,9 +4007,9 @@ def prove_subset_carry_checked(
     fixture_root: Path,
     work_dir: Path,
 ) -> list[str]:
-    """Prove subset re-execution plus explicit carry can satisfy a checked gate."""
+    """Prove subset re-execution plus one current applicability declaration."""
     work_dir.mkdir(parents=True, exist_ok=True)
-    worker_script = work_dir / "subset-carry-worker.py"
+    worker_script = work_dir / "subset-applicability-worker.py"
     worker_script.write_text(
         "import argparse, json, sys\n"
         "from pathlib import Path\n"
@@ -3976,20 +4021,20 @@ def prove_subset_carry_checked(
         "count = int(state.read_text()) if state.exists() else 0\n"
         "state.write_text(str(count + 1))\n"
         "sys.stdin.buffer.read()\n"
-        "print(json.dumps({'axis':'subset-carry-axis','author':{'name':args.author,'kind':'script'},'result':'pass','findings':''}, separators=(',', ':')))\n",
+        "print(json.dumps({'axis':'subset-applicability-axis','author':{'name':args.author,'kind':'script'},'result':'pass','findings':''}, separators=(',', ':')))\n",
         encoding="utf-8",
     )
     worker_script.chmod(0o755)
-    custom_profile = work_dir / "subset-carry-profile.json"
+    custom_profile = work_dir / "subset-applicability-profile.json"
     profile = json.loads(profile_source.read_text(encoding="utf-8"))
     policies = profile["review_policies"]
     for gate in list(policies):
         policies[gate] = []
     policies["design-review"] = [
         {
-            "id": "subset-carry-axis",
-            "description": "Subset carry checked transition proof",
-            "example_prompt": "Judge subset-carry-axis only.",
+            "id": "subset-applicability-axis",
+            "description": "Subset applicability checked transition proof",
+            "example_prompt": "Judge subset-applicability-axis only.",
             "required_authors": 2,
         }
     ]
@@ -3998,7 +4043,7 @@ def prove_subset_carry_checked(
         "type": "object",
         "required": ["axis", "author", "result", "findings"],
         "properties": {
-            "axis": {"const": "subset-carry-axis"},
+            "axis": {"const": "subset-applicability-axis"},
             "author": {"type": "object"},
             "result": {"const": "pass"},
             "findings": {"const": ""},
@@ -4018,7 +4063,7 @@ def prove_subset_carry_checked(
                     "--state",
                     str(states[index]),
                 ],
-                "preamble": f"subset-carry worker {index}",
+                "preamble": f"subset-applicability worker {index}",
                 "full_output_schema": schema,
             }
             for index in (0, 1)
@@ -4030,10 +4075,10 @@ def prove_subset_carry_checked(
         profile_source=custom_profile,
         fixture_root=fixture_root,
         work_dir=work_dir / "run",
-        run_id="subset-carry-checked",
+        run_id="subset-applicability-checked",
         extra_bindings={"design-review": binding},
     )
-    run_id = "subset-carry-checked"
+    run_id = "subset-applicability-checked"
     invoke_until_succeeded(engine_call, run_id, "intent-draft", timeout_s=20.0)
     _expect_event_state(engine_call, run_id, "intent-ready", "design")
     _expect_event_state(engine_call, run_id, "design-ready", "design-review")
@@ -4044,14 +4089,13 @@ def prove_subset_carry_checked(
         "gate": "design-review",
         "subject": subject,
         "subject_revision": revision,
-        "author": {"name": "subset-carry-driver", "kind": "agent"},
-        "repository_state": None,
+        "author": {"name": "subset-driver", "kind": "agent"},
         "findings": [],
     }
     ledger_result = engine_call(
         [
             "append",
-            "--record-id=subset-carry-routing-ledger",
+            "--record-id=subset-applicability-ledger",
             run_id,
             "finding-ledger",
             json.dumps(ledger, separators=(",", ":")),
@@ -4067,7 +4111,7 @@ def prove_subset_carry_checked(
     if any(states[index].read_text() != "1" for index in (0, 1)):
         raise WorkSlotJourneyFailure("full overlay did not start both dummy assignments exactly once")
     config_version = frozen_profile["config_version"]
-    source_records = {}
+    source_records: dict[str, str] = {}
     for worker in full_workers:
         assignment = worker["assignment_id"]
         output_path = Path(worker["selected_output_path"])
@@ -4077,28 +4121,32 @@ def prove_subset_carry_checked(
             raise WorkSlotJourneyFailure(f"full overlay omitted selected output evidence: {worker}")
         evidence = {
             "gate": "design-review",
-            "policy_id": "subset-carry-axis",
+            "policy_id": "subset-applicability-axis",
             "result": "pass",
             "findings": "",
             "author": {"name": author, "kind": "script"},
             "subject": subject,
             "subject_revision": revision,
             "config_version": config_version,
-            "originating_output": {
-                "invocation_id": full_overlay["invocation_id"],
+            "origin": {
+                "kind": "selected-assignment-output",
+                "id": full_overlay["invocation_id"],
                 "assignment_id": assignment,
-                "selected_attempt": worker["selected_attempt"],
-                "sha256": output_digest,
-                "path": str(output_path),
             },
         }
-        record_id = f"subset-carry-source-{assignment}"
+        record_id = f"subset-applicability-source-{assignment}"
         appended = engine_call(
-            ["append", f"--record-id={record_id}", run_id, "review-evidence", json.dumps(evidence, separators=(",", ":"))]
+            [
+                "append",
+                f"--record-id={record_id}",
+                run_id,
+                "review-evidence",
+                json.dumps(evidence, separators=(",", ":")),
+            ]
         )
         if appended.get("status") != "completed":
             raise WorkSlotJourneyFailure(f"source evidence append failed for {assignment}: {appended}")
-        source_records[assignment] = (record_id, output_digest)
+        source_records[assignment] = record_id
 
     subset = invoke_until_succeeded(
         engine_call,
@@ -4108,51 +4156,40 @@ def prove_subset_carry_checked(
         invoke_args=("--assignment", "worker-0"),
     )
     subset_workers = subset.get("inner_workers")
-    if (
-        not isinstance(subset_workers, list)
-        or [worker.get("assignment_id") for worker in subset_workers] != ["worker-0"]
-    ):
+    if not isinstance(subset_workers, list) or [worker.get("assignment_id") for worker in subset_workers] != ["worker-0"]:
         raise WorkSlotJourneyFailure(f"subset re-invoke did not select only worker-0: {subset}")
     counts = {index: int(states[index].read_text()) for index in (0, 1)}
     if counts != {0: 2, 1: 1}:
-        raise WorkSlotJourneyFailure(
-            f"subset re-invoke changed assignment counts unexpectedly: {counts}"
-        )
+        raise WorkSlotJourneyFailure(f"subset re-invoke changed assignment counts unexpectedly: {counts}")
 
     subset_worker = subset_workers[0]
     subset_output_path = Path(subset_worker["selected_output_path"])
-    subset_output_digest = "sha256:" + hashlib.sha256(
-        subset_output_path.read_bytes()
-    ).hexdigest()
+    subset_output_digest = "sha256:" + hashlib.sha256(subset_output_path.read_bytes()).hexdigest()
     if (
         subset_worker.get("selected_attempt") != 1
         or subset_worker.get("selected_output_sha256") != subset_output_digest
         or subset_output_path == Path(full_workers[0]["selected_output_path"])
     ):
-        raise WorkSlotJourneyFailure(
-            f"subset overlay omitted fresh worker-0 output evidence: {subset_worker}"
-        )
+        raise WorkSlotJourneyFailure(f"subset overlay omitted fresh worker-0 output evidence: {subset_worker}")
     subset_evidence = {
         "gate": "design-review",
-        "policy_id": "subset-carry-axis",
+        "policy_id": "subset-applicability-axis",
         "result": "pass",
         "findings": "",
         "author": {"name": "subset-worker-0", "kind": "script"},
         "subject": subject,
         "subject_revision": revision,
         "config_version": config_version,
-        "originating_output": {
-            "invocation_id": subset["invocation_id"],
+        "origin": {
+            "kind": "selected-assignment-output",
+            "id": subset["invocation_id"],
             "assignment_id": subset_worker["assignment_id"],
-            "selected_attempt": subset_worker["selected_attempt"],
-            "sha256": subset_output_digest,
-            "path": str(subset_output_path),
         },
     }
     subset_evidence_result = engine_call(
         [
             "append",
-            "--record-id=subset-carry-worker-0-evidence",
+            "--record-id=subset-applicability-fresh-worker-0",
             run_id,
             "review-evidence",
             json.dumps(subset_evidence, separators=(",", ":")),
@@ -4163,91 +4200,80 @@ def prove_subset_carry_checked(
             f"subset worker-0 evidence append failed: {subset_evidence_result}"
         )
 
-    pre_carry_show = engine_call(["show", run_id])
-    pre_carry_invocation = next(
-        item
-        for item in pre_carry_show["result"]["work_slot_invocations"]
-        if item.get("invocation_id") == full_overlay["invocation_id"]
-    )
-    if pre_carry_invocation["change_report"]["dimensions"]["routed_inputs"]["changed"]:
-        raise WorkSlotJourneyFailure(
-            "routed_inputs became dirty before the remainder unchanged-carry"
-        )
-
-    clean_carry = engine_call(
+    applicability = {
+        "origin": {
+            "kind": "context-record",
+            "id": source_records["worker-1"],
+        },
+        "target": {"subject": subject, "revision": revision, "checkpoint": None},
+        "attesting_driver": {"name": "subset-driver", "kind": "agent"},
+        "reason": "The unchanged worker-1 judgment remains applicable to this review.",
+    }
+    applicability_result = engine_call(
         [
             "append",
-            "--record-id=subset-carry-worker-1",
+            "--record-id=subset-applicability-declaration",
             run_id,
-            "unchanged-carry",
-            json.dumps(
-                {
-                    "source_record_id": source_records["worker-1"][0],
-                    "invocation_id": full_overlay["invocation_id"],
-                    "assignment_id": "worker-1",
-                    "attesting_driver": {"name": "subset-carry-driver", "kind": "agent"},
-                },
-                separators=(",", ":"),
-            ),
+            "evidence-applicability",
+            json.dumps(applicability, separators=(",", ":")),
         ]
     )
-    if clean_carry.get("status") != "completed":
-        raise WorkSlotJourneyFailure(f"clean remainder unchanged-carry failed: {clean_carry}")
+    if applicability_result.get("status") != "completed":
+        raise WorkSlotJourneyFailure(f"applicability append failed: {applicability_result}")
+
+    shown = engine_call(["show", run_id])
+    context = shown.get("result", {}).get("context", [])
+    declaration = next(
+        (
+            record
+            for record in context
+            if isinstance(record, dict)
+            and record.get("id") == "subset-applicability-declaration"
+        ),
+        None,
+    )
+    if declaration is None or declaration.get("data") != applicability:
+        raise WorkSlotJourneyFailure(f"show did not preserve applicability declaration: {shown}")
+    if any(
+        key in declaration.get("data", {})
+        for key in (
+            "command",
+            "args",
+            "binding",
+            "selected_attempt",
+            "selected_output_sha256",
+            "selected_output_path",
+            "capture_dir",
+            "overridden_inputs",
+            "changed_inputs",
+        )
+    ):
+        raise WorkSlotJourneyFailure(f"applicability duplicated mechanical provenance: {declaration}")
+    source_record = next(
+        (
+            record
+            for record in context
+            if isinstance(record, dict)
+            and record.get("id") == source_records["worker-1"]
+        ),
+        None,
+    )
+    if source_record is None or source_record.get("kind") != "review-evidence":
+        raise WorkSlotJourneyFailure("show omitted the immutable applicability source record")
 
     checked = engine_call(["event", run_id, "approved"])
     checked_run = (checked.get("result") or {}).get("run") or {}
     if checked.get("status") != "completed" or checked_run.get("current_state") != "plan":
-        raise WorkSlotJourneyFailure(f"carried evidence did not satisfy checked transition: {checked}")
-    shown = engine_call(["show", run_id])
-    context = shown["result"].get("context", [])
-    carried_context = [
-        record
-        for record in context
-        if isinstance(record, dict)
-        and isinstance(record.get("data"), dict)
-        and isinstance(record["data"].get("loop_engine_carry"), dict)
-    ]
-    carried_authors = {
-        record["data"].get("author", {}).get("name")
-        for record in carried_context
-        if isinstance(record["data"].get("author"), dict)
-    }
-    if carried_authors != {"subset-worker-1"}:
-        raise WorkSlotJourneyFailure(f"carried records lost originating authors: {carried_context}")
-    carry_acts = {
-        record["data"]["loop_engine_carry"].get("act")
-        for record in carried_context
-    }
-    if carry_acts != {"unchanged-carry"}:
-        raise WorkSlotJourneyFailure(f"show omitted explicit carry acts: {carried_context}")
-    judgments = shown["result"]["change_report"].get("assignments", [])
-    carried_judgments = {
-        judgment.get("assignment_id"): judgment
-        for judgment in judgments
-        if judgment.get("carry_act") is not None
-    }
-    worker_judgments = {
-        judgment.get("assignment_id"): judgment
-        for judgment in judgments
-    }
-    if (
-        carried_judgments.get("worker-1", {}).get("carry_act") != "unchanged-carry"
-        or not carried_judgments.get("worker-1", {}).get("standing")
-        or worker_judgments.get("worker-0", {}).get("carry_act") is not None
-    ):
-        raise WorkSlotJourneyFailure(
-            f"show did not project carried remainder and fresh subset evidence: {judgments}"
-        )
+        raise WorkSlotJourneyFailure(f"applicable evidence did not satisfy checked transition: {checked}")
     return [
-        "full two-assignment overlay records selected outputs and evidence",
+        "full two-assignment overlay records selected outputs under engine-owned captures",
         "subset re-invoke starts worker-0 twice and never starts unselected worker-1",
-        "subset worker-0 evidence links the subset stdout digest and path",
-        "unchanged-carry preserves the clean remainder without dirtying routed_inputs",
-        "checked approved transition counts fresh worker-0 evidence and carried worker-1",
-        "show exposes only the carried remainder as standing carry provenance",
+        "fresh evidence names only invocation and assignment while engine resolves output metadata",
+        "one evidence-applicability declaration preserves the worker-1 judgment for the current target",
+        "checked approval counts fresh and applicable independent authors",
+        "show keeps source evidence, applicability, and immutable history visible",
         "no live model",
     ]
-
 
 def prove_stdin_exec(*, provider: Path, work_dir: Path) -> list[str]:
     """Drive the provider's hidden stdin-exec helper as a real CLI."""

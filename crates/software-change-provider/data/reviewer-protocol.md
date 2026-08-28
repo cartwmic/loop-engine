@@ -2,7 +2,7 @@
 
 Provider checks evidence shape and aggregation. Reviewer decides truth externally and records one `review-evidence` context record per axis judgment. `review-evidence` remains binary: `result` is exactly `pass` or `fail`; this protocol adds no verdict, severity, owner-override, or round-state fields.
 
-## Evidence record
+## Fresh review evidence
 
 ```json
 {
@@ -15,31 +15,53 @@ Provider checks evidence shape and aggregation. Reviewer decides truth externall
     "author": {"name": "reviewer-sol", "kind": "agent"},
     "subject": "design.json",
     "subject_revision": "3",
-    "config_version": "standard-7"
+    "config_version": "standard-7",
+    "origin": {
+      "kind": "selected-assignment-output",
+      "id": "invocation-123",
+      "assignment_id": "intent-faithful-reviewer-0"
+    }
   }
 }
 ```
 
-All eight fields are required. `result` is exactly `pass` or `fail`; `findings` is a string and is non-empty for `fail`. Author identity is exact `(name, kind)`. `subject` must match gate subject. `subject_revision` and `config_version` must name what was reviewed and which frozen config judged it.
+The eight judgment fields remain required. `result` is exactly `pass` or `fail`; `findings` is a string and is non-empty for `fail`. Author identity is exact `(name, kind)`. `subject` must match the gate subject. `subject_revision` and `config_version` name what was reviewed and which frozen config judged it.
 
-A driver-recorded claim that stands for a bound worker judgment may additionally carry
-`loop_engine_carry` (the engine-generated carry metadata), or the equivalent
-`originating_output_sha256` and `originating_output_path` fields. When either linkage
-field is present, both are required. The provider reads the named selected stdout
-under `artifact_root`, checks its raw SHA-256, and compares the mechanical judgment
-fields (`axis`/`policy_id`, `author`, `result`, and `findings`) with the claim. A
-missing, changed, unavailable, non-JSON, or disagreeing origin is **unverified** and
-cannot satisfy the axis. This is field agreement, not a semantic disposition; the
-driver remains responsible for triage, disposition, and the carry decision. An
-invocation's worker record alone is inert and never satisfies an axis.
+A bound worker judgment uses only the concise `origin` reference shown above. Core resolves that same-run invocation and assignment, then appends the engine-resolved, engine-owned `loop_engine_origin` projection containing the selected attempt, raw-output digest, selected path, capture directory, command, and binding. The driver does not copy any of those fields. The provider reads the selected bytes through that engine-owned projection and compares the raw digest and the judgment fields (`axis`, `author`, `result`, and `findings`) with the evidence record. Missing, changed, unavailable, non-JSON, or disagreeing bytes are **unverified** and cannot satisfy the axis. This is mechanical field agreement, not semantic disposition; the driver remains responsible for triage. An invocation's worker record alone is inert and never satisfies an axis. Genuinely external hand-authored evidence omits `origin`.
+
+## Evidence applicability
+
+Evidence reuse is a distinct context kind, never a second form of `review-evidence`:
+
+```json
+{
+  "kind": "evidence-applicability",
+  "data": {
+    "origin": {"kind": "context-record", "id": "review-evidence-1"},
+    "target": {
+      "subject": "design.json",
+      "revision": "3",
+      "checkpoint": null
+    },
+    "attesting_driver": {"name": "driver", "kind": "human"},
+    "reason": "The reviewed design remains applicable to this target."
+  }
+}
+```
+
+The referenced record is immutable and must be an earlier same-run `review-evidence` record. The provider retains that record's original author, verdict, findings, subject revision, and config identity; it never copies or replaces those judgment fields with the attestation. The driver explicitly supplies the current target, attesting driver, and short reason. For implementation or validation targets, `checkpoint` is the current object `{"phase":"implementation|validation","report_revision":"..."}` derived from the verified provider checkpoint; for other subjects it is `null`. The provider checks only that the named target is current and the source is structurally valid. It does not infer semantic applicability from repository changes or any other evidence.
 
 ## Finding-ledger snapshot
 
-The driver appends context records with kind `finding-ledger`; Loop Engine stores them unchanged and ordinary `show` returns the immutable history. The latest well-formed record for an exact gate/subject pair is the current snapshot. The snapshot data is closed and uses exactly these top-level fields: `schema_version: "1"`, `gate`, `subject`, `subject_revision`, `author: {name, kind}`, `repository_state`, and `findings`.
+The driver appends context records with kind `finding-ledger`; Loop Engine stores them unchanged and ordinary `show` returns the immutable history. A latest malformed record for an exact gate/subject pair blocks that pair until a later valid snapshot; otherwise the latest well-formed record is the current snapshot. The snapshot data is closed and uses exactly these top-level fields: `schema_version: "1"`, `gate`, `subject`, `subject_revision`, `author: {name, kind}`, and `findings`.
 
-Each finding has exactly `id`, `source`, `policy_id`, `statement`, `disposition`, `reason`, `owner_phase`, `task_ids`, `review_axes`, and `status`. IDs match `F-[a-z0-9][a-z0-9_-]{0,63}` and remain tied to the same source, policy, and statement across snapshots. A work-slot source points to `work-slot-captures/<gate>/<invocation_id>/<worker_index>/attempts/<attempt>/stdout` and its `attempts.json` selected attempt; an external-artifact source is a normalized artifact-root-relative path. In both cases the digest is over exact raw stdout bytes. Accepted findings use `unresolved`, `resolved`, or `stale` and an owning phase; rejected/advisory findings use `recorded` or `stale`, null owner, and empty routing arrays.
+Each finding has exactly `id`, `source`, `policy_id`, `statement`, `disposition`, `reason`, `owner_phase`, `task_ids`, `review_axes`, and `status`. IDs match `F-[a-z0-9][a-z0-9_-]{0,63}` and remain tied to the same source, policy, and statement across snapshots. `source` is exactly a context-record reference: `{"kind":"context-record","id":"review-evidence-1"}`. The provider resolves that immutable record, checks its gate, policy, subject, revision, and judgment agreement, and follows its concise engine origin when present; no finding copies a path, digest, attempt, command, binding, or repository-state digest. Accepted findings use `unresolved`, `resolved`, or `stale` and an owning phase; rejected/advisory findings use `recorded` or `stale`, null owner, and empty routing arrays.
 
-The provider checks only shape, identifier membership, stable identity, subject/checkpoint freshness, raw path/digest linkage, and equality between accepted-unresolved `(policy_id, statement)` pairs and current failing evidence. It does not judge statements, reasons, dispositions, owners, or routes.
+The provider checks only shape, current configured identifiers, stable finding identity, subject and checkpoint freshness, source-record validity, and equality between accepted-unresolved `(policy_id, statement)` pairs and current failing evidence. It does not judge statements, reasons, dispositions, owners, or routes.
+
+## Historical boundary
+
+Completed runs may contain records from the former verbose linkage and two-act carry contract. They remain immutable and readable through engine `show` and `history`; they are not accepted as a parallel new provider path and are not rewritten or migrated.
 
 ## Frozen operating boundary
 
@@ -74,7 +96,7 @@ Reviewer output is candidate data until owner inspection. **Before append or mut
 
 Adversarial output is candidate data under the YAGNI/pragmatic append bar: extra mechanism, unlisted requirements, and hypothetical-future fails are not appended. `review-evidence` stays binary.
 
-Append an accepted in-scope material failure as conforming binary evidence; provider aggregation then blocks normally. After triage, append one well-formed `finding-ledger` snapshot for that exact gate and subject. It is a driver-authored, append-only snapshot of every candidate disposition, including rejected and advisory entries and an empty list. It is not `review-evidence`; preserve the raw reviewer stdout source and its exact `sha256:` digest in every finding. The latest well-formed snapshot is authoritative only when its subject revision and repository checkpoint state are current. The provider checks the closed shape, source linkage, stable IDs, and evidence-set agreement; it does not choose a disposition or route.
+Append an accepted in-scope material failure as conforming binary evidence; provider aggregation then blocks normally. After triage, append one well-formed `finding-ledger` snapshot for that exact gate and subject. It is a driver-authored, append-only snapshot of every candidate disposition, including rejected and advisory entries and an empty list. It is not `review-evidence`; each finding uses only the immutable source reference `{"kind":"context-record","id":"REVIEW_EVIDENCE_ID"}`. The provider resolves that source and follows any engine-owned selected-output metadata there. The latest well-formed snapshot is authoritative only when its subject revision and current checkpoint are valid. The provider checks the closed shape, source reference, stable IDs, and evidence-set agreement; it does not choose a disposition or route.
 
 There is no waiver: accepted material failure remains blocking until fixed or a subject revision changes the reviewed work. Known accepted material defects are never waived. Unsupported, advisory, unrelated, or burden-deficient candidates do not authorize an owner pass and are not appended as blocking failures. If owner disputes a candidate's evidence, consequence, materiality, or scope classification, request **focused external reconsideration** of that candidate only. Give reconsideration the disputed evidence and original-intent linkage; append only returned conforming evidence that meets this protocol. Focused reconsideration does not silently turn a disputed material concern into approval.
 

@@ -359,27 +359,42 @@ impl RepairFixture {
             .to_owned()
     }
 
-    fn source(&self) -> Value {
-        let bytes = b"repair finding source\n";
-        fs::write(self.artifact_root.join("repair.stdout"), bytes).expect("repair source");
+    fn source(&self, id: &str) -> Value {
         json!({
-            "kind": "external-artifact",
-            "relative_path": "repair.stdout",
-            "output_sha256": format!("sha256:{:x}", Sha256::digest(bytes))
+            "kind": "context-record",
+            "id": format!("{id}-evidence"),
         })
     }
 
-    fn context(&self, finding: Value, subject_revision: &str, state: &str) -> Value {
-        json!([{
+    fn context(&self, finding: Value, subject_revision: &str, _state: &str) -> Value {
+        let source_id = finding["source"]["id"].as_str().expect("source id");
+        let gate = "implementation-review";
+        let subject = "implementation-report.json";
+        let source = json!({
+            "id": source_id,
+            "kind": "review-evidence",
+            "data": {
+                "gate": gate,
+                "policy_id": finding["policy_id"],
+                "result": "fail",
+                "findings": finding["statement"],
+                "author": {"name": "reviewer", "kind": "agent"},
+                "subject": subject,
+                "subject_revision": subject_revision,
+                "config_version": "test-1"
+            },
+            "sequence": 0,
+            "created_at": 0
+        });
+        json!([source, {
             "id": "ledger-repair",
             "kind": "finding-ledger",
             "data": {
                 "schema_version": "1",
-                "gate": "implementation-review",
-                "subject": "implementation-report.json",
+                "gate": gate,
+                "subject": subject,
                 "subject_revision": subject_revision,
                 "author": {"name": "driver", "kind": "agent"},
-                "repository_state": state,
                 "findings": [finding]
             },
             "sequence": 1,
@@ -390,7 +405,7 @@ impl RepairFixture {
     fn finding(&self, id: &str) -> Value {
         json!({
             "id": id,
-            "source": self.source(),
+            "source": self.source(id),
             "policy_id": "implementation-contract",
             "statement": "repair this exact implementation defect",
             "disposition": "accepted",
@@ -852,6 +867,10 @@ fn bound_repair_selection_refuses_non_current_or_non_empty_task_findings_before_
         let pre_checkpoint = fs::read(fixture.artifact_root.join("implementation-checkpoint.json"))
             .expect("pre checkpoint");
         let pre_state = fixture.current_state();
+        if label == "stale-checkpoint" {
+            fs::write(fixture.repo.path().join("marker.txt"), b"changed\n")
+                .expect("make checkpoint stale");
+        }
         let mut finding = fixture.finding("F-repair");
         if let Some((field, value)) = mutation {
             finding[field] = value;
@@ -869,7 +888,7 @@ fn bound_repair_selection_refuses_non_current_or_non_empty_task_findings_before_
             .unwrap_or(&pre_state);
         let mut context = fixture.context(finding, subject_revision, state);
         if label == "unknown" {
-            context[0]["data"]["findings"][0]["id"] = json!("F-other");
+            context[1]["data"]["findings"][0]["id"] = json!("F-other");
         }
         let fake_dagu = fixture
             .artifact_root
@@ -893,7 +912,7 @@ fn bound_repair_selection_refuses_non_current_or_non_empty_task_findings_before_
         );
         assert_eq!(
             output.status.code(),
-            Some(2),
+            Some(if label == "stale-checkpoint" { 1 } else { 2 }),
             "{label}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
@@ -1071,18 +1090,10 @@ fn bound_selection_routes_only_matching_current_implementation_findings() {
             "dependency_graph": [{"from": "b", "to": "c"}]
         }),
     );
-    let source_bytes = b"bound selection review output\n";
-    let source_path = artifact_root.join("review.stdout");
-    fs::write(&source_path, source_bytes).expect("finding source");
-    let source = json!({
-        "kind": "external-artifact",
-        "relative_path": "review.stdout",
-        "output_sha256": format!("sha256:{:x}", Sha256::digest(source_bytes))
-    });
     let finding = |id: &str, task_id: &str| {
         json!({
             "id": id,
-            "source": source.clone(),
+            "source": {"kind": "context-record", "id": format!("{id}-evidence")},
             "policy_id": "task-sized",
             "statement": id,
             "disposition": "accepted",
@@ -1093,7 +1104,31 @@ fn bound_selection_routes_only_matching_current_implementation_findings() {
             "status": "unresolved"
         })
     };
-    let context = json!([{
+    let findings = [
+        finding("F-a", "a"),
+        finding("F-b", "b"),
+        finding("F-c", "c"),
+    ];
+    let mut context_records = Vec::new();
+    for (index, finding) in findings.iter().enumerate() {
+        context_records.push(json!({
+            "id": finding["source"]["id"],
+            "kind": "review-evidence",
+            "data": {
+                "gate": "plan-review",
+                "policy_id": "task-sized",
+                "result": "fail",
+                "findings": finding["statement"],
+                "author": {"name": format!("reviewer-{index}"), "kind": "agent"},
+                "subject": "plan.json",
+                "subject_revision": "plan-r1",
+                "config_version": "test-1"
+            },
+            "sequence": index,
+            "created_at": index
+        }));
+    }
+    context_records.push(json!({
         "id": "ledger-1",
         "kind": "finding-ledger",
         "data": {
@@ -1102,16 +1137,12 @@ fn bound_selection_routes_only_matching_current_implementation_findings() {
             "subject": "plan.json",
             "subject_revision": "plan-r1",
             "author": {"name": "driver", "kind": "agent"},
-            "repository_state": null,
-            "findings": [
-                finding("F-a", "a"),
-                finding("F-b", "b"),
-                finding("F-c", "c")
-            ]
+            "findings": findings
         },
-        "sequence": 1,
-        "created_at": 1
-    }]);
+        "sequence": 10,
+        "created_at": 10
+    }));
+    let context = Value::Array(context_records);
     let mut invoke_packet = packet(
         "run-bound-findings",
         "implement",
@@ -1767,19 +1798,11 @@ fn implementation_context_routes_exact_current_findings_without_widening_task_st
             "dependency_graph": []
         }),
     );
-    let raw = b"reviewer stdout\n";
-    fs::write(artifact_root.join("review.stdout"), raw).expect("review source");
-    let digest = format!("sha256:{:x}", Sha256::digest(raw));
-    let source = json!({
-        "kind": "external-artifact",
-        "relative_path": "review.stdout",
-        "output_sha256": digest
-    });
     let finding =
         |id: &str, disposition: &str, status: &str, owner: Value, tasks: Value, axes: Value| {
             json!({
                 "id": id,
-                "source": source.clone(),
+                "source": {"kind": "context-record", "id": format!("{id}-evidence")},
                 "policy_id": "task-sized",
                 "statement": id,
                 "disposition": disposition,
@@ -1796,7 +1819,6 @@ fn implementation_context_routes_exact_current_findings_without_widening_task_st
         "subject": "plan.json",
         "subject_revision": "1",
         "author": {"name": "driver", "kind": "agent"},
-        "repository_state": null,
         "findings": [
             finding("F-route-a", "accepted", "unresolved", json!("implementation"), json!(["task-a"]), json!(["task-sized"])),
             finding("F-route-b", "accepted", "unresolved", json!("implementation"), json!(["task-b"]), json!(["task-sized"])),
@@ -1807,22 +1829,43 @@ fn implementation_context_routes_exact_current_findings_without_widening_task_st
             finding("F-advisory", "advisory", "recorded", Value::Null, json!([]), json!([]))
         ]
     });
-    let context = json!([
-        {
-            "id": "ledger-1",
-            "kind": "finding-ledger",
-            "data": ledger,
-            "sequence": 1,
-            "created_at": 1
-        },
-        {
-            "id": "proposal-1",
-            "kind": "advisory-finding-proposal",
-            "data": {"proposals": [{"candidate_source_ids": ["source-1"]}]},
-            "sequence": 2,
-            "created_at": 2
-        }
-    ]);
+    let findings = ledger["findings"].as_array().unwrap().clone();
+    let mut context_records = Vec::new();
+    for (index, finding) in findings.iter().enumerate() {
+        let accepted_unresolved =
+            finding["disposition"] == "accepted" && finding["status"] == "unresolved";
+        context_records.push(json!({
+            "id": finding["source"]["id"],
+            "kind": "review-evidence",
+            "data": {
+                "gate": "plan-review",
+                "policy_id": finding["policy_id"],
+                "result": if accepted_unresolved { "fail" } else { "pass" },
+                "findings": if accepted_unresolved { finding["statement"].clone() } else { json!("") },
+                "author": {"name": format!("reviewer-{index}"), "kind": "agent"},
+                "subject": "plan.json",
+                "subject_revision": "1",
+                "config_version": "test-1"
+            },
+            "sequence": index,
+            "created_at": index
+        }));
+    }
+    context_records.push(json!({
+        "id": "ledger-1",
+        "kind": "finding-ledger",
+        "data": ledger,
+        "sequence": 10,
+        "created_at": 10
+    }));
+    context_records.push(json!({
+        "id": "proposal-1",
+        "kind": "advisory-finding-proposal",
+        "data": {"proposals": [{"candidate_source_ids": ["source-1"]}]},
+        "sequence": 11,
+        "created_at": 11
+    }));
+    let context = Value::Array(context_records);
     let mut invoke_packet = packet(
         "run-1",
         "implement",

@@ -2,23 +2,42 @@
 //!
 //! This module owns no transition routing. It consumes already-validated
 //! configuration projections and engine-supplied context records, then applies
-//! technical-design §7's six stages in order. When a driver links a claim to
-//! selected worker output, it reads and verifies those named bytes; the engine
-//! core remains opaque to their meaning.
+//! technical-design §7's six stages in order. Stable invocation/assignment
+//! references are resolved by core; this provider verifies the engine-resolved
+//! selected bytes and judgment fields without inferring semantic truth.
 
 #![allow(dead_code)]
 
+use crate::checkpoint;
 use crate::config::PolicyAxis;
-use loop_core::ContextRecord;
-use serde::Serialize;
+use loop_core::{
+    ContextRecord, EngineOrigin, EvidenceApplicability, OriginReference, ENGINE_ORIGIN_KEY,
+    EVIDENCE_APPLICABILITY_KIND, ORIGIN_KEY,
+};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const REVIEW_EVIDENCE_KIND: &str = "review-evidence";
 const AUTHOR_KINDS: &[&str] = &["human", "agent", "script"];
+const LEGACY_LINKAGE_FIELDS: &[&str] = &[
+    "loop_engine_carry",
+    "originating_output",
+    "originating_output_sha256",
+    "originating_output_path",
+    "overridden_inputs",
+    "attested_dimensions",
+    "selected_attempt",
+    "selected_output_sha256",
+    "selected_output_path",
+    "capture_dir",
+    "command",
+    "args",
+    "binding",
+];
 
 /// Exact author identity used for supersession, distinctness, and
 /// subject-author exclusion.
@@ -161,18 +180,29 @@ impl EvidenceEvaluation {
 }
 
 #[derive(Clone, Debug)]
-struct ConformingEvidence {
-    result: EvidenceResult,
-    findings: String,
-    author: AuthorIdentity,
-    subject_revision: String,
-    config_version: String,
+pub(crate) struct ConformingEvidence {
+    pub(crate) gate: String,
+    pub(crate) policy_id: String,
+    pub(crate) result: EvidenceResult,
+    pub(crate) findings: String,
+    pub(crate) author: AuthorIdentity,
+    pub(crate) subject_revision: String,
+    pub(crate) config_version: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum EvidenceResult {
+pub(crate) enum EvidenceResult {
     Pass,
     Fail,
+}
+
+impl EvidenceResult {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Fail => "fail",
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -213,66 +243,112 @@ pub(crate) fn evaluate_evidence(
     let mut latest: BTreeMap<(String, String, AuthorIdentity), ConformingEvidence> =
         BTreeMap::new();
     let mut inert_records = Vec::new();
+    let mut global_malformed = Vec::new();
+    let mut global_unverified = Vec::new();
 
-    // Stages 1–3: filter, attribute, then structurally conform.  Iteration
+    // Stages 1–3: filter, attribute, then structurally conform. Iteration
     // order is the supplied append/sequence order; map insertion below is
     // therefore latest-wins without relying on wall-clock metadata.
     for (context_index, record) in context.iter().enumerate() {
-        if record.kind != REVIEW_EVIDENCE_KIND || !record.data.is_object() {
-            continue;
-        }
-        let data = record
-            .data
-            .as_object()
-            .expect("object check above guarantees object data");
-        match classify_attribution(data, context_index, gate, axis_namespace) {
-            Attribution::Current { axis } => {
-                match parse_conforming(data, subject, artifact_root) {
-                    Ok(conforming) => {
-                        // Any later conforming record clears the malformed
-                        // block, regardless of author/revision/config.
-                        malformed
-                            .get_mut(&axis)
-                            .expect("attribution only returns configured axis")
-                            .clear();
-                        unverified
-                            .get_mut(&axis)
-                            .expect("attribution only returns configured axis")
-                            .clear();
-                        latest.insert(
-                            (
-                                axis,
-                                conforming.subject_revision.clone(),
-                                conforming.author.clone(),
-                            ),
+        if record.kind == REVIEW_EVIDENCE_KIND {
+            let Some(data) = record.data.as_object() else {
+                continue;
+            };
+            let attribution = classify_attribution(data, context_index, gate, axis_namespace);
+            match attribution {
+                Attribution::Current { axis } => {
+                    match parse_conforming(data, subject, artifact_root) {
+                        Ok(conforming) => record_conforming(
+                            &mut malformed,
+                            &mut unverified,
+                            &mut latest,
+                            axis,
                             conforming,
-                        );
-                    }
-                    Err(EvidenceParseError::Malformed(reasons)) => {
-                        // A malformed attributable record blocks only its own
-                        // axis until a later conforming record for that axis.
-                        malformed
+                        ),
+                        Err(EvidenceParseError::Malformed(reasons)) => malformed
                             .get_mut(&axis)
                             .expect("attribution only returns configured axis")
-                            .extend(reasons);
-                    }
-                    Err(EvidenceParseError::Unverified(reasons)) => {
-                        // A linked claim whose source cannot be verified is
-                        // not a reviewer disposition. It blocks only its own
-                        // axis until a later conforming record for that axis.
-                        unverified
+                            .extend(reasons),
+                        Err(EvidenceParseError::Unverified(reasons)) => unverified
                             .get_mut(&axis)
                             .expect("attribution only returns configured axis")
-                            .extend(reasons);
+                            .extend(reasons),
                     }
                 }
+                Attribution::OtherConfigured => {
+                    // Evidence for another configured gate belongs there;
+                    // never diagnose it during this gate's evaluation.
+                }
+                Attribution::Inert(inert) => inert_records.push(inert),
             }
-            Attribution::OtherConfigured => {
-                // Valid evidence for another configured gate belongs there;
-                // never diagnose it during this gate's evaluation.
+        } else if record.kind == EVIDENCE_APPLICABILITY_KIND {
+            let attribution =
+                applicability_attribution(context, record, context_index, gate, axis_namespace);
+            match (
+                attribution,
+                parse_applicable_evidence(
+                    context,
+                    record,
+                    subject,
+                    current_revision,
+                    artifact_root,
+                ),
+            ) {
+                (Some(Attribution::Current { axis }), Ok(conforming)) => record_conforming(
+                    &mut malformed,
+                    &mut unverified,
+                    &mut latest,
+                    axis,
+                    conforming,
+                ),
+                (
+                    Some(Attribution::Current { axis }),
+                    Err(EvidenceParseError::Malformed(reasons)),
+                ) => malformed
+                    .get_mut(&axis)
+                    .expect("attribution only returns configured axis")
+                    .extend(reasons),
+                (
+                    Some(Attribution::Current { axis }),
+                    Err(EvidenceParseError::Unverified(reasons)),
+                ) => unverified
+                    .get_mut(&axis)
+                    .expect("attribution only returns configured axis")
+                    .extend(reasons),
+                (Some(Attribution::OtherConfigured), _) => {
+                    // A declaration for another configured gate is not a
+                    // denial while evaluating this gate.
+                }
+                (Some(Attribution::Inert(inert)), _) => inert_records.push(inert),
+                (None, Err(EvidenceParseError::Malformed(reasons))) => {
+                    global_malformed.extend(reasons)
+                }
+                (None, Err(EvidenceParseError::Unverified(reasons))) => {
+                    global_unverified.extend(reasons)
+                }
+                (None, Ok(_)) => {
+                    global_malformed.push(
+                        "evidence applicability could not be attributed to a configured gate and axis"
+                            .to_owned(),
+                    );
+                }
             }
-            Attribution::Inert(inert) => inert_records.push(inert),
         }
+    }
+
+    // An applicability declaration without a resolvable source has no gate or
+    // axis from which to derive attribution. It is still a named durable
+    // reference failure, so fail closed rather than allowing a valid-looking
+    // fresh record to hide it.
+    for axis in axes.keys() {
+        malformed
+            .get_mut(axis)
+            .expect("all configured axes have malformed state")
+            .extend(global_malformed.iter().cloned());
+        unverified
+            .get_mut(axis)
+            .expect("all configured axes have unverified state")
+            .extend(global_unverified.iter().cloned());
     }
 
     let mut diagnostics = Vec::new();
@@ -458,29 +534,71 @@ fn classify_attribution(
 }
 
 #[derive(Clone, Debug)]
-enum EvidenceParseError {
+pub(crate) enum EvidenceParseError {
     Malformed(Vec<String>),
     Unverified(Vec<String>),
 }
 
-#[derive(Clone, Debug)]
-struct OriginatingOutput {
-    invocation_id: String,
-    assignment_id: String,
-    selected_attempt: Option<u32>,
-    identity_required: bool,
-    digest: String,
-    path: PathBuf,
+impl EvidenceParseError {
+    fn into_message(self) -> String {
+        match self {
+            Self::Malformed(reasons) | Self::Unverified(reasons) => reasons.join("; "),
+        }
+    }
+}
+
+fn record_conforming(
+    malformed: &mut BTreeMap<String, Vec<String>>,
+    unverified: &mut BTreeMap<String, Vec<String>>,
+    latest: &mut BTreeMap<(String, String, AuthorIdentity), ConformingEvidence>,
+    axis: String,
+    conforming: ConformingEvidence,
+) {
+    // Any later conforming record clears the earlier block, regardless of
+    // author, revision, or whether the record was fresh or explicitly
+    // applicable.
+    malformed
+        .get_mut(&axis)
+        .expect("attribution only returns configured axis")
+        .clear();
+    unverified
+        .get_mut(&axis)
+        .expect("attribution only returns configured axis")
+        .clear();
+    latest.insert(
+        (
+            axis,
+            conforming.subject_revision.clone(),
+            conforming.author.clone(),
+        ),
+        conforming,
+    );
+}
+
+/// Parse one review-evidence object for use as an immutable source record.
+/// The returned values are the original judgment fields; callers must not
+/// replace its author, result, findings, or config identity with attestation
+/// metadata from another context record.
+pub(crate) fn parse_evidence_record(
+    value: &Value,
+    expected_subject: &str,
+    artifact_root: Option<&Value>,
+) -> Result<ConformingEvidence, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "review-evidence source data must be an object".to_owned())?;
+    parse_conforming(object, expected_subject, artifact_root)
+        .map_err(EvidenceParseError::into_message)
 }
 
 fn parse_conforming(
     data: &Map<String, Value>,
     expected_subject: &str,
-    artifact_root: Option<&Value>,
+    _artifact_root: Option<&Value>,
 ) -> Result<ConformingEvidence, EvidenceParseError> {
     let mut reasons = Vec::new();
-    let _gate = non_empty_string(data, "gate", &mut reasons);
-    let _policy_id = non_empty_string(data, "policy_id", &mut reasons);
+    let gate = non_empty_string(data, "gate", &mut reasons);
+    let policy_id = non_empty_string(data, "policy_id", &mut reasons);
     let result = match data.get("result").and_then(Value::as_str) {
         Some("pass") => Some(EvidenceResult::Pass),
         Some("fail") => Some(EvidenceResult::Fail),
@@ -523,18 +641,18 @@ fn parse_conforming(
     let result = result.expect("result checked by empty-reasons branch");
     let findings = findings.expect("findings checked by empty-reasons branch");
     let author = author.expect("author checked by empty-reasons branch");
+    let gate = gate.expect("gate checked by empty-reasons branch");
+    let policy_id = policy_id.expect("policy id checked by empty-reasons branch");
     let subject_revision = subject_revision.expect("revision checked by empty-reasons branch");
     let config_version = config_version.expect("config version checked by empty-reasons branch");
 
-    if let Some(link) = originating_output(data) {
-        if let Err(reason) =
-            verify_originating_output(&link, data, &author, &result, &findings, artifact_root)
-        {
-            return Err(EvidenceParseError::Unverified(vec![reason]));
-        }
+    if let Err(reason) = validate_stable_origin(data, &policy_id, &author, result, &findings) {
+        return Err(EvidenceParseError::Unverified(vec![reason]));
     }
 
     Ok(ConformingEvidence {
+        gate,
+        policy_id,
         result,
         findings,
         author,
@@ -543,153 +661,352 @@ fn parse_conforming(
     })
 }
 
-/// A linked claim is driver-shaped evidence that names the selected stdout
-/// bytes which originated the judgment.  Ordinary hand-authored evidence has
-/// no linkage and remains valid; worker invocation records never enter this
-/// function and therefore cannot satisfy an axis by themselves.
-fn originating_output(data: &Map<String, Value>) -> Option<OriginatingOutput> {
-    let carry = data.get("loop_engine_carry").and_then(Value::as_object);
-    let nested = data.get("originating_output").and_then(Value::as_object);
-    let linkage_present = carry.is_some()
-        || nested.is_some()
-        || data.contains_key("originating_output_sha256")
-        || data.contains_key("originating_output_path");
-    if !linkage_present {
-        return None;
+/// Resolve one evidence-applicability record through its earlier immutable
+/// context-record source. The attestation itself supplies only the explicit
+/// semantic claim and current target; all judgment fields come from the
+/// referenced review-evidence record.
+fn parse_applicable_evidence(
+    context: &[ContextRecord],
+    applicability_record: &ContextRecord,
+    expected_subject: &str,
+    current_revision: &str,
+    artifact_root: Option<&Value>,
+) -> Result<ConformingEvidence, EvidenceParseError> {
+    let applicability = serde_json::from_value::<EvidenceApplicability>(
+        applicability_record.data.clone(),
+    )
+    .map_err(|error| {
+        EvidenceParseError::Malformed(vec![format!(
+            "evidence-applicability data must contain only origin, target, attesting_driver, and reason: {error}"
+        )])
+    })?;
+    if applicability.origin.kind != "context-record" {
+        return Err(EvidenceParseError::Unverified(vec![
+            "evidence-applicability origin kind must be `context-record`".to_owned(),
+        ]));
+    }
+    if applicability.origin.id.trim().is_empty() {
+        return Err(EvidenceParseError::Unverified(vec![
+            "evidence-applicability origin.id must be non-empty".to_owned(),
+        ]));
+    }
+    if applicability.origin.assignment_id.is_some() {
+        return Err(EvidenceParseError::Unverified(vec![
+            "evidence-applicability context-record origin must not carry assignment_id".to_owned(),
+        ]));
+    }
+    validate_attesting_driver(&applicability.attesting_driver).map_err(|reason| {
+        EvidenceParseError::Malformed(vec![format!("evidence-applicability {reason}")])
+    })?;
+    if applicability.reason.trim().is_empty() {
+        return Err(EvidenceParseError::Malformed(vec![
+            "evidence-applicability reason must be non-empty".to_owned(),
+        ]));
+    }
+    validate_applicability_target(
+        &applicability.target,
+        expected_subject,
+        current_revision,
+        artifact_root,
+    )
+    .map_err(|reason| EvidenceParseError::Unverified(vec![reason]))?;
+
+    let matches = context
+        .iter()
+        .filter(|record| record.id.as_str() == applicability.origin.id)
+        .collect::<Vec<_>>();
+    let Some(source) = matches.first().copied() else {
+        return Err(EvidenceParseError::Unverified(vec![format!(
+            "evidence-applicability source context record `{}` was not found",
+            applicability.origin.id
+        )]));
+    };
+    if matches.len() != 1 {
+        return Err(EvidenceParseError::Unverified(vec![format!(
+            "evidence-applicability source context record `{}` is ambiguous",
+            applicability.origin.id
+        )]));
+    }
+    if source.sequence >= applicability_record.sequence {
+        return Err(EvidenceParseError::Unverified(vec![format!(
+            "evidence-applicability source context record `{}` is not an earlier record",
+            applicability.origin.id
+        )]));
+    }
+    if source.kind != REVIEW_EVIDENCE_KIND {
+        return Err(EvidenceParseError::Unverified(vec![format!(
+            "evidence-applicability source context record `{}` is not review-evidence",
+            applicability.origin.id
+        )]));
     }
 
-    let string = |object: Option<&Map<String, Value>>, name: &str| {
-        object
-            .and_then(|object| object.get(name))
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned()
-    };
-    if carry.is_some() {
-        return Some(OriginatingOutput {
-            invocation_id: string(carry, "invocation_id"),
-            assignment_id: string(carry, "assignment_id"),
-            selected_attempt: carry
-                .and_then(|object| object.get("originating_attempt"))
-                .and_then(Value::as_u64)
-                .and_then(|value| u32::try_from(value).ok()),
-            identity_required: true,
-            digest: string(carry, "originating_output_sha256"),
-            path: PathBuf::from(string(carry, "originating_output_path")),
-        });
-    }
-    if nested.is_some() {
-        return Some(OriginatingOutput {
-            invocation_id: string(nested, "invocation_id"),
-            assignment_id: string(nested, "assignment_id"),
-            selected_attempt: nested
-                .and_then(|object| object.get("selected_attempt"))
-                .and_then(Value::as_u64)
-                .and_then(|value| u32::try_from(value).ok()),
-            identity_required: true,
-            digest: string(nested, "sha256"),
-            path: PathBuf::from(string(nested, "path")),
-        });
-    }
-    Some(OriginatingOutput {
-        invocation_id: String::new(),
-        assignment_id: String::new(),
-        selected_attempt: None,
-        identity_required: false,
-        digest: data
-            .get("originating_output_sha256")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned(),
-        path: PathBuf::from(
-            data.get("originating_output_path")
-                .and_then(Value::as_str)
-                .unwrap_or_default(),
-        ),
-    })
+    let mut evidence = parse_conforming(
+        source.data.as_object().ok_or_else(|| {
+            EvidenceParseError::Malformed(vec![format!(
+                "evidence source context record `{}` is not an object",
+                applicability.origin.id
+            )])
+        })?,
+        expected_subject,
+        artifact_root,
+    )?;
+    // The driver explicitly attests that the immutable judgment applies to
+    // this current target. It is not a semantic inference by the provider.
+    evidence.subject_revision = current_revision.to_owned();
+    Ok(evidence)
 }
 
-fn verify_originating_output(
-    link: &OriginatingOutput,
-    data: &Map<String, Value>,
-    author: &AuthorIdentity,
-    result: &EvidenceResult,
-    findings: &str,
+/// Return whether an applicability record validly promotes one immutable
+/// source evidence record to the supplied current target. This is a
+/// mechanical reference check for finding-ledger validation; it does not make
+/// a semantic applicability decision.
+pub(crate) fn applicability_covers_source(
+    context: &[ContextRecord],
+    record: &ContextRecord,
+    source_record_id: &str,
+    expected_subject: &str,
+    current_revision: &str,
+    artifact_root: Option<&Value>,
+) -> bool {
+    let Ok(applicability) = serde_json::from_value::<EvidenceApplicability>(record.data.clone())
+    else {
+        return false;
+    };
+    applicability.origin.kind == "context-record"
+        && applicability.origin.id == source_record_id
+        && parse_applicable_evidence(
+            context,
+            record,
+            expected_subject,
+            current_revision,
+            artifact_root,
+        )
+        .is_ok()
+}
+
+fn applicability_attribution(
+    context: &[ContextRecord],
+    record: &ContextRecord,
+    context_index: usize,
+    gate: &str,
+    axis_namespace: &BTreeMap<String, BTreeSet<String>>,
+) -> Option<Attribution> {
+    let applicability =
+        serde_json::from_value::<EvidenceApplicability>(record.data.clone()).ok()?;
+    let matches = context
+        .iter()
+        .filter(|candidate| candidate.id.as_str() == applicability.origin.id)
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        return None;
+    }
+    let source = matches[0].data.as_object()?;
+    Some(classify_attribution(
+        source,
+        context_index,
+        gate,
+        axis_namespace,
+    ))
+}
+
+fn validate_attesting_driver(value: &Value) -> Result<(), String> {
+    let Some(object) = value.as_object() else {
+        return Err("attesting_driver must be an object".to_owned());
+    };
+    for key in object.keys() {
+        if key != "name" && key != "kind" {
+            return Err(format!("attesting_driver has unknown field `{key}`"));
+        }
+    }
+    let Some(name) = object.get("name").and_then(Value::as_str) else {
+        return Err("attesting_driver.name must be a non-empty string".to_owned());
+    };
+    if name.trim().is_empty() {
+        return Err("attesting_driver.name must be a non-empty string".to_owned());
+    }
+    let Some(kind) = object.get("kind").and_then(Value::as_str) else {
+        return Err("attesting_driver.kind must be human, agent, or script".to_owned());
+    };
+    if !AUTHOR_KINDS.contains(&kind) {
+        return Err("attesting_driver.kind must be human, agent, or script".to_owned());
+    }
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApplicabilityTarget {
+    subject: String,
+    revision: String,
+    #[serde(default)]
+    checkpoint: Option<Value>,
+}
+
+fn validate_applicability_target(
+    value: &Value,
+    expected_subject: &str,
+    current_revision: &str,
     artifact_root: Option<&Value>,
 ) -> Result<(), String> {
-    if link.identity_required
-        && (link.invocation_id.is_empty()
-            || link.assignment_id.is_empty()
-            || link.selected_attempt.is_none())
-    {
+    let target = serde_json::from_value::<ApplicabilityTarget>(value.clone())
+        .map_err(|error| format!("target is not a valid current-target object: {error}"))?;
+    if target.subject.trim().is_empty() || target.subject != expected_subject {
+        return Err(format!(
+            "evidence-applicability target subject must equal `{expected_subject}`"
+        ));
+    }
+    if target.revision.trim().is_empty() || target.revision != current_revision {
+        return Err(format!(
+            "evidence-applicability target revision is stale (expected `{current_revision}`)"
+        ));
+    }
+    let expected_checkpoint = checkpoint::current_target(
+        expected_subject,
+        Path::new(artifact_root.and_then(Value::as_str).unwrap_or_default()),
+    )?;
+    if target.checkpoint != expected_checkpoint {
+        return Err(format!(
+            "evidence-applicability target checkpoint is not current (expected {})",
+            expected_checkpoint.map_or_else(|| "null".to_owned(), |value| value.to_string())
+        ));
+    }
+    Ok(())
+}
+
+fn validate_stable_origin(
+    data: &Map<String, Value>,
+    policy_id: &str,
+    author: &AuthorIdentity,
+    result: EvidenceResult,
+    findings: &str,
+) -> Result<(), String> {
+    let legacy = LEGACY_LINKAGE_FIELDS
+        .iter()
+        .find(|field| data.contains_key(**field));
+    if let Some(field) = legacy {
+        return Err(format!(
+            "legacy selected-output field `{field}` is not accepted; use `origin` with engine-resolved metadata"
+        ));
+    }
+
+    let has_origin = data.contains_key(ORIGIN_KEY);
+    let has_engine_origin = data.contains_key(ENGINE_ORIGIN_KEY);
+    if !has_origin && !has_engine_origin {
+        return Ok(());
+    }
+    let Some(origin_value) = data.get(ORIGIN_KEY) else {
+        return Err(format!(
+            "`{ENGINE_ORIGIN_KEY}` requires the concise `{ORIGIN_KEY}` reference"
+        ));
+    };
+    let origin =
+        serde_json::from_value::<OriginReference>(origin_value.clone()).map_err(|error| {
+            format!("`{ORIGIN_KEY}` is not a valid stable origin reference: {error}")
+        })?;
+    if origin.kind != "selected-assignment-output" {
         return Err(
-            "originating selected output must name its invocation, assignment, and selected attempt"
-                .to_owned(),
+            "fresh review-evidence origin kind must be `selected-assignment-output`".to_owned(),
         );
     }
-    if !valid_digest(&link.digest) {
-        return Err("originating selected output has an invalid sha256 digest".to_owned());
+    if origin.id.trim().is_empty() {
+        return Err("fresh review-evidence origin.id must be non-empty".to_owned());
     }
-    let Some(root_value) = artifact_root.and_then(Value::as_str) else {
-        return Err("artifact_root is required to verify originating selected output".to_owned());
+    let Some(origin_assignment) = origin.assignment_id.as_deref() else {
+        return Err(
+            "fresh review-evidence selected-assignment-output origin requires assignment_id"
+                .to_owned(),
+        );
     };
-    let root = fs::canonicalize(root_value).map_err(|error| {
-        format!("could not resolve artifact_root for originating output: {error}")
+    if origin_assignment.trim().is_empty() {
+        return Err("fresh review-evidence origin.assignment_id must be non-empty".to_owned());
+    }
+    let Some(engine_value) = data.get(ENGINE_ORIGIN_KEY) else {
+        return Err(format!(
+            "fresh selected-assignment evidence is missing engine-resolved `{ENGINE_ORIGIN_KEY}`"
+        ));
+    };
+    let engine = serde_json::from_value::<EngineOrigin>(engine_value.clone()).map_err(|error| {
+        format!("`{ENGINE_ORIGIN_KEY}` is not valid engine-resolved origin metadata: {error}")
     })?;
-    if !root.is_dir() {
-        return Err("artifact_root for originating output must be a directory".to_owned());
+    if engine.invocation_id.as_str() != origin.id {
+        return Err("engine-resolved invocation does not match concise origin id".to_owned());
     }
-    if link.path.as_os_str().is_empty() {
-        return Err("originating selected output path is missing".to_owned());
+    if engine.assignment_id != origin_assignment {
+        return Err(
+            "engine-resolved assignment does not match concise origin assignment_id".to_owned(),
+        );
     }
-    let path = if link.path.is_absolute() {
-        link.path.clone()
+    verify_engine_selected_output(&engine, policy_id, author, result, findings)
+}
+
+fn verify_engine_selected_output(
+    origin: &EngineOrigin,
+    policy_id: &str,
+    author: &AuthorIdentity,
+    result: EvidenceResult,
+    findings: &str,
+) -> Result<(), String> {
+    if origin.selected_attempt == 0 {
+        return Err("engine-resolved selected_attempt must be positive".to_owned());
+    }
+    if origin.selected_output_sha256.trim().is_empty()
+        || !valid_digest(&origin.selected_output_sha256)
+    {
+        return Err("engine-resolved selected_output_sha256 is invalid".to_owned());
+    }
+    if origin.capture_dir.trim().is_empty() || origin.selected_output_path.trim().is_empty() {
+        return Err("engine-resolved selected output path is incomplete".to_owned());
+    }
+    let cwd = std::env::current_dir()
+        .map_err(|error| format!("could not read provider working directory: {error}"))?;
+    let capture = PathBuf::from(&origin.capture_dir);
+    let capture = if capture.is_absolute() {
+        capture
     } else {
-        root.join(&link.path)
+        cwd.join(capture)
     };
-    let canonical = fs::canonicalize(&path)
-        .map_err(|error| format!("originating selected output is unavailable: {error}"))?;
-    if !canonical.starts_with(&root) || canonical == root || !canonical.is_file() {
-        return Err("originating selected output is outside artifact_root".to_owned());
+    let capture = fs::canonicalize(&capture)
+        .map_err(|error| format!("engine-resolved capture directory is unavailable: {error}"))?;
+    if !capture.is_dir() {
+        return Err("engine-resolved capture directory is not a directory".to_owned());
     }
-    let bytes = fs::read(&canonical)
-        .map_err(|error| format!("originating selected output is unavailable: {error}"))?;
-    let actual = sha256_digest(&bytes);
-    if actual != link.digest {
-        return Err("originating selected output digest does not match raw bytes".to_owned());
+    let selected = PathBuf::from(&origin.selected_output_path);
+    let selected = if selected.is_absolute() {
+        selected
+    } else {
+        capture.join(selected)
+    };
+    let selected = fs::canonicalize(&selected)
+        .map_err(|error| format!("engine-resolved selected output is unavailable: {error}"))?;
+    if selected == capture || !selected.starts_with(&capture) || !selected.is_file() {
+        return Err("engine-resolved selected output escapes capture_dir".to_owned());
+    }
+    let bytes = fs::read(&selected)
+        .map_err(|error| format!("engine-resolved selected output is unavailable: {error}"))?;
+    if sha256_digest(&bytes) != origin.selected_output_sha256 {
+        return Err("engine-resolved selected output digest does not match raw bytes".to_owned());
     }
     let value = parse_originating_judgment(&bytes)?;
     let object = value
         .as_object()
-        .ok_or_else(|| "originating selected output is not a JSON object".to_owned())?;
-    let expected_result = match result {
-        EvidenceResult::Pass => "pass",
-        EvidenceResult::Fail => "fail",
-    };
-    if object.get("result").and_then(Value::as_str) != Some(expected_result) {
-        return Err("judgment result disagrees with originating selected output".to_owned());
+        .ok_or_else(|| "engine-resolved selected output is not a JSON object".to_owned())?;
+    if object.get("axis").and_then(Value::as_str) != Some(policy_id) {
+        return Err("judgment axis disagrees with review-evidence policy_id".to_owned());
     }
-    if object.get("findings").and_then(Value::as_str) != Some(findings) {
-        return Err("judgment findings disagree with originating selected output".to_owned());
-    }
-    if let Some(axis) = object.get("axis").and_then(Value::as_str) {
-        if data.get("policy_id").and_then(Value::as_str) != Some(axis) {
-            return Err("judgment axis disagrees with originating selected output".to_owned());
-        }
-    } else if let Some(policy_id) = object.get("policy_id").and_then(Value::as_str) {
-        if data.get("policy_id").and_then(Value::as_str) != Some(policy_id) {
-            return Err("judgment policy disagrees with originating selected output".to_owned());
-        }
-    } else {
-        return Err("originating selected output has no judgment axis".to_owned());
-    }
-    let Some(output_author) = object.get("author").and_then(Value::as_object) else {
-        return Err("originating selected output has no judgment author".to_owned());
-    };
+    let output_author = object
+        .get("author")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "engine-resolved selected output has no judgment author".to_owned())?;
     if output_author.get("name").and_then(Value::as_str) != Some(author.name())
         || output_author.get("kind").and_then(Value::as_str) != Some(author.kind())
     {
-        return Err("judgment author disagrees with originating selected output".to_owned());
+        return Err("judgment author disagrees with review-evidence author".to_owned());
+    }
+    if object.get("result").and_then(Value::as_str) != Some(result.as_str()) {
+        return Err("judgment result disagrees with review-evidence result".to_owned());
+    }
+    if object.get("findings").and_then(Value::as_str) != Some(findings) {
+        return Err("judgment findings disagree with review-evidence findings".to_owned());
     }
     Ok(())
 }

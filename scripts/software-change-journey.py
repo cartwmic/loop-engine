@@ -136,7 +136,11 @@ COMPANION_SCENARIO_SUBPATH = Path(
 
 def _review_stdin_kinds(slot_ids: Sequence[str]) -> dict[str, list[str]]:
     return {
-        slot_id: ["finding-ledger"]
+        slot_id: (
+            ["finding-ledger", "review-evidence", "evidence-applicability"]
+            if slot_id == "implement"
+            else ["finding-ledger"]
+        )
         for slot_id in slot_ids
         if "-review" in slot_id or slot_id == "implement"
     }
@@ -166,7 +170,9 @@ DUMMY_WORKER_PROOF = [
     "show exposes durable change report and provider content-agreement refusal",
     "observation-before-mutation refuses all four guarded acts",
     "invoke subset starts only selected assignments",
-    "unchanged-carry and override-carry preserve explicit provenance",
+    "stable evidence references and one applicability declaration preserve explicit provenance",
+    "public negatives reject missing/cross-run invocation or assignment and stale subject/revision/checkpoint references",
+    "public negatives reject missing evidence, unknown policy/task, and missing finding references before progression",
     "plan-graph subset refuses missing prerequisites and summarizes resulting tree",
     "overrun overlay show/retry and distinct captures",
     "stdin-exec sidecar/propagate, spawn failure, and session directory",
@@ -1127,7 +1133,6 @@ class Journey:
             "subject": subject,
             "subject_revision": revision,
             "author": {"name": "journey-driver", "kind": "agent"},
-            "repository_state": self._checkpoint_state_for_subject(subject),
             "findings": [],
         }
         record = json.dumps(data, separators=(",", ":"))
@@ -1372,15 +1377,11 @@ class Journey:
             raise JourneyFailure("pre-repair checkpoint omitted repository state")
 
         policy_id = self.profile["review_policies"]["implementation-review"][0]["id"]
-        source_path = self.artifact_root / "ad-hoc-repair-review.stdout"
-        source_bytes = b"accepted no-honest-task implementation finding\n"
-        source_path.write_bytes(source_bytes)
         finding = {
             "id": "F-no-honest-task-repair",
             "source": {
-                "kind": "external-artifact",
-                "relative_path": source_path.name,
-                "output_sha256": "sha256:" + hashlib.sha256(source_bytes).hexdigest(),
+                "kind": "context-record",
+                "id": "ad-hoc-failing-evidence",
             },
             "policy_id": policy_id,
             "statement": "The accepted implementation defect has no honest frozen plan task owner.",
@@ -1430,7 +1431,6 @@ class Journey:
             "subject": "implementation-report.json",
             "subject_revision": pre_report_revision,
             "author": {"name": "no-honest-task-driver", "kind": "agent"},
-            "repository_state": pre_state,
             "findings": [finding],
         }
         self._assert_show("implementation-review", "ad-hoc-unresolved-ledger")
@@ -1522,13 +1522,7 @@ class Journey:
 
             invalid_variants = (
                 ("repair-stale-subject", {"subject_revision": "stale-report"}),
-                (
-                    "repair-stale-checkpoint",
-                    {
-                        "repository_state":
-                        "sha256:" + "0" * 64
-                    },
-                ),
+                ("repair-stale-checkpoint", {"checkpoint_stale": True}),
                 ("repair-resolved", {"status": "resolved"}),
                 (
                     "repair-rejected",
@@ -1562,6 +1556,7 @@ class Journey:
                 "review_axes",
                 "status",
             }
+            stale_checkpoint_marker = self.repository_root / "repair-stale-checkpoint.txt"
             for index, (label, changes) in enumerate(invalid_variants, start=1):
                 invalid_finding = copy.deepcopy(finding)
                 invalid_finding.update(
@@ -1575,10 +1570,10 @@ class Journey:
                 invalid_snapshot["subject_revision"] = changes.get(
                     "subject_revision", pre_report_revision
                 )
-                invalid_snapshot["repository_state"] = changes.get(
-                    "repository_state", pre_state
-                )
                 invalid_snapshot["findings"] = [invalid_finding]
+                checkpoint_was_staled = bool(changes.get("checkpoint_stale"))
+                if checkpoint_was_staled:
+                    stale_checkpoint_marker.write_text("checkpoint drift\n", encoding="utf-8")
                 self._assert_show("implement", f"{label}-before-ledger")
                 self._append_ledger_snapshot_for(
                     self.run_id,
@@ -1591,6 +1586,8 @@ class Journey:
                 self._invoke_expected_failure(repair_input, label=label)
                 if (fake_dagu_dir / "called").exists():
                     raise JourneyFailure(f"invalid repair selection probed Dagu during {label}")
+                if checkpoint_was_staled:
+                    stale_checkpoint_marker.unlink()
                 self._assert_show("implement", f"{label}-restore-ledger")
                 self._append_ledger_snapshot_for(
                     self.run_id,
@@ -1731,9 +1728,44 @@ class Journey:
         if not repair_effect.is_file():
             raise JourneyFailure("ad-hoc repair dummy omitted its controlled repository effect")
         valid_effect_bytes = repair_effect.read_bytes()
+        # The original failure remains the immutable source. Reuse it for the
+        # fresh implementation revision through the one explicit applicability
+        # declaration instead of copying its engine/checkpoint coordinates.
+        repair_applicability = {
+            "origin": {"kind": "context-record", "id": "ad-hoc-failing-evidence"},
+            "target": {
+                "subject": "implementation-report.json",
+                "revision": repair_revision,
+                "checkpoint": {
+                    "phase": "implementation",
+                    "report_revision": repair_revision,
+                },
+            },
+            "attesting_driver": {"name": "no-honest-task-driver", "kind": "agent"},
+            "reason": "The accepted implementation finding remains applicable after the repair proof revision.",
+        }
+        self._assert_show("implement", "ad-hoc-applicability")
+        applicability_result = self._engine(
+            [
+                "append",
+                "--record-id=ad-hoc-repair-applicability",
+                self.run_id,
+                "evidence-applicability",
+                json.dumps(repair_applicability, separators=(",", ":")),
+            ],
+            state="implement",
+            event="append",
+            axis=policy_id,
+        )
+        self._expect_status(
+            applicability_result,
+            "completed",
+            event="append",
+            state="implement",
+            axis=policy_id,
+        )
         current_unresolved = copy.deepcopy(unresolved_ledger)
         current_unresolved["subject_revision"] = repair_revision
-        current_unresolved["repository_state"] = post_state
         current_unresolved["findings"] = [finding]
         self._assert_show("implement", "ad-hoc-collision-ledger")
         self._append_ledger_snapshot_for(
@@ -1796,27 +1828,6 @@ class Journey:
             "worker capture, collision failures, fresh proof, and independent re-review"
         )
         return repair_revision
-
-    def _checkpoint_state_for_subject(self, subject: str) -> Optional[str]:
-        if subject in {"intent.json", "design.json", "plan.json"}:
-            return None
-        assert self.artifact_root is not None
-        checkpoint_name = (
-            "implementation-checkpoint.json"
-            if subject == "implementation-report.json"
-            else "validation-checkpoint.json"
-        )
-        checkpoint = self._read_json(
-            self.artifact_root / checkpoint_name, f"{subject} checkpoint"
-        )
-        state = checkpoint.get("repository", {}).get("state_sha256")
-        if not isinstance(state, str) or not state:
-            raise JourneyFailure(
-                f"{checkpoint_name} omitted repository.state_sha256",
-                state=self.state,
-                event="append",
-            )
-        return state
 
     def _expect_denial_for(
         self, run_id: str, state: str, event: str, axis: str, code: str
@@ -2568,9 +2579,6 @@ class Journey:
             "subject": "validation-report.json",
             "subject_revision": validation_revision,
             "author": {"name": f"checkpoint-driver-{mutation}", "kind": "agent"},
-            "repository_state": self._create_checkpoint_at(
-                self.provider, "validation", artifacts, repository
-            )["repository"]["state_sha256"],
             "findings": [],
         }
         ledger_result = call(
@@ -2628,9 +2636,6 @@ class Journey:
         self._expect_status(fresh_result, "completed", event="append", state="validation-review")
         fresh_ledger = dict(ledger)
         fresh_ledger["author"] = {"name": f"checkpoint-driver-{mutation}-fresh", "kind": "agent"}
-        fresh_ledger["repository_state"] = self._create_checkpoint_at(
-            self.provider, "validation", artifacts, repository
-        )["repository"]["state_sha256"]
         fresh_ledger_result = call(
             [
                 "append",
@@ -2901,9 +2906,6 @@ class Journey:
             "subject": "implementation-report.json",
             "subject_revision": repair_revision,
             "author": {"name": "late-validation-driver", "kind": "agent"},
-            "repository_state": self._checkpoint_state_for_subject(
-                "implementation-report.json"
-            ),
             "findings": [],
         }
         late_append = self._engine(
@@ -3022,18 +3024,12 @@ class Journey:
         validation_revision = self._fixture_revision("validation-report.json")
         repair_policy = self.profile["review_policies"]["validation-review"][0]["id"]
         repair_author = f"synthetic-validation-review-{repair_policy}-a"
-        repair_source_path = self.artifact_root / "focused-repair-review.stdout"
-        repair_source_bytes = b"accepted focused implementation repair finding\n"
-        repair_source_path.write_bytes(repair_source_bytes)
-        repair_source = {
-            "kind": "external-artifact",
-            "relative_path": repair_source_path.name,
-            "output_sha256": "sha256:"
-            + hashlib.sha256(repair_source_bytes).hexdigest(),
-        }
         repair_finding = {
             "id": "F-focused-implementation-repair",
-            "source": repair_source,
+            "source": {
+                "kind": "context-record",
+                "id": "focused-repair-fail-evidence",
+            },
             "policy_id": repair_policy,
             "statement": "The checked-transition task requires focused rework.",
             "disposition": "accepted",
@@ -3079,9 +3075,6 @@ class Journey:
             "subject": "validation-report.json",
             "subject_revision": validation_revision,
             "author": {"name": "focused-repair-driver", "kind": "agent"},
-            "repository_state": self._checkpoint_state_for_subject(
-                "validation-report.json"
-            ),
             "findings": [repair_finding],
         }
         self._assert_show("validation-review", "focused-repair-ledger")
@@ -3322,9 +3315,6 @@ class Journey:
         resolved_ledger = {
             **unresolved_ledger,
             "author": {"name": "focused-repair-driver-confirmation", "kind": "agent"},
-            "repository_state": self._checkpoint_state_for_subject(
-                "validation-report.json"
-            ),
             "findings": [resolved_finding],
         }
         self._assert_show("validation-review", "focused-repair-resolved-ledger")
@@ -5080,7 +5070,7 @@ else:
                 fixture_root=self.fixture_root,
                 work_dir=proof_root / "observation-before-mutation",
             )
-            # bookends:LE-99 — the selected-attempt journey exposes durable assignment identity, digest, path, and coverage gap.
+            # bookends:LE-99 — the selected-attempt journey exposes durable engine-owned assignment, capture, and output identity.
             # bookends:LE-100 — the selected invocation's public show asserts deterministic change-report dimensions.
             # bookends:LE-105 — the public provider gate refuses content disagreement with selected bytes.
             work_slot_journey.prove_selected_attempt_ledger_linkage(
@@ -5090,8 +5080,8 @@ else:
                 fixture_root=self.fixture_root,
                 work_dir=proof_root / "selected-attempt-ledger",
             )
-            # A38 — subset re-execution, explicit remainder carry, and a later checked transition.
-            work_slot_journey.prove_subset_carry_checked(
+            # bookends:LE-107 — subset re-execution, concise evidence references, and one current applicability declaration.
+            work_slot_journey.prove_subset_applicability_checked(
                 engine=self.engine,
                 provider=self.provider,
                 profile_source=self.profile_source,
@@ -5157,7 +5147,7 @@ else:
             "dummy worker proofs passed: shipped profiles, graph-runner, fan-out, "
             "preview-bindings fail-closed, missing -e warning, default sandbox argv, bound heartbeats, "
             "overrun retry, bounded reviewer retry/exhaustion, selected-attempt linkage, observation guard, "
-            "subset invoke, change report, carry acts, and content-agreement refusal, stdin-exec, graph working-directory cwd/marker proof, implementation finding routing, "
+            "subset invoke, change report, applicability, and content-agreement refusal, stdin-exec, graph working-directory cwd/marker proof, implementation finding routing, "
             "bound operating-context inspection, overlay-running invocation-progress, "
             "omitted vs set --max-active, "
             "progress-query overlay-untouched"
@@ -6152,7 +6142,7 @@ def assert_worker_data_skill_and_root_policy() -> None:
         "before the commit introducing `LE-107`, the owner-accepted wording is a proposal; once it is present in committed `docs/PRD.md`, that PRD is authoritative.",
         "This AGENTS summary is subordinate and referential, not a second product policy",
         "observed ordinary-use failure and why a smaller mechanism using existing durable state, history, capture, or driver judgment is insufficient",
-        "Keep driver-authored metadata small, trust explicit materiality and carry declarations except for cheap mechanical identity mismatches",
+        "Keep driver-authored metadata small, trust explicit materiality and applicability declarations except for cheap mechanical identity mismatches",
         "prefer the narrowest honest correction, and preserve rich engine-generated history",
         "[`docs/PRD.md`](docs/PRD.md) LE-107",
     )
@@ -6163,9 +6153,9 @@ def assert_worker_data_skill_and_root_policy() -> None:
         "retain R8 and R13 freshness and subject/identity checks, but do not repeat mechanically available invocation, attempt, digest, path, or coverage facts in driver-authored records",
         "Preserve R16's independent-author aggregation and visible verdict history",
         "R21's retained review, materiality, triage, source-visibility, and no-waiver rules remain",
-        "stable-reference and carry runtime redesign is separate work",
+        "delivered stable references use context-record or invocation/assignment identities",
     )
-    # bookends:LE-107 — the public self-test checks referential root/provider operational summaries against the PRD authority boundary.
+    # LE-107 — the self-test checks referential root/provider operational summaries against the PRD authority boundary.
     for label, text, fragments in (
         ("root", policy, policy_fragments),
         ("software-change provider", provider_policy, provider_policy_fragments),
@@ -6190,6 +6180,7 @@ def assert_worker_data_skill_and_root_policy() -> None:
 def assert_operator_contract_surfaces() -> None:
     """Assert the existing public procedure exposes the accepted operator contract."""
     repository = Path(__file__).resolve().parent.parent
+    root_readme = (repository / "README.md").read_text(encoding="utf-8")
     root_policy = (repository / "AGENTS.md").read_text(encoding="utf-8")
     engine_skill = (repository / "skills/using-loop-engine/SKILL.md").read_text(
         encoding="utf-8"
@@ -6200,7 +6191,10 @@ def assert_operator_contract_surfaces() -> None:
     protocol = (
         repository / "crates/software-change-provider/data/reviewer-protocol.md"
     ).read_text(encoding="utf-8")
-    contract = "\n".join((root_policy, engine_skill, provider_skill, protocol))
+    agent_usage = (repository / "docs/agent-usage.md").read_text(encoding="utf-8")
+    contract = "\n".join(
+        (root_readme, root_policy, engine_skill, provider_skill, protocol, agent_usage)
+    )
     for clause in (
         "Exact profile and external-fleet preflight",
         "config_version",
@@ -6221,7 +6215,12 @@ def assert_operator_contract_surfaces() -> None:
         "revise-design",
         "revise-intent",
         "captured ad hoc repair",
-        "override-carry",
+        "evidence-applicability",
+        "context-record",
+        "engine-owned",
+        "does not infer semantic applicability",
+        "current target",
+        "Historical completed-run records",
         "challenge review",
         "meaningfully falsify",
         "current supplied evidence",
@@ -6229,6 +6228,29 @@ def assert_operator_contract_surfaces() -> None:
     ):
         if clause.lower() not in contract.lower():
             raise JourneyFailure(f"operator procedure omitted {clause!r}")
+
+    # The ordinary procedures use only the stable-reference contract. Legacy
+    # forms remain readable only through the explicit historical PRD note and
+    # negative compatibility tests, not as driver instructions.
+    legacy_fields = (
+        "unchanged" + "-carry",
+        "override" + "-carry",
+        "originating" + "_output",
+        "external" + "-artifact",
+    )
+    for legacy in legacy_fields:
+        if any(
+            legacy in text
+            for text in (
+                root_readme,
+                root_policy,
+                engine_skill,
+                provider_skill,
+                protocol,
+                agent_usage,
+            )
+        ):
+            raise JourneyFailure(f"ordinary operator guidance still exposes legacy field {legacy!r}")
 
     # Shipped profile bytes are the immutable source of profile-derived facts;
     # comparing against HEAD catches accidental edits without hard-coding any
@@ -6247,6 +6269,41 @@ def assert_operator_contract_surfaces() -> None:
     workflow_source = (
         repository / "crates/software-change-provider/src/workflow.rs"
     ).read_text(encoding="utf-8")
+    if (
+        "REVIEW_EVIDENCE_KIND.to_owned()" not in workflow_source
+        or "EVIDENCE_APPLICABILITY_KIND.to_owned()" not in workflow_source
+    ):
+        raise JourneyFailure(
+            "implementation slot stopped forwarding stable-reference source context"
+        )
+    work_slot_source = (repository / "scripts/work_slot_journey.py").read_text(
+        encoding="utf-8"
+    )
+    for function_name in (
+        "prove_selected_attempt_ledger_linkage",
+        "prove_subset_applicability_checked",
+    ):
+        function_start = work_slot_source.index(f"def {function_name}(")
+        function_end = work_slot_source.find("\ndef ", function_start + 1)
+        function_source = work_slot_source[
+            function_start : function_end if function_end >= 0 else len(work_slot_source)
+        ]
+        for clause in ("context-record", "evidence-applicability", '"origin"'):
+            if clause not in function_source:
+                raise JourneyFailure(
+                    f"{function_name} omitted stable-reference clause {clause!r}"
+                )
+        legacy_fields = (
+            "originating" + "_output",
+            "external" + "-artifact",
+            "unchanged" + "-carry",
+            "override" + "-carry",
+        )
+        for legacy in legacy_fields:
+            if legacy in function_source:
+                raise JourneyFailure(
+                    f"{function_name} retained legacy provenance path {legacy!r}"
+                )
     for identifier in (
         "intent-adversarial-review",
         "design-adversarial-review",
@@ -6302,6 +6359,8 @@ def assert_focused_boundary_scenarios() -> None:
     full_source = source[full_start:full_end if full_end >= 0 else len(source)]
     if "self._run_engine_boundary_scenarios()" not in full_source:
         raise JourneyFailure("focused engine boundary scenarios are not in the full source journey")
+    if "self._run_dummy_worker_proofs()" not in full_source or "prove_selected_attempt_ledger_linkage" not in source or "prove_subset_applicability_checked" not in source:
+        raise JourneyFailure("stable-reference applicability proof is not in the full source journey")
 
     focused_functions = {
         2: "_run_le2_topology_scenario",
@@ -6343,7 +6402,11 @@ def assert_focused_boundary_scenarios() -> None:
         ),
         92: (
             "_run_dummy_worker_proofs",
-            ("prove_graph_runner", "prove_selected_attempt_ledger_linkage"),
+            (
+                "prove_graph_runner",
+                "prove_selected_attempt_ledger_linkage",
+                "prove_subset_applicability_checked",
+            ),
         ),
         93: (
             "_run_dummy_worker_proofs",
@@ -6364,6 +6427,14 @@ def assert_focused_boundary_scenarios() -> None:
                 "assert_semantic_outcome_proof_contract",
                 "executable CLI assertions",
                 "token-only or activity-only proof is refused",
+            ),
+        ),
+        107: (
+            "_run_dummy_worker_proofs",
+            (
+                "prove_selected_attempt_ledger_linkage",
+                "prove_subset_applicability_checked",
+                "current applicability declaration",
             ),
         ),
         108: (

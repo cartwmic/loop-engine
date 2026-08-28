@@ -14,11 +14,10 @@ pub use dagu::{names_for_capture_root, resolve_dagu, write_locator, DaguError, D
 pub use fan_out::FanOutArgs;
 
 use loop_core::{
-    self as core, AppendContextRequest, CarryAct, CarryRequest, CompleteWorkSlotInvocationRequest,
-    EventRequest, HistoryRequest, InnerWorker, InvocationId, InvokeRequest, OperationOutcome,
-    Persistence, ProcessError, ProviderResolutionError, RunId, ShowRequest, StartRequest,
-    StartedWaiter, TerminateRunRequest, Timestamp, WaiterSpawnArgs, WaiterWrittenStatus,
-    WorkSlotProcess,
+    self as core, AppendContextRequest, CompleteWorkSlotInvocationRequest, EventRequest,
+    HistoryRequest, InnerWorker, InvocationId, InvokeRequest, OperationOutcome, Persistence,
+    ProcessError, ProviderResolutionError, RunId, ShowRequest, StartRequest, StartedWaiter,
+    TerminateRunRequest, Timestamp, WaiterSpawnArgs, WaiterWrittenStatus, WorkSlotProcess,
 };
 use loop_integrations::{
     ConfiguredProviderResolver, ProviderConfiguration, SqlitePersistence, SubprocessProviderGateway,
@@ -982,37 +981,6 @@ fn parse_output_format(value: &str) -> Result<OutputFormat, CliError> {
             format!("unknown output format `{value}`; expected human or json"),
         )),
     }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CarryInput {
-    #[serde(default)]
-    source_record_id: String,
-    invocation_id: String,
-    assignment_id: String,
-    attesting_driver: Value,
-    #[serde(default)]
-    overridden_inputs: Vec<String>,
-}
-
-fn parse_carry_request(data: Value, act: CarryAct) -> Result<CarryRequest, CliError> {
-    let input = serde_json::from_value::<CarryInput>(data).map_err(|error| {
-        CliError::new(
-            "invalid-carry-request",
-            format!(
-                "{act:?} data must name invocation_id, assignment_id, and attesting_driver; source_record_id is optional for plan-task results: {error}"
-            ),
-        )
-    })?;
-    Ok(CarryRequest::new(
-        input.source_record_id,
-        input.invocation_id,
-        input.assignment_id,
-        act,
-        input.attesting_driver,
-    )
-    .with_overridden_inputs(input.overridden_inputs))
 }
 
 fn parse_assignment_selection_value(raw: &str) -> Result<Vec<String>, CliError> {
@@ -2274,26 +2242,12 @@ fn execute_operation(options: CliOptions, command: PrimaryCommand) -> Execution 
         }
         PrimaryCommand::Append(args) => {
             let request = AppendContextRequest::new(
-                args.run_id.clone(),
+                args.run_id,
                 args.record_id.unwrap_or_else(new_context_id),
-                args.kind.clone(),
-                args.data.clone(),
+                args.kind,
+                args.data,
                 now_timestamp(),
             );
-            let request = if matches!(args.kind.as_str(), "unchanged-carry" | "override-carry") {
-                let act = if args.kind == "unchanged-carry" {
-                    CarryAct::Unchanged
-                } else {
-                    CarryAct::Override
-                };
-                let carry = match parse_carry_request(args.data, act) {
-                    Ok(carry) => carry,
-                    Err(error) => return render_invalid_invocation_with_format(error, output),
-                };
-                request.with_carry(carry)
-            } else {
-                request
-            };
             let outcome =
                 core::execute_append(request, &persistence).map(CliAppendContextResult::from);
             render_operation(operation, output, &outcome)
@@ -2660,28 +2614,14 @@ struct CliAppendContextResult {
     run: CliRun,
     context: core::ContextRecord,
     history: core::HistoryEntry,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    guidance: Option<String>,
 }
 
 impl From<core::AppendContextResult> for CliAppendContextResult {
     fn from(result: core::AppendContextResult) -> Self {
-        let guidance = result
-            .context
-            .data
-            .get("loop_engine_carry")
-            .and_then(|value| value.get("act"))
-            .and_then(Value::as_str)
-            .map(|act| {
-                format!(
-                    "Consult the change report of record; this append used {act}. Unchanged-carry requires every covered input to be unchanged. Override-carry must name every changed input it overrides."
-                )
-            });
         Self {
             run: result.run.into(),
             context: result.context,
             history: result.history,
-            guidance,
         }
     }
 }
@@ -3211,6 +3151,9 @@ fn usage(command: Option<&str>) -> String {
         Some("append") => {
             "Usage: loop-engine [options] append <run-id> <kind> <data-json>\n\n".to_owned()
                 + "Options: --record-id <id> --database <path> --json\n"
+                + "Stable worker output data uses {\"origin\":{\"kind\":\"selected-assignment-output\",\"id\":\"INVOCATION_ID\",\"assignment_id\":\"ASSIGNMENT_ID\"}};\n"
+                + "the engine resolves the selected attempt and capture metadata. Evidence reuse uses\n"
+                + "kind evidence-applicability with {origin,target,attesting_driver,reason}.\n"
         }
         Some("event") => "Usage: loop-engine [options] event <run-id> <event>\n".to_owned(),
         Some("show") => {

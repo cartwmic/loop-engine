@@ -245,11 +245,17 @@ pub struct CreateRunResult {
     pub history: HistoryEntry,
 }
 
-/// The explicit driver act used to carry a recorded worker result forward.
+/// The explicit driver acts used by the pre-stable-reference append path.
+///
+/// These types remain deserializable so completed historical requests and
+/// fixtures can still be read.  New append execution rejects them; they are
+/// not aliases for the stable-reference contract.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CarryAct {
+    #[serde(rename = "unchanged", alias = "unchanged-carry")]
     Unchanged,
+    #[serde(rename = "override", alias = "override-carry")]
     Override,
 }
 
@@ -262,12 +268,7 @@ impl CarryAct {
     }
 }
 
-/// Opaque-to-provider request metadata for an explicit carry append.
-///
-/// Core uses only the durable invocation/change-report identity and transports
-/// `attesting_driver` without interpreting it. When a source context exists,
-/// its kind and data remain the record of record; plan-task results may omit
-/// the source context because their durable worker record is the source.
+/// Legacy request metadata retained only at the decoding boundary.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CarryRequest {
@@ -304,12 +305,142 @@ impl CarryRequest {
     }
 }
 
+/// Key in caller data for the concise stable origin reference.
+pub const ORIGIN_KEY: &str = "origin";
+/// Reserved key populated by core from durable invocation state.
+pub const ENGINE_ORIGIN_KEY: &str = "loop_engine_origin";
+/// Context kind for a driver-owned evidence applicability declaration.
+pub const EVIDENCE_APPLICABILITY_KIND: &str = "evidence-applicability";
+
+/// A small run-local reference to an engine-owned origin.
+///
+/// `id` is the invocation ID for `selected-assignment-output` and a context
+/// record ID for `context-record`.  `assignment_id` is required only for a
+/// selected assignment output.  The reference is caller data; the resolved
+/// metadata under [`ENGINE_ORIGIN_KEY`] is engine-authored.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OriginReference {
+    pub kind: String,
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment_id: Option<String>,
+}
+
+impl OriginReference {
+    pub fn new(kind: impl Into<String>, id: impl Into<String>) -> Self {
+        Self {
+            kind: kind.into(),
+            id: id.into(),
+            assignment_id: None,
+        }
+    }
+
+    pub fn selected_assignment_output(
+        invocation_id: impl Into<String>,
+        assignment_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: "selected-assignment-output".to_owned(),
+            id: invocation_id.into(),
+            assignment_id: Some(assignment_id.into()),
+        }
+    }
+
+    pub fn context_record(record_id: impl Into<String>) -> Self {
+        Self::new("context-record", record_id)
+    }
+
+    pub fn with_assignment_id(mut self, assignment_id: impl Into<String>) -> Self {
+        self.assignment_id = Some(assignment_id.into());
+        self
+    }
+}
+
+/// The only driver-authored fields in a new evidence reuse declaration.
+///
+/// Core validates the same-run context-record origin and the shape of this
+/// declaration, but treats `target` and `attesting_driver` as opaque semantic
+/// values.  The provider owns their meaning and currency.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceApplicability {
+    pub origin: OriginReference,
+    pub target: Value,
+    pub attesting_driver: Value,
+    pub reason: String,
+}
+
+impl EvidenceApplicability {
+    pub fn new(
+        origin: OriginReference,
+        target: Value,
+        attesting_driver: Value,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            origin,
+            target,
+            attesting_driver,
+            reason: reason.into(),
+        }
+    }
+}
+
+/// Durable, engine-resolved projection of one selected assignment output.
+///
+/// This value is generated from an invocation and worker record at append
+/// time.  It is deliberately separate from the caller's concise [`OriginReference`]
+/// so callers cannot supply or overwrite selected-attempt facts.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EngineOrigin {
+    pub invocation_id: InvocationId,
+    pub assignment_id: String,
+    pub selected_attempt: u32,
+    pub selected_output_sha256: String,
+    pub selected_output_path: String,
+    pub capture_dir: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub binding: WorkSlotBinding,
+}
+
+impl EngineOrigin {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        invocation_id: impl Into<InvocationId>,
+        assignment_id: impl Into<String>,
+        selected_attempt: u32,
+        selected_output_sha256: impl Into<String>,
+        selected_output_path: impl Into<String>,
+        capture_dir: impl Into<String>,
+        command: impl Into<String>,
+        args: Vec<String>,
+        binding: WorkSlotBinding,
+    ) -> Self {
+        Self {
+            invocation_id: invocation_id.into(),
+            assignment_id: assignment_id.into(),
+            selected_attempt,
+            selected_output_sha256: selected_output_sha256.into(),
+            selected_output_path: selected_output_path.into(),
+            capture_dir: capture_dir.into(),
+            command: command.into(),
+            args,
+            binding,
+        }
+    }
+}
+
 /// Semantic input for an atomic context append.
 ///
 /// The adapter allocates the context record's semantic sequence.  The
 /// supplied record ID, kind, data, and timestamp remain caller-owned data.
-/// When `carry` is present, core replaces kind/data from the named source
-/// record after checking the durable change report.
+/// Stable origins embedded in `data` are the one generic exception: core
+/// validates same-run engine identities and adds its reserved resolved
+/// projection before persistence. The legacy `carry` field remains
+/// deserializable for historical boundaries but is rejected by execution.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AppendContextRequest {
     pub run_id: RunId,

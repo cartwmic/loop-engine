@@ -1,5 +1,6 @@
 use super::bounded_process::CommandExt;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -153,7 +154,6 @@ fn finding_ledger_record(gate: &str, subject: &str, revision: &str, findings: Va
             "subject": subject,
             "subject_revision": revision,
             "author": {"name": "driver", "kind": "agent"},
-            "repository_state": null,
             "findings": findings
         },
         "sequence": 2,
@@ -172,6 +172,56 @@ fn passing_evidence() -> Value {
         "subject_revision": "1",
         "config_version": "test-1"
     }))
+}
+
+#[test]
+fn evaluate_accepts_concise_selected_origin_and_engine_metadata_only() {
+    let root = TestDir::new();
+    root.write_json("intent.json", &valid_metadata("1"));
+    let capture = root.path.join("capture");
+    let selected = capture.join("worker-0/attempts/1/stdout");
+    fs::create_dir_all(selected.parent().unwrap()).unwrap();
+    let raw = serde_json::to_vec(&json!({
+        "axis": "axis",
+        "author": {"name": "reviewer", "kind": "agent"},
+        "result": "pass",
+        "findings": ""
+    }))
+    .unwrap();
+    fs::write(&selected, &raw).unwrap();
+    let evidence = json!({
+        "gate": "intent-review",
+        "policy_id": "axis",
+        "result": "pass",
+        "findings": "",
+        "author": {"name": "reviewer", "kind": "agent"},
+        "subject": "intent.json",
+        "subject_revision": "1",
+        "config_version": "test-1",
+        "origin": {"kind": "selected-assignment-output", "id": "invocation-1", "assignment_id": "worker-0"},
+        "loop_engine_origin": {
+            "invocation_id": "invocation-1",
+            "assignment_id": "worker-0",
+            "selected_attempt": 1,
+            "selected_output_sha256": format!("sha256:{:x}", Sha256::digest(&raw)),
+            "selected_output_path": selected.to_string_lossy(),
+            "capture_dir": capture.to_string_lossy(),
+            "command": "/bin/worker",
+            "args": ["--review"],
+            "binding": {"command": "/bin/worker", "args": ["--review"]}
+        }
+    });
+    let mut request = base_request(
+        config_with_axis(&root),
+        checked("intent-review", "approved", "design"),
+    );
+    request["context"] = json!([
+        {"id": "evidence-1", "kind": "review-evidence", "data": evidence, "sequence": 1, "created_at": 1},
+        finding_ledger_record("intent-review", "intent.json", "1", json!([]))
+    ]);
+    let output = run_provider(request);
+    assert_exit(&output, 0);
+    assert_eq!(response(&output), json!({"result": "allow"}));
 }
 
 fn run_provider(request: Value) -> Output {

@@ -9,14 +9,12 @@
       "name": "driver",
       "kind": "human"
     },
-    "repository_state": null,
     "findings": [
       {
         "id": "F-example",
         "source": {
-          "kind": "external-artifact",
-          "relative_path": "review.stdout",
-          "output_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+          "kind": "context-record",
+          "id": "review-evidence-1"
         },
         "policy_id": "intent-faithful",
         "statement": "Accepted in-scope material finding after driver triage.",

@@ -2,26 +2,24 @@
 //!
 //! The provider treats this data as an opaque record of driver decisions.  It
 //! only checks the frozen mechanical contract: closed JSON shape, freshness,
-//! identifier membership, stable IDs, raw-source linkage, and agreement with
-//! the current failing review evidence.  It does not classify findings or
+//! identifier membership, stable IDs, immutable source-record references, and
+//! agreement with the current failing review evidence. It does not classify findings or
 //! choose their disposition, owner, or route.
 
 use crate::checkpoint;
 use crate::config::ValidatedConfig;
+use crate::evidence;
 use crate::workflow::FINDING_LEDGER_KIND;
 use loop_core::ContextRecord;
-use serde::Deserialize;
 use serde_json::{Map, Value};
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 #[allow(dead_code)]
 pub(crate) const ADVISORY_FINDING_PROPOSAL_KIND: &str = "advisory-finding-proposal";
 const SCHEMA_VERSION: &str = "1";
 const IMPLEMENTATION_SUBJECT: &str = "implementation-report.json";
-const VALIDATION_SUBJECT: &str = "validation-report.json";
 const PLAN_SUBJECT: &str = "plan.json";
 const SNAPSHOT_FIELDS: &[&str] = &[
     "schema_version",
@@ -29,7 +27,6 @@ const SNAPSHOT_FIELDS: &[&str] = &[
     "subject",
     "subject_revision",
     "author",
-    "repository_state",
     "findings",
 ];
 const AUTHOR_FIELDS: &[&str] = &["name", "kind"];
@@ -45,52 +42,27 @@ const FINDING_FIELDS: &[&str] = &[
     "review_axes",
     "status",
 ];
-const WORK_SLOT_SOURCE_FIELDS: &[&str] = &[
-    "kind",
-    "invocation_id",
-    "worker_index",
-    "attempt",
-    "output_sha256",
-];
-const EXTERNAL_SOURCE_FIELDS: &[&str] = &["kind", "relative_path", "output_sha256"];
-/// A source reference retained by a driver disposition.
+const SOURCE_FIELDS: &[&str] = &["kind", "id"];
+/// A source reference retained by a driver disposition. The referenced
+/// context record contains the original review-evidence and, when applicable,
+/// its engine-resolved selected-output origin.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum FindingSource {
-    WorkSlot {
-        invocation_id: String,
-        worker_index: u64,
-        attempt: u8,
-        output_sha256: String,
-    },
-    ExternalArtifact {
-        relative_path: String,
-        output_sha256: String,
-    },
+    ContextRecord { record_id: String },
 }
 
 impl FindingSource {
     #[allow(dead_code)]
-    pub(crate) fn output_sha256(&self) -> &str {
+    pub(crate) fn record_id(&self) -> &str {
         match self {
-            Self::WorkSlot { output_sha256, .. } | Self::ExternalArtifact { output_sha256, .. } => {
-                output_sha256
-            }
+            Self::ContextRecord { record_id } => record_id,
         }
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum FindingSourceIdentity {
-    WorkSlot {
-        invocation_id: String,
-        worker_index: u64,
-        attempt: u8,
-        output_sha256: String,
-    },
-    ExternalArtifact {
-        relative_path: String,
-        output_sha256: String,
-    },
+    ContextRecord { record_id: String },
 }
 
 /// One driver disposition in a snapshot.
@@ -138,7 +110,6 @@ pub(crate) struct FindingLedgerSnapshot {
     pub(crate) subject: String,
     pub(crate) subject_revision: String,
     pub(crate) author: LedgerAuthor,
-    pub(crate) repository_state: Option<String>,
     pub(crate) findings: Vec<Finding>,
 }
 
@@ -168,9 +139,8 @@ pub(crate) enum FindingLedgerStatus {
         record_revision: String,
         current_revision: String,
     },
-    StaleRepositoryState {
-        record_state: String,
-        current_state: Option<String>,
+    CheckpointInvalid {
+        diagnostic: String,
     },
     SetMismatch {
         accepted_unresolved: BTreeSet<(String, String)>,
@@ -199,7 +169,7 @@ impl FindingLedgerEvaluation {
             FindingLedgerStatus::Missing
             | FindingLedgerStatus::Malformed { .. }
             | FindingLedgerStatus::StaleSubject { .. }
-            | FindingLedgerStatus::StaleRepositoryState { .. } => None,
+            | FindingLedgerStatus::CheckpointInvalid { .. } => None,
         }
     }
 
@@ -223,13 +193,9 @@ impl FindingLedgerEvaluation {
                 "record_revision": record_revision,
                 "current_revision": current_revision
             }),
-            FindingLedgerStatus::StaleRepositoryState {
-                record_state,
-                current_state,
-            } => serde_json::json!({
-                "status": "stale_repository_state",
-                "record_state": record_state,
-                "current_state": current_state
+            FindingLedgerStatus::CheckpointInvalid { diagnostic } => serde_json::json!({
+                "status": "checkpoint_invalid",
+                "diagnostic": diagnostic
             }),
             FindingLedgerStatus::SetMismatch {
                 accepted_unresolved,
@@ -245,10 +211,11 @@ impl FindingLedgerEvaluation {
 
 /// Validate the append-only ledger history for one exact gate and subject.
 ///
-/// Context records are immutable and ordered by their semantic sequence.  A
-/// malformed record is not a current snapshot; the last well-formed record is
-/// the candidate current view.  Stable IDs are nevertheless checked across
-/// every well-formed snapshot in that history.
+/// Context records are immutable and ordered by their semantic sequence. A
+/// malformed latest record is not a usable current snapshot and blocks until
+/// a later valid snapshot; earlier malformed records may be superseded by a
+/// later valid snapshot. Stable IDs are checked across every well-formed
+/// snapshot in that history.
 pub(crate) fn evaluate_finding_ledger(
     context: &[ContextRecord],
     gate: &str,
@@ -257,6 +224,23 @@ pub(crate) fn evaluate_finding_ledger(
     config: &ValidatedConfig,
     failing_evidence: &BTreeSet<(String, String)>,
 ) -> FindingLedgerEvaluation {
+    // Report subjects are bound to the provider-generated checkpoint. The
+    // snapshot no longer carries a copied repository digest; derive and
+    // verify the current identity before considering ledger history.
+    if checkpoint::phase_for_subject(subject).is_some() {
+        let checkpoint_result = config
+            .artifact_root()
+            .and_then(Value::as_str)
+            .ok_or_else(|| "artifact_root is required for checkpoint identity".to_owned())
+            .and_then(|root| checkpoint::current_target(subject, Path::new(root)).map(|_| ()));
+        if let Err(diagnostic) = checkpoint_result {
+            return FindingLedgerEvaluation {
+                status: FindingLedgerStatus::CheckpointInvalid { diagnostic },
+                snapshot: None,
+            };
+        }
+    }
+
     let mut records: Vec<&ContextRecord> = context
         .iter()
         .filter(|record| record.kind == FINDING_LEDGER_KIND)
@@ -265,7 +249,7 @@ pub(crate) fn evaluate_finding_ledger(
     records.sort_by_key(|record| record.sequence);
 
     let mut snapshots = Vec::new();
-    let mut malformed_reasons = Vec::new();
+    let mut latest_malformed_reasons: Option<Vec<String>> = None;
     for record in records {
         match parse_snapshot(
             &record.data,
@@ -273,25 +257,37 @@ pub(crate) fn evaluate_finding_ledger(
             subject,
             config.artifact_root(),
             Some(config),
+            context,
+            record.sequence.as_u64(),
         ) {
-            Ok(snapshot) => snapshots.push(snapshot),
-            Err(reasons) => malformed_reasons.extend(
-                reasons
-                    .into_iter()
-                    .map(|reason| format!("context {}: {reason}", record.id)),
-            ),
+            Ok(snapshot) => {
+                snapshots.push(snapshot);
+                // A later valid snapshot explicitly replaces an earlier
+                // malformed candidate. A malformed latest snapshot, however,
+                // must not silently expose an older finding disposition.
+                latest_malformed_reasons = None;
+            }
+            Err(reasons) => {
+                latest_malformed_reasons = Some(
+                    reasons
+                        .into_iter()
+                        .map(|reason| format!("context {}: {reason}", record.id))
+                        .collect(),
+                );
+            }
         }
+    }
+
+    if let Some(reasons) = latest_malformed_reasons {
+        return FindingLedgerEvaluation {
+            status: FindingLedgerStatus::Malformed { reasons },
+            snapshot: snapshots.last().cloned(),
+        };
     }
 
     if snapshots.is_empty() {
         return FindingLedgerEvaluation {
-            status: if malformed_reasons.is_empty() {
-                FindingLedgerStatus::Missing
-            } else {
-                FindingLedgerStatus::Malformed {
-                    reasons: malformed_reasons,
-                }
-            },
+            status: FindingLedgerStatus::Missing,
             snapshot: None,
         };
     }
@@ -315,19 +311,6 @@ pub(crate) fn evaluate_finding_ledger(
             },
             snapshot: Some(snapshot),
         };
-    }
-
-    if let Some(record_state) = snapshot.repository_state.as_ref() {
-        let current_state = current_checkpoint_identity(config.artifact_root(), subject).ok();
-        if current_state.as_deref() != Some(record_state.as_str()) {
-            return FindingLedgerEvaluation {
-                status: FindingLedgerStatus::StaleRepositoryState {
-                    record_state: record_state.clone(),
-                    current_state,
-                },
-                snapshot: Some(snapshot),
-            };
-        }
     }
 
     let accepted_unresolved = snapshot
@@ -411,6 +394,11 @@ pub(crate) fn project_implementation_repair_findings_at(
     if !root.is_dir() {
         return Err("artifact_root for finding routing must be a directory".to_owned());
     }
+    // A repair selection is an explicit mutation request. Unlike ordinary
+    // task projection, it must not fall back to an older well-formed ledger
+    // when the latest ledger for a pair is malformed or stale; otherwise a
+    // fresh driver could accidentally repair from superseded findings.
+    ensure_latest_routing_snapshots_are_well_formed(context, &root)?;
     let latest = latest_routing_snapshots(context, &root, working_directory)?;
     let requested = requested_ids.iter().collect::<BTreeSet<_>>();
     let mut candidates: BTreeMap<String, Vec<(bool, String, String, Finding)>> = BTreeMap::new();
@@ -472,6 +460,58 @@ pub(crate) fn project_implementation_repair_findings_at(
     Ok(projected)
 }
 
+fn ensure_latest_routing_snapshots_are_well_formed(
+    context: &[ContextRecord],
+    root: &Path,
+) -> Result<(), String> {
+    let root_value = Value::String(root.to_string_lossy().into_owned());
+    let mut latest: BTreeMap<(String, String), &ContextRecord> = BTreeMap::new();
+    for record in context
+        .iter()
+        .filter(|record| record.kind == FINDING_LEDGER_KIND)
+    {
+        let Some(object) = record.data.as_object() else {
+            continue;
+        };
+        let (Some(gate), Some(subject)) = (
+            object.get("gate").and_then(Value::as_str),
+            object.get("subject").and_then(Value::as_str),
+        ) else {
+            continue;
+        };
+        if crate::config::GATE_IDS.contains(&gate)
+            && crate::config::SUBJECT_NAMES.contains(&subject)
+            && ledger_pair_is_valid(gate, subject)
+        {
+            let key = (gate.to_owned(), subject.to_owned());
+            match latest.get(&key) {
+                Some(previous) if previous.sequence >= record.sequence => {}
+                _ => {
+                    latest.insert(key, record);
+                }
+            }
+        }
+    }
+    for ((gate, subject), record) in latest {
+        if let Err(reasons) = parse_snapshot(
+            &record.data,
+            &gate,
+            &subject,
+            Some(&root_value),
+            None,
+            context,
+            record.sequence.as_u64(),
+        ) {
+            return Err(format!(
+                "latest finding-ledger record `{}` for {gate}/{subject} is invalid: {}",
+                record.id,
+                reasons.join("; ")
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn latest_routing_snapshots(
     context: &[ContextRecord],
     root: &Path,
@@ -502,8 +542,15 @@ fn latest_routing_snapshots(
         {
             continue;
         }
-        let Ok(snapshot) = parse_snapshot(&record.data, gate, subject, Some(&root_value), None)
-        else {
+        let Ok(snapshot) = parse_snapshot(
+            &record.data,
+            gate,
+            subject,
+            Some(&root_value),
+            None,
+            context,
+            record.sequence.as_u64(),
+        ) else {
             // A malformed record is not a current view. The latest
             // well-formed snapshot remains the routing candidate.
             continue;
@@ -572,39 +619,16 @@ fn routing_snapshot_is_current(
     if revision != snapshot.subject_revision {
         return false;
     }
-    match snapshot.repository_state.as_ref() {
-        Some(expected) => {
-            checkpoint::phase_for_subject(&snapshot.subject)
-                .and_then(|phase| checkpoint::verify(phase, root, working_directory).ok())
-                .map(|checkpoint| checkpoint::state_identity(&checkpoint).to_owned())
-                .as_deref()
-                == Some(expected.as_str())
-        }
-        None => true,
-    }
+    checkpoint::phase_for_subject(&snapshot.subject)
+        .map(|phase| checkpoint::verify(phase, root, working_directory).is_ok())
+        .unwrap_or(true)
 }
 
 fn finding_to_value(finding: &Finding) -> Value {
     let source = match &finding.source {
-        FindingSource::WorkSlot {
-            invocation_id,
-            worker_index,
-            attempt,
-            output_sha256,
-        } => serde_json::json!({
-            "kind": "work-slot",
-            "invocation_id": invocation_id,
-            "worker_index": worker_index,
-            "attempt": attempt,
-            "output_sha256": output_sha256,
-        }),
-        FindingSource::ExternalArtifact {
-            relative_path,
-            output_sha256,
-        } => serde_json::json!({
-            "kind": "external-artifact",
-            "relative_path": relative_path,
-            "output_sha256": output_sha256,
+        FindingSource::ContextRecord { record_id } => serde_json::json!({
+            "kind": "context-record",
+            "id": record_id,
         }),
     };
     serde_json::json!({
@@ -658,6 +682,8 @@ fn parse_snapshot(
     expected_subject: &str,
     artifact_root: Option<&Value>,
     config: Option<&ValidatedConfig>,
+    context: &[ContextRecord],
+    snapshot_sequence: u64,
 ) -> Result<FindingLedgerSnapshot, Vec<String>> {
     let Some(object) = value.as_object() else {
         return Err(vec!["snapshot must be an object".to_owned()]);
@@ -679,16 +705,15 @@ fn parse_snapshot(
     }
 
     let author = parse_author(object.get("author"), &mut reasons);
-    let repository_state = parse_repository_state(
-        object.get("repository_state"),
-        expected_subject,
-        &mut reasons,
-    );
     let findings = parse_findings(
         object.get("findings"),
         gate.as_deref().unwrap_or(expected_gate),
+        expected_subject,
+        subject_revision.as_deref().unwrap_or_default(),
         artifact_root,
         config,
+        context,
+        snapshot_sequence,
         &mut reasons,
     );
 
@@ -702,7 +727,6 @@ fn parse_snapshot(
         subject: subject.expect("subject checked above"),
         subject_revision: subject_revision.expect("revision checked above"),
         author: author.expect("author checked above"),
-        repository_state,
         findings: findings.expect("findings checked above"),
     })
 }
@@ -728,41 +752,16 @@ fn parse_author(value: Option<&Value>, reasons: &mut Vec<String>) -> Option<Ledg
     }
 }
 
-fn parse_repository_state(
-    value: Option<&Value>,
-    subject: &str,
-    reasons: &mut Vec<String>,
-) -> Option<String> {
-    let Some(value) = value else {
-        reasons.push("missing `repository_state`".to_owned());
-        return None;
-    };
-    let report_subject = matches!(subject, IMPLEMENTATION_SUBJECT | VALIDATION_SUBJECT);
-    if !report_subject {
-        if !value.is_null() {
-            reasons.push(format!("`repository_state` must be null for `{subject}`"));
-        }
-        return None;
-    }
-
-    let Some(state) = value.as_str() else {
-        reasons.push(format!(
-            "`repository_state` must be a sha256 digest for `{subject}`"
-        ));
-        return None;
-    };
-    if !valid_sha256(state) {
-        reasons.push("`repository_state` must be sha256:<64 lowercase hex>".to_owned());
-        return None;
-    }
-    Some(state.to_owned())
-}
-
+#[allow(clippy::too_many_arguments)]
 fn parse_findings(
     value: Option<&Value>,
     gate: &str,
+    subject: &str,
+    subject_revision: &str,
     artifact_root: Option<&Value>,
     config: Option<&ValidatedConfig>,
+    context: &[ContextRecord],
+    snapshot_sequence: u64,
     reasons: &mut Vec<String>,
 ) -> Option<Vec<Finding>> {
     let Some(value) = value else {
@@ -777,7 +776,17 @@ fn parse_findings(
     let mut ids = BTreeSet::new();
     let mut findings = Vec::with_capacity(items.len());
     for (index, item) in items.iter().enumerate() {
-        match parse_finding(item, index, gate, artifact_root, config) {
+        match parse_finding(
+            item,
+            index,
+            gate,
+            subject,
+            subject_revision,
+            artifact_root,
+            config,
+            context,
+            snapshot_sequence,
+        ) {
             Ok(finding) => {
                 if !ids.insert(finding.id.clone()) {
                     reasons.push(format!("duplicate finding id `{}`", finding.id));
@@ -790,12 +799,17 @@ fn parse_findings(
     Some(findings)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn parse_finding(
     value: &Value,
     index: usize,
     gate: &str,
+    subject: &str,
+    subject_revision: &str,
     artifact_root: Option<&Value>,
     config: Option<&ValidatedConfig>,
+    context: &[ContextRecord],
+    snapshot_sequence: u64,
 ) -> Result<Finding, Vec<String>> {
     let path = format!("findings[{index}]");
     let Some(object) = value.as_object() else {
@@ -809,13 +823,6 @@ fn parse_finding(
             "`{path}.id` must match F-[a-z0-9][a-z0-9_-]{{0,63}}"
         ));
     }
-    let source = parse_source(
-        object.get("source"),
-        &path,
-        gate,
-        artifact_root,
-        &mut reasons,
-    );
     let policy_id = required_non_empty_string(object, "policy_id", &mut reasons);
     let statement = required_non_empty_string(object, "statement", &mut reasons);
     let disposition = parse_disposition(object.get("disposition"), &path, &mut reasons);
@@ -832,6 +839,22 @@ fn parse_finding(
         &mut reasons,
     );
     let status = parse_status(object.get("status"), &path, &mut reasons);
+    let source = parse_source(
+        object.get("source"),
+        &path,
+        gate,
+        subject,
+        subject_revision,
+        policy_id.as_deref(),
+        statement.as_deref(),
+        disposition,
+        status,
+        artifact_root,
+        config,
+        context,
+        snapshot_sequence,
+        &mut reasons,
+    );
 
     if let (Some(disposition), Some(status), Some(owner_phase), Some(task_ids), Some(review_axes)) = (
         disposition,
@@ -853,15 +876,17 @@ fn parse_finding(
 
     if let Some(config) = config {
         if let Some(policy_id) = policy_id.as_ref() {
-            if !configured_policy_id(config, policy_id) {
-                reasons.push(format!("`{path}.policy_id` is not a configured policy id"));
+            if !configured_policy_id(config, gate, policy_id) {
+                reasons.push(format!(
+                    "`{path}.policy_id` is not configured on gate `{gate}`"
+                ));
             }
         }
         if let Some(review_axes) = review_axes.as_ref() {
             for axis in review_axes {
-                if !configured_policy_id(config, axis) {
+                if !configured_policy_id(config, gate, axis) {
                     reasons.push(format!(
-                        "`{path}.review_axes` contains unknown policy id `{axis}`"
+                        "`{path}.review_axes` contains unknown policy id `{axis}` on gate `{gate}`"
                     ));
                 }
             }
@@ -902,11 +927,21 @@ fn parse_finding(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn parse_source(
     value: Option<&Value>,
     path: &str,
     gate: &str,
+    subject: &str,
+    subject_revision: &str,
+    policy_id: Option<&str>,
+    statement: Option<&str>,
+    disposition: Option<FindingDisposition>,
+    status: Option<FindingStatus>,
     artifact_root: Option<&Value>,
+    config: Option<&ValidatedConfig>,
+    context: &[ContextRecord],
+    snapshot_sequence: u64,
     reasons: &mut Vec<String>,
 ) -> Option<FindingSource> {
     let Some(value) = value else {
@@ -917,122 +952,129 @@ fn parse_source(
         reasons.push(format!("`{path}.source` must be an object"));
         return None;
     };
-    let Some(kind) = object.get("kind").and_then(Value::as_str) else {
-        reasons.extend(unknown_fields(
-            object,
-            &[
-                "kind",
-                "invocation_id",
-                "worker_index",
-                "attempt",
-                "output_sha256",
-                "relative_path",
-            ],
-            &format!("{path}.source"),
-        ));
-        reasons.push(format!("`{path}.source.kind` must be a string"));
+    reasons.extend(unknown_fields(
+        object,
+        SOURCE_FIELDS,
+        &format!("{path}.source"),
+    ));
+    if object.get("kind").and_then(Value::as_str) != Some("context-record") {
+        reasons.push(format!("`{path}.source.kind` must be `context-record`"));
+        return None;
+    }
+    let Some(record_id) = object.get("id").and_then(Value::as_str) else {
+        reasons.push(format!("`{path}.source.id` must be a non-empty string"));
         return None;
     };
-
-    let source = match kind {
-        "work-slot" => {
-            reasons.extend(unknown_fields(
-                object,
-                WORK_SLOT_SOURCE_FIELDS,
-                &format!("{path}.source"),
-            ));
-            let invocation_id = required_non_empty_string(object, "invocation_id", reasons);
-            let worker_index = match object.get("worker_index").and_then(Value::as_u64) {
-                Some(index) => Some(index),
-                None => {
-                    reasons.push(format!(
-                        "`{path}.source.worker_index` must be a nonnegative integer"
-                    ));
-                    None
-                }
-            };
-            let attempt = match object.get("attempt").and_then(Value::as_u64) {
-                Some(1) => Some(1_u8),
-                Some(2) => Some(2_u8),
-                _ => {
-                    reasons.push(format!("`{path}.source.attempt` must be 1 or 2"));
-                    None
-                }
-            };
-            let output_sha256 = parse_digest(
-                object.get("output_sha256"),
-                &format!("{path}.source.output_sha256"),
-                reasons,
-            );
-            match (invocation_id, worker_index, attempt, output_sha256) {
-                (Some(invocation_id), Some(worker_index), Some(attempt), Some(output_sha256)) => {
-                    let source = FindingSource::WorkSlot {
-                        invocation_id,
-                        worker_index,
-                        attempt,
-                        output_sha256,
-                    };
-                    if let Err(error) = validate_source_bytes(artifact_root, gate, path, &source) {
-                        reasons.push(error);
-                    }
-                    Some(source)
-                }
-                _ => None,
-            }
-        }
-        "external-artifact" => {
-            reasons.extend(unknown_fields(
-                object,
-                EXTERNAL_SOURCE_FIELDS,
-                &format!("{path}.source"),
-            ));
-            let relative_path = match object.get("relative_path").and_then(Value::as_str) {
-                Some(value) if !value.is_empty() => match normalize_relative_path(value) {
-                    Ok(normalized) => Some(normalized.to_string_lossy().into_owned()),
-                    Err(_) => {
-                        reasons.push(format!(
-                            "`{path}.source.relative_path` must be a relative path inside artifact_root"
-                        ));
-                        None
-                    }
-                },
-                Some(_) => {
-                    reasons.push(format!("`{path}.source.relative_path` must not be empty"));
-                    None
-                }
-                None => {
-                    reasons.push(format!("`{path}.source.relative_path` must be a string"));
-                    None
-                }
-            };
-            let output_sha256 = parse_digest(
-                object.get("output_sha256"),
-                &format!("{path}.source.output_sha256"),
-                reasons,
-            );
-            match (relative_path, output_sha256) {
-                (Some(relative_path), Some(output_sha256)) => {
-                    let source = FindingSource::ExternalArtifact {
-                        relative_path,
-                        output_sha256,
-                    };
-                    if let Err(error) = validate_source_bytes(artifact_root, gate, path, &source) {
-                        reasons.push(error);
-                    }
-                    Some(source)
-                }
-                _ => None,
-            }
-        }
-        _ => {
-            reasons.extend(unknown_fields(object, &["kind"], &format!("{path}.source")));
-            reasons.push(format!(
-                "`{path}.source.kind` must be `work-slot` or `external-artifact`"
-            ));
-            None
-        }
+    if record_id.trim().is_empty() {
+        reasons.push(format!("`{path}.source.id` must be a non-empty string"));
+        return None;
+    }
+    let matches = context
+        .iter()
+        .filter(|record| record.id.as_str() == record_id)
+        .collect::<Vec<_>>();
+    let Some(record) = matches.first().copied() else {
+        reasons.push(format!(
+            "`{path}.source.id` references missing context record `{record_id}`"
+        ));
+        return None;
     };
-    source
+    if matches.len() != 1 {
+        reasons.push(format!(
+            "`{path}.source.id` references ambiguous context record `{record_id}`"
+        ));
+        return None;
+    }
+    if record.sequence.as_u64() >= snapshot_sequence {
+        reasons.push(format!(
+            "`{path}.source.id` must reference an earlier context record"
+        ));
+        return None;
+    }
+    if record.kind != "review-evidence" {
+        reasons.push(format!(
+            "`{path}.source.id` must reference a review-evidence context record"
+        ));
+        return None;
+    }
+    if !record.data.is_object() {
+        reasons.push(format!(
+            "`{path}.source.id` references non-object review evidence"
+        ));
+        return None;
+    }
+    let source_evidence =
+        match evidence::parse_evidence_record(&record.data, subject, artifact_root) {
+            Ok(evidence) => evidence,
+            Err(error) => {
+                reasons.push(format!(
+                    "`{path}.source.id` references invalid review evidence: {error}"
+                ));
+                return None;
+            }
+        };
+    if source_evidence.gate != gate {
+        reasons.push(format!(
+            "`{path}.source.id` evidence gate `{}` does not match `{gate}`",
+            source_evidence.gate
+        ));
+    }
+    if let Some(config) = config {
+        if source_evidence.config_version != config.config_version() {
+            reasons.push(format!(
+                "`{path}.source.id` evidence config_version `{}` is stale for `{}`",
+                source_evidence.config_version,
+                config.config_version()
+            ));
+        }
+    }
+    if policy_id != Some(source_evidence.policy_id.as_str()) {
+        reasons.push(format!(
+            "`{path}.source.id` evidence policy_id does not match the finding"
+        ));
+    }
+    if source_evidence.subject_revision != subject_revision {
+        let applicable = context.iter().any(|candidate| {
+            candidate.kind == loop_core::EVIDENCE_APPLICABILITY_KIND
+                && candidate.sequence > record.sequence
+                && candidate.sequence.as_u64() < snapshot_sequence
+                && evidence::applicability_covers_source(
+                    context,
+                    candidate,
+                    record_id,
+                    subject,
+                    subject_revision,
+                    artifact_root,
+                )
+        });
+        if !applicable {
+            reasons.push(format!(
+                "`{path}.source.id` evidence revision `{}` is stale for snapshot revision `{subject_revision}`",
+                source_evidence.subject_revision
+            ));
+        }
+    }
+    if source_evidence.result == evidence::EvidenceResult::Fail
+        && statement != Some(source_evidence.findings.as_str())
+    {
+        reasons.push(format!(
+            "`{path}.source.id` evidence findings do not match the finding statement"
+        ));
+    }
+    if disposition == Some(FindingDisposition::Accepted)
+        && status == Some(FindingStatus::Unresolved)
+        && source_evidence.result != evidence::EvidenceResult::Fail
+    {
+        reasons.push(format!(
+            "`{path}.source.id` must reference failing review evidence for an accepted unresolved finding"
+        ));
+    }
+    if !reasons.is_empty() {
+        return None;
+    }
+    Some(FindingSource::ContextRecord {
+        record_id: record_id.to_owned(),
+    })
 }
 
 fn parse_disposition(
@@ -1179,8 +1221,8 @@ fn validate_combination(
     }
 }
 
-fn configured_policy_id(config: &ValidatedConfig, id: &str) -> bool {
-    config.axis_namespace().values().any(|ids| ids.contains(id))
+fn configured_policy_id(config: &ValidatedConfig, gate: &str, id: &str) -> bool {
+    config.axis(gate, id).is_some()
 }
 
 fn current_plan_task_ids(artifact_root: Option<&Value>) -> Result<BTreeSet<String>, String> {
@@ -1272,125 +1314,14 @@ struct FindingIdentity {
 impl FindingIdentity {
     fn owned(finding: &Finding) -> FindingIdentity {
         let source = match &finding.source {
-            FindingSource::WorkSlot {
-                invocation_id,
-                worker_index,
-                attempt,
-                output_sha256,
-            } => FindingSourceIdentity::WorkSlot {
-                invocation_id: invocation_id.clone(),
-                worker_index: *worker_index,
-                attempt: *attempt,
-                output_sha256: output_sha256.clone(),
-            },
-            FindingSource::ExternalArtifact {
-                relative_path,
-                output_sha256,
-            } => FindingSourceIdentity::ExternalArtifact {
-                relative_path: relative_path.clone(),
-                output_sha256: output_sha256.clone(),
+            FindingSource::ContextRecord { record_id } => FindingSourceIdentity::ContextRecord {
+                record_id: record_id.clone(),
             },
         };
         Self {
             source,
             policy_id: finding.policy_id.clone(),
             statement: finding.statement.clone(),
-        }
-    }
-}
-
-fn validate_source_bytes(
-    artifact_root: Option<&Value>,
-    gate: &str,
-    finding_path: &str,
-    source: &FindingSource,
-) -> Result<(), String> {
-    match source {
-        FindingSource::WorkSlot {
-            invocation_id,
-            worker_index,
-            attempt,
-            output_sha256,
-        } => {
-            if !single_path_component(invocation_id) {
-                return Err(format!(
-                    "`{finding_path}.source.invocation_id` must be a safe invocation id"
-                ));
-            }
-            let root = canonical_root(artifact_root)?;
-            let capture_dir = root
-                .join("work-slot-captures")
-                .join(gate)
-                .join(invocation_id)
-                .join(worker_index.to_string());
-            let worker_dir = canonical_contained_dir(&root, &capture_dir)?;
-            let attempts_path = worker_dir.join("attempts.json");
-            let attempts_bytes = read_contained_file(&root, &attempts_path)?;
-            let manifest: AttemptsManifest = serde_json::from_slice(&attempts_bytes)
-                .map_err(|error| format!("work-slot attempts.json is malformed: {error}"))?;
-            validate_attempts_manifest(&manifest)?;
-            if manifest.selected_attempt != Some(u64::from(*attempt)) {
-                return Err(format!(
-                    "work-slot source attempt {} is not the selected_attempt in attempts.json",
-                    attempt
-                ));
-            }
-            let entry = manifest
-                .attempts
-                .iter()
-                .find(|entry| entry.number == u64::from(*attempt))
-                .ok_or_else(|| format!("attempts.json does not list attempt {attempt}"))?;
-            // Validate every manifest entry, not only the selected one. The
-            // append-only capture contract keeps both attempts available, so
-            // a damaged non-selected attempt must not become an undetectable
-            // hole in the immutable reviewer evidence.
-            for listed in &manifest.attempts {
-                let attempt_dir = worker_dir.join("attempts").join(listed.number.to_string());
-                let stdout_path = attempt_dir.join("stdout");
-                let stdout = read_contained_file(&root, &stdout_path)?;
-                if sha256_digest(&stdout) != listed.stdout_sha256 {
-                    return Err(format!(
-                        "attempts.json stdout digest does not match raw bytes for attempt {}",
-                        listed.number
-                    ));
-                }
-                let stderr_path = attempt_dir.join("stderr");
-                let stderr = read_contained_file(&root, &stderr_path)?;
-                if sha256_digest(&stderr) != listed.stderr_sha256 {
-                    return Err(format!(
-                        "attempts.json stderr digest does not match raw bytes for attempt {}",
-                        listed.number
-                    ));
-                }
-            }
-            let stdout_path = worker_dir
-                .join("attempts")
-                .join(attempt.to_string())
-                .join("stdout");
-            let stdout = read_contained_file(&root, &stdout_path)?;
-            let actual = sha256_digest(&stdout);
-            if actual != *output_sha256 || actual != entry.stdout_sha256 {
-                return Err(format!(
-                    "work-slot source stdout digest does not match output_sha256 and attempts.json for attempt {attempt}"
-                ));
-            }
-            Ok(())
-        }
-        FindingSource::ExternalArtifact {
-            relative_path,
-            output_sha256,
-        } => {
-            let root = canonical_root(artifact_root)?;
-            let relative = normalize_relative_path(relative_path)?;
-            let path = root.join(relative);
-            let bytes = read_contained_file(&root, &path)?;
-            let actual = sha256_digest(&bytes);
-            if actual != *output_sha256 {
-                return Err(format!(
-                    "external-artifact source `{relative_path}` digest does not match raw bytes"
-                ));
-            }
-            Ok(())
         }
     }
 }
@@ -1409,18 +1340,6 @@ fn canonical_root(artifact_root: Option<&Value>) -> Result<PathBuf, String> {
         return Err("artifact_root must name a directory".to_owned());
     }
     Ok(root)
-}
-
-fn canonical_contained_dir(root: &Path, path: &Path) -> Result<PathBuf, String> {
-    let canonical = fs::canonicalize(path)
-        .map_err(|error| format!("could not resolve finding source directory: {error}"))?;
-    if !is_contained(root, &canonical) {
-        return Err("finding source path escapes artifact_root".to_owned());
-    }
-    if !canonical.is_dir() {
-        return Err("finding source capture path must be a directory".to_owned());
-    }
-    Ok(canonical)
 }
 
 fn read_contained_file(root: &Path, path: &Path) -> Result<Vec<u8>, String> {
@@ -1447,94 +1366,6 @@ fn read_json_under_root(artifact_root: Option<&Value>, subject: &str) -> Result<
     serde_json::from_slice(&bytes).map_err(|error| format!("{subject} is not valid JSON: {error}"))
 }
 
-fn current_checkpoint_identity(
-    artifact_root: Option<&Value>,
-    subject: &str,
-) -> Result<String, String> {
-    let phase = checkpoint::phase_for_subject(subject)
-        .ok_or_else(|| format!("subject `{subject}` has no checkpoint identity"))?;
-    let root = artifact_root
-        .and_then(Value::as_str)
-        .ok_or_else(|| "artifact_root is required for checkpoint identity".to_owned())?;
-    checkpoint::current_state_from_cwd(phase, Path::new(root))
-}
-
-fn validate_attempts_manifest(manifest: &AttemptsManifest) -> Result<(), String> {
-    if manifest.schema_version != SCHEMA_VERSION {
-        return Err("attempts.json schema_version must be the constant string \"1\"".to_owned());
-    }
-    if manifest.attempts.is_empty() || manifest.attempts.len() > 2 {
-        return Err("attempts.json must list one or two attempts".to_owned());
-    }
-    let mut numbers = BTreeSet::new();
-    for (index, attempt) in manifest.attempts.iter().enumerate() {
-        if attempt.number != index as u64 + 1 {
-            return Err(
-                "attempts.json attempt numbers must be consecutive starting at 1".to_owned(),
-            );
-        }
-        if !numbers.insert(attempt.number) {
-            return Err("attempts.json contains duplicate attempt numbers".to_owned());
-        }
-        if !valid_sha256(&attempt.stdout_sha256) || !valid_sha256(&attempt.stderr_sha256) {
-            return Err("attempts.json contains an invalid digest".to_owned());
-        }
-    }
-    match (manifest.selected_attempt, manifest.exhausted) {
-        (Some(selected), false) if numbers.contains(&selected) => {
-            let selected_entry = manifest
-                .attempts
-                .iter()
-                .find(|attempt| attempt.number == selected)
-                .expect("selected number is in the set");
-            if !selected_entry.validation_errors.is_empty() {
-                return Err("attempts.json selected_attempt has validation errors".to_owned());
-            }
-        }
-        (None, true) => {}
-        _ => {
-            return Err(
-                "attempts.json selected_attempt/exhausted fields are inconsistent".to_owned(),
-            )
-        }
-    }
-    Ok(())
-}
-
-fn normalize_relative_path(value: &str) -> Result<PathBuf, String> {
-    let path = Path::new(value);
-    if path.is_absolute() {
-        return Err("path is absolute".to_owned());
-    }
-    let mut normalized = PathBuf::new();
-    let mut saw_component = false;
-    for component in path.components() {
-        match component {
-            Component::Normal(part) => {
-                normalized.push(part);
-                saw_component = true;
-            }
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !normalized.pop() {
-                    return Err("path escapes artifact root".to_owned());
-                }
-            }
-            Component::RootDir | Component::Prefix(_) => return Err("path is absolute".to_owned()),
-        }
-    }
-    if !saw_component || normalized.as_os_str().is_empty() {
-        return Err("path is empty".to_owned());
-    }
-    Ok(normalized)
-}
-
-fn single_path_component(value: &str) -> bool {
-    let path = Path::new(value);
-    let mut components = path.components();
-    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
-}
-
 fn required_non_empty_string(
     object: &Map<String, Value>,
     field: &str,
@@ -1548,20 +1379,6 @@ fn required_non_empty_string(
         }
         None => {
             reasons.push(format!("missing or non-string `{field}`"));
-            None
-        }
-    }
-}
-
-fn parse_digest(value: Option<&Value>, path: &str, reasons: &mut Vec<String>) -> Option<String> {
-    match value.and_then(Value::as_str) {
-        Some(value) if valid_sha256(value) => Some(value.to_owned()),
-        Some(_) => {
-            reasons.push(format!("`{path}` must be sha256:<64 lowercase hex>"));
-            None
-        }
-        None => {
-            reasons.push(format!("`{path}` must be a string"));
             None
         }
     }
@@ -1598,19 +1415,6 @@ fn valid_finding_id(value: &str) -> bool {
     })
 }
 
-fn valid_sha256(value: &str) -> bool {
-    value.len() == "sha256:".len() + 64
-        && value.starts_with("sha256:")
-        && value[7..]
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
-fn sha256_digest(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    format!("sha256:{digest:x}")
-}
-
 fn set_to_values(set: &BTreeSet<(String, String)>) -> Vec<Value> {
     set.iter()
         .map(|(policy_id, statement)| {
@@ -1620,24 +1424,6 @@ fn set_to_values(set: &BTreeSet<(String, String)>) -> Vec<Value> {
             })
         })
         .collect()
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AttemptsManifest {
-    schema_version: String,
-    attempts: Vec<AttemptEntry>,
-    selected_attempt: Option<u64>,
-    exhausted: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AttemptEntry {
-    number: u64,
-    stdout_sha256: String,
-    stderr_sha256: String,
-    validation_errors: Vec<String>,
 }
 
 #[cfg(test)]
@@ -1704,26 +1490,35 @@ mod tests {
         .unwrap()
     }
 
-    fn external_source(root: &TempRoot, bytes: &[u8]) -> Value {
-        fs::write(root.path.join("review.stdout"), bytes).unwrap();
-        json!({
-            "kind": "external-artifact",
-            "relative_path": "review.stdout",
-            "output_sha256": sha256_digest(bytes)
-        })
+    fn source_evidence(statement: &str) -> ContextRecord {
+        ContextRecord::new(
+            "review-failure",
+            "review-evidence",
+            json!({
+                "gate": "intent-review",
+                "policy_id": "axis",
+                "result": "fail",
+                "findings": statement,
+                "author": {"name": "reviewer", "kind": "agent"},
+                "subject": "intent.json",
+                "subject_revision": "r1",
+                "config_version": "test-1"
+            }),
+            SemanticSequence::new(1),
+            Timestamp::from_unix_millis(1),
+        )
     }
 
-    fn snapshot(root: &TempRoot, statement: &str) -> Value {
+    fn snapshot(_root: &TempRoot, statement: &str) -> Value {
         json!({
             "schema_version": "1",
             "gate": "intent-review",
             "subject": "intent.json",
             "subject_revision": "r1",
             "author": {"name": "driver", "kind": "agent"},
-            "repository_state": null,
             "findings": [{
                 "id": "F-one",
-                "source": external_source(root, b"review"),
+                "source": {"kind": "context-record", "id": "review-failure"},
                 "policy_id": "axis",
                 "statement": statement,
                 "disposition": "rejected",
@@ -1814,6 +1609,8 @@ mod tests {
             "intent.json",
             Some(&root.value()),
             Some(&config),
+            &[source_evidence("statement")],
+            2,
         )
         .expect("well-formed snapshot");
         let projected = project_review_findings(&parsed, "axis");

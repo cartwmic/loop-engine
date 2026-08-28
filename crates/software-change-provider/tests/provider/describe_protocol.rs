@@ -207,11 +207,16 @@ fn describe_live_review_slots_declare_finding_ledger_and_drafts_omit_it() {
         let id = slot["id"].as_str().expect("id");
         let is_review = id.ends_with("-review");
         if is_review || id == "implement" {
-            assert_eq!(
-                slot.get("stdin_context_kinds"),
-                Some(&json!(["finding-ledger"])),
-                "{id}"
-            );
+            let expected = if id == "implement" {
+                json!([
+                    "finding-ledger",
+                    "review-evidence",
+                    "evidence-applicability"
+                ])
+            } else {
+                json!(["finding-ledger"])
+            };
+            assert_eq!(slot.get("stdin_context_kinds"), Some(&expected), "{id}");
         } else {
             assert!(
                 slot.get("stdin_context_kinds").is_none(),

@@ -57,7 +57,7 @@ impl CheckpointPhase {
         }
     }
 
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Implementation => "implementation",
             Self::Validation => "validation",
@@ -228,17 +228,6 @@ pub(crate) fn verify(
         }
     }
     Ok(verified)
-}
-
-/// Return the state identity after verification.  This is used by the
-/// finding ledger so a stored `repository_state` cannot stand in for current
-/// evidence.
-pub(crate) fn current_state_from_cwd(
-    phase: CheckpointPhase,
-    artifact_root: &Path,
-) -> Result<String, String> {
-    let checkpoint = verify_from_cwd(phase, artifact_root)?;
-    Ok(checkpoint.repository.state_sha256)
 }
 
 /// Preserve the exact implementation checkpoint admitted to validation.
@@ -443,6 +432,21 @@ pub(crate) fn state_identity(checkpoint: &Checkpoint) -> &str {
 /// The report revision bound by a verified checkpoint.
 pub(crate) fn report_revision(checkpoint: &Checkpoint) -> &str {
     &checkpoint.report.revision
+}
+
+/// Derive the compact checkpoint target carried by an evidence-applicability
+/// declaration.  The declaration names this value, but the provider rebuilds
+/// it from the immutable checkpoint rather than trusting a copied repository
+/// digest.
+pub(crate) fn current_target(subject: &str, artifact_root: &Path) -> Result<Option<Value>, String> {
+    let Some(phase) = phase_for_subject(subject) else {
+        return Ok(None);
+    };
+    let checkpoint = verify_from_cwd(phase, artifact_root)?;
+    Ok(Some(serde_json::json!({
+        "phase": phase.as_str(),
+        "report_revision": report_revision(&checkpoint),
+    })))
 }
 
 fn build(
