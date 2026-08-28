@@ -111,6 +111,26 @@ pub(crate) fn execute_invocation_progress(
     }
 }
 
+pub(crate) fn collect_snapshot_for_invocation<P>(
+    persistence: &P,
+    run_id: &RunId,
+    invocation_id: &InvocationId,
+    timeout: Duration,
+    now: Timestamp,
+) -> Result<InvocationProgressSnapshot, CliError>
+where
+    P: Persistence + ?Sized,
+{
+    collect_snapshot(
+        persistence,
+        run_id,
+        Some(invocation_id),
+        timeout,
+        now,
+        waiter_alive,
+    )
+}
+
 fn collect_snapshot<P, F>(
     persistence: &P,
     run_id: &RunId,

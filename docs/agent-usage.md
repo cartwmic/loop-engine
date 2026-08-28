@@ -31,7 +31,7 @@ Use the canonical executable name and these eight primary forms:
 ```text
 loop-engine [--database DB] [--config CONFIG] [--json] [--timeout-ms MILLISECONDS] start [--id RUN_ID] PROVIDER INITIAL_JSON [LABEL]
 loop-engine [--database DB] [--json] list
-loop-engine [--database DB] [--json] show RUN_ID
+loop-engine [--database DB] [--json] show [--compact] RUN_ID
 loop-engine [--database DB] [--json] append [--record-id RECORD_ID] RUN_ID KIND DATA_JSON
 loop-engine [--database DB] [--json] event RUN_ID EVENT_ID
 loop-engine [--database DB] [--json] history RUN_ID
@@ -46,6 +46,26 @@ loop-engine [--database DB] [--json] [--timeout-ms MILLISECONDS] invocation-prog
 loop-engine fan-out [--worker JSON]... [--instructions FILE] [--max-active N]
 loop-engine preview-bindings [JSON|@FILE]
 ```
+
+`show --compact RUN_ID` is a command-local, human-only projection of the
+ordinary `show` result. It prints, in fixed order, the run identity and
+lifecycle, current state, requestable events, latest checked result, the
+active invocation (or latest invocation), and inner progress. The invocation
+line is sourced from `show` and remains the overlay authority; graph progress
+never changes its `running`/`succeeded`/`failed`/`overrun` status or exit code.
+Compact deliberately omits `show`'s observation-time `elapsed_ms` and
+`remaining_allowed_ms` counters, so repeated reads of unchanged state have the
+same text; detailed JSON `show` remains authoritative for those fields. The
+inner line counts `not_started`, `running`, and `reaped` Dagu helper states when
+the existing `invocation-progress` collector can provide a graph.
+A missing graph, missing capture data, missing Dagu executable, or collector
+failure is rendered as `inner progress: unavailable [...] ...`; a valid durable
+`show` therefore still exits successfully and no task state is invented. With
+`--json`, use ordinary `show` for the complete projection or
+`invocation-progress` for its detailed inner-progress document. Combining
+`--compact` with JSON output is rejected rather than defining a second JSON
+schema. `reaped` means only that a Dagu step helper finished; it is not worker
+success or provider acceptance.
 
 ```sh
 loop-engine --json --config /absolute/path/to/providers.toml \
@@ -109,7 +129,7 @@ Both directories must already be absolute and existing. The command only reads G
 loop-engine [--database DB] [--json] [--timeout-ms MILLISECONDS] invocation-progress RUN_ID [INVOCATION_ID]
 ```
 
-While overlay is `running`, the canonical driver poll is `show` plus `invocation-progress`. `show` remains the overlay authority: overlay, `elapsed_ms`, `remaining_allowed_ms`, `capture_dir`, and `inner_workers` empty. `invocation-progress` is the inner-progress document: it names `invocation_id`, `slot_id`, `capture_dir`, optional graph steps in `not_started`|`running`|`reaped` when `capture_dir/dagu-locator.json` is present, and already-associated sidecar or session traces (`path`, `kind` sidecar|session, `last_modified_ms`, optional step). Graph omitted means no locator yet or a non-graph bound CLI; `traces` is `[]` when none are found. The snapshot does not include overlay status, `inner_workers`, or worker stdout. Graph state is Dagu helper liveness: `reaped` means the Dagu step helper finished, not overlay success and not inner waitpid 0. True inner waitpid remains in named sidecar traces and later `summary.json`; overlay remains the bound CLI process exit. `dagu status` / `dagu history` against the locator remain the underlying surface `invocation-progress` uses; they are not the driver-facing path. Session traces live under a worker directory's `sessions/` subdirectory when hidden stdin-exec set `PI_CODING_AGENT_SESSION_DIR` there; do not add `--session-dir` to frozen argv, and do not switch bound Pi commands to `--mode json`.
+While overlay is `running`, the canonical driver poll is `show` plus `invocation-progress`, or the human-only `show --compact` view for a concise summary. `show` remains the overlay authority: overlay, `elapsed_ms`, `remaining_allowed_ms`, `capture_dir`, and `inner_workers` empty. `invocation-progress` is the inner-progress document: it names `invocation_id`, `slot_id`, `capture_dir`, optional graph steps in `not_started`|`running`|`reaped` when `capture_dir/dagu-locator.json` is present, and already-associated sidecar or session traces (`path`, `kind` sidecar|session, `last_modified_ms`, optional step). Graph omitted means no locator yet or a non-graph bound CLI; `traces` is `[]` when none are found. The snapshot does not include overlay status, `inner_workers`, or worker stdout. Graph state is Dagu helper liveness: `reaped` means the Dagu step helper finished, not overlay success and not inner waitpid 0. True inner waitpid remains in named sidecar traces and later `summary.json`; overlay remains the bound CLI process exit. `dagu status` / `dagu history` against the locator remain the underlying surface `invocation-progress` uses; they are not the driver-facing path. Session traces live under a worker directory's `sessions/` subdirectory when hidden stdin-exec set `PI_CODING_AGENT_SESSION_DIR` there; do not add `--session-dir` to frozen argv, and do not switch bound Pi commands to `--mode json`.
 
 When `INVOCATION_ID` is omitted, the unique overlay-running invocation is selected if one exists; otherwise the latest invocation by `started_at`. An early poll before the facade writes the locator can return `capture_dir` with graph omitted; retry while `show` still reports overlay `running`.
 

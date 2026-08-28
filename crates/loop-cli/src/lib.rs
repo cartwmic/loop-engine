@@ -79,6 +79,8 @@ pub struct CliOptions {
     pub database: Option<PathBuf>,
     pub provider_config: Option<PathBuf>,
     pub provider_timeout: Option<Duration>,
+    /// Human-only compact rendering for the existing `show` operation.
+    pub compact: bool,
 }
 
 impl Default for CliOptions {
@@ -88,6 +90,7 @@ impl Default for CliOptions {
             database: None,
             provider_config: None,
             provider_timeout: None,
+            compact: false,
         }
     }
 }
@@ -259,6 +262,7 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
     let mut sidecar_file = None;
     let mut capture_dir = None;
     let mut worker_index = None;
+    let mut compact = false;
     let mut assignment_selection: Option<Vec<String>> = None;
     let mut assignment_flags_seen = false;
     let mut assignments_option_seen = false;
@@ -281,6 +285,11 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
                 }
                 "--human" => {
                     options.output = OutputFormat::Human;
+                    index += 1;
+                    continue;
+                }
+                "--compact" => {
+                    compact = true;
                     index += 1;
                     continue;
                 }
@@ -780,6 +789,20 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
             "a primary operation is required (start, list, show, append, event, history, terminate, or invoke)",
         )
     })?;
+
+    if compact && command_name != "show" {
+        return Err(CliError::new(
+            "invalid-invocation",
+            "`--compact` is only valid for the existing show operation",
+        ));
+    }
+    if compact && options.output == OutputFormat::Json {
+        return Err(CliError::new(
+            "invalid-invocation",
+            "show --compact is human-only and cannot be combined with --json, --format=json, or --output=json",
+        ));
+    }
+    options.compact = compact;
 
     if command_name != "invoke" && assignment_selection.is_some() {
         return Err(CliError::new(
@@ -2171,6 +2194,7 @@ impl WorkSlotProcess for CliWorkSlotProcess {
 
 fn execute_operation(options: CliOptions, command: PrimaryCommand) -> Execution {
     let output = options.output;
+    let compact = options.compact;
     let operation = command.name();
 
     // Parse JSON before opening storage.  Malformed caller input is an
@@ -2234,14 +2258,19 @@ fn execute_operation(options: CliOptions, command: PrimaryCommand) -> Execution 
                     );
                 }
             };
+            let now = now_timestamp();
             let outcome = core::execute_show(
                 ShowRequest::new(run_id),
                 &persistence,
                 &CliWorkSlotProcess { binary },
-                now_timestamp(),
+                now,
             )
             .map(CliShowProjection::from);
-            render_operation(operation, output, &outcome)
+            if compact {
+                render_show_compact(&persistence, &outcome, timeout, now)
+            } else {
+                render_operation(operation, output, &outcome)
+            }
         }
         PrimaryCommand::Append(args) => {
             let request = AppendContextRequest::new(
@@ -2772,6 +2801,235 @@ impl From<core::ShowProjection> for CliShowProjection {
     }
 }
 
+/// Inner progress is deliberately subordinate to the normal show projection.
+/// A collection failure is rendered as unavailable rather than changing the
+/// durable show outcome or guessing a task state.
+enum CompactInnerProgress {
+    Unavailable { code: String, message: String },
+    Snapshot(invocation_progress::InvocationProgressSnapshot),
+}
+
+fn select_compact_invocation(
+    projection: &CliShowProjection,
+) -> Option<&core::operations::WorkSlotInvocationView> {
+    let running = projection
+        .work_slot_invocations
+        .iter()
+        .filter(|invocation| invocation.status == core::ProjectedInvocationStatus::Running)
+        .collect::<Vec<_>>();
+    if running.len() == 1 {
+        return running.into_iter().next();
+    }
+    projection
+        .work_slot_invocations
+        .iter()
+        .max_by_key(|invocation| invocation.started_at)
+}
+
+fn render_show_compact(
+    persistence: &SqlitePersistence,
+    outcome: &OperationOutcome<CliShowProjection>,
+    timeout: Duration,
+    now: Timestamp,
+) -> Execution {
+    match outcome {
+        OperationOutcome::Completed(projection) => {
+            let invocation = select_compact_invocation(projection);
+            let progress = match invocation {
+                Some(invocation) => match invocation_progress::collect_snapshot_for_invocation(
+                    persistence,
+                    &projection.run_id,
+                    &invocation.invocation_id,
+                    timeout,
+                    now,
+                ) {
+                    Ok(snapshot) => CompactInnerProgress::Snapshot(snapshot),
+                    Err(error) => CompactInnerProgress::Unavailable {
+                        code: error.code,
+                        message: error.message,
+                    },
+                },
+                None => CompactInnerProgress::Unavailable {
+                    code: "no-invocations".to_owned(),
+                    message: "no work-slot invocation is recorded on this run".to_owned(),
+                },
+            };
+            Execution {
+                exit_code: EXIT_COMPLETED,
+                stdout: render_compact_show(projection, invocation, progress),
+                stderr: String::new(),
+            }
+        }
+        OperationOutcome::Rejected(_) => Execution {
+            exit_code: EXIT_REJECTED,
+            stdout: render_operation_human("show", outcome),
+            stderr: String::new(),
+        },
+        OperationOutcome::Error(_) => Execution {
+            exit_code: EXIT_ERROR,
+            stdout: render_operation_human("show", outcome),
+            stderr: String::new(),
+        },
+    }
+}
+
+fn render_compact_show(
+    projection: &CliShowProjection,
+    invocation: Option<&core::operations::WorkSlotInvocationView>,
+    progress: CompactInnerProgress,
+) -> String {
+    let run = match projection.label.as_deref() {
+        Some(label) if !label.is_empty() => format!(
+            "run: {} (label: {})",
+            compact_text(projection.run_id.as_str()),
+            compact_text(label)
+        ),
+        _ => format!("run: {}", compact_text(projection.run_id.as_str())),
+    };
+    let events = if projection.requestable_events.is_empty() {
+        "none".to_owned()
+    } else {
+        projection
+            .requestable_events
+            .iter()
+            .map(|event| {
+                format!(
+                    "{} -> {} ({})",
+                    compact_text(event.event.as_str()),
+                    compact_text(event.target.as_str()),
+                    compact_transition_kind(event.kind)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let checked = compact_latest_evaluation(projection);
+    // `show` also carries observation-time elapsed/remaining counters. Compact
+    // omits them so an unchanged running invocation has stable human output.
+    let invocation_line = invocation
+        .map(|invocation| {
+            let exit_code = invocation
+                .exit_code
+                .map_or_else(|| "pending".to_owned(), |code| code.to_string());
+            format!(
+                "invocation: {} slot={} status={} exit_code={}",
+                compact_text(invocation.invocation_id.as_str()),
+                compact_text(invocation.slot_id.as_str()),
+                compact_invocation_status(invocation.status),
+                exit_code,
+            )
+        })
+        .unwrap_or_else(|| "invocation: none".to_owned());
+
+    [
+        "completed show --compact".to_owned(),
+        run,
+        format!("lifecycle: {}", compact_lifecycle(projection.lifecycle)),
+        format!(
+            "state: {} ({})",
+            compact_text(projection.current_state.as_str()),
+            compact_text(&projection.current_state_title)
+        ),
+        format!("requestable events: {events}"),
+        format!("latest checked result: {checked}"),
+        invocation_line,
+        compact_progress_line(progress),
+    ]
+    .join("\n")
+        + "\n"
+}
+
+fn compact_latest_evaluation(projection: &CliShowProjection) -> String {
+    let Some(evaluation) = projection
+        .latest_evaluations
+        .iter()
+        .max_by_key(|evaluation| evaluation.sequence)
+    else {
+        return "none".to_owned();
+    };
+    let result = if evaluation.is_allow() {
+        "allow"
+    } else {
+        "deny"
+    };
+    let mut summary = format!(
+        "{} event={} target={} kind={} sequence={}",
+        result,
+        compact_text(evaluation.transition.event.as_str()),
+        compact_text(evaluation.transition.target.as_str()),
+        compact_transition_kind(evaluation.transition.kind),
+        evaluation.sequence,
+    );
+    if let Some(feedback) = evaluation.feedback() {
+        summary.push_str(&format!(
+            " code={} message={}",
+            compact_text(&feedback.code),
+            compact_text(&feedback.message)
+        ));
+    }
+    summary
+}
+
+fn compact_progress_line(progress: CompactInnerProgress) -> String {
+    match progress {
+        CompactInnerProgress::Unavailable { code, message } => format!(
+            "inner progress: unavailable [{}] {}",
+            compact_text(&code),
+            compact_text(&message)
+        ),
+        CompactInnerProgress::Snapshot(snapshot) => {
+            let Some(graph) = snapshot.graph else {
+                return "inner progress: unavailable [no-dagu-graph] no Dagu graph locator is available; task state is unknown".to_owned();
+            };
+            let mut not_started = 0;
+            let mut running = 0;
+            let mut reaped = 0;
+            for step in graph.steps {
+                match step.state {
+                    invocation_progress::GraphStepState::NotStarted => not_started += 1,
+                    invocation_progress::GraphStepState::Running => running += 1,
+                    invocation_progress::GraphStepState::Reaped => reaped += 1,
+                }
+            }
+            format!(
+                "inner progress (Dagu helper liveness): steps={} not_started={} running={} reaped={}",
+                not_started + running + reaped,
+                not_started,
+                running,
+                reaped
+            )
+        }
+    }
+}
+
+fn compact_text(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn compact_lifecycle(lifecycle: core::Lifecycle) -> &'static str {
+    match lifecycle {
+        core::Lifecycle::Active => "active",
+        core::Lifecycle::Final => "final",
+        core::Lifecycle::Terminated => "terminated",
+    }
+}
+
+fn compact_invocation_status(status: core::ProjectedInvocationStatus) -> &'static str {
+    match status {
+        core::ProjectedInvocationStatus::Running => "running",
+        core::ProjectedInvocationStatus::Succeeded => "succeeded",
+        core::ProjectedInvocationStatus::Failed => "failed",
+        core::ProjectedInvocationStatus::Overrun => "overrun",
+    }
+}
+
+fn compact_transition_kind(kind: core::TransitionKind) -> &'static str {
+    match kind {
+        core::TransitionKind::Checked => "checked",
+        core::TransitionKind::CheckFree => "check-free",
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 struct CliHistoryEntry {
     sequence: core::SemanticSequence,
@@ -2955,7 +3213,11 @@ fn usage(command: Option<&str>) -> String {
                 + "Options: --record-id <id> --database <path> --json\n"
         }
         Some("event") => "Usage: loop-engine [options] event <run-id> <event>\n".to_owned(),
-        Some("show") => "Usage: loop-engine [options] show <run-id>\n".to_owned(),
+        Some("show") => {
+            "Usage: loop-engine [options] show [--compact] <run-id>\n\n".to_owned()
+                + "Without --compact, human output is the detailed projection. --compact is\n"
+                + "human-only and summarizes the same show data plus opportunistic inner progress.\n"
+        }
         Some("history") => "Usage: loop-engine [options] history <run-id>\n".to_owned(),
         Some("terminate") => "Usage: loop-engine [options] terminate <run-id>\n".to_owned(),
         Some("invoke") => {
@@ -3074,6 +3336,11 @@ fn help_lists_fan_out_and_hides_wait_invocation() {
     assert!(!fan_out_help.stdout.contains("wait-invocation"));
     assert!(!fan_out_help.stdout.contains("stdin-exec"));
     assert!(!fan_out_help.stdout.contains("fan-out-join"));
+    let show_help = execute(["show", "--help"]);
+    assert_eq!(show_help.exit_code, EXIT_COMPLETED);
+    assert!(show_help.stdout.contains("show [--compact]"));
+    assert!(show_help.stdout.contains("human-only"));
+
     let progress_help = execute(["invocation-progress", "--help"]);
     assert_eq!(progress_help.exit_code, EXIT_COMPLETED);
     assert!(progress_help.stdout.contains("invocation-progress"));
@@ -3465,6 +3732,10 @@ mod tests {
         assert!(!preview_help.stdout.contains("wait-invocation"));
         assert!(!preview_help.stdout.contains("stdin-exec"));
         assert!(!preview_help.stdout.contains("fan-out-join"));
+        let show_help = execute(["show", "--help"]);
+        assert_eq!(show_help.exit_code, EXIT_COMPLETED);
+        assert!(show_help.stdout.contains("show [--compact]"));
+        assert!(show_help.stdout.contains("human-only"));
         let progress_help = execute(["invocation-progress", "--help"]);
         assert_eq!(progress_help.exit_code, EXIT_COMPLETED);
         assert!(progress_help.stdout.contains("invocation-progress"));
@@ -3596,6 +3867,46 @@ mod tests {
     }
 
     #[test]
+    fn parser_show_compact_is_human_only_and_not_a_new_operation() {
+        let parsed =
+            parse_args(["show", "--compact", "run-1"]).expect("show --compact should parse");
+        let ParsedRequest::Operation {
+            options,
+            command: PrimaryCommand::Show(run_id),
+        } = parsed
+        else {
+            panic!("expected show operation");
+        };
+        assert!(options.compact);
+        assert_eq!(run_id.as_str(), "run-1");
+
+        for selector in [
+            "--json",
+            "--machine-readable",
+            "-j",
+            "--format=json",
+            "--output=json",
+        ] {
+            let json_error = parse_args([selector, "show", "--compact", "run-1"])
+                .expect_err("compact show must reject JSON output");
+            assert_eq!(json_error.code, "invalid-invocation");
+            assert!(json_error.message.contains("human-only"));
+            assert!(json_error.message.contains("--json"));
+        }
+
+        let other_error =
+            parse_args(["list", "--compact"]).expect_err("compact must remain local to show");
+        assert_eq!(other_error.code, "invalid-invocation");
+        assert!(other_error.message.contains("only valid"));
+
+        let execution = execute(["--json", "show", "--compact", "run-1"]);
+        assert_eq!(execution.exit_code, EXIT_INVALID_INVOCATION);
+        let output: Value = serde_json::from_str(&execution.stdout).expect("JSON error");
+        assert_eq!(output["status"], "invalid-invocation");
+        assert!(output["message"].as_str().unwrap().contains("human-only"));
+    }
+
+    #[test]
     fn append_parser_preserves_separate_record_id_value() {
         let parsed = parse_args([
             "append",
@@ -3716,6 +4027,113 @@ mod tests {
         let human_output = render_operation_human("show", &outcome);
         assert!(!human_output.contains("control_revision"));
         assert!(!human_output.contains("last_sequence"));
+    }
+
+    #[test]
+    fn compact_renderer_keeps_fixed_order_and_separates_helper_liveness() {
+        let transition = core::Transition::checked("draft", "approve", "done");
+        let evaluation = core::DurableEvaluation::allow(
+            transition.clone(),
+            4_u64.into(),
+            core::Timestamp::from_unix_millis(40),
+        );
+        let invocation = core::operations::WorkSlotInvocationView {
+            invocation_id: "inv-1".into(),
+            slot_id: "slot-1".into(),
+            binding: core::WorkSlotBinding::new("worker", vec!["--flag".to_owned()]),
+            instruction_digest: "digest".to_owned(),
+            subject: "subject".to_owned(),
+            status: core::ProjectedInvocationStatus::Running,
+            started_at: core::Timestamp::from_unix_millis(10),
+            allowed_time_ms: 1_000,
+            exit_code: None,
+            completed_at: None,
+            overlay_meaning: "overlay remains authoritative".to_owned(),
+            elapsed_ms: 30,
+            remaining_allowed_ms: 970,
+            capture_dir: "/tmp/capture".to_owned(),
+            inner_workers: Vec::new(),
+            assignment_selection: None,
+            invocation_input: None,
+            change_report: core::operations::show::InvocationChangeReport {
+                identity: "inv-1".into(),
+                standing: false,
+                subject_revision: "subject".to_owned(),
+                dimensions: Value::Null,
+                assignments: Vec::new(),
+                plan_task_results: Vec::new(),
+            },
+        };
+        let projection = CliShowProjection {
+            run_id: "run-1".into(),
+            label: Some("compact test".to_owned()),
+            workflow_id: "workflow".into(),
+            lifecycle: core::Lifecycle::Active,
+            current_state: "draft".into(),
+            current_state_title: "Draft".to_owned(),
+            current_state_instructions: "Do work".to_owned(),
+            initial_input: json!({}),
+            context: Vec::new(),
+            requestable_events: vec![core::operations::RequestableEvent::from_transition(
+                &transition,
+            )],
+            latest_evaluations: vec![evaluation],
+            work_slots: vec![core::WorkSlot::new("slot-1", "draft", "approve")],
+            change_report: core::operations::RunChangeReport {
+                assignments: Vec::new(),
+                plan_task_results: Vec::new(),
+            },
+            work_slot_invocations: vec![invocation],
+        };
+        let progress =
+            CompactInnerProgress::Snapshot(invocation_progress::InvocationProgressSnapshot {
+                run_id: "run-1".into(),
+                invocation_id: "inv-1".into(),
+                slot_id: "slot-1".into(),
+                capture_dir: "/tmp/capture".to_owned(),
+                graph: Some(invocation_progress::GraphProgress {
+                    locator: DaguLocator {
+                        dagu_home: "/tmp/dagu".to_owned(),
+                        dag_name: "dag".to_owned(),
+                        run_name: "run".to_owned(),
+                    },
+                    steps: vec![
+                        invocation_progress::GraphStep {
+                            name: "w0".to_owned(),
+                            state: invocation_progress::GraphStepState::Running,
+                        },
+                        invocation_progress::GraphStep {
+                            name: "join".to_owned(),
+                            state: invocation_progress::GraphStepState::Reaped,
+                        },
+                        invocation_progress::GraphStep {
+                            name: "w1".to_owned(),
+                            state: invocation_progress::GraphStepState::NotStarted,
+                        },
+                    ],
+                }),
+                traces: Vec::new(),
+            });
+        let output = render_compact_show(
+            &projection,
+            Some(&projection.work_slot_invocations[0]),
+            progress,
+        );
+        let lines = output.lines().collect::<Vec<_>>();
+        assert_eq!(lines[0], "completed show --compact");
+        assert!(lines[1].starts_with("run: run-1"));
+        assert_eq!(lines[2], "lifecycle: active");
+        assert_eq!(lines[3], "state: draft (Draft)");
+        assert_eq!(lines[4], "requestable events: approve -> done (checked)");
+        assert!(lines[5].contains("latest checked result: allow event=approve"));
+        assert_eq!(
+            lines[6],
+            "invocation: inv-1 slot=slot-1 status=running exit_code=pending"
+        );
+        assert_eq!(
+            lines[7],
+            "inner progress (Dagu helper liveness): steps=3 not_started=1 running=1 reaped=1"
+        );
     }
 
     #[test]
