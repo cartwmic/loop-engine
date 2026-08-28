@@ -282,8 +282,44 @@ pub(crate) fn record_accepted_implementation_from_cwd(artifact_root: &Path) -> R
 pub(crate) fn verify_accepted_implementation_from_cwd(artifact_root: &Path) -> Result<(), String> {
     let artifact_root = existing_absolute_directory(artifact_root, "artifact_root")?;
     let current = verify_from_cwd(CheckpointPhase::Implementation, &artifact_root)?;
-    let history = implementation_proof_history(&artifact_root, false)?;
-    let mut matching = Vec::new();
+    let matching = read_implementation_proof_history(&artifact_root, false)?
+        .into_iter()
+        .filter(|checkpoint| checkpoint.report.revision == current.report.revision)
+        .collect::<Vec<_>>();
+
+    select_accepted_implementation(&current, &matching)
+}
+
+/// Return report revisions from the immutable implementation proof history.
+/// Repair admission treats a missing history directory as empty; validation
+/// callers continue to use [`verify_accepted_implementation_from_cwd`], which
+/// still requires an accepted history entry for the current report.
+pub(crate) fn accepted_implementation_report_revisions(
+    artifact_root: &Path,
+) -> Result<BTreeSet<String>, String> {
+    let artifact_root = existing_absolute_directory(artifact_root, "artifact_root")?;
+    Ok(read_implementation_proof_history(&artifact_root, true)?
+        .into_iter()
+        .map(|checkpoint| checkpoint.report.revision)
+        .collect())
+}
+
+fn read_implementation_proof_history(
+    artifact_root: &Path,
+    missing_is_empty: bool,
+) -> Result<Vec<Checkpoint>, String> {
+    let history = match implementation_proof_history(artifact_root, false) {
+        Ok(history) => history,
+        Err(_error)
+            if missing_is_empty
+                && fs::symlink_metadata(artifact_root.join(IMPLEMENTATION_PROOF_HISTORY))
+                    .is_err() =>
+        {
+            return Ok(Vec::new())
+        }
+        Err(error) => return Err(error),
+    };
+    let mut checkpoints = Vec::new();
     for entry in fs::read_dir(&history)
         .map_err(|error| format!("could not read {}: {error}", history.display()))?
     {
@@ -332,12 +368,9 @@ pub(crate) fn verify_accepted_implementation_from_cwd(artifact_root: &Path) -> R
                 path.display()
             ));
         }
-        if checkpoint.report.revision == current.report.revision {
-            matching.push(checkpoint);
-        }
+        checkpoints.push(checkpoint);
     }
-
-    select_accepted_implementation(&current, &matching)
+    Ok(checkpoints)
 }
 
 fn select_accepted_implementation(
@@ -405,6 +438,11 @@ pub(crate) fn phase_for_subject(subject: &str) -> Option<CheckpointPhase> {
 /// accessor; the checkpoint remains otherwise opaque to gates.
 pub(crate) fn state_identity(checkpoint: &Checkpoint) -> &str {
     &checkpoint.repository.state_sha256
+}
+
+/// The report revision bound by a verified checkpoint.
+pub(crate) fn report_revision(checkpoint: &Checkpoint) -> &str {
+    &checkpoint.report.revision
 }
 
 fn build(

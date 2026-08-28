@@ -44,7 +44,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import work_slot_journey
 
@@ -175,6 +175,10 @@ DUMMY_WORKER_PROOF = [
     "symlink-selected checkout cwd receipts are filesystem-equivalent and see .git",
     "dummy plan-graph summarizer writes implementation-report.json; ordinary dummy tasks do not",
     "implementation ledger routing enriches exact tasks, keeps proposal inert, and preserves task stdin envelope",
+    "bound ad-hoc repair exact-input preflight refuses malformed, stale, routed, and non-current findings before Dagu",
+    "ad-hoc repair no-context and frozen-task-flag refusals preserve proof",
+    "ad-hoc repair captures one generic assignment with exact findings and pre/post report/state identities",
+    "ad-hoc repair changes Git, refreshes implementation proof, and leaves plan-task-results untouched",
     "bound reviewer reads frozen operating_context from artifact_root",
     "overlay-running bound fan-out invocation-progress names invocation capture_dir graph steps; show inner_workers empty",
     "overlay-running bound run-plan-graph invocation-progress names task ids plus summarizer; show inner_workers empty",
@@ -528,9 +532,18 @@ class Journey:
             assert self.repository_root is not None
             assert self.run_dir is not None
             implementation_receipts = self.run_dir / "implementation-receipts"
+            repair_revision_file = self.run_dir / "repair-report-revision.txt"
+            repair_effect_file = self.repository_root / "ad-hoc-repair-effect.txt"
             implementation_worker = work_slot_journey.stdin_worker_cli(
                 implementation_receipts,
-                ("--stdout", '{"repository_effect":{"kind":"dummy"}}'),
+                (
+                    "--stdout",
+                    '{"repository_effect":{"kind":"dummy"}}',
+                    "--repair-revision-file",
+                    str(repair_revision_file),
+                    "--repair-effect-file",
+                    str(repair_effect_file),
+                ),
             )
             bindings["implement"] = work_slot_journey.implement_graph_runner_binding(
                 provider=self.provider,
@@ -1030,11 +1043,18 @@ class Journey:
         self.state = target
         return response
 
-    def _append_evidence(self, gate: str, *, subject_revision: Optional[str] = None) -> None:
+    def _append_evidence(
+        self,
+        gate: str,
+        *,
+        record_prefix: str = "",
+        subject_revision: Optional[str] = None,
+    ) -> None:
         self._append_evidence_for(
             self.run_id,
             gate,
             state=self.state,
+            record_prefix=record_prefix,
             subject_revision=subject_revision,
         )
 
@@ -1128,6 +1148,654 @@ class Journey:
                 event="append",
                 axis=gate,
             )
+
+    def _append_ledger_snapshot_for(
+        self,
+        run_id: str,
+        snapshot: Mapping[str, Any],
+        *,
+        record_id: str,
+        state: str,
+        axis: str = "none",
+    ) -> None:
+        response = self._engine_for(
+            run_id,
+            [
+                "append",
+                f"--record-id={record_id}",
+                run_id,
+                "finding-ledger",
+                json.dumps(snapshot, separators=(",", ":")),
+            ],
+            state=state,
+            event="append",
+            axis=axis,
+        )
+        self._expect_status(response, "completed", event="append", axis=axis, state=state)
+        if response.get("result", {}).get("context", {}).get("id") != record_id:
+            raise JourneyFailure(
+                f"finding-ledger record ID was changed for {record_id}",
+                state=state,
+                event="append",
+                axis=axis,
+            )
+
+    @staticmethod
+    def _artifact_tree_snapshot(root: Path) -> Dict[str, bytes]:
+        return {
+            path.relative_to(root).as_posix(): path.read_bytes()
+            for path in root.rglob("*")
+            if path.is_file()
+        }
+
+    def _invoke_expected_failure(
+        self,
+        invocation_input: Any,
+        *,
+        label: str,
+        expect_worker: bool = False,
+    ) -> Dict[str, Any]:
+        """Invoke the bound slot and prove its failed overlay did not mutate proof."""
+        assert self.artifact_root is not None
+        assert self.repository_root is not None
+        assert self.run_dir is not None
+        before_artifacts = self._artifact_tree_snapshot(self.artifact_root)
+        response = self._engine(
+            [
+                "invoke",
+                self.run_id,
+                "implement",
+                "--input",
+                json.dumps(invocation_input, separators=(",", ":")),
+            ],
+            state="implement",
+            event="invoke",
+            axis=label,
+        )
+        self._expect_status(response, "completed", event="invoke", state="implement", axis=label)
+        invocation_id = response.get("result", {}).get("invocation_id")
+        if not isinstance(invocation_id, str) or not invocation_id:
+            raise JourneyFailure(f"{label} invocation omitted invocation_id: {response}")
+        deadline = time.monotonic() + 20.0
+        match: Optional[Dict[str, Any]] = None
+        while time.monotonic() < deadline:
+            shown = self._show_for(self.run_id, state="implement", event=f"{label}-poll")
+            invocations = shown.get("work_slot_invocations", [])
+            candidate = next(
+                (
+                    item
+                    for item in invocations
+                    if isinstance(item, dict)
+                    and item.get("invocation_id") == invocation_id
+                ),
+                None,
+            )
+            if candidate is not None:
+                match = candidate
+                if candidate.get("status") == "failed" and candidate.get("completed_at") is not None:
+                    break
+            time.sleep(0.05)
+        if match is None or match.get("status") != "failed":
+            raise JourneyFailure(f"{label} did not produce a durable failed overlay: {match}")
+        if not expect_worker and match.get("inner_workers"):
+            raise JourneyFailure(f"{label} started a worker before refusing: {match}")
+        if self._artifact_tree_snapshot(self.artifact_root) != before_artifacts:
+            raise JourneyFailure(f"{label} mutated artifact proof before refusal")
+        receipt_root = self.run_dir / "implementation-receipts"
+        if any(receipt_root.glob("*.stdin")):
+            raise JourneyFailure(f"{label} started the bound worker: {sorted(receipt_root.glob('*.stdin'))}")
+        return match
+
+    def _invoke_direct_repair_failure(
+        self,
+        binding: Mapping[str, Any],
+        invocation_input: Any,
+        *,
+        label: str,
+        include_context: bool = False,
+        extra_args: Sequence[str] = (),
+    ) -> None:
+        """Exercise provider packet/argv refusals without the engine envelope."""
+        assert self.artifact_root is not None
+        assert self.repository_root is not None
+        packet: Dict[str, Any] = {
+            "run_id": self.run_id,
+            "slot_id": "implement",
+            "artifact_root": str(self.artifact_root),
+            "instruction_body": "Implement",
+            "capture_dir": str(self.run_dir / f"{label}-capture") if self.run_dir else "",
+            "invocation_input": invocation_input,
+        }
+        if include_context:
+            packet["context"] = self._show_for(
+                self.run_id, state="implement", event=f"{label}-context"
+            ).get("context", [])
+        command = [str(self.provider), *list(binding["args"]), *extra_args]
+        before = self._artifact_tree_snapshot(self.artifact_root)
+        completed = subprocess.run(
+            command,
+            input=json.dumps(packet, separators=(",", ":")),
+            text=True,
+            capture_output=True,
+            check=False,
+            cwd=self.repository_root,
+            env={**os.environ, **self.command_env},
+        )
+        if completed.returncode == 0:
+            raise JourneyFailure(f"{label} unexpectedly succeeded: {completed.stdout}")
+        if self._artifact_tree_snapshot(self.artifact_root) != before:
+            raise JourneyFailure(f"{label} mutated artifact proof before refusal")
+
+    def _invoke_expected_collision(
+        self,
+        invocation_input: Dict[str, Any],
+        *,
+        label: str,
+        expected_revision: str,
+    ) -> Dict[str, Any]:
+        """Prove a worker-executed report-revision collision stays failed."""
+        assert self.artifact_root is not None
+        assert self.run_dir is not None
+        before_plan_results = self.artifact_root / "plan-task-results.json"
+        before_plan_bytes = before_plan_results.read_bytes() if before_plan_results.exists() else None
+        response = self._engine(
+            [
+                "invoke",
+                self.run_id,
+                "implement",
+                "--input",
+                json.dumps(invocation_input, separators=(",", ":")),
+            ],
+            state="implement",
+            event="invoke",
+            axis=label,
+        )
+        self._expect_status(response, "completed", event="invoke", state="implement", axis=label)
+        invocation_id = response.get("result", {}).get("invocation_id")
+        if not isinstance(invocation_id, str) or not invocation_id:
+            raise JourneyFailure(f"{label} invocation omitted invocation_id: {response}")
+        deadline = time.monotonic() + 120.0
+        match: Optional[Dict[str, Any]] = None
+        while time.monotonic() < deadline:
+            shown = self._show_for(self.run_id, state="implement", event=f"{label}-poll")
+            match = next(
+                (
+                    item
+                    for item in shown.get("work_slot_invocations", [])
+                    if isinstance(item, dict)
+                    and item.get("invocation_id") == invocation_id
+                ),
+                None,
+            )
+            if match is not None and match.get("status") == "failed" and match.get("completed_at") is not None:
+                break
+            time.sleep(0.05)
+        if match is None or match.get("status") != "failed":
+            raise JourneyFailure(f"{label} did not preserve a failed collision overlay: {match}")
+        report = self._read_json(
+            self.artifact_root / "implementation-report.json",
+            f"{label} collision report",
+        )
+        if report.get("revision") != expected_revision:
+            raise JourneyFailure(f"{label} worker did not write the collision revision: {report}")
+        if (self.artifact_root / "implementation-checkpoint.json").exists():
+            raise JourneyFailure(f"{label} wrote a post-collision implementation checkpoint")
+        if before_plan_bytes is not None and before_plan_results.read_bytes() != before_plan_bytes:
+            raise JourneyFailure(f"{label} changed plan-task-results.json")
+        capture_dir = match.get("capture_dir")
+        if not isinstance(capture_dir, str) or not capture_dir:
+            raise JourneyFailure(f"{label} omitted capture_dir: {match}")
+        summary = self._read_json(Path(capture_dir) / "summary.json", f"{label} capture summary")
+        if len(summary.get("workers", [])) != 1 or summary.get("repair", {}).get("post_report_revision") is not None:
+            raise JourneyFailure(f"{label} did not preserve worker-executed collision metadata: {summary}")
+        return match
+
+    def _run_ad_hoc_repair_proof(
+        self,
+        plan_revision: str,
+        frozen_binding: Mapping[str, Any],
+    ) -> str:
+        """Prove the no-honest-task repair route on the public bound slot."""
+        assert self.artifact_root is not None
+        assert self.repository_root is not None
+        assert self.run_dir is not None
+        assert self.state == "implementation-review"
+
+        report_path = self.artifact_root / "implementation-report.json"
+        checkpoint_path = self.artifact_root / "implementation-checkpoint.json"
+        pre_checkpoint = self._read_json(checkpoint_path, "pre-repair implementation checkpoint")
+        pre_report_revision = pre_checkpoint.get("report", {}).get("revision")
+        pre_state = pre_checkpoint.get("repository", {}).get("state_sha256")
+        if not isinstance(pre_report_revision, str) or not pre_report_revision:
+            raise JourneyFailure("pre-repair checkpoint omitted report revision")
+        if not isinstance(pre_state, str) or not pre_state:
+            raise JourneyFailure("pre-repair checkpoint omitted repository state")
+
+        policy_id = self.profile["review_policies"]["implementation-review"][0]["id"]
+        source_path = self.artifact_root / "ad-hoc-repair-review.stdout"
+        source_bytes = b"accepted no-honest-task implementation finding\n"
+        source_path.write_bytes(source_bytes)
+        finding = {
+            "id": "F-no-honest-task-repair",
+            "source": {
+                "kind": "external-artifact",
+                "relative_path": source_path.name,
+                "output_sha256": "sha256:" + hashlib.sha256(source_bytes).hexdigest(),
+            },
+            "policy_id": policy_id,
+            "statement": "The accepted implementation defect has no honest frozen plan task owner.",
+            "disposition": "accepted",
+            "reason": "The driver accepted the finding and selected the narrow bound repair route.",
+            "owner_phase": "implementation",
+            "task_ids": [],
+            "review_axes": [policy_id],
+            "status": "unresolved",
+        }
+        failing_evidence = {
+            "gate": "implementation-review",
+            "policy_id": policy_id,
+            "result": "fail",
+            "findings": finding["statement"],
+            "author": {
+                "name": f"synthetic-implementation-review-{policy_id}-a",
+                "kind": "script",
+            },
+            "subject": "implementation-report.json",
+            "subject_revision": pre_report_revision,
+            "config_version": self.profile["config_version"],
+        }
+        self._assert_show("implementation-review", "ad-hoc-failing-evidence")
+        evidence_response = self._engine(
+            [
+                "append",
+                "--record-id=ad-hoc-failing-evidence",
+                self.run_id,
+                "review-evidence",
+                json.dumps(failing_evidence, separators=(",", ":")),
+            ],
+            state="implementation-review",
+            event="append",
+            axis=policy_id,
+        )
+        self._expect_status(
+            evidence_response,
+            "completed",
+            event="append",
+            state="implementation-review",
+            axis=policy_id,
+        )
+        unresolved_ledger = {
+            "schema_version": "1",
+            "gate": "implementation-review",
+            "subject": "implementation-report.json",
+            "subject_revision": pre_report_revision,
+            "author": {"name": "no-honest-task-driver", "kind": "agent"},
+            "repository_state": pre_state,
+            "findings": [finding],
+        }
+        self._assert_show("implementation-review", "ad-hoc-unresolved-ledger")
+        self._append_ledger_snapshot_for(
+            self.run_id,
+            unresolved_ledger,
+            record_id="ad-hoc-unresolved-ledger",
+            state="implementation-review",
+            axis=policy_id,
+        )
+        self._assert_show("implementation-review", "ad-hoc-finding-denial")
+        denied = self._event("approved", policy_id)
+        self._expect_status(
+            denied,
+            "rejected",
+            event="approved",
+            state="implementation-review",
+            axis=policy_id,
+        )
+        if denied.get("code") != "software-change-review-incomplete":
+            raise JourneyFailure(
+                f"no-honest-task finding did not block implementation review: {denied}",
+                state="implementation-review",
+                event="approved",
+                axis=policy_id,
+            )
+        self._expect_allow("revise", "implement")
+
+        repair_input = {"repair_finding_ids": [finding["id"]]}
+        # Invalid input/currentness requests run with an executable Dagu
+        # sentinel first in PATH. They must fail before that sentinel or the
+        # bound worker is reached and must leave proof bytes unchanged.
+        fake_dagu_dir = self.run_dir / "repair-fail-if-dagu"
+        fake_dagu_dir.mkdir()
+        fake_dagu = fake_dagu_dir / "dagu"
+        fake_dagu.write_text(
+            "#!/bin/sh\nprintf 'called\\n' >> \"$(dirname \"$0\")/called\"\nexit 97\n",
+            encoding="utf-8",
+        )
+        fake_dagu.chmod(0o755)
+        saved_env = dict(self.command_env)
+        self.command_env = {
+            "PATH": str(fake_dagu_dir)
+            + os.pathsep
+            + os.environ.get("PATH", "")
+        }
+        try:
+            for label, invalid_input in (
+                ("repair-null", None),
+                ("repair-empty", {"repair_finding_ids": []}),
+                ("repair-blank", {"repair_finding_ids": ["  "]}),
+                (
+                    "repair-duplicate",
+                    {"repair_finding_ids": [finding["id"], finding["id"]]},
+                ),
+                ("repair-unknown", {"repair_finding_ids": ["F-unknown-repair"]}),
+                (
+                    "repair-extra",
+                    {"repair_finding_ids": [finding["id"]], "extra": True},
+                ),
+                (
+                    "repair-mixed",
+                    {
+                        "plan_revision": plan_revision,
+                        "task_roots": ["checked-transition-evaluator"],
+                        "repair_finding_ids": [finding["id"]],
+                    },
+                ),
+                ("repair-wrong-type", {"repair_finding_ids": [7]}),
+            ):
+                self._assert_show("implement", f"{label}-show")
+                self._invoke_expected_failure(invalid_input, label=label)
+                if (fake_dagu_dir / "called").exists():
+                    raise JourneyFailure(f"invalid repair selection probed Dagu during {label}")
+
+            self._invoke_direct_repair_failure(
+                frozen_binding,
+                repair_input,
+                label="repair-no-context",
+            )
+            self._invoke_direct_repair_failure(
+                frozen_binding,
+                repair_input,
+                label="repair-frozen-task-flags",
+                extra_args=("--task", "checked-transition-evaluator"),
+            )
+            if (fake_dagu_dir / "called").exists():
+                raise JourneyFailure("invalid repair selection probed Dagu during direct argv checks")
+
+            invalid_variants = (
+                ("repair-stale-subject", {"subject_revision": "stale-report"}),
+                (
+                    "repair-stale-checkpoint",
+                    {
+                        "repository_state":
+                        "sha256:" + "0" * 64
+                    },
+                ),
+                ("repair-resolved", {"status": "resolved"}),
+                (
+                    "repair-rejected",
+                    {
+                        "disposition": "rejected",
+                        "status": "recorded",
+                        "owner_phase": None,
+                        "review_axes": [],
+                    },
+                ),
+                (
+                    "repair-advisory",
+                    {
+                        "disposition": "advisory",
+                        "status": "recorded",
+                        "owner_phase": None,
+                        "review_axes": [],
+                    },
+                ),
+                ("repair-wrong-phase", {"owner_phase": "plan"}),
+                (
+                    "repair-task-routed",
+                    {"task_ids": ["checked-transition-evaluator"]},
+                ),
+            )
+            finding_fields = {
+                "disposition",
+                "reason",
+                "owner_phase",
+                "task_ids",
+                "review_axes",
+                "status",
+            }
+            for index, (label, changes) in enumerate(invalid_variants, start=1):
+                invalid_finding = copy.deepcopy(finding)
+                invalid_finding.update(
+                    {
+                        key: copy.deepcopy(value)
+                        for key, value in changes.items()
+                        if key in finding_fields
+                    }
+                )
+                invalid_snapshot = copy.deepcopy(unresolved_ledger)
+                invalid_snapshot["subject_revision"] = changes.get(
+                    "subject_revision", pre_report_revision
+                )
+                invalid_snapshot["repository_state"] = changes.get(
+                    "repository_state", pre_state
+                )
+                invalid_snapshot["findings"] = [invalid_finding]
+                self._assert_show("implement", f"{label}-before-ledger")
+                self._append_ledger_snapshot_for(
+                    self.run_id,
+                    invalid_snapshot,
+                    record_id=f"{label}-ledger-{index}",
+                    state="implement",
+                    axis=policy_id,
+                )
+                self._assert_show("implement", f"{label}-show")
+                self._invoke_expected_failure(repair_input, label=label)
+                if (fake_dagu_dir / "called").exists():
+                    raise JourneyFailure(f"invalid repair selection probed Dagu during {label}")
+                self._assert_show("implement", f"{label}-restore-ledger")
+                self._append_ledger_snapshot_for(
+                    self.run_id,
+                    unresolved_ledger,
+                    record_id=f"{label}-valid-ledger-{index}",
+                    state="implement",
+                    axis=policy_id,
+                )
+        finally:
+            self.command_env = saved_env
+        if (fake_dagu_dir / "called").exists():
+            raise JourneyFailure("invalid repair selection probed Dagu")
+        repair_revision_file = self.run_dir / "repair-report-revision.txt"
+        repair_revision = pre_report_revision + "-ad-hoc-repair"
+        repair_revision_file.write_text(repair_revision + "\n", encoding="utf-8")
+        self._assert_show("implement", "ad-hoc-repair-before-invoke")
+        pre_report_bytes = report_path.read_bytes()
+        pre_checkpoint_bytes = checkpoint_path.read_bytes()
+        plan_results_path = self.artifact_root / "plan-task-results.json"
+        plan_results_bytes = plan_results_path.read_bytes() if plan_results_path.exists() else None
+        pre_repository = self._repository_snapshot(self.repository_root)
+        try:
+            repair_invocation = work_slot_journey.invoke_until_succeeded(
+                self._engine_call(self.run_id, state="implement"),
+                self.run_id,
+                "implement",
+                timeout_s=120.0,
+                invoke_args=[
+                    "--input",
+                    json.dumps(repair_input, separators=(",", ":")),
+                ],
+            )
+        except work_slot_journey.WorkSlotJourneyFailure as error:
+            raise JourneyFailure(str(error), state="implement", event="invoke") from error
+        if (
+            repair_invocation.get("binding") != frozen_binding
+            or repair_invocation.get("invocation_input") != repair_input
+            or [
+                worker.get("assignment_id")
+                for worker in repair_invocation.get("inner_workers", [])
+            ]
+            != ["ad-hoc-repair"]
+            or repair_invocation.get("change_report", {}).get("plan_task_results") != []
+        ):
+            raise JourneyFailure(
+                f"bound repair widened into plan execution or changed its frozen binding: {repair_invocation}",
+                state="implement",
+                event="invoke",
+            )
+        capture_dir = Path(repair_invocation["capture_dir"])
+        summary = self._read_json(capture_dir / "summary.json", "ad-hoc repair capture summary")
+        if set(summary) != {"workers", "repair"}:
+            raise JourneyFailure(f"ad-hoc repair summary changed shape: {summary}")
+        workers = summary.get("workers")
+        if not isinstance(workers, list) or len(workers) != 1:
+            raise JourneyFailure(f"ad-hoc repair did not capture exactly one worker: {summary}")
+        worker = workers[0]
+        if (
+            worker.get("assignment_id") != "ad-hoc-repair"
+            or "task_definition" in worker
+            or "repository_effect" in worker
+            or worker.get("routed_inputs") != [finding]
+        ):
+            raise JourneyFailure(f"ad-hoc repair worker was not a generic routed assignment: {worker}")
+        task_packet = worker.get("task_packet")
+        if not isinstance(task_packet, str):
+            raise JourneyFailure(f"ad-hoc repair worker omitted task packet: {worker}")
+        location_raw, assignment_raw = task_packet.split("\n---\n\n", 1)
+        if json.loads(location_raw) != {"artifact_root": str(self.artifact_root)}:
+            raise JourneyFailure(f"ad-hoc repair location was not compact artifact_root JSON: {task_packet}")
+        assignment = json.loads(assignment_raw)
+        if set(assignment) != {
+            "kind",
+            "plan_revision",
+            "pre_report_revision",
+            "pre_repository_state_sha256",
+            "findings",
+            "instruction",
+        } or assignment.get("kind") != "ad-hoc-repair":
+            raise JourneyFailure(f"ad-hoc repair assignment shape changed: {assignment}")
+        if (
+            assignment.get("plan_revision") != plan_revision
+            or assignment.get("pre_report_revision") != pre_report_revision
+            or assignment.get("pre_repository_state_sha256") != pre_state
+            or assignment.get("findings") != [finding]
+            or "fresh report revision" not in assignment.get("instruction", "")
+        ):
+            raise JourneyFailure(f"ad-hoc repair assignment omitted exact frozen inputs: {assignment}")
+        summary_repair = summary["repair"]
+        if (
+            summary_repair.get("repair_finding_ids") != [finding["id"]]
+            or summary_repair.get("pre_report_revision") != pre_report_revision
+            or summary_repair.get("post_report_revision") != repair_revision
+            or summary_repair.get("pre_repository_state_sha256") != pre_state
+        ):
+            raise JourneyFailure(f"ad-hoc repair summary omitted pre/post report identity: {summary}")
+        post_checkpoint = self._read_json(checkpoint_path, "post-repair implementation checkpoint")
+        post_state = post_checkpoint.get("repository", {}).get("state_sha256")
+        if post_checkpoint.get("report", {}).get("revision") != repair_revision:
+            raise JourneyFailure(f"post-repair checkpoint omitted fresh report revision: {post_checkpoint}")
+        if not isinstance(post_state, str) or post_state == pre_state:
+            raise JourneyFailure(f"ad-hoc repair did not create a distinct repository state: {post_checkpoint}")
+        if summary_repair.get("post_repository_state_sha256") != post_state:
+            raise JourneyFailure(f"ad-hoc repair summary omitted post repository identity: {summary}")
+        report = self._read_json(report_path, "post-repair report")
+        if report.get("revision") != repair_revision or report.get("plan_revision") != plan_revision:
+            raise JourneyFailure(f"ad-hoc repair worker report was not fresh and plan-linked: {report}")
+        if plan_results_bytes is not None and plan_results_path.read_bytes() != plan_results_bytes:
+            raise JourneyFailure("ad-hoc repair changed plan-task-results.json")
+        if self._repository_snapshot(self.repository_root) == pre_repository:
+            raise JourneyFailure("ad-hoc repair worker did not create a repository effect")
+        selected_path = worker.get("selected_output_path")
+        selected_digest = worker.get("selected_output_sha256")
+        if (
+            not isinstance(selected_path, str)
+            or not isinstance(selected_digest, str)
+            or selected_digest != "sha256:" + hashlib.sha256(Path(selected_path).read_bytes()).hexdigest()
+        ):
+            raise JourneyFailure(f"ad-hoc repair capture omitted selected output identity: {worker}")
+        history_revisions = {
+            self._read_json(path, "implementation proof history entry")
+            .get("report", {})
+            .get("revision")
+            for path in (self.artifact_root / "implementation-proof-history").glob("*.json")
+        }
+        if pre_report_revision not in history_revisions:
+            raise JourneyFailure(f"ad-hoc repair did not preserve the historical pre-repair proof: {history_revisions}")
+        implementation_receipts = self.run_dir / "implementation-receipts"
+        if not (implementation_receipts / "ad-hoc-repair.stdin").is_file() or any(
+            (implementation_receipts / f"{task}.stdin").exists()
+            for task in (*[result.get("assignment_id") for result in workers], "summarizer")
+            if task != "ad-hoc-repair"
+        ):
+            raise JourneyFailure("ad-hoc repair started an ordinary task or summarizer")
+        valid_report_bytes = report_path.read_bytes()
+        valid_checkpoint_bytes = checkpoint_path.read_bytes()
+        repair_effect = self.repository_root / "ad-hoc-repair-effect.txt"
+        if not repair_effect.is_file():
+            raise JourneyFailure("ad-hoc repair dummy omitted its controlled repository effect")
+        valid_effect_bytes = repair_effect.read_bytes()
+        current_unresolved = copy.deepcopy(unresolved_ledger)
+        current_unresolved["subject_revision"] = repair_revision
+        current_unresolved["repository_state"] = post_state
+        current_unresolved["findings"] = [finding]
+        self._assert_show("implement", "ad-hoc-collision-ledger")
+        self._append_ledger_snapshot_for(
+            self.run_id,
+            current_unresolved,
+            record_id="ad-hoc-collision-unresolved-ledger",
+            state="implement",
+            axis=policy_id,
+        )
+        collision_input = repair_input
+        for label, collision_revision in (
+            ("ad-hoc-immediate-collision", repair_revision),
+            ("ad-hoc-historical-collision", pre_report_revision),
+        ):
+            repair_revision_file.write_text(collision_revision + "\n", encoding="utf-8")
+            self._assert_show("implement", f"{label}-before-invoke")
+            collision = self._invoke_expected_collision(
+                collision_input,
+                label=label,
+                expected_revision=collision_revision,
+            )
+            if collision.get("binding") != frozen_binding or collision.get("invocation_input") != collision_input:
+                raise JourneyFailure(f"{label} did not preserve frozen invocation identity: {collision}")
+            inner = collision.get("inner_workers", [])
+            if [item.get("assignment_id") for item in inner] != ["ad-hoc-repair"] or inner[0].get("exit_code") != 0:
+                raise JourneyFailure(f"{label} did not retain the successful worker capture: {collision}")
+            report_path.write_bytes(valid_report_bytes)
+            repair_effect.write_bytes(valid_effect_bytes)
+            checkpoint_path.write_bytes(valid_checkpoint_bytes)
+        repair_receipts = self.run_dir / "ad-hoc-repair-receipts"
+        repair_receipts.mkdir(exist_ok=True)
+        for path in (self.run_dir / "implementation-receipts").glob("ad-hoc-repair*"):
+            path.rename(repair_receipts / path.name)
+        repair_revision_file.write_text(repair_revision + "\n", encoding="utf-8")
+        resolved_finding = copy.deepcopy(finding)
+        resolved_finding["status"] = "resolved"
+        resolved_ledger = copy.deepcopy(current_unresolved)
+        resolved_ledger["author"] = {"name": "no-honest-task-driver-confirmation", "kind": "agent"}
+        resolved_ledger["findings"] = [resolved_finding]
+        self._assert_show("implement", "ad-hoc-resolved-ledger")
+        self._append_ledger_snapshot_for(
+            self.run_id,
+            resolved_ledger,
+            record_id="ad-hoc-resolved-ledger",
+            state="implement",
+            axis=policy_id,
+        )
+        # Re-enter the review state after the repair and require independent
+        # fresh evidence before allowing its normal challenge successor.
+        self._expect_allow("implementation-ready", "implementation-review")
+        self._append_evidence(
+            "implementation-review",
+            record_prefix="ad-hoc-",
+            subject_revision=repair_revision,
+        )
+        self._assert_show("implementation-review", "ad-hoc-fresh-review")
+        self._expect_allow("approved", "implementation-adversarial-review")
+        print(
+            "ad hoc repair journey passed: exact bound selection, fail-before-Dagu refusals, "
+            "worker capture, collision failures, fresh proof, and independent re-review"
+        )
+        return repair_revision
 
     def _checkpoint_state_for_subject(self, subject: str) -> Optional[str]:
         if subject in {"intent.json", "design.json", "plan.json"}:
@@ -1277,7 +1945,13 @@ class Journey:
         )
         self.state = target
 
-    def _prepare_successor_state(self, run_id: str, target: str) -> None:
+    def _prepare_successor_state(
+        self,
+        run_id: str,
+        target: str,
+        *,
+        implementation_revision: Optional[str] = None,
+    ) -> None:
         self._start_run(run_id)
         self._invoke_bound_slot(run_id, state="explore")
         prefix = f"{run_id}-"
@@ -1351,6 +2025,7 @@ class Journey:
             "approved",
             "implementation-adversarial-review",
             record_prefix=prefix,
+            subject_revision=implementation_revision,
         )
         self._pass_review_for(
             run_id,
@@ -1359,6 +2034,7 @@ class Journey:
             "approved",
             "validation",
             record_prefix=prefix,
+            subject_revision=implementation_revision,
         )
         self._expect_allow_for(
             run_id, "validation", "validation-ready", "validation-review"
@@ -1366,10 +2042,14 @@ class Journey:
         if target != "validation-review":
             raise JourneyFailure(f"unsupported successor route source state: {target}")
 
-    def _run_successor_route_proof(self) -> None:
+    def _run_successor_route_proof(
+        self, *, implementation_revision: Optional[str] = None
+    ) -> None:
         for index, (source, event, target) in enumerate(SUCCESSOR_ROUTE_CASES, start=1):
             run_id = f"successor-route-{index:02d}-{event}"
-            self._prepare_successor_state(run_id, source)
+            self._prepare_successor_state(
+                run_id, source, implementation_revision=implementation_revision
+            )
             shown = self._assert_show_for(run_id, source, "route-exposure")
             candidates = [
                 candidate
@@ -2067,6 +2747,7 @@ class Journey:
         frozen_implement_binding = copy.deepcopy(self.work_slot_bindings["implement"])
         plan_document = self._read_json(self.artifact_root / "plan.json", "accepted plan")
         plan_revision = str(plan_document["revision"])
+        pre_repair_revision = self._fixture_revision("implementation-report.json")
         full_task_ids = [task["id"] for task in plan_document["tasks"]]
         self._assert_show("implement", "full-implementation-invoke")
         try:
@@ -2124,12 +2805,87 @@ class Journey:
         # bookends:LE-94 — implementation-ready refuses report-only completion until the public checkpoint command binds the report to the selected Git tree.
         self._create_checkpoint("implementation")
         self._expect_allow("implementation-ready", "implementation-review")
+        # First complete the ordinary implementation route so the accepted
+        # pre-repair checkpoint is present in immutable proof history. Re-enter
+        # implementation through the public check-free owning-phase route, then
+        # exercise the no-honest-task finding at a fresh implementation review.
         self._pass_review(
             "implementation-review", "approved", "implementation-adversarial-review"
         )
         self._pass_review(
             "implementation-adversarial-review", "approved", "validation"
         )
+        self._create_checkpoint("validation")
+        self._expect_allow("validation-ready", "validation-review")
+        self._expect_allow("revise-implementation", "implement")
+        # A bound implementation-ready hop after backtracking requires a new
+        # succeeded invocation for the new state visit. Preserve Package 3a's
+        # full execution contract while preparing the repair proof.
+        self._assert_show("implement", "repair-reentry-full-invoke")
+        try:
+            reentry_invocation = work_slot_journey.invoke_until_succeeded(
+                self._engine_call(self.run_id, state="implement"),
+                self.run_id,
+                "implement",
+                timeout_s=120.0,
+            )
+        except work_slot_journey.WorkSlotJourneyFailure as error:
+            raise JourneyFailure(str(error), state="implement", event="invoke") from error
+        if (
+            reentry_invocation.get("binding") != frozen_implement_binding
+            or "invocation_input" in reentry_invocation
+            or [worker.get("assignment_id") for worker in reentry_invocation.get("inner_workers", [])]
+            != full_task_ids
+        ):
+            raise JourneyFailure(
+                f"repair re-entry widened or changed the frozen full-plan path: {reentry_invocation}",
+                state="implement",
+                event="invoke",
+            )
+        for task_id in (*full_task_ids, "summarizer"):
+            if not (implementation_receipts / f"{task_id}.stdin").is_file():
+                raise JourneyFailure(
+                    f"repair re-entry omitted worker receipt {task_id}",
+                    state="implement",
+                    event="invoke",
+                )
+        reentry_receipts = self.run_dir / "implementation-receipts-reentry"
+        implementation_receipts.rename(reentry_receipts)
+        implementation_receipts.mkdir()
+        implementation_report = self._read_json(
+            implementation_report_path, "repair re-entry implementation report"
+        )
+        implementation_report["revision"] = self._fixture_revision(
+            "implementation-report.json"
+        )
+        implementation_report_path.write_text(
+            json.dumps(implementation_report, indent=2) + "\n", encoding="utf-8"
+        )
+        self._create_checkpoint("implementation")
+        self._expect_allow("implementation-ready", "implementation-review")
+        # bookends:LE-108 — the public bound run refuses invalid no-task selections, captures one ad-hoc repair with no plan-task replay, refreshes proof, and continues through independent review and validation to terminal end.
+        repair_revision = self._run_ad_hoc_repair_proof(
+            plan_revision, frozen_implement_binding
+        )
+        self._pass_review(
+            "implementation-adversarial-review",
+            "approved",
+            "validation",
+            subject_revision=repair_revision,
+            record_prefix="ad-hoc-",
+        )
+        accepted_history = {
+            self._read_json(path, "accepted implementation proof history entry")
+            .get("report", {})
+            .get("revision")
+            for path in (self.artifact_root / "implementation-proof-history").glob("*.json")
+        }
+        if not {pre_repair_revision, repair_revision}.issubset(accepted_history):
+            raise JourneyFailure(
+                f"implementation review did not record both pre/post accepted proofs: {accepted_history}",
+                state=self.state,
+                event="approved",
+            )
 
         # Overwriting both mutable checkpoint files after implementation review
         # must not let validation accept repository bytes that no implementation
@@ -2143,7 +2899,7 @@ class Journey:
             "schema_version": "1",
             "gate": "implementation-adversarial-review",
             "subject": "implementation-report.json",
-            "subject_revision": self._fixture_revision("implementation-report.json"),
+            "subject_revision": repair_revision,
             "author": {"name": "late-validation-driver", "kind": "agent"},
             "repository_state": self._checkpoint_state_for_subject(
                 "implementation-report.json"
@@ -2166,13 +2922,27 @@ class Journey:
         history_entries = list(
             (self.artifact_root / "implementation-proof-history").glob("*.json")
         )
-        if len(history_entries) != 1:
+        if len(history_entries) != 2:
             raise JourneyFailure(
                 f"implementation proof history had {len(history_entries)} entries before overwrite test",
                 state=self.state,
                 event="validation-ready",
             )
-        accepted_path = history_entries[0]
+        accepted_candidates = [
+            path
+            for path in history_entries
+            if self._read_json(path, "accepted implementation proof history entry")
+            .get("report", {})
+            .get("revision")
+            == repair_revision
+        ]
+        if len(accepted_candidates) != 1:
+            raise JourneyFailure(
+                f"implementation proof history did not select the fresh repair proof: {accepted_candidates}",
+                state=self.state,
+                event="validation-ready",
+            )
+        accepted_path = accepted_candidates[0]
         accepted_bytes = accepted_path.read_bytes()
         accepted_path.write_bytes(
             (self.artifact_root / "implementation-checkpoint.json").read_bytes()
@@ -2642,13 +3412,15 @@ class Journey:
             raise JourneyFailure("history omitted expected denial lineage", state=self.state, event="history")
 
         # Later route fixtures reuse this artifact root with unbound implement.
-        # Restore their calibration revision after the primary focused run has
-        # durably completed and regenerate the two current-tree checkpoints.
+        # Give their post-repair proof a fresh revision: the append-only history
+        # must reject reusing the old pre-repair revision for this changed tree.
+        # Regenerate the two current-tree checkpoints after the primary focused
+        # run has durably completed.
         restored_report = self._read_json(
             implementation_report_path, "post-focused implementation report"
         )
-        restored_report["revision"] = self._fixture_revision(
-            "implementation-report.json"
+        restored_report["revision"] = (
+            self._fixture_revision("implementation-report.json") + "-successor-routes"
         )
         restored_report["summary"] = "dummy summarizer wrote this report"
         implementation_report_path.write_text(
@@ -2657,7 +3429,9 @@ class Journey:
         self._create_checkpoint("implementation")
         self._create_checkpoint("validation")
 
-        self._run_successor_route_proof()
+        self._run_successor_route_proof(
+            implementation_revision=restored_report["revision"]
+        )
         self._run_stitched_source()
         self._run_engine_boundary_scenarios()
         self._run_dummy_worker_proofs()
@@ -5592,6 +6366,13 @@ def assert_focused_boundary_scenarios() -> None:
                 "token-only or activity-only proof is refused",
             ),
         ),
+        108: (
+            "_run_full_source",
+            (
+                "self._run_ad_hoc_repair_proof(",
+                '"implementation-adversarial-review"',
+            ),
+        ),
     }
     for number, (function_name, assertions) in requirement_scenarios.items():
         token = f"{citation_prefix}{number} —"
@@ -5607,6 +6388,19 @@ def assert_focused_boundary_scenarios() -> None:
                 raise JourneyFailure(
                     f"{token} scenario omitted observable assertion marker {assertion!r}"
                 )
+
+    repair_start = source.index("    def _run_ad_hoc_repair_proof")
+    repair_end = source.find("\n    def ", repair_start + len("    def _run_ad_hoc_repair_proof"))
+    repair_source = source[repair_start:repair_end + 1 if repair_end >= 0 else len(source)]
+    for assertion in (
+        "repair_finding_ids",
+        "fail-before-Dagu refusals",
+        "ad hoc repair journey passed:",
+    ):
+        if assertion not in repair_source:
+            raise JourneyFailure(
+                f"LE-108 repair scenario omitted observable assertion marker {assertion!r}"
+            )
 
     print("focused citation scenarios remain bound to public assertions")
 

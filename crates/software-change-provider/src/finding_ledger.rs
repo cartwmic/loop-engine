@@ -371,6 +371,112 @@ pub(crate) fn project_implementation_findings_at(
     if !root.is_dir() {
         return Err("artifact_root for finding routing must be a directory".to_owned());
     }
+    let latest = latest_routing_snapshots(context, &root, working_directory)?
+        .into_iter()
+        .filter(|(_, _, _, snapshot)| {
+            routing_snapshot_is_current(&root, snapshot, working_directory)
+        })
+        .collect::<Vec<_>>();
+
+    let mut projected = Vec::new();
+    for (_, _, _, snapshot) in latest {
+        for finding in snapshot.findings {
+            if finding.is_accepted_unresolved()
+                && finding.owner_phase.as_deref() == Some("implementation")
+                && finding
+                    .task_ids
+                    .iter()
+                    .any(|candidate| candidate == task_id)
+            {
+                projected.push(finding_to_value(&finding));
+            }
+        }
+    }
+    Ok(projected)
+}
+
+/// Resolve an exact bound ad-hoc repair selection from the latest well-formed
+/// finding-ledger snapshots. Every requested ID must occur exactly once and
+/// must be a current accepted unresolved implementation finding with no
+/// frozen plan-task route.
+pub(crate) fn project_implementation_repair_findings_at(
+    context: &[ContextRecord],
+    artifact_root: &Path,
+    requested_ids: &[String],
+    working_directory: &Path,
+) -> Result<Vec<Value>, String> {
+    let root = fs::canonicalize(artifact_root).map_err(|error| {
+        format!("could not canonicalize artifact_root for finding routing: {error}")
+    })?;
+    if !root.is_dir() {
+        return Err("artifact_root for finding routing must be a directory".to_owned());
+    }
+    let latest = latest_routing_snapshots(context, &root, working_directory)?;
+    let requested = requested_ids.iter().collect::<BTreeSet<_>>();
+    let mut candidates: BTreeMap<String, Vec<(bool, String, String, Finding)>> = BTreeMap::new();
+    for (_, gate, subject, snapshot) in latest {
+        let current = routing_snapshot_is_current(&root, &snapshot, working_directory);
+        for finding in snapshot.findings {
+            if requested.contains(&finding.id) {
+                candidates.entry(finding.id.clone()).or_default().push((
+                    current,
+                    gate.clone(),
+                    subject.clone(),
+                    finding,
+                ));
+            }
+        }
+    }
+
+    let mut projected = Vec::with_capacity(requested_ids.len());
+    for id in requested_ids {
+        let matches = candidates.get(id).map(Vec::as_slice).unwrap_or_default();
+        if matches.is_empty() {
+            return Err(format!("repair selection names unknown finding `{id}`"));
+        }
+        if matches.len() > 1 {
+            return Err(format!(
+                "repair selection finding `{id}` occurs in multiple ledger contexts"
+            ));
+        }
+        let (current, _gate, subject, finding) = &matches[0];
+        if subject != IMPLEMENTATION_SUBJECT {
+            return Err(format!(
+                "repair selection finding `{id}` belongs to `{subject}`, not `{IMPLEMENTATION_SUBJECT}`"
+            ));
+        }
+        if !*current {
+            return Err(format!(
+                "repair selection finding `{id}` is stale for the current subject or repository checkpoint"
+            ));
+        }
+        if finding.disposition != FindingDisposition::Accepted
+            || finding.status != FindingStatus::Unresolved
+        {
+            return Err(format!(
+                "repair selection finding `{id}` must be accepted and unresolved"
+            ));
+        }
+        if finding.owner_phase.as_deref() != Some("implementation") {
+            return Err(format!(
+                "repair selection finding `{id}` is not implementation-owned"
+            ));
+        }
+        if !finding.task_ids.is_empty() {
+            return Err(format!(
+                "repair selection finding `{id}` is routed to plan tasks"
+            ));
+        }
+        projected.push(finding_to_value(finding));
+    }
+    Ok(projected)
+}
+
+fn latest_routing_snapshots(
+    context: &[ContextRecord],
+    root: &Path,
+    _working_directory: &Path,
+) -> Result<Vec<(u64, String, String, FindingLedgerSnapshot)>, String> {
     let root_value = Value::String(root.to_string_lossy().into_owned());
     let mut records = context
         .iter()
@@ -398,10 +504,8 @@ pub(crate) fn project_implementation_findings_at(
         }
         let Ok(snapshot) = parse_snapshot(&record.data, gate, subject, Some(&root_value), None)
         else {
-            // The provider gate is the authority for malformed/current ledger
-            // state.  A malformed historical record must not become a routing
-            // decision here; the last well-formed snapshot remains the only
-            // candidate, matching the current-view contract.
+            // A malformed record is not a current view. The latest
+            // well-formed snapshot remains the routing candidate.
             continue;
         };
         histories
@@ -422,9 +526,6 @@ pub(crate) fn project_implementation_findings_at(
         let Some((sequence, snapshot)) = snapshots.into_iter().last() else {
             continue;
         };
-        if !routing_snapshot_is_current(&root, &snapshot, working_directory) {
-            continue;
-        }
         latest.push((sequence, gate, subject, snapshot));
     }
     latest.sort_by(|left, right| {
@@ -433,22 +534,7 @@ pub(crate) fn project_implementation_findings_at(
             .then_with(|| left.1.cmp(&right.1))
             .then_with(|| left.2.cmp(&right.2))
     });
-
-    let mut projected = Vec::new();
-    for (_, _, _, snapshot) in latest {
-        for finding in snapshot.findings {
-            if finding.is_accepted_unresolved()
-                && finding.owner_phase.as_deref() == Some("implementation")
-                && finding
-                    .task_ids
-                    .iter()
-                    .any(|candidate| candidate == task_id)
-            {
-                projected.push(finding_to_value(&finding));
-            }
-        }
-    }
-    Ok(projected)
+    Ok(latest)
 }
 
 /// Project the entries relevant to one assigned review axis from a current
@@ -1066,14 +1152,6 @@ fn validate_combination(
                     "`{path}.owner_phase` must be intent, design, plan, implementation, or validation"
                 )),
                 None => reasons.push(format!("`{path}.owner_phase` is required for accepted findings")),
-            }
-            if owner_phase.as_deref() == Some("implementation")
-                && status == FindingStatus::Unresolved
-                && task_ids.is_empty()
-            {
-                reasons.push(format!(
-                    "`{path}.task_ids` must contain at least one task for an unresolved implementation finding"
-                ));
             }
         }
         FindingDisposition::Rejected | FindingDisposition::Advisory => {

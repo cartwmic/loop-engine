@@ -15,9 +15,9 @@ SEPARATOR = "\n---\n\n"
 SUMMARIZER_PREFIX = "Write artifact_root/implementation-report.json"
 
 
-def split_stdin(stdin: str) -> tuple[dict[str, object], str, bool]:
+def split_stdin(stdin: str) -> tuple[dict[str, object], str, bool, bool]:
     if SEPARATOR not in stdin:
-        return {}, stdin, False
+        return {}, stdin, False, False
     raw_location, rest = stdin.split(SEPARATOR, 1)
     try:
         location = json.loads(raw_location.strip())
@@ -25,12 +25,19 @@ def split_stdin(stdin: str) -> tuple[dict[str, object], str, bool]:
             location = {}
     except json.JSONDecodeError:
         location = {}
-    return location, rest, rest.startswith(SUMMARIZER_PREFIX)
+    try:
+        assignment = json.loads(rest)
+    except json.JSONDecodeError:
+        assignment = {}
+    is_repair = isinstance(assignment, dict) and assignment.get("kind") == "ad-hoc-repair"
+    return location, rest, rest.startswith(SUMMARIZER_PREFIX), is_repair
 
 
-def parse_task_id(rest: str, is_summarizer: bool) -> str:
+def parse_task_id(rest: str, is_summarizer: bool, is_repair: bool) -> str:
     if is_summarizer:
         return "summarizer"
+    if is_repair:
+        return "ad-hoc-repair"
     try:
         task = json.loads(rest)
     except json.JSONDecodeError:
@@ -41,12 +48,14 @@ def parse_task_id(rest: str, is_summarizer: bool) -> str:
     return "unknown"
 
 
-def write_valid_report(location: dict[str, object]) -> None:
+def write_valid_report(location: dict[str, object], revision: str) -> None:
     artifact_root = location.get("artifact_root")
     plan_path = location.get("plan_path")
     if not isinstance(artifact_root, str) or not artifact_root:
         return
-    revision = "1"
+    if not isinstance(plan_path, str) or not plan_path:
+        plan_path = str(Path(artifact_root, "plan.json"))
+    plan_revision = "1"
     if isinstance(plan_path, str) and plan_path:
         try:
             plan = json.loads(Path(plan_path).read_text(encoding="utf-8"))
@@ -54,14 +63,14 @@ def write_valid_report(location: dict[str, object]) -> None:
             plan = {}
         found = plan.get("revision") if isinstance(plan, dict) else None
         if isinstance(found, str) and found:
-            revision = found
+            plan_revision = found
     report = {
-        "revision": "1",
+        "revision": revision,
         "author": {"name": "run-plan-graph-dummy", "kind": "script"},
-        "plan_revision": revision,
+        "plan_revision": plan_revision,
         "coverage": {
             "commit": "dummy",
-            "documents": [{"path": "plan.json", "revision": revision}],
+            "documents": [{"path": "plan.json", "revision": plan_revision}],
         },
         "summary": "dummy summarizer wrote this report",
         "changed_surface": ["dummy"],
@@ -79,6 +88,9 @@ def main() -> int:
     parser.add_argument("--exit-code", type=int, default=0)
     parser.add_argument("--fail-task")
     parser.add_argument("--write-report", action="store_true")
+    parser.add_argument("--write-repair-report", action="store_true")
+    parser.add_argument("--repair-report-revision", default="repair-1")
+    parser.add_argument("--repair-effect-file")
     parser.add_argument("--summarizer-kill", action="store_true")
     parser.add_argument("--spawn-marker")
     parser.add_argument("--wait-peers", type=int, default=0)
@@ -91,8 +103,8 @@ def main() -> int:
     sys.stdout.write(stdin)
     sys.stdout.flush()
 
-    location, rest, is_summarizer = split_stdin(stdin)
-    task_id = parse_task_id(rest, is_summarizer)
+    location, rest, is_summarizer, is_repair = split_stdin(stdin)
+    task_id = parse_task_id(rest, is_summarizer, is_repair)
     receipt = Path(args.receipt_dir)
     receipt.mkdir(parents=True, exist_ok=True)
 
@@ -124,7 +136,11 @@ def main() -> int:
     (receipt / f"{task_id}.end").write_text(f"{time.time():.9f}\n", encoding="utf-8")
 
     if args.write_report and is_summarizer:
-        write_valid_report(location)
+        write_valid_report(location, "1")
+    if args.write_repair_report and is_repair:
+        if args.repair_effect_file:
+            Path(args.repair_effect_file).write_text("repair\n", encoding="utf-8")
+        write_valid_report(location, args.repair_report_revision)
 
     if not is_summarizer and args.fail_task == task_id:
         return 1

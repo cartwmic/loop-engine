@@ -14,8 +14,8 @@ from typing import Any, NoReturn, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# Plan revision 3 final-integration-proof command matrix, stored as Python
-# data so quoted pipefail commands are not re-encoded through a shell.
+# Final-integration-proof command matrix, stored as Python data so quoted
+# pipefail commands are not re-encoded through a shell.
 FINAL_MATRIX_COMMANDS = [
     "cargo test --workspace",
     "cargo clippy --workspace --all-targets -- -D warnings",
@@ -46,8 +46,12 @@ FINAL_MATRIX_COMMANDS = [
     "git diff --check",
     "outside-checkout public binary smoke for fan-out retry, checkpoint, and help",
     "software-change checkpoint --phase implementation --artifact-root <artifact_root> --working-directory <checkout>",
-    "python3 scripts/assert-implementation-report.py --report <artifact_root>/implementation-report.json --revision 1 --plan-revision 3",
 ]
+REPORT_CHECK_COMMAND = (
+    "python3 scripts/assert-implementation-report.py --report "
+    "<artifact_root>/implementation-report.json --revision {revision} "
+    "--plan-revision {plan_revision}"
+)
 PROOF_MARKERS = [
     "worker-data skill/root policy assertions passed",
     "contracted fan-out failure",
@@ -66,9 +70,12 @@ PROOF_MARKERS = [
     "GREEN",
     "terminal end reached",
 ]
-EXPECTED_VALIDATION = [f"{command}: passed" for command in FINAL_MATRIX_COMMANDS] + list(
-    PROOF_MARKERS
-)
+def expected_validation(revision: str, plan_revision: str) -> list[str]:
+    commands = [
+        *FINAL_MATRIX_COMMANDS,
+        REPORT_CHECK_COMMAND.format(revision=revision, plan_revision=plan_revision),
+    ]
+    return [f"{command}: passed" for command in commands] + list(PROOF_MARKERS)
 
 
 class ReportError(RuntimeError):
@@ -146,7 +153,11 @@ def check_report(
         raise ReportError("coverage must be a JSON object")
     assert_equal("coverage.commit", coverage.get("commit"), f"{head}+uncommitted-worktree")
     assert_equal("changed_surface", report.get("changed_surface"), changed_paths)
-    assert_equal("validation", report.get("validation"), EXPECTED_VALIDATION)
+    assert_equal(
+        "validation",
+        report.get("validation"),
+        expected_validation(revision, plan_revision),
+    )
 
 
 def write_report(path: Path, report: dict[str, Any]) -> None:
@@ -167,13 +178,21 @@ def self_test() -> int:
         },
         "summary": "Temporary passing implementation report.",
         "changed_surface": changed_paths,
-        "validation": EXPECTED_VALIDATION,
+        "validation": expected_validation(revision, plan_revision),
     }
 
-    if EXPECTED_VALIDATION != [f"{command}: passed" for command in FINAL_MATRIX_COMMANDS] + list(
+    expected_commands = [
+        *FINAL_MATRIX_COMMANDS,
+        REPORT_CHECK_COMMAND.format(revision=revision, plan_revision=plan_revision),
+    ]
+    if passing["validation"] != [f"{command}: passed" for command in expected_commands] + list(
         PROOF_MARKERS
     ):
         raise AssertionError("expected passed-string list drifted from matrix and markers")
+    if not passing["validation"][-len(PROOF_MARKERS) - 1].endswith(
+        f"--revision {revision} --plan-revision {plan_revision}: passed"
+    ):
+        raise AssertionError("report-check evidence did not use the requested revisions")
     pipefail = [command for command in FINAL_MATRIX_COMMANDS if command.startswith("bash -o pipefail")]
     if len(pipefail) != 2:
         raise AssertionError(f"expected two quoted pipefail commands, got {len(pipefail)}")

@@ -127,6 +127,14 @@ fn invoke_graph_with_env(
         command.current_dir(dir);
     }
     if let Some(path) = path {
+        // Keep the real toolchain available for checkpoint verification while
+        // putting the fake Dagu directory first so resolver probes remain
+        // observable and deterministic.
+        let mut paths = vec![path.to_path_buf()];
+        if let Some(existing) = std::env::var_os("PATH") {
+            paths.extend(std::env::split_paths(&existing));
+        }
+        let path = std::env::join_paths(paths).expect("join test PATH");
         command.env("PATH", path);
     }
     let completed = super::bounded_process::run_with_stdin(
@@ -240,6 +248,180 @@ fn fixture(label: &str) -> (TestDir, PathBuf, PathBuf) {
     }
     fs::create_dir_all(&receipt_dir).expect("receipt dir");
     (dir, artifact_root, receipt_dir)
+}
+
+struct RepairFixture {
+    repo: TestDir,
+    artifact_root: PathBuf,
+    receipt_dir: PathBuf,
+    capture_root: PathBuf,
+}
+
+impl RepairFixture {
+    fn new(label: &str) -> Self {
+        let repo = TestDir::new(&format!("repair-{label}"));
+        let suffix = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let base = std::env::temp_dir().join(format!(
+            "software-change-repair-artifacts-{}-{suffix}",
+            std::process::id()
+        ));
+        let artifact_root = base.join("artifacts");
+        let receipt_dir = base.join("receipts");
+        let capture_root = base.join("capture");
+        fs::create_dir_all(&artifact_root).expect("repair artifact root");
+        fs::create_dir_all(&receipt_dir).expect("repair receipt directory");
+        for name in ["intent.json", "design.json"] {
+            fs::write(artifact_root.join(name), br#"{"revision":"1"}"#)
+                .expect("write repair checkpoint document");
+        }
+        Self {
+            repo,
+            artifact_root,
+            receipt_dir,
+            capture_root,
+        }
+    }
+
+    fn setup_plan(&self) {
+        write_plan(
+            &self.artifact_root,
+            &json!({
+                "revision": "plan-r1",
+                "tasks": [{"id": "ordinary"}],
+                "dependency_graph": []
+            }),
+        );
+    }
+
+    fn write_report(&self, revision: &str) {
+        fs::write(
+            self.artifact_root.join("implementation-report.json"),
+            serde_json::to_vec_pretty(&json!({
+                "revision": revision,
+                "author": {"name": "repair-fixture", "kind": "script"},
+                "plan_revision": "plan-r1",
+                "coverage": {"commit": "fixture", "documents": [{"path": "plan.json", "revision": "plan-r1"}]},
+                "summary": "fixture report",
+                "changed_surface": ["fixture"],
+                "validation": ["fixture"]
+            }))
+            .expect("report JSON"),
+        )
+        .expect("write implementation report");
+    }
+
+    fn create_checkpoint(&self) {
+        let output = Command::new(bin())
+            .args([
+                "checkpoint",
+                "--phase",
+                "implementation",
+                "--artifact-root",
+                self.artifact_root.to_str().expect("artifact root UTF-8"),
+                "--working-directory",
+                self.repo.path().to_str().expect("repository UTF-8"),
+            ])
+            .current_dir(self.repo.path())
+            .output()
+            .expect("create implementation checkpoint");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "checkpoint stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn accept_report_revision(&self, revision: &str) {
+        self.write_report(revision);
+        self.create_checkpoint();
+        let bytes = fs::read(self.artifact_root.join("implementation-checkpoint.json"))
+            .expect("read historical implementation checkpoint");
+        let history = self.artifact_root.join("implementation-proof-history");
+        fs::create_dir_all(&history).expect("create implementation proof history");
+        let digest = format!("{:x}", Sha256::digest(&bytes));
+        fs::write(history.join(format!("{digest}.json")), bytes)
+            .expect("write historical implementation checkpoint");
+    }
+
+    fn checkpoint_value(&self) -> Value {
+        serde_json::from_slice(
+            &fs::read(self.artifact_root.join("implementation-checkpoint.json"))
+                .expect("read implementation checkpoint"),
+        )
+        .expect("checkpoint JSON")
+    }
+
+    fn current_state(&self) -> String {
+        self.checkpoint_value()["repository"]["state_sha256"]
+            .as_str()
+            .expect("repository state")
+            .to_owned()
+    }
+
+    fn source(&self) -> Value {
+        let bytes = b"repair finding source\n";
+        fs::write(self.artifact_root.join("repair.stdout"), bytes).expect("repair source");
+        json!({
+            "kind": "external-artifact",
+            "relative_path": "repair.stdout",
+            "output_sha256": format!("sha256:{:x}", Sha256::digest(bytes))
+        })
+    }
+
+    fn context(&self, finding: Value, subject_revision: &str, state: &str) -> Value {
+        json!([{
+            "id": "ledger-repair",
+            "kind": "finding-ledger",
+            "data": {
+                "schema_version": "1",
+                "gate": "implementation-review",
+                "subject": "implementation-report.json",
+                "subject_revision": subject_revision,
+                "author": {"name": "driver", "kind": "agent"},
+                "repository_state": state,
+                "findings": [finding]
+            },
+            "sequence": 1,
+            "created_at": 1
+        }])
+    }
+
+    fn finding(&self, id: &str) -> Value {
+        json!({
+            "id": id,
+            "source": self.source(),
+            "policy_id": "implementation-contract",
+            "statement": "repair this exact implementation defect",
+            "disposition": "accepted",
+            "reason": "driver selected the no-task route",
+            "owner_phase": "implementation",
+            "task_ids": [],
+            "review_axes": ["implementation-contract"],
+            "status": "unresolved"
+        })
+    }
+
+    fn packet(&self, invocation_input: Value, context: Value) -> Value {
+        let mut packet = packet_with_capture(
+            "run-repair",
+            "implement",
+            self.artifact_root.to_str().expect("artifact root UTF-8"),
+            "Implement",
+            &self.capture_root,
+        );
+        packet["invocation_input"] = invocation_input;
+        packet["context"] = context;
+        packet
+    }
+}
+
+impl Drop for RepairFixture {
+    fn drop(&mut self) {
+        if let Some(base) = self.artifact_root.parent() {
+            let _ = fs::remove_dir_all(base);
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -444,6 +626,345 @@ fn bound_invocation_selection_refuses_every_invalid_shape_before_dagu_or_graph()
                 .is_none(),
             "{label} started a task worker"
         );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn bound_repair_selection_refuses_invalid_shapes_before_dagu_or_mutation() {
+    let cases = [
+        ("null", Value::Null),
+        ("string", json!("repair")),
+        ("empty", json!({"repair_finding_ids": []})),
+        ("blank", json!({"repair_finding_ids": ["  "]})),
+        (
+            "duplicate",
+            json!({"repair_finding_ids": ["F-repair", "F-repair"]}),
+        ),
+        (
+            "extra",
+            json!({"repair_finding_ids": ["F-repair"], "extra": true}),
+        ),
+        (
+            "mixed",
+            json!({
+                "plan_revision": "plan-r1",
+                "task_roots": ["ordinary"],
+                "repair_finding_ids": ["F-repair"]
+            }),
+        ),
+        ("wrong-type", json!({"repair_finding_ids": [7]})),
+    ];
+    for (label, invocation_input) in cases {
+        let fixture = RepairFixture::new(&format!("invalid-{label}"));
+        let fake_dagu = fixture
+            .artifact_root
+            .parent()
+            .unwrap()
+            .join("fake-dagu-bin");
+        let probe_marker = dagu_sentinel(&fake_dagu);
+        let worker = task_worker(
+            &fixture.receipt_dir,
+            &[
+                "--spawn-marker",
+                fixture.repo.path().join("worker-started").to_str().unwrap(),
+            ],
+        );
+        let output = invoke_graph_with_env(
+            &worker,
+            &fixture.packet(invocation_input, json!([])),
+            Some(fixture.repo.path()),
+            &[],
+            Some(&fake_dagu),
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{label}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!probe_marker.exists(), "{label} probed Dagu");
+        assert!(
+            !fixture.capture_root.exists(),
+            "{label} created capture data"
+        );
+        assert!(fixture.receipt_dir.read_dir().unwrap().next().is_none());
+        assert!(!fixture.repo.path().join("worker-started").exists());
+        assert!(!fixture
+            .artifact_root
+            .join("implementation-report.json")
+            .exists());
+        assert!(!fixture
+            .artifact_root
+            .join("implementation-checkpoint.json")
+            .exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn bound_repair_runs_one_captured_generic_worker_and_refreshes_checkpoint() {
+    let fixture = RepairFixture::new("valid");
+    fixture.setup_plan();
+    fixture.write_report("pre-report");
+    fixture.create_checkpoint();
+    let pre_state = fixture.current_state();
+    let finding = fixture.finding("F-repair");
+    let context = fixture.context(finding.clone(), "pre-report", &pre_state);
+    let effect = fixture.repo.path().join("repair-effect.txt");
+    let worker = task_worker(
+        &fixture.receipt_dir,
+        &[
+            "--write-repair-report",
+            "--repair-report-revision",
+            "post-report",
+            "--repair-effect-file",
+            effect.to_str().unwrap(),
+        ],
+    );
+    let output = invoke_graph(
+        &worker,
+        &fixture.packet(json!({"repair_finding_ids": ["F-repair"]}), context),
+        Some(fixture.repo.path()),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        effect.is_file(),
+        "repair worker must change the Git checkout"
+    );
+    assert!(fixture.receipt_dir.join("ad-hoc-repair.stdin").is_file());
+    assert!(!fixture.receipt_dir.join("ordinary.stdin").exists());
+    assert!(!fixture.receipt_dir.join("summarizer.stdin").exists());
+    assert!(!fixture
+        .artifact_root
+        .join("plan-task-results.json")
+        .exists());
+
+    let repair_stdin = fs::read_to_string(fixture.receipt_dir.join("ad-hoc-repair.stdin"))
+        .expect("repair worker stdin");
+    let (location_raw, assignment_raw) = repair_stdin
+        .split_once("\n---\n\n")
+        .expect("repair location and assignment");
+    let location: Value = serde_json::from_str(location_raw).expect("repair location JSON");
+    assert_eq!(
+        location,
+        json!({"artifact_root": fixture.artifact_root.to_string_lossy()})
+    );
+    let assignment: Value = serde_json::from_str(assignment_raw).expect("repair assignment JSON");
+    assert_eq!(assignment["kind"], "ad-hoc-repair");
+    assert_eq!(assignment["plan_revision"], "plan-r1");
+    assert_eq!(assignment["pre_report_revision"], "pre-report");
+    assert_eq!(assignment["pre_repository_state_sha256"], pre_state);
+    assert_eq!(assignment["findings"], json!([finding]));
+    assert!(assignment["instruction"]
+        .as_str()
+        .unwrap()
+        .contains("fresh report revision"));
+
+    let summary = read_summary_at(&fixture.capture_root);
+    let workers = summary["workers"].as_array().expect("repair workers");
+    assert_eq!(workers.len(), 1);
+    assert_eq!(workers[0]["assignment_id"], "ad-hoc-repair");
+    assert!(workers[0].get("task_definition").is_none());
+    assert!(workers[0].get("repository_effect").is_none());
+    assert_eq!(workers[0]["routed_inputs"], json!([finding]));
+    assert_eq!(workers[0]["task_packet"], repair_stdin);
+    assert!(workers[0]["selected_output_path"]
+        .as_str()
+        .unwrap()
+        .contains("ad-hoc-repair/attempts/1/stdout"));
+    assert_eq!(summary["repair"]["repair_finding_ids"], json!(["F-repair"]));
+    assert_eq!(summary["repair"]["pre_report_revision"], "pre-report");
+    assert_eq!(summary["repair"]["post_report_revision"], "post-report");
+    assert_eq!(summary["repair"]["pre_repository_state_sha256"], pre_state);
+    let post_state = summary["repair"]["post_repository_state_sha256"]
+        .as_str()
+        .expect("post state");
+    assert_ne!(post_state, pre_state);
+    assert!(fixture
+        .artifact_root
+        .join("implementation-checkpoint.json")
+        .is_file());
+    let report: Value = serde_json::from_slice(
+        &fs::read(fixture.artifact_root.join("implementation-report.json")).unwrap(),
+    )
+    .expect("post report JSON");
+    assert_eq!(report["revision"], "post-report");
+    let yaml = emitted_yaml(&fixture.capture_root);
+    assert!(yaml.contains("name: \"ad-hoc-repair\""), "{yaml}");
+    assert!(!yaml.contains("summarizer"), "{yaml}");
+}
+
+#[test]
+fn bound_repair_selection_refuses_non_current_or_non_empty_task_findings_before_dagu() {
+    let cases = [
+        ("unknown", "unknown", None, None),
+        (
+            "resolved",
+            "F-repair",
+            Some(("status", json!("resolved"))),
+            None,
+        ),
+        (
+            "rejected",
+            "F-repair",
+            Some(("disposition", json!("rejected"))),
+            None,
+        ),
+        (
+            "advisory",
+            "F-repair",
+            Some(("disposition", json!("advisory"))),
+            None,
+        ),
+        (
+            "wrong-phase",
+            "F-repair",
+            Some(("owner_phase", json!("plan"))),
+            None,
+        ),
+        (
+            "task-routed",
+            "F-repair",
+            Some(("task_ids", json!(["ordinary"]))),
+            None,
+        ),
+        ("stale-subject", "F-repair", None, Some("old-report")),
+        (
+            "stale-checkpoint",
+            "F-repair",
+            None,
+            Some("sha256:0000000000000000000000000000000000000000000000000000000000000000"),
+        ),
+    ];
+    for (label, requested_id, mutation, stale) in cases {
+        let fixture = RepairFixture::new(label);
+        fixture.setup_plan();
+        fixture.write_report("pre-report");
+        fixture.create_checkpoint();
+        let pre_report =
+            fs::read(fixture.artifact_root.join("implementation-report.json")).expect("pre report");
+        let pre_checkpoint = fs::read(fixture.artifact_root.join("implementation-checkpoint.json"))
+            .expect("pre checkpoint");
+        let pre_state = fixture.current_state();
+        let mut finding = fixture.finding("F-repair");
+        if let Some((field, value)) = mutation {
+            finding[field] = value;
+            if field == "disposition" {
+                finding["status"] = json!("recorded");
+                finding["owner_phase"] = Value::Null;
+                finding["review_axes"] = json!([]);
+            }
+        }
+        let subject_revision = stale
+            .filter(|value| value == &"old-report")
+            .unwrap_or("pre-report");
+        let state = stale
+            .filter(|value| value.starts_with("sha256:"))
+            .unwrap_or(&pre_state);
+        let mut context = fixture.context(finding, subject_revision, state);
+        if label == "unknown" {
+            context[0]["data"]["findings"][0]["id"] = json!("F-other");
+        }
+        let fake_dagu = fixture
+            .artifact_root
+            .parent()
+            .unwrap()
+            .join("fake-dagu-bin");
+        let probe_marker = dagu_sentinel(&fake_dagu);
+        let worker = task_worker(
+            &fixture.receipt_dir,
+            &[
+                "--spawn-marker",
+                fixture.repo.path().join("worker-started").to_str().unwrap(),
+            ],
+        );
+        let output = invoke_graph_with_env(
+            &worker,
+            &fixture.packet(json!({"repair_finding_ids": [requested_id]}), context),
+            Some(fixture.repo.path()),
+            &[],
+            Some(&fake_dagu),
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{label}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!probe_marker.exists(), "{label} probed Dagu");
+        assert!(
+            !fixture.capture_root.exists(),
+            "{label} created capture data"
+        );
+        assert!(fixture.receipt_dir.read_dir().unwrap().next().is_none());
+        assert_eq!(
+            fs::read(fixture.artifact_root.join("implementation-report.json")).unwrap(),
+            pre_report,
+            "{label} changed implementation report"
+        );
+        assert_eq!(
+            fs::read(fixture.artifact_root.join("implementation-checkpoint.json")).unwrap(),
+            pre_checkpoint,
+            "{label} changed implementation checkpoint"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn bound_repair_report_revision_collisions_run_worker_but_create_no_post_checkpoint() {
+    for (label, collision_revision, historical) in [
+        ("immediate-collision", "pre-report", false),
+        ("historical-collision", "old-report", true),
+    ] {
+        let fixture = RepairFixture::new(label);
+        fixture.setup_plan();
+        if historical {
+            fixture.accept_report_revision("old-report");
+        }
+        fixture.write_report("pre-report");
+        fixture.create_checkpoint();
+        let pre_state = fixture.current_state();
+        let finding = fixture.finding("F-repair");
+        let context = fixture.context(finding, "pre-report", &pre_state);
+        let worker = task_worker(
+            &fixture.receipt_dir,
+            &[
+                "--write-repair-report",
+                "--repair-report-revision",
+                collision_revision,
+            ],
+        );
+        let output = invoke_graph(
+            &worker,
+            &fixture.packet(json!({"repair_finding_ids": ["F-repair"]}), context),
+            Some(fixture.repo.path()),
+        );
+        assert_ne!(output.status.code(), Some(0), "{label} unexpectedly passed");
+        assert!(fixture.receipt_dir.join("ad-hoc-repair.stdin").is_file());
+        assert!(!fixture.receipt_dir.join("ordinary.stdin").exists());
+        assert!(!fixture.receipt_dir.join("summarizer.stdin").exists());
+        assert!(!fixture
+            .artifact_root
+            .join("implementation-checkpoint.json")
+            .exists());
+        let report: Value = serde_json::from_slice(
+            &fs::read(fixture.artifact_root.join("implementation-report.json")).unwrap(),
+        )
+        .expect("collision report");
+        assert_eq!(report["revision"], collision_revision);
+        let summary = read_summary_at(&fixture.capture_root);
+        assert_eq!(summary["workers"].as_array().unwrap().len(), 1);
+        assert_eq!(summary["workers"][0]["exit_code"], 0);
+        assert_eq!(summary["repair"]["pre_report_revision"], "pre-report");
+        assert!(summary["repair"]["post_report_revision"].is_null());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("collides"));
     }
 }
 

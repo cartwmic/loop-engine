@@ -2,13 +2,15 @@
 
 use crate::checkpoint::{self, CheckpointPhase};
 use crate::dagu::{names_for_capture_root, resolve_dagu, write_locator};
-use crate::finding_ledger::project_implementation_findings_at;
+use crate::finding_ledger::{
+    project_implementation_findings_at, project_implementation_repair_findings_at,
+};
 use crate::schema::{self, CheckResult};
 use loop_core::ContextRecord;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::io::{self, Read};
@@ -22,6 +24,7 @@ pub(crate) const MAX_CONCURRENCY: usize = 4;
 const DEFAULT_WORKER_COMMAND: &str = "pi";
 const DEFAULT_WORKER_ARGS: &[&str] = &["--print", "--no-skills", "--no-extensions"];
 const SUMMARIZER_STEP: &str = "summarizer";
+const AD_HOC_REPAIR_STEP: &str = "ad-hoc-repair";
 const REPORT_FILE: &str = "implementation-report.json";
 const CHECKPOINT_FILE: &str = "implementation-checkpoint.json";
 const SUMMARY_FILE: &str = "summary.json";
@@ -36,6 +39,7 @@ const REQUIRED_REPORT_KEYS: &[&str] = &[
     "validation",
 ];
 const SUMMARIZER_ASSIGNMENT: &str = "Write artifact_root/implementation-report.json for this invocation only. You are the sole writer of that filename. plan_revision must equal the revision of the plan.json at plan_path. Do not concatenate worker stdout. Do not append review-evidence. Ordinary plan tasks must not write that filename.";
+const REPAIR_ASSIGNMENT_INSTRUCTION: &str = "Make only the narrow correction described by the selected accepted findings. Write a schema-valid artifact_root/implementation-report.json for this invocation with a fresh report revision linked to plan.json. Do not run plan tasks or write plan-task-results.json.";
 
 /// Worker argv: JSON object with exactly string `command` and array-of-string `args`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -79,11 +83,23 @@ pub(crate) struct InvokePacket {
 }
 
 /// The closed provider-owned selection object carried by a bound invocation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum InvocationSelection {
+    Plan(PlanSelection),
+    Repair(RepairSelection),
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-struct InvocationSelection {
+struct PlanSelection {
     plan_revision: String,
     task_roots: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct RepairSelection {
+    repair_finding_ids: Vec<String>,
 }
 
 /// Parse failure for worker JSON, invoke packets, or `run-plan-graph` argv.
@@ -184,31 +200,71 @@ pub(crate) fn parse_invoke_packet(raw: &str) -> Result<InvokePacket, ParseError>
 }
 
 fn parse_invocation_selection(value: &Value) -> Result<InvocationSelection, ExecuteError> {
-    let selection = serde_json::from_value::<InvocationSelection>(value.clone()).map_err(|error| {
-        ExecuteError::usage(format!(
-            "invocation_input must be exactly {{plan_revision,task_roots}} with a nonempty string plan_revision and nonempty string-array task_roots: {error}"
-        ))
+    let object = value.as_object().ok_or_else(|| {
+        ExecuteError::usage(
+            "invocation_input must be exactly {plan_revision,task_roots} or {repair_finding_ids}",
+        )
     })?;
-    if selection.plan_revision.is_empty() {
-        return Err(ExecuteError::usage(
-            "invocation_input plan_revision must be a non-empty string",
-        ));
+    let mut keys = object.keys().map(String::as_str).collect::<Vec<_>>();
+    keys.sort_unstable();
+    match keys.as_slice() {
+        ["plan_revision", "task_roots"] => {
+            let selection = serde_json::from_value::<PlanSelection>(value.clone()).map_err(|error| {
+                ExecuteError::usage(format!(
+                    "invocation_input must be exactly {{plan_revision,task_roots}} with a nonempty string plan_revision and nonempty string-array task_roots: {error}"
+                ))
+            })?;
+            if selection.plan_revision.is_empty() {
+                return Err(ExecuteError::usage(
+                    "invocation_input plan_revision must be a non-empty string",
+                ));
+            }
+            if selection.task_roots.is_empty() {
+                return Err(ExecuteError::usage(
+                    "invocation_input task_roots must be a non-empty string array",
+                ));
+            }
+            if selection
+                .task_roots
+                .iter()
+                .any(|task_id| task_id.trim().is_empty())
+            {
+                return Err(ExecuteError::usage(
+                    "invocation_input task_roots must not contain blank task ids",
+                ));
+            }
+            Ok(InvocationSelection::Plan(selection))
+        }
+        ["repair_finding_ids"] => {
+            let selection = serde_json::from_value::<RepairSelection>(value.clone()).map_err(|error| {
+                ExecuteError::usage(format!(
+                    "invocation_input must be exactly {{repair_finding_ids}} with a nonempty string-array finding id list: {error}"
+                ))
+            })?;
+            if selection.repair_finding_ids.is_empty() {
+                return Err(ExecuteError::usage(
+                    "invocation_input repair_finding_ids must be a non-empty string array",
+                ));
+            }
+            let mut ids = HashSet::new();
+            for id in &selection.repair_finding_ids {
+                if id.trim().is_empty() {
+                    return Err(ExecuteError::usage(
+                        "invocation_input repair_finding_ids must not contain blank finding ids",
+                    ));
+                }
+                if !ids.insert(id) {
+                    return Err(ExecuteError::usage(format!(
+                        "invocation_input repair_finding_ids names duplicate finding `{id}`"
+                    )));
+                }
+            }
+            Ok(InvocationSelection::Repair(selection))
+        }
+        _ => Err(ExecuteError::usage(
+            "invocation_input must be exactly {plan_revision,task_roots} or {repair_finding_ids}",
+        )),
     }
-    if selection.task_roots.is_empty() {
-        return Err(ExecuteError::usage(
-            "invocation_input task_roots must be a non-empty string array",
-        ));
-    }
-    if selection
-        .task_roots
-        .iter()
-        .any(|task_id| task_id.trim().is_empty())
-    {
-        return Err(ExecuteError::usage(
-            "invocation_input task_roots must not contain blank task ids",
-        ));
-    }
-    Ok(selection)
 }
 
 /// Parse argv tokens after the `run-plan-graph` command name.
@@ -521,6 +577,46 @@ struct CaptureSummary<'a> {
 }
 
 #[derive(Serialize)]
+struct RepairAssignment<'a> {
+    kind: &'static str,
+    plan_revision: &'a str,
+    pre_report_revision: &'a str,
+    pre_repository_state_sha256: &'a str,
+    findings: &'a [Value],
+    instruction: &'static str,
+}
+
+#[derive(Serialize)]
+struct RepairCaptureWorker<'a> {
+    assignment_id: &'a str,
+    command: &'a str,
+    args: &'a [String],
+    exit_code: i32,
+    selected_attempt: u32,
+    selected_output_sha256: String,
+    selected_output_path: &'a str,
+    stdout_path: &'a str,
+    stderr_path: &'a str,
+    task_packet: Value,
+    routed_inputs: Value,
+}
+
+#[derive(Serialize)]
+struct RepairCaptureMetadata<'a> {
+    repair_finding_ids: &'a [String],
+    pre_report_revision: &'a str,
+    post_report_revision: Option<&'a str>,
+    pre_repository_state_sha256: &'a str,
+    post_repository_state_sha256: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct RepairCaptureSummary<'a> {
+    workers: Vec<RepairCaptureWorker<'a>>,
+    repair: RepairCaptureMetadata<'a>,
+}
+
+#[derive(Serialize)]
 struct ArtifactRootContext<'a> {
     artifact_root: &'a str,
 }
@@ -564,22 +660,68 @@ fn execute_from_packet(args: &RunPlanGraphArgs, raw_packet: &str) -> Result<(), 
         ExecuteError::failed(format!("could not read {}: {error}", plan_path.display()))
     })?;
     let plan = parse_plan(&plan_raw)?;
-    // Resolve explicit selection before even probing Dagu.  Invalid caller
+    // Resolve explicit selection before even probing Dagu. Invalid caller
     // input must be a usage refusal, not a dependency/PATH failure, and no
     // external graph process should be involved in that refusal.
+    if let Some(InvocationSelection::Repair(selection)) = invocation_selection.as_ref() {
+        if plan.revision.is_empty() {
+            return Err(ExecuteError::usage(
+                "plan.json revision must be non-empty for ad-hoc repair",
+            ));
+        }
+        let context = packet
+            .context
+            .as_deref()
+            .ok_or_else(|| ExecuteError::usage("ad-hoc repair requires finding-ledger context"))?;
+        let pre_checkpoint = checkpoint::verify(
+            CheckpointPhase::Implementation,
+            &artifact_root,
+            &args.working_directory,
+        )
+        .map_err(ExecuteError::failed)?;
+        let historical_report_revisions =
+            checkpoint::accepted_implementation_report_revisions(&artifact_root)
+                .map_err(ExecuteError::failed)?;
+        let findings = project_implementation_repair_findings_at(
+            context,
+            &artifact_root,
+            &selection.repair_finding_ids,
+            &args.working_directory,
+        )
+        .map_err(ExecuteError::usage)?;
+        let dagu = resolve_dagu().map_err(|error| ExecuteError::failed(error.to_string()))?;
+        return run_ad_hoc_repair(
+            args,
+            &dagu,
+            &artifact_root,
+            &capture_root,
+            &plan,
+            &selection.repair_finding_ids,
+            findings,
+            &pre_checkpoint,
+            &historical_report_revisions,
+        );
+    }
+
     let standing_assignment_ids = packet
         .standing_assignment_ids
         .as_ref()
         .map(|ids| ids.iter().cloned().collect::<HashSet<_>>());
+    let invocation_plan_selection =
+        invocation_selection
+            .as_ref()
+            .and_then(|selection| match selection {
+                InvocationSelection::Plan(selection) => Some(selection),
+                InvocationSelection::Repair(_) => None,
+            });
     let selected_order = resolve_plan_selection(
         args,
         &artifact_root,
         &plan,
         standing_assignment_ids.as_ref(),
-        invocation_selection.as_ref(),
+        invocation_plan_selection,
     )?;
-    let requested_selection = invocation_selection
-        .as_ref()
+    let requested_selection = invocation_plan_selection
         .map(|selection| selection.task_roots.as_slice())
         .or(args.task_selection.as_deref());
     let dagu = resolve_dagu().map_err(|error| ExecuteError::failed(error.to_string()))?;
@@ -750,7 +892,7 @@ fn resolve_plan_selection(
     artifact_root: &Path,
     plan: &PlanGraph,
     standing_assignment_ids: Option<&HashSet<String>>,
-    invocation_selection: Option<&InvocationSelection>,
+    invocation_selection: Option<&PlanSelection>,
 ) -> Result<Vec<String>, ExecuteError> {
     let requested = if let Some(selection) = invocation_selection {
         if selection.plan_revision != plan.revision {
@@ -1081,6 +1223,208 @@ fn run_dagu_graph(
     .map_err(ExecuteError::failed)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn run_ad_hoc_repair(
+    args: &RunPlanGraphArgs,
+    dagu: &Path,
+    artifact_root: &Path,
+    capture_root: &Path,
+    plan: &PlanGraph,
+    finding_ids: &[String],
+    findings: Vec<Value>,
+    pre_checkpoint: &checkpoint::Checkpoint,
+    historical_report_revisions: &BTreeSet<String>,
+) -> Result<(), ExecuteError> {
+    let pre_report_revision = checkpoint::report_revision(pre_checkpoint).to_owned();
+    let pre_repository_state_sha256 = checkpoint::state_identity(pre_checkpoint).to_owned();
+
+    // All selection, currentness, and history checks happen before these
+    // destructive proof invalidations or any Dagu process is started.
+    delete_stale_report(artifact_root)?;
+    delete_stale_checkpoint(artifact_root)?;
+
+    fs::create_dir_all(capture_root).map_err(|error| {
+        ExecuteError::failed(format!(
+            "could not create {}: {error}",
+            capture_root.display()
+        ))
+    })?;
+    let (dag_name, run_name) = names_for_capture_root(capture_root)
+        .map_err(|error| ExecuteError::failed(error.to_string()))?;
+    let locator = write_locator(capture_root, &dag_name, &run_name)
+        .map_err(|error| ExecuteError::failed(error.to_string()))?;
+    let home = PathBuf::from(&locator.dagu_home);
+    write_isolated_home_files(&home)?;
+    let software_change = path_to_string(&software_change_exe()?);
+
+    let repair_dir = task_capture_dir(capture_root, AD_HOC_REPAIR_STEP)?;
+    let output_dir = repair_dir.join("attempts").join("1");
+    fs::create_dir_all(&output_dir).map_err(|error| {
+        ExecuteError::failed(format!(
+            "could not create {}: {error}",
+            output_dir.display()
+        ))
+    })?;
+    let stdin_path = repair_dir.join("stdin");
+    let stdin = repair_stdin(
+        artifact_root,
+        &plan.revision,
+        &pre_report_revision,
+        &pre_repository_state_sha256,
+        &findings,
+    )?;
+    fs::write(&stdin_path, &stdin).map_err(|error| {
+        ExecuteError::failed(format!("could not write {}: {error}", stdin_path.display()))
+    })?;
+    let step = PreparedStep {
+        name: AD_HOC_REPAIR_STEP.to_owned(),
+        stdin_path: path_to_string(&stdin_path),
+        stdout_path: path_to_string(&output_dir.join("stdout")),
+        stderr_path: path_to_string(&output_dir.join("stderr")),
+        depends: Vec::new(),
+        recorded_dependencies: Vec::new(),
+    };
+    let yaml = emit_repair_yaml(
+        &software_change,
+        &args.worker,
+        &args.working_directory,
+        &step,
+    );
+    let dags_dir = home.join("dags");
+    fs::create_dir_all(&dags_dir).map_err(|error| {
+        ExecuteError::failed(format!("could not create {}: {error}", dags_dir.display()))
+    })?;
+    let yaml_path = dags_dir.join(format!("{dag_name}.yaml"));
+    fs::write(&yaml_path, yaml).map_err(|error| {
+        ExecuteError::failed(format!("could not write {}: {error}", yaml_path.display()))
+    })?;
+
+    run_dagu_cli(
+        dagu,
+        &[
+            "validate",
+            "--dagu-home",
+            &locator.dagu_home,
+            &path_to_string(&yaml_path),
+        ],
+        false,
+    )?;
+    let start_result = run_dagu_cli(
+        dagu,
+        &[
+            "start",
+            "--quiet",
+            "--dagu-home",
+            &locator.dagu_home,
+            "--name",
+            &dag_name,
+            "--run-id",
+            &run_name,
+            &path_to_string(&yaml_path),
+        ],
+        true,
+    );
+    let outcomes = step_outcomes(&home);
+    let outcome = outcomes.get(AD_HOC_REPAIR_STEP).copied();
+    let worker_ok = outcome.is_some_and(|outcome| outcome.exit_code == Some(0));
+
+    if !worker_ok {
+        write_repair_summary(
+            capture_root,
+            &args.worker,
+            &step,
+            outcome,
+            finding_ids,
+            &findings,
+            &pre_report_revision,
+            &pre_repository_state_sha256,
+            None,
+        )?;
+        if let Err(error) = start_result {
+            return Err(error);
+        }
+        return Err(ExecuteError::failed(
+            "ad-hoc-repair worker did not exit 0".to_owned(),
+        ));
+    }
+
+    let report_revision = match validate_fresh_report(artifact_root, &plan.revision) {
+        Ok(revision) => revision,
+        Err(error) => {
+            write_repair_summary(
+                capture_root,
+                &args.worker,
+                &step,
+                outcome,
+                finding_ids,
+                &findings,
+                &pre_report_revision,
+                &pre_repository_state_sha256,
+                None,
+            )?;
+            return Err(error);
+        }
+    };
+    if report_revision == pre_report_revision
+        || historical_report_revisions.contains(&report_revision)
+    {
+        write_repair_summary(
+            capture_root,
+            &args.worker,
+            &step,
+            outcome,
+            finding_ids,
+            &findings,
+            &pre_report_revision,
+            &pre_repository_state_sha256,
+            None,
+        )?;
+        return Err(ExecuteError::failed(format!(
+            "ad-hoc-repair implementation report revision `{report_revision}` collides with an existing accepted proof"
+        )));
+    }
+
+    let post_checkpoint = match checkpoint::create(
+        CheckpointPhase::Implementation,
+        artifact_root,
+        &args.working_directory,
+    ) {
+        Ok(checkpoint) => checkpoint,
+        Err(error) => {
+            write_repair_summary(
+                capture_root,
+                &args.worker,
+                &step,
+                outcome,
+                finding_ids,
+                &findings,
+                &pre_report_revision,
+                &pre_repository_state_sha256,
+                None,
+            )?;
+            return Err(ExecuteError::failed(error));
+        }
+    };
+    let post_report_revision = checkpoint::report_revision(&post_checkpoint).to_owned();
+    let post_repository_state_sha256 = checkpoint::state_identity(&post_checkpoint).to_owned();
+    write_repair_summary(
+        capture_root,
+        &args.worker,
+        &step,
+        outcome,
+        finding_ids,
+        &findings,
+        &pre_report_revision,
+        &pre_repository_state_sha256,
+        Some((&post_report_revision, &post_repository_state_sha256)),
+    )?;
+
+    // As with the existing plan graph, a completed worker/report/checkpoint
+    // is sufficient when Dagu itself reports a late nonzero status.
+    let _ = start_result;
+    Ok(())
+}
+
 fn summarizer_succeeded(outcomes: &HashMap<String, StepOutcome>) -> bool {
     outcomes
         .get(SUMMARIZER_STEP)
@@ -1300,7 +1644,107 @@ fn write_plan_summary(
     Ok(())
 }
 
-fn validate_fresh_report(artifact_root: &Path, plan_revision: &str) -> Result<(), ExecuteError> {
+#[allow(clippy::too_many_arguments)]
+fn write_repair_summary(
+    capture_root: &Path,
+    worker: &WorkerCli,
+    step: &PreparedStep,
+    outcome: Option<StepOutcome>,
+    finding_ids: &[String],
+    findings: &[Value],
+    pre_report_revision: &str,
+    pre_repository_state_sha256: &str,
+    post: Option<(&str, &str)>,
+) -> Result<(), ExecuteError> {
+    let stdout_path = Path::new(&step.stdout_path);
+    let stderr_path = Path::new(&step.stderr_path);
+    let started = stdout_path.is_file()
+        || stderr_path.is_file()
+        || outcome.map(|item| item.started).unwrap_or(false);
+    let mut workers = Vec::new();
+    if started {
+        if let Some(parent) = stdout_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                ExecuteError::failed(format!(
+                    "could not create repair output directory {}: {error}",
+                    parent.display()
+                ))
+            })?;
+        }
+        if !stdout_path.exists() {
+            fs::write(stdout_path, b"").map_err(|error| {
+                ExecuteError::failed(format!(
+                    "could not write repair stdout {}: {error}",
+                    stdout_path.display()
+                ))
+            })?;
+        }
+        if !stderr_path.exists() {
+            fs::write(stderr_path, b"").map_err(|error| {
+                ExecuteError::failed(format!(
+                    "could not write repair stderr {}: {error}",
+                    stderr_path.display()
+                ))
+            })?;
+        }
+        let exit_code = outcome.and_then(|item| item.exit_code).unwrap_or(1);
+        let packet = fs::read_to_string(&step.stdin_path).map_err(|error| {
+            ExecuteError::failed(format!("could not read {}: {error}", step.stdin_path))
+        })?;
+        let selected_output_sha256 = format!(
+            "sha256:{}",
+            sha256_digest_file(stdout_path).map_err(|error| {
+                ExecuteError::failed(format!(
+                    "could not read selected repair output {}: {error}",
+                    stdout_path.display()
+                ))
+            })?
+        );
+        workers.push(RepairCaptureWorker {
+            assignment_id: &step.name,
+            command: &worker.command,
+            args: &worker.args,
+            exit_code,
+            selected_attempt: 1,
+            selected_output_sha256,
+            selected_output_path: &step.stdout_path,
+            stdout_path: &step.stdout_path,
+            stderr_path: &step.stderr_path,
+            task_packet: Value::String(packet),
+            routed_inputs: Value::Array(findings.to_vec()),
+        });
+    }
+    let metadata = RepairCaptureMetadata {
+        repair_finding_ids: finding_ids,
+        pre_report_revision,
+        post_report_revision: post.map(|(report, _)| report),
+        pre_repository_state_sha256,
+        post_repository_state_sha256: post.map(|(_, state)| state),
+    };
+    let path = capture_root.join(SUMMARY_FILE);
+    let bytes = serde_json::to_vec_pretty(&RepairCaptureSummary {
+        workers,
+        repair: metadata,
+    })
+    .map_err(|error| {
+        ExecuteError::failed(format!(
+            "could not serialize repair capture summary {}: {error}",
+            path.display()
+        ))
+    })?;
+    fs::write(&path, bytes).map_err(|error| {
+        ExecuteError::failed(format!(
+            "could not write repair capture summary {}: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(())
+}
+
+fn validate_fresh_report(
+    artifact_root: &Path,
+    plan_revision: &str,
+) -> Result<String, ExecuteError> {
     let report_path = artifact_root.join(REPORT_FILE);
     let raw = fs::read(&report_path).map_err(|error| {
         ExecuteError::failed(format!(
@@ -1333,17 +1777,29 @@ fn validate_fresh_report(artifact_root: &Path, plan_revision: &str) -> Result<()
         },
         None => required_keys_valid(&value)?,
     }
-    let reported = value
+    let report_revision = value
+        .get("revision")
+        .and_then(Value::as_str)
+        .filter(|revision| !revision.is_empty())
+        .ok_or_else(|| {
+            ExecuteError::failed(format!("{REPORT_FILE} revision must be a non-empty string"))
+        })?;
+    let reported_plan_revision = value
         .get("plan_revision")
         .and_then(Value::as_str)
-        .unwrap_or("");
-    if reported != plan_revision {
+        .filter(|revision| !revision.is_empty())
+        .ok_or_else(|| {
+            ExecuteError::failed(format!(
+                "{REPORT_FILE} plan_revision must be a non-empty string"
+            ))
+        })?;
+    if reported_plan_revision != plan_revision {
         return Err(ExecuteError::failed(format!(
-            "{} plan_revision `{reported}` does not match plan.json revision `{plan_revision}`",
+            "{} plan_revision `{reported_plan_revision}` does not match plan.json revision `{plan_revision}`",
             report_path.display()
         )));
     }
-    Ok(())
+    Ok(report_revision.to_owned())
 }
 
 fn load_frozen_report_schema(artifact_root: &Path) -> Option<Value> {
@@ -1529,6 +1985,48 @@ fn emit_graph_yaml(
     yaml
 }
 
+fn emit_repair_yaml(
+    software_change: &str,
+    worker: &WorkerCli,
+    working_directory: &Path,
+    step: &PreparedStep,
+) -> String {
+    let mut yaml = String::from("type: graph\nworking_dir: ");
+    yaml.push_str(&yaml_double_quoted(&path_to_string(working_directory)));
+    yaml.push_str("\nmax_active_steps: 1\nsteps:\n");
+    yaml.push_str("  - name: ");
+    yaml.push_str(&yaml_double_quoted(&step.name));
+    yaml.push('\n');
+    yaml.push_str("    action: exec\n");
+    yaml.push_str("    with:\n");
+    yaml.push_str("      command: ");
+    yaml.push_str(&yaml_double_quoted(software_change));
+    yaml.push('\n');
+    yaml.push_str("      args:\n");
+    let mut args = vec![
+        "stdin-exec".to_owned(),
+        "--exit-mode".to_owned(),
+        "propagate".to_owned(),
+        "--stdin-file".to_owned(),
+        step.stdin_path.clone(),
+        "--".to_owned(),
+        worker.command.clone(),
+    ];
+    args.extend(worker.args.iter().cloned());
+    for arg in args {
+        yaml.push_str("        - ");
+        yaml.push_str(&yaml_double_quoted(&arg));
+        yaml.push('\n');
+    }
+    yaml.push_str("    stdout: ");
+    yaml.push_str(&yaml_double_quoted(&step.stdout_path));
+    yaml.push('\n');
+    yaml.push_str("    stderr: ");
+    yaml.push_str(&yaml_double_quoted(&step.stderr_path));
+    yaml.push('\n');
+    yaml
+}
+
 fn yaml_double_quoted(value: &str) -> String {
     let mut out = String::from("\"");
     for ch in value.chars() {
@@ -1566,6 +2064,33 @@ fn project_task_finding_context(
             .map_err(ExecuteError::failed)?;
     object.insert("finding_context".to_owned(), Value::Array(findings));
     Ok(task)
+}
+
+fn repair_stdin(
+    artifact_root: &Path,
+    plan_revision: &str,
+    pre_report_revision: &str,
+    pre_repository_state_sha256: &str,
+    findings: &[Value],
+) -> Result<String, ExecuteError> {
+    let location = serde_json::to_string(&ArtifactRootContext {
+        artifact_root: &path_to_string(artifact_root),
+    })
+    .map_err(|error| ExecuteError::failed(format!("could not serialize location JSON: {error}")))?;
+    let assignment = serde_json::to_string(&RepairAssignment {
+        kind: AD_HOC_REPAIR_STEP,
+        plan_revision,
+        pre_report_revision,
+        pre_repository_state_sha256,
+        findings,
+        instruction: REPAIR_ASSIGNMENT_INSTRUCTION,
+    })
+    .map_err(|error| {
+        ExecuteError::failed(format!(
+            "could not serialize ad-hoc repair assignment: {error}"
+        ))
+    })?;
+    Ok(format!("{location}\n---\n\n{assignment}"))
 }
 
 fn task_stdin(artifact_root: &Path, task: &Value) -> Result<String, ExecuteError> {

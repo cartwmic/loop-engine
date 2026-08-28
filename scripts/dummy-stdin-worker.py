@@ -11,12 +11,15 @@ visible from that cwd before the worker succeeds. ``--inspect-operating-context`
 reads ``artifact_root/intent.json`` and records its frozen operating context
 beside the receipt.
 
-Detects the summarizer assignment after the compact location JSON separator.
-Only that summarizer invocation may write ``artifact_root/implementation-report.json``;
-ordinary dummy tasks never write that file. Pass ``--no-report`` to skip the
-summarizer write (missing-report proofs). When ``PI_CODING_AGENT_SESSION_DIR``
-is set (stdin-exec colocation), writes a dummy session marker there so journeys
-can name session traces without a live model. Does not call a model.
+Detects the summarizer and the ad-hoc-repair assignment after the compact
+location JSON separator. Only those assignments may write
+``artifact_root/implementation-report.json``; ordinary dummy tasks never write
+that file. Pass ``--no-report`` to skip the summarizer write (missing-report
+proofs). Repair assignments may use ``--repair-revision-file`` to select the
+report revision and write a small controlled effect in the worker cwd. When
+``PI_CODING_AGENT_SESSION_DIR`` is set (stdin-exec colocation), writes a dummy
+session marker there so journeys can name session traces without a live model.
+Does not call a model.
 """
 
 from __future__ import annotations
@@ -49,17 +52,17 @@ def split_stdin(stdin: str) -> tuple[dict[str, object], str, bool]:
     return location, rest, rest.startswith(SUMMARIZER_PREFIX)
 
 
-def parse_task_id(rest: str, is_summarizer: bool) -> str | None:
-    if is_summarizer:
-        return "summarizer"
+def parse_assignment(rest: str) -> tuple[str | None, bool]:
     try:
-        task = json.loads(rest)
+        value = json.loads(rest)
     except json.JSONDecodeError:
-        return None
-    task_id = task.get("id") if isinstance(task, dict) else None
+        return None, False
+    if isinstance(value, dict) and value.get("kind") == "ad-hoc-repair":
+        return "ad-hoc-repair", True
+    task_id = value.get("id") if isinstance(value, dict) else None
     if isinstance(task_id, str) and task_id:
-        return task_id
-    return None
+        return task_id, False
+    return None, False
 
 
 def receipt_destination(receipt: Path, task_id: str | None) -> Path:
@@ -74,12 +77,13 @@ def receipt_destination(receipt: Path, task_id: str | None) -> Path:
     return receipt
 
 
-def write_valid_report(location: dict[str, object]) -> None:
+def write_valid_report(location: dict[str, object], revision: str | None = None) -> None:
     artifact_root = location.get("artifact_root")
     plan_path = location.get("plan_path")
     if not isinstance(artifact_root, str) or not artifact_root:
         return
-    revision = ""
+    if revision is None:
+        revision = ""
     resolved_plan = plan_path if isinstance(plan_path, str) and plan_path else str(
         Path(artifact_root) / "plan.json"
     )
@@ -88,15 +92,14 @@ def write_valid_report(location: dict[str, object]) -> None:
     except (OSError, json.JSONDecodeError):
         plan = {}
     found = plan.get("revision") if isinstance(plan, dict) else None
-    if isinstance(found, str) and found:
-        revision = found
+    plan_revision = found if isinstance(found, str) and found else ""
     report = {
-        "revision": "1",
+        "revision": revision or "1",
         "author": {"name": "dummy-stdin-worker", "kind": "script"},
-        "plan_revision": revision,
+        "plan_revision": plan_revision,
         "coverage": {
             "commit": "dummy",
-            "documents": [{"path": "plan.json", "revision": revision or "none"}],
+            "documents": [{"path": "plan.json", "revision": plan_revision or "none"}],
         },
         "summary": "dummy summarizer wrote this report",
         "changed_surface": ["dummy"],
@@ -164,6 +167,16 @@ def main() -> int:
         default=None,
         help="Require this path, relative to the process cwd, before succeeding",
     )
+    parser.add_argument(
+        "--repair-revision-file",
+        default=None,
+        help="Read the implementation-report revision for an ad-hoc repair",
+    )
+    parser.add_argument(
+        "--repair-effect-file",
+        default=None,
+        help="Write this path from an ad-hoc repair worker",
+    )
     args = parser.parse_args()
 
     raw = sys.stdin.buffer.read()
@@ -176,7 +189,9 @@ def main() -> int:
             compact_location = {}
         if isinstance(compact_location, dict):
             location = compact_location
-    task_id = parse_task_id(rest, is_summarizer)
+    task_id, is_repair = parse_assignment(rest)
+    if is_summarizer:
+        task_id = "summarizer"
     dest = receipt_destination(Path(args.receipt), task_id)
     dest.write_bytes(raw)
     dest.with_name(dest.name + ".pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
@@ -229,8 +244,29 @@ def main() -> int:
 
     if is_summarizer and not args.no_report:
         write_valid_report(location)
+    if is_repair:
+        revision = None
+        if args.repair_revision_file:
+            try:
+                revision = Path(args.repair_revision_file).read_text(encoding="utf-8").strip()
+            except OSError as error:
+                print(f"could not read repair revision file: {error}", file=sys.stderr)
+                return 1
+        if not revision:
+            assignment = json.loads(rest)
+            pre_revision = assignment.get("pre_report_revision", "")
+            revision = f"{pre_revision}-repaired"
+        if args.repair_effect_file:
+            Path(args.repair_effect_file).write_text(
+                f"ad-hoc repair {revision}\n", encoding="utf-8"
+            )
+        else:
+            Path.cwd().joinpath("ad-hoc-repair-effect.txt").write_text(
+                f"ad-hoc repair {revision}\n", encoding="utf-8"
+            )
+        write_valid_report(location, revision)
 
-    if not is_summarizer and args.fail_task and task_id == args.fail_task:
+    if not is_summarizer and not is_repair and args.fail_task and task_id == args.fail_task:
         return 1
     return args.exit_code
 
