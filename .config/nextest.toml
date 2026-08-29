@@ -18,6 +18,13 @@ slow-timeout = { period = "30s", terminate-after = 2, grace-period = "0s", on-ti
 filter = 'test(deferred_readers_with_large_payload_start_in_parallel)'
 threads-required = "num-cpus"
 
+# This test starts loop-engine repeatedly to verify the public change-report
+# boundary. Reserve the configured slots for it so separate test processes do
+# not turn ordinary hosted-runner contention into a false 60-second timeout.
+[[profile.default.overrides]]
+filter = 'test(show_projects_durable_change_report_without_capture_files)'
+threads-required = "num-cpus"
+
 [[profile.default.overrides]]
 filter = 'test(process_timeout_probe)'
 slow-timeout = { period = "1s", terminate-after = 1, grace-period = "0s", on-timeout = "fail" }

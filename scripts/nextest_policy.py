@@ -18,6 +18,7 @@ except ModuleNotFoundError:  # Python 3.10 on older supported CI images.
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / ".config/nextest.toml"
 PINNED_VERSION = "0.9.143"
+SLOT_RESERVED_TEST = "show_projects_durable_change_report_without_capture_files"
 TIMEOUT_TEST = "process_timeout_probe"
 
 
@@ -115,7 +116,22 @@ def validate_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
 
     overrides = default.get("overrides")
     if not isinstance(overrides, list):
-        raise PolicyError("profile.default.overrides must contain the timeout probe override")
+        raise PolicyError("profile.default.overrides must contain the required test overrides")
+    slot_overrides = [
+        override
+        for override in overrides
+        if isinstance(override, dict)
+        and override.get("filter") == f"test({SLOT_RESERVED_TEST})"
+    ]
+    if len(slot_overrides) != 1:
+        raise PolicyError(
+            f"profile.default must contain exactly one test({SLOT_RESERVED_TEST}) override"
+        )
+    if slot_overrides[0].get("threads-required") != "num-cpus":
+        raise PolicyError(
+            f"test({SLOT_RESERVED_TEST}) threads-required must be 'num-cpus'"
+        )
+
     probe_overrides = [
         override
         for override in overrides
@@ -141,6 +157,8 @@ def validate_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
             "status_level": default["status-level"],
             "final_status_level": default["final-status-level"],
             "ordinary_slow_timeout": _timeout_summary(ordinary_timeout),
+            "slot_reserved_filter": f"test({SLOT_RESERVED_TEST})",
+            "slot_reserved_threads_required": slot_overrides[0]["threads-required"],
             "timeout_probe_filter": f"test({TIMEOUT_TEST})",
             "timeout_probe_slow_timeout": _timeout_summary(probe_overrides[0]["slow-timeout"]),
             "test_threads": default.get("test-threads", "num-cpus (nextest default)"),
@@ -219,6 +237,9 @@ final-status-level = \"slow\"
 test-threads = 4
 slow-timeout = { period = \"30s\", terminate-after = 2, grace-period = \"0s\", on-timeout = \"fail\" }
 [[profile.default.overrides]]
+filter = 'test(show_projects_durable_change_report_without_capture_files)'
+threads-required = \"num-cpus\"
+[[profile.default.overrides]]
 filter = 'test(process_timeout_probe)'
 slow-timeout = { period = \"1s\", terminate-after = 1, grace-period = \"0s\", on-timeout = \"fail\" }
 """
@@ -230,10 +251,24 @@ slow-timeout = { period = \"1s\", terminate-after = 1, grace-period = \"0s\", on
             raise PolicyError("policy self-test did not preserve the pinned version")
 
         invalid = Path(directory) / "invalid.toml"
-        invalid.write_text(valid.replace('terminate-after = 2', 'terminate-after = 1'), encoding="utf-8")
+        invalid.write_text(
+            valid.replace('terminate-after = 2', 'terminate-after = 1'),
+            encoding="utf-8",
+        )
         try:
             validate_config(invalid)
         except PolicyError:
             pass
         else:
             raise PolicyError("policy self-test accepted an invalid timeout")
+
+        invalid.write_text(
+            valid.replace('threads-required = \"num-cpus\"', 'threads-required = 1'),
+            encoding="utf-8",
+        )
+        try:
+            validate_config(invalid)
+        except PolicyError:
+            pass
+        else:
+            raise PolicyError("policy self-test accepted an invalid slot reservation")
