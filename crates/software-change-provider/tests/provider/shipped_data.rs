@@ -1257,7 +1257,7 @@ fn constructor_rejects_draft_slots_and_accepts_intent_and_adversarial_review() {
         &object(&high_rigor["review_policies"], "review_policies")["intent-review"],
         "intent-review policies",
     );
-    for (worker_index, worker_pair) in binding_args[1..].chunks_exact(2).enumerate() {
+    for (worker_index, worker_pair) in binding_args[1..].as_chunks::<2>().0.iter().enumerate() {
         assert_eq!(worker_pair[0], "--worker");
         let worker: Value = serde_json::from_str(string(&worker_pair[1], "constructor worker"))
             .expect("constructor worker must be JSON");
