@@ -21,7 +21,7 @@ const ADVERSARIAL_GATES: &[&str] = &[
 const RETIRED_GATES: &[&str] = &["intent", "validation"];
 
 fn shipped_text(relative: &str) -> String {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
+    let path = workspace_integration::package_root("software-change-provider").join(relative);
     fs::read_to_string(&path).unwrap_or_else(|error| panic!("could not read {path:?}: {error}"))
 }
 const SUBJECTS: &[&str] = &[
@@ -40,7 +40,10 @@ const PROMPT_GUARDS: &[&str] = &[
 ];
 
 fn load_profile(profile: &str) -> Value {
-    let path = format!("{}/data/configs/{profile}.json", env!("CARGO_MANIFEST_DIR"));
+    let path = workspace_integration::package_root("software-change-provider")
+        .join(format!("data/configs/{profile}.json"))
+        .to_string_lossy()
+        .into_owned();
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("could not read shipped config {path}: {error}"));
     serde_json::from_str(&text).unwrap_or_else(|error| panic!("invalid JSON in {path}: {error}"))
@@ -181,7 +184,7 @@ fn parent_gate(adversarial: &str) -> &'static str {
 }
 
 fn describe_profile(config: &Value) -> Value {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_software-change"));
+    let mut command = Command::new(workspace_integration::binary("software-change"));
     let request = json!({"operation": "describe", "initial_input": config});
     let output = super::bounded_process::run_with_stdin(
         &mut command,
@@ -1135,7 +1138,7 @@ fn run_review_constructor(
     slot: &str,
     roster: &std::path::Path,
 ) -> Result<Value, String> {
-    let crate_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let crate_dir = workspace_integration::package_root("software-change-provider");
     let output = Command::new("jq")
         .args([
             "--arg",
@@ -1181,7 +1184,7 @@ fn run_review_constructor(
 
 #[test]
 fn constructor_rejects_draft_slots_and_accepts_intent_and_adversarial_review() {
-    let crate_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let crate_dir = workspace_integration::package_root("software-change-provider");
     let profile = crate_dir.join("data/configs/high-rigor.json");
     let temp = std::env::temp_dir().join(format!(
         "software-change-constructor-{}",

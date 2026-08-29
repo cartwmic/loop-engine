@@ -17,14 +17,13 @@ use loop_integrations::{
     SqlitePersistence, SubprocessProviderGateway,
 };
 use loop_reference_fixtures::{
-    agents_policy_input, document_policy, fixture_binary, policy_document_initial_input,
-    policy_document_workflow, readme_policy_input, research_artifact_schemas, research_brief,
-    research_initial_input, research_policy_set_a, research_report, research_review_context,
-    research_revision_links, research_sources, research_verification, research_workflow,
-    software_change_initial_input, software_change_policy_set_a, software_change_policy_set_b,
-    software_change_review_context, software_change_workflow, DESIGN_REVIEW_GATE,
-    IMPLEMENTATION_REVIEW_GATE, PLAN_REVIEW_GATE, RESEARCH_SYNTHESIZE_GATE, RESEARCH_VERIFY_GATE,
-    VALIDATION_GATE,
+    agents_policy_input, document_policy, policy_document_initial_input, policy_document_workflow,
+    readme_policy_input, research_artifact_schemas, research_brief, research_initial_input,
+    research_policy_set_a, research_report, research_review_context, research_revision_links,
+    research_sources, research_verification, research_workflow, software_change_initial_input,
+    software_change_policy_set_a, software_change_policy_set_b, software_change_review_context,
+    software_change_workflow, DESIGN_REVIEW_GATE, IMPLEMENTATION_REVIEW_GATE, PLAN_REVIEW_GATE,
+    RESEARCH_SYNTHESIZE_GATE, RESEARCH_VERIFY_GATE, VALIDATION_GATE,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -222,7 +221,7 @@ fn reference_resolver() -> ConfiguredProviderResolver {
         (
             SOFTWARE_ALIAS,
             ProviderInvocation::new(
-                fixture_binary("software-change-provider")
+                workspace_integration::fixture_binary("software-change-provider")
                     .to_string_lossy()
                     .into_owned(),
                 Vec::<String>::new(),
@@ -231,7 +230,7 @@ fn reference_resolver() -> ConfiguredProviderResolver {
         (
             DOCUMENT_ALIAS,
             ProviderInvocation::new(
-                fixture_binary("policy-document-provider")
+                workspace_integration::fixture_binary("policy-document-provider")
                     .to_string_lossy()
                     .into_owned(),
                 Vec::<String>::new(),
@@ -240,7 +239,7 @@ fn reference_resolver() -> ConfiguredProviderResolver {
         (
             RESEARCH_ALIAS,
             ProviderInvocation::new(
-                fixture_binary("research-provider")
+                workspace_integration::fixture_binary("research-provider")
                     .to_string_lossy()
                     .into_owned(),
                 Vec::<String>::new(),
@@ -249,7 +248,7 @@ fn reference_resolver() -> ConfiguredProviderResolver {
         (
             PROVIDER_ALIAS,
             ProviderInvocation::new(
-                fixture_binary("software-change-provider")
+                workspace_integration::fixture_binary("software-change-provider")
                     .to_string_lossy()
                     .into_owned(),
                 Vec::<String>::new(),
@@ -739,8 +738,8 @@ fn software_change_stored_association_and_workflow_snapshot_evolution_is_durable
     let wrapper_dir = tempdir()?;
     let wrapper = wrapper_dir.path().join("stored-provider.sh");
     let request_log = wrapper_dir.path().join("requests.json");
-    let software_fixture = fixture_binary("software-change-provider");
-    let policy_fixture = fixture_binary("policy-document-provider");
+    let software_fixture = workspace_integration::fixture_binary("software-change-provider");
+    let policy_fixture = workspace_integration::fixture_binary("policy-document-provider");
     let original_workflow = software_change_workflow();
     write_provider_wrapper(
         &wrapper,

@@ -21,7 +21,7 @@ raise SystemExit(code)
 "#;
 
 fn engine() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+    Command::new(workspace_integration::binary("loop-engine"))
 }
 
 fn write_inspector(directory: &Path) -> std::path::PathBuf {

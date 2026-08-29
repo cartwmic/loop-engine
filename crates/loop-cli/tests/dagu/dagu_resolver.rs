@@ -11,7 +11,7 @@ use tempfile::tempdir;
 use loop_cli::{names_for_capture_root, write_locator, DaguLocator};
 
 fn engine() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+    Command::new(workspace_integration::binary("loop-engine"))
 }
 
 fn prepend_path(directory: &Path) -> OsString {

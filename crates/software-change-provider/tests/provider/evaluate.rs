@@ -225,11 +225,14 @@ fn evaluate_accepts_concise_selected_origin_and_engine_metadata_only() {
 }
 
 fn run_provider(request: Value) -> Output {
-    run_provider_in(Path::new(env!("CARGO_MANIFEST_DIR")), request)
+    run_provider_in(
+        &workspace_integration::package_root("software-change-provider"),
+        request,
+    )
 }
 
 fn run_provider_in(directory: &Path, request: Value) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_software-change"));
+    let mut command = Command::new(workspace_integration::binary("software-change"));
     command.current_dir(directory);
     let request = serde_json::to_vec(&request).expect("serialize provider request");
     super::bounded_process::run_with_stdin(
@@ -527,7 +530,7 @@ fn every_checked_reference_route_is_accepted_when_obligations_are_empty() {
             .success());
     }
     for phase in ["implementation", "validation"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_software-change"))
+        let output = Command::new(workspace_integration::binary("software-change"))
             .args([
                 "checkpoint",
                 "--phase",

@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 repository.workspace = true
+autotests = false
 
 [package.metadata.dist]
 dist = true
@@ -17,7 +18,3 @@ path = "src/main.rs"
 loop-core = { path = "../loop-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
-[dev-dependencies]
-loop-integrations = { path = "../loop-integrations" }
-sha2 = "0.10"

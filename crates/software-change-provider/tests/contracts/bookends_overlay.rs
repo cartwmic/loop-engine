@@ -144,7 +144,7 @@ fn axis_ids(policies: &Value, gate: &str) -> Vec<String> {
 }
 
 fn run_provider_in(cwd: &Path, request: Value) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_software-change"));
+    let mut command = Command::new(workspace_integration::binary("software-change"));
     command.current_dir(cwd);
     let bytes = serde_json::to_vec(&request).expect("serialize request");
     super::bounded_process::run_with_stdin(&mut command, "bookends overlay provider", &bytes)

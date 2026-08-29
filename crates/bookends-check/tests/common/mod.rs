@@ -97,5 +97,5 @@ fn git(repo: &Path, args: &[&str]) {
 }
 
 pub fn bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_bookends-check"))
+    workspace_integration::binary("bookends-check")
 }

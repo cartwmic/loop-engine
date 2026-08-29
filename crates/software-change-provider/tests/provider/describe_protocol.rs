@@ -2,7 +2,7 @@ use serde_json::json;
 use std::process::{Command, Output};
 
 fn invoke(input: &[u8]) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_software-change"));
+    let mut command = Command::new(workspace_integration::binary("software-change"));
     super::bounded_process::run_with_stdin(&mut command, "software-change describe protocol", input)
         .expect("software-change process should exit")
         .output

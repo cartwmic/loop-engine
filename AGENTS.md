@@ -42,26 +42,72 @@ For late findings, follow the provider skill's proportional guide: keep validati
 
 ## Workflow
 
-Build the engine and the reference providers, then run the repository baseline:
+Build the engine and the reference providers, then run the repository baseline. The dependency audit requires the exact `cargo-machete` version checked by its repository command:
 
 ```sh
+cargo install cargo-machete --version 0.9.2 --locked
+python3 scripts/dependency-audit.py
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
-Use focused stock Cargo commands while iterating; they do not replace the workspace completion gate. `--test NAME` names a retained suite root, not a former source module:
+Use focused commands while iterating; they do not replace the workspace completion gate. Package integration roots are now imported as modules by the one central target, so `--test NAME` names `workspace`, not a former source module:
 
 ```sh
 cargo test -p loop-cli --lib
-cargo test -p loop-cli --test engine       # engine, workers, or dagu
 cargo test -p software-change-provider --lib
-cargo test -p software-change-provider --test contracts  # contracts, provider, cli, or plan_graph
+python3 scripts/run-nextest.py --filter TEST_SUBSTRING
+python3 scripts/run-central-tests.py --filter TEST_SUBSTRING
+```
+
+`run-nextest.py` is the supported fresh-binary command. It builds the current
+five production binaries and three `loop-reference-fixtures` binaries,
+exports their direct active-target paths through
+`LOOP_ENGINE_TEST_BINARY_HANDOFF`, runs workspace unit tests and
+`workspace-integration/workspace` with pinned cargo-nextest, then runs Cargo
+doctests. It rejects stale, hashed, outside-target, missing, and
+non-executable handoffs. Inspect the one-target contract with:
+
+```sh
+python3 scripts/run-central-tests.py \
+  --no-run \
+  --compiler-artifacts /tmp/central-test-artifacts.jsonl \
+  --handoff-output /tmp/stock-cargo-handoff.json
+python3 scripts/assert-test-topology.py --compiler-artifacts /tmp/central-test-artifacts.jsonl
+python3 scripts/assert-test-inventory.py \
+  --compiler-artifacts /tmp/central-test-artifacts.jsonl --current-only
+```
+
+The topology check uses Cargo metadata and compiler artifacts and requires
+exactly one integration-test executable across the workspace. The inventory
+check maps the emitted names to every retained source declaration. The
+central runner's `--handoff-output` is only for the following independent
+stock compatibility gate; it is not a second test runner:
+
+```sh
+LOOP_ENGINE_TEST_BINARY_HANDOFF=/tmp/stock-cargo-handoff.json \
+  cargo test --workspace
+```
+
+The local cache proof is `python3 scripts/sccache-proof.py proof --artifact
+/tmp/testing-sccache.json`; it compiles equivalent real workspace inputs into
+two temporary target directories, requires a positive warm hit, and never uses
+`cargo clean`. The required preflight pins sccache 0.17.0, cargo-nextest
+0.9.143, and cargo-machete 0.9.2, starts the credential-free GitHub Actions
+cache before any Cargo compilation, and emits final cache statistics. Run the
+whole dependency audit with:
+
+```sh
+cargo install cargo-machete --version 0.9.2 --locked
+python3 scripts/dependency-audit.py
 ```
 
 For an enabled repository, run `scripts/bookends-check-gate.sh` from the repository root in pre-push and required CI. It emits `GREEN`, `RED`, or `BYPASS`; only an explicit `BOOKENDS_BYPASS=<class>:<reason>` may bypass a red repository gate, and that output is the invocation evidence. The parser-only candidate command is `bookends-check candidate PRD.md`. Bookends does not load README.md or AGENTS.md as coverage classes. The optional software-change overlay is off unless a per-run profile sets `extra.bookends.enabled` to JSON `true`; its driver and bound-worker citation procedure is in the provider skill.
 
-CI preflight also runs `scripts/bookends-check-gate.sh` without a bypass, `dist generate --check`, `scripts/assert-dist-plan.py`, `scripts/assert-release-gates.py`, `scripts/assert-push-main-preflight.py`, `scripts/assert-generate-prd-profile.py`, `scripts/generate-prd-journey.py --self-test`, the software-change, policy-document, and research journey interface self-tests, a locked build of the four release packages plus `bookends-check`, the software-change source journey (`--mode source --traversal-depth full` against high-rigor), both policy-document source journey modes, the research source journey, and the Generate-PRD source journey.
+The reusable CI preflight installs and checks pinned cargo-nextest, sccache, and cargo-machete, starts sccache before Cargo compilation, then runs `python3 scripts/dependency-audit.py`, `python3 scripts/run-nextest.py`, `python3 scripts/prove-nextest-timeout.py`, the central one-target and current-inventory assertions, the direct `cargo test --workspace` compatibility gate with a fresh binary handoff, workspace clippy/fmt, locked package builds, `scripts/bookends-check-gate.sh` without a bypass, `dist generate --check`, `scripts/assert-dist-plan.py`, `scripts/assert-release-gates.py`, `scripts/assert-push-main-preflight.py`, `scripts/assert-generate-prd-profile.py`, the journey interface self-tests, and all four public source journeys. Each is a separate serialized step; `.github/workflows/release.yml` remains cargo-dist-generated.
+
+The driver-owned final stable-revision matrix is serialized in this order: tool installation and checks, dependency audit, generated-release assertions, Bookends, ordinary nextest plus doctests, timeout proof, central topology/inventory, stock `cargo test --workspace`, clippy/fmt and locked builds, no-argument discovery surfaces, the Generate-PRD profile check, journey self-tests, public source journeys, and final hosted sccache statistics/total wall time. T06's implementation report records the pending matrix explicitly and does not claim hosted execution. After one owner-approved commit, run the push-to-main preflight for that exact commit and require its hosted sccache startup, final statistics, and total wall time to pass before Package 7b.
 
 Public-boundary Python journeys are required validation for every in-scope change. Workspace `cargo test` / clippy / fmt do not substitute for them. Build the four release packages, then run the journeys that cover the public boundary you touched; if that boundary is unclear, run all three source journeys.
 

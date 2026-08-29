@@ -17,16 +17,41 @@ ROOT = Path(__file__).resolve().parents[1]
 # Final-integration-proof command matrix, stored as Python data so quoted
 # pipefail commands are not re-encoded through a shell.
 FINAL_MATRIX_COMMANDS = [
+    "cargo install cargo-nextest --version 0.9.143 --locked",
+    "cargo install cargo-machete --version 0.9.2 --locked",
+    "python3 scripts/assert-nextest.py --self-test",
+    "python3 scripts/assert-nextest.py",
+    "python3 scripts/assert-test-topology.py --self-test",
+    "python3 scripts/assert-test-inventory.py --self-test",
+    "python3 scripts/sccache-proof.py --self-test",
+    "python3 scripts/assert-push-main-preflight.py --self-test",
+    "python3 scripts/dependency-audit.py",
+    "dist generate --check",
+    "dist plan --output-format=json > /tmp/loop-engine-dist-plan.json",
+    "python3 scripts/assert-dist-plan.py --self-test",
+    "python3 scripts/assert-dist-plan.py /tmp/loop-engine-dist-plan.json",
+    "python3 scripts/assert-release-gates.py",
+    "python3 scripts/assert-push-main-preflight.py",
+    "env -u BOOKENDS_BYPASS scripts/bookends-check-gate.sh",
+    "python3 scripts/run-nextest.py",
+    "python3 scripts/prove-nextest-timeout.py --report <artifact_root>/testing-nextest-timeout.json",
+    "python3 scripts/run-central-tests.py --no-run --compiler-artifacts <artifact_root>/central-test-artifacts.jsonl --handoff-output <artifact_root>/stock-cargo-handoff.json",
+    "python3 scripts/assert-test-topology.py --repo <checkout> --compiler-artifacts <artifact_root>/central-test-artifacts.jsonl",
+    "python3 scripts/assert-test-inventory.py --repo <checkout> --compiler-artifacts <artifact_root>/central-test-artifacts.jsonl --current-only",
     "cargo test --workspace",
     "cargo clippy --workspace --all-targets -- -D warnings",
     "cargo fmt --all -- --check",
     "cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider -p bookends-check",
     "cargo test -p bookends-check --offline",
     "cargo test -p software-change-provider --offline",
+    "python3 scripts/assert-generate-prd-profile.py",
+    "python3 scripts/software-change-journey.py",
+    "python3 scripts/policy-document-journey.py",
+    "python3 scripts/research-journey.py",
+    "python3 scripts/generate-prd-journey.py",
     "python3 scripts/software-change-journey.py --self-test",
     "python3 scripts/research-journey.py --self-test",
     "python3 scripts/generate-prd-journey.py --self-test",
-    "python3 scripts/assert-generate-prd-profile.py",
     r"bash -o pipefail -c 'python3 scripts/software-change-journey.py --self-test | tee /tmp/loop-engine-software-change-self-test.log && rg -q ^worker-data\ skill/root\ policy\ assertions\ passed$ /tmp/loop-engine-software-change-self-test.log'",
     r"bash -o pipefail -c 'env -u BOOKENDS_BYPASS python3 scripts/software-change-journey.py --mode source --engine target/debug/loop-engine --provider target/debug/software-change --data-root $PWD --work-root ${TMPDIR:-/tmp}/loop-engine-software-change-journey --profile crates/software-change-provider/data/configs/high-rigor.json --traversal-depth full | tee /tmp/loop-engine-software-change-source.log && rg -q contracted\ fan-out\ failure /tmp/loop-engine-software-change-source.log && rg -q bookends-enabled\ external\ scenario\ passed: /tmp/loop-engine-software-change-source.log && rg -q LE-2\ topology\ scenarios\ passed:\ malformed\ rejected,\ cyclic\ topology\ accepted /tmp/loop-engine-software-change-source.log && rg -q LE-11\ frozen-run\ scenario\ passed:\ changed\ describe\ did\ not\ alter\ show /tmp/loop-engine-software-change-source.log && rg -q LE-12\ unsupported-action\ scenario\ passed:\ explicit\ and\ operational\ errors\ preserved\ state /tmp/loop-engine-software-change-source.log && rg -q LE-13\ final-state\ scenario\ passed:\ outgoing\ transition\ rejected\ before\ run\ creation /tmp/loop-engine-software-change-source.log && rg -q LE-14\ initially-final\ scenario\ passed:\ run\ created\ final /tmp/loop-engine-software-change-source.log && rg -q LE-15\ terminal-mutation\ scenario\ passed:\ append/event/terminate\ rejected\ without\ history\ change /tmp/loop-engine-software-change-source.log'",
     "for mode in draft audit; do python3 scripts/policy-document-journey.py --engine target/debug/loop-engine --provider target/debug/policy-document --profile crates/policy-document-provider/data/readme.json --mode $mode; done",
@@ -34,24 +59,31 @@ FINAL_MATRIX_COMMANDS = [
     "python3 scripts/generate-prd-journey.py --mode source --engine target/debug/loop-engine --provider target/debug/research --checker target/debug/bookends-check --profile crates/research-provider/data/configs/generate-prd.json",
     "software-change packaged public journey with an empty temporary data-root",
     "research packaged public journey with an empty temporary data-root",
-    "env -u BOOKENDS_BYPASS scripts/bookends-check-gate.sh",
     "isolated temporary GIT_INDEX_FILE with all worktree paths staged, env -u BOOKENDS_BYPASS scripts/bookends-check-gate.sh",
-    "dist generate --check",
-    "dist plan --output-format=json > /tmp/loop-engine-dist-plan.json",
-    "python3 scripts/assert-dist-plan.py --self-test",
-    "python3 scripts/assert-dist-plan.py /tmp/loop-engine-dist-plan.json",
-    "python3 scripts/assert-release-gates.py",
-    "python3 scripts/assert-push-main-preflight.py",
-    "python3 scripts/assert-implementation-report.py --self-test",
-    "git diff --check",
     "outside-checkout public binary smoke for fan-out retry, checkpoint, and help",
     "software-change checkpoint --phase implementation --artifact-root <artifact_root> --working-directory <checkout>",
+    "push-to-main required preflight for exact final commit (hosted sccache startup, final statistics, and total wall time)",
+    "python3 scripts/assert-implementation-report.py --self-test",
+    "git diff --check",
 ]
 REPORT_CHECK_COMMAND = (
     "python3 scripts/assert-implementation-report.py --report "
     "<artifact_root>/implementation-report.json --revision {revision} "
     "--plan-revision {plan_revision}"
 )
+DRAFT_PENDING_PREFIX = "PENDING (driver-owned final matrix; not run): "
+
+
+def draft_validation(revision: str, plan_revision: str) -> list[str]:
+    """Represent the complete matrix without falsely claiming pending work."""
+    values: list[str] = []
+    for item in expected_validation(revision, plan_revision):
+        if item.endswith(": passed"):
+            item = item[: -len(": passed")]
+        values.append(DRAFT_PENDING_PREFIX + item)
+    return values
+
+
 PROOF_MARKERS = [
     "worker-data skill/root policy assertions passed",
     "contracted fan-out failure",
@@ -136,6 +168,35 @@ def assert_equal(label: str, actual: Any, expected: Any) -> None:
         raise ReportError(f"{label} mismatch: expected {expected!r}, got {actual!r}")
 
 
+def check_validation(report: dict[str, Any], revision: str, plan_revision: str) -> None:
+    actual = report.get("validation")
+    expected = expected_validation(revision, plan_revision)
+    if not isinstance(actual, list) or not all(isinstance(item, str) for item in actual):
+        raise ReportError("validation must be a string array")
+    if not any(item.startswith(DRAFT_PENDING_PREFIX) for item in actual):
+        assert_equal("validation", actual, expected)
+        return
+
+    # A T06 implementation report is a provider-schema-valid draft.  Every
+    # final-matrix item must be represented exactly once as either a real
+    # passed string or an explicitly pending string; no other status is valid.
+    normalized: list[str] = []
+    for item in actual:
+        if item.startswith(DRAFT_PENDING_PREFIX):
+            pending = item[len(DRAFT_PENDING_PREFIX) :]
+            normalized.append(pending + ": passed" if pending not in PROOF_MARKERS else pending)
+        elif item in expected:
+            normalized.append(item)
+        else:
+            raise ReportError(f"draft validation contains an unknown item: {item!r}")
+    assert_equal("draft validation order/items", normalized, expected)
+    summary = report.get("summary")
+    if not isinstance(summary, str) or "driver-owned" not in summary or "not claimed as passed" not in summary:
+        raise ReportError(
+            "draft summary must name the driver-owned final matrix and say pending work is not claimed as passed"
+        )
+
+
 def check_report(
     path: Path,
     *,
@@ -153,11 +214,7 @@ def check_report(
         raise ReportError("coverage must be a JSON object")
     assert_equal("coverage.commit", coverage.get("commit"), f"{head}+uncommitted-worktree")
     assert_equal("changed_surface", report.get("changed_surface"), changed_paths)
-    assert_equal(
-        "validation",
-        report.get("validation"),
-        expected_validation(revision, plan_revision),
-    )
+    check_validation(report, revision, plan_revision)
 
 
 def write_report(path: Path, report: dict[str, Any]) -> None:
@@ -213,7 +270,20 @@ def self_test() -> int:
         if marker not in pipefail[1]:
             raise AssertionError(f"source-journey pipefail command lost focused marker {marker}")
 
+    draft = copy.deepcopy(passing)
+    draft["summary"] = (
+        "T06 draft: the driver-owned final matrix is explicitly pending and is not claimed as passed."
+    )
+    draft["validation"] = draft_validation(revision, plan_revision)
+
     tampered: list[tuple[str, dict[str, Any]]] = []
+    draft_missing = copy.deepcopy(draft)
+    draft_missing["validation"] = draft_missing["validation"][:-1]
+    tampered.append(("draft-omission", draft_missing))
+
+    draft_unknown = copy.deepcopy(draft)
+    draft_unknown["validation"][0] = DRAFT_PENDING_PREFIX + "unknown command"
+    tampered.append(("draft-unknown", draft_unknown))
 
     wrong_revision = copy.deepcopy(passing)
     wrong_revision["revision"] = "tampered"
@@ -259,6 +329,18 @@ def self_test() -> int:
             )
         except ReportError as error:
             raise AssertionError(f"self-test rejected passing report: {error}") from error
+
+        write_report(report_path, draft)
+        try:
+            check_report(
+                report_path,
+                revision=revision,
+                plan_revision=plan_revision,
+                head=head,
+                changed_paths=changed_paths,
+            )
+        except ReportError as error:
+            raise AssertionError(f"self-test rejected honest draft report: {error}") from error
 
         rejected: list[str] = []
         for label, report in tampered:

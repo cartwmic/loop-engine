@@ -115,7 +115,7 @@ fn spawn_wait_invocation(
     invocation_id: &str,
     envelope: &Value,
 ) -> std::process::Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_loop-engine"));
+    let mut command = Command::new(workspace_integration::binary("loop-engine"));
     command.args([
         "--database",
         database.to_str().expect("utf-8 database path"),
@@ -194,7 +194,7 @@ fn wait_invocation_waiter_is_the_worker_parent() {
         worker_packet("run-wait-ppid"),
     );
 
-    let mut waiter_command = Command::new(env!("CARGO_BIN_EXE_loop-engine"));
+    let mut waiter_command = Command::new(workspace_integration::binary("loop-engine"));
     waiter_command
         .args([
             "--database",
@@ -263,7 +263,7 @@ fn wait_invocation_worker_stdin_is_inner_worker_packet_not_envelope() {
 
 #[test]
 fn wait_invocation_help_stdout_does_not_contain_wait_invocation() {
-    let output = Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+    let output = Command::new(workspace_integration::binary("loop-engine"))
         .arg("--help")
         .bounded_output("loop-engine wait-invocation")
         .expect("run --help");
@@ -277,7 +277,7 @@ fn wait_invocation_help_stdout_does_not_contain_wait_invocation() {
 
 #[test]
 fn wait_invocation_unknown_primary_list_unchanged() {
-    let help = Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+    let help = Command::new(workspace_integration::binary("loop-engine"))
         .arg("--help")
         .bounded_output("loop-engine wait-invocation")
         .expect("run --help");
@@ -302,7 +302,7 @@ fn wait_invocation_unknown_primary_list_unchanged() {
         "help operations list must still omit wait-invocation: {stdout}"
     );
 
-    let missing_args = Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+    let missing_args = Command::new(workspace_integration::binary("loop-engine"))
         .arg("wait-invocation")
         .bounded_output("loop-engine wait-invocation")
         .expect("run wait-invocation without args");
@@ -312,7 +312,7 @@ fn wait_invocation_unknown_primary_list_unchanged() {
         "hidden wait-invocation must be accepted (exit 0 or 2 if missing args), got {code:?}: {:?}",
         String::from_utf8_lossy(&missing_args.stderr)
     );
-    let unknown = Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+    let unknown = Command::new(workspace_integration::binary("loop-engine"))
         .arg("not-a-primary")
         .bounded_output("loop-engine wait-invocation")
         .expect("run unknown operation");

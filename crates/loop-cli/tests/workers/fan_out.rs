@@ -170,7 +170,7 @@ fn capture_summary(output_dir: &str) -> Value {
 }
 
 fn run_fan_out(cwd: &Path, args: &[&str], stdin: &[u8]) -> std::process::Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_loop-engine"));
+    let mut command = Command::new(workspace_integration::binary("loop-engine"));
     command.current_dir(cwd).args(args);
     let completed =
         super::bounded_process::run_with_stdin(&mut command, "loop-engine fan-out", stdin)
@@ -877,7 +877,7 @@ fn bound_dummy_nonzero_exit_still_yields_fan_out_exit_0() {
 
 #[test]
 fn help_lists_fan_out_and_hides_wait_invocation() {
-    let output = Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+    let output = Command::new(workspace_integration::binary("loop-engine"))
         .arg("--help")
         .bounded_output("loop-engine fan-out")
         .expect("run --help");
@@ -906,7 +906,7 @@ fn help_lists_fan_out_and_hides_wait_invocation() {
         );
     }
 
-    let fan_out_help = Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+    let fan_out_help = Command::new(workspace_integration::binary("loop-engine"))
         .args(["fan-out", "--help"])
         .bounded_output("loop-engine fan-out")
         .expect("run fan-out --help");
@@ -921,7 +921,7 @@ fn help_lists_fan_out_and_hides_wait_invocation() {
         "{fan_out_stdout}"
     );
 
-    let unknown = Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+    let unknown = Command::new(workspace_integration::binary("loop-engine"))
         .args(["fan-out", "--max-concurrency", "2"])
         .bounded_output("loop-engine fan-out")
         .expect("run unknown --max-concurrency");
@@ -943,6 +943,8 @@ fn deferred_readers_with_large_payload_start_in_parallel() {
     let pid_b = directory.path().join("b.pid");
     let worker_a = delay_then_read_worker(&receipt_a, &pid_a);
     let worker_b = delay_then_read_worker(&receipt_b, &pid_b);
+    // Keep fresh binary setup outside the interval that measures worker overlap.
+    let _ = workspace_integration::binary("loop-engine");
     let cwd = directory.path().to_path_buf();
     let instructions_arg = instructions.to_str().expect("utf-8").to_owned();
 
@@ -962,20 +964,25 @@ fn deferred_readers_with_large_payload_start_in_parallel() {
         )
     });
 
-    let first_pid_deadline = Instant::now() + Duration::from_secs(2);
-    while Instant::now() < first_pid_deadline && !(pid_a.is_file() || pid_b.is_file()) {
+    let both_pid_deadline = Instant::now() + Duration::from_secs(12);
+    while Instant::now() < both_pid_deadline && !(pid_a.is_file() && pid_b.is_file()) {
         thread::sleep(Duration::from_millis(10));
     }
-    thread::sleep(Duration::from_millis(150));
     let both_started = pid_a.is_file() && pid_b.is_file();
-    let overlapping_live = both_started
-        && pid_is_alive(std::fs::read_to_string(&pid_a).expect("pid a").trim())
-        && pid_is_alive(std::fs::read_to_string(&pid_b).expect("pid b").trim());
+    let pid_a_value = std::fs::read_to_string(&pid_a).ok();
+    let pid_b_value = std::fs::read_to_string(&pid_b).ok();
+    let alive_a = pid_a_value
+        .as_deref()
+        .is_some_and(|pid| pid_is_alive(pid.trim()));
+    let alive_b = pid_b_value
+        .as_deref()
+        .is_some_and(|pid| pid_is_alive(pid.trim()));
+    let overlapping_live = both_started && alive_a && alive_b;
     let output = handle.join().expect("fan-out thread");
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert!(
         overlapping_live,
-        "both workers must start concurrently with overlapping live pids before either finishes reading a 2MiB payload"
+        "both workers must start concurrently with overlapping live pids before either finishes reading a 2MiB payload: both_started={both_started} pid_a={pid_a_value:?} alive_a={alive_a} pid_b={pid_b_value:?} alive_b={alive_b}"
     );
     assert_eq!(std::fs::read(&receipt_a).expect("read a"), payload);
     assert_eq!(std::fs::read(&receipt_b).expect("read b"), payload);
@@ -1035,7 +1042,9 @@ raise SystemExit(2)
     let output = Command::new("python3")
         .args([
             script.to_str().expect("utf-8 script"),
-            env!("CARGO_BIN_EXE_loop-engine"),
+            workspace_integration::binary("loop-engine")
+                .to_str()
+                .expect("utf-8 loop-engine path"),
             instructions.to_str().expect("utf-8 instructions"),
             &worker,
             directory.path().to_str().expect("utf-8 cwd"),
@@ -1052,7 +1061,7 @@ raise SystemExit(2)
 }
 
 fn spawn_fan_out(cwd: &Path, args: &[&str], stdin: &[u8]) -> std::process::Child {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_loop-engine"));
+    let mut command = Command::new(workspace_integration::binary("loop-engine"));
     command
         .current_dir(cwd)
         .args(args)
@@ -1264,7 +1273,7 @@ fn missing_join_helper_still_writes_summary_for_started_workers() {
     let capture_dir = directory.path().join("captures").join("inv-no-join");
     let worker = worker_json("sh", &["-c", "echo started; exit 0"]);
     let packet = invoke_packet(&artifact_root, &capture_dir, "no-join");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_loop-engine"));
+    let mut command = Command::new(workspace_integration::binary("loop-engine"));
     command
         .current_dir(directory.path())
         .args(["fan-out", "--worker", &worker])

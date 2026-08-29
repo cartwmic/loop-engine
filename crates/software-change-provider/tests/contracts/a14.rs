@@ -488,7 +488,7 @@ fn describe_matches_snapshot_and_engine_prd_reference_topology() {
     assert_expected_topology(&workflow);
     assert_expected_topology(&snapshot);
 
-    let prd_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/PRD.md");
+    let prd_path = workspace_integration::repository_root().join("docs/PRD.md");
     let prd = fs::read_to_string(&prd_path).expect("read engine PRD");
     for line in [
         "explore\n  └─ intent-ready [checked] → intent-review",

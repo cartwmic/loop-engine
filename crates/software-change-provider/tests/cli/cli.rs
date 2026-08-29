@@ -1,7 +1,7 @@
 use std::process::{Command, Output};
 
 fn invoke(arguments: &[&str], stdin: &[u8]) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_software-change"));
+    let mut command = Command::new(workspace_integration::binary("software-change"));
     command.args(arguments);
     let completed =
         super::bounded_process::run_with_stdin(&mut command, "software-change CLI protocol", stdin)

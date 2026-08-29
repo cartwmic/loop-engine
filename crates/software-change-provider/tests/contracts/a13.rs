@@ -1,6 +1,5 @@
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
 
 use super::support;
 
@@ -31,7 +30,8 @@ fn standard_profile_and_task_packet_template_carry_doc_integration_contract() {
         assert!(required.contains("coverage"));
     }
 
-    let template_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("data/templates/task-packet.md");
+    let template_path = workspace_integration::package_root("software-change-provider")
+        .join("data/templates/task-packet.md");
     let template = fs::read_to_string(&template_path).expect("read task-packet template");
     let lower = template.to_ascii_lowercase();
     assert!(lower.contains("doc integration"));

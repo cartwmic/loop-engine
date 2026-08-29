@@ -38,11 +38,12 @@ impl Drop for TestDir {
 }
 
 fn bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_software-change"))
+    workspace_integration::binary("software-change")
 }
 
 fn dummy_script() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/support/run_plan_graph_dummy.py")
+    workspace_integration::package_root("software-change-provider")
+        .join("tests/support/run_plan_graph_dummy.py")
 }
 
 fn prepend_path(directory: &Path) -> OsString {
@@ -326,8 +327,10 @@ fn names_for_long_invocation_dir_stay_under_dagu_limit() {
 
 #[test]
 fn main_rs_declares_mod_dagu_and_keeps_stdin_exec_dispatch() {
-    let source = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/main.rs"))
-        .expect("read main.rs");
+    let source = fs::read_to_string(
+        workspace_integration::package_root("software-change-provider").join("src/main.rs"),
+    )
+    .expect("read main.rs");
     assert!(
         source.contains("mod dagu;"),
         "main.rs must declare mod dagu"

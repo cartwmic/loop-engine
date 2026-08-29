@@ -4,11 +4,10 @@ use loop_core::{
 };
 use loop_integrations::{ProviderError, ProviderInvocation, SubprocessProviderGateway};
 use loop_reference_fixtures::{
-    agents_policy_input, document_policy, fixture_binary, policy_document_initial_input,
-    policy_document_workflow, readme_policy_input, research_artifact_schemas, research_brief,
-    research_initial_input, research_policy_set_a, research_review_context,
-    research_revision_links, research_verification, research_workflow,
-    software_change_initial_input, software_change_initial_input_with_behavior,
+    agents_policy_input, document_policy, policy_document_initial_input, policy_document_workflow,
+    readme_policy_input, research_artifact_schemas, research_brief, research_initial_input,
+    research_policy_set_a, research_review_context, research_revision_links, research_verification,
+    research_workflow, software_change_initial_input, software_change_initial_input_with_behavior,
     software_change_policy_set_a, software_change_policy_set_b, software_change_review_context,
     software_change_workflow, FixtureProvider, DESIGN_REVIEW_GATE, PLAN_REVIEW_GATE,
     RESEARCH_VERIFY_GATE,
@@ -20,7 +19,9 @@ use tempfile::tempdir;
 
 fn association(binary: &str) -> ProviderAssociation {
     ProviderInvocation::new(
-        fixture_binary(binary).to_string_lossy().into_owned(),
+        workspace_integration::fixture_binary(binary)
+            .to_string_lossy()
+            .into_owned(),
         Vec::<String>::new(),
     )
     .to_association()

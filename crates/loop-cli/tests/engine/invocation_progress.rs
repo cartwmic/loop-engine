@@ -158,7 +158,7 @@ esac\n",
 }
 
 fn run_progress(database: &Path, run_id: &str, path: OsString) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+    Command::new(workspace_integration::binary("loop-engine"))
         .args([
             "--json",
             "--database",
@@ -172,7 +172,7 @@ fn run_progress(database: &Path, run_id: &str, path: OsString) -> std::process::
 }
 
 fn run_show_compact(database: &Path, run_id: &str, path: OsString) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+    Command::new(workspace_integration::binary("loop-engine"))
         .args([
             "--database",
             database.to_str().expect("utf-8 database"),
@@ -186,7 +186,7 @@ fn run_show_compact(database: &Path, run_id: &str, path: OsString) -> std::proce
 }
 
 fn run_show_json(database: &Path, run_id: &str, path: OsString) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+    Command::new(workspace_integration::binary("loop-engine"))
         .args([
             "--json",
             "--database",
@@ -437,7 +437,7 @@ fn public_compact_json_combination_is_a_clear_parse_error() {
         "--format=json",
         "--output=json",
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+        let output = Command::new(workspace_integration::binary("loop-engine"))
             .args([selector, "show", "--compact", "run-1"])
             .bounded_output("loop-engine incompatible compact JSON")
             .expect("run incompatible compact JSON");

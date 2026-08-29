@@ -1,12 +1,11 @@
 use std::fs;
-use std::path::Path;
 
 const PROFILES: &[&str] = &["minimal", "standard", "high-rigor"];
 
 #[test]
 fn shipped_profile_bytes_have_no_bookends_keys() {
     for profile in PROFILES {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        let path = workspace_integration::package_root("software-change-provider")
             .join("data")
             .join("configs")
             .join(format!("{profile}.json"));

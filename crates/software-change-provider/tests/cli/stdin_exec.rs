@@ -49,7 +49,7 @@ impl Drop for TestDir {
 }
 
 fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_software-change"))
+    Command::new(workspace_integration::binary("software-change"))
 }
 
 fn write_inspector(directory: &Path) -> PathBuf {

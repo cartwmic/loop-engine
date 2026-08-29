@@ -103,7 +103,7 @@ fn run_invoke(
     ];
     args.extend(extra.iter().map(|value| (*value).to_owned()));
     args.extend(["invoke".to_owned(), run_id.to_owned(), slot_id.to_owned()]);
-    Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+    Command::new(workspace_integration::binary("loop-engine"))
         .args(args)
         .bounded_output("loop-engine invoke")
         .expect("run invoke")
@@ -170,7 +170,7 @@ fn invoke_fan_out_subset_starts_only_selected_assignment_and_records_it() {
     };
     let binding = json!({
         "slot-1": {
-            "command": env!("CARGO_BIN_EXE_loop-engine"),
+            "command": workspace_integration::binary_string("loop-engine"),
             "args": [
                 "fan-out",
                 "--worker", worker("zero", &worker_zero),
@@ -201,7 +201,7 @@ fn invoke_fan_out_subset_starts_only_selected_assignment_and_records_it() {
     assert_eq!(
         invocation.binding,
         loop_core::WorkSlotBinding::new(
-            env!("CARGO_BIN_EXE_loop-engine"),
+            workspace_integration::binary_string("loop-engine"),
             vec![
                 "fan-out".to_owned(),
                 "--worker".to_owned(),
@@ -219,7 +219,7 @@ fn invoke_fan_out_subset_starts_only_selected_assignment_and_records_it() {
     assert_eq!(invocation.inner_workers.len(), 1);
     assert_eq!(invocation.inner_workers[0].assignment_id, "worker-1");
 
-    let shown = Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+    let shown = Command::new(workspace_integration::binary("loop-engine"))
         .args([
             "--database",
             database.to_str().expect("utf-8 database path"),
@@ -257,7 +257,7 @@ fn invoke_fan_out_omitted_selection_starts_every_assignment() {
     };
     let binding = json!({
         "slot-1": {
-            "command": env!("CARGO_BIN_EXE_loop-engine"),
+            "command": workspace_integration::binary_string("loop-engine"),
             "args": [
                 "fan-out",
                 "--worker", worker("zero", &worker_zero),
@@ -327,7 +327,7 @@ fn invoke_invalid_assignment_selections_refuse_before_any_process_starts() {
         };
         let binding = json!({
             "slot-1": {
-                "command": env!("CARGO_BIN_EXE_loop-engine"),
+                "command": workspace_integration::binary_string("loop-engine"),
                 "args": [
                     "fan-out",
                     "--worker", worker(&worker_zero),
@@ -612,7 +612,7 @@ fn invoke_worker_ppid_equals_waiter_pid_not_invoke() {
         Some("subject-1"),
     );
 
-    let mut command = Command::new(env!("CARGO_BIN_EXE_loop-engine"));
+    let mut command = Command::new(workspace_integration::binary("loop-engine"));
     command
         .args([
             "--database",
@@ -759,7 +759,7 @@ fn elapsed_time_overrun_then_retry_show_history_gate() {
 
     std::thread::sleep(Duration::from_millis(80));
 
-    let show = Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+    let show = Command::new(workspace_integration::binary("loop-engine"))
         .args([
             "--database",
             database.to_str().expect("utf-8 database path"),
@@ -800,7 +800,7 @@ fn elapsed_time_overrun_then_retry_show_history_gate() {
         assert!(object.contains_key("event"), "{slot}");
     }
 
-    let history = Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+    let history = Command::new(workspace_integration::binary("loop-engine"))
         .args([
             "--database",
             database.to_str().expect("utf-8 database path"),
@@ -839,7 +839,7 @@ fn elapsed_time_overrun_then_retry_show_history_gate() {
         "history must contain InvocationStarted for {invocation_id}: {history_json}"
     );
 
-    let event = Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+    let event = Command::new(workspace_integration::binary("loop-engine"))
         .args([
             "--database",
             database.to_str().expect("utf-8 database path"),
@@ -919,7 +919,7 @@ fn invoke_opaque_input_is_received_and_survives_sqlite_reopen() {
 
     let reopened = load_invocations(&database, "run-opaque-input");
     assert_eq!(reopened[0].invocation_input, Some(invocation_input.clone()));
-    let shown = Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+    let shown = Command::new(workspace_integration::binary("loop-engine"))
         .args([
             "--database",
             database.to_str().expect("utf-8 database path"),

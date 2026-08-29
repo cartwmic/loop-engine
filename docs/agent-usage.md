@@ -236,6 +236,102 @@ At each durable `e2e/journey` or declared `contract` test boundary, the driver o
 - Do not progress final or terminated runs; `show` exposes no requestable events there.
 - Use `history` for a semantic audit of creation, appends, transitions, checked-transition denials, work-slot invocation started/status-changed actions, and termination; other rejections (such as unavailable events or terminal mutations) are absent, overlay `overrun` is not a history action, and history is not an exhaustive execution trace.
 
+## Workspace Rust test and preflight path
+
+The ordinary full Rust suite uses the exact `cargo-nextest` version pinned in
+`.config/nextest.toml`:
+
+```sh
+cargo install cargo-nextest --version 0.9.143 --locked
+python3 scripts/assert-nextest.py
+python3 scripts/run-nextest.py
+```
+
+`run-nextest.py` is the fresh-binary build contract: it builds the five
+production/reference packages and all three fixture provider binaries from the
+current source, hands their direct `target/debug` paths to the central suite
+through `LOOP_ENGINE_TEST_BINARY_HANDOFF`, runs workspace unit tests and the
+single `workspace-integration/workspace` target through nextest, and then runs
+owning-crate doctests with Cargo. Focused iteration is
+`python3 scripts/run-nextest.py --filter TEST_SUBSTRING`; it skips doctests.
+The deliberately wedged `process_timeout_probe` is not part of the ordinary
+selection; prove its configured timeout and descendant cleanup with
+`python3 scripts/prove-nextest-timeout.py --report /tmp/nextest-timeout.json`.
+Do not use workspace-wide `--test-threads=1`.
+
+The central target contract can be inspected without executing its tests:
+
+```sh
+python3 scripts/run-central-tests.py \
+  --no-run \
+  --compiler-artifacts /tmp/central-test-artifacts.jsonl \
+  --handoff-output /tmp/stock-cargo-handoff.json
+python3 scripts/assert-test-topology.py \
+  --compiler-artifacts /tmp/central-test-artifacts.jsonl
+python3 scripts/assert-test-inventory.py \
+  --compiler-artifacts /tmp/central-test-artifacts.jsonl \
+  --current-only
+```
+
+The topology assertion is based on Cargo metadata and compiler-artifact
+messages and requires exactly one integration-test executable across the
+workspace. The inventory assertion maps every declaration in the central
+source modules to the names emitted by that executable; the predecessor
+baseline and central-harness artifact provide the before/after equivalence
+proof. The explicit handoff is current-build evidence, not a search fallback:
+it rejects missing, non-executable, outside-target, digest-mismatched, and
+hashed `target/debug/deps` candidates.
+
+Stock compatibility remains an independent final gate and does not route
+through `run-central-tests.py`. Use the fresh handoff produced above:
+
+```sh
+test -s /tmp/stock-cargo-handoff.json
+LOOP_ENGINE_TEST_BINARY_HANDOFF=/tmp/stock-cargo-handoff.json \
+  cargo test --workspace
+```
+
+Run Cargo consumers serially against one checkout. The repository dependency
+audit is similarly pinned and reproducible:
+
+```sh
+cargo install cargo-machete --version 0.9.2 --locked
+python3 scripts/dependency-audit.py
+```
+
+For local compiler-cache proof, use the credential-free disk backend and the
+same real-Rust two-target check; the proof creates no repository cache or
+`target` data and never runs `cargo clean`:
+
+```sh
+python3 scripts/sccache-proof.py --self-test
+python3 scripts/sccache-proof.py proof \
+  --artifact /tmp/testing-sccache.json \
+  --work-root /tmp/loop-engine-sccache-proof
+```
+
+Required GitHub-hosted preflight installs sccache 0.17.0 through
+`mozilla-actions/sccache-action@v0.0.11`, exports the ephemeral
+`ACTIONS_RESULTS_URL` and `ACTIONS_RUNTIME_TOKEN` values required by its
+credential-free GHA backend, starts it before any Cargo compilation, and emits
+startup and final statistics; no repository secret is used.
+It also installs nextest and cargo-machete at the pins above, runs the
+ordinary nextest/doctest path, timeout/structure/inventory/audit assertions,
+the direct stock Cargo gate, clippy/fmt, locked package builds, Bookends,
+generated-release checks, and the four public journeys as separate serialized
+steps. `.github/workflows/release.yml` remains cargo-dist-generated; only the
+hand-authored `preflight.yml` is changed for this contract.
+
+The final stable-revision matrix is driver-owned and serialized in this
+order: tool installation and checks, dependency audit, generated-release
+assertions, Bookends, ordinary nextest plus doctests, timeout proof, central
+topology/inventory, stock `cargo test --workspace`, clippy/fmt and locked
+builds, no-argument journey discovery, the Generate-PRD profile check, journey
+self-tests, the required software-change, policy-document, research, and
+Generate-PRD public source journeys, and final hosted sccache statistics plus
+total wall time. A local focused pass or a static workflow assertion is not a
+claim that this final matrix or the hosted sccache run passed.
+
 ## Executable proof boundaries
 
 Repository checks name boundaries they actually cross:

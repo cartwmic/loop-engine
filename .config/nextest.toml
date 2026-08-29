@@ -1,0 +1,23 @@
+# Repository test policy. Keep the runner version and timeout behavior pinned;
+# update both deliberately and rerun scripts/assert-nextest.py.
+nextest-version = "0.9.143"
+
+[profile.default]
+# Failures are visible immediately; slow tests are retained in the final report.
+status-level = "fail"
+final-status-level = "slow"
+# Four isolated test processes avoid resource spikes while retaining parallelism.
+test-threads = 4
+# Ordinary tests are slow after 30s and fail closed after two periods.
+slow-timeout = { period = "30s", terminate-after = 2, grace-period = "0s", on-timeout = "fail" }
+
+# This subprocess regression deliberately observes two workers before either
+# reads a large stdin payload. Reserve the available test slots for it rather
+# than weakening its assertion or serializing the whole suite.
+[[profile.default.overrides]]
+filter = 'test(deferred_readers_with_large_payload_start_in_parallel)'
+threads-required = "num-cpus"
+
+[[profile.default.overrides]]
+filter = 'test(process_timeout_probe)'
+slow-timeout = { period = "1s", terminate-after = 1, grace-period = "0s", on-timeout = "fail" }

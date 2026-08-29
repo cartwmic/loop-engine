@@ -8,11 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("provider crate must be nested under repository root")
-        .to_path_buf()
+    workspace_integration::repository_root()
 }
 
 fn collect_files(root: &Path, current: &Path, files: &mut BTreeMap<String, Vec<u8>>) {
@@ -72,7 +68,7 @@ fn temporary_path(label: &str) -> PathBuf {
 }
 
 fn dump(destination: &Path) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_research"))
+    Command::new(workspace_integration::binary("research"))
         .arg("data-dump")
         .arg(destination)
         .output()

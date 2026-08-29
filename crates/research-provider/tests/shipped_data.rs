@@ -1,7 +1,6 @@
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::Path;
 
 const SUBJECTS: &[&str] = &[
     "brief.json",
@@ -18,22 +17,25 @@ const PROMPT_GUARDS: &[&str] = &[
 ];
 
 fn shipped_text(relative: &str) -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
+    let path = workspace_integration::package_root("research-provider").join(relative);
     fs::read_to_string(&path).unwrap_or_else(|error| panic!("could not read {path:?}: {error}"))
 }
 
 fn load_profile() -> Value {
-    let path = format!("{}/data/configs/standard.json", env!("CARGO_MANIFEST_DIR"));
+    let path = workspace_integration::package_root("research-provider")
+        .join("data/configs/standard.json")
+        .to_string_lossy()
+        .into_owned();
     let text = fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("could not read shipped config {path}: {error}"));
     serde_json::from_str(&text).unwrap_or_else(|error| panic!("invalid JSON in {path}: {error}"))
 }
 
 fn load_generate_prd_profile() -> Value {
-    let path = format!(
-        "{}/data/configs/generate-prd.json",
-        env!("CARGO_MANIFEST_DIR")
-    );
+    let path = workspace_integration::package_root("research-provider")
+        .join("data/configs/generate-prd.json")
+        .to_string_lossy()
+        .into_owned();
     let text = fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("could not read shipped config {path}: {error}"));
     serde_json::from_str(&text).unwrap_or_else(|error| panic!("invalid JSON in {path}: {error}"))

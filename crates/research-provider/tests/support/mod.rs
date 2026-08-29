@@ -3,7 +3,7 @@
 use serde_json::{json, Value};
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -48,7 +48,7 @@ impl Drop for TestDir {
 }
 
 pub fn provider_binary() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_research"))
+    workspace_integration::binary("research")
 }
 
 pub fn invoke(request: Value) -> Output {
@@ -181,7 +181,7 @@ pub fn evidence(
 }
 
 pub fn load_profile(profile: &str) -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+    let path = workspace_integration::package_root("research-provider")
         .join("data")
         .join("configs")
         .join(format!("{profile}.json"));

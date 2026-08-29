@@ -29,7 +29,7 @@ fn worker(assignment: &str) -> InnerWorker {
 }
 
 fn show(database: &std::path::Path) -> Value {
-    let output = Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+    let output = Command::new(workspace_integration::binary("loop-engine"))
         .args([
             "--database",
             database.to_str().expect("database path"),

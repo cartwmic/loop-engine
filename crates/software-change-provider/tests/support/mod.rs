@@ -61,11 +61,14 @@ impl Drop for TestDir {
 }
 
 pub fn provider_binary() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_software-change"))
+    workspace_integration::binary("software-change")
 }
 
 pub fn invoke(request: Value) -> Output {
-    invoke_in_dir(request, Path::new(env!("CARGO_MANIFEST_DIR")))
+    invoke_in_dir(
+        request,
+        &workspace_integration::package_root("software-change-provider"),
+    )
 }
 
 pub fn invoke_in_dir(request: Value, directory: &Path) -> Output {
@@ -232,7 +235,7 @@ pub fn finding_ledger_context(
 }
 
 pub fn load_profile(profile: &str) -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+    let path = workspace_integration::package_root("software-change-provider")
         .join("data")
         .join("configs")
         .join(format!("{profile}.json"));
@@ -242,7 +245,7 @@ pub fn load_profile(profile: &str) -> Value {
 }
 
 pub fn load_fixture(name: &str) -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+    let path = workspace_integration::package_root("software-change-provider")
         .join("data")
         .join("calibration")
         .join("fixtures")

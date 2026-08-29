@@ -185,9 +185,77 @@ A repository without a schema-valid git PRD can use the research provider's [Gen
 
 Supported publication matrix is exactly four applications (`loop-cli`, `software-change-provider`, `policy-document-provider`, `research-provider`) by two native targets (`aarch64-apple-darwin`, `x86_64-unknown-linux-gnu`). `dist plan` describes this matrix; it does not compile or run archives.
 
-Run baseline checks, generated-workflow validation, plan assertion, and full source-tree public-boundary journeys before release handoff:
+The ordinary local Rust test path uses the exact `cargo-nextest` version pinned in `.config/nextest.toml`:
 
 ```sh
+cargo install cargo-nextest --version 0.9.143 --locked
+python3 scripts/assert-nextest.py
+python3 scripts/run-nextest.py
+```
+
+`run-nextest.py` is the fresh-binary contract. It builds the current
+production and reference-fixture binaries, hands their direct active-target
+paths to the central suite through `LOOP_ENGINE_TEST_BINARY_HANDOFF`, runs
+workspace unit tests and the one `workspace-integration/workspace` target with
+nextest process isolation, and then runs owning-crate doctests through Cargo.
+Focused iteration uses `python3 scripts/run-nextest.py --filter
+TEST_SUBSTRING` or `python3 scripts/run-central-tests.py --filter
+TEST_SUBSTRING`; the intentionally wedged timeout test is proved separately
+with `python3 scripts/prove-nextest-timeout.py`. Nextest does not run
+doctests, and the normal path does not use workspace-wide `--test-threads=1`.
+
+The central topology and current source-inventory assertions consume a fresh
+compiler-artifact stream and require exactly one integration-test executable
+across the workspace:
+
+```sh
+python3 scripts/run-central-tests.py \
+  --no-run \
+  --compiler-artifacts /tmp/central-test-artifacts.jsonl \
+  --handoff-output /tmp/stock-cargo-handoff.json
+python3 scripts/assert-test-topology.py --compiler-artifacts /tmp/central-test-artifacts.jsonl
+python3 scripts/assert-test-inventory.py \
+  --compiler-artifacts /tmp/central-test-artifacts.jsonl --current-only
+```
+
+The handoff rejects missing, stale, hashed, non-executable, and
+outside-target candidates. Stock Cargo remains an independent final
+compatibility gate; it does not route through `run-central-tests.py`:
+
+```sh
+LOOP_ENGINE_TEST_BINARY_HANDOFF=/tmp/stock-cargo-handoff.json \
+  cargo test --workspace
+```
+
+The repository-owned dependency audit pins `cargo-machete` and checks its
+exact version before scanning the whole workspace:
+
+```sh
+cargo install cargo-machete --version 0.9.2 --locked
+python3 scripts/dependency-audit.py
+```
+
+For local cache proof, `python3 scripts/sccache-proof.py proof --artifact
+/tmp/testing-sccache.json` compiles equivalent real Rust inputs into two
+isolated temporary target directories and requires a positive warm cache hit.
+It never uses `cargo clean` or leaves cache data in the repository. Required
+GitHub-hosted preflight pins sccache 0.17.0 through
+`mozilla-actions/sccache-action@v0.0.11`, exports the ephemeral
+`ACTIONS_RESULTS_URL` and `ACTIONS_RUNTIME_TOKEN` values required by that
+backend, starts it before any Cargo compilation, and emits startup/final
+statistics; no repository secret is used.
+The final preflight matrix is serialized on one stable revision in this
+order: tool installation and checks, dependency audit, generated-release
+assertions, Bookends, ordinary nextest plus doctests, timeout proof, central
+topology/inventory, stock Cargo, clippy/fmt and locked builds, no-argument
+journey discovery, the Generate-PRD profile check, journey self-tests, all
+four public source journeys, and final hosted sccache statistics plus total
+wall time. Local focused or static checks do not claim the hosted run.
+
+Run baseline checks, the dependency audit, generated-workflow validation, plan assertion, and full source-tree public-boundary journeys before release handoff:
+
+```sh
+python3 scripts/dependency-audit.py
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
@@ -260,4 +328,4 @@ Historical `v0.2.0`, `v0.2.1`, and `v0.2.2` tags remain immutable. `v0.2.2` was 
 
 ### Direct pushes to main
 
-Direct pushes to `main` run `.github/workflows/push-to-main.yml`. That read-only dispatcher checks out the pushed SHA, computes the pinned cargo-dist 0.32.0 plan, and calls reusable `preflight.yml`; preflight installs operator-provided `dagu` 2.14.0 onto `PATH` (into `$RUNNER_TEMP`, not dist artifacts or crate packages), then owns workspace tests, warning-denying clippy, formatting, generated-release checks, release assertions, and source software-change-journey proof. A missing `dagu` fails those tests with the resolver error rather than a skip. The dispatcher has no publication job. `.github/workflows/release.yml` remains cargo-dist-generated and dispatch-only.
+Direct pushes to `main` run `.github/workflows/push-to-main.yml`. That read-only dispatcher checks out the pushed SHA, computes the pinned cargo-dist 0.32.0 plan, and calls reusable `preflight.yml`; preflight installs operator-provided `dagu` 2.14.0 onto `PATH` (into `$RUNNER_TEMP`, not dist artifacts or crate packages), starts pinned sccache before Cargo compilation, and owns the nextest/doctest path, timeout and one-target/inventory assertions, dependency audit, direct stock Cargo compatibility, warning-denying clippy, formatting, locked builds, Bookends, generated-release checks, cache statistics/total wall time, and every public source journey. A missing `dagu` or tool fails those tests rather than a skip. The dispatcher has no publication job. `.github/workflows/release.yml` remains cargo-dist-generated and dispatch-only.

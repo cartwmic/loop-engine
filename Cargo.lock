@@ -73,7 +73,6 @@ version = "0.18.0"
 dependencies = [
  "serde",
  "serde_yaml",
- "tempfile",
  "toml",
 ]
 
@@ -539,10 +538,8 @@ name = "loop-cli"
 version = "0.18.0"
 dependencies = [
  "jsonschema",
- "libc",
  "loop-core",
  "loop-integrations",
- "rusqlite",
  "serde",
  "serde_json",
  "sha2",
@@ -576,10 +573,8 @@ name = "loop-reference-fixtures"
 version = "0.18.0"
 dependencies = [
  "loop-core",
- "loop-integrations",
  "serde",
  "serde_json",
- "tempfile",
 ]
 
 [[package]]
@@ -847,10 +842,8 @@ name = "research-provider"
 version = "0.18.0"
 dependencies = [
  "loop-core",
- "loop-integrations",
  "serde",
  "serde_json",
- "sha2",
 ]
 
 [[package]]
@@ -1002,9 +995,7 @@ name = "software-change-provider"
 version = "0.18.0"
 dependencies = [
  "bookends-check",
- "libc",
  "loop-core",
- "loop-integrations",
  "serde",
  "serde_json",
  "sha2",
@@ -1307,6 +1298,24 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+
+[[package]]
+name = "workspace-integration"
+version = "0.18.0"
+dependencies = [
+ "bookends-check",
+ "libc",
+ "loop-cli",
+ "loop-core",
+ "loop-integrations",
+ "loop-reference-fixtures",
+ "research-provider",
+ "rusqlite",
+ "serde_json",
+ "sha2",
+ "software-change-provider",
+ "tempfile",
+]
 
 [[package]]
 name = "writeable"

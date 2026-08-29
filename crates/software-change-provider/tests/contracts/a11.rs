@@ -22,7 +22,7 @@ const GOOD_STATE_DATA_PATH: &str =
     "calibration/companions/fictional-repo/implementation-evidence/repo-state-2026-08-12.txt";
 
 fn provider_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
+    workspace_integration::package_root("software-change-provider")
 }
 
 fn data_path(relative: &str) -> PathBuf {

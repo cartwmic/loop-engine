@@ -9,7 +9,6 @@ use loop_core::{ContextRecord, DurableEvaluation, State, Transition, Workflow};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
-use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -72,59 +71,6 @@ impl std::fmt::Display for FixtureError {
 }
 
 impl std::error::Error for FixtureError {}
-
-/// Return the path to one of this package's fixture binaries.
-///
-/// Cargo exposes `CARGO_BIN_EXE_*` while running this package's integration
-/// tests.  The target-directory fallback also makes the helper useful to a
-/// later acceptance crate that depends on this fixture crate.
-pub fn fixture_binary(name: &str) -> PathBuf {
-    let environment_name = format!(
-        "CARGO_BIN_EXE_{}",
-        name.replace('-', "_").to_ascii_lowercase()
-    );
-    if let Some(path) = env::var_os(&environment_name) {
-        return PathBuf::from(path);
-    }
-
-    let target_directory = env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../target")
-                .to_path_buf()
-        });
-    let executable = target_directory.join("debug").join(name);
-    if executable.exists() {
-        return executable;
-    }
-
-    // `cargo test` may place a package binary only in `debug/deps` with a
-    // hash suffix when this helper is called from another package's tests.
-    let deps_directory = target_directory.join("debug").join("deps");
-    if let Ok(entries) = fs::read_dir(&deps_directory) {
-        let mut candidates = entries
-            .flatten()
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.is_file()
-                    && path
-                        .file_name()
-                        .and_then(|file| file.to_str())
-                        .map(|file| file.starts_with(&format!("{name}-")))
-                        .unwrap_or(false)
-            })
-            .collect::<Vec<_>>();
-        candidates.sort();
-        if let Some(candidate) = candidates.into_iter().next() {
-            return candidate;
-        }
-    }
-
-    // Keep the returned path useful even before a caller has built the
-    // fixture.  The resulting subprocess error identifies the missing binary.
-    executable
-}
 
 /// Run a fixture provider against stdin and write one protocol response.
 ///

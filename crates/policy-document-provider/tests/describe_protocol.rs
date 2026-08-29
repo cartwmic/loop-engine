@@ -2,7 +2,7 @@ use std::io::Write;
 use std::process::{Command, Output, Stdio};
 
 fn invoke(input: &[u8]) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_policy-document"))
+    let mut child = Command::new(workspace_integration::binary("policy-document"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

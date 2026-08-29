@@ -8,6 +8,7 @@ members = [
     "crates/policy-document-provider",
     "crates/research-provider",
     "tests/fixtures",
+    "tests/workspace-integration",
 ]
 resolver = "2"
 

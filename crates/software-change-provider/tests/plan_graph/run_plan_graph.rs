@@ -54,11 +54,12 @@ impl Drop for TestDir {
 }
 
 fn bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_software-change"))
+    workspace_integration::binary("software-change")
 }
 
 fn dummy_script() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/support/run_plan_graph_dummy.py")
+    workspace_integration::package_root("software-change-provider")
+        .join("tests/support/run_plan_graph_dummy.py")
 }
 
 fn task_worker(receipt: &Path, extra: &[&str]) -> String {
@@ -2484,9 +2485,11 @@ fn max_concurrency_and_invalid_max_active_are_parse_errors() {
 
 #[test]
 fn default_task_worker_is_pi_print_without_tools_or_no_context_files() {
-    let source =
-        fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/run_plan_graph.rs"))
-            .expect("read run_plan_graph.rs");
+    let source = fs::read_to_string(
+        workspace_integration::package_root("software-change-provider")
+            .join("src/run_plan_graph.rs"),
+    )
+    .expect("read run_plan_graph.rs");
     assert!(
         source.contains("const DEFAULT_WORKER_COMMAND: &str = \"pi\";"),
         "default --task-worker command must remain pi"

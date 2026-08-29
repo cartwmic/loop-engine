@@ -109,7 +109,7 @@ fn create_completed_invocation(
 }
 
 fn cli(database: &Path, args: &[&str]) -> (i32, Value, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+    let output = Command::new(workspace_integration::binary("loop-engine"))
         .args([
             "--database",
             database.to_str().expect("database path"),
@@ -436,7 +436,7 @@ fn detailed_compact_and_history_are_capture_free_and_terminal_history_remains_re
         "/bin/worker"
     );
 
-    let compact = Command::new(env!("CARGO_BIN_EXE_loop-engine"))
+    let compact = Command::new(workspace_integration::binary("loop-engine"))
         .args([
             "--database",
             database.to_str().expect("database path"),
