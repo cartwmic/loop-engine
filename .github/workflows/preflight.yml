@@ -84,7 +84,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo install cargo-nextest --version 0.9.143 --locked
-          test "$(cargo nextest --version | sed -n '1s/^cargo-nextest //p')" = "0.9.143"
+          python3 scripts/assert-nextest.py
       - name: Install pinned cargo-machete
         shell: bash
         run: |

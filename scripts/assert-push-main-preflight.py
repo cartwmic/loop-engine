@@ -110,7 +110,6 @@ def validate_preflight(preflight: str) -> None:
         '"$SCCACHE_PATH" --zero-stats',
         '"$SCCACHE_PATH" --show-stats --stats-format=json',
         "cargo install cargo-nextest --version 0.9.143 --locked",
-        "test \"$(cargo nextest --version | sed -n '1s/^cargo-nextest //p')\" = \"0.9.143\"",
         "cargo install cargo-machete --version 0.9.2 --locked",
         'test "$(cargo machete --version)" = "0.9.2"',
         # Tool, timeout, structure, inventory, and dependency assertions.
@@ -191,6 +190,10 @@ def validate_preflight(preflight: str) -> None:
     )
     require("continue-on-error" not in preflight, "reusable preflight must not skip a missing tool or gate")
     require("cargo clean" not in preflight, "preflight must not use cargo clean")
+    require(
+        "sed -n '1s/^cargo-nextest //p'" not in preflight,
+        "cargo-nextest version check must not compare metadata-bearing output as a bare version",
+    )
     required_files = (
         ".config/nextest.toml",
         "scripts/assert-nextest.py",
@@ -217,12 +220,20 @@ def validate_preflight(preflight: str) -> None:
     runtime_export = position(preflight, "name: Export GitHub Actions cache runtime variables")
     cache_start = position(preflight, '"$SCCACHE_PATH" --start-server')
     nextest_install = position(preflight, "Install pinned cargo-nextest")
+    nextest_install_command = position(preflight, "cargo install cargo-nextest --version 0.9.143 --locked")
+    nextest_version_check = preflight.find("python3 scripts/assert-nextest.py", nextest_install_command)
     machete_install = position(preflight, "Install pinned cargo-machete")
     tooling_validation = position(preflight, "Validate repository test tooling")
     require(runtime_export < cache_start, "GHA cache runtime variables must be exported before sccache startup")
+    require(nextest_version_check >= 0, "pinned cargo-nextest install must run the canonical version check")
     require(
-        cache_start < nextest_install < machete_install < tooling_validation,
-        "sccache startup and pinned tool installs must precede tooling validation",
+        cache_start
+        < nextest_install
+        < nextest_install_command
+        < nextest_version_check
+        < machete_install
+        < tooling_validation,
+        "sccache startup, pinned nextest install/check, and machete install must precede tooling validation",
     )
     # There must be no unrecognized Cargo invocation before the cache is
     # running.  The literal space avoids matching the cargo-dist installer URL.
@@ -305,7 +316,7 @@ def self_test(dispatcher: str, preflight: str) -> int:
         ("cache runtime export", "core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');", "GHA cache runtime export"),
         ("cache startup", '"$SCCACHE_PATH" --start-server', "sccache startup"),
         ("nextest install", "cargo install cargo-nextest --version 0.9.143 --locked", "pinned cargo-nextest install"),
-        ("nextest version", "test \"$(cargo nextest --version | sed -n '1s/^cargo-nextest //p')\" = \"0.9.143\"", "cargo-nextest version check"),
+        ("nextest version", "python3 scripts/assert-nextest.py", "canonical cargo-nextest version check"),
         ("machete install", "cargo install cargo-machete --version 0.9.2 --locked", "pinned cargo-machete install"),
         ("machete version", 'test "$(cargo machete --version)" = "0.9.2"', "cargo-machete version check"),
         # Tooling and structural gates.
