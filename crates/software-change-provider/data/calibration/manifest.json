@@ -9,7 +9,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "34e6f403a5d98137f5f7aef1c8094323f5f3e30aaa7a0c59f20664b602b054b2"
+    "input_sha256": "6f492175c2fd87464b6d3741383b147720f6705e6258cb3ff6f5724e3d452d0c"
   },
   {
     "fixture_id": "validation-report-defective",
@@ -21,7 +21,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "9e2233f7ff569be74343db4ad78b1d6b791e2c5d25308606f16f0e2109a5b05a"
+    "input_sha256": "d05e28aae8f9572d67843683465494a021c78647a5362bee5bdd31d7cf10f8eb"
   },
   {
     "fixture_id": "intent-good",
@@ -33,7 +33,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "6ce7c131236438053f2f4f280810fe0db9356e8a4d99fddb1e8a2811c6be0f6c"
+    "input_sha256": "18c5f9ff0f03fd853b7b3b2e714895213eda1cfa04774f2302c855863e29af16"
   },
   {
     "fixture_id": "intent-defective",
@@ -45,7 +45,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "6f8f51d05b2821507ecbd25692169175f432d58ec9f31736aa45d55524374f81"
+    "input_sha256": "3d26de233f2bc3b6656363e485b24e22d5e062ac9d8a998f62a07a29a0a92b9b"
   },
   {
     "fixture_id": "intent-good",
@@ -57,7 +57,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "c00dddd5d0591d08188c82535a1d9a601e020036e3cf45cdaebc3f9b9f09b314"
+    "input_sha256": "946afb8eb5874f32749a16f5f88bee943fa328a1e6eecc3cf982d7d20edb2b8c"
   },
   {
     "fixture_id": "intent-defective",
@@ -69,7 +69,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "0403e65f74fd0842836e72ed62781921056cf90c75b8944b161f8d61a944c470"
+    "input_sha256": "b3b61dc3607e1f7919ab8efaad3d1a41de0c88c9486df1dfb232005e190bc3d6"
   },
   {
     "fixture_id": "intent-good",
@@ -81,7 +81,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "88d63108ea71c92ca007a94c9ff8646d4ac88875c3be54206e7d3288ce7f3e76"
+    "input_sha256": "bd7acabfb3417f48d6c6b55485c23721c1a60dac969f5217d7bb7be14d7cba64"
   },
   {
     "fixture_id": "intent-defective",
@@ -93,7 +93,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "09ffb6c25fc8c2aaa97b5107a32261dbdea7a5795481128375d9fda722f9bbfe"
+    "input_sha256": "e34210c15df197ce53591784f07dd7c38f4ff98cc643b4e323ef727b10eedc0d"
   },
   {
     "fixture_id": "intent-good",
@@ -105,7 +105,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "066d39d9769336dfd37eb147a9dd0c5a7b98f90b5571dcd2c8945f183da5254a"
+    "input_sha256": "94d030cb8beca24b2b6f8224ac7bb51fd608d5cd0adc2bd7c9b3da2e8c349e46"
   },
   {
     "fixture_id": "intent-defective",
@@ -117,7 +117,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "ea4c3ce9c421e1b57235af12855e7ff74344bf28c98356fea03f8299ed2876c7"
+    "input_sha256": "66170ce7efe78087b1846134445ed567910bb56921bc8c9315bbf9749d0b81cb"
   },
   {
     "fixture_id": "intent-good",
@@ -129,7 +129,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "e3ace6df7b819b9d15f77ec12ae6771eba91efd0fe35b03c8c0688875fa58d34"
+    "input_sha256": "e16820cc8183d44a01c8f8ad5ce41580df78bb2641b7e92aaa75d5796b6ef02b"
   },
   {
     "fixture_id": "intent-defective",
@@ -141,7 +141,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "b83df0bacb062c845bc9da94a6356c1fc67a9408fff7939c768b195ba12c96a5"
+    "input_sha256": "397fc803e29d061b13aa996fb55c656707d0d24e0937d443ae08132239734b00"
   },
   {
     "fixture_id": "intent-good",
@@ -153,7 +153,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "9f4ad51caf367a92944cc1f3427e8ae71f455ef1ac1a41738c0d64e3240237a4"
+    "input_sha256": "4d970cf38946eda117e7bb24f39abdd4e6ef3ce1bbbde0bdc0ce0a37f16443ae"
   },
   {
     "fixture_id": "intent-defective",
@@ -165,7 +165,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "4a145c5d09c3619990210a33b8e1753fbf7b86ec54d46d4dd00c38545c4b4385"
+    "input_sha256": "834d042f51cffc37347179abbc611b29796b1e8ada58b83df026cfe893d62c5e"
   },
   {
     "fixture_id": "intent-good",
@@ -177,7 +177,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "6edae0cf5947cc26f74e4c94327ba1f7a760cb912bdc37c6365713f8bed40f6f"
+    "input_sha256": "083edc4c65fba26a6be1da678294295f846b794caab9540706a4c95639ba4acf"
   },
   {
     "fixture_id": "intent-defective",
@@ -189,7 +189,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "6a082d099e411a80c43c97cbdc6146cebda95e63a0540e55145cc283c26b5504"
+    "input_sha256": "212242d466497cfe2b78e80234bfe08cbae2dca68dbe6d2c547317234931d811"
   },
   {
     "fixture_id": "intent-good",
@@ -201,7 +201,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "c6ddf96f1c8127f5e14af82bb893212cee2aeaf820d621fbe5c81e58b65d994c"
+    "input_sha256": "c2358411745eba47e7736023dffa5d226d9788adb67a598aa497137ae5a7f6dd"
   },
   {
     "fixture_id": "intent-defective",
@@ -213,7 +213,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "f359c38bfb7bbda6695dc3eee5df16e9e2ec3778150175665a286ff032aeeb06"
+    "input_sha256": "8651971853ebd9c41f401e02f50eccd7eac924d53bdaabaca4da91691c09afec"
   },
   {
     "fixture_id": "intent-good",
@@ -225,7 +225,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "0ca15dccadf0eb945e43a02eae15cc12e69283d19043c5ee99463dfbbe818d39"
+    "input_sha256": "8c5c641bab1b2bc803abe8967b47794843f3758349275c23f1852588d6f03a3e"
   },
   {
     "fixture_id": "intent-defective",
@@ -237,7 +237,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "76872b1220f5006cfd4c9499db575d1b4e7668bf4ed39de3da48a86b0ddf43d0"
+    "input_sha256": "17cf7ba9d03b499c1b6cb08eb654cd381da8dee332169b1076a3295629f615ef"
   },
   {
     "fixture_id": "intent-good",
@@ -249,7 +249,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "9c07c74238ddb478ace4be00afa29f422648de5e32698d2ffc77e910081a5cf4"
+    "input_sha256": "fbd1420f098c340b501dbba901233cc091c70ece29582d8f252144e33c5d2b1f"
   },
   {
     "fixture_id": "intent-defective",
@@ -261,7 +261,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "5465e8ea69afa766fa20f134c12c966e0d11bb92d78cf0b897de6d3e90978a9a"
+    "input_sha256": "8dfca625e73660112e1388541d68ca1fba377bf0eb7de50d45e46efb400fd027"
   },
   {
     "fixture_id": "design-good",
@@ -273,7 +273,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "8e73513dc10756b4ce62d7de068379ac604ba618e59ea45270ca1853cb07ac19"
+    "input_sha256": "6063e5cb26503c0cc3d301f5e164932be10ffc3c8e918df2c4667b60755f3eb6"
   },
   {
     "fixture_id": "design-defective",
@@ -285,7 +285,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "b9f1bb2f817c9aae40874ca9163a3c7b54b61dab5acf0239ca2eb8f63a7410db"
+    "input_sha256": "c8c30f799f4c8c4b59e33c0dc47eeb2c3c1d6da89feca964b41b61d6f27b461c"
   },
   {
     "fixture_id": "design-good",
@@ -297,7 +297,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "9ee5d98a4203714bbdc8bed51495bcc53e835104d8e85989f5483110330e692a"
+    "input_sha256": "11596da27158a835e600d140dd96c16748c9a6133a560f801f092552ea848a0f"
   },
   {
     "fixture_id": "design-defective",
@@ -309,7 +309,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "379aaf1506edda9e44841e6f3fd05b05f0518ab5a1d41879be8481e973965044"
+    "input_sha256": "94713de0555480d7199e86feae27c1048a5c6613e82a356aa7b907c5ff445883"
   },
   {
     "fixture_id": "design-good",
@@ -321,7 +321,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "96a5235d420fffb95cd57875907f531ab25542de2d5cf56e2340180a74f89340"
+    "input_sha256": "ece13c0a1793d1c228e81285539a87b02b174a54bff07b9e2b403a9bbc73fd70"
   },
   {
     "fixture_id": "design-defective",
@@ -333,7 +333,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "f0c80cd9dd9dddebedff34a9536b018add90de9f7e292132927637dac160414a"
+    "input_sha256": "1ffc86838006656862307a45b7f3f9861cc3161ea68728b8317fef87dbf943f7"
   },
   {
     "fixture_id": "design-good",
@@ -345,7 +345,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "9d7e6211b6aba034ed071fb572c4a4eb84f683f8dbc3abba027743865510cecf"
+    "input_sha256": "cc138f8cd532b67573a164b92db9d842faf5ca938c6c2aada84d84b178552449"
   },
   {
     "fixture_id": "design-overbuilt",
@@ -357,7 +357,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "17d22145c42f7ebe57d1cd6caabeb72dbc20189dd4dc86065440811cd97a709a"
+    "input_sha256": "ec42cc80a8bc48b18890224702b7837346883081da38da1f410f95ef157c5a6b"
   },
   {
     "fixture_id": "design-good",
@@ -369,7 +369,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "b1cd9c23fb911933b58f2e1b6033c3780a6b292113e0e2c2efd381461c1ffd21"
+    "input_sha256": "50221b4b0bc3088b2cc21d72d6a98b2181ffca89f49fea059a08825ec223fa1a"
   },
   {
     "fixture_id": "design-defective",
@@ -381,7 +381,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "9d6fb2219ae36bc90fcd2a14b8b96376625e7b9efb07b385faf0203d194c6b52"
+    "input_sha256": "4f8f7f0b94230343386072a58d96db0501a1ba18948fd97db7269ba2ad746a7b"
   },
   {
     "fixture_id": "design-good",
@@ -393,7 +393,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "281899d0b146b7aaea13f95ae7c0af5b3690b8b28dd479985e7769619aca7494"
+    "input_sha256": "b3b925ecc89bb03178085c79bb26e48bd7df5c7e7672690ea40f5d4775b6592e"
   },
   {
     "fixture_id": "design-defective",
@@ -405,7 +405,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "2f2716af97ab93e758324046083e0ef0b10e341a6bbeeeaea13e95d919bb2417"
+    "input_sha256": "792b8a193cd175dacdf058d4d958cbefd3037752f80bfb00ef6c613ccb98d1cc"
   },
   {
     "fixture_id": "design-good",
@@ -417,7 +417,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "c32d3d5c50f0cc6b34aa7fcd4608bb362324d095d61e1ba97c843858ee90736e"
+    "input_sha256": "4b8fc48b2b8c92d38652436661799e271cbe34b920c857ff4bf5ad475eb189cb"
   },
   {
     "fixture_id": "design-defective",
@@ -429,7 +429,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "c01a96911eaa43c8ebe9277c9d19575cafae7fb05e6793eeef61ed1c39fedd96"
+    "input_sha256": "95c1c3b65d38184358e5dbd2be01ba8471f1fbc21122ec4c4f6854c69463771a"
   },
   {
     "fixture_id": "design-good",
@@ -441,7 +441,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "c8a572a742663beca550484263816fb06c4b48cc6f56574c03e7be3f05983e9c"
+    "input_sha256": "e5f08523a75810692e5f9c1002d112cd60f3d145e5e63a0e5ad3da7de084ee34"
   },
   {
     "fixture_id": "design-overbuilt",
@@ -453,7 +453,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "ef996aa73183f1d7577ff5ef3279e8b50dbd2170a7e39bdf6d356e2371d68ca1"
+    "input_sha256": "0cce28c43ee0bf24a7ee5a74bdb9c5b842d1dca3467dc93bc52a9b98a32e6d34"
   },
   {
     "fixture_id": "validation-report-good",
@@ -465,7 +465,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "2779b4c9d962ae3f18f9af35153808e367c664bc21eeeee4138d52744232fc9c"
+    "input_sha256": "ccc2d8024cbc4b046682966e92771662ba066a408597e6806e60f2aa8084f9e8"
   },
   {
     "fixture_id": "validation-report-defective",
@@ -477,7 +477,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "e9bc3204d24e1acb3c3d4ec9e17efa4ce2984cd35f4e9ad5bfff000b7440be99"
+    "input_sha256": "dd10c9d4c4757e2bdf901f290af7e68624366b81c957c74e6d27b99610f26111"
   },
   {
     "fixture_id": "validation-report-good",
@@ -489,7 +489,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "65e4f9c2c4a32c715e79789d4a52d3eb2ee7e25a2ad30f37b105917bc1a01924"
+    "input_sha256": "2d6bace5cae6a05c9cb7055997043a2c8096b13fe0565ede941a3d90960c8234"
   },
   {
     "fixture_id": "validation-report-defective",
@@ -501,7 +501,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "742be16ab87b142b11be54863d55f3726d27dea688b8af1495c18696d44323c6"
+    "input_sha256": "289ce8f281c7e83ec6bfe12e0560a8478093b93fc3a2f91d98e32470480ba514"
   },
   {
     "fixture_id": "validation-report-good",
@@ -513,7 +513,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "4e12165b6113068b8480f191058e08d844375453d5125ac12e65a9ad2cc34a4f"
+    "input_sha256": "b8f565c642e3019f208adb9ed7681f6ef6ed55a9efae6d4b21070fe460d2b592"
   },
   {
     "fixture_id": "validation-report-defective",
@@ -525,7 +525,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "0013cce4d6ce5ec899ce48ce4e80dfd1a27b1639523cdf19689a521def18c07b"
+    "input_sha256": "ea53c5063057df857fe947ffe25c4b00e7d02866b7357b5842e9be011bc26a30"
   },
   {
     "fixture_id": "validation-report-good",
@@ -537,7 +537,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "099d22491326014824b08323d492999cc44455699e141addaf92e0e6f1104a70"
+    "input_sha256": "1ed224ae9e91e54e7faef61c39fb86ed8a7bdfd354c9efe3a643f50a5d4f9fdb"
   },
   {
     "fixture_id": "validation-report-defective",
@@ -549,7 +549,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "5aaa121c54714db8cd2480960062e7f9810b22f466f3b3891c3f8abbab0b9cf4"
+    "input_sha256": "ef4e5d36b3aec62adbd37cd9d15a253269171e8fed3c0061b637bf28fce1b84e"
   },
   {
     "fixture_id": "intent-good",
@@ -561,7 +561,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "8c8a3106e8e1e0cc0102ca2b6ab68ab17190525ce5610753f72e3049b6049fef"
+    "input_sha256": "ecca4de324be0c23ce176d0ca24908a462a32f3d875e347f98a38bd8b6feb5b2"
   },
   {
     "fixture_id": "intent-defective",
@@ -573,7 +573,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "897e1a898b42914713b0de1969634a14f0dad7dae9e27e539f5e0f093ef6864f"
+    "input_sha256": "16570a3fe31b4071c44c21b3b217034779859e07c00509510bfe6c4c42849f96"
   },
   {
     "fixture_id": "intent-good",
@@ -585,7 +585,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "51383bcc7ee04059a01105e0222bebb9ca49b0f2279b3a7fae641f56cacdc4c4"
+    "input_sha256": "d8cf8750708d86c87e56a0aaf9db06f7dd73f937d11bd4c9db5672b371aed1d8"
   },
   {
     "fixture_id": "intent-defective",
@@ -597,7 +597,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "bc808aaff2ed5b81083f8f0fa4d16c52c67bf7a67f7fea5dfd166c114db2ad87"
+    "input_sha256": "ba2af87c18aa0cce902ac5e3158875b99dcc2b7be54d2094bd60b1d68403c36d"
   },
   {
     "fixture_id": "intent-good",
@@ -609,7 +609,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "d1863e4ad34183fdb1ff0f53e0cec14dbbe2c634a9567735aaa6cab08d298e06"
+    "input_sha256": "b8ac073ab83ba9305248eff5e846dbab4f28273a9fd1c32e6a3acfbd87991ffb"
   },
   {
     "fixture_id": "intent-defective",
@@ -621,7 +621,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "024d43a40e206a5b1d2e7a72c9fccee73d11914a7c43a64402670c17f91101ca"
+    "input_sha256": "149504191ee7cda52c95441a25e0d04eb1ce11b0ebc0dd5119056ce3a8410ea0"
   },
   {
     "fixture_id": "intent-good",
@@ -633,7 +633,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "8b10846ed5678bf817a67fa5c3184d91aff2dcf59512da5c645d2d1d3abd45a5"
+    "input_sha256": "f14a148aca0377eadf26f72f82b5d27740a2ff0dd3ca7e88d1dbcbad1905c0aa"
   },
   {
     "fixture_id": "intent-defective",
@@ -645,7 +645,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "ec43924664e076bb496b20caecad3b4fd9d383cec5ae3591f7b3b8f77272f6b6"
+    "input_sha256": "b09f45f6d15103ef572a3c4ecc0b3da0f9a5fb3346b063d646e6572ea88b44e0"
   },
   {
     "fixture_id": "intent-good",
@@ -657,7 +657,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "ac28041115712cfd80cce042e1dfc64b570fd6cb99acc676b513f60c90692b61"
+    "input_sha256": "1a2898fc72903e08a90a087bbbfda88713966e4511fe000f44470e2a49f0bd25"
   },
   {
     "fixture_id": "intent-defective",
@@ -669,7 +669,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "017ee10aa30dfad18bb25a25898fc9d3e63c1c84372fd7f48518e4eae6176d4f"
+    "input_sha256": "2a7d8df11535a025692fb4d177d051f916ca31d26e1943b78fed552108d247d0"
   },
   {
     "fixture_id": "intent-good",
@@ -681,7 +681,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "643bfc582787e9df123dc56f9239d6e536b328529ad6c5698a8465bcfd3139f1"
+    "input_sha256": "010d329f8059e7c703e780bc2fc87b71359295f343cfc2dd454f1c0a4aacd7c5"
   },
   {
     "fixture_id": "intent-defective",
@@ -693,7 +693,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "1617ecd3b9dca1542adea6449f35cae0dbe6fc48cae66bb5704edc4d8e67f518"
+    "input_sha256": "7262bf520542bdfa1fdac8385088103a19d2c6abff74de15f599f9968d17bf5a"
   },
   {
     "fixture_id": "intent-good",
@@ -705,7 +705,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "89c23c7e05d6f09386b6b913f7e7f21faad0353b727b774ec04d489fb4e6d4bc"
+    "input_sha256": "b8e422be72b20495721760f604e24436088e5037da3c3b00b162e84135888af3"
   },
   {
     "fixture_id": "intent-defective",
@@ -717,7 +717,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "7f40d7fbf770b5818369375250acb08d283effe0b992ac2f0b709838aa46dd6f"
+    "input_sha256": "329ec2b639a0daf3e99f211bd51bf90fdc5c1eeb5e58aa2efe8f48ca2f1330b2"
   },
   {
     "fixture_id": "intent-good",
@@ -729,7 +729,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "fab0990d50477ff7584cc5434db2989d3cfe0735cbc52001d49729c8b2b95bbc"
+    "input_sha256": "7ba98f4fed1e4ec09fc6b6afee0d0d81163126815e0e2718627cdd65f584d397"
   },
   {
     "fixture_id": "intent-defective",
@@ -741,7 +741,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "ef0203fa1335279e58e9777f20b8d9661ac6c3627a3b2b1a3985ff604aebd27b"
+    "input_sha256": "5aa55bf98812184ecbd914f6012c198bd89d69c6f96d559149d14b072f2d3186"
   },
   {
     "fixture_id": "intent-good",
@@ -753,7 +753,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "c8dcd6df9d5c7cc1668c620f2994f83ab4dbc56624a00458c955bf7dc13e1604"
+    "input_sha256": "2c47552c18eb706b2a97ce41357183ca70aad741a3891c75d9dd100f35f2971e"
   },
   {
     "fixture_id": "intent-defective",
@@ -765,7 +765,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "bdb9d9149a1f4f3190b779b003622954e872907b4d87be6edf50f06432cbd33a"
+    "input_sha256": "730969c2287daf839c593148865f9081c5f8721bf486d7b6197ae0a5f21d08eb"
   },
   {
     "fixture_id": "intent-good",
@@ -777,7 +777,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "7ba73487be0224424a471f964f39c583f96ab21763b1e930d8eda2a2977bcc94"
+    "input_sha256": "f0c58e98df7544c7d0935e21ce52e3bb27abf1255302b5f5410e8127229460e1"
   },
   {
     "fixture_id": "intent-defective",
@@ -789,7 +789,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "08d9cdeeb19e413ec2750431c39832cd791442abb787b3fd132335cc8a5c4114"
+    "input_sha256": "7e6905d15819f821ffad14c669b71c8116b164f823262230f7e89f8d2acdf51a"
   },
   {
     "fixture_id": "design-good",
@@ -801,7 +801,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "f4e5440d2057915e18ece21982f1c4d2364c2471931f78440ba10967568f9351"
+    "input_sha256": "4c5976ad23386554ccbb5cb7742d0bfd856b61611ddefc551f821d443c3518d4"
   },
   {
     "fixture_id": "design-defective",
@@ -813,7 +813,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "47887234c458fc453beb1ec03aec6baae7596f785529e5d073ac7e16e3604f85"
+    "input_sha256": "3b2a5a62cfccfb61a04f30bf12d753cc9919eea4addfac49102bd81ca3907baa"
   },
   {
     "fixture_id": "design-good",
@@ -825,7 +825,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "ec0e8890bb6838b6f8f1454dbe4f95ce74caccfb8899337b8df401464b9867ed"
+    "input_sha256": "98f77ca517afda36eed93b109cf6586ea0f86f7b444d967f4931c949f4073dc4"
   },
   {
     "fixture_id": "design-defective",
@@ -837,7 +837,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "c299cc2ba2f113a8f008c865223f0ea343051940c1e13b4476d92cbcb6c8e726"
+    "input_sha256": "d21bb264c100a0fc8bebdabc45335d08e30014a8bd5a2755f8480d7b0f6c5f37"
   },
   {
     "fixture_id": "design-good",
@@ -849,7 +849,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "68a4369d5a1f3e296b1d30067df5e1393931d81740fa2bdea74a3d74ab000a3f"
+    "input_sha256": "9de84c44306f072c47a5d9bd71c90616c4f05b3fc97e3c92d97a159c6acb8f95"
   },
   {
     "fixture_id": "design-defective",
@@ -861,7 +861,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "81bf60ca32ecfc10df9330a79d4c3b68cc3ae589765bdbc21d181553dc4a0437"
+    "input_sha256": "1ea2861a6732260fe8ef3bcbfe5f218fe8c6682239540fde37768f272f27433e"
   },
   {
     "fixture_id": "design-good",
@@ -873,7 +873,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "696126a61d1dd0e7cc42d59df7304dd40183bcf69f291518d092da8f48095b7f"
+    "input_sha256": "c7f8554eb7c1aa26fc3418866a3d58fb7b9cffe467b86767d899d23e911d733e"
   },
   {
     "fixture_id": "design-defective",
@@ -885,7 +885,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "209c1fabda6ba1a0789b6ebe29af81d7825de43d9f5f3d373d66b5c07bd3a024"
+    "input_sha256": "374fac7c9ba718a3cbf1c098d450a95077f6a57ab2cc48918ad2e189a258bec7"
   },
   {
     "fixture_id": "design-good",
@@ -897,7 +897,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "e4e4baeb50a81fac2669273506a0a2a7ddb018055e787024b553f716776a7ed6"
+    "input_sha256": "624ae05f6cad032b7dedaa8ce8aae7f312f42562a82ecc047d616cafb3f4f2d5"
   },
   {
     "fixture_id": "design-defective",
@@ -909,7 +909,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "df97659edf1bcff026f1058815ba14e416d32d00b0c4b5b3e6144a4c9b9b5e76"
+    "input_sha256": "31de721dde4946bfaa747d6656415c841802306df096a6228b13450874fce3cc"
   },
   {
     "fixture_id": "design-good",
@@ -921,7 +921,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "971a5df30dce81285b249d5030f934bff698fde6eeb8905227e50591051061d1"
+    "input_sha256": "c16ed27f8d44e8447914ab5b6d6bb11c0bdb71dd93d903e3cf21f63a58bd9b18"
   },
   {
     "fixture_id": "design-overbuilt",
@@ -933,7 +933,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "59259a04dce5e0e23ce673b50baedbd9008290c6551f6fea3918cb6e68d32cc5"
+    "input_sha256": "aa73a7aefb509eb85e28d36ec872b52d1798e4957448380d5f9100733fc97351"
   },
   {
     "fixture_id": "design-good",
@@ -945,7 +945,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "7e68d4ca4890146353f4967f3c8a71bb9edca5ee3e79bb74475f82a872a2bcca"
+    "input_sha256": "c97a970ece936203e79b915d9963ad6075abc63240fdc08e50c355a37d1bc9f6"
   },
   {
     "fixture_id": "design-defective",
@@ -957,7 +957,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "a6446c7f50ab9f33018d83bea166a3d3d5e8c92d4567444558c8395e5af6de4c"
+    "input_sha256": "76959d0aade55e77f248dc87510f95794a8f29ac10e6f19c0a7a587185cd3f95"
   },
   {
     "fixture_id": "design-good",
@@ -969,7 +969,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "163e8475eafb6287d429ddd4403b7ff0a0f78129b4900b5de25229ec549e90dd"
+    "input_sha256": "e33dd0e63a5d7d51ff1623a1360143a309f2660f2becd86332ebeb0d2e1cdbc6"
   },
   {
     "fixture_id": "design-defective",
@@ -981,7 +981,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "873fb363adb5786ba77e9139e556053fa4b30cb60ae838d509743dbf959f4a0c"
+    "input_sha256": "7a46da9224ca22a7bf7cf38ef66fd15d990b68c6d67a1b8d023389b8de47310f"
   },
   {
     "fixture_id": "design-good",
@@ -993,7 +993,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "90807fce59e2f8cff045b1d7700be4a807dfe19554951d56a26eaf1c576abb23"
+    "input_sha256": "5f9359ca86bd387b474ed852061291712869dec4eb9374669c5cec0c71a2a64d"
   },
   {
     "fixture_id": "design-defective",
@@ -1005,7 +1005,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "dc313899a3e56d2d7c062e5d1195a39f962024f7063111d3161df05fcb25f2fc"
+    "input_sha256": "1b1e24cfa30197c107dc9a0cba0078f1b9cf159ff6d85f3b3cf6882342693eee"
   },
   {
     "fixture_id": "design-good",
@@ -1017,7 +1017,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "f2629f0145ec71a63d012b82857a0507e27ee124154c7f82c9df652d9e3d08d1"
+    "input_sha256": "02ed29c759d11a82d58ad2bc813f59ee1687bbec6d8b9422cab688f2b98f8af3"
   },
   {
     "fixture_id": "design-defective",
@@ -1029,7 +1029,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "6ab48d196ac395bbcf25984f06db2ab09cd96243a3c7c3f22c577eae24d837a3"
+    "input_sha256": "73524f89658bd74190ac22df076d62a0064ab555cae56536cf8dbbc9b8a5b2fe"
   },
   {
     "fixture_id": "design-good",
@@ -1041,7 +1041,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "4095a7ae36e7fb16ef6d43e90e2f9a21add8ac3b4231854cdf75a94f5bd19ee2"
+    "input_sha256": "0776b377838da26f07e00d1df8066850354bfc6f001a7f9a5655a3a9b370b284"
   },
   {
     "fixture_id": "design-defective",
@@ -1053,7 +1053,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "a024c21af8a486cd9e7f84524fdc5be64f08df51f64c4b3922046019b6d7236d"
+    "input_sha256": "36e2a6a6b8be78507db7ede72d0fa0b8170f080c0cfa427a91434c5384c63973"
   },
   {
     "fixture_id": "design-good",
@@ -1065,7 +1065,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "d4e14fb516db02e8bb84cb0010192886fbef734f7fe7c666f79ed2c8973846fd"
+    "input_sha256": "43ecf7761e8eabe74f29630cb68b834dc18d6422036e3a8a7e56ad501d5479a6"
   },
   {
     "fixture_id": "design-overbuilt",
@@ -1077,7 +1077,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "252c2751c4adb1ab7e78b2f9b244455526d07d26deb17c3f5aa7deb748a71dad"
+    "input_sha256": "ce33cb78fb14c1516c4c6015f9ed3a0e31070f069e02154ff7bb52e07f199460"
   },
   {
     "fixture_id": "plan-good",
@@ -1089,7 +1089,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "848f9a37d6cb9268a748889716bdd94a6595f966323adbcd666470cc849ab19a"
+    "input_sha256": "60a3ac2650fb776d802255b62fd1cd9565b57e9fda8af39669ab1b85c4afdf3d"
   },
   {
     "fixture_id": "plan-defective",
@@ -1101,7 +1101,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "0f9c86fae1c5d22c6f5f7d4469456e9cee60604befe08c63b71c1fdca04d6822"
+    "input_sha256": "861115fb8c60f6bb544d82f69aafe8ae5658dddd19aa5204646993cec5898a71"
   },
   {
     "fixture_id": "plan-good",
@@ -1113,7 +1113,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "4c16a2cdfb308150eba6486b44658dbfeb9d4417066669e295130b9161a0db80"
+    "input_sha256": "20fd3a8d5c88745acd87d7daa667d777eac24458d3fe3fc37a990ac5553c0cbd"
   },
   {
     "fixture_id": "plan-defective",
@@ -1125,7 +1125,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "874a24c2b65e8a736a93de68b77ead2ed31b9f30f8d5dcee758d669d57b966b1"
+    "input_sha256": "95d46da2add198bc4fc97289cdcf44e7d3b6b4ba3ae5e68a19c64c44830f7aee"
   },
   {
     "fixture_id": "plan-good",
@@ -1137,7 +1137,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "8d7428a594e672e3e2916f45892599cb9513a6543d803fe70e5448857e5a5e6f"
+    "input_sha256": "dd2dc0251facb1cd9192b179fa79840560c2deef80e14ab5c228bf68cd26f9c6"
   },
   {
     "fixture_id": "plan-defective",
@@ -1149,7 +1149,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "2b6e04d3e612b1c4e3606d5f1cf941838c504de23387f9a39076b93d0932eb66"
+    "input_sha256": "222acaad278814ae25476480372b0d3ee56f70cab86ab5f875c5497fe04d0935"
   },
   {
     "fixture_id": "plan-good",
@@ -1161,7 +1161,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "24c0ac5f44e4b6a05f41ea4d434d723ca771850da6506bac2cd57091a349326b"
+    "input_sha256": "13e3c5e163fb0060110a15ff62392166790238bb508b32550779625eb6891a73"
   },
   {
     "fixture_id": "plan-defective",
@@ -1173,7 +1173,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "705deaefe1a2ec0c6182b893f0e5501dcfcc199da13b0789e41edc64fd87a978"
+    "input_sha256": "054c526242fb41839ed4641135fd874c7f5c21666fbabf878bee1c867f78f100"
   },
   {
     "fixture_id": "plan-good",
@@ -1185,7 +1185,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "3ca98dde8863d76908edfae409a6158945c7bea207f27718e158ef3fa30fcc05"
+    "input_sha256": "ced572d045f2f96b642e5be89b4ccd143487e8ad975a0ea490635befcf127ca6"
   },
   {
     "fixture_id": "plan-defective",
@@ -1197,7 +1197,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "bf8cc787eb4212ed477edf8a8c392b1321c23e24ae5f34306f9fd7713061f800"
+    "input_sha256": "f7bb1a8c303450dd8e7c8bba47858faf676756c0aad19d9c77825c1f681137bf"
   },
   {
     "fixture_id": "plan-good",
@@ -1209,7 +1209,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "b9cedc431b69edc17c0c190d7f877bc917b2a0a78779855e98f08788f52307d3"
+    "input_sha256": "9a727d8974428218d61b646692ce702316c08ba5c03793286c8114de51f0f181"
   },
   {
     "fixture_id": "plan-defective",
@@ -1221,7 +1221,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "0cd26828ca5f9ee508c901d1e97dbcfb181468d7e3a767cc013eb4d855eae94a"
+    "input_sha256": "959935bb8da5590e8057150f4b14ba2e99cfd9545f466814bd3a473d84368bbe"
   },
   {
     "fixture_id": "plan-good",
@@ -1233,7 +1233,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "3b0bf13993ae5f76a26028030f2d29218c81354c2d33e33f93442484698c00ed"
+    "input_sha256": "3b78203fe4b492f2f411d258dc3de19d15cf3c9d040b3390e3fe0c5258b957d2"
   },
   {
     "fixture_id": "plan-defective",
@@ -1245,7 +1245,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "e3f18701f33703a4727c5edff16105a12e159909b960d41e35691e87503ac1ac"
+    "input_sha256": "7604e925c5127dd122af0a5c6a5dc090097f888a983976144c571987d3c4f381"
   },
   {
     "fixture_id": "plan-good",
@@ -1257,7 +1257,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "3a65982a72a1b3f6abe1685d2c95ffd7be0ba7e15f2228712158785342208326"
+    "input_sha256": "6b5c5977588a88d365432ca6f664cd14c6ea3b7552eb4470a441cbfa47c8fdca"
   },
   {
     "fixture_id": "plan-defective",
@@ -1269,7 +1269,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "9e2bb5030b6af1a12bd26a1e2a0f74f5ca7bc901223b97c560c83f89c99892dc"
+    "input_sha256": "5f806c28541c55fff43a465becd353d60e7426a9f700f376dc565277b87c10d1"
   },
   {
     "fixture_id": "plan-good",
@@ -1281,7 +1281,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "02a994b6519eec1f1b7f34dea6ecbcfe95667f5480d129f691606ca31eb3e100"
+    "input_sha256": "4ba59706a38582a15a0702347d979edf100d77df585e6780d3beba08e9b2c84d"
   },
   {
     "fixture_id": "plan-defective",
@@ -1293,7 +1293,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "7d9cfc64e65ec33047b7c7707de0dd9fcc97223eb5abdd75c664d081d58d8d06"
+    "input_sha256": "22fd29eb9701bf333b1e57d17b7c6217102684cfd8f862e89f7d9a181c5734f6"
   },
   {
     "fixture_id": "plan-good",
@@ -1305,7 +1305,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "8481db537f0e55ec403f4a5b03a11b7d39d40413a5b3f834a799f93265740e9b"
+    "input_sha256": "c74d8e124efc3b63931654b1660bc7867b1ee2850550a71aa55ba4278526a1f1"
   },
   {
     "fixture_id": "plan-defective",
@@ -1317,7 +1317,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "3646faba4f8e7eac6317c16e9ac5c74d9e880b650faee769eb2a6b5073ed4e42"
+    "input_sha256": "b4de549f0f496d124efa6473972bc9d174fc67edad9e3b0d3d54177d19503d3a"
   },
   {
     "fixture_id": "plan-good",
@@ -1329,7 +1329,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "924b6128df8e94323097e3325ed96a3913e5c6a7158dd61dab78d1a7897dc387"
+    "input_sha256": "ea6f848a112812951d79e5f3b3485748ad97c8cd7f178321b9d95a8f10d41786"
   },
   {
     "fixture_id": "plan-defective",
@@ -1341,7 +1341,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "906135765fda83f4081c7430568daea2185ec05e16b7dbf5c7d46fd2e16931a1"
+    "input_sha256": "10e23e98f9a9670a29a00200f784e23309b6c419b7c0044fb6a235ad4c09edb3"
   },
   {
     "fixture_id": "plan-good",
@@ -1353,7 +1353,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "57559b22d1337c67d8dee2ade85970c0c99b21319bc42caa9e5f40a33c1bb533"
+    "input_sha256": "1084610473c4c8508721946b540a114b49f50b8bc3724fe1016dcbccb6ce6ed5"
   },
   {
     "fixture_id": "plan-defective",
@@ -1365,7 +1365,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "63ca65f4c4c5b3ce45fbb3e4205088dbd99817dc8c41a04b315849b6943d27f9"
+    "input_sha256": "37f053af684293a24115699b0ac366a473b3479888aa13d74ec811d62c89f772"
   },
   {
     "fixture_id": "implementation-report-good",
@@ -1377,7 +1377,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "78ae69c8bb24c5d9d7f80f12d834361a999e674c8b47f2f1893f96aab0c8e856"
+    "input_sha256": "cac6d08be33530dc680ef9081858957775cac4b1f026c7452e401a8afac50ebd"
   },
   {
     "fixture_id": "implementation-report-defective",
@@ -1389,7 +1389,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "42f86d661dee3b0c3a963a8612660226af228128f4d2d51ab6028aa18f651e93"
+    "input_sha256": "920bb5aec3878e70f999cfbc18441f577ccedff37e337d0cb4a1e0ae4c976263"
   },
   {
     "fixture_id": "implementation-report-good",
@@ -1401,7 +1401,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "858f53637d64ab96833b92f16e940574bd06476a3a128cb92cb8410ac738aeed"
+    "input_sha256": "154b8930e81076bc94a12aa7414b2ad225de2cdf17325412dca24d3de46f9c2c"
   },
   {
     "fixture_id": "implementation-report-defective",
@@ -1413,7 +1413,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "f138cb1b5ca222b20f5be20c96bc1102721a427319408ba0e7623cd1ef79ed64"
+    "input_sha256": "881e10cfa0c6220afd5b069028561ffae8e409e253464be38348a50d3aa178cb"
   },
   {
     "fixture_id": "implementation-report-good",
@@ -1425,7 +1425,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "947e3f982db7e3ddaa22cc5b4a6d6365d42f3031290d5ce83b723418b09a1b7b"
+    "input_sha256": "86c7c32aba67c225f9a7cda1cb60e95917d73e501a5a8ab7b12f4400da79b78c"
   },
   {
     "fixture_id": "implementation-report-defective",
@@ -1437,7 +1437,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "accfd7b7cc0c08ceff8e2d2bd7bcbd9bd7f245d8ea2de3d63e8a2a4dcf190c14"
+    "input_sha256": "5588a76719c3422b6e93b76be9f38f4b098763ac2dc6e1d184e97dfbe7e6ec2a"
   },
   {
     "fixture_id": "implementation-report-good",
@@ -1449,7 +1449,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "a948186bcf685b367092330a5e2de799e0a86c8ed9d7c8bf9c2fee6cc3a6766e"
+    "input_sha256": "9abda0a5b15c7d808b663763bf58950d7ee5e311f96d7ad0fd25eda2400ee80c"
   },
   {
     "fixture_id": "implementation-report-defective",
@@ -1461,7 +1461,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "35f68d68f20fe4892503581d49074ca58baef472357becf78ae0a0db14665837"
+    "input_sha256": "9e2f2d1ab6c9df9b129dfe91d5ef2cf2d874c1d2bca031b1c9fcb3659550894e"
   },
   {
     "fixture_id": "implementation-report-good",
@@ -1473,7 +1473,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "c3bccd31e0fd004b863e44c8e6dbe9a0e09a9efde975bee4161c5f880fe3ac8f"
+    "input_sha256": "ea81872d5f3744d1992b20d009bee9e20b539bdc58794f80d65738da307d399b"
   },
   {
     "fixture_id": "implementation-report-defective",
@@ -1485,7 +1485,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "2f23ca3427d2d53c8dab82adabd8a025f5bf351436709570f8bdbc09c6a0cd74"
+    "input_sha256": "2f4190d5ef407169dea213e42473d75e054b9aeb8d731681d84dd032dcf27611"
   },
   {
     "fixture_id": "implementation-report-good",
@@ -1497,7 +1497,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "309bbd020ae62694deed3216c47227db44789236b29a9e30eae7f4a0da6b9434"
+    "input_sha256": "c0bffdce86de037a8e527201d3cb676bc1d53fb5172da325ae18d982b132f979"
   },
   {
     "fixture_id": "implementation-report-defective",
@@ -1509,7 +1509,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "3b707a5162abde188325970ae4271d80b9a852e0aed9532a3951adef70c78c8f"
+    "input_sha256": "9b2e028df972e33a7d103ee4d72276b166a2345e51d4b428438bea8598ad744e"
   },
   {
     "fixture_id": "validation-report-good",
@@ -1521,7 +1521,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "6779fba2e6a0013deb52f7bf12b7b7e66a79dd1201fbcf6a397e52d3a0fc1010"
+    "input_sha256": "06cc4c53a1aed18df5a13c950bfb10687e12b796b666f22dece5339af2c29da8"
   },
   {
     "fixture_id": "validation-report-defective",
@@ -1533,7 +1533,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "84b1517c2ba852218f3384a278d3ed3878fc6608604b0847b7ae820b1c94d1ae"
+    "input_sha256": "e787621ad5eed1adcb5ba5808254d45d9688d3183c00db7be0c40b1c64d1ab67"
   },
   {
     "fixture_id": "validation-report-good",
@@ -1545,7 +1545,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "5c2164da01c25b06431e30f4f5acf78abb89bd107898da5d89bb7325efdc86d1"
+    "input_sha256": "acab316c1c851b5e36412a736a0773b1d02b310dd304b1e306f5ed976e34e116"
   },
   {
     "fixture_id": "validation-report-defective",
@@ -1557,7 +1557,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "80a4000f8267a7033d0ff0a394fe00c3ecbf7c940f3397b8e92fadd3125db065"
+    "input_sha256": "2bfa658cca22913c4621bda11924b67fbff3ad5d34f77f24c9a36bd8ad6cd1aa"
   },
   {
     "fixture_id": "validation-report-good",
@@ -1569,7 +1569,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "f32f98be6e393747824a999be34647285f229d104122c95921e312fb69f06a19"
+    "input_sha256": "70d6946b4e10125524b69af3de52a090b0d1a5611f1ff57402aa80e925d5ce72"
   },
   {
     "fixture_id": "validation-report-defective",
@@ -1581,7 +1581,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "5879372b376db2def41ac2be95e30521b8449eb08bf25aab3617729fb3f21fed"
+    "input_sha256": "bd9f8fc8e0f619fb89186f831dc44d6e5727c77e95ea5ef0a8563b9b12bbfacc"
   },
   {
     "fixture_id": "validation-report-good",
@@ -1593,7 +1593,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "e16998f778fe29c232685aad023b1a6adb79b71c3016a9248e69974c5e4f725c"
+    "input_sha256": "07e7797587d1e16e413f3405950f07f4706e85d997baa4829cd4d1ad370417f8"
   },
   {
     "fixture_id": "validation-report-defective",
@@ -1605,7 +1605,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "183d95495f04e4d7a1b5adc23d6c11303291e9c514cb2c21c58733e4ee2c3833"
+    "input_sha256": "b7b67632f5cccdebc707a829438d0978a091a3b90b8802b9b83d44b1eff85c43"
   },
   {
     "fixture_id": "validation-report-good",
@@ -1617,7 +1617,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "b4c645fd40b7aa0bece1f0b3f790a31665dcb5af2fcb707b1223dc4a7feb783d"
+    "input_sha256": "1c17b8d613513ff595a707f93a81b086856aa79b1e009d836c9a6856cf7b518a"
   },
   {
     "fixture_id": "validation-report-defective",
@@ -1629,7 +1629,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "4a0b0d5b46f32c07c7526ca4c768f11e0d9f337f5b10eaa492a669a36e33049c"
+    "input_sha256": "3c0b44f4dcde232e8267d7045a25a4ecb12251a0cbe5ed55518477872f1f29f7"
   },
   {
     "fixture_id": "validation-report-good",
@@ -1641,7 +1641,7 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "a46a23ccdf7563dab0b1600df6611a387f31fe8ca34185f05b40d2b57cda4501"
+    "input_sha256": "80fe7297a1a8566d3a40efbcf54ec866d73055be60b6660ced40b8a4ab06a02f"
   },
   {
     "fixture_id": "validation-report-defective",
@@ -1653,6 +1653,6 @@
     "model": "openai-codex/gpt-5.6-sol",
     "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
     "attested_by": "",
-    "input_sha256": "cbe4eb529b6aef4407c34923d6751e43a38fcd53e9feed22a2a3abd441301b56"
+    "input_sha256": "d0cfb1d09723e1e5a103d93d893ac6f6bb1f2ba266c8230ad9473cad821c1a8f"
   }
 ]

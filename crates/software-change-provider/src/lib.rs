@@ -11,6 +11,7 @@ mod overlay;
 mod schema;
 
 pub mod embedded_data;
+pub mod review_candidates;
 
 pub use dagu::{names_for_capture_root, resolve_dagu, write_locator, DaguError, DaguLocator};
 

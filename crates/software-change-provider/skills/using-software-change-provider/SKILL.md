@@ -380,6 +380,14 @@ loop-engine --json append "$RUN_ID" review-evidence @verdict.json
 
 Core resolves the invocation and assignment from the same run and adds `loop_engine_origin`; do not copy its selected attempt, digest, path, capture directory, command, or binding. The provider verifies the raw selected bytes and compares `axis`, `author`, `result`, and `findings`. Missing, changed, unavailable, or disagreeing bytes are `unverified`. Omit `origin` only for genuinely external hand-authored evidence.
 
+Before authoring any record, a fresh driver may run the exact read-only candidate pipe over the ordinary show envelope:
+
+```sh
+"$ENGINE" --json show "$RUN_ID" | "$PROVIDER" review-candidates
+```
+
+The provider emits one candidate per completed contracted review assignment in durable invocation/assignment order. `ready` is a mechanical selected-byte/contract result with only stable invocation/assignment origin plus normalized `axis`, `author`, `result`, and `findings`; `malformed`, `unavailable`, `missing-selection`, and `exhausted` are mechanical diagnostics with no judgment fields. The command does not open the catalog, retry, deduplicate distinct durable invocations, rewrite raw attempts, append context, route findings, or satisfy a gate. Inspect the raw attempts and then explicitly **accept, edit, or reject** each candidate. Candidate output is not `review-evidence` and is not semantic review; use the unchanged ordinary append path for driver-authored `review-evidence` and `finding-ledger`, then request the shown checked event.
+
 For review reuse, append one distinct applicability declaration. It references the original evidence context record and names only the current target, attesting driver, and short reason; semantic applicability remains the driver's judgment:
 
 ```sh

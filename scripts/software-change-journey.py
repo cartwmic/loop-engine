@@ -26,9 +26,10 @@ summary/captures, and the compact one-key ``artifact_root`` stdin proof, it
 prints ``contracted fan-out failure``. It also drives the real engine/provider
 boundary cases for structural workflow rejection, final-state topology,
 an initially-final run, terminal mutation rejection, a changed provider
-``describe``, and an unavailable stored evaluation. It then starts a second run
-from shipped minimal.json and walks the stitched hops (empty review lists
-omitted, last-hop ``passed`` on the live validation review).
+``describe``, and an unavailable stored evaluation. The full source run also
+executes the named Package 7b ``review-candidates`` pipe proof before it starts
+a second run from shipped minimal.json and walks the stitched hops (empty
+review lists omitted, last-hop ``passed`` on the live validation review).
 """
 
 from __future__ import annotations
@@ -313,6 +314,7 @@ class Journey:
         self.repository_root: Optional[Path] = None
         self.work_slot_bindings: Dict[str, Any] = {}
         self.dummy_worker_proof: List[str] = []
+        self.package_7b_proof: List[str] = []
         self.engine_boundary_proof: List[str] = []
         self.bookends_proof: Optional[Path] = None
         self.command_cwd: Optional[Path] = None
@@ -433,6 +435,7 @@ class Journey:
                     "successor_route_cases": successor_route_cases,
                     "work_slot_proof": WORK_SLOT_PROOF,
                     "dummy_worker_proof": self.dummy_worker_proof,
+                    "package_7b_proof": self.package_7b_proof,
                     "engine_boundary_proof": self.engine_boundary_proof,
                     "synthetic_evidence_scope": (
                         "Deterministic mechanics only; synthetic records are not semantic verdict quality."
@@ -3425,6 +3428,7 @@ class Journey:
         self._run_stitched_source()
         self._run_engine_boundary_scenarios()
         self._run_dummy_worker_proofs()
+        self._run_package_7b_review_candidates_scenario()
         self._run_checkpoint_scenarios()
         self._run_bookends_enabled_source()
 
@@ -4518,6 +4522,613 @@ else:
             )
         print("LE-76 binding-start scenarios passed: omitted/empty, argv freeze, and invalid maps")
 
+    def _run_package_7b_review_candidates_scenario(self) -> None:
+        """Prove the read-only bound-review candidate pipe end to end."""
+        if self.mode != "source":
+            raise JourneyFailure("Package 7b candidate scenario is source-only", state=self.state)
+        assert self.run_dir is not None
+        assert self.provider is not None
+        assert self.profile_source is not None
+        assert self.fixture_root is not None
+        scenario_dir = self.run_dir / "package-7b-review-candidates"
+        scenario_dir.mkdir(parents=True, exist_ok=True)
+
+        axis = "package-7b-selected"
+        ready_author = "package-7b-ready-reviewer"
+        exhausted_author = "package-7b-exhausted-reviewer"
+        profile = copy.deepcopy(self.profile)
+        policies = profile.get("review_policies")
+        if not isinstance(policies, dict):
+            raise JourneyFailure("Package 7b profile omitted review_policies", state="design-review")
+        for gate in policies:
+            policies[gate] = []
+        policies["design-review"] = [
+            {
+                "id": axis,
+                "description": "Package 7b selected candidate proof",
+                "example_prompt": "Judge package-7b-selected only.",
+                "required_authors": 1,
+            }
+        ]
+        profile_path = scenario_dir / "profile.json"
+        _write_json(profile_path, profile)
+
+        worker_script = scenario_dir / "review-worker.py"
+        worker_script.write_text(
+            "#!/usr/bin/env python3\n"
+            "import argparse, json, sys\n"
+            "from pathlib import Path\n"
+            "parser = argparse.ArgumentParser()\n"
+            "parser.add_argument('--mode', choices=('ready', 'exhausted'), required=True)\n"
+            "parser.add_argument('--state', required=True)\n"
+            "parser.add_argument('--author', required=True)\n"
+            "args = parser.parse_args()\n"
+            "sys.stdin.buffer.read()\n"
+            "state = Path(args.state)\n"
+            "count = int(state.read_text()) if state.exists() else 0\n"
+            "state.write_text(str(count + 1))\n"
+            "if args.mode == 'ready' and count == 0:\n"
+            "    sys.stdout.write('{\\\"axis\\\":\\\"malformed-first-attempt\\\"}')\n"
+            "else:\n"
+            "    result = {'axis': 'package-7b-selected', 'author': {'name': args.author, 'kind': 'script'}, 'result': 'pass', 'findings': ''}\n"
+            "    if args.mode == 'exhausted':\n"
+            "        result['axis'] = 'always-invalid'\n"
+            "    sys.stdout.write(json.dumps(result, separators=(',', ':')))\n",
+            encoding="utf-8",
+        )
+        worker_script.chmod(0o755)
+
+        def output_schema(author: str) -> Dict[str, Any]:
+            return {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["axis", "author", "result", "findings"],
+                "properties": {
+                    "axis": {"type": "string", "const": axis},
+                    "author": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["name", "kind"],
+                        "properties": {
+                            "name": {"type": "string"},
+                            "kind": {"type": "string"},
+                        },
+                        "const": {"name": author, "kind": "script"},
+                    },
+                    "result": {"type": "string", "const": "pass"},
+                    "findings": {"type": "string", "const": ""},
+                },
+            }
+
+        workers = [
+            {
+                "command": sys.executable,
+                "args": [
+                    str(worker_script),
+                    "--mode",
+                    "ready",
+                    "--state",
+                    str(scenario_dir / "ready-attempt-count"),
+                    "--author",
+                    ready_author,
+                ],
+                "preamble": "Package 7b selected reviewer",
+                "full_output_schema": output_schema(ready_author),
+            },
+            {
+                "command": sys.executable,
+                "args": [
+                    str(worker_script),
+                    "--mode",
+                    "exhausted",
+                    "--state",
+                    str(scenario_dir / "exhausted-attempt-count"),
+                    "--author",
+                    exhausted_author,
+                ],
+                "preamble": "Package 7b exhausted reviewer",
+                "full_output_schema": output_schema(exhausted_author),
+            },
+        ]
+        binding = work_slot_journey.fan_out_binding(engine=self.engine, workers=workers)
+        engine_call, artifact_root, frozen_profile = work_slot_journey._start_isolated_software_change(
+            engine=self.engine,
+            provider=self.provider,
+            profile_source=profile_path,
+            fixture_root=self.fixture_root,
+            work_dir=scenario_dir / "run",
+            run_id="package-7b-review-candidates",
+            extra_bindings={"design-review": binding},
+        )
+        run_id = "package-7b-review-candidates"
+        database = scenario_dir / "run" / "loop.sqlite"
+
+        def wait_for_terminal(invocation_id: str) -> Dict[str, Any]:
+            deadline = time.monotonic() + 30.0
+            last: Optional[Dict[str, Any]] = None
+            while time.monotonic() < deadline:
+                response = engine_call(["show", run_id])
+                if response.get("status") != "completed":
+                    raise JourneyFailure(
+                        f"Package 7b show failed while waiting: {response}",
+                        state="design-review",
+                        event="show",
+                    )
+                projection = response.get("result", {})
+                invocations = projection.get("work_slot_invocations", [])
+                last = next(
+                    (
+                        item
+                        for item in invocations
+                        if isinstance(item, dict)
+                        and item.get("invocation_id") == invocation_id
+                    ),
+                    None,
+                )
+                if last is not None and last.get("status") in {"succeeded", "failed"}:
+                    if last.get("completed_at") is not None:
+                        return last
+                time.sleep(0.05)
+            raise JourneyFailure(
+                f"Package 7b invocation did not finish: {last}",
+                state="design-review",
+                event="invoke",
+            )
+
+        def show_only() -> tuple[bytes, Dict[str, Any]]:
+            completed = subprocess.run(
+                [str(self.engine), "--database", str(database), "--json", "show", run_id],
+                cwd=self.data_root,
+                capture_output=True,
+                check=False,
+            )
+            if completed.returncode != 0:
+                raise JourneyFailure(
+                    "Package 7b ordinary show failed: "
+                    + completed.stderr.decode("utf-8", "replace"),
+                    state="design-review",
+                    event="show",
+                )
+            try:
+                envelope = json.loads(completed.stdout)
+            except json.JSONDecodeError as error:
+                raise JourneyFailure(
+                    f"Package 7b ordinary show returned non-JSON: {error}",
+                    state="design-review",
+                    event="show",
+                ) from error
+            if not isinstance(envelope, dict) or envelope.get("status") != "completed":
+                raise JourneyFailure(
+                    f"Package 7b ordinary show was not completed: {envelope}",
+                    state="design-review",
+                    event="show",
+                )
+            return completed.stdout, envelope
+
+        def project_candidates(show_bytes: bytes) -> tuple[bytes, Dict[str, Any]]:
+            # This is the public pipe: loop-engine --json show RUN | software-change review-candidates.
+            completed = subprocess.run(
+                [str(self.provider), "review-candidates"],
+                input=show_bytes,
+                capture_output=True,
+                check=False,
+            )
+            if completed.returncode != 0:
+                raise JourneyFailure(
+                    "Package 7b review-candidates failed: "
+                    + completed.stderr.decode("utf-8", "replace"),
+                    state="design-review",
+                    event="review-candidates",
+                )
+            if completed.stderr:
+                raise JourneyFailure(
+                    f"Package 7b review-candidates wrote stderr: {completed.stderr!r}",
+                    state="design-review",
+                    event="review-candidates",
+                )
+            try:
+                document = json.loads(completed.stdout)
+            except json.JSONDecodeError as error:
+                raise JourneyFailure(
+                    f"Package 7b candidate output returned non-JSON: {error}",
+                    state="design-review",
+                    event="review-candidates",
+                ) from error
+            if not isinstance(document, dict):
+                raise JourneyFailure(
+                    f"Package 7b candidate output was not an object: {document}",
+                    state="design-review",
+                    event="review-candidates",
+                )
+            return completed.stdout, document
+
+        def state_context_view(envelope: Mapping[str, Any]) -> Dict[str, Any]:
+            result = envelope.get("result")
+            if not isinstance(result, dict):
+                raise JourneyFailure(f"Package 7b show omitted result: {envelope}")
+            return {
+                name: result.get(name)
+                for name in (
+                    "current_state",
+                    "lifecycle",
+                    "initial_input",
+                    "context",
+                    "requestable_events",
+                    "latest_evaluations",
+                )
+            }
+
+        # Reach a single configured review axis through the real engine and provider.
+        work_slot_journey.invoke_until_succeeded(
+            engine_call, run_id, "intent-draft", timeout_s=20.0
+        )
+        work_slot_journey._expect_event_state(engine_call, run_id, "intent-ready", "design")
+        work_slot_journey._expect_event_state(
+            engine_call, run_id, "design-ready", "design-review"
+        )
+        started = engine_call(["invoke", run_id, "design-review"])
+        if started.get("status") != "completed":
+            raise JourneyFailure(
+                f"Package 7b bound review invoke failed: {started}",
+                state="design-review",
+                event="invoke",
+            )
+        first_invocation_id = started.get("result", {}).get("invocation_id")
+        first_capture_value = started.get("result", {}).get("capture_dir")
+        if not isinstance(first_invocation_id, str) or not isinstance(first_capture_value, str):
+            raise JourneyFailure(
+                f"Package 7b invoke omitted invocation identity: {started}",
+                state="design-review",
+                event="invoke",
+            )
+        first_capture = Path(first_capture_value)
+        first_overlay = wait_for_terminal(first_invocation_id)
+        if first_overlay.get("status") != "failed":
+            raise JourneyFailure(
+                f"Package 7b exhausted assignment did not fail the overlay: {first_overlay}",
+                state="design-review",
+                event="invoke",
+            )
+        first_workers = first_overlay.get("inner_workers")
+        if not isinstance(first_workers, list) or len(first_workers) != 2:
+            raise JourneyFailure(
+                f"Package 7b failed overlay omitted both assignment results: {first_overlay}",
+                state="design-review",
+                event="invoke",
+            )
+        attempt_count_paths = {
+            "ready": scenario_dir / "ready-attempt-count",
+            "exhausted": scenario_dir / "exhausted-attempt-count",
+        }
+
+        def read_attempt_counts(stage: str) -> Dict[str, bytes]:
+            counts = {}
+            for name, path in attempt_count_paths.items():
+                try:
+                    value = path.read_bytes()
+                except OSError as error:
+                    raise JourneyFailure(
+                        f"Package 7b could not read {name} worker attempt sentinel {path} "
+                        f"{stage}: {error}",
+                        state="design-review",
+                        event="review-candidates",
+                    ) from error
+                counts[name] = value
+            return counts
+
+        first_attempt_counts = read_attempt_counts("after the first bound invocation")
+        if any(value != b"2" for value in first_attempt_counts.values()):
+            raise JourneyFailure(
+                "Package 7b bound workers did not produce exactly two attempts before inspection: "
+                f"{first_attempt_counts}",
+                state="design-review",
+                event="review-candidates",
+            )
+        raw_before = self._artifact_tree_snapshot(first_capture)
+        first_show_bytes, first_show = show_only()
+        foreign_show = copy.deepcopy(first_show)
+        foreign_result = foreign_show.get("result")
+        if not isinstance(foreign_result, dict):
+            raise JourneyFailure(
+                f"Package 7b ordinary show omitted a mutable result: {first_show}",
+                state="design-review",
+                event="show",
+            )
+        foreign_result["workflow_id"] = "research"
+        foreign_projection = subprocess.run(
+            [str(self.provider), "review-candidates"],
+            input=json.dumps(foreign_show, separators=(",", ":")).encode("utf-8"),
+            capture_output=True,
+            check=False,
+        )
+        if (
+            foreign_projection.returncode != 2
+            or foreign_projection.stdout
+            or b"software-change" not in foreign_projection.stderr
+        ):
+            raise JourneyFailure(
+                "Package 7b projected a foreign workflow instead of failing closed: "
+                f"returncode={foreign_projection.returncode}, "
+                f"stdout={foreign_projection.stdout!r}, "
+                f"stderr={foreign_projection.stderr!r}",
+                state="design-review",
+                event="review-candidates",
+            )
+        candidate_counts_before = read_attempt_counts("before repeated candidate inspection")
+        first_candidate_bytes, first_document = project_candidates(first_show_bytes)
+        repeated_candidate_bytes, repeated_document = project_candidates(first_show_bytes)
+        candidate_counts_after = read_attempt_counts("after repeated candidate inspection")
+        if candidate_counts_before != candidate_counts_after:
+            raise JourneyFailure(
+                "Package 7b candidate inspection changed worker attempt sentinels: "
+                f"before={candidate_counts_before}, after={candidate_counts_after}",
+                state="design-review",
+                event="review-candidates",
+            )
+        if first_candidate_bytes != repeated_candidate_bytes or first_document != repeated_document:
+            raise JourneyFailure(
+                "Package 7b repeated candidate inspections were not byte-identical",
+                state="design-review",
+                event="review-candidates",
+            )
+        after_candidate_bytes, after_candidate = show_only()
+        del after_candidate_bytes
+        if state_context_view(first_show) != state_context_view(after_candidate):
+            raise JourneyFailure(
+                "Package 7b candidate inspection changed run context or state",
+                state="design-review",
+                event="review-candidates",
+            )
+        if self._artifact_tree_snapshot(first_capture) != raw_before:
+            raise JourneyFailure(
+                "Package 7b candidate inspection changed raw capture files",
+                state="design-review",
+                event="review-candidates",
+            )
+
+        candidates = first_document.get("candidates")
+        if first_document.get("schema_version") != "1" or not isinstance(candidates, list):
+            raise JourneyFailure(
+                f"Package 7b candidate document was not closed: {first_document}",
+                state="design-review",
+                event="review-candidates",
+            )
+        if [candidate.get("status") for candidate in candidates] != ["ready", "exhausted"]:
+            raise JourneyFailure(
+                f"Package 7b candidate statuses were wrong: {first_document}",
+                state="design-review",
+                event="review-candidates",
+            )
+        ready = candidates[0]
+        exhausted = candidates[1]
+        expected_first_origin = {
+            "kind": "selected-assignment-output",
+            "id": first_invocation_id,
+            "assignment_id": "worker-0",
+        }
+        if (
+            set(ready) != {"status", "origin", "axis", "author", "result", "findings"}
+            or ready.get("origin") != expected_first_origin
+            or ready.get("axis") != axis
+            or ready.get("author") != {"name": ready_author, "kind": "script"}
+            or ready.get("result") != "pass"
+            or ready.get("findings") != ""
+        ):
+            raise JourneyFailure(
+                f"Package 7b did not select the conforming retry output: {ready}",
+                state="design-review",
+                event="review-candidates",
+            )
+        expected_exhausted_origin = {
+            "kind": "selected-assignment-output",
+            "id": first_invocation_id,
+            "assignment_id": "worker-1",
+        }
+        if (
+            set(exhausted) != {"status", "origin", "diagnostic"}
+            or exhausted.get("origin") != expected_exhausted_origin
+            or not isinstance(exhausted.get("diagnostic"), str)
+            or "exhausted" not in exhausted["diagnostic"]
+        ):
+            raise JourneyFailure(
+                f"Package 7b exhausted assignment became judgment data: {exhausted}",
+                state="design-review",
+                event="review-candidates",
+            )
+        for index, expected_selected, expected_exhausted in (
+            (0, 2, False),
+            (1, None, True),
+        ):
+            manifest_path = first_capture / str(index) / "attempts.json"
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as error:
+                raise JourneyFailure(
+                    f"Package 7b could not read raw attempt manifest {manifest_path}: {error}",
+                    state="design-review",
+                    event="review-candidates",
+                ) from error
+            if (
+                manifest.get("schema_version") != "1"
+                or manifest.get("selected_attempt") != expected_selected
+                or manifest.get("exhausted") is not expected_exhausted
+                or len(manifest.get("attempts", [])) != 2
+            ):
+                raise JourneyFailure(
+                    f"Package 7b raw attempt selection/exhaustion was wrong: {manifest}",
+                    state="design-review",
+                    event="review-candidates",
+                )
+            for number in (1, 2):
+                if not (first_capture / str(index) / "attempts" / str(number) / "stdout").is_file():
+                    raise JourneyFailure(
+                        f"Package 7b omitted raw attempt {index}/{number}",
+                        state="design-review",
+                        event="review-candidates",
+                    )
+
+        # Candidate inspection alone cannot satisfy the bound edge or the provider gate.
+        inert_before_driver = engine_call(["event", run_id, "approved"])
+        inert_show = engine_call(["show", run_id])
+        if (
+            inert_before_driver.get("status") != "rejected"
+            or inert_before_driver.get("code") != "bound-slot-invocation-required"
+            or inert_show.get("result", {}).get("current_state") != "design-review"
+        ):
+            raise JourneyFailure(
+                f"Package 7b candidate inspection unexpectedly advanced the failed overlay: {inert_before_driver}",
+                state="design-review",
+                event="approved",
+            )
+
+        # Synthetic driver triage accepts the conforming ready candidate and rejects the
+        # exhausted diagnostic; a deliberate assignment selection starts a new invocation.
+        # The projection keeps both invocations rather than silently deduplicating them.
+        second_overlay = work_slot_journey.invoke_until_succeeded(
+            engine_call,
+            run_id,
+            "design-review",
+            timeout_s=20.0,
+            invoke_args=("--assignment", "worker-0"),
+        )
+        second_invocation_id = second_overlay.get("invocation_id")
+        if not isinstance(second_invocation_id, str) or second_invocation_id == first_invocation_id:
+            raise JourneyFailure(
+                f"Package 7b selected retry reused the first invocation: {second_overlay}",
+                state="design-review",
+                event="invoke",
+            )
+        second_show_bytes, second_show = show_only()
+        _, second_document = project_candidates(second_show_bytes)
+        second_candidates = second_document.get("candidates")
+        if (
+            not isinstance(second_candidates, list)
+            or [candidate.get("status") for candidate in second_candidates]
+            != ["ready", "exhausted", "ready"]
+            or [
+                candidate.get("origin", {}).get("id")
+                for candidate in second_candidates
+                if candidate.get("status") == "ready"
+            ]
+            != [first_invocation_id, second_invocation_id]
+        ):
+            raise JourneyFailure(
+                f"Package 7b projected durable invocations out of order or deduplicated them: {second_document}",
+                state="design-review",
+                event="review-candidates",
+            )
+        second_ready = second_candidates[-1]
+        expected_target_candidates = [
+            item
+            for item in second_show.get("result", {}).get("requestable_events", [])
+            if item.get("event") == "approved"
+        ]
+        if len(expected_target_candidates) != 1:
+            raise JourneyFailure(
+                f"Package 7b review state did not expose one approved event: {second_show}",
+                state="design-review",
+                event="show",
+            )
+        expected_target = expected_target_candidates[0].get("target")
+        inert_without_records = engine_call(["event", run_id, "approved"])
+        inert_without_records_show = engine_call(["show", run_id])
+        if (
+            inert_without_records.get("status") != "rejected"
+            or inert_without_records_show.get("result", {}).get("current_state") != "design-review"
+        ):
+            raise JourneyFailure(
+                f"Package 7b candidate output satisfied the checked event without driver records: {inert_without_records}",
+                state="design-review",
+                event="approved",
+            )
+
+        subject = "design.json"
+        subject_revision = self._fixture_revision(subject)
+        evidence = {
+            "gate": "design-review",
+            "policy_id": axis,
+            "result": second_ready.get("result"),
+            "findings": second_ready.get("findings"),
+            "author": second_ready.get("author"),
+            "subject": subject,
+            "subject_revision": subject_revision,
+            "config_version": frozen_profile["config_version"],
+            "origin": second_ready.get("origin"),
+        }
+        evidence_result = engine_call(
+            [
+                "append",
+                "--record-id=package-7b-review-evidence",
+                run_id,
+                "review-evidence",
+                json.dumps(evidence, separators=(",", ":")),
+            ]
+        )
+        if evidence_result.get("status") != "completed":
+            raise JourneyFailure(
+                f"Package 7b driver review-evidence append failed: {evidence_result}",
+                state="design-review",
+                event="append",
+            )
+        ledger = {
+            "schema_version": "1",
+            "gate": "design-review",
+            "subject": subject,
+            "subject_revision": subject_revision,
+            "author": {"name": "package-7b-driver", "kind": "agent"},
+            "findings": [],
+        }
+        ledger_result = engine_call(
+            [
+                "append",
+                "--record-id=package-7b-finding-ledger",
+                run_id,
+                "finding-ledger",
+                json.dumps(ledger, separators=(",", ":")),
+            ]
+        )
+        if ledger_result.get("status") != "completed":
+            raise JourneyFailure(
+                f"Package 7b driver finding-ledger append failed: {ledger_result}",
+                state="design-review",
+                event="append",
+            )
+        approved = engine_call(["event", run_id, "approved"])
+        final_show = engine_call(["show", run_id])
+        contexts = final_show.get("result", {}).get("context", [])
+        context_ids = [record.get("id") for record in contexts if isinstance(record, dict)]
+        if (
+            approved.get("status") != "completed"
+            or approved.get("result", {}).get("run", {}).get("current_state") != expected_target
+            or expected_target == "design-review"
+            or final_show.get("result", {}).get("current_state") != expected_target
+            or "package-7b-review-evidence" not in context_ids
+            or "package-7b-finding-ledger" not in context_ids
+        ):
+            raise JourneyFailure(
+                f"Package 7b explicit driver records did not permit normal progression: {approved}",
+                state="design-review",
+                event="approved",
+            )
+        self.package_7b_proof = [
+            "selected retry output is ready and exposes normalized result/findings",
+            "exhausted assignment is a non-judgmental diagnostic",
+            "raw attempts and captures remain unchanged",
+            "worker attempt sentinels remain unchanged across repeated inspection",
+            "repeated candidate inspection is byte-identical",
+            "distinct durable invocations remain ordered without deduplication",
+            "candidate inspection is inert before driver records",
+            "foreign workflow identity is rejected before projection",
+            "driver triage accepts ready and rejects exhausted before ordinary append",
+            "driver-authored review-evidence and finding-ledger permit checked progression",
+        ]
+        # bookends:LE-109 — this named Package 7b source scenario pipes ordinary show into review-candidates, proves selected retry/exhaustion and raw preservation, denies inert inspection, and advances only after explicit driver records.
+        print(
+            "Package 7b review-candidates scenario passed: selected retry, exhausted assignment, "
+            "raw capture preservation, deterministic repeated inspection, inert-before-records, "
+            "and driver-action-afterward progression"
+        )
+
     def _run_engine_boundary_scenarios(self) -> None:
         """Drive focused workflow-boundary cases through real CLI processes."""
         if self.mode != "source":
@@ -5575,6 +6186,7 @@ def assert_worker_data_skill_and_root_policy() -> None:
         "full_output_schema",
         "attempts.json",
         "finding-ledger",
+        "review-candidates",
         "revise-implementation",
         "never stages, commits, branches, pushes",
     ):
@@ -6154,6 +6766,9 @@ def assert_worker_data_skill_and_root_policy() -> None:
         "Preserve R16's independent-author aggregation and visible verdict history",
         "R21's retained review, materiality, triage, source-visibility, and no-waiver rules remain",
         "delivered stable references use context-record or invocation/assignment identities",
+        "Frozen requirements this crate's acceptance suite traces to (R1–R29",
+        "`software-change --help`/`-h` names `describe`, `evaluate`, `data-dump`, `checkpoint`, `review-candidates`, and `run-plan-graph`",
+        "`review-candidates` reads one completed ordinary `show` envelope from stdin",
     )
     # LE-107 — the self-test checks referential root/provider operational summaries against the PRD authority boundary.
     for label, text, fragments in (
@@ -6225,6 +6840,12 @@ def assert_operator_contract_surfaces() -> None:
         "meaningfully falsify",
         "current supplied evidence",
         "concrete consequence",
+        "review-candidates",
+        "selected-assignment-output",
+        "accept, edit, or reject",
+        "not evidence or semantic review",
+        "raw attempts",
+        "deduplicate",
     ):
         if clause.lower() not in contract.lower():
             raise JourneyFailure(f"operator procedure omitted {clause!r}")
@@ -6442,6 +7063,21 @@ def assert_focused_boundary_scenarios() -> None:
             (
                 "self._run_ad_hoc_repair_proof(",
                 '"implementation-adversarial-review"',
+            ),
+        ),
+        109: (
+            "_run_package_7b_review_candidates_scenario",
+            (
+                "review-candidates",
+                "selected retry",
+                "exhausted assignment",
+                "raw capture",
+                "inert-before-records",
+                "attempt_count_paths",
+                "candidate_counts_before",
+                "candidate_counts_after",
+                "foreign_projection",
+                "driver-action-afterward",
             ),
         ),
     }

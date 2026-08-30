@@ -65,6 +65,13 @@ fn run() -> i32 {
                 }
             };
         }
+        Some(command) if command == "review-candidates" => {
+            if args.next().is_some() {
+                eprintln!("review-candidates accepts no additional arguments");
+                return 2;
+            }
+            return software_change_provider::review_candidates::run_from_stdin();
+        }
         Some(command) if command == "checkpoint" => {
             let rest = match args
                 .map(|token| token.into_string())
@@ -181,7 +188,7 @@ fn run_protocol() -> i32 {
 
 fn provider_help() -> i32 {
     println!(
-        "software-change\n\nUsage:\n  software-change < stdin\n  software-change data-dump DIR\n  software-change checkpoint --phase implementation|validation --artifact-root ABS --working-directory ABS\n  software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--task ID ... | --tasks ID,ID,...] [--max-active N]\n  software-change --help | -h\n  software-change --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nData:\n  data-dump  materialize embedded provider data under DIR\n\nPlan graph:\n  run-plan-graph  requires --working-directory ABS (one existing driver-selected directory for every selected task and summarizer; no Git/worktree management) and executes plan.json as a Dagu type:graph (--max-active N; omitted means {MAX_CONCURRENCY} ordinary tasks) with a mandatory summarizer"
+        "software-change\n\nUsage:\n  software-change < stdin\n  software-change data-dump DIR\n  software-change checkpoint --phase implementation|validation --artifact-root ABS --working-directory ABS\n  software-change review-candidates\n  software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--task ID ... | --tasks ID,ID,...] [--max-active N]\n  software-change --help | -h\n  software-change --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nReview candidates:\n  review-candidates  read one completed `show` JSON envelope from stdin and emit inert selected-review candidates\n\nData:\n  data-dump  materialize embedded provider data under DIR\n\nPlan graph:\n  run-plan-graph  requires --working-directory ABS (one existing driver-selected directory for every selected task and summarizer; no Git/worktree management) and executes plan.json as a Dagu type:graph (--max-active N; omitted means {MAX_CONCURRENCY} ordinary tasks) with a mandatory summarizer"
     );
     0
 }

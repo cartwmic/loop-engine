@@ -29,6 +29,18 @@ The eight judgment fields remain required. `result` is exactly `pass` or `fail`;
 
 A bound worker judgment uses only the concise `origin` reference shown above. Core resolves that same-run invocation and assignment, then appends the engine-resolved, engine-owned `loop_engine_origin` projection containing the selected attempt, raw-output digest, selected path, capture directory, command, and binding. The driver does not copy any of those fields. The provider reads the selected bytes through that engine-owned projection and compares the raw digest and the judgment fields (`axis`, `author`, `result`, and `findings`) with the evidence record. Missing, changed, unavailable, non-JSON, or disagreeing bytes are **unverified** and cannot satisfy the axis. This is mechanical field agreement, not semantic disposition; the driver remains responsible for triage. An invocation's worker record alone is inert and never satisfies an axis. Genuinely external hand-authored evidence omits `origin`.
 
+## Read-only candidate inspection
+
+A fresh driver may inspect completed bound review output with the exact pipe:
+
+```sh
+"$ENGINE" --json show "$RUN_ID" | "$PROVIDER" review-candidates
+```
+
+This provider command reads the ordinary completed `show` envelope from stdin. It emits one candidate per eligible assignment in durable invocation/assignment order. `ready` means only that the selected bytes were found under the engine-named capture, matched the recorded digest, and conformed mechanically to the frozen review contract; its stable origin is `{ "kind": "selected-assignment-output", "id": "INVOCATION_ID", "assignment_id": "ASSIGNMENT_ID" }`, alongside normalized `axis`, `author`, `result`, and `findings`. `malformed`, `unavailable`, `missing-selection`, and `exhausted` are mechanical diagnostics, not reviewer verdicts, and omit judgment fields.
+
+The command performs no catalog access, retry, cross-invocation deduplication, capture rewrite, append, routing, or gate satisfaction. Repeated inspection of unchanged input is deterministic and raw attempts remain intact. The driver must inspect and triage the candidate and raw attempts, explicitly **accept, edit, or reject** it, then use the ordinary `review-evidence` and driver-authored `finding-ledger` append path. Candidate output is never itself review evidence or semantic judgment.
+
 ## Evidence applicability
 
 Evidence reuse is a distinct context kind, never a second form of `review-evidence`:
