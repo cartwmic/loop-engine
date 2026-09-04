@@ -1,5 +1,5 @@
 {
-  "config_version": "minimal-6",
+  "config_version": "minimal-8",
   "review_policies": {
     "intent-review": [],
     "design-review": [],
@@ -163,8 +163,22 @@
         "acceptance": {
           "type": "array",
           "items": {
-            "type": "string",
-            "minLength": 1
+            "type": "object",
+            "required": [
+              "id",
+              "statement"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^AC-[1-9][0-9]*$"
+              },
+              "statement": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
           },
           "minItems": 1
         },
@@ -324,6 +338,10 @@
               "delivered_by": {
                 "type": "string",
                 "minLength": 1
+              },
+              "criterion_id": {
+                "type": "string",
+                "pattern": "^AC-[1-9][0-9]*$"
               }
             },
             "additionalProperties": false
@@ -396,6 +414,14 @@
               "id": {
                 "type": "string",
                 "minLength": 1
+              },
+              "criterion_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^AC-[1-9][0-9]*$"
+                },
+                "minItems": 1
               },
               "objective": {
                 "type": "string",
@@ -568,8 +594,21 @@
         "validation": {
           "type": "array",
           "items": {
-            "type": "string",
-            "minLength": 1
+            "type": "object",
+            "required": [
+              "proof"
+            ],
+            "properties": {
+              "criterion_id": {
+                "type": "string",
+                "pattern": "^AC-[1-9][0-9]*$"
+              },
+              "proof": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
           },
           "minItems": 1
         }
@@ -667,6 +706,10 @@
               "proof"
             ],
             "properties": {
+              "criterion_id": {
+                "type": "string",
+                "pattern": "^AC-[1-9][0-9]*$"
+              },
               "requirement": {
                 "type": "string",
                 "minLength": 1

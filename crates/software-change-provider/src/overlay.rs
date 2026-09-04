@@ -1,8 +1,8 @@
 //! Evaluate-time bookends overlay.
 //!
 //! Shipped profile JSON stays free of bookends keys. When a frozen per-run
-//! copy sets `extra.bookends.enabled` to JSON `true`, evaluate injects
-//! `requirement_ids` into selected schemas and extra review axes. Extra is
+//! copy sets `extra.bookends.enabled` to JSON `true`, evaluate injects the
+//! PRD-traceability disposition schema and extra review axes. Extra is
 //! otherwise opaque.
 
 #![allow(dead_code)]
@@ -10,17 +10,16 @@
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
 
-const OVERLAY_SUBJECTS: &[&str] = &[
-    "intent.json",
-    "design.json",
-    "plan.json",
-    "validation-report.json",
-];
 const REQUIREMENT_ID_PATTERN: &str = r"^LE-[1-9][0-9]*$";
+const PRD_TRACEABILITY_FIELD: &str = "prd_traceability";
+const LINKED_LIVE: &str = "linked-live";
+const CANDIDATE: &str = "candidate";
+const NOT_APPLICABLE: &str = "not-applicable";
+const PRD_TRACEABILITY_TYPES: &[&str] = &[LINKED_LIVE, CANDIDATE, NOT_APPLICABLE];
 
 const IDS_GROUNDED_ID: &str = "ids-grounded";
-const IDS_GROUNDED_DESCRIPTION: &str = "Cited requirement_ids are live PRD IDs relevant to this change. Do not re-judge bookends checker red/green.";
-const IDS_GROUNDED_PROMPT: &str = "Judge ids-grounded only. Confirm every cited requirement_ids value is a live PRD ID relevant to this change. Do not re-judge bookends checker red/green.";
+const IDS_GROUNDED_DESCRIPTION: &str = "Linked-live disposition IDs are live PRD IDs relevant to this change. Do not re-judge bookends checker red/green.";
+const IDS_GROUNDED_PROMPT: &str = "Judge ids-grounded only. Confirm every linked-live disposition ID is a live PRD ID relevant to this change. Do not re-judge bookends checker red/green.";
 
 const BYPASS_NOT_GREEN_ID: &str = "bypass-not-green";
 const BYPASS_NOT_GREEN_DESCRIPTION: &str = "The validation report does not present an in-process bookends Red or other non-Green result as a green check or as validation passed. A repository pre-push or CI bypass is not a green check.";
@@ -56,7 +55,7 @@ pub(crate) fn apply(initial_input: &Value) -> Value {
         .entry("artifact_schemas")
         .or_insert_with(|| json!({}));
     if let Some(schemas) = schemas.as_object_mut() {
-        inject_requirement_ids(schemas);
+        inject_prd_traceability(schemas);
     }
     if let Some(policies) = overlayed
         .get_mut("review_policies")
@@ -79,24 +78,187 @@ pub(crate) fn is_requirement_id(value: &str) -> bool {
     }
 }
 
-/// Extra schema denials for overlay-on `requirement_ids` values.
-///
-/// Missing arrays and empty arrays are left to the injected schema
-/// (`required` / `minItems`). Missing or tombstoned IDs are not bypassable.
-pub(crate) fn requirement_id_violations(
-    instance: &Value,
+/// Validate the one PRD-traceability disposition attached to every current
+/// intent criterion when the overlay is enabled.
+pub(crate) fn intent_overlay_violations(
+    intent: &Value,
     live_ids: &[String],
 ) -> Vec<OverlayViolation> {
-    let Some(ids) = instance.get("requirement_ids").and_then(Value::as_array) else {
+    let Some(criteria) = intent.get("acceptance").and_then(Value::as_array) else {
         return Vec::new();
     };
-    let live: BTreeSet<&str> = live_ids.iter().map(String::as_str).collect();
+
     let mut violations = Vec::new();
-    for (index, value) in ids.iter().enumerate() {
-        let Some(id) = value.as_str() else {
+    for (index, criterion) in criteria.iter().enumerate() {
+        let path = format!("/acceptance/{index}/{PRD_TRACEABILITY_FIELD}");
+        let Some(criterion) = criterion.as_object() else {
+            violations.push(OverlayViolation {
+                path: format!("/acceptance/{index}"),
+                rule: "type".to_owned(),
+                message: "current criterion must be an object".to_owned(),
+            });
             continue;
         };
-        let path = format!("/requirement_ids/{index}");
+        let Some(disposition) = criterion.get(PRD_TRACEABILITY_FIELD) else {
+            violations.push(OverlayViolation {
+                path,
+                rule: "prd-traceability".to_owned(),
+                message: "each current criterion requires exactly one PRD traceability disposition"
+                    .to_owned(),
+            });
+            continue;
+        };
+        let Some(disposition) = disposition.as_object() else {
+            violations.push(OverlayViolation {
+                path,
+                rule: "prd-traceability".to_owned(),
+                message: "PRD traceability disposition must be an object".to_owned(),
+            });
+            continue;
+        };
+
+        let Some(kind) = disposition.get("type").and_then(Value::as_str) else {
+            violations.push(OverlayViolation {
+                path,
+                rule: "prd-traceability".to_owned(),
+                message: "PRD traceability disposition requires a string `type`".to_owned(),
+            });
+            continue;
+        };
+
+        match kind {
+            LINKED_LIVE => {
+                require_fields(
+                    disposition,
+                    &path,
+                    &["type", "live_ids"],
+                    &["live_ids"],
+                    &mut violations,
+                );
+                if let Some(ids) = disposition.get("live_ids") {
+                    validate_linked_live_ids(
+                        ids,
+                        &format!("{path}/live_ids"),
+                        live_ids,
+                        &mut violations,
+                    );
+                }
+            }
+            CANDIDATE => {
+                require_fields(
+                    disposition,
+                    &path,
+                    &["type", "proposed_id", "record_markdown"],
+                    &["proposed_id", "record_markdown"],
+                    &mut violations,
+                );
+                validate_candidate_disposition(disposition, &path, live_ids, &mut violations);
+            }
+            NOT_APPLICABLE => {
+                require_fields(
+                    disposition,
+                    &path,
+                    &["type", "reason"],
+                    &["reason"],
+                    &mut violations,
+                );
+                match disposition.get("reason") {
+                    Some(Value::String(reason)) if !reason.is_empty() => {}
+                    Some(Value::String(_)) => violations.push(OverlayViolation {
+                        path: format!("{path}/reason"),
+                        rule: "minLength".to_owned(),
+                        message: "not-applicable reason must not be empty".to_owned(),
+                    }),
+                    Some(_) => violations.push(OverlayViolation {
+                        path: format!("{path}/reason"),
+                        rule: "type".to_owned(),
+                        message: "not-applicable reason must be a string".to_owned(),
+                    }),
+                    None => {}
+                }
+            }
+            other => violations.push(OverlayViolation {
+                path: format!("{path}/type"),
+                rule: "enum".to_owned(),
+                message: format!("unknown PRD traceability disposition `{other}`"),
+            }),
+        }
+    }
+    sort_overlay_violations(&mut violations);
+    violations
+}
+
+/// Whether the current intent contains an active provisional candidate.
+pub(crate) fn has_candidate(intent: &Value) -> bool {
+    intent
+        .get("acceptance")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|criterion| criterion.get(PRD_TRACEABILITY_FIELD))
+        .any(|disposition| disposition.get("type").and_then(Value::as_str) == Some(CANDIDATE))
+}
+
+fn require_fields(
+    object: &Map<String, Value>,
+    path: &str,
+    allowed: &[&str],
+    required: &[&str],
+    violations: &mut Vec<OverlayViolation>,
+) {
+    for key in object.keys() {
+        if !allowed.contains(&key.as_str()) {
+            violations.push(OverlayViolation {
+                path: format!("{path}/{key}"),
+                rule: "additionalProperties".to_owned(),
+                message: format!("property `{key}` is not allowed for this disposition"),
+            });
+        }
+    }
+    for key in required {
+        if !object.contains_key(*key) {
+            violations.push(OverlayViolation {
+                path: path.to_owned(),
+                rule: "required".to_owned(),
+                message: format!("disposition requires `{key}`"),
+            });
+        }
+    }
+}
+
+fn validate_linked_live_ids(
+    value: &Value,
+    path: &str,
+    live_ids: &[String],
+    violations: &mut Vec<OverlayViolation>,
+) {
+    let Some(ids) = value.as_array() else {
+        violations.push(OverlayViolation {
+            path: path.to_owned(),
+            rule: "type".to_owned(),
+            message: "linked-live `live_ids` must be an array".to_owned(),
+        });
+        return;
+    };
+    if ids.is_empty() {
+        violations.push(OverlayViolation {
+            path: path.to_owned(),
+            rule: "minItems".to_owned(),
+            message: "linked-live `live_ids` must contain at least one ID".to_owned(),
+        });
+    }
+    let live = live_ids.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    let mut seen = BTreeSet::new();
+    for (index, value) in ids.iter().enumerate() {
+        let path = format!("{path}/{index}");
+        let Some(id) = value.as_str() else {
+            violations.push(OverlayViolation {
+                path,
+                rule: "type".to_owned(),
+                message: "linked-live ID must be a string".to_owned(),
+            });
+            continue;
+        };
         if !is_requirement_id(id) {
             violations.push(OverlayViolation {
                 path: path.clone(),
@@ -104,6 +266,13 @@ pub(crate) fn requirement_id_violations(
                 message: format!("string does not match `{REQUIREMENT_ID_PATTERN}`"),
             });
             continue;
+        }
+        if !seen.insert(id.to_owned()) {
+            violations.push(OverlayViolation {
+                path: path.clone(),
+                rule: "requirement-ids-duplicate".to_owned(),
+                message: format!("duplicate linked live requirement ID `{id}`"),
+            });
         }
         if !live.contains(id) {
             violations.push(OverlayViolation {
@@ -113,51 +282,140 @@ pub(crate) fn requirement_id_violations(
             });
         }
     }
-    violations
 }
 
-fn inject_requirement_ids(schemas: &mut Map<String, Value>) {
-    for subject in OVERLAY_SUBJECTS {
-        let schema = schemas
-            .entry((*subject).to_owned())
-            .or_insert_with(minimal_requirement_schema);
-        let Some(object) = schema.as_object_mut() else {
-            continue;
-        };
-        let properties = object.entry("properties").or_insert_with(|| json!({}));
-        if let Some(properties) = properties.as_object_mut() {
-            // The overlay owns this field even when a caller's per-run copy
-            // already contains a stale or weaker declaration.
-            properties.insert("requirement_ids".to_owned(), requirement_ids_schema());
+fn validate_candidate_disposition(
+    disposition: &Map<String, Value>,
+    path: &str,
+    live_ids: &[String],
+    violations: &mut Vec<OverlayViolation>,
+) {
+    let proposed = disposition.get("proposed_id").and_then(Value::as_str);
+    if let Some(id) = proposed {
+        if !is_requirement_id(id) {
+            violations.push(OverlayViolation {
+                path: format!("{path}/proposed_id"),
+                rule: "pattern".to_owned(),
+                message: format!("string does not match `{REQUIREMENT_ID_PATTERN}`"),
+            });
+        } else if live_ids.iter().any(|live| live == id) {
+            violations.push(OverlayViolation {
+                path: format!("{path}/proposed_id"),
+                rule: "candidate-live-id".to_owned(),
+                message: format!("candidate requirement ID `{id}` is already live"),
+            });
         }
-        let required = object.entry("required").or_insert_with(|| json!([]));
-        if let Some(required) = required.as_array_mut() {
-            let already = required
-                .iter()
-                .any(|entry| entry.as_str() == Some("requirement_ids"));
-            if !already {
-                required.push(json!("requirement_ids"));
-            }
+    }
+
+    let Some(markdown) = disposition.get("record_markdown").and_then(Value::as_str) else {
+        return;
+    };
+    let parsed = match bookends_check::candidate_ids(markdown) {
+        Ok(ids) => ids,
+        Err(errors) => {
+            violations.push(OverlayViolation {
+                path: format!("{path}/record_markdown"),
+                rule: "candidate-parser".to_owned(),
+                message: errors.join("; "),
+            });
+            return;
+        }
+    };
+    if parsed.len() != 1 {
+        violations.push(OverlayViolation {
+            path: format!("{path}/record_markdown"),
+            rule: "candidate-parser".to_owned(),
+            message: format!(
+                "candidate must contain exactly one parsed requirement record, found {}",
+                parsed.len()
+            ),
+        });
+        return;
+    }
+    let parsed_id = &parsed[0];
+    if proposed != Some(parsed_id.as_str()) {
+        violations.push(OverlayViolation {
+            path: format!("{path}/proposed_id"),
+            rule: "candidate-id-binding".to_owned(),
+            message: format!("proposed_id must equal parser-extracted candidate ID `{parsed_id}`"),
+        });
+    }
+}
+
+fn sort_overlay_violations(violations: &mut [OverlayViolation]) {
+    violations.sort_by(|left, right| {
+        (&left.path, &left.rule, &left.message).cmp(&(&right.path, &right.rule, &right.message))
+    });
+}
+
+fn inject_prd_traceability(schemas: &mut Map<String, Value>) {
+    let Some(schema) = schemas.get_mut("intent.json") else {
+        return;
+    };
+    let Some(schema) = schema.as_object_mut() else {
+        return;
+    };
+    let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else {
+        return;
+    };
+    let Some(acceptance) = properties
+        .get_mut("acceptance")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    let Some(item) = acceptance.get_mut("items").and_then(Value::as_object_mut) else {
+        return;
+    };
+
+    let item_properties = item.entry("properties").or_insert_with(|| json!({}));
+    let Some(item_properties) = item_properties.as_object_mut() else {
+        return;
+    };
+    item_properties.insert(PRD_TRACEABILITY_FIELD.to_owned(), prd_traceability_schema());
+
+    let required = item.entry("required").or_insert_with(|| json!([]));
+    if let Some(required) = required.as_array_mut() {
+        if !required
+            .iter()
+            .any(|entry| entry.as_str() == Some(PRD_TRACEABILITY_FIELD))
+        {
+            required.push(json!(PRD_TRACEABILITY_FIELD));
         }
     }
 }
 
-fn minimal_requirement_schema() -> Value {
+fn prd_traceability_schema() -> Value {
     json!({
         "type": "object",
-        "properties": {},
-        "required": []
-    })
-}
-
-fn requirement_ids_schema() -> Value {
-    json!({
-        "type": "array",
-        "minItems": 1,
-        "items": {
-            "type": "string",
-            "pattern": REQUIREMENT_ID_PATTERN
-        }
+        "required": ["type"],
+        "properties": {
+            "type": {
+                "type": "string",
+                "enum": PRD_TRACEABILITY_TYPES
+            },
+            "live_ids": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "string",
+                    "pattern": REQUIREMENT_ID_PATTERN
+                }
+            },
+            "proposed_id": {
+                "type": "string",
+                "pattern": REQUIREMENT_ID_PATTERN
+            },
+            "record_markdown": {
+                "type": "string",
+                "minLength": 1
+            },
+            "reason": {
+                "type": "string",
+                "minLength": 1
+            }
+        },
+        "additionalProperties": false
     })
 }
 
@@ -241,82 +499,59 @@ mod tests {
     }
 
     #[test]
-    fn apply_injects_requirement_ids_into_four_schemas_only() {
+    fn apply_injects_closed_prd_traceability_into_intent_criteria_only() {
         let input = json!({
             "artifact_schemas": {
                 "intent.json": {
                     "type": "object",
-                    "properties": {"revision": {"type": "string"}},
-                    "required": ["revision"],
-                    "additionalProperties": false
+                    "properties": {
+                        "acceptance": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["id", "statement"],
+                                "properties": {
+                                    "id": {"type": "string"},
+                                    "statement": {"type": "string"}
+                                },
+                                "additionalProperties": false
+                            }
+                        }
+                    },
+                    "required": ["acceptance"]
                 },
                 "design.json": {
                     "type": "object",
-                    "properties": {"revision": {"type": "string"}},
-                    "required": ["revision"]
-                },
-                "plan.json": {
-                    "type": "object",
-                    "properties": {"revision": {"type": "string"}},
-                    "required": ["revision"]
-                },
-                "implementation-report.json": {
-                    "type": "object",
-                    "properties": {"revision": {"type": "string"}},
-                    "required": ["revision"]
-                },
-                "validation-report.json": {
-                    "type": "object",
-                    "properties": {"revision": {"type": "string"}},
-                    "required": ["revision"]
+                    "properties": {},
+                    "required": []
                 }
             },
             "review_policies": {}
         });
         let overlayed = apply(&input);
-        for subject in OVERLAY_SUBJECTS {
-            let schema = &overlayed["artifact_schemas"][subject];
-            assert!(
-                schema_required(schema).contains(&"requirement_ids"),
-                "{subject} required"
-            );
-            assert_eq!(schema["properties"]["requirement_ids"]["type"], "array");
-            assert_eq!(schema["properties"]["requirement_ids"]["minItems"], 1);
-            assert_eq!(
-                schema["properties"]["requirement_ids"]["items"]["type"],
-                "string"
-            );
-            assert_eq!(
-                schema["properties"]["requirement_ids"]["items"]["pattern"],
-                REQUIREMENT_ID_PATTERN
-            );
-        }
-        assert!(
-            overlayed["artifact_schemas"]["implementation-report.json"]["properties"]
-                .get("requirement_ids")
-                .is_none()
-        );
-        assert!(
-            !schema_required(&overlayed["artifact_schemas"]["implementation-report.json"])
-                .contains(&"requirement_ids")
+        let item =
+            &overlayed["artifact_schemas"]["intent.json"]["properties"]["acceptance"]["items"];
+        assert!(schema_required(item).contains(&PRD_TRACEABILITY_FIELD));
+        let disposition = &item["properties"][PRD_TRACEABILITY_FIELD];
+        assert_eq!(disposition["type"], "object");
+        assert_eq!(disposition["additionalProperties"], false);
+        assert_eq!(
+            disposition["properties"]["type"]["enum"],
+            json!(PRD_TRACEABILITY_TYPES)
         );
         assert_eq!(
-            input["artifact_schemas"]["intent.json"]["required"],
-            json!(["revision"])
+            disposition["properties"]["live_ids"]["items"]["pattern"],
+            REQUIREMENT_ID_PATTERN
         );
-    }
-
-    #[test]
-    fn apply_adds_id_only_schemas_when_a_custom_profile_omits_them() {
-        let input = json!({"review_policies": {}});
-        let overlayed = apply(&input);
-        for subject in OVERLAY_SUBJECTS {
-            let schema = &overlayed["artifact_schemas"][subject];
-            assert_eq!(schema["type"], "object");
-            assert!(schema_required(schema).contains(&"requirement_ids"));
-            assert_eq!(schema["properties"]["requirement_ids"]["minItems"], 1);
-        }
-        assert!(input.get("artifact_schemas").is_none());
+        assert!(overlayed["artifact_schemas"]["design.json"]["properties"]
+            .get(PRD_TRACEABILITY_FIELD)
+            .is_none());
+        assert!(
+            input["artifact_schemas"]["intent.json"]["properties"]["acceptance"]["items"]
+                ["properties"]
+                .get(PRD_TRACEABILITY_FIELD)
+                .is_none()
+        );
     }
 
     #[test]
@@ -348,6 +583,123 @@ mod tests {
     }
 
     #[test]
+    fn overlay_dispositions_accept_linked_candidate_and_not_applicable() {
+        let intent = json!({
+            "acceptance": [
+                {
+                    "id": "AC-1",
+                    "statement": "The live requirement is delivered.",
+                    "prd_traceability": {
+                        "type": "linked-live",
+                        "live_ids": ["LE-1"]
+                    }
+                },
+                {
+                    "id": "AC-2",
+                    "statement": "The new requirement is proposed.",
+                    "prd_traceability": {
+                        "type": "candidate",
+                        "proposed_id": "LE-9",
+                        "record_markdown": "### LE-9: Proposed requirement\n- Status: live\n- Coverage: e2e/journey\n"
+                    }
+                },
+                {
+                    "id": "AC-3",
+                    "statement": "The repository-only condition remains binding.",
+                    "prd_traceability": {
+                        "type": "not-applicable",
+                        "reason": "Repository-only condition, not an enduring product requirement."
+                    }
+                }
+            ]
+        });
+        assert!(intent_overlay_violations(&intent, &["LE-1".to_owned()]).is_empty());
+        assert!(has_candidate(&intent));
+    }
+
+    #[test]
+    fn candidate_binding_and_live_collision_are_mechanical() {
+        let mismatch = json!({
+            "acceptance": [{
+                "id": "AC-1",
+                "statement": "candidate",
+                "prd_traceability": {
+                    "type": "candidate",
+                    "proposed_id": "LE-8",
+                    "record_markdown": "### LE-9: Proposed\n- Status: live\n- Coverage: e2e/journey\n"
+                }
+            }]
+        });
+        let mismatch_rules = intent_overlay_violations(&mismatch, &[])
+            .into_iter()
+            .map(|violation| violation.rule)
+            .collect::<Vec<_>>();
+        assert!(mismatch_rules.contains(&"candidate-id-binding".to_owned()));
+
+        let collision = json!({
+            "acceptance": [{
+                "id": "AC-1",
+                "statement": "candidate",
+                "prd_traceability": {
+                    "type": "candidate",
+                    "proposed_id": "LE-1",
+                    "record_markdown": "### LE-1: Existing\n- Status: live\n- Coverage: e2e/journey\n"
+                }
+            }]
+        });
+        let collision_rules = intent_overlay_violations(&collision, &["LE-1".to_owned()])
+            .into_iter()
+            .map(|violation| violation.rule)
+            .collect::<Vec<_>>();
+        assert!(collision_rules.contains(&"candidate-live-id".to_owned()));
+
+        let multiple = json!({
+            "acceptance": [{
+                "id": "AC-1",
+                "statement": "candidate",
+                "prd_traceability": {
+                    "type": "candidate",
+                    "proposed_id": "LE-8",
+                    "record_markdown": "### LE-8: One\n- Status: live\n- Coverage: e2e/journey\n\n### LE-9: Two\n- Status: live\n- Coverage: e2e/journey\n"
+                }
+            }]
+        });
+        let multiple_rules = intent_overlay_violations(&multiple, &[])
+            .into_iter()
+            .map(|violation| violation.rule)
+            .collect::<Vec<_>>();
+        assert!(multiple_rules.contains(&"candidate-parser".to_owned()));
+    }
+
+    #[test]
+    fn not_applicable_does_not_look_like_a_candidate() {
+        let intent = json!({
+            "acceptance": [{
+                "id": "AC-1",
+                "statement": "A binding criterion.",
+                "prd_traceability": {
+                    "type": "not-applicable",
+                    "reason": "Only a change-specific validation condition."
+                }
+            }]
+        });
+        assert!(intent_overlay_violations(&intent, &[]).is_empty());
+        assert!(!has_candidate(&intent));
+        let candidate = json!({
+            "acceptance": [{
+                "id": "AC-1",
+                "statement": "A binding criterion.",
+                "prd_traceability": {
+                    "type": "candidate",
+                    "proposed_id": "LE-8",
+                    "record_markdown": "### LE-8: Proposed\n- Status: live\n- Coverage: e2e/journey\n"
+                }
+            }]
+        });
+        assert!(has_candidate(&candidate));
+    }
+
+    #[test]
     fn requirement_id_pattern_matches_schema_token() {
         assert!(is_requirement_id("LE-1"));
         assert!(is_requirement_id("LE-99"));
@@ -359,15 +711,30 @@ mod tests {
     }
 
     #[test]
-    fn empty_and_tombstoned_ids_are_denied() {
-        let live = vec!["LE-1".to_owned()];
-        assert!(requirement_id_violations(&json!({}), &live).is_empty());
-        assert!(requirement_id_violations(&json!({"requirement_ids": []}), &live).is_empty());
-        let tombstoned = requirement_id_violations(&json!({"requirement_ids": ["LE-2"]}), &live);
-        assert_eq!(tombstoned.len(), 1);
-        assert_eq!(tombstoned[0].rule, "requirement-ids-live");
-        let malformed = requirement_id_violations(&json!({"requirement_ids": ["nope"]}), &live);
-        assert_eq!(malformed[0].rule, "pattern");
-        assert!(requirement_id_violations(&json!({"requirement_ids": ["LE-1"]}), &live).is_empty());
+    fn linked_live_disposition_reuses_live_id_checks() {
+        let empty = json!({
+            "acceptance": [{
+                "prd_traceability": {"type": "linked-live", "live_ids": []}
+            }]
+        });
+        assert!(intent_overlay_violations(&empty, &["LE-1".to_owned()])
+            .iter()
+            .any(|violation| violation.rule == "minItems"));
+
+        let tombstoned = json!({
+            "acceptance": [{
+                "prd_traceability": {"type": "linked-live", "live_ids": ["LE-2"]}
+            }]
+        });
+        assert!(intent_overlay_violations(&tombstoned, &["LE-1".to_owned()])
+            .iter()
+            .any(|violation| violation.rule == "requirement-ids-live"));
+
+        let live = json!({
+            "acceptance": [{
+                "prd_traceability": {"type": "linked-live", "live_ids": ["LE-1"]}
+            }]
+        });
+        assert!(intent_overlay_violations(&live, &["LE-1".to_owned()]).is_empty());
     }
 }

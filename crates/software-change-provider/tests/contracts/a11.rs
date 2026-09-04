@@ -35,9 +35,9 @@ fn read_data(relative: &str) -> Vec<u8> {
 
 fn profile_name(config_version: &str) -> &'static str {
     match config_version {
-        "minimal-6" => "minimal",
-        "standard-7" => "standard",
-        "high-rigor-7" => "high-rigor",
+        "minimal-8" => "minimal",
+        "standard-8" => "standard",
+        "high-rigor-8" => "high-rigor",
         other => panic!("unknown shipped config version {other}"),
     }
 }
@@ -1632,7 +1632,7 @@ fn canonical_source_records_have_exact_order_and_labels() {
             entry["gate"] == "validation-review"
                 && entry["axis"] == "docs-integrated"
                 && entry["expected"] == "pass"
-                && entry["config_version"] == "standard-7"
+                && entry["config_version"] == "standard-8"
         })
         .expect("docs-integrated row");
     let entry = entry.as_object().expect("manifest row object");
@@ -1677,11 +1677,11 @@ fn canonical_request_json_has_exact_fields_and_no_trailing_newline() {
         "docs-integrated",
         "validation-report.json",
         "r15",
-        "standard-7",
+        "standard-8",
     );
     assert_eq!(
         request,
-        br#"{"gate":"validation-review","policy_id":"docs-integrated","subject":"validation-report.json","subject_revision":"r15","config_version":"standard-7"}"#
+        br#"{"gate":"validation-review","policy_id":"docs-integrated","subject":"validation-report.json","subject_revision":"r15","config_version":"standard-8"}"#
     );
     assert_ne!(request.last(), Some(&b'\n'));
 }
@@ -1694,7 +1694,7 @@ fn every_supplied_source_record_mutation_changes_digest() {
             entry["gate"] == "validation-review"
                 && entry["axis"] == "docs-integrated"
                 && entry["expected"] == "pass"
-                && entry["config_version"] == "standard-7"
+                && entry["config_version"] == "standard-8"
         })
         .expect("docs-integrated row");
     let entry = entry.as_object().expect("manifest row object");

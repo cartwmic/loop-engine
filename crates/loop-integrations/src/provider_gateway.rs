@@ -7,8 +7,8 @@
 
 use crate::provider::ProviderInvocation;
 use loop_core::{
-    EvaluationFeedback, EvaluationRequest, EvaluationResult, ProviderAssociation, ProviderError,
-    ProviderGateway, Workflow,
+    AllowResponse, EvaluationFeedback, EvaluationRequest, EvaluationResult, ProviderAssociation,
+    ProviderError, ProviderGateway, Workflow,
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -290,10 +290,7 @@ fn parse_evaluation_response(value: Value) -> Result<EvaluationResult, ProviderE
         })?;
 
     match result {
-        "allow" => {
-            require_exact_keys(object, &["result"], "allow response")?;
-            Ok(EvaluationResult::Allow)
-        }
+        "allow" => parse_allow_response(object),
         "unsupported" => {
             require_exact_keys(object, &["result"], "unsupported response")?;
             Ok(EvaluationResult::Unsupported)
@@ -303,6 +300,27 @@ fn parse_evaluation_response(value: Value) -> Result<EvaluationResult, ProviderE
             "unknown evaluate result `{other}`"
         ))),
     }
+}
+
+fn parse_allow_response(object: &Map<String, Value>) -> Result<EvaluationResult, ProviderError> {
+    require_allowed_keys(object, &["result", "context_append"], "allow response")?;
+    if object.is_empty() || object.len() > 2 {
+        return Err(ProviderError::invalid_response(
+            "allow response contains unexpected or missing fields",
+        ));
+    }
+
+    let mut response = AllowResponse::empty();
+    if let Some(context_append) = object.get("context_append") {
+        response.context_append = Some(serde_json::from_value(context_append.clone()).map_err(
+            |error| {
+                ProviderError::invalid_response(format!(
+                    "allow response `context_append` is invalid: {error}"
+                ))
+            },
+        )?);
+    }
+    Ok(EvaluationResult::from(response))
 }
 
 fn parse_deny_response(object: &Map<String, Value>) -> Result<EvaluationResult, ProviderError> {
@@ -572,6 +590,39 @@ mod tests {
             })),
             Err(ProviderError::InvalidResponse { .. })
         ));
+    }
+
+    #[test]
+    fn allow_response_parses_opaque_context_append_and_rejects_malformed_shapes() {
+        let parsed = parse_evaluation_response(json!({
+            "result": "allow",
+            "context_append": {
+                "kind": "",
+                "data": ["opaque", null]
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            parsed.context_append().map(|effect| effect.kind.as_str()),
+            Some("")
+        );
+        assert_eq!(
+            parsed.context_append().unwrap().data,
+            json!(["opaque", null])
+        );
+
+        for response in [
+            json!({"result": "allow", "context_append": {"data": {}}}),
+            json!({"result": "allow", "context_append": null}),
+            json!({"result": "allow", "context_append": {"kind": "snapshot", "data": {}, "extra": true}}),
+            json!({"result": "deny", "feedback": {"code": "blocked", "message": "no"}, "context_append": {"kind": "snapshot", "data": {}}}),
+            json!({"result": "unsupported", "context_append": {"kind": "snapshot", "data": {}}}),
+        ] {
+            assert!(matches!(
+                parse_evaluation_response(response),
+                Err(ProviderError::InvalidResponse { .. })
+            ));
+        }
     }
 
     #[test]

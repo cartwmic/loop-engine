@@ -62,13 +62,29 @@ impl Prd {
 /// A candidate must contain at least one live record or retained tombstone;
 /// no repository-level claim is made by this function.
 pub fn validate_candidate(text: &str) -> Result<Vec<String>, Vec<String>> {
+    Ok(parse_candidate(text)?.live_ids())
+}
+
+/// Return every requirement identity parsed from a candidate, including a
+/// retained tombstone.  This is the same parser-only validation as
+/// [`validate_candidate`], but callers that bind a provisional identity need
+/// the candidate's complete parsed record set rather than only its live IDs.
+pub fn candidate_ids(text: &str) -> Result<Vec<String>, Vec<String>> {
+    Ok(parse_candidate(text)?
+        .records
+        .into_iter()
+        .map(|record| record.id)
+        .collect())
+}
+
+fn parse_candidate(text: &str) -> Result<Prd, Vec<String>> {
     let prd = parse_prd(text)?;
     if prd.records.is_empty() {
         return Err(vec![
             "candidate contains no live or tombstone records".to_owned()
         ]);
     }
-    Ok(prd.live_ids())
+    Ok(prd)
 }
 
 pub(crate) fn parse_prd(text: &str) -> Result<Prd, Vec<String>> {
@@ -296,6 +312,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(prd.live_ids(), vec!["LE-1".to_string()]);
+    }
+
+    #[test]
+    fn candidate_ids_expose_all_parser_records_without_changing_live_projection() {
+        let text = "### LE-7: Proposed\n- Status: tombstone\n\n### LE-8: Live\n- Status: live\n- Coverage: e2e/journey\n";
+        assert_eq!(
+            candidate_ids(text).unwrap(),
+            vec!["LE-7".to_owned(), "LE-8".to_owned()]
+        );
+        assert_eq!(validate_candidate(text).unwrap(), vec!["LE-8".to_owned()]);
     }
 
     #[test]

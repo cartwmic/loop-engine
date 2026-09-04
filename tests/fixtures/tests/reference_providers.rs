@@ -1,6 +1,7 @@
 use loop_core::{
-    ContextRecord, DurableEvaluation, EvaluationFeedback, EvaluationRequest, EvaluationResult,
-    ProviderAssociation, ProviderGateway, SemanticSequence, Timestamp, Transition,
+    ContextAppendEffect, ContextRecord, DurableEvaluation, EvaluationFeedback, EvaluationRequest,
+    EvaluationResult, ProviderAssociation, ProviderGateway, SemanticSequence, Timestamp,
+    Transition,
 };
 use loop_integrations::{ProviderError, ProviderInvocation, SubprocessProviderGateway};
 use loop_reference_fixtures::{
@@ -9,8 +10,8 @@ use loop_reference_fixtures::{
     research_policy_set_a, research_review_context, research_revision_links, research_verification,
     research_workflow, software_change_initial_input, software_change_initial_input_with_behavior,
     software_change_policy_set_a, software_change_policy_set_b, software_change_review_context,
-    software_change_workflow, FixtureProvider, DESIGN_REVIEW_GATE, PLAN_REVIEW_GATE,
-    RESEARCH_VERIFY_GATE,
+    software_change_workflow, FixtureProvider, DESIGN_REVIEW_GATE, LE_110_CONTEXT_APPEND_BEHAVIOR,
+    LE_110_CONTEXT_APPEND_KIND, PLAN_REVIEW_GATE, RESEARCH_VERIFY_GATE,
 };
 use serde_json::{json, Value};
 use std::fs;
@@ -290,6 +291,52 @@ fn two_material_policy_sets_use_one_provider_and_unchanged_topology() {
     .expect("provider response");
     assert_eq!(second, EvaluationResult::Allow);
     assert_eq!(software_change_workflow(), software_change_workflow());
+}
+
+#[test]
+fn le_110_fixture_effect_is_wire_visible_only_at_intent_ready() {
+    let named_transition = Transition::checked("explore", "intent-ready", "design");
+    let effect_input = software_change_initial_input_with_behavior(
+        json!({}),
+        None,
+        LE_110_CONTEXT_APPEND_BEHAVIOR,
+    );
+    let effect = evaluate_software(effect_input, named_transition, Vec::new(), Vec::new())
+        .expect("fixture allow response");
+    assert_eq!(
+        effect,
+        EvaluationResult::allow_with_context_append(ContextAppendEffect::new(
+            LE_110_CONTEXT_APPEND_KIND,
+            json!({
+                "fixture": "reference-software-change",
+                "transition": "intent-ready"
+            }),
+        ))
+    );
+
+    let other_checked = evaluate_software(
+        software_change_initial_input_with_behavior(
+            json!({}),
+            None,
+            LE_110_CONTEXT_APPEND_BEHAVIOR,
+        ),
+        Transition::checked("design", "design-ready", "design-review"),
+        Vec::new(),
+        Vec::new(),
+    )
+    .expect("effect-free fixture allow response");
+    assert_eq!(other_checked, EvaluationResult::Allow);
+    assert!(other_checked.context_append().is_none());
+
+    let denied = evaluate_software(
+        software_change_initial_input_with_behavior(json!({}), None, "deny"),
+        Transition::checked("explore", "intent-ready", "design"),
+        Vec::new(),
+        Vec::new(),
+    )
+    .expect("fixture deny response");
+    assert!(denied.is_deny());
+    assert!(denied.context_append().is_none());
 }
 
 #[test]

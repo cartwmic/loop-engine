@@ -11,7 +11,10 @@ Every task includes:
 - deliverables;
 - out-of-scope boundaries;
 - validation;
-- handoff contract.
+- handoff contract;
+- optional `criterion_ids`, a non-empty list of current intent `AC-N` IDs when this task usefully names its criterion scope.
+
+Do not require every task to carry a criterion reference, and do not reproduce a complete criterion matrix or create a parallel PRD-ID spine.
 
 Validation must use realistic black-box proof of the observable outcome when practical. If black-box proof is genuinely impractical, state the concrete reason and the nearest realistic substitute; a list of completed work, internal tests, or passing commands is not outcome proof by itself. Keep task packets specific enough to preserve acceptance without prescribing replaceable mechanisms. Implementation agents have freedom inside frozen intent, operating context, outside obligations, and design decisions; do not leave product or architectural decisions for them, and do not turn a preferred implementation into a requirement.
 

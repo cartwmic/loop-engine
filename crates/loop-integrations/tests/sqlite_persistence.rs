@@ -1,10 +1,12 @@
 use loop_core::{
+    operations::event::{execute as execute_event, Request as EventRequest},
     AppendContextRequest, CheckedEvaluationSnapshotRequest, CommitTransitionRequest,
-    CompleteWorkSlotInvocationRequest, CreateRunRequest, CreateWorkSlotInvocationRequest,
-    EvaluationFeedback, HistoryAction, Lifecycle, Persistence, PersistenceConflict,
-    PersistenceError, PersistenceRejection, ProviderAssociation, RecordDenialRequest, RunSummary,
-    State, TerminateRequest, Timestamp, Transition, TransitionHistoryOutcome, WaiterWrittenStatus,
-    WorkSlotBinding, WorkSlotId, Workflow,
+    CompleteWorkSlotInvocationRequest, ContextAppendEffect, CreateRunRequest,
+    CreateWorkSlotInvocationRequest, EvaluationFeedback, EvaluationRequest, EvaluationResult,
+    HistoryAction, Lifecycle, Persistence, PersistenceConflict, PersistenceError,
+    PersistenceRejection, ProviderAssociation, ProviderError, ProviderGateway, RecordDenialRequest,
+    RunSummary, State, TerminateRequest, Timestamp, Transition, TransitionHistoryOutcome,
+    WaiterWrittenStatus, WorkSlotBinding, WorkSlotId, Workflow,
 };
 use loop_integrations::SqlitePersistence;
 use rusqlite::Connection;
@@ -89,6 +91,205 @@ fn assert_waiter_written_status_has_no_overrun(status: WaiterWrittenStatus) {
 
 fn checked_start_transition(event: &str, target: &str) -> Transition {
     Transition::checked("start", event, target)
+}
+
+struct StaticGateway {
+    result: EvaluationResult,
+}
+
+impl StaticGateway {
+    fn new(result: EvaluationResult) -> Self {
+        Self { result }
+    }
+}
+
+impl ProviderGateway for StaticGateway {
+    fn describe(
+        &self,
+        _provider: &ProviderAssociation,
+        _initial_input: Option<&serde_json::Value>,
+    ) -> Result<Workflow, ProviderError> {
+        Ok(workflow())
+    }
+
+    fn evaluate(
+        &self,
+        _provider: &ProviderAssociation,
+        _request: EvaluationRequest,
+    ) -> Result<EvaluationResult, ProviderError> {
+        Ok(self.result.clone())
+    }
+}
+
+#[test]
+fn outer_checked_event_persists_provider_effect_allow_and_transition_together(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let path = directory.path().join("event-effect.sqlite");
+    let run_id = "run-event-effect";
+    let effect = ContextAppendEffect::new(
+        "accepted-intent-snapshot",
+        json!({"schema_version": 1, "intent_revision": "r1"}),
+    );
+
+    {
+        let adapter = SqlitePersistence::open(&path)?;
+        create_observed(&adapter, run_id)?;
+        let outcome = execute_event(
+            EventRequest::new(run_id, "approve"),
+            &StaticGateway::new(EvaluationResult::allow_with_context_append(effect.clone())),
+            &adapter,
+        );
+        assert!(outcome.is_completed(), "checked event failed: {outcome:?}");
+    }
+
+    let reopened = SqlitePersistence::open(&path)?;
+    let run = reopened.load_authoritative_run(&run_id.into())?;
+    assert_eq!(run.current_state.as_str(), "middle");
+    assert_eq!(run.lifecycle, Lifecycle::Active);
+    assert_eq!(run.control_revision.as_u64(), 1);
+    assert_eq!(run.last_sequence.as_u64(), 3);
+
+    let context = reopened.load_context_records(&run_id.into())?;
+    assert_eq!(context.len(), 1);
+    assert_eq!(context[0].kind, effect.kind);
+    assert_eq!(context[0].data, effect.data);
+    assert_eq!(context[0].sequence.as_u64(), 2);
+    assert!(!context[0].id.as_str().is_empty());
+
+    let history = reopened.load_history(&run_id.into())?;
+    assert_eq!(history.len(), 3);
+    assert!(matches!(
+        history[1].action,
+        HistoryAction::ContextAppended { .. }
+    ));
+    assert!(matches!(
+        history[2].action,
+        HistoryAction::Transition {
+            ref transition,
+            outcome: TransitionHistoryOutcome::Committed,
+        } if transition == &checked_start_transition("approve", "middle")
+    ));
+
+    let evaluations = reopened.load_checked_evaluations(&run_id.into())?;
+    assert_eq!(evaluations.len(), 1);
+    assert!(evaluations[0].is_allow());
+    assert_eq!(evaluations[0].sequence.as_u64(), 3);
+    assert_eq!(
+        evaluations[0].transition,
+        checked_start_transition("approve", "middle")
+    );
+    Ok(())
+}
+
+#[test]
+fn outer_checked_event_deny_and_unsupported_do_not_persist_provider_effects_or_transitions(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let deny_path = directory.path().join("event-deny.sqlite");
+    let deny_run_id = "run-event-deny";
+    let feedback = EvaluationFeedback::new("needs-work", "Revise before approval");
+    {
+        let adapter = SqlitePersistence::open(&deny_path)?;
+        create_observed(&adapter, deny_run_id)?;
+        let outcome = execute_event(
+            EventRequest::new(deny_run_id, "approve"),
+            &StaticGateway::new(EvaluationResult::deny(feedback.clone())),
+            &adapter,
+        );
+        assert!(outcome.is_rejected());
+        assert_eq!(outcome.issue().expect("deny feedback").code, "needs-work");
+    }
+    let deny_reopened = SqlitePersistence::open(&deny_path)?;
+    let deny_run = deny_reopened.load_authoritative_run(&deny_run_id.into())?;
+    assert_eq!(deny_run.current_state.as_str(), "start");
+    assert_eq!(deny_run.control_revision.as_u64(), 0);
+    assert_eq!(deny_run.last_sequence.as_u64(), 2);
+    assert!(deny_reopened
+        .load_context_records(&deny_run_id.into())?
+        .is_empty());
+    let deny_evaluations = deny_reopened.load_checked_evaluations(&deny_run_id.into())?;
+    assert_eq!(deny_evaluations.len(), 1);
+    assert_eq!(deny_evaluations[0].feedback(), Some(&feedback));
+    assert!(deny_evaluations[0].is_deny());
+    assert!(matches!(
+        deny_reopened.load_history(&deny_run_id.into())?[1].action,
+        HistoryAction::Transition {
+            outcome: TransitionHistoryOutcome::Denied { .. },
+            ..
+        }
+    ));
+
+    let unsupported_path = directory.path().join("event-unsupported.sqlite");
+    let unsupported_run_id = "run-event-unsupported";
+    {
+        let adapter = SqlitePersistence::open(&unsupported_path)?;
+        create_observed(&adapter, unsupported_run_id)?;
+        let outcome = execute_event(
+            EventRequest::new(unsupported_run_id, "approve"),
+            &StaticGateway::new(EvaluationResult::Unsupported),
+            &adapter,
+        );
+        assert!(outcome.is_error());
+        assert_eq!(
+            outcome.issue().expect("unsupported issue").code,
+            "provider-unsupported"
+        );
+    }
+    let unsupported_reopened = SqlitePersistence::open(&unsupported_path)?;
+    let unsupported_run =
+        unsupported_reopened.load_authoritative_run(&unsupported_run_id.into())?;
+    assert_eq!(unsupported_run.current_state.as_str(), "start");
+    assert_eq!(unsupported_run.control_revision.as_u64(), 0);
+    assert_eq!(unsupported_run.last_sequence.as_u64(), 1);
+    assert!(unsupported_reopened
+        .load_context_records(&unsupported_run_id.into())?
+        .is_empty());
+    assert!(unsupported_reopened
+        .load_checked_evaluations(&unsupported_run_id.into())?
+        .is_empty());
+    assert_eq!(
+        unsupported_reopened
+            .load_history(&unsupported_run_id.into())?
+            .len(),
+        1
+    );
+    Ok(())
+}
+
+#[test]
+fn context_effects_are_rejected_for_check_free_commits_without_writing(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = SqlitePersistence::open_in_memory()?;
+    let run_id = "run-check-free-effect";
+    create_observed(&adapter, run_id)?;
+
+    let error = adapter
+        .commit_transition(
+            CommitTransitionRequest::new(
+                run_id,
+                0_u64.into(),
+                "start",
+                Transition::check_free("start", "finish", "middle"),
+                Lifecycle::Active,
+            )
+            .with_context_append(ContextAppendEffect::new(
+                "provider-context",
+                json!({"value": "opaque"}),
+            )),
+        )
+        .unwrap_err();
+    assert!(matches!(error, PersistenceError::Failure(_)));
+    assert_eq!(error.code(), "persistence-failure");
+    assert_eq!(
+        adapter
+            .load_authoritative_run(&run_id.into())?
+            .current_state,
+        "start".into()
+    );
+    assert!(adapter.load_context_records(&run_id.into())?.is_empty());
+    assert_eq!(adapter.load_history(&run_id.into())?.len(), 1);
+    Ok(())
 }
 
 #[test]
@@ -528,13 +729,19 @@ fn required_history_failure_rolls_back_complete_transition(
     drop(raw);
 
     let error = adapter
-        .commit_transition(CommitTransitionRequest::new(
-            "run-transition-rollback",
-            before_run.control_revision,
-            "start",
-            checked_start_transition("approve", "middle"),
-            Lifecycle::Active,
-        ))
+        .commit_transition(
+            CommitTransitionRequest::new(
+                "run-transition-rollback",
+                before_run.control_revision,
+                "start",
+                checked_start_transition("approve", "middle"),
+                Lifecycle::Active,
+            )
+            .with_context_append(ContextAppendEffect::new(
+                "provider-effect",
+                json!({"revision": "r1"}),
+            )),
+        )
         .unwrap_err();
     assert!(matches!(error, PersistenceError::Failure(_)));
     drop(adapter);
@@ -551,6 +758,9 @@ fn required_history_failure_rolls_back_complete_transition(
             .len(),
         before_history_count
     );
+    assert!(reopened
+        .load_context_records(&"run-transition-rollback".into())?
+        .is_empty());
     assert_eq!(
         reopened.load_checked_evaluations(&"run-transition-rollback".into())?,
         before_evaluations

@@ -108,6 +108,55 @@ fn describe_forwards_optional_initial_input() -> Result<(), Box<dyn std::error::
 }
 
 #[test]
+fn evaluate_accepts_and_rejects_context_append_effects_at_the_wire_boundary(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let valid_response =
+        r#"{"result":"allow","context_append":{"kind":"snapshot","data":{"revision":1}}}"#;
+    let directory = tempdir()?;
+    let (provider, _) = capture_response(&directory, valid_response);
+    let request = EvaluationRequest::new(
+        workflow(),
+        json!({}),
+        Vec::new(),
+        Transition::checked("start", "finish", "done"),
+        Vec::new(),
+    );
+    let result =
+        SubprocessProviderGateway::new(Duration::from_secs(2)).evaluate(&provider, request)?;
+    assert_eq!(result.context_append().unwrap().kind, "snapshot");
+    assert_eq!(
+        result.context_append().unwrap().data,
+        json!({"revision": 1})
+    );
+
+    for response in [
+        r#"{"result":"allow","context_append":{"data":{}}}"#,
+        r#"{"result":"allow","context_append":null}"#,
+        r#"{"result":"allow","context_append":{"kind":"snapshot","data":{},"extra":true}}"#,
+    ] {
+        let directory = tempdir()?;
+        let (provider, _) = capture_response(&directory, response);
+        let error = SubprocessProviderGateway::new(Duration::from_secs(2))
+            .evaluate(
+                &provider,
+                EvaluationRequest::new(
+                    workflow(),
+                    json!({}),
+                    Vec::new(),
+                    Transition::checked("start", "finish", "done"),
+                    Vec::new(),
+                ),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            loop_core::ProviderError::InvalidResponse { .. }
+        ));
+    }
+    Ok(())
+}
+
+#[test]
 fn evaluate_sends_stored_inputs_ordered_context_and_exact_lineage_only(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;

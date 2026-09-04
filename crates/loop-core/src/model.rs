@@ -3,8 +3,8 @@
 //! These types intentionally describe semantic workflow data only.  They do
 //! not contain persistence, process, configuration, or CLI concerns.
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde::{de::Error as SerdeError, Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::fmt;
 
 /// JSON data supplied to a run or attached as context.
@@ -893,18 +893,227 @@ impl EvaluationRequest {
     }
 }
 
-/// Semantic result returned by a provider for the selected transition.
+/// The one provider-authored effect an allow response may carry.
+///
+/// The engine keeps both fields opaque.  The effect does not contain an
+/// identity, timestamp, or sequence; the persistence adapter assigns those
+/// when the checked allow is committed.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextAppendEffect {
+    pub kind: String,
+    pub data: Value,
+}
+
+impl ContextAppendEffect {
+    pub fn new(kind: impl Into<String>, data: Value) -> Self {
+        Self {
+            kind: kind.into(),
+            data,
+        }
+    }
+}
+
+fn deserialize_optional_context_append<'de, D>(
+    deserializer: D,
+) -> Result<Option<ContextAppendEffect>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    if value.is_null() {
+        return Err(D::Error::custom(
+            "allow response `context_append` must be an object when present",
+        ));
+    }
+    serde_json::from_value(value)
+        .map(Some)
+        .map_err(D::Error::custom)
+}
+
+/// Payload fields permitted after an allow result discriminator.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AllowResponse {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_context_append",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub context_append: Option<ContextAppendEffect>,
+}
+
+impl AllowResponse {
+    pub const fn empty() -> Self {
+        Self {
+            context_append: None,
+        }
+    }
+
+    pub fn new(context_append: Option<ContextAppendEffect>) -> Self {
+        Self { context_append }
+    }
+
+    pub fn with_context_append(mut self, effect: ContextAppendEffect) -> Self {
+        self.context_append = Some(effect);
+        self
+    }
+}
+
+/// Semantic result returned by a provider for the selected transition.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "result", rename_all = "lowercase")]
 pub enum EvaluationResult {
-    Allow,
-    Deny { feedback: EvaluationFeedback },
+    /// An allow may carry one context append effect.  The associated
+    /// `EvaluationResult::Allow` constant below preserves the old unit-value
+    /// construction for effect-free providers.
+    Allow {
+        #[serde(
+            default,
+            deserialize_with = "deserialize_optional_context_append",
+            skip_serializing_if = "Option::is_none"
+        )]
+        context_append: Option<ContextAppendEffect>,
+    },
+    Deny {
+        feedback: EvaluationFeedback,
+    },
     Unsupported,
 }
 
+impl<'de> Deserialize<'de> for EvaluationResult {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        parse_evaluation_result(value).map_err(D::Error::custom)
+    }
+}
+
+fn parse_evaluation_result(value: Value) -> Result<EvaluationResult, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "evaluate response must be a JSON object".to_owned())?;
+    let result = object
+        .get("result")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "evaluate response must contain a string `result` field".to_owned())?;
+
+    match result {
+        "allow" => {
+            require_result_keys(
+                object,
+                &["result", "context_append"],
+                true,
+                "allow response",
+            )?;
+            let context_append = object
+                .get("context_append")
+                .map(|value| {
+                    serde_json::from_value::<ContextAppendEffect>(value.clone()).map_err(|error| {
+                        format!("allow response `context_append` is invalid: {error}")
+                    })
+                })
+                .transpose()?;
+            Ok(EvaluationResult::Allow { context_append })
+        }
+        "deny" => {
+            require_result_keys(object, &["result", "feedback"], false, "deny response")?;
+            let feedback = object
+                .get("feedback")
+                .and_then(Value::as_object)
+                .ok_or_else(|| "deny response `feedback` must be a JSON object".to_owned())?;
+            require_allowed_result_keys(
+                feedback,
+                &["code", "message", "details"],
+                "deny feedback",
+            )?;
+            let code = feedback
+                .get("code")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "deny feedback must contain a string `code` field".to_owned())?;
+            let message = feedback
+                .get("message")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "deny feedback must contain a string `message` field".to_owned())?;
+            let mut evaluation_feedback = EvaluationFeedback::new(code, message);
+            if let Some(details) = feedback.get("details") {
+                evaluation_feedback.details = Some(details.clone());
+            }
+            Ok(EvaluationResult::Deny {
+                feedback: evaluation_feedback,
+            })
+        }
+        "unsupported" => {
+            require_result_keys(object, &["result"], false, "unsupported response")?;
+            Ok(EvaluationResult::Unsupported)
+        }
+        other => Err(format!("unknown evaluate result `{other}`")),
+    }
+}
+
+fn require_result_keys(
+    object: &Map<String, Value>,
+    expected: &[&str],
+    optional_context_append: bool,
+    description: &str,
+) -> Result<(), String> {
+    require_allowed_result_keys(object, expected, description)?;
+    if optional_context_append {
+        if object.len() != 1 && object.len() != expected.len() {
+            return Err(format!(
+                "{description} contains unexpected or missing fields"
+            ));
+        }
+    } else if object.len() != expected.len() {
+        return Err(format!(
+            "{description} contains unexpected or missing fields"
+        ));
+    }
+    Ok(())
+}
+
+fn require_allowed_result_keys(
+    object: &Map<String, Value>,
+    allowed: &[&str],
+    description: &str,
+) -> Result<(), String> {
+    if let Some(unexpected) = object
+        .keys()
+        .find(|key| !allowed.iter().any(|candidate| candidate == key))
+    {
+        return Err(format!(
+            "{description} contains unexpected field `{unexpected}`"
+        ));
+    }
+    Ok(())
+}
+
 impl EvaluationResult {
+    /// Backwards-compatible effect-free allow value.  New code may use
+    /// `EvaluationResult::allow()` or `allow_with_context_append`.
+    #[allow(non_upper_case_globals)]
+    pub const Allow: Self = Self::Allow {
+        context_append: None,
+    };
+
     pub const fn allow() -> Self {
-        Self::Allow
+        Self::Allow {
+            context_append: None,
+        }
+    }
+
+    pub fn allow_with_context_append(effect: ContextAppendEffect) -> Self {
+        Self::Allow {
+            context_append: Some(effect),
+        }
+    }
+
+    pub fn allow_with_response(response: AllowResponse) -> Self {
+        Self::Allow {
+            context_append: response.context_append,
+        }
     }
 
     pub fn deny(feedback: EvaluationFeedback) -> Self {
@@ -916,7 +1125,7 @@ impl EvaluationResult {
     }
 
     pub const fn is_allow(&self) -> bool {
-        matches!(self, Self::Allow)
+        matches!(self, Self::Allow { .. })
     }
 
     pub const fn is_deny(&self) -> bool {
@@ -927,11 +1136,24 @@ impl EvaluationResult {
         matches!(self, Self::Unsupported)
     }
 
+    pub fn context_append(&self) -> Option<&ContextAppendEffect> {
+        match self {
+            Self::Allow { context_append } => context_append.as_ref(),
+            Self::Deny { .. } | Self::Unsupported => None,
+        }
+    }
+
     pub fn feedback(&self) -> Option<&EvaluationFeedback> {
         match self {
             Self::Deny { feedback } => Some(feedback),
-            Self::Allow | Self::Unsupported => None,
+            Self::Allow { .. } | Self::Unsupported => None,
         }
+    }
+}
+
+impl From<AllowResponse> for EvaluationResult {
+    fn from(response: AllowResponse) -> Self {
+        Self::allow_with_response(response)
     }
 }
 
@@ -1178,6 +1400,78 @@ mod tests {
             serde_json::from_value::<EvaluationResult>(encoded).unwrap(),
             result
         );
+    }
+
+    #[test]
+    fn allow_response_round_trips_one_opaque_context_append_effect() {
+        let effect = ContextAppendEffect::new("", json!(["opaque", null]));
+        let result = EvaluationResult::allow_with_context_append(effect.clone());
+
+        assert_eq!(
+            serde_json::to_value(&result).unwrap(),
+            json!({
+                "result": "allow",
+                "context_append": {
+                    "kind": "",
+                    "data": ["opaque", null]
+                }
+            })
+        );
+        assert_eq!(result.context_append(), Some(&effect));
+        assert_eq!(
+            serde_json::from_value::<EvaluationResult>(serde_json::to_value(&result).unwrap())
+                .unwrap(),
+            result
+        );
+
+        let response: AllowResponse = serde_json::from_value(json!({
+            "context_append": {
+                "kind": "snapshot",
+                "data": {"revision": 1}
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            response.context_append,
+            Some(ContextAppendEffect::new("snapshot", json!({"revision": 1})))
+        );
+        assert_eq!(
+            serde_json::from_value::<AllowResponse>(json!({})).unwrap(),
+            AllowResponse::empty()
+        );
+        assert!(serde_json::from_value::<AllowResponse>(json!({
+            "context_append": null
+        }))
+        .is_err());
+        assert!(serde_json::from_value::<EvaluationResult>(json!({
+            "result": "allow",
+            "context_append": null
+        }))
+        .is_err());
+        assert!(serde_json::from_value::<EvaluationResult>(json!({
+            "result": "deny",
+            "feedback": {"code": "blocked", "message": "no"},
+            "context_append": {"kind": "opaque", "data": {}}
+        }))
+        .is_err());
+        assert!(serde_json::from_value::<EvaluationResult>(json!({
+            "result": "unsupported",
+            "context_append": {"kind": "opaque", "data": {}}
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn context_append_effect_rejects_missing_or_unknown_fields() {
+        for value in [
+            json!({"kind": "snapshot"}),
+            json!({"kind": "snapshot", "data": {}, "extra": true}),
+        ] {
+            assert!(
+                serde_json::from_value::<ContextAppendEffect>(value).is_err(),
+                "invalid context append effect was accepted"
+            );
+        }
     }
 
     #[test]

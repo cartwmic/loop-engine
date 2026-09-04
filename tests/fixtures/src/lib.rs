@@ -24,6 +24,12 @@ pub const PLAN_REVIEW_GATE: &str = "plan-review";
 pub const IMPLEMENTATION_REVIEW_GATE: &str = "implementation-review";
 pub const VALIDATION_GATE: &str = "validation";
 
+/// Fixture-only behavior that makes the software-change provider exercise the
+/// LE-110 allow-response effect at the reference `intent-ready` edge.
+pub const LE_110_CONTEXT_APPEND_BEHAVIOR: &str = "le-110-context-append";
+/// The opaque kind emitted by the LE-110 reference proof.
+pub const LE_110_CONTEXT_APPEND_KIND: &str = "fixture-le-110-proof";
+
 /// Which reference provider should process a protocol request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FixtureProvider {
@@ -379,8 +385,11 @@ pub fn software_change_initial_input(
 
 /// Build software-change input with a deterministic provider behavior switch.
 ///
-/// The switch is fixture-only and is useful for proving unsupported/failure
-/// behavior without changing the provider association or workflow topology.
+/// The switch is fixture-only and is useful for proving deny, unsupported, and
+/// process-failure behavior without changing the provider association or
+/// workflow topology. [`LE_110_CONTEXT_APPEND_BEHAVIOR`] additionally makes
+/// the reference provider return one opaque allow effect, but only at the
+/// existing `explore` → `intent-ready` → `design` checked transition.
 pub fn software_change_initial_input_with_behavior(
     review_policies: Value,
     external_reference: Option<Value>,
@@ -1407,7 +1416,32 @@ fn evaluate_software_change(request: EvaluateRequest) -> Result<Value, FixtureEr
             // direct callers receive the same invalid-protocol marker as data.
             return Ok(json!({"fixture_raw_response": "{"}));
         }
+        "deny" => {
+            return Ok(deny(
+                "fixture-denied",
+                "software-change fixture requested a denial".to_owned(),
+                json!({"fixture": "reference"}),
+            ));
+        }
         _ => {}
+    }
+
+    if behavior == LE_110_CONTEXT_APPEND_BEHAVIOR
+        && request.transition.kind.is_checked()
+        && request.transition.source.as_str() == "explore"
+        && request.transition.event.as_str() == "intent-ready"
+        && request.transition.target.as_str() == "design"
+    {
+        return Ok(json!({
+            "result": "allow",
+            "context_append": {
+                "kind": LE_110_CONTEXT_APPEND_KIND,
+                "data": {
+                    "fixture": "reference-software-change",
+                    "transition": "intent-ready"
+                }
+            }
+        }));
     }
 
     let gate = software_change_gate(&request.transition);
@@ -1960,6 +1994,53 @@ mod unit_tests {
         assert_eq!(evidence["gate"], DESIGN_REVIEW_GATE);
         assert_eq!(evidence["result"], "fail");
         assert!(input.get("prompt").is_none());
+    }
+
+    #[test]
+    fn le_110_fixture_effect_is_one_opaque_field_at_only_the_named_transition() {
+        let input = software_change_initial_input_with_behavior(
+            json!({}),
+            None,
+            LE_110_CONTEXT_APPEND_BEHAVIOR,
+        );
+        let evaluate = |transition: Transition| {
+            let request = json!({
+                "operation": "evaluate",
+                "workflow": software_change_workflow(),
+                "initial_input": input.clone(),
+                "context": [],
+                "transition": transition,
+                "prior_evaluations": []
+            });
+            match process_request(FixtureProvider::SoftwareChange, request)
+                .expect("fixture evaluation")
+            {
+                FixtureResponse::Json(value) => value,
+                other => panic!("expected JSON fixture response, got {other:?}"),
+            }
+        };
+
+        assert_eq!(
+            evaluate(Transition::checked("explore", "intent-ready", "design")),
+            json!({
+                "result": "allow",
+                "context_append": {
+                    "kind": LE_110_CONTEXT_APPEND_KIND,
+                    "data": {
+                        "fixture": "reference-software-change",
+                        "transition": "intent-ready"
+                    }
+                }
+            })
+        );
+        assert_eq!(
+            evaluate(Transition::checked(
+                "design",
+                "design-ready",
+                "design-review"
+            )),
+            json!({"result": "allow"})
+        );
     }
 
     #[test]

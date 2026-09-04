@@ -186,9 +186,17 @@ fn with_root(mut config: Value, root: &TestDir) -> Value {
     config
 }
 
-fn intent_with_ids(ids: Value) -> Value {
+fn intent_with_live_ids(ids: Value) -> Value {
     let mut intent = load_fixture("intent-good.json");
-    intent["requirement_ids"] = ids;
+    let disposition = json!({
+        "type": "linked-live",
+        "live_ids": ids
+    });
+    if let Some(criteria) = intent["acceptance"].as_array_mut() {
+        for criterion in criteria {
+            criterion["prd_traceability"] = disposition.clone();
+        }
+    }
     intent
 }
 
@@ -230,46 +238,44 @@ fn schema_rules(value: &Value) -> Vec<String> {
 }
 
 #[test]
-fn overlay_on_injects_requirement_ids_into_four_schemas() {
+fn overlay_on_injects_dispositions_into_intent_criteria_only() {
     for profile_name in ["minimal", "standard", "high-rigor"] {
         let overlayed = software_change_provider::apply_bookends_overlay_for_tests(
             &enable_overlay(load_profile(profile_name)),
+        );
+        let item =
+            &overlayed["artifact_schemas"]["intent.json"]["properties"]["acceptance"]["items"];
+        let required = item["required"]
+            .as_array()
+            .expect("criterion required")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(
+            required.contains(&"prd_traceability"),
+            "{profile_name} missing disposition"
+        );
+        let disposition = &item["properties"]["prd_traceability"];
+        assert_eq!(disposition["type"], "object");
+        assert_eq!(disposition["additionalProperties"], false);
+        assert_eq!(
+            disposition["properties"]["type"]["enum"],
+            json!(["linked-live", "candidate", "not-applicable"])
         );
         for subject in [
             "intent.json",
             "design.json",
             "plan.json",
+            "implementation-report.json",
             "validation-report.json",
         ] {
-            let schema = &overlayed["artifact_schemas"][subject];
-            let required = schema["required"]
-                .as_array()
-                .expect("required")
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>();
             assert!(
-                required.contains(&"requirement_ids"),
-                "{profile_name} {subject} required"
-            );
-            assert_eq!(schema["properties"]["requirement_ids"]["type"], "array");
-            assert_eq!(schema["properties"]["requirement_ids"]["minItems"], 1);
-            assert_eq!(
-                schema["properties"]["requirement_ids"]["items"]["type"],
-                "string"
+                overlayed["artifact_schemas"][subject]["properties"]
+                    .get("requirement_ids")
+                    .is_none(),
+                "{profile_name} {subject} gained a PRD projection"
             );
         }
-        let implementation = &overlayed["artifact_schemas"]["implementation-report.json"];
-        let required = implementation["required"]
-            .as_array()
-            .expect("required")
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>();
-        assert!(!required.contains(&"requirement_ids"));
-        assert!(implementation["properties"]
-            .get("requirement_ids")
-            .is_none());
     }
 }
 
@@ -312,11 +318,11 @@ fn overlay_on_injects_ids_grounded_on_existing_gates_and_bypass_on_validation() 
 }
 
 #[test]
-fn overlay_on_empty_requirement_ids_deny() {
+fn overlay_on_empty_linked_live_ids_deny() {
     let repo = Repo::new();
     enable_green_prd(&repo, live_prd());
-    let artifacts = TestDir::new("empty-ids");
-    artifacts.write_json("intent.json", &intent_with_ids(json!([])));
+    let artifacts = TestDir::new("empty-linked-live");
+    artifacts.write_json("intent.json", &intent_with_live_ids(json!([])));
     let config = with_root(enable_overlay(load_profile("high-rigor")), &artifacts);
     let value = evaluate_in(
         repo.path(),
@@ -329,10 +335,10 @@ fn overlay_on_empty_requirement_ids_deny() {
 }
 
 #[test]
-fn overlay_on_missing_requirement_ids_deny() {
+fn overlay_on_missing_disposition_deny() {
     let repo = Repo::new();
     enable_green_prd(&repo, live_prd());
-    let artifacts = TestDir::new("missing-ids");
+    let artifacts = TestDir::new("missing-disposition");
     artifacts.write_json("intent.json", &load_fixture("intent-good.json"));
     let config = with_root(enable_overlay(load_profile("high-rigor")), &artifacts);
     let value = evaluate_in(
@@ -346,11 +352,11 @@ fn overlay_on_missing_requirement_ids_deny() {
 }
 
 #[test]
-fn overlay_on_tombstoned_id_deny() {
+fn overlay_on_tombstoned_linked_id_deny() {
     let repo = Repo::new();
     enable_green_prd(&repo, live_and_tombstone_prd());
-    let artifacts = TestDir::new("tombstone");
-    artifacts.write_json("intent.json", &intent_with_ids(json!(["LE-2"])));
+    let artifacts = TestDir::new("tombstone-linked-id");
+    artifacts.write_json("intent.json", &intent_with_live_ids(json!(["LE-2"])));
     let config = with_root(enable_overlay(load_profile("high-rigor")), &artifacts);
     let value = evaluate_in(
         repo.path(),
@@ -429,12 +435,106 @@ fn write_checkpoints(repo: &Repo, artifacts: &TestDir) {
     assert_eq!(support::response(&output), json!({"result": "allow"}));
 }
 
-fn validation_artifact(ids: Value) -> Value {
+fn validation_artifact() -> Value {
     json!({
         "revision": "1",
-        "author": {"name": "owner", "kind": "human"},
-        "requirement_ids": ids
+        "author": {"name": "owner", "kind": "human"}
     })
+}
+
+fn intent_with_disposition(disposition: Value) -> Value {
+    let mut intent = load_fixture("intent-good.json");
+    if let Some(criteria) = intent["acceptance"].as_array_mut() {
+        for criterion in criteria {
+            criterion["prd_traceability"] = disposition.clone();
+        }
+    }
+    intent
+}
+
+fn candidate_disposition() -> Value {
+    json!({
+        "type": "candidate",
+        "proposed_id": "LE-9",
+        "record_markdown": "### LE-9: Proposed requirement\n- Status: live\n- Coverage: e2e/journey\n"
+    })
+}
+
+fn not_applicable_disposition() -> Value {
+    json!({
+        "type": "not-applicable",
+        "reason": "Change-specific condition, not an enduring product requirement."
+    })
+}
+
+fn full_validation_artifact() -> Value {
+    load_fixture("validation-report-good.json")
+}
+
+fn refresh_validation_checkpoint(repo: &Repo, artifacts: &TestDir) {
+    let output = Command::new(provider_binary())
+        .args([
+            "checkpoint",
+            "--phase",
+            "validation",
+            "--artifact-root",
+            artifacts.path().to_str().expect("artifact root"),
+            "--working-directory",
+            repo.path().to_str().expect("repository"),
+        ])
+        .current_dir(repo.path())
+        .bounded_output("bookends overlay validation checkpoint")
+        .expect("run validation checkpoint");
+    assert!(
+        output.status.success(),
+        "validation checkpoint refresh failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn refresh_implementation_checkpoint(repo: &Repo, artifacts: &TestDir) {
+    // The checkpoint history is content-addressed and rejects two proofs for
+    // the same implementation report revision after the intent changes.
+    artifacts.write_json("implementation-report.json", &json!({"revision": "2"}));
+    let output = Command::new(provider_binary())
+        .args([
+            "checkpoint",
+            "--phase",
+            "implementation",
+            "--artifact-root",
+            artifacts.path().to_str().expect("artifact root"),
+            "--working-directory",
+            repo.path().to_str().expect("repository"),
+        ])
+        .current_dir(repo.path())
+        .bounded_output("bookends overlay implementation checkpoint")
+        .expect("run implementation checkpoint");
+    assert!(
+        output.status.success(),
+        "implementation checkpoint refresh failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let config = json!({
+        "config_version": "test-1",
+        "artifact_root": artifacts.path().to_string_lossy().to_string(),
+        "review_policies": {}
+    });
+    let workflow = described_workflow_in(repo.path(), &config);
+    let output = run_provider_in(
+        repo.path(),
+        json!({
+            "operation": "evaluate",
+            "workflow": workflow,
+            "initial_input": config,
+            "context": [],
+            "transition": support::checked("implement", "implementation-ready", "validation"),
+            "prior_evaluations": []
+        }),
+    );
+    support::assert_exit(&output, 0);
+    assert_eq!(support::response(&output), json!({"result": "allow"}));
+    refresh_validation_checkpoint(repo, artifacts);
 }
 
 #[test]
@@ -442,10 +542,7 @@ fn overlay_on_checker_red_denies_passed() {
     let repo = Repo::new();
     enable_green_prd(&repo, live_uncovered_prd());
     let artifacts = TestDir::new("red-passed");
-    artifacts.write_json(
-        "validation-report.json",
-        &validation_artifact(json!(["LE-1"])),
-    );
+    artifacts.write_json("validation-report.json", &validation_artifact());
     write_checkpoints(&repo, &artifacts);
     let value = evaluate_in(
         repo.path(),
@@ -463,10 +560,7 @@ fn overlay_on_checker_green_allows_schema_only_passed() {
     let repo = Repo::new();
     enable_green_prd(&repo, live_prd());
     let artifacts = TestDir::new("green-passed");
-    artifacts.write_json(
-        "validation-report.json",
-        &validation_artifact(json!(["LE-1"])),
-    );
+    artifacts.write_json("validation-report.json", &validation_artifact());
     write_checkpoints(&repo, &artifacts);
     let value = evaluate_in(
         repo.path(),
@@ -511,12 +605,81 @@ fn failing_evidence(gate: &str, axis: &str, sequence: u64) -> Value {
 }
 
 #[test]
+fn overlay_on_candidate_allows_authoring_but_blocks_final_validation() {
+    let repo = Repo::new();
+    enable_green_prd(&repo, live_prd());
+    let artifacts = TestDir::new("candidate-final");
+    artifacts.write_json("validation-report.json", &full_validation_artifact());
+    write_checkpoints(&repo, &artifacts);
+    artifacts.write_json(
+        "intent.json",
+        &intent_with_disposition(candidate_disposition()),
+    );
+    refresh_implementation_checkpoint(&repo, &artifacts);
+
+    let mut config = with_root(enable_overlay(load_profile("high-rigor")), &artifacts);
+    config["review_policies"] = json!({});
+    let authoring = evaluate_in(
+        repo.path(),
+        config.clone(),
+        support::checked("explore", "intent-ready", "design"),
+        json!([]),
+    );
+    assert_eq!(authoring, json!({"result": "allow"}));
+    let value = evaluate_in(
+        repo.path(),
+        config,
+        support::checked("validation", "passed", "end"),
+        json!([]),
+    );
+    assert_eq!(value["result"], "deny");
+    assert_eq!(
+        value["feedback"]["code"],
+        "software-change-bookends-candidate"
+    );
+    assert!(value["feedback"]["message"]
+        .as_str()
+        .expect("candidate message")
+        .contains("Bookends-enabled final completion"));
+}
+
+#[test]
+fn overlay_on_not_applicable_does_not_waive_review_evidence() {
+    let repo = Repo::new();
+    enable_green_prd(&repo, live_prd());
+    let artifacts = TestDir::new("not-applicable-no-waiver");
+    artifacts.write_json("validation-report.json", &full_validation_artifact());
+    write_checkpoints(&repo, &artifacts);
+    artifacts.write_json(
+        "intent.json",
+        &intent_with_disposition(not_applicable_disposition()),
+    );
+    refresh_implementation_checkpoint(&repo, &artifacts);
+
+    let mut config = with_root(enable_overlay(load_profile("high-rigor")), &artifacts);
+    config["review_policies"] = json!({
+        "validation-review": [{"id": "delivery", "description": "delivery"}]
+    });
+    let value = evaluate_in(
+        repo.path(),
+        config,
+        support::checked("validation-review", "passed", "end"),
+        json!([]),
+    );
+    assert_eq!(value["result"], "deny");
+    assert_eq!(
+        value["feedback"]["code"],
+        "software-change-finding-ledger-invalid"
+    );
+    assert_eq!(value["feedback"]["details"]["phase"], "finding-ledger");
+}
+
+#[test]
 fn overlay_on_greenwash_fails_bypass_not_green() {
     let repo = Repo::new();
     enable_green_prd(&repo, live_uncovered_prd());
     let artifacts = TestDir::new("greenwash");
     let mut report = load_fixture("validation-report-good.json");
-    report["requirement_ids"] = json!(["LE-1"]);
     report["validation"] = json!(["In-process bookends check is green and validation passed"]);
     artifacts.write_json("validation-report.json", &report);
     write_checkpoints(&repo, &artifacts);

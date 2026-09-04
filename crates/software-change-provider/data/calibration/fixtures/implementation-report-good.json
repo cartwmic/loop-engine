@@ -62,16 +62,16 @@
     "fictional-repo/scripts/assert-doc-authority.py"
   ],
   "validation": [
-    "cargo check --workspace passed",
-    "cargo test -p software-change-provider --test evaluate schema_deny_reports_every_simultaneous_structural_violation -- --exact passed",
-    "cargo test -p software-change-provider --test embedded_data passed",
-    "cargo test -p software-change-provider --test shipped_data passed",
-    "cargo test --workspace passed",
-    "cargo clippy --workspace --all-targets passed",
-    "cargo fmt --all -- --check passed",
-    "python3 scripts/production-journey.py passed",
-    "python3 fictional-repo/scripts/assert-requirement-proof.py",
-    "python3 fictional-repo/scripts/assert-doc-authority.py",
-    "Docs-integrated coverage supplied every listed fictional companion; semantic review remained external to provider mechanics."
+    {"proof": "cargo check --workspace passed"},
+    {"proof": "cargo test -p software-change-provider --test evaluate schema_deny_reports_every_simultaneous_structural_violation -- --exact passed"},
+    {"proof": "cargo test -p software-change-provider --test embedded_data passed"},
+    {"proof": "cargo test -p software-change-provider --test shipped_data passed"},
+    {"proof": "cargo test --workspace passed"},
+    {"proof": "cargo clippy --workspace --all-targets passed"},
+    {"proof": "cargo fmt --all -- --check passed"},
+    {"proof": "python3 scripts/production-journey.py passed"},
+    {"proof": "python3 fictional-repo/scripts/assert-requirement-proof.py"},
+    {"proof": "python3 fictional-repo/scripts/assert-doc-authority.py"},
+    {"proof": "Docs-integrated coverage supplied every listed fictional companion; semantic review remained external to provider mechanics."}
   ]
 }

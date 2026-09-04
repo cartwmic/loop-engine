@@ -13,12 +13,13 @@ mod workflow;
 
 pub use invocation::{instruction_digest, project_invocation_status};
 pub use model::{
-    ContextRecord, ContextRecordId, ControlRevision, DurableEvaluation, DurableEvaluationResult,
-    EvaluationFeedback, EvaluationRequest, EvaluationResult, EventId, HistoryAction, HistoryEntry,
-    InnerWorker, InvocationId, JsonValue, Lifecycle, PriorEvaluation, ProjectedInvocationStatus,
-    ProviderAssociation, ProviderSelector, Run, RunId, SemanticSequence, State, StateId, Timestamp,
-    Transition, TransitionHistoryOutcome, TransitionKind, WaiterWrittenStatus, WorkSlot,
-    WorkSlotBinding, WorkSlotId, WorkSlotInvocation, Workflow, WorkflowId,
+    AllowResponse, ContextAppendEffect, ContextRecord, ContextRecordId, ControlRevision,
+    DurableEvaluation, DurableEvaluationResult, EvaluationFeedback, EvaluationRequest,
+    EvaluationResult, EventId, HistoryAction, HistoryEntry, InnerWorker, InvocationId, JsonValue,
+    Lifecycle, PriorEvaluation, ProjectedInvocationStatus, ProviderAssociation, ProviderSelector,
+    Run, RunId, SemanticSequence, State, StateId, Timestamp, Transition, TransitionHistoryOutcome,
+    TransitionKind, WaiterWrittenStatus, WorkSlot, WorkSlotBinding, WorkSlotId, WorkSlotInvocation,
+    Workflow, WorkflowId,
 };
 pub use operations::{
     execute_append, execute_event, execute_history, execute_invoke, execute_list, execute_show,

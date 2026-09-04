@@ -1052,7 +1052,7 @@ def _write_pi_stub(directory: Path) -> Path:
         "        },\n"
         "        'summary': 'pi stub summarizer wrote this report',\n"
         "        'changed_surface': ['dummy'],\n"
-        "        'validation': ['dummy'],\n"
+        "        'validation': [{'proof': 'dummy'}],\n"
         "    }\n"
         "    Path(artifact_root, 'implementation-report.json').write_text(\n"
         "        json.dumps(report) + '\\n', encoding='utf-8'\n"
@@ -2029,7 +2029,7 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
         "location = json.loads(location_raw); root = Path(location['artifact_root'])\n"
         "if rest.startswith('Write artifact_root/implementation-report.json'):\n"
         "    plan = json.loads((root / 'plan.json').read_text())\n"
-        "    report = {'revision':'1','author':{'name':'subset-worker','kind':'script'},'plan_revision':plan['revision'],'coverage':{'commit':'subset','documents':[{'path':'plan.json','revision':plan['revision']}]},'summary':'resulting tree','changed_surface':sorted(p.name for p in Path.cwd().iterdir()),'validation':['subset']}\n"
+        "    report = {'revision':'1','author':{'name':'subset-worker','kind':'script'},'plan_revision':plan['revision'],'coverage':{'commit':'subset','documents':[{'path':'plan.json','revision':plan['revision']}]},'summary':'resulting tree','changed_surface':sorted(p.name for p in Path.cwd().iterdir()),'validation':[{'proof':'subset'}]}\n"
         "    (root / 'implementation-report.json').write_text(json.dumps(report)+'\\n')\n"
         "else:\n"
         "    task = json.loads(rest); (Path.cwd() / ('effect-' + task['id'] + '.txt')).write_text('present\\n')\n",

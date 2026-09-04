@@ -30,6 +30,9 @@ an initially-final run, terminal mutation rejection, a changed provider
 executes the named Package 7b ``review-candidates`` pipe proof before it starts
 a second run from shipped minimal.json and walks the stitched hops (empty
 review lists omitted, last-hop ``passed`` on the live validation review).
+Finally it runs the reduced criterion-spine scenarios: overlay-off proves AC-N
+without PRD metadata, while overlay-on proves one disposition per criterion,
+candidate blocking, and the non-waiver of not-applicable.
 """
 
 from __future__ import annotations
@@ -53,10 +56,11 @@ PROFILE_SUBPATH = Path("crates/software-change-provider/data/configs/high-rigor.
 STITCHED_PROFILE_SUBPATH = Path(
     "crates/software-change-provider/data/configs/minimal.json"
 )
-BOOKENDS_TOMBSTONE_ID = "LE-9000"
+BOOKENDS_CANDIDATE_ID = "LE-9001"
 BOOKENDS_SCENARIO_RUN_ID = "bookends-enabled-journey"
+BOOKENDS_NOT_APPLICABLE_RUN_ID = "bookends-not-applicable-journey"
 BOOKENDS_SCENARIO_PROFILE = Path(
-    "crates/software-change-provider/data/configs/minimal.json"
+    "crates/software-change-provider/data/configs/high-rigor.json"
 )
 STITCHED_RUN_ID = "journey-stitched-run"
 FIXTURE_SUBPATH = Path(
@@ -317,6 +321,7 @@ class Journey:
         self.package_7b_proof: List[str] = []
         self.engine_boundary_proof: List[str] = []
         self.bookends_proof: Optional[Path] = None
+        self.criterion_overlay_proof: Dict[str, Path] = {}
         self.command_cwd: Optional[Path] = None
         self.command_env: Dict[str, str] = {}
         self.run_id = "journey-production-run"
@@ -432,6 +437,10 @@ class Journey:
                     "bookends_enabled_proof": (
                         str(self.bookends_proof) if self.bookends_proof is not None else None
                     ),
+                    "criterion_overlay_proof": {
+                        name: str(path)
+                        for name, path in self.criterion_overlay_proof.items()
+                    },
                     "successor_route_cases": successor_route_cases,
                     "work_slot_proof": WORK_SLOT_PROOF,
                     "dummy_worker_proof": self.dummy_worker_proof,
@@ -467,9 +476,9 @@ class Journey:
         missing = sorted(required.difference(profile))
         if missing:
             raise JourneyFailure(f"high-rigor profile is missing fields: {', '.join(missing)}")
-        if profile.get("config_version") != "high-rigor-7":
+        if profile.get("config_version") != "high-rigor-8":
             raise JourneyFailure(
-                f"journey requires high-rigor-7, got {profile.get('config_version')!r}"
+                f"journey requires high-rigor-8, got {profile.get('config_version')!r}"
             )
         schemas = profile.get("artifact_schemas")
         if not isinstance(schemas, dict) or set(schemas) != set(SUBJECTS):
@@ -2564,7 +2573,7 @@ class Journey:
             "author": {"name": f"checkpoint-reviewer-{mutation}", "kind": "script"},
             "subject": "validation-report.json",
             "subject_revision": validation_revision,
-            "config_version": "minimal-6",
+            "config_version": "minimal-8",
         }
         evidence_result = call(
             [
@@ -2689,6 +2698,16 @@ class Journey:
         shutil.copy2(
             self.fixture_root / SUBJECTS["intent.json"],
             self.artifact_root / "intent.json",
+        )
+        # The primary full run is overlay-off.  Keep its authored artifact
+        # set on the AC-N-only spine even though the shared historical
+        # validation fixture contains one old Bookends citation in prose.
+        validation_path = self.artifact_root / "validation-report.json"
+        validation = self._replace_overlay_off_citation(
+            self._read_json(validation_path, "overlay-off validation report")
+        )
+        validation_path.write_text(
+            json.dumps(validation, indent=2) + "\n", encoding="utf-8"
         )
         intent_context = self._read_json(
             self.artifact_root / "intent.json", "operating-context intent"
@@ -5165,278 +5184,125 @@ else:
         self._run_concurrency_scenarios(scenario_dir, wrapper_command)
 
     def _run_bookends_enabled_source(self) -> None:
-        """Drive the opt-in overlay through fresh engine/provider processes."""
+        """Drive the reduced AC-N spine with the optional Bookends overlay."""
         if self.mode != "source":
-            raise JourneyFailure("Bookends overlay proof is source-only", state=self.state)
-        assert self.run_dir is not None
-        assert self.fixture_root is not None
-        assert self.provider_config is not None
+            raise JourneyFailure("criterion overlay proof is source-only", state=self.state)
+        overlay_off = self._run_overlay_off_source()
+        overlay_candidate = self._run_overlay_on_source(candidate=True)
+        overlay_not_applicable = self._run_overlay_on_source(candidate=False)
+        self.criterion_overlay_proof = {
+            "overlay_off": overlay_off,
+            "overlay_on_candidate": overlay_candidate,
+            "overlay_on_not_applicable": overlay_not_applicable,
+        }
+        self.bookends_proof = overlay_candidate
+        print(
+            "overlay-off criterion spine scenario passed: AC-N only; no PRD disposition, "
+            "candidate, liveness, citation, or Green claim"
+        )
+        print(
+            "overlay-on criterion scenarios passed: one disposition per criterion, "
+            "candidate blocks Bookends-enabled final completion, not-applicable does not waive or "
+            "fulfill its criterion"
+        )
 
-        scenario_dir = self.run_dir / "bookends-enabled"
-        checkout = scenario_dir / "checkout"
+    def _run_overlay_off_source(self) -> Path:
+        """Prove the unannotated public path uses only the AC-N criterion spine."""
+        assert self.run_dir is not None
+        assert self.data_root is not None
+        assert self.fixture_root is not None
+        scenario_dir = self.run_dir / "criterion-overlay-off"
         artifacts = scenario_dir / "artifacts"
         database = scenario_dir / "run.sqlite"
-        profile_path = scenario_dir / "minimal-bookends.json"
+        profile_path = scenario_dir / "high-rigor.json"
+        provider_config = scenario_dir / "providers.toml"
         scenario_dir.mkdir(parents=True, exist_ok=True)
+        artifacts.mkdir()
+        for subject, fixture in SUBJECTS.items():
+            value = self._read_json(
+                self.fixture_root / fixture, f"overlay-off fixture {subject}"
+            )
+            # The supplied validation fixture contains an old historical
+            # citation in prose.  This focused overlay-off artifact set is
+            # deliberately citation-free, so replace that prose only in the
+            # temporary scenario copy; shipped fixtures remain untouched.
+            if subject == "validation-report.json":
+                value = self._replace_overlay_off_citation(value)
+            (artifacts / subject).write_text(
+                json.dumps(value, indent=2) + "\n", encoding="utf-8"
+            )
+        profile = self._read_json(
+            self.data_root / PROFILE_SUBPATH, "overlay-off high-rigor profile"
+        )
+        profile["artifact_root"] = str(artifacts)
+        _write_json(profile_path, profile)
+        self._write_provider_config_at(provider_config)
 
         saved = {
             "run_id": self.run_id,
             "database": self.database,
+            "provider_config": self.provider_config,
             "artifact_root": self.artifact_root,
             "profile_path": self.profile_path,
             "profile_source": self.profile_source,
             "profile": self.profile,
+            "work_slot_bindings": self.work_slot_bindings,
             "state": self.state,
             "command_cwd": self.command_cwd,
             "repository_root": self.repository_root,
             "command_env": self.command_env,
         }
+        proof_path = scenario_dir / "overlay-off-proof.json"
         try:
-            shutil.copytree(
-                self.data_root,
-                checkout,
-                ignore=shutil.ignore_patterns(".git", "target", "__pycache__", "*.pyc"),
-            )
-            for git_args in (
-                ["init", "-q"],
-                ["config", "user.name", "software-change journey"],
-                ["config", "user.email", "journey@example.invalid"],
-                ["config", "commit.gpgsign", "false"],
-                ["add", "-A"],
-                ["commit", "-qm", "bookends journey baseline"],
-            ):
-                completed = subprocess.run(
-                    ["git", *git_args],
-                    cwd=checkout,
-                    text=True,
-                    capture_output=True,
-                    check=False,
-                )
-                if completed.returncode != 0:
-                    raise JourneyFailure(
-                        f"Bookends scenario git {' '.join(git_args)} failed: "
-                        f"{completed.stderr.strip() or completed.stdout.strip()}"
-                    )
-
-            prd_path = checkout / "docs/PRD.md"
-            prd = prd_path.read_text(encoding="utf-8")
-            prd_path.write_text(
-                prd.rstrip()
-                + f"\n\n### {BOOKENDS_TOMBSTONE_ID}: Retired journey fixture\n"
-                + "- Status: tombstone\n",
-                encoding="utf-8",
-            )
-            artifacts.mkdir()
-            for subject, fixture in SUBJECTS.items():
-                shutil.copy2(self.fixture_root / fixture, artifacts / subject)
-            shipped_profile = self.data_root / BOOKENDS_SCENARIO_PROFILE
-            shutil.copy2(shipped_profile, profile_path)
-            scenario_profile = self._read_json(profile_path, "Bookends scenario profile")
-            scenario_profile["artifact_root"] = str(artifacts)
-            scenario_profile["extra"] = {"bookends": {"enabled": True}}
-            profile_path.write_text(
-                json.dumps(scenario_profile, indent=2) + "\n", encoding="utf-8"
-            )
-
-            self.run_id = BOOKENDS_SCENARIO_RUN_ID
+            self.run_id = "criterion-overlay-off-journey"
             self.database = database
+            self.provider_config = provider_config
             self.artifact_root = artifacts
             self.profile_path = profile_path
-            self.profile_source = shipped_profile
-            self.profile = scenario_profile
+            self.profile_source = self.data_root / PROFILE_SUBPATH
+            self.profile = profile
+            self.work_slot_bindings = {}
             self.state = "not-started"
-            self.command_cwd = checkout
-            self.repository_root = checkout
-            # An explicit empty value prevents a caller's ambient bypass from
-            # changing the normal scenario while still allowing the next case.
+            self.command_cwd = self.data_root
+            self.repository_root = None
             self.command_env = {"BOOKENDS_BYPASS": ""}
-            self._write_provider_config()
             self._start()
-            self._create_checkpoint("implementation")
-
-            shown = self._assert_show("explore", "bookends-enabled-show")
+            shown = self._assert_show("explore", "overlay-off-show")
+            intent = self._read_json(artifacts / "intent.json", "overlay-off intent")
+            criteria = self._assert_overlay_off_criterion_spine(intent)
+            for subject in SUBJECTS:
+                self._assert_no_overlay_off_metadata(
+                    self._read_json(artifacts / subject, f"overlay-off {subject}"),
+                    subject,
+                )
             initial_input = shown.get("initial_input", {})
-            if initial_input.get("extra", {}).get("bookends", {}).get("enabled") is not True:
+            if initial_input.get("extra", {}).get("bookends", {}).get("enabled") is True:
                 raise JourneyFailure(
-                    "enabled Bookends option was not frozen in initial_input",
+                    "overlay-off run unexpectedly enabled Bookends",
                     state=self.state,
                     event="show",
                 )
-            instructions = shown.get("current_state_instructions", "")
-            for fragment in (
-                "Bookends overlay",
-                "requirement_ids",
-                "durable e2e/journey",
-                "Never mint an ID",
-                "".join(("bookends", ":LE-", "<n>")),
-            ):
-                if fragment not in instructions:
-                    raise JourneyFailure(
-                        f"enabled Bookends instructions omitted {fragment!r}",
-                        state=self.state,
-                        event="show",
-                    )
-
-            def write_artifact(subject: str, ids: Optional[list[str]]) -> None:
-                value = self._read_json(
-                    self.fixture_root / SUBJECTS[subject],
-                    f"Bookends fixture {subject}",
-                )
-                if ids is not None:
-                    value["requirement_ids"] = ids
-                (artifacts / subject).write_text(
-                    json.dumps(value, indent=2) + "\n", encoding="utf-8"
-                )
-
-            def require_rule(response: Dict[str, Any], rule: str) -> None:
-                violations = response.get("details", {}).get("violations", [])
-                if not any(item.get("rule") == rule for item in violations):
-                    raise JourneyFailure(
-                        f"Bookends schema denial omitted {rule}: {response}",
-                        state=self.state,
-                        event="intent-ready",
-                    )
-
-            # Missing field, empty collection, and a tombstoned ID each travel
-            # through the public event path and are refused as schema-invalid.
-            write_artifact("intent.json", None)
-            missing = self._expect_denial(
-                "intent-ready", "intent", "software-change-schema-invalid"
-            )
-            require_rule(missing, "required")
-
-            write_artifact("intent.json", [])
-            empty = self._expect_denial(
-                "intent-ready", "intent", "software-change-schema-invalid"
-            )
-            require_rule(empty, "minItems")
-
-            write_artifact("intent.json", [BOOKENDS_TOMBSTONE_ID])
-            tombstoned = self._expect_denial(
-                "intent-ready", "intent", "software-change-schema-invalid"
-            )
-            require_rule(tombstoned, "requirement-ids-live")
-
-            for subject in ("intent.json", "design.json", "plan.json", "validation-report.json"):
-                write_artifact(subject, ["LE-1"])
-            self._expect_allow("intent-ready", "design")
-            self._expect_allow("design-ready", "plan")
-            self._expect_allow("plan-ready", "implement")
-            green_prd = (checkout / "docs/PRD.md").read_text(encoding="utf-8")
-            (checkout / "docs/PRD.md").write_text(
-                green_prd
-                + "\n### LE-9001: Uncovered RED fixture\n"
-                + "- Status: live\n- Coverage: e2e/journey\n",
-                encoding="utf-8",
-            )
-            self._create_checkpoint("implementation")
-            self._expect_allow("implementation-ready", "validation")
-            self._create_checkpoint("validation")
-            self._expect_allow("validation-ready", "validation-review")
-
-            red = self._expect_denial(
-                "passed", "bookends", "software-change-bookends-red"
-            )
-            red_details = red.get("details", {})
-            if red_details.get("status") != "red":
+            self._expect_allow("intent-ready", "intent-review")
+            after = self._assert_show("intent-review", "overlay-off-ready-show")
+            if after.get("initial_input") != initial_input:
                 raise JourneyFailure(
-                    f"real RED checker result was not surfaced by provider: {red}",
-                    state=self.state,
-                    event="passed",
-                )
-
-            self.command_env = {"BOOKENDS_BYPASS": "journey:public-proof"}
-            bypass = self._expect_denial(
-                "passed", "bookends", "software-change-bookends-red"
-            )
-            bypass_details = bypass.get("details", {})
-            if (
-                bypass_details.get("status") != "bypass"
-                or bypass_details.get("bypass_class") != "journey"
-                or bypass_details.get("bypass_reason") != "public-proof"
-            ):
-                raise JourneyFailure(
-                    f"real BYPASS checker result was not surfaced by provider: {bypass}",
-                    state=self.state,
-                    event="passed",
-                )
-
-            (checkout / "docs/PRD.md").write_text(green_prd, encoding="utf-8")
-            self.command_env = {"BOOKENDS_BYPASS": ""}
-            self._expect_allow("revise-implementation", "implement")
-            implementation_path = artifacts / "implementation-report.json"
-            implementation = self._read_json(
-                implementation_path, "Bookends recovered implementation report"
-            )
-            implementation["revision"] = str(implementation["revision"]) + "-recovered"
-            implementation_path.write_text(
-                json.dumps(implementation, indent=2) + "\n", encoding="utf-8"
-            )
-            self._create_checkpoint("implementation")
-            self._expect_allow("implementation-ready", "validation")
-            self._create_checkpoint("validation")
-            self._expect_allow("validation-ready", "validation-review")
-            validation_revision = self._fixture_revision("validation-report.json")
-            for index, axis in enumerate(
-                ("intent-delivered", "ids-grounded", "bypass-not-green")
-            ):
-                evidence = {
-                    "gate": "validation-review",
-                    "policy_id": axis,
-                    "result": "pass",
-                    "findings": "",
-                    "author": {"name": f"bookends-{axis}", "kind": "script"},
-                    "subject": "validation-report.json",
-                    "subject_revision": validation_revision,
-                    "config_version": scenario_profile["config_version"],
-                }
-                response = self._engine(
-                    [
-                        "append",
-                        f"--record-id=bookends-evidence-{index}",
-                        self.run_id,
-                        "review-evidence",
-                        json.dumps(evidence, separators=(",", ":")),
-                    ],
-                    state=self.state,
-                    event="append",
-                    axis=axis,
-                )
-                self._expect_status(
-                    response,
-                    "completed",
-                    event="append",
-                    axis=axis,
-                    state=self.state,
-                )
-            self._append_finding_ledger_for(
-                self.run_id, "validation-review", state=self.state, record_prefix="bookends-"
-            )
-            self._expect_allow("passed", "end")
-            final = self._assert_show("end", "bookends-enabled-terminal")
-            if final.get("lifecycle") != "final" or final.get("requestable_events") != []:
-                raise JourneyFailure(
-                    f"Bookends enabled scenario did not finish terminal: {final}",
+                    "overlay-off checked transition changed frozen initial input",
                     state=self.state,
                     event="show",
                 )
-
-            proof_path = scenario_dir / "bookends-enabled-proof.json"
             proof_path.write_text(
                 json.dumps(
                     {
                         "result": "passed",
-                        "run_id": BOOKENDS_SCENARIO_RUN_ID,
-                        "profile": str(shipped_profile),
-                        "candidate_checkout": str(checkout),
-                        "cases": [
-                            "enabled instructions visible through show",
-                            "missing requirement_ids refused as schema-invalid",
-                            "empty requirement_ids refused as schema-invalid",
-                            "tombstoned requirement ID refused as schema-invalid",
-                            "validation passed refused on real RED checker",
-                            "validation passed refused on real BYPASS checker",
-                            "green checker allowed terminal validation after evidence",
+                        "run_id": self.run_id,
+                        "overlay_enabled": False,
+                        "config_version": profile["config_version"],
+                        "criterion_ids": criteria,
+                        "state_after_intent_ready": self.state,
+                        "assertions": [
+                            "intent acceptance is a closed AC-N {id, statement} spine",
+                            "intent-ready is accepted through the real engine/provider path",
+                            "all five authored overlay-off artifacts carry no PRD disposition, candidate, liveness, citation, or Green claim",
                         ],
                         "database": str(database),
                         "artifact_root": str(artifacts),
@@ -5446,22 +5312,535 @@ else:
                 + "\n",
                 encoding="utf-8",
             )
-            self.bookends_proof = proof_path
-            print(
-                "bookends-enabled external scenario passed: "
-                "show instructions, missing/empty/tombstoned IDs, RED, and BYPASS"
-            )
         finally:
             self.run_id = saved["run_id"]
             self.database = saved["database"]
+            self.provider_config = saved["provider_config"]
             self.artifact_root = saved["artifact_root"]
             self.profile_path = saved["profile_path"]
             self.profile_source = saved["profile_source"]
             self.profile = saved["profile"]
+            self.work_slot_bindings = saved["work_slot_bindings"]
             self.state = saved["state"]
             self.command_cwd = saved["command_cwd"]
             self.repository_root = saved["repository_root"]
             self.command_env = saved["command_env"]
+        return proof_path
+
+    def _assert_overlay_off_criterion_spine(self, intent: Dict[str, Any]) -> List[str]:
+        acceptance = intent.get("acceptance")
+        if not isinstance(acceptance, list) or not acceptance:
+            raise JourneyFailure("overlay-off intent omitted acceptance criteria")
+        ids: List[str] = []
+        for index, criterion in enumerate(acceptance):
+            if not isinstance(criterion, dict) or set(criterion) != {"id", "statement"}:
+                raise JourneyFailure(
+                    f"overlay-off criterion {index} is not the closed AC-N record: {criterion}"
+                )
+            criterion_id = criterion.get("id")
+            statement = criterion.get("statement")
+            if (
+                not isinstance(criterion_id, str)
+                or not criterion_id.startswith("AC-")
+                or not criterion_id[3:].isdigit()
+                or criterion_id[3:] == "0"
+                or criterion_id in ids
+                or not isinstance(statement, str)
+                or not statement
+            ):
+                raise JourneyFailure(
+                    f"overlay-off criterion identity is malformed: {criterion}"
+                )
+            ids.append(criterion_id)
+        serialized = json.dumps(intent, separators=(",", ":"), ensure_ascii=False).lower()
+        forbidden = (
+            "prd_traceability",
+            "requirement_ids",
+            "bookends:",
+            "candidate",
+            "citation",
+            "green",
+            "live_ids",
+        )
+        found = [term for term in forbidden if term in serialized]
+        if found:
+            raise JourneyFailure(
+                f"overlay-off artifact carried optional PRD metadata: {found}",
+                state=self.state,
+                event="show",
+            )
+        return ids
+
+    @staticmethod
+    def _replace_overlay_off_citation(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: Journey._replace_overlay_off_citation(child)
+                for key, child in value.items()
+            }
+        if isinstance(value, list):
+            return [Journey._replace_overlay_off_citation(child) for child in value]
+        if isinstance(value, str):
+            return value.replace("bookends:LE-39", "named public requirement")
+        return value
+
+    @staticmethod
+    def _assert_no_overlay_off_metadata(value: Dict[str, Any], subject: str) -> None:
+        serialized = json.dumps(value, separators=(",", ":"), ensure_ascii=False).lower()
+        forbidden = (
+            "prd_traceability",
+            "requirement_ids",
+            "bookends:",
+            "candidate",
+            "citation",
+            "green",
+            "live_ids",
+        )
+        found = [term for term in forbidden if term in serialized]
+        if found:
+            raise JourneyFailure(
+                f"overlay-off {subject} carried optional PRD metadata: {found}",
+                state="explore",
+                event="show",
+            )
+
+    def _write_provider_config_at(self, path: Path) -> None:
+        assert self.provider is not None
+        path.write_text(
+            "[providers.software-change]\n"
+            f"command = {json.dumps(str(self.provider))}\n"
+            "args = []\n",
+            encoding="utf-8",
+        )
+
+    def _overlay_axes(self, gate: str) -> List[Dict[str, Any]]:
+        policies = self.profile.get("review_policies", {})
+        configured = policies.get(gate)
+        if not isinstance(configured, list):
+            raise JourneyFailure(f"overlay scenario profile omitted policy gate {gate}")
+        axes = [copy.deepcopy(entry) for entry in configured]
+        ids = {entry.get("id") for entry in axes if isinstance(entry, dict)}
+        if axes and "ids-grounded" not in ids:
+            axes.append({"id": "ids-grounded"})
+        if axes and gate in {"validation-review", "validation-adversarial-review"} and "bypass-not-green" not in ids:
+            axes.append({"id": "bypass-not-green"})
+        return axes
+
+    def _append_overlay_evidence(
+        self,
+        gate: str,
+        *,
+        record_prefix: str = "",
+        failing_axis: Optional[str] = None,
+        failure_findings: str = "",
+    ) -> Optional[str]:
+        subject = GATE_SUBJECT[gate]
+        revision = self._fixture_revision(subject)
+        failure_record_id: Optional[str] = None
+        for entry in self._overlay_axes(gate):
+            axis = entry["id"]
+            required = int(entry.get("required_authors", 1))
+            count = 1 if axis == failing_axis else required
+            if axis == failing_axis:
+                if not failure_findings:
+                    raise JourneyFailure("overlay failing evidence omitted findings")
+            for index in range(count):
+                result = "fail" if axis == failing_axis else "pass"
+                findings = failure_findings if result == "fail" else ""
+                record_id = f"{record_prefix}evidence-{gate}-{axis}-{index}"
+                data = {
+                    "gate": gate,
+                    "policy_id": axis,
+                    "result": result,
+                    "findings": findings,
+                    "author": {
+                        "name": f"overlay-{gate}-{axis}-{index}",
+                        "kind": "script",
+                    },
+                    "subject": subject,
+                    "subject_revision": revision,
+                    "config_version": self.profile["config_version"],
+                }
+                response = self._engine(
+                    [
+                        "append",
+                        f"--record-id={record_id}",
+                        self.run_id,
+                        "review-evidence",
+                        json.dumps(data, separators=(",", ":")),
+                    ],
+                    state=self.state,
+                    event="append",
+                    axis=axis,
+                )
+                self._expect_status(
+                    response, "completed", event="append", state=self.state, axis=axis
+                )
+                if result == "fail":
+                    failure_record_id = record_id
+        return failure_record_id
+
+    def _pass_overlay_review(self, gate: str, event: str, target: str) -> None:
+        prefix = f"overlay-{gate}-"
+        self._assert_show(self.state, f"{prefix}before")
+        self._append_overlay_evidence(gate, record_prefix=prefix)
+        self._append_finding_ledger_for(
+            self.run_id, gate, state=self.state, record_prefix=prefix
+        )
+        self._expect_allow(event, target)
+
+    def _write_overlay_artifacts(
+        self, artifacts: Path, *, candidate: bool, unfulfilled: bool
+    ) -> Dict[str, Any]:
+        assert self.fixture_root is not None
+        values = {
+            subject: self._read_json(
+                self.fixture_root / fixture, f"overlay fixture {subject}"
+            )
+            for subject, fixture in SUBJECTS.items()
+        }
+        dispositions = [
+            {
+                "type": "linked-live",
+                "live_ids": ["LE-1"],
+            },
+            (
+                {
+                    "type": "candidate",
+                    "proposed_id": BOOKENDS_CANDIDATE_ID,
+                    "record_markdown": (
+                        f"### {BOOKENDS_CANDIDATE_ID}: Proposed requirement\n"
+                        "- Status: live\n- Coverage: e2e/journey\n"
+                    ),
+                }
+                if candidate
+                else {"type": "linked-live", "live_ids": ["LE-2"]}
+            ),
+            {
+                "type": "not-applicable",
+                "reason": "This criterion is change-specific and has no enduring PRD identity.",
+            },
+            {
+                "type": "linked-live",
+                "live_ids": ["LE-2"],
+            },
+        ]
+        intent = values["intent.json"]
+        for criterion, disposition in zip(intent["acceptance"], dispositions):
+            criterion["prd_traceability"] = disposition
+
+        design = values["design.json"]
+        design["coverage"][0]["criterion_id"] = "AC-1"
+
+        plan = values["plan.json"]
+        plan["tasks"][0]["criterion_ids"] = ["AC-1"]
+
+        implementation = values["implementation-report.json"]
+        implementation["validation"][0]["criterion_id"] = "AC-1"
+
+        validation = values["validation-report.json"]
+        validation["requirements"][0]["criterion_id"] = "AC-3" if unfulfilled else "AC-1"
+        if unfulfilled:
+            validation["requirements"][0]["proof"] = (
+                "This report deliberately leaves AC-3 unfulfilled; not-applicable is only a PRD traceability classification."
+            )
+
+        for subject, value in values.items():
+            (artifacts / subject).write_text(
+                json.dumps(value, indent=2) + "\n", encoding="utf-8"
+            )
+        return {
+            "criterion_types": [disposition["type"] for disposition in dispositions],
+        }
+
+    def _assert_overlay_artifacts(
+        self, artifacts: Path, *, candidate: bool, unfulfilled: bool
+    ) -> Dict[str, Any]:
+        intent = self._read_json(artifacts / "intent.json", "overlay intent")
+        criteria = intent.get("acceptance")
+        if not isinstance(criteria, list) or len(criteria) != 4:
+            raise JourneyFailure(f"overlay intent has unexpected criteria: {intent}")
+        types = []
+        for index, criterion in enumerate(criteria):
+            if not isinstance(criterion, dict):
+                raise JourneyFailure(f"overlay criterion {index} is not an object")
+            disposition = criterion.get("prd_traceability")
+            if not isinstance(disposition, dict):
+                raise JourneyFailure(
+                    f"overlay criterion {index} omitted its one disposition"
+                )
+            types.append(disposition.get("type"))
+        expected = (
+            ["linked-live", "candidate", "not-applicable", "linked-live"]
+            if candidate
+            else ["linked-live", "linked-live", "not-applicable", "linked-live"]
+        )
+        if types != expected or types.count("not-applicable") != 1:
+            raise JourneyFailure(
+                f"overlay dispositions were not exactly one per criterion: {types}"
+            )
+        if self._read_json(artifacts / "design.json", "overlay design")["coverage"][0].get("criterion_id") != "AC-1":
+            raise JourneyFailure("overlay design omitted its AC-N reference")
+        if self._read_json(artifacts / "plan.json", "overlay plan")["tasks"][0].get("criterion_ids") != ["AC-1"]:
+            raise JourneyFailure("overlay plan omitted its AC-N reference")
+        if self._read_json(artifacts / "validation-report.json", "overlay validation")["requirements"][0].get("criterion_id") != ("AC-3" if unfulfilled else "AC-1"):
+            raise JourneyFailure("overlay validation omitted its AC-N reference")
+        return {"criterion_types": types}
+
+    def _run_overlay_on_source(self, *, candidate: bool) -> Path:
+        """Prove candidate blocking and the non-waiver of not-applicable."""
+        assert self.run_dir is not None
+        assert self.data_root is not None
+        scenario_name = "candidate" if candidate else "not-applicable"
+        scenario_dir = self.run_dir / f"criterion-overlay-on-{scenario_name}"
+        checkout = scenario_dir / "checkout"
+        artifacts = scenario_dir / "artifacts"
+        database = scenario_dir / "run.sqlite"
+        profile_path = scenario_dir / "high-rigor-bookends.json"
+        provider_config = scenario_dir / "providers.toml"
+        scenario_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(
+            self.data_root,
+            checkout,
+            ignore=shutil.ignore_patterns(".git", "target", "__pycache__", "*.pyc"),
+        )
+        artifacts.mkdir()
+        self._initialize_overlay_checkout(checkout)
+        profile = self._read_json(
+            self.data_root / BOOKENDS_SCENARIO_PROFILE,
+            "overlay-on high-rigor profile",
+        )
+        profile["artifact_root"] = str(artifacts)
+        extra = copy.deepcopy(profile.get("extra", {}))
+        extra["bookends"] = {"enabled": True}
+        profile["extra"] = extra
+        _write_json(profile_path, profile)
+        self._write_provider_config_at(provider_config)
+
+        saved = {
+            "run_id": self.run_id,
+            "database": self.database,
+            "provider_config": self.provider_config,
+            "artifact_root": self.artifact_root,
+            "profile_path": self.profile_path,
+            "profile_source": self.profile_source,
+            "profile": self.profile,
+            "work_slot_bindings": self.work_slot_bindings,
+            "state": self.state,
+            "command_cwd": self.command_cwd,
+            "repository_root": self.repository_root,
+            "command_env": self.command_env,
+        }
+        proof_path = scenario_dir / f"overlay-on-{scenario_name}-proof.json"
+        try:
+            self.run_id = (
+                BOOKENDS_SCENARIO_RUN_ID
+                if candidate
+                else BOOKENDS_NOT_APPLICABLE_RUN_ID
+            )
+            self.database = database
+            self.provider_config = provider_config
+            self.artifact_root = artifacts
+            self.profile_path = profile_path
+            self.profile_source = self.data_root / BOOKENDS_SCENARIO_PROFILE
+            self.profile = profile
+            self.work_slot_bindings = {}
+            self.state = "not-started"
+            self.command_cwd = checkout
+            self.repository_root = checkout
+            self.command_env = {"BOOKENDS_BYPASS": ""}
+            dispositions = self._write_overlay_artifacts(
+                artifacts, candidate=candidate, unfulfilled=not candidate
+            )
+            self._assert_overlay_artifacts(
+                artifacts, candidate=candidate, unfulfilled=not candidate
+            )
+            self._start()
+            shown = self._assert_show("explore", f"overlay-on-{scenario_name}-show")
+            initial_input = shown.get("initial_input", {})
+            if initial_input.get("extra", {}).get("bookends", {}).get("enabled") is not True:
+                raise JourneyFailure(
+                    "overlay-on option was not frozen in initial_input",
+                    state=self.state,
+                    event="show",
+                )
+            instructions = str(shown.get("current_state_instructions", ""))
+            for fragment in ("prd_traceability", "linked-live", "candidate", "not-applicable"):
+                if fragment not in instructions:
+                    raise JourneyFailure(
+                        f"overlay-on instructions omitted {fragment!r}",
+                        state=self.state,
+                        event="show",
+                    )
+
+            self._expect_allow("intent-ready", "intent-review")
+            self._pass_overlay_review("intent-review", "approved", "intent-adversarial-review")
+            self._pass_overlay_review("intent-adversarial-review", "approved", "design")
+            self._expect_allow("design-ready", "design-review")
+            self._pass_overlay_review("design-review", "approved", "design-adversarial-review")
+            self._pass_overlay_review("design-adversarial-review", "approved", "plan")
+            self._expect_allow("plan-ready", "plan-review")
+            self._pass_overlay_review("plan-review", "approved", "plan-adversarial-review")
+            self._pass_overlay_review("plan-adversarial-review", "approved", "implement")
+            self._create_checkpoint("implementation")
+            self._expect_allow("implementation-ready", "implementation-review")
+            self._pass_overlay_review("implementation-review", "approved", "implementation-adversarial-review")
+            self._pass_overlay_review("implementation-adversarial-review", "approved", "validation")
+            self._create_checkpoint("validation")
+            self._expect_allow("validation-ready", "validation-review")
+            self._pass_overlay_review("validation-review", "approved", "validation-adversarial-review")
+
+            if candidate:
+                # bookends:LE-97 — the public overlay-on candidate assertion proves a current provisional PRD record blocks Bookends-enabled final completion after all other phase checks pass.
+                denial = self._event("passed", "bookends-candidate")
+                self._expect_status(
+                    denial,
+                    "rejected",
+                    event="passed",
+                    axis="bookends-candidate",
+                    state=self.state,
+                )
+                if denial.get("code") != "software-change-bookends-candidate":
+                    raise JourneyFailure(
+                        f"current candidate did not block Bookends-enabled final completion: {denial}",
+                        state=self.state,
+                        event="passed",
+                    )
+                self._assert_show("validation-adversarial-review", "overlay-candidate-denied")
+                case_assertions = [
+                    "exactly one prd_traceability disposition is present on every current criterion",
+                    "linked-live dispositions use only live LE-1 and LE-2 IDs",
+                    "current candidate LE-9001 blocks final high-rigor passed",
+                ]
+            else:
+                # bookends:LE-97 — the public overlay-on not-applicable assertion proves traceability classification does not waive an unfulfilled AC-N criterion.
+                finding_id = self._append_overlay_evidence(
+                    "validation-adversarial-review",
+                    record_prefix="overlay-not-applicable-",
+                    failing_axis="intent-delivered",
+                    failure_findings=(
+                        "AC-3 remains unfulfilled; not-applicable classifies PRD traceability only and does not satisfy the criterion."
+                    ),
+                )
+                if finding_id is None:
+                    raise JourneyFailure("not-applicable proof did not append a failing review")
+                finding = {
+                    "id": "F-not-applicable-criterion",
+                    "source": {"kind": "context-record", "id": finding_id},
+                    "policy_id": "intent-delivered",
+                    "statement": (
+                        "AC-3 remains unfulfilled; not-applicable classifies PRD traceability only "
+                        "and does not satisfy the criterion."
+                    ),
+                    "disposition": "accepted",
+                    "reason": "The driver accepted the current semantic failure and kept the criterion binding.",
+                    "owner_phase": "validation",
+                    "task_ids": [],
+                    "review_axes": ["intent-delivered"],
+                    "status": "unresolved",
+                }
+                ledger = {
+                    "schema_version": "1",
+                    "gate": "validation-adversarial-review",
+                    "subject": "validation-report.json",
+                    "subject_revision": self._fixture_revision("validation-report.json"),
+                    "author": {"name": "overlay-not-applicable-driver", "kind": "agent"},
+                    "findings": [finding],
+                }
+                self._append_ledger_snapshot_for(
+                    self.run_id,
+                    ledger,
+                    record_id="overlay-not-applicable-ledger",
+                    state=self.state,
+                    axis="intent-delivered",
+                )
+                denial = self._event("passed", "not-applicable")
+                self._expect_status(
+                    denial,
+                    "rejected",
+                    event="passed",
+                    axis="not-applicable",
+                    state=self.state,
+                )
+                if denial.get("code") != "software-change-review-incomplete":
+                    raise JourneyFailure(
+                        f"not-applicable unexpectedly waived the unfulfilled criterion: {denial}",
+                        state=self.state,
+                        event="passed",
+                    )
+                if "AC-3" not in json.dumps(denial, ensure_ascii=False):
+                    raise JourneyFailure(
+                        "not-applicable denial did not retain the unfulfilled criterion finding",
+                        state=self.state,
+                        event="passed",
+                    )
+                self._assert_show("validation-adversarial-review", "overlay-not-applicable-denied")
+                case_assertions = [
+                    "exactly one prd_traceability disposition is present on every current criterion",
+                    "not-applicable is PRD traceability only and contributes no fulfillment claim",
+                    "an external validation failure for AC-3 still blocks passed",
+                ]
+
+            proof_path.write_text(
+                json.dumps(
+                    {
+                        "result": "passed",
+                        "run_id": self.run_id,
+                        "overlay_enabled": True,
+                        "scenario": scenario_name,
+                        "config_version": profile["config_version"],
+                        "dispositions": dispositions,
+                        "terminal_state": self.state,
+                        "denial_code": denial.get("code"),
+                        "candidate_id": BOOKENDS_CANDIDATE_ID if candidate else None,
+                        "finding_id": "F-not-applicable-criterion" if not candidate else None,
+                        "assertions": case_assertions,
+                        "database": str(database),
+                        "artifact_root": str(artifacts),
+                        "candidate_checkout": str(checkout),
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        finally:
+            self.run_id = saved["run_id"]
+            self.database = saved["database"]
+            self.provider_config = saved["provider_config"]
+            self.artifact_root = saved["artifact_root"]
+            self.profile_path = saved["profile_path"]
+            self.profile_source = saved["profile_source"]
+            self.profile = saved["profile"]
+            self.work_slot_bindings = saved["work_slot_bindings"]
+            self.state = saved["state"]
+            self.command_cwd = saved["command_cwd"]
+            self.repository_root = saved["repository_root"]
+            self.command_env = saved["command_env"]
+        return proof_path
+
+    @staticmethod
+    def _initialize_overlay_checkout(checkout: Path) -> None:
+        for git_args in (
+            ["init", "-q"],
+            ["config", "user.name", "software-change journey"],
+            ["config", "user.email", "journey@example.invalid"],
+            ["config", "commit.gpgsign", "false"],
+            ["add", "-A"],
+            ["commit", "-qm", "criterion overlay journey baseline"],
+        ):
+            completed = subprocess.run(
+                ["git", *git_args],
+                cwd=checkout,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if completed.returncode != 0:
+                raise JourneyFailure(
+                    f"criterion overlay git {' '.join(git_args)} failed: "
+                    f"{completed.stderr.strip() or completed.stdout.strip()}"
+                )
 
     def _run_stitched_source(self) -> None:
         """Walk the live graph produced from shipped minimal.json on a second run."""
@@ -5502,7 +5881,7 @@ else:
             # bookends:LE-43 — the same production provider mechanism starts a materially different minimal topology profile.
             if (
                 shown.get("workflow_id") != "software-change"
-                or shown.get("initial_input", {}).get("config_version") != "minimal-6"
+                or shown.get("initial_input", {}).get("config_version") != "minimal-8"
                 or shown.get("initial_input", {}).get("review_policies")
                 == saved_profile.get("review_policies")
             ):
@@ -6788,8 +7167,46 @@ def assert_worker_data_skill_and_root_policy() -> None:
             if reversal in lowered:
                 raise JourneyFailure(f"{label} AGENTS.md reverses PRD authority with {reversal!r}")
     assert_operator_contract_surfaces()
+    assert_criterion_spine_docs()
     assert_focused_boundary_scenarios()
     print("worker-data skill/root policy assertions passed")
+
+
+def assert_criterion_spine_docs() -> None:
+    """Keep the provider-facing criterion and overlay instructions aligned."""
+    repository = Path(__file__).resolve().parent.parent
+    criterion_docs = (
+        repository / "crates/software-change-provider/README.md",
+        repository / "crates/software-change-provider/AGENTS.md",
+        repository / "crates/software-change-provider/docs/prd.md",
+        repository / "crates/software-change-provider/data/reviewer-protocol.md",
+        repository / "crates/software-change-provider/data/calibration/PROCEDURE.md",
+        repository / "crates/software-change-provider/skills/using-software-change-provider/SKILL.md",
+        repository / "crates/software-change-provider/data/templates/intent.md",
+        repository / "crates/software-change-provider/data/templates/design.md",
+        repository / "crates/software-change-provider/data/templates/task-packet.md",
+        repository / "crates/software-change-provider/data/templates/implementation-report.md",
+        repository / "crates/software-change-provider/data/templates/validation-report.md",
+    )
+    for path in criterion_docs:
+        text = path.read_text(encoding="utf-8").lower()
+        if "ac-n" not in text:
+            raise JourneyFailure(f"criterion-spine documentation {path} omitted AC-N")
+    overlay_docs = criterion_docs[:6] + (
+        criterion_docs[6],
+        criterion_docs[-1],
+    )
+    for path in overlay_docs:
+        text = path.read_text(encoding="utf-8").lower()
+        for clause in ("prd_traceability", "candidate", "not-applicable"):
+            if clause not in text:
+                raise JourneyFailure(
+                    f"criterion overlay documentation {path} omitted {clause!r}"
+                )
+        if "waive" not in text or "fulfill" not in text:
+            raise JourneyFailure(
+                f"criterion overlay documentation {path} omitted the non-waiver rule"
+            )
 
 
 def assert_operator_contract_surfaces() -> None:
@@ -6873,19 +7290,40 @@ def assert_operator_contract_surfaces() -> None:
         ):
             raise JourneyFailure(f"ordinary operator guidance still exposes legacy field {legacy!r}")
 
-    # Shipped profile bytes are the immutable source of profile-derived facts;
-    # comparing against HEAD catches accidental edits without hard-coding any
-    # run-specific model or profile values into the journey.
-    for profile in sorted((repository / "crates/software-change-provider/data/configs").glob("*.json")):
-        relative = profile.relative_to(repository).as_posix()
-        try:
-            committed = subprocess.check_output(
-                ["git", "show", f"HEAD:{relative}"], cwd=repository
+    # Shipped profiles are intentionally changed by the criterion-spine
+    # package.  Validate their current contract here instead of comparing the
+    # worktree to HEAD: a source journey must run against the same bytes it
+    # proves.
+    expected_versions = {
+        "minimal.json": "minimal-8",
+        "standard.json": "standard-8",
+        "high-rigor.json": "high-rigor-8",
+    }
+    for name, expected_version in expected_versions.items():
+        profile = _load_json(repository / "crates/software-change-provider/data/configs" / name)
+        if profile.get("config_version") != expected_version:
+            raise JourneyFailure(
+                f"criterion-spine profile {name} has {profile.get('config_version')!r}, "
+                f"expected {expected_version!r}"
             )
-        except (OSError, subprocess.CalledProcessError) as error:
-            raise JourneyFailure(f"could not read committed profile bytes for {relative}: {error}") from error
-        if profile.read_bytes() != committed:
-            raise JourneyFailure(f"shipped profile/config bytes changed: {relative}")
+        if profile.get("extra", {}).get("bookends") is not None:
+            raise JourneyFailure(f"shipped profile unexpectedly enables Bookends: {name}")
+        acceptance = (
+            profile.get("artifact_schemas", {})
+            .get("intent.json", {})
+            .get("properties", {})
+            .get("acceptance", {})
+            .get("items", {})
+        )
+        if (
+            acceptance.get("type") != "object"
+            or set(acceptance.get("required", [])) != {"id", "statement"}
+            or set(acceptance.get("properties", {})) != {"id", "statement"}
+            or acceptance.get("additionalProperties") is not False
+            or acceptance.get("properties", {}).get("id", {}).get("pattern")
+            != "^AC-[1-9][0-9]*$"
+        ):
+            raise JourneyFailure(f"shipped profile lacks the closed AC-N acceptance shape: {name}")
 
     workflow_source = (
         repository / "crates/software-change-provider/src/workflow.rs"
@@ -7095,6 +7533,34 @@ def assert_focused_boundary_scenarios() -> None:
                 raise JourneyFailure(
                     f"{token} scenario omitted observable assertion marker {assertion!r}"
                 )
+
+    overlay_scenarios = {
+        "_run_overlay_off_source": (
+            "_assert_overlay_off_criterion_spine",
+            "all five authored overlay-off artifacts",
+        ),
+        "_run_overlay_on_source": (
+            "prd_traceability",
+            "software-change-bookends-candidate",
+            "not-applicable",
+            "AC-3 remains unfulfilled",
+        ),
+    }
+    for function_name, assertions in overlay_scenarios.items():
+        function_start = source.index(f"    def {function_name}")
+        function_end = source.find("\n    def ", function_start + len(f"    def {function_name}"))
+        function_source = source[function_start:function_end + 1 if function_end >= 0 else len(source)]
+        for assertion in assertions:
+            if assertion not in function_source:
+                raise JourneyFailure(
+                    f"criterion overlay scenario {function_name} omitted {assertion!r}"
+                )
+    for marker in (
+        "overlay-off criterion spine scenario passed:",
+        "overlay-on criterion scenarios passed:",
+    ):
+        if marker not in source:
+            raise JourneyFailure(f"criterion overlay marker missing: {marker}")
 
     repair_start = source.index("    def _run_ad_hoc_repair_proof")
     repair_end = source.find("\n    def ", repair_start + len("    def _run_ad_hoc_repair_proof"))

@@ -134,6 +134,134 @@ fn valid_metadata(revision: &str) -> Value {
     })
 }
 
+fn criterion_intent_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "revision": {"type": "string", "minLength": 1},
+            "acceptance": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["id", "statement"],
+                    "properties": {
+                        "id": {"type": "string", "pattern": "^AC-[1-9][0-9]*$"},
+                        "statement": {"type": "string", "minLength": 1}
+                    },
+                    "additionalProperties": false
+                },
+                "minItems": 1
+            }
+        },
+        "required": ["revision", "acceptance"],
+        "additionalProperties": false
+    })
+}
+
+fn criterion_design_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "revision": {"type": "string", "minLength": 1},
+            "intent_revision": {"type": "string", "minLength": 1},
+            "coverage": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["acceptance", "delivered_by"],
+                    "properties": {
+                        "acceptance": {"type": "string", "minLength": 1},
+                        "delivered_by": {"type": "string", "minLength": 1},
+                        "criterion_id": {"type": "string", "pattern": "^AC-[1-9][0-9]*$"}
+                    },
+                    "additionalProperties": false
+                },
+                "minItems": 1
+            }
+        },
+        "required": ["revision", "intent_revision", "coverage"],
+        "additionalProperties": false
+    })
+}
+
+fn criterion_config(root: &TestDir) -> Value {
+    json!({
+        "config_version": "criteria-test-1",
+        "artifact_root": root.root_value(),
+        "review_policies": {},
+        "artifact_schemas": {
+            "intent.json": criterion_intent_schema(),
+            "design.json": criterion_design_schema()
+        },
+        "revision_links": [{
+            "from": "design.json",
+            "field": "intent_revision",
+            "to": "intent.json"
+        }]
+    })
+}
+
+fn criterion_intent(revision: &str, criteria: Value) -> Value {
+    json!({"revision": revision, "acceptance": criteria})
+}
+
+fn criterion_design(revision: &str, intent_revision: &str, coverage: Value) -> Value {
+    json!({
+        "revision": revision,
+        "intent_revision": intent_revision,
+        "coverage": coverage
+    })
+}
+
+fn pre_8_criterion_config(root: &TestDir) -> Value {
+    json!({
+        "config_version": "criteria-pre-8",
+        "artifact_root": root.root_value(),
+        "review_policies": {},
+        "artifact_schemas": {
+            "intent.json": {
+                "type": "object",
+                "properties": {
+                    "revision": {"type": "string", "minLength": 1},
+                    "acceptance": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1},
+                        "minItems": 1
+                    }
+                },
+                "required": ["revision", "acceptance"],
+                "additionalProperties": false
+            },
+            "design.json": {
+                "type": "object",
+                "properties": {
+                    "revision": {"type": "string", "minLength": 1},
+                    "intent_revision": {"type": "string", "minLength": 1},
+                    "coverage": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "acceptance": {"type": "string", "minLength": 1},
+                                "delivered_by": {"type": "string", "minLength": 1}
+                            },
+                            "required": ["acceptance", "delivered_by"]
+                        },
+                        "minItems": 1
+                    }
+                },
+                "required": ["revision", "intent_revision", "coverage"],
+                "additionalProperties": false
+            }
+        },
+        "revision_links": [{
+            "from": "design.json",
+            "field": "intent_revision",
+            "to": "intent.json"
+        }]
+    })
+}
+
 fn context_record(data: Value) -> Value {
     json!({
         "id": "context-1",
@@ -261,6 +389,20 @@ fn assert_exit(output: &Output, code: i32) {
         "stderr={:?}",
         output.stderr
     );
+}
+
+fn criterion_violation_rules(output: &Output) -> Vec<String> {
+    response(output)["feedback"]["details"]["violations"]
+        .as_array()
+        .expect("criterion schema violations")
+        .iter()
+        .map(|violation| {
+            violation["rule"]
+                .as_str()
+                .expect("criterion violation rule")
+                .to_owned()
+        })
+        .collect()
 }
 
 #[test]
@@ -909,4 +1051,205 @@ fn same_policy_id_on_parent_and_adversarial_gates_aggregates_independently() {
         .unwrap()
         .iter()
         .any(|axis| axis["axis"] == "axis"));
+}
+
+#[test]
+fn pre_8_scalar_intent_acceptance_uses_the_frozen_schema_contract() {
+    let root = TestDir::new();
+    root.write_json(
+        "intent.json",
+        &json!({"revision": "i1", "acceptance": ["first"]}),
+    );
+    let output = run_provider(base_request(
+        pre_8_criterion_config(&root),
+        checked("explore", "intent-ready", "design"),
+    ));
+    assert_exit(&output, 0);
+    assert_eq!(response(&output), json!({"result": "allow"}));
+}
+
+#[test]
+fn pre_8_downstream_schema_does_not_activate_criterion_references() {
+    let root = TestDir::new();
+    root.write_json(
+        "intent.json",
+        &json!({"revision": "i1", "acceptance": ["first"]}),
+    );
+    let config = pre_8_criterion_config(&root);
+    root.write_json(
+        "design.json",
+        &criterion_design(
+            "d1",
+            "i1",
+            json!([{
+                "acceptance": "first",
+                "delivered_by": "part",
+                "criterion_id": "AC-1"
+            }]),
+        ),
+    );
+    let output = run_provider(base_request(
+        config,
+        checked("design", "design-ready", "plan"),
+    ));
+    assert_exit(&output, 0);
+    assert_eq!(response(&output), json!({"result": "allow"}));
+}
+
+#[test]
+fn intent_criterion_identity_rejects_duplicate_ids_and_schema_malformed_records() {
+    let root = TestDir::new();
+    let config = criterion_config(&root);
+    root.write_json(
+        "intent.json",
+        &criterion_intent(
+            "i1",
+            json!([
+                {"id": "AC-1", "statement": "first"},
+                {"id": "AC-1", "statement": "second"}
+            ]),
+        ),
+    );
+    let duplicate = run_provider(base_request(
+        config.clone(),
+        checked("explore", "intent-ready", "design"),
+    ));
+    assert_exit(&duplicate, 0);
+    assert_eq!(
+        response(&duplicate)["feedback"]["code"],
+        "software-change-schema-invalid"
+    );
+    assert_eq!(
+        criterion_violation_rules(&duplicate),
+        vec!["criterion-identity"]
+    );
+    assert!(
+        response(&duplicate)["feedback"]["details"]["violations"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("duplicate criterion ID")
+    );
+
+    root.write_json(
+        "intent.json",
+        &criterion_intent("i1", json!([{"id": "AC-0", "statement": ""}])),
+    );
+    let malformed = run_provider(base_request(
+        config,
+        checked("explore", "intent-ready", "design"),
+    ));
+    assert_exit(&malformed, 0);
+    assert_eq!(
+        response(&malformed)["feedback"]["code"],
+        "software-change-schema-invalid"
+    );
+    let rules = criterion_violation_rules(&malformed);
+    assert!(rules.contains(&"pattern".to_owned()));
+    assert!(rules.contains(&"minLength".to_owned()));
+}
+
+#[test]
+fn downstream_criterion_references_are_optional_but_current_and_unique() {
+    let root = TestDir::new();
+    let config = criterion_config(&root);
+    root.write_json(
+        "intent.json",
+        &criterion_intent("i1", json!([{"id": "AC-1", "statement": "first"}])),
+    );
+
+    root.write_json(
+        "design.json",
+        &criterion_design(
+            "d1",
+            "i1",
+            json!([{"acceptance": "first", "delivered_by": "part"}]),
+        ),
+    );
+    let optional = run_provider(base_request(
+        config.clone(),
+        checked("design", "design-ready", "plan"),
+    ));
+    assert_exit(&optional, 0);
+    assert_eq!(response(&optional), json!({"result": "allow"}));
+
+    root.write_json(
+        "design.json",
+        &criterion_design(
+            "d1",
+            "i1",
+            json!([{"acceptance": "first", "delivered_by": "part", "criterion_id": "AC-1"}]),
+        ),
+    );
+    let known = run_provider(base_request(
+        config.clone(),
+        checked("design", "design-ready", "plan"),
+    ));
+    assert_exit(&known, 0);
+    assert_eq!(response(&known), json!({"result": "allow"}));
+
+    root.write_json(
+        "design.json",
+        &criterion_design(
+            "d1",
+            "i1",
+            json!([{"acceptance": "malformed", "delivered_by": "part", "criterion_id": "AC-01"}]),
+        ),
+    );
+    let malformed = run_provider(base_request(
+        config.clone(),
+        checked("design", "design-ready", "plan"),
+    ));
+    assert_exit(&malformed, 0);
+    assert!(criterion_violation_rules(&malformed).contains(&"pattern".to_owned()));
+
+    root.write_json(
+        "design.json",
+        &criterion_design(
+            "d1",
+            "i1",
+            json!([
+                {"acceptance": "first", "delivered_by": "part", "criterion_id": "AC-1"},
+                {"acceptance": "same", "delivered_by": "other", "criterion_id": "AC-1"}
+            ]),
+        ),
+    );
+    let duplicate = run_provider(base_request(
+        config.clone(),
+        checked("design", "design-ready", "plan"),
+    ));
+    assert_exit(&duplicate, 0);
+    assert_eq!(
+        criterion_violation_rules(&duplicate),
+        vec!["criterion-reference"]
+    );
+    assert!(
+        response(&duplicate)["feedback"]["details"]["violations"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("duplicate criterion reference")
+    );
+
+    root.write_json(
+        "design.json",
+        &criterion_design(
+            "d1",
+            "i1",
+            json!([{"acceptance": "unknown", "delivered_by": "part", "criterion_id": "AC-2"}]),
+        ),
+    );
+    let unknown = run_provider(base_request(
+        config,
+        checked("design", "design-ready", "plan"),
+    ));
+    assert_exit(&unknown, 0);
+    assert_eq!(
+        criterion_violation_rules(&unknown),
+        vec!["criterion-reference"]
+    );
+    assert!(
+        response(&unknown)["feedback"]["details"]["violations"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("not present in the current intent")
+    );
 }

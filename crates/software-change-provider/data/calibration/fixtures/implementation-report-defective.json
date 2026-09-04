@@ -20,6 +20,6 @@
     "fictional-repo/provider/src/service.rs"
   ],
   "validation": [
-    "It should work."
+    {"proof": "It should work."}
   ]
 }

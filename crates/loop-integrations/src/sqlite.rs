@@ -275,6 +275,13 @@ impl Persistence for SqlitePersistence {
         &self,
         request: CommitTransitionRequest,
     ) -> Result<CommitTransitionResult, PersistenceError> {
+        if request.context_append.is_some() && request.transition.kind.is_check_free() {
+            return Err(PersistenceError::failure(PersistenceFailure::new(
+                "sqlite-invalid-context-effect",
+                "provider context append effects require a checked transition",
+            )));
+        }
+
         let mut connection = self.lock()?;
         let transaction = begin_immediate(&mut connection)?;
         let result = (|| {
@@ -297,11 +304,36 @@ impl Persistence for SqlitePersistence {
 
             require_observed(&raw)?;
 
-            let sequence = next_sequence(run.last_sequence)?;
+            let first_sequence = next_sequence(run.last_sequence)?;
             let revision = next_revision(run.control_revision)?;
             let occurred_at = current_timestamp()?;
+            let transition_sequence = if let Some(effect) = request.context_append.as_ref() {
+                let record_id = generated_context_effect_id(&request.run_id, first_sequence);
+                let data_json = encode_json(&effect.data, "context effect data")?;
+                transaction
+                    .execute(
+                        "INSERT INTO context_records (
+                            run_id, record_id, sequence, kind, data_json, created_at
+                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        params![
+                            request.run_id.as_str(),
+                            record_id.as_str(),
+                            to_sqlite_i64(first_sequence.as_u64(), "semantic sequence")?,
+                            effect.kind,
+                            data_json,
+                            occurred_at.as_unix_millis(),
+                        ],
+                    )
+                    .map_err(sqlite_failure)?;
+                let context_history =
+                    HistoryEntry::context_appended(first_sequence, occurred_at, record_id);
+                insert_history(&transaction, &request.run_id, &context_history)?;
+                next_sequence(first_sequence)?
+            } else {
+                first_sequence
+            };
             let history = HistoryEntry::transition(
-                sequence,
+                transition_sequence,
                 occurred_at,
                 request.transition.clone(),
                 TransitionHistoryOutcome::Committed,
@@ -318,7 +350,7 @@ impl Persistence for SqlitePersistence {
                         request.transition.target.as_str(),
                         lifecycle_name(request.resulting_lifecycle),
                         to_sqlite_i64(revision.as_u64(), "control revision")?,
-                        to_sqlite_i64(sequence.as_u64(), "semantic sequence")?,
+                        to_sqlite_i64(transition_sequence.as_u64(), "semantic sequence")?,
                         request.run_id.as_str(),
                     ],
                 )
@@ -1093,6 +1125,13 @@ fn verify_revision_and_source(
     Ok(())
 }
 
+fn generated_context_effect_id(
+    run_id: &RunId,
+    sequence: SemanticSequence,
+) -> loop_core::ContextRecordId {
+    loop_core::ContextRecordId::new(format!("engine-context-effect-{run_id}-{sequence}"))
+}
+
 fn update_last_sequence(
     transaction: &Transaction<'_>,
     run_id: &RunId,
@@ -1614,8 +1653,9 @@ fn sqlite_failure(error: impl std::fmt::Display) -> PersistenceError {
 mod tests {
     use super::*;
     use loop_core::{
-        InnerWorker, Lifecycle, ProviderAssociation, State, Transition, WaiterWrittenStatus,
-        WorkSlotBinding, Workflow,
+        ContextAppendEffect, EvaluationRequest, EvaluationResult, InnerWorker, Lifecycle,
+        ProviderAssociation, ProviderError, ProviderGateway, State, Transition,
+        WaiterWrittenStatus, WorkSlotBinding, Workflow,
     };
     use serde_json::json;
     use tempfile::tempdir;
@@ -1642,6 +1682,131 @@ mod tests {
             "test-provider",
             Some("/allocated/run-dir".to_owned()),
         )
+    }
+
+    fn checked_event_workflow() -> Workflow {
+        Workflow::new(
+            "checked-event-test-workflow",
+            "start",
+            vec![
+                State::new("start", "Start", "Begin", false),
+                State::new("middle", "Middle", "Continue", false),
+                State::new("done", "Done", "Finished", true),
+            ],
+            vec![Transition::checked("start", "approve", "middle")],
+        )
+    }
+
+    fn checked_event_run(id: &str) -> CreateRunRequest {
+        CreateRunRequest::new(
+            id,
+            Some(format!("label-{id}")),
+            checked_event_workflow(),
+            ProviderAssociation::new(json!({"provider": "static-test-gateway"})),
+            json!({"objective": "atomic checked event"}),
+            "start",
+            Lifecycle::Active,
+            Timestamp::from_unix_millis(100),
+            "static-test-gateway",
+            None,
+        )
+    }
+
+    struct StaticGateway {
+        result: EvaluationResult,
+    }
+
+    impl StaticGateway {
+        fn new(result: EvaluationResult) -> Self {
+            Self { result }
+        }
+    }
+
+    impl ProviderGateway for StaticGateway {
+        fn describe(
+            &self,
+            _provider: &ProviderAssociation,
+            _initial_input: Option<&serde_json::Value>,
+        ) -> Result<Workflow, ProviderError> {
+            Ok(checked_event_workflow())
+        }
+
+        fn evaluate(
+            &self,
+            _provider: &ProviderAssociation,
+            _request: EvaluationRequest,
+        ) -> Result<EvaluationResult, ProviderError> {
+            Ok(self.result.clone())
+        }
+    }
+
+    #[test]
+    fn outer_checked_event_persists_effect_allow_and_transition_atomically() {
+        let directory = tempdir().expect("tempdir");
+        let path = directory.path().join("checked-event-atomic.sqlite");
+        let effect = ContextAppendEffect::new(
+            "accepted-intent-snapshot",
+            json!({"schema_version": 1, "intent_revision": "r1"}),
+        );
+
+        {
+            let adapter = SqlitePersistence::open(&path).expect("open sqlite");
+            adapter
+                .create_run(checked_event_run("run-checked-event-atomic"))
+                .expect("create run");
+            adapter
+                .load_show_data(&"run-checked-event-atomic".into())
+                .expect("observe run");
+
+            let outcome = loop_core::operations::event::execute(
+                loop_core::operations::event::Request::new("run-checked-event-atomic", "approve"),
+                &StaticGateway::new(EvaluationResult::allow_with_context_append(effect.clone())),
+                &adapter,
+            );
+            assert!(outcome.is_completed(), "checked event failed: {outcome:?}");
+        }
+
+        let reopened = SqlitePersistence::open(&path).expect("reopen sqlite");
+        let run = reopened
+            .load_authoritative_run(&"run-checked-event-atomic".into())
+            .expect("load committed run");
+        assert_eq!(run.current_state.as_str(), "middle");
+        assert_eq!(run.lifecycle, Lifecycle::Active);
+        assert_eq!(run.control_revision.as_u64(), 1);
+        assert_eq!(run.last_sequence.as_u64(), 3);
+
+        let context = reopened
+            .load_context_records(&"run-checked-event-atomic".into())
+            .expect("load effect");
+        assert_eq!(context.len(), 1);
+        assert_eq!(context[0].kind, effect.kind);
+        assert_eq!(context[0].data, effect.data);
+        assert_eq!(context[0].sequence.as_u64(), 2);
+        assert!(context[0].id.as_str().starts_with("engine-context-effect-"));
+        assert!(!context[0].id.as_str().contains("accepted-intent-snapshot"));
+
+        let history = reopened
+            .load_history(&"run-checked-event-atomic".into())
+            .expect("load history");
+        assert_eq!(history.len(), 3);
+        assert!(matches!(
+            history[1].action,
+            loop_core::HistoryAction::ContextAppended { .. }
+        ));
+        assert!(matches!(
+            history[2].action,
+            loop_core::HistoryAction::Transition {
+                outcome: loop_core::TransitionHistoryOutcome::Committed,
+                ..
+            }
+        ));
+
+        let evaluations = reopened
+            .load_checked_evaluations(&"run-checked-event-atomic".into())
+            .expect("load allow evaluation");
+        assert_eq!(evaluations.len(), 1);
+        assert!(evaluations[0].is_allow());
+        assert_eq!(evaluations[0].sequence.as_u64(), 3);
     }
 
     #[test]

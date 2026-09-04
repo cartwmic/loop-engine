@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 pub(crate) const FINDING_LEDGER_KIND: &str = "finding-ledger";
 pub(crate) const REVIEW_EVIDENCE_KIND: &str = "review-evidence";
 
-const BOOKENDS_STATE_GUIDANCE: &str = "Bookends overlay: cite at least one live PRD ID in `requirement_ids`; at every durable e2e/journey or declared contract test boundary, use the same live ID in a citation. Bound workers include that citation in their captured result for driver triage. Never mint an ID.";
+const BOOKENDS_STATE_GUIDANCE: &str = "Bookends overlay: every current intent criterion has one `prd_traceability` disposition (`linked-live`, `candidate`, or `not-applicable`). Linked-live IDs must be live PRD IDs; candidates must be parser-valid proposed records. At every durable e2e/journey or declared contract test boundary, cite the applicable live PRD ID in the captured result for driver triage. Never mint an ID.";
 
 fn bookends_citation_hint() -> String {
     ["bookends", ":LE-", "<n>"].concat()

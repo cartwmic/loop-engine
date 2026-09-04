@@ -6,10 +6,10 @@
 //! database transaction or a generic CRUD callback.
 
 use crate::{
-    ContextRecord, ContextRecordId, ControlRevision, DurableEvaluation, EvaluationFeedback,
-    EvaluationRequest, EvaluationResult, HistoryEntry, InnerWorker, InvocationId, Lifecycle,
-    ProviderAssociation, ProviderSelector, Run, RunId, StateId, Timestamp, Transition,
-    WaiterWrittenStatus, WorkSlotBinding, WorkSlotId, WorkSlotInvocation, Workflow,
+    ContextAppendEffect, ContextRecord, ContextRecordId, ControlRevision, DurableEvaluation,
+    EvaluationFeedback, EvaluationRequest, EvaluationResult, HistoryEntry, InnerWorker,
+    InvocationId, Lifecycle, ProviderAssociation, ProviderSelector, Run, RunId, StateId, Timestamp,
+    Transition, WaiterWrittenStatus, WorkSlotBinding, WorkSlotId, WorkSlotInvocation, Workflow,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -85,8 +85,8 @@ impl std::error::Error for ProviderResolutionError {}
 /// Executes the two stateless semantic provider operations.
 ///
 /// `evaluate` receives an engine-selected transition.  A provider can allow,
-/// deny, or report unsupported; it cannot choose a target state or mutate a
-/// run through this port.
+/// deny, or report unsupported; an allow may carry one opaque context append
+/// effect. It cannot choose a target state or mutate a run through this port.
 pub trait ProviderGateway {
     /// Snapshot the provider workflow for this start caller object.
     ///
@@ -492,6 +492,13 @@ pub struct AppendContextResult {
 /// still equals `expected_source_state`.  It then commits the target state and
 /// supplied lifecycle, advances revision, and appends one transition history
 /// entry atomically.
+///
+/// When present, `context_append` is the provider-authored effect returned by
+/// the allow evaluation. The adapter assigns its context-record identity,
+/// timestamp, and semantic sequence and persists it in the same conditional
+/// mutation as the committed allow and selected transition. The effect uses
+/// one semantic sequence (and matching `ContextAppended` history entry); the
+/// transition uses the following sequence.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CommitTransitionRequest {
     pub run_id: RunId,
@@ -503,6 +510,11 @@ pub struct CommitTransitionRequest {
     /// after verifying the existing revision/active/source preconditions; it
     /// must not derive lifecycle itself.
     pub resulting_lifecycle: Lifecycle,
+    /// At most one provider-authored context append effect. It is only
+    /// meaningful for a checked allow; persistence rejects it for check-free
+    /// transitions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_append: Option<ContextAppendEffect>,
     /// Slot-visit subjects persisted in the same transaction as the committed
     /// target state. Empty when the target is not a work slot.
     pub slot_subjects: Vec<(WorkSlotId, String)>,
@@ -522,8 +534,19 @@ impl CommitTransitionRequest {
             expected_source_state: expected_source_state.into(),
             transition,
             resulting_lifecycle,
+            context_append: None,
             slot_subjects: Vec::new(),
         }
+    }
+
+    /// Attach the single provider-authored context effect to this commit.
+    /// `None` is accepted for callers that forward an optional allow effect.
+    pub fn with_context_append(
+        mut self,
+        context_append: impl Into<Option<ContextAppendEffect>>,
+    ) -> Self {
+        self.context_append = context_append.into();
+        self
     }
 
     pub fn with_slot_subjects(mut self, slot_subjects: Vec<(WorkSlotId, String)>) -> Self {
@@ -834,7 +857,8 @@ pub trait Persistence {
 
     /// Atomically conditionally commit a transition and its history entry.
     /// The transition kind determines whether the committed entry represents
-    /// a check-free edge or a checked allow.
+    /// a check-free edge or a checked allow. A provider context append effect
+    /// may accompany only the checked-allow form.
     fn commit_transition(
         &self,
         request: CommitTransitionRequest,
@@ -1497,6 +1521,25 @@ mod tests {
         );
 
         assert_eq!(request.resulting_lifecycle, Lifecycle::Final);
+    }
+
+    #[test]
+    fn commit_transition_contract_carries_optional_provider_context_effect() {
+        let effect = ContextAppendEffect::new("snapshot", json!({"version": 1}));
+        let request = CommitTransitionRequest::new(
+            "run-1",
+            ControlRevision::from_u64(1),
+            "start",
+            workflow().transitions[0].clone(),
+            Lifecycle::Final,
+        )
+        .with_context_append(effect.clone());
+
+        assert_eq!(request.context_append, Some(effect));
+        assert_eq!(
+            serde_json::to_value(&request).unwrap()["context_append"],
+            json!({"kind": "snapshot", "data": {"version": 1}})
+        );
     }
 
     #[test]

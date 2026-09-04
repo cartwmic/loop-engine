@@ -2,6 +2,12 @@
 
 Provider checks evidence shape and aggregation. Reviewer decides truth externally and records one `review-evidence` context record per axis judgment. `review-evidence` remains binary: `result` is exactly `pass` or `fail`; this protocol adds no verdict, severity, owner-override, or round-state fields.
 
+## Criterion spine
+
+Current intent acceptance is a closed `{id, statement}` record with a stable run-local `AC-N` ID. Downstream `criterion_id`/`criterion_ids` references are optional and name only current intent criteria; the provider checks syntax, local duplicate-freeness, and current-intent membership, not complete coverage. Reviewers judge whether the supplied evidence semantically fulfills the named criteria.
+
+When the optional Bookends overlay is disabled, AC-N is the only criterion identity and review records need no PRD disposition, candidate, liveness, citation, or Green claim. When it is enabled, each current intent criterion has exactly one `prd_traceability` disposition: `linked-live`, `candidate`, or `not-applicable`. The last is PRD traceability only and never waives or fulfills the criterion; a candidate remains blocking until owner acceptance and committed PRD integration or honest reclassification.
+
 ## Fresh review evidence
 
 ```json
@@ -15,7 +21,7 @@ Provider checks evidence shape and aggregation. Reviewer decides truth externall
     "author": {"name": "reviewer-sol", "kind": "agent"},
     "subject": "design.json",
     "subject_revision": "3",
-    "config_version": "standard-7",
+    "config_version": "standard-8",
     "origin": {
       "kind": "selected-assignment-output",
       "id": "invocation-123",

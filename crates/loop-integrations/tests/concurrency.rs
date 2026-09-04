@@ -1,10 +1,10 @@
 use loop_core::{
     operations::{execute_append, execute_event, execute_terminate, AppendRequest, EventRequest},
-    AppendContextRequest, CheckedEvaluationSnapshotRequest, CommitTransitionRequest, ContextRecord,
-    CreateRunRequest, EvaluationFeedback, EvaluationRequest, EvaluationResult, HistoryAction,
-    Lifecycle, OperationOutcome, Persistence, ProviderAssociation, ProviderError, ProviderGateway,
-    RecordDenialRequest, Run, State, TerminateRequest, Timestamp, Transition,
-    TransitionHistoryOutcome, Workflow,
+    AppendContextRequest, CheckedEvaluationSnapshotRequest, CommitTransitionRequest,
+    ContextAppendEffect, ContextRecord, CreateRunRequest, EvaluationFeedback, EvaluationRequest,
+    EvaluationResult, HistoryAction, Lifecycle, OperationOutcome, Persistence, ProviderAssociation,
+    ProviderError, ProviderGateway, RecordDenialRequest, Run, State, TerminateRequest, Timestamp,
+    Transition, TransitionHistoryOutcome, Workflow,
 };
 use loop_integrations::SqlitePersistence;
 use serde_json::json;
@@ -555,7 +555,10 @@ fn competing_checked_allows_share_one_snapshot_revision_but_only_one_control_mut
 
     let first = SqlitePersistence::open(&path)?;
     let second = SqlitePersistence::open(&path)?;
-    let (gateway, ready, release) = BlockingGateway::new(EvaluationResult::Allow);
+    let (gateway, ready, release) =
+        BlockingGateway::new(EvaluationResult::allow_with_context_append(
+            ContextAppendEffect::new("accepted-intent-snapshot", json!({"revision": "r1"})),
+        ));
     let gateway = Arc::new(gateway);
     let first_gateway = gateway.clone();
     let first_handle = thread::spawn(move || {
@@ -625,11 +628,19 @@ fn competing_checked_allows_share_one_snapshot_revision_but_only_one_control_mut
         }
     );
     assert_eq!(run.control_revision.as_u64(), 1);
-    assert_eq!(run.last_sequence.as_u64(), 2);
+    assert_eq!(run.last_sequence.as_u64(), 3);
+    let context = adapter.load_context_records(&"run-checked".into())?;
+    assert_eq!(context.len(), 1, "the losing CAS attempt added no effect");
+    assert_eq!(context[0].kind, "accepted-intent-snapshot");
+    assert_eq!(context[0].sequence.as_u64(), 2);
     let history = adapter.load_history(&"run-checked".into())?;
-    assert_eq!(history.len(), 2);
+    assert_eq!(history.len(), 3);
     assert!(matches!(
         history[1].action,
+        HistoryAction::ContextAppended { .. }
+    ));
+    assert!(matches!(
+        history[2].action,
         HistoryAction::Transition {
             outcome: TransitionHistoryOutcome::Committed,
             ..

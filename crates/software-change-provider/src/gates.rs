@@ -6,11 +6,12 @@
 //! combinatorial table of every rewired target is not the source of topology.
 
 use crate::artifacts::{
-    check_revision_link, extract_metadata, read_artifact, ArtifactReadDeny, ArtifactReadOutcome,
-    LinkCheckOutcome, LinkViolation,
+    check_revision_link, extract_metadata, read_artifact, ArtifactDocument, ArtifactReadDeny,
+    ArtifactReadError, ArtifactReadOutcome, LinkCheckOutcome, LinkViolation,
 };
 use crate::checkpoint;
 use crate::config::parse_initial_input;
+use crate::criterion::{self, CriterionViolation};
 use crate::evidence::{evaluate_evidence, AuthorIdentity as EvidenceAuthorIdentity};
 use crate::finding_ledger::evaluate_finding_ledger;
 use crate::overlay;
@@ -19,6 +20,7 @@ use crate::workflow::{self, TransitionDuties};
 use bookends_check::CheckStatus;
 use loop_core::{DurableEvaluationResult, TransitionKind};
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use std::fmt;
 
 const SCHEMA_DENY_CODE: &str = "software-change-schema-invalid";
@@ -26,11 +28,14 @@ const EVIDENCE_DENY_CODE: &str = "software-change-review-incomplete";
 const FINDING_LEDGER_DENY_CODE: &str = "software-change-finding-ledger-invalid";
 const CHECKPOINT_DENY_CODE: &str = "software-change-checkpoint-invalid";
 const BOOKENDS_RED_DENY_CODE: &str = "software-change-bookends-red";
+const BOOKENDS_CANDIDATE_DENY_CODE: &str = "software-change-bookends-candidate";
 const SCHEMA_DENY_MESSAGE: &str = "not judged: fix shape first";
 const EVIDENCE_DENY_MESSAGE: &str = "review evidence incomplete";
 const FINDING_LEDGER_DENY_MESSAGE: &str = "finding ledger missing or malformed";
 const CHECKPOINT_DENY_MESSAGE: &str = "repository checkpoint missing or stale";
 const BOOKENDS_RED_DENY_MESSAGE: &str = "in-process bookends check is red";
+const BOOKENDS_CANDIDATE_DENY_MESSAGE: &str =
+    "provisional Bookends candidate blocks Bookends-enabled final completion";
 
 /// Evaluation result consumed by `main.rs` for exit-code handling.
 pub(crate) enum EvaluationOutcome {
@@ -122,7 +127,7 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
     let mut metadata = None;
     if let (Some(schema), Some(document)) = (schema, document.as_ref()) {
         let report = schema.evaluate(document.value());
-        let mut violations: Vec<Value> = report
+        let violations: Vec<Value> = report
             .violations()
             .iter()
             .map(|violation| {
@@ -133,26 +138,6 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
                 })
             })
             .collect();
-        if let Some(bookends) = bookends_report.as_ref() {
-            for extra in overlay::requirement_id_violations(document.value(), &bookends.live_ids) {
-                // The ID grammar is also represented by the injected schema.
-                // Keep the overlay's live-ID rule, but do not report the same
-                // malformed token twice when the schema already emitted its
-                // pattern violation.
-                let already_reported = violations.iter().any(|violation| {
-                    violation.get("path").and_then(Value::as_str) == Some(extra.path.as_str())
-                        && violation.get("rule").and_then(Value::as_str)
-                            == Some(extra.rule.as_str())
-                });
-                if !already_reported {
-                    violations.push(json!({
-                        "path": extra.path,
-                        "rule": extra.rule,
-                        "message": extra.message,
-                    }));
-                }
-            }
-        }
         if !violations.is_empty() {
             return EvaluationOutcome::Response(schema_deny(request, violations));
         }
@@ -189,6 +174,76 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
         }
     }
 
+    if let Some(document) = document.as_ref() {
+        match check_criterion_rules(&config, subject, document) {
+            Ok(violations) if !violations.is_empty() => {
+                return EvaluationOutcome::Response(schema_deny_for_criteria(request, violations))
+            }
+            Ok(_) => {}
+            Err(CriterionResolutionError::ReadDenied(deny)) => {
+                return EvaluationOutcome::Response(schema_deny_for_read(request, *deny))
+            }
+            Err(CriterionResolutionError::LinkViolation(violation)) => {
+                return EvaluationOutcome::Response(schema_deny_for_link(request, *violation))
+            }
+            Err(CriterionResolutionError::EvaluationError(error)) => {
+                return EvaluationOutcome::EvaluationError(error.to_string())
+            }
+        }
+    }
+
+    let mut overlay_candidate_blocks = false;
+    if overlay_on {
+        let needs_current_intent = (subject == "validation-report.json" && is_passed(request))
+            || document.as_ref().is_some_and(|document| {
+                criterion::has_references(config.schema(subject), subject, document.value())
+            });
+        let current_intent = if subject == "intent.json" {
+            document.clone()
+        } else if needs_current_intent {
+            let Some(document) = document.as_ref() else {
+                return EvaluationOutcome::EvaluationError(
+                    "overlay subject requires an artifact document".to_owned(),
+                );
+            };
+            match resolve_current_intent(&config, document, &mut BTreeSet::new()) {
+                Ok(intent) => intent,
+                Err(CriterionResolutionError::ReadDenied(deny)) => {
+                    return EvaluationOutcome::Response(schema_deny_for_read(request, *deny))
+                }
+                Err(CriterionResolutionError::LinkViolation(violation)) => {
+                    return EvaluationOutcome::Response(schema_deny_for_link(request, *violation))
+                }
+                Err(CriterionResolutionError::EvaluationError(error)) => {
+                    return EvaluationOutcome::EvaluationError(error.to_string())
+                }
+            }
+        } else {
+            None
+        };
+        let mut overlay_violations = Vec::new();
+        if let Some(intent) = current_intent.as_ref() {
+            overlay_violations.extend(overlay::intent_overlay_violations(
+                intent.value(),
+                &bookends_report
+                    .as_ref()
+                    .expect("overlay-on loads the checker")
+                    .live_ids,
+            ));
+        }
+        if !overlay_violations.is_empty() {
+            return EvaluationOutcome::Response(schema_deny_for_overlay(
+                request,
+                overlay_violations,
+            ));
+        }
+        overlay_candidate_blocks = is_passed(request)
+            && subject == "validation-report.json"
+            && current_intent
+                .as_ref()
+                .is_some_and(|intent| overlay::has_candidate(intent.value()));
+    }
+
     if checkpoint_required {
         if let Err(error) = verify_checkpoint(
             request,
@@ -206,6 +261,9 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
                 .as_ref()
                 .expect("overlay-on loads the checker"),
         ));
+    }
+    if overlay_candidate_blocks {
+        return EvaluationOutcome::Response(bookends_candidate_deny(request));
     }
 
     // §9.6: review evidence and the driver ledger are consulted only after
@@ -292,6 +350,105 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
     EvaluationOutcome::Response(allow_response())
 }
 
+enum CriterionResolutionError {
+    ReadDenied(Box<ArtifactReadDeny>),
+    LinkViolation(Box<LinkViolation>),
+    EvaluationError(Box<ArtifactReadError>),
+}
+
+fn check_criterion_rules(
+    config: &crate::config::ValidatedConfig,
+    subject: &str,
+    document: &ArtifactDocument,
+) -> Result<Vec<CriterionViolation>, CriterionResolutionError> {
+    let has_references =
+        criterion::has_references(config.schema(subject), subject, document.value());
+    if subject == "intent.json" {
+        return Ok(criterion::validate_intent(
+            config.schema(subject),
+            document.value(),
+        ));
+    }
+    // Downstream references are optional.  Do not resolve an intent chain or
+    // impose a new read obligation when the artifact contains no reference;
+    // the existing configured schema and revision-link checks remain the only
+    // checks for an unreferenced downstream artifact.
+    if !has_references {
+        return Ok(Vec::new());
+    }
+
+    let mut visited = BTreeSet::new();
+    let Some(current_intent) = resolve_current_intent(config, document, &mut visited)? else {
+        return Ok(vec![CriterionViolation {
+            path: format!("/{subject}"),
+            rule: "criterion-reference".to_owned(),
+            message: "downstream criterion references require a currently linked intent".to_owned(),
+        }]);
+    };
+
+    let identity_violations =
+        criterion::validate_intent(config.schema("intent.json"), current_intent.value());
+    if !identity_violations.is_empty() {
+        return Ok(identity_violations);
+    }
+    let known_ids = criterion::intent_ids(current_intent.value());
+    Ok(criterion::validate_references(
+        subject,
+        document.value(),
+        &known_ids,
+    ))
+}
+
+fn resolve_current_intent(
+    config: &crate::config::ValidatedConfig,
+    current: &ArtifactDocument,
+    visited: &mut BTreeSet<String>,
+) -> Result<Option<ArtifactDocument>, CriterionResolutionError> {
+    if current.subject() == "intent.json" {
+        return Ok(Some(current.clone()));
+    }
+    if !visited.insert(current.subject().to_owned()) {
+        return Ok(None);
+    }
+
+    for link in config.links_from(current.subject()) {
+        let target = match read_artifact(config.artifact_root(), link.to()) {
+            ArtifactReadOutcome::Present(document) => document,
+            ArtifactReadOutcome::Deny(deny) => {
+                return Err(CriterionResolutionError::ReadDenied(Box::new(deny)))
+            }
+            ArtifactReadOutcome::EvaluationError(error) => {
+                return Err(CriterionResolutionError::EvaluationError(Box::new(error)))
+            }
+        };
+        match check_revision_link(
+            config.artifact_root(),
+            current.subject(),
+            current.value(),
+            link,
+        ) {
+            LinkCheckOutcome::Holds => {}
+            LinkCheckOutcome::Violation(violation) => {
+                return Err(CriterionResolutionError::LinkViolation(Box::new(violation)))
+            }
+            LinkCheckOutcome::ReadDenied(deny) => {
+                return Err(CriterionResolutionError::ReadDenied(Box::new(deny)))
+            }
+            LinkCheckOutcome::EvaluationError(error) => {
+                return Err(CriterionResolutionError::EvaluationError(Box::new(error)))
+            }
+        }
+
+        if target.subject() == "intent.json" {
+            return Ok(Some(target));
+        }
+        if let Some(intent) = resolve_current_intent(config, &target, visited)? {
+            return Ok(Some(intent));
+        }
+    }
+    Ok(None)
+}
+
 fn verify_checkpoint(
     request: &EvaluateRequest,
     phase: checkpoint::CheckpointPhase,
@@ -353,6 +510,37 @@ fn is_passed(request: &EvaluateRequest) -> bool {
 
 fn bookends_is_green(report: Option<&bookends_check::CheckReport>) -> bool {
     report.is_some_and(|report| matches!(report.status, CheckStatus::Green))
+}
+
+fn schema_deny_for_overlay(
+    request: &EvaluateRequest,
+    violations: Vec<overlay::OverlayViolation>,
+) -> Value {
+    schema_deny(
+        request,
+        violations
+            .into_iter()
+            .map(|violation| {
+                json!({
+                    "path": violation.path,
+                    "rule": violation.rule,
+                    "message": violation.message,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn bookends_candidate_deny(request: &EvaluateRequest) -> Value {
+    deny_response(
+        BOOKENDS_CANDIDATE_DENY_CODE,
+        BOOKENDS_CANDIDATE_DENY_MESSAGE,
+        Some(json!({
+            "phase": "bookends",
+            "diagnostic": "resolve every current candidate through explicit owner acceptance and committed PRD integration or honest reclassification before final validation passed",
+            "prior_denials": prior_denials(request),
+        })),
+    )
 }
 
 fn bookends_red_deny(request: &EvaluateRequest, report: &bookends_check::CheckReport) -> Value {
@@ -430,6 +618,25 @@ fn schema_deny_for_link(request: &EvaluateRequest, violation: LinkViolation) -> 
             "rule": "revision-link",
             "message": violation.to_string(),
         })],
+    )
+}
+
+fn schema_deny_for_criteria(
+    request: &EvaluateRequest,
+    violations: Vec<CriterionViolation>,
+) -> Value {
+    schema_deny(
+        request,
+        violations
+            .into_iter()
+            .map(|violation| {
+                json!({
+                    "path": violation.path,
+                    "rule": violation.rule,
+                    "message": violation.message,
+                })
+            })
+            .collect(),
     )
 }
 

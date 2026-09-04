@@ -103,7 +103,7 @@ def write_valid_report(location: dict[str, object], revision: str | None = None)
         },
         "summary": "dummy summarizer wrote this report",
         "changed_surface": ["dummy"],
-        "validation": ["dummy"],
+        "validation": [{"proof": "dummy"}],
     }
     Path(artifact_root, REPORT_FILE).write_text(json.dumps(report) + "\n", encoding="utf-8")
 

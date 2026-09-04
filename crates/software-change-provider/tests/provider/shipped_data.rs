@@ -305,9 +305,9 @@ fn all_profiles_pass_production_config_validation_and_have_exact_subjects() {
     for profile in PROFILES {
         let config = load_profile(profile);
         let expected_version = match *profile {
-            "minimal" => "minimal-6",
-            "standard" => "standard-7",
-            "high-rigor" => "high-rigor-7",
+            "minimal" => "minimal-8",
+            "standard" => "standard-8",
+            "high-rigor" => "high-rigor-8",
             _ => unreachable!("unknown profile {profile}"),
         };
         assert_eq!(config["config_version"], expected_version);

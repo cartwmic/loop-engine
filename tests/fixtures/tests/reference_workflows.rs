@@ -9,8 +9,8 @@
 use loop_core::{
     self as core, AppendContextResult, ContextRecord, EvaluationResult, EventRequest, EventResult,
     HistoryEntry, Lifecycle, OperationOutcome, Persistence, ProviderError, ProviderGateway,
-    ProviderSelector, Run, RunId, ShowProjection, StartRequest, StateId, Timestamp, Transition,
-    Workflow,
+    ProviderSelector, Run, RunId, ShowProjection, StartRequest, StateId, TerminateRequest,
+    Timestamp, Transition, Workflow,
 };
 use loop_integrations::{
     ConfiguredProviderResolver, ProviderConfiguration, ProviderDefinition, ProviderInvocation,
@@ -21,15 +21,20 @@ use loop_reference_fixtures::{
     readme_policy_input, research_artifact_schemas, research_brief, research_initial_input,
     research_policy_set_a, research_report, research_review_context, research_revision_links,
     research_sources, research_verification, research_workflow, software_change_initial_input,
-    software_change_policy_set_a, software_change_policy_set_b, software_change_review_context,
-    software_change_workflow, DESIGN_REVIEW_GATE, IMPLEMENTATION_REVIEW_GATE, PLAN_REVIEW_GATE,
-    RESEARCH_SYNTHESIZE_GATE, RESEARCH_VERIFY_GATE, VALIDATION_GATE,
+    software_change_initial_input_with_behavior, software_change_policy_set_a,
+    software_change_policy_set_b, software_change_review_context, software_change_workflow,
+    DESIGN_REVIEW_GATE, IMPLEMENTATION_REVIEW_GATE, LE_110_CONTEXT_APPEND_BEHAVIOR,
+    LE_110_CONTEXT_APPEND_KIND, PLAN_REVIEW_GATE, RESEARCH_SYNTHESIZE_GATE, RESEARCH_VERIFY_GATE,
+    VALIDATION_GATE,
 };
+use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Barrier};
+use std::thread;
 use std::time::Duration;
 use tempfile::tempdir;
 
@@ -356,6 +361,51 @@ impl ProviderGateway for UnavailableGateway {
     }
 }
 
+/// Hold one or more real fixture-provider evaluations after the checked
+/// snapshot and before the conditional SQLite commit.  The barrier makes the
+/// following tests exercise the public subprocess round trip, not a gateway
+/// fake, while deterministically producing a stale or CAS-lost commit.
+#[derive(Clone)]
+struct BlockingFixtureGateway {
+    inner: SubprocessProviderGateway,
+    entered: Arc<Barrier>,
+    release: Arc<Barrier>,
+}
+
+impl BlockingFixtureGateway {
+    fn new(participants: usize) -> Self {
+        Self {
+            inner: SubprocessProviderGateway::new(Duration::from_secs(2)),
+            entered: Arc::new(Barrier::new(participants)),
+            release: Arc::new(Barrier::new(participants)),
+        }
+    }
+}
+
+impl ProviderGateway for BlockingFixtureGateway {
+    fn describe(
+        &self,
+        provider: &core::ProviderAssociation,
+        initial_input: Option<&serde_json::Value>,
+    ) -> Result<Workflow, ProviderError> {
+        self.inner.describe(provider, initial_input)
+    }
+
+    fn evaluate(
+        &self,
+        provider: &core::ProviderAssociation,
+        request: core::EvaluationRequest,
+    ) -> Result<EvaluationResult, ProviderError> {
+        self.entered.wait();
+        self.release.wait();
+        self.inner.evaluate(provider, request)
+    }
+}
+
+fn le_110_input(behavior: &str) -> Value {
+    software_change_initial_input_with_behavior(json!({}), None, behavior)
+}
+
 fn with_allocated_artifact_root(mut input: Value, database: &Path, run_id: &str) -> Value {
     let catalog_root = database
         .parent()
@@ -419,6 +469,282 @@ fn write_provider_wrapper(
         fs::set_permissions(path, fs::Permissions::from_mode(0o755))
             .expect("make provider wrapper executable");
     }
+}
+
+#[test]
+fn le_110_fixture_allow_persists_one_effect_with_transition_and_evaluation(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let state = tempdir()?;
+    let database = state.path().join("le-110-allow.sqlite");
+    let engine = Composition::new(&database, reference_resolver());
+    let run_id = "le110-fixture-allow";
+
+    engine.start(
+        run_id,
+        SOFTWARE_ALIAS,
+        le_110_input(LE_110_CONTEXT_APPEND_BEHAVIOR),
+    );
+    let committed = require_completed(engine.event(run_id, "intent-ready"));
+    assert_eq!(committed.run.current_state, StateId::from("design"));
+    assert_eq!(committed.run.control_revision.as_u64(), 1);
+    assert_eq!(committed.run.last_sequence.as_u64(), 3);
+
+    // Reopen through the normal show/history/evaluation surfaces so the proof
+    // is about the durable subprocess path rather than an in-memory result.
+    let show = engine.show(run_id);
+    assert_eq!(show.current_state, StateId::from("design"));
+    assert_eq!(show.context.len(), 1);
+    assert_eq!(show.context[0].kind, LE_110_CONTEXT_APPEND_KIND);
+    assert_eq!(
+        show.context[0].data,
+        json!({
+            "fixture": "reference-software-change",
+            "transition": "intent-ready"
+        })
+    );
+    assert_eq!(show.context[0].sequence.as_u64(), 2);
+    assert!(show.context[0]
+        .id
+        .as_str()
+        .starts_with("engine-context-effect-"));
+
+    let history = engine.history(run_id);
+    assert_eq!(history.len(), 3);
+    assert!(matches!(
+        history[1].action,
+        core::HistoryAction::ContextAppended { .. }
+    ));
+    assert!(matches!(
+        history[2].action,
+        core::HistoryAction::Transition {
+            outcome: core::TransitionHistoryOutcome::Committed,
+            ..
+        }
+    ));
+    let evaluations = engine
+        .persistence()
+        .load_checked_evaluations(&RunId::from(run_id))?;
+    assert_eq!(evaluations.len(), 1);
+    assert!(evaluations[0].is_allow());
+    assert_eq!(evaluations[0].sequence.as_u64(), 3);
+    Ok(())
+}
+
+#[test]
+fn le_110_fixture_deny_unsupported_and_failure_persist_no_effect(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let state = tempdir()?;
+    let database = state.path().join("le-110-absence.sqlite");
+    let engine = Composition::new(&database, reference_resolver());
+
+    for (run_id, behavior, expected_status) in [
+        ("le110-fixture-deny", "deny", "rejected"),
+        ("le110-fixture-unsupported", "unsupported", "error"),
+        ("le110-fixture-failure", "failure", "error"),
+    ] {
+        engine.start(run_id, SOFTWARE_ALIAS, le_110_input(behavior));
+        let outcome = engine.event(run_id, "intent-ready");
+        match expected_status {
+            "rejected" => assert!(outcome.is_rejected()),
+            "error" => assert!(outcome.is_error()),
+            _ => unreachable!(),
+        }
+
+        let show = engine.show(run_id);
+        assert_eq!(show.current_state, StateId::from("explore"));
+        assert!(show.context.is_empty(), "{behavior} persisted an effect");
+        let history = engine.history(run_id);
+        let evaluations = engine
+            .persistence()
+            .load_checked_evaluations(&RunId::from(run_id))?;
+        match behavior {
+            "deny" => {
+                assert_eq!(history.len(), 2);
+                assert_eq!(evaluations.len(), 1);
+                assert!(evaluations[0].is_deny());
+            }
+            "unsupported" | "failure" => {
+                assert_eq!(history.len(), 1);
+                assert!(evaluations.is_empty());
+            }
+            _ => unreachable!(),
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn le_110_fixture_cas_loss_keeps_effect_only_for_the_winning_allow(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let state = tempdir()?;
+    let database = state.path().join("le-110-cas.sqlite");
+    let engine = Composition::new(&database, reference_resolver());
+    let run_id = "le110-fixture-cas";
+    engine.start(
+        run_id,
+        SOFTWARE_ALIAS,
+        le_110_input(LE_110_CONTEXT_APPEND_BEHAVIOR),
+    );
+
+    let gateway = BlockingFixtureGateway::new(2);
+    let first_persistence = engine.persistence();
+    let second_persistence = engine.persistence();
+    let first_gateway = gateway.clone();
+    let first = thread::spawn(move || {
+        core::execute_event(
+            EventRequest::new(run_id, "intent-ready"),
+            &first_gateway,
+            &first_persistence,
+        )
+    });
+    let second_gateway = gateway.clone();
+    let second = thread::spawn(move || {
+        core::execute_event(
+            EventRequest::new(run_id, "intent-ready"),
+            &second_gateway,
+            &second_persistence,
+        )
+    });
+    let first = first.join().expect("first CAS event thread");
+    let second = second.join().expect("second CAS event thread");
+    assert_eq!(
+        [first.is_completed(), second.is_completed()]
+            .into_iter()
+            .filter(|completed| *completed)
+            .count(),
+        1
+    );
+    assert_eq!(
+        [first.is_error(), second.is_error()]
+            .into_iter()
+            .filter(|error| *error)
+            .count(),
+        1
+    );
+
+    let run = engine.authoritative(run_id);
+    assert_eq!(run.current_state, StateId::from("design"));
+    assert_eq!(run.control_revision.as_u64(), 1);
+    assert_eq!(run.last_sequence.as_u64(), 3);
+    let context = engine
+        .persistence()
+        .load_context_records(&RunId::from(run_id))?;
+    assert_eq!(context.len(), 1, "the losing CAS attempt added an effect");
+    assert_eq!(context[0].kind, LE_110_CONTEXT_APPEND_KIND);
+    assert_eq!(
+        engine.history(run_id).len(),
+        3,
+        "the losing CAS attempt added history"
+    );
+    let evaluations = engine
+        .persistence()
+        .load_checked_evaluations(&RunId::from(run_id))?;
+    assert_eq!(
+        evaluations.len(),
+        1,
+        "the losing CAS attempt added an evaluation"
+    );
+    assert!(evaluations[0].is_allow());
+    Ok(())
+}
+
+#[test]
+fn le_110_fixture_stale_allow_after_termination_persists_no_effect(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let state = tempdir()?;
+    let database = state.path().join("le-110-stale.sqlite");
+    let engine = Composition::new(&database, reference_resolver());
+    let run_id = "le110-fixture-stale";
+    engine.start(
+        run_id,
+        SOFTWARE_ALIAS,
+        le_110_input(LE_110_CONTEXT_APPEND_BEHAVIOR),
+    );
+
+    let gateway = BlockingFixtureGateway::new(2);
+    let persistence = engine.persistence();
+    let event_gateway = gateway.clone();
+    let event = thread::spawn(move || {
+        core::execute_event(
+            EventRequest::new(run_id, "intent-ready"),
+            &event_gateway,
+            &persistence,
+        )
+    });
+    // The event has captured the exact checked transition and is waiting in
+    // the real provider gateway.  Termination now makes that allow stale.
+    gateway.entered.wait();
+    let terminated = engine
+        .persistence()
+        .terminate(TerminateRequest::new(run_id))?;
+    assert_eq!(terminated.run.lifecycle, Lifecycle::Terminated);
+    gateway.release.wait();
+
+    let outcome = event.join().expect("stale event thread");
+    assert!(outcome.is_error());
+    let run = engine.authoritative(run_id);
+    assert_eq!(run.lifecycle, Lifecycle::Terminated);
+    assert_eq!(run.current_state, StateId::from("explore"));
+    assert_eq!(run.control_revision.as_u64(), 1);
+    assert_eq!(run.last_sequence.as_u64(), 2);
+    assert!(engine
+        .persistence()
+        .load_context_records(&RunId::from(run_id))?
+        .is_empty());
+    assert!(engine
+        .persistence()
+        .load_checked_evaluations(&RunId::from(run_id))?
+        .is_empty());
+    assert_eq!(engine.history(run_id).len(), 2);
+    Ok(())
+}
+
+#[test]
+fn le_110_fixture_failed_commit_rolls_back_effect_transition_and_evaluation(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let state = tempdir()?;
+    let database = state.path().join("le-110-rollback.sqlite");
+    let engine = Composition::new(&database, reference_resolver());
+    let run_id = "le110-fixture-rollback";
+    engine.start(
+        run_id,
+        SOFTWARE_ALIAS,
+        le_110_input(LE_110_CONTEXT_APPEND_BEHAVIOR),
+    );
+
+    let raw = Connection::open(&database)?;
+    raw.execute_batch(
+        "CREATE TRIGGER le110_fail_history_insert
+         BEFORE INSERT ON history_entries
+         BEGIN
+             SELECT RAISE(ABORT, 'forced LE-110 history failure');
+         END;",
+    )?;
+    drop(raw);
+
+    let persistence = engine.persistence();
+    let outcome = core::execute_event(
+        EventRequest::new(run_id, "intent-ready"),
+        &engine.gateway,
+        &persistence,
+    );
+    assert!(outcome.is_error());
+    drop(persistence);
+
+    let run = engine.authoritative(run_id);
+    assert_eq!(run.current_state, StateId::from("explore"));
+    assert_eq!(run.control_revision.as_u64(), 0);
+    assert_eq!(run.last_sequence.as_u64(), 1);
+    assert!(engine
+        .persistence()
+        .load_context_records(&RunId::from(run_id))?
+        .is_empty());
+    assert!(engine
+        .persistence()
+        .load_checked_evaluations(&RunId::from(run_id))?
+        .is_empty());
+    assert_eq!(engine.history(run_id).len(), 1);
+    Ok(())
 }
 
 #[test]

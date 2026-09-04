@@ -1,5 +1,5 @@
 {
-  "config_version": "standard-7",
+  "config_version": "standard-8",
   "review_policies": {
     "intent-review": [
       {
@@ -218,7 +218,15 @@
         "outcome": {"type": "string", "minLength": 1},
         "acceptance": {
           "type": "array",
-          "items": {"type": "string", "minLength": 1},
+          "items": {
+            "type": "object",
+            "required": ["id", "statement"],
+            "properties": {
+              "id": {"type": "string", "pattern": "^AC-[1-9][0-9]*$"},
+              "statement": {"type": "string", "minLength": 1}
+            },
+            "additionalProperties": false
+          },
           "minItems": 1
         },
         "constraints": {
@@ -301,7 +309,8 @@
             "required": ["acceptance", "delivered_by"],
             "properties": {
               "acceptance": {"type": "string", "minLength": 1},
-              "delivered_by": {"type": "string", "minLength": 1}
+              "delivered_by": {"type": "string", "minLength": 1},
+              "criterion_id": {"type": "string", "pattern": "^AC-[1-9][0-9]*$"}
             },
             "additionalProperties": false
           },
@@ -333,6 +342,11 @@
             "required": ["id", "objective", "dependencies", "source_of_truth", "deliverables", "out_of_scope", "validation", "handoff"],
             "properties": {
               "id": {"type": "string", "minLength": 1},
+              "criterion_ids": {
+                "type": "array",
+                "items": {"type": "string", "pattern": "^AC-[1-9][0-9]*$"},
+                "minItems": 1
+              },
               "objective": {"type": "string", "minLength": 1},
               "dependencies": {
                 "type": "array",
@@ -425,7 +439,15 @@
         },
         "validation": {
           "type": "array",
-          "items": {"type": "string", "minLength": 1},
+          "items": {
+            "type": "object",
+            "required": ["proof"],
+            "properties": {
+              "criterion_id": {"type": "string", "pattern": "^AC-[1-9][0-9]*$"},
+              "proof": {"type": "string", "minLength": 1}
+            },
+            "additionalProperties": false
+          },
           "minItems": 1
         }
       },
@@ -474,6 +496,7 @@
             "type": "object",
             "required": ["requirement", "proof"],
             "properties": {
+              "criterion_id": {"type": "string", "pattern": "^AC-[1-9][0-9]*$"},
               "requirement": {"type": "string", "minLength": 1},
               "proof": {"type": "string", "minLength": 1}
             },

@@ -1,7 +1,8 @@
 //! Deterministic bookends checker: living git PRD to eligible proof citations.
 //!
-//! The public interface is `check_repo` plus `CheckReport` / `CheckStatus`.
-//! Callers must not reimplement parse, eligibility, continuity, or bypass.
+//! The public interface is `check_repo`, the parser-only candidate helpers,
+//! and `CheckReport` / `CheckStatus`. Callers must not reimplement parse,
+//! eligibility, continuity, or bypass.
 
 mod check;
 mod config;
@@ -14,7 +15,7 @@ use std::io;
 use std::path::Path;
 
 pub use check::check_repo;
-pub use prd::validate_candidate;
+pub use prd::{candidate_ids, validate_candidate};
 
 /// Outcome of one checker invocation. Bypass is never a green check.
 #[derive(Debug, Clone, PartialEq, Eq)]

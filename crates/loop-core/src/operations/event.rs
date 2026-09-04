@@ -256,9 +256,10 @@ where
         Ok(result) => result,
         Err(error) => return provider_error(error),
     };
-
     match evaluation {
-        EvaluationResult::Allow => commit_checked_allow(snapshot, transition, persistence),
+        EvaluationResult::Allow { context_append } => {
+            commit_checked_allow(snapshot, transition, context_append, persistence)
+        }
         EvaluationResult::Deny { feedback } => {
             record_checked_denial(snapshot, transition, feedback, persistence)
         }
@@ -275,6 +276,7 @@ where
 fn commit_checked_allow<P>(
     snapshot: crate::CheckedEvaluationSnapshot,
     transition: &Transition,
+    context_append: Option<crate::ContextAppendEffect>,
     persistence: &P,
 ) -> OperationOutcome<Result>
 where
@@ -293,6 +295,7 @@ where
         transition.clone(),
         resulting_lifecycle,
     )
+    .with_context_append(context_append)
     .with_slot_subjects(slot_subjects);
 
     match persistence.commit_transition(request) {
@@ -912,7 +915,10 @@ mod tests {
             )))),
             ..FakePersistence::with_run_and_snapshot(current.clone(), transition.clone())
         };
-        let gateway = FakeGateway::with_result(Ok(crate::EvaluationResult::Allow));
+        let effect = crate::ContextAppendEffect::new("snapshot", json!({"revision": 1}));
+        let gateway = FakeGateway::with_result(Ok(
+            crate::EvaluationResult::allow_with_context_append(effect.clone()),
+        ));
 
         let outcome = execute(Request::new("run-1", "approve"), &gateway, &persistence);
 
@@ -935,6 +941,7 @@ mod tests {
         );
         assert_eq!(commits[0].expected_source_state, current.current_state);
         assert_eq!(commits[0].resulting_lifecycle, Lifecycle::Final);
+        assert_eq!(commits[0].context_append, Some(effect));
         assert!(persistence.denial_requests.borrow().is_empty());
     }
 

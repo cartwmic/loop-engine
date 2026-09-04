@@ -9,6 +9,6 @@ Required machine-checked shape:
 - `elements`: named parts, each with `name` and `responsibility`.
 - `decisions`: choices with `choice`, `rationale`, and optional `rejected` alternatives.
 - `risks`: design-specific risks with `risk` and `mitigation`.
-- `coverage`: each intent acceptance line mapped to `acceptance` and `delivered_by`.
+- `coverage`: each design coverage row has `acceptance` and `delivered_by`, with an optional `criterion_id` referring to a current intent `AC-N` record.
 
-Describe boundaries, responsibilities, relationships, invariants, and decisions. Do not turn design into task schedule or implementation diary. `intent_revision` must equal current `intent.json` revision when checked.
+Describe boundaries, responsibilities, relationships, invariants, and decisions. Do not turn design into task schedule or implementation diary. `intent_revision` must equal current `intent.json` revision when checked. Criterion references are optional and are checked only for AC-N shape, local duplicate-freeness, and current-intent membership; do not reproduce a complete criterion matrix or maintain a separate PRD-ID spine.

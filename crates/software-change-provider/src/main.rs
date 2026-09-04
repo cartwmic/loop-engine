@@ -6,6 +6,7 @@
 mod artifacts;
 mod checkpoint;
 mod config;
+mod criterion;
 mod dagu;
 mod evidence;
 mod finding_ledger;

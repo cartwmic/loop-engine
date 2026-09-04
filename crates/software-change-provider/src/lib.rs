@@ -6,6 +6,7 @@
 //! writers used by `run-plan-graph` tests. The crate does not vendor or ship dagu.
 
 mod config;
+mod criterion;
 mod dagu;
 mod overlay;
 mod schema;

@@ -40,12 +40,23 @@ const ARRAY_KEYWORDS: &[&str] = &["items", "minItems", "type"];
 /// Keywords permitted on a string schema, in sorted order.
 const STRING_KEYWORDS: &[&str] = &["enum", "minLength", "type"];
 
-// The provider's bounded schema language normally has no regex keyword. The
-// bookends overlay needs exactly this one closed-field token, so it is
-// accepted as a private schema extension without widening the general
-// allowlist.
+// The provider's bounded schema language normally has no general regex
+// keyword.  These are the closed identifier fields used by the shipped
+// profiles and the Bookends overlay; accepting the patterns only at their
+// known schema paths keeps the schema language deliberately narrow.
 const REQUIREMENT_ID_PATTERN: &str = r"^LE-[1-9][0-9]*$";
-const REQUIREMENT_ID_SCHEMA_PATH: &str = "/properties/requirement_ids/items";
+const REQUIREMENT_ID_SCHEMA_PATHS: &[&str] = &[
+    "/properties/acceptance/items/properties/prd_traceability/properties/live_ids/items",
+    "/properties/acceptance/items/properties/prd_traceability/properties/proposed_id",
+];
+const CRITERION_ID_PATTERN: &str = r"^AC-[1-9][0-9]*$";
+const CRITERION_ID_SCHEMA_PATHS: &[&str] = &[
+    "/properties/acceptance/items/properties/id",
+    "/properties/coverage/items/properties/criterion_id",
+    "/properties/tasks/items/properties/criterion_ids/items",
+    "/properties/validation/items/properties/criterion_id",
+    "/properties/requirements/items/properties/criterion_id",
+];
 
 /// Return exact keyword allowlist for one schema type.
 ///
@@ -225,6 +236,26 @@ impl ValidatedSchema {
         evaluate_node(&self.root, instance, "", &mut violations);
         InstanceReport::new(violations)
     }
+
+    /// Return whether a named root array declares object items.
+    pub(crate) fn array_items_are_objects(&self, property: &str) -> bool {
+        self.root
+            .properties
+            .get(property)
+            .and_then(|schema| schema.items.as_deref())
+            .is_some_and(|items| items.schema_type == SchemaType::Object)
+    }
+
+    /// Return whether a named root array's object items declare a property.
+    pub(crate) fn array_item_declares_property(&self, array: &str, property: &str) -> bool {
+        self.root
+            .properties
+            .get(array)
+            .and_then(|schema| schema.items.as_deref())
+            .is_some_and(|items| {
+                items.schema_type == SchemaType::Object && items.properties.contains_key(property)
+            })
+    }
 }
 
 /// Validate schema meta-rules and compile it for repeated instance checks.
@@ -322,11 +353,7 @@ fn compile_node(value: &Value, path: &str, violations: &mut Vec<MetaViolation>) 
     };
 
     for keyword in object.keys() {
-        if keyword == "pattern"
-            && path == REQUIREMENT_ID_SCHEMA_PATH
-            && schema_type == Some(SchemaType::String)
-            && object.get("pattern").and_then(Value::as_str) == Some(REQUIREMENT_ID_PATTERN)
-        {
+        if keyword == "pattern" && is_supported_pattern(path, object, schema_type) {
             continue;
         }
         if !known_keyword(keyword) {
@@ -359,7 +386,7 @@ fn compile_node(value: &Value, path: &str, violations: &mut Vec<MetaViolation>) 
     let min_items = compile_nonnegative_integer(object, path, "minItems", violations);
     let min_length = compile_nonnegative_integer(object, path, "minLength", violations);
     let enum_values = compile_enum(object, path, violations);
-    let pattern = compile_requirement_id_pattern(path, object, schema_type);
+    let pattern = compile_supported_pattern(path, object, schema_type);
 
     SchemaNode {
         schema_type: schema_type.unwrap_or(SchemaType::String),
@@ -516,19 +543,33 @@ fn compile_nonnegative_integer(
     }
 }
 
-fn compile_requirement_id_pattern(
+fn is_supported_pattern(
+    path: &str,
+    object: &Map<String, Value>,
+    schema_type: Option<SchemaType>,
+) -> bool {
+    if schema_type != Some(SchemaType::String) {
+        return false;
+    }
+    let Some(pattern) = object.get("pattern").and_then(Value::as_str) else {
+        return false;
+    };
+    (REQUIREMENT_ID_SCHEMA_PATHS.contains(&path) && pattern == REQUIREMENT_ID_PATTERN)
+        || (CRITERION_ID_SCHEMA_PATHS.contains(&path) && pattern == CRITERION_ID_PATTERN)
+}
+
+fn compile_supported_pattern(
     path: &str,
     object: &Map<String, Value>,
     schema_type: Option<SchemaType>,
 ) -> Option<String> {
-    if path == REQUIREMENT_ID_SCHEMA_PATH
-        && schema_type == Some(SchemaType::String)
-        && object.get("pattern").and_then(Value::as_str) == Some(REQUIREMENT_ID_PATTERN)
-    {
-        Some(REQUIREMENT_ID_PATTERN.to_owned())
-    } else {
-        None
-    }
+    is_supported_pattern(path, object, schema_type).then(|| {
+        object
+            .get("pattern")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_owned()
+    })
 }
 
 fn compile_enum(
@@ -684,21 +725,34 @@ fn evaluate_node(
                     "string is not one of enum values".to_owned(),
                 ));
             }
-            if schema.pattern.as_deref() == Some(REQUIREMENT_ID_PATTERN)
-                && !matches_requirement_id_pattern(string)
-            {
-                violations.push(InstanceViolation::new(
-                    path,
-                    "pattern",
-                    format!("string does not match `{REQUIREMENT_ID_PATTERN}`"),
-                ));
+            if let Some(pattern) = schema.pattern.as_deref() {
+                let matches = match pattern {
+                    REQUIREMENT_ID_PATTERN => matches_requirement_id_pattern(string),
+                    CRITERION_ID_PATTERN => matches_criterion_id_pattern(string),
+                    _ => true,
+                };
+                if !matches {
+                    violations.push(InstanceViolation::new(
+                        path,
+                        "pattern",
+                        format!("string does not match `{pattern}`"),
+                    ));
+                }
             }
         }
     }
 }
 
 fn matches_requirement_id_pattern(value: &str) -> bool {
-    let Some(rest) = value.strip_prefix("LE-") else {
+    matches_numeric_id(value, "LE-")
+}
+
+fn matches_criterion_id_pattern(value: &str) -> bool {
+    matches_numeric_id(value, "AC-")
+}
+
+fn matches_numeric_id(value: &str, prefix: &str) -> bool {
+    let Some(rest) = value.strip_prefix(prefix) else {
         return false;
     };
     let mut chars = rest.chars();
@@ -1046,26 +1100,87 @@ mod tests {
     }
 
     #[test]
-    fn requirement_id_pattern_is_only_allowed_on_the_overlay_items_schema() {
-        let valid = json!({
+    fn identifier_patterns_are_only_allowed_on_their_closed_fields() {
+        let valid_criterion = json!({
             "type": "object",
             "properties": {
-                "requirement_ids": {
+                "acceptance": {
                     "type": "array",
                     "items": {
-                        "type": "string",
-                        "pattern": REQUIREMENT_ID_PATTERN
+                        "type": "object",
+                        "properties": {
+                            "id": {
+                                "type": "string",
+                                "pattern": CRITERION_ID_PATTERN
+                            },
+                            "prd_traceability": {
+                                "type": "object",
+                                "properties": {
+                                    "live_ids": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "string",
+                                            "pattern": REQUIREMENT_ID_PATTERN
+                                        }
+                                    },
+                                    "proposed_id": {
+                                        "type": "string",
+                                        "pattern": REQUIREMENT_ID_PATTERN
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
         });
-        assert!(validate_schema(&valid).is_ok());
+        assert!(validate_schema(&valid_criterion).is_ok());
 
         let invalid = json!({
             "type": "string",
             "pattern": REQUIREMENT_ID_PATTERN
         });
         assert!(validate_schema(&invalid).is_err());
+    }
+
+    #[test]
+    fn instance_checks_criterion_pattern() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "acceptance": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {
+                                "type": "string",
+                                "pattern": CRITERION_ID_PATTERN
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        let invalid = instance_violations(schema.clone(), json!({"acceptance": [{"id": "AC-0"}]}));
+        assert_eq!(invalid.len(), 1);
+        assert_eq!(invalid[0].rule, "pattern");
+
+        for valid in ["AC-1", "AC-9", "AC-10", "AC-123"] {
+            assert!(
+                instance_violations(schema.clone(), json!({"acceptance": [{"id": valid}]}),)
+                    .is_empty()
+            );
+        }
+
+        for invalid in ["AC-", "AC-0", "AC-01", "AC-1x", "ac-1"] {
+            assert_eq!(
+                instance_violations(schema.clone(), json!({"acceptance": [{"id": invalid}]}),)
+                    .len(),
+                1,
+                "invalid criterion id {invalid} was accepted"
+            );
+        }
     }
 
     #[test]
