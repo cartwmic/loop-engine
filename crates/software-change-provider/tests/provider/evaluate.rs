@@ -715,6 +715,8 @@ fn every_checked_reference_route_is_accepted_when_obligations_are_empty() {
 
 #[test]
 fn each_single_field_tuple_mismatch_is_unsupported() {
+    let initial_input = json!({"config_version": "none", "review_policies": {}});
+    let workflow = described_workflow(&initial_input);
     let routes = [
         ("explore", "intent-ready", "design"),
         ("design", "design-ready", "plan"),
@@ -730,10 +732,14 @@ fn each_single_field_tuple_mismatch_is_unsupported() {
             transition(source, event, target, "check-free"),
         ];
         for transition in variants {
-            let output = run_provider(base_request(
-                json!({"config_version": "none", "review_policies": {}}),
-                transition,
-            ));
+            let output = run_provider(json!({
+                "operation": "evaluate",
+                "workflow": workflow,
+                "initial_input": initial_input,
+                "context": [],
+                "transition": transition,
+                "prior_evaluations": []
+            }));
             assert_exit(&output, 0);
             assert_eq!(response(&output), json!({"result": "unsupported"}));
         }
