@@ -82,6 +82,21 @@ def cleanup(active):
 
 
 def run(jobs, *, root, limit=2, timeout=1200):
+    # Reaping belongs to this pool visit, not to later caller-owned workflows.
+    previous = None
+    if sys.platform.startswith("linux"):
+        libc = ctypes.CDLL(None, use_errno=True)
+        previous = ctypes.c_int()
+        if libc.prctl(37, ctypes.byref(previous), 0, 0, 0):
+            raise PoolFailure("cannot read caller child-subreaper setting")
+    try:
+        return _run(jobs, root=root, limit=limit, timeout=timeout)
+    finally:
+        if previous is not None and libc.prctl(36, previous.value, 0, 0, 0):
+            raise PoolFailure("cannot restore caller child-subreaper setting")
+
+
+def _run(jobs, *, root, limit, timeout):
     if os.environ.get("LOOP_PROOF_POOL_ACTIVE"):
         raise PoolFailure("nested proof pools are forbidden")
     if type(limit) is not int or limit < 1 or timeout <= 0:

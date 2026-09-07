@@ -17,6 +17,28 @@ def main():
     root = args.work_root or Path(tempfile.mkdtemp(prefix="proof-pool-self-test-"))
     root.mkdir(parents=True, exist_ok=True)
     results = {}
+    if sys.platform.startswith("linux"):
+        import ctypes
+        libc = ctypes.CDLL(None, use_errno=True)
+        def subreaper():
+            value = ctypes.c_int()
+            assert libc.prctl(37, ctypes.byref(value), 0, 0, 0) == 0
+            return value.value
+        original = subreaper()
+        try:
+            for prior in (0, 1):
+                assert libc.prctl(36, prior, 0, 0, 0) == 0
+                for mode, code in (("success", "pass"), ("failure", "raise SystemExit(7)"),
+                                   ("timeout", "import time; time.sleep(2)")):
+                    name = f"subreaper-{prior}-{mode}"
+                    report = proof_pool.run([{"name": "probe", "command": [sys.executable, "-c", code]}],
+                                            root=root / name, timeout=.2 if mode == "timeout" else 10)
+                    assert report["status"] == ("passed" if mode == "success" else "failed"), report
+                    assert report["cleanup"]["verified"], report
+                    assert subreaper() == prior, (name, "caller subreaper setting changed")
+                    results[name] = report
+        finally:
+            assert libc.prctl(36, original, 0, 0, 0) == 0
     for limit in (1, 2, 3):
         jobs = []
         for n in range(5):
