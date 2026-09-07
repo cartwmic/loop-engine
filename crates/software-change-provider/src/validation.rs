@@ -183,8 +183,9 @@ fn timed_command(
             #[cfg(unix)]
             {
                 // Only the process group created for this command, never a caller PID.
+                // procps 3.x needs `--` to disambiguate the negative group operand.
                 let _ = Command::new("/bin/kill")
-                    .args(["-KILL", &format!("-{pid}")])
+                    .args(["-KILL", "--", &format!("-{pid}")])
                     .status();
             }
             if status.is_none() {
