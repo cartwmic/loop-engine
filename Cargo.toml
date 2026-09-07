@@ -37,3 +37,8 @@ global-artifacts-jobs = ["./preflight", "./archive-smoke"]
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+# Test binary resolution verifies full executable digests on every lookup.
+# Optimize hashing, not away the integrity checks or test deadlines.
+[profile.test.package.sha2]
+opt-level = 3
