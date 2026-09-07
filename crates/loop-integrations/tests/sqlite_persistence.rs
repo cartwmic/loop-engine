@@ -79,6 +79,171 @@ fn invocation_create_request(run_id: &str, invocation_id: &str) -> CreateWorkSlo
     )
 }
 
+#[test]
+fn show_refreshes_terminal_commit_between_snapshot_and_waiter_liveness(
+) -> Result<(), Box<dyn std::error::Error>> {
+    struct CompletingWaiter<'a>(&'a SqlitePersistence);
+    impl loop_core::WorkSlotProcess for CompletingWaiter<'_> {
+        type Handle = ();
+        fn waiter_alive(&self, _pid: u32) -> bool {
+            self.0
+                .complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
+                    "race",
+                    "race-invocation",
+                    WaiterWrittenStatus::Succeeded,
+                    0,
+                    Timestamp::from_unix_millis(600),
+                    vec![],
+                ))
+                .unwrap();
+            false // exit observed after the commit, but after show's initial read
+        }
+        fn spawn_wait_invocation(
+            &self,
+            _: loop_core::WaiterSpawnArgs,
+        ) -> Result<loop_core::StartedWaiter<()>, loop_core::ProcessError> {
+            panic!("show spawned work")
+        }
+        fn send_envelope_and_detach(
+            &self,
+            _: loop_core::StartedWaiter<()>,
+            _: &[u8],
+        ) -> Result<(), loop_core::ProcessError> {
+            panic!("show sent work")
+        }
+    }
+    let directory = tempdir()?;
+    let adapter = SqlitePersistence::open(directory.path().join("race.sqlite"))?;
+    create_observed(&adapter, "race")?;
+    adapter.create_work_slot_invocation(invocation_create_request("race", "race-invocation"))?;
+    let result = loop_core::operations::show::execute(
+        loop_core::operations::show::Request::new("race"),
+        &adapter,
+        &CompletingWaiter(&adapter),
+        Timestamp::from_unix_millis(700),
+    );
+    let shown = result.value().expect("completed provider-free show");
+    assert_eq!(
+        shown.work_slot_invocations[0].status,
+        loop_core::ProjectedInvocationStatus::Succeeded
+    );
+    assert_eq!(shown.work_slot_invocations[0].exit_code, Some(0));
+    Ok(())
+}
+
+#[test]
+fn historical_software_change_public_reads_preserve_absent_capabilities_and_refuse_new_evaluation(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let path = directory.path().join("historical.sqlite");
+    let adapter = SqlitePersistence::open(&path)?;
+    let historical: Workflow = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/software-change-historical-reviewless.json"
+    ))?;
+    let input = json!({"config_version":"high-rigor-8", "review_policies":{
+        "design-review":[{"id":"correctness","description":"original obligation","required_authors":2}]},
+        "artifact_root":directory.path().to_str().unwrap()});
+    adapter.create_run(CreateRunRequest::new(
+        "historical",
+        None,
+        historical,
+        ProviderAssociation::new(
+            json!({"command":workspace_integration::binary("software-change"),"args":[]}),
+        ),
+        input.clone(),
+        "implement",
+        Lifecycle::Active,
+        Timestamp::from_unix_millis(100),
+        "software-change",
+        Some(directory.path().to_string_lossy().into_owned()),
+    ))?;
+    adapter.load_show_data(&"historical".into())?;
+    let original = json!({"config_version":"high-rigor-8", "subject_revision":"original-3",
+        "result":"fail", "findings":"Original reviewer disagreement", "author":{"name":"original reviewer","kind":"agent"}});
+    adapter.append_context(AppendContextRequest::new(
+        "historical",
+        "old-verdict",
+        "review-evidence",
+        original.clone(),
+        Timestamp::from_unix_millis(200),
+    ))?;
+    let mut invocation = invocation_create_request("historical", "old-invocation");
+    invocation.slot_id = "implement".into();
+    adapter.create_work_slot_invocation(invocation)?;
+    adapter.complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
+        "historical",
+        "old-invocation",
+        WaiterWrittenStatus::Failed,
+        7,
+        Timestamp::from_unix_millis(600),
+        Vec::new(),
+    ))?;
+    let call = |args: &[&str]| -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+        let output = std::process::Command::new(workspace_integration::binary("loop-engine"))
+            .arg("--database")
+            .arg(&path)
+            .arg("--json")
+            .args(args)
+            .output()?;
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        println!("HISTORICAL_ENVELOPE {} {}", args.join(" "), value);
+        Ok(value)
+    };
+    let shown = call(&["show", "historical"])?;
+    assert_eq!(shown["status"], "completed");
+    let result = &shown["result"];
+    assert_eq!(result["initial_input"], input);
+    assert_eq!(result["context"][0]["data"], original);
+    assert!(result["initial_input"].get("contract_version").is_none());
+    assert!(result["initial_input"].get("criterion_policy").is_none());
+    let invocation = &result["work_slot_invocations"][0];
+    assert_eq!(invocation["exit_code"], 7);
+    assert_eq!(invocation["status"], "failed");
+    assert!(invocation
+        .get("ownership")
+        .is_none_or(serde_json::Value::is_null));
+    assert!(invocation
+        .get("controls")
+        .is_none_or(serde_json::Value::is_null));
+    assert!(!result["requestable_events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["event"] == "revise-plan"));
+    let before = call(&["history", "historical"])?;
+    assert_eq!(before["status"], "completed");
+    let refusal = call(&["event", "historical", "implementation-ready"])?;
+    assert_eq!(refusal["status"], "error");
+    assert!(refusal
+        .to_string()
+        .contains("unsupported software-change semantic contract"));
+    assert!(refusal.to_string().contains("fixed original provider"));
+    assert_eq!(call(&["history", "historical"])?, before);
+    let after = call(&["show", "historical"])?;
+    assert_eq!(after["result"]["initial_input"], input);
+    assert_eq!(after["result"]["context"], result["context"]);
+    assert_eq!(after["result"]["state_visit"], result["state_visit"]);
+    // A historical live-shaped record has no ownership protocol. The public
+    // controller must refuse before treating its waiter PID as signal authority.
+    let mut running = invocation_create_request("historical", "old-running");
+    running.slot_id = "implement".into();
+    running.waiter_pid = std::process::id();
+    adapter.set_current_slot_subject(
+        &"historical".into(),
+        &"implement".into(),
+        "subject-a".to_owned(),
+    )?;
+    adapter.create_work_slot_invocation(running)?;
+    call(&["show", "historical"])?;
+    let history = call(&["history", "historical"])?;
+    let refused = call(&["cancel-invocation", "historical", "old-running"])?;
+    assert_eq!(refused["status"], "rejected");
+    assert_eq!(refused["code"], "ownership-unavailable");
+    assert!(refused.to_string().contains("unsupported historical"));
+    assert_eq!(call(&["history", "historical"])?, history);
+    Ok(())
+}
+
 fn assert_waiter_written_status_has_no_overrun(status: WaiterWrittenStatus) {
     match status {
         WaiterWrittenStatus::Succeeded | WaiterWrittenStatus::Failed => {}
@@ -119,6 +284,108 @@ impl ProviderGateway for StaticGateway {
     ) -> Result<EvaluationResult, ProviderError> {
         Ok(self.result.clone())
     }
+}
+
+#[test]
+fn recovery_override_persistence_retains_denial_without_synthetic_allow(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let path = directory.path().join("override.sqlite");
+    let run_id = "exception";
+    let denied_history;
+    {
+        let adapter = SqlitePersistence::open(&path)?;
+        create_observed(&adapter, run_id)?;
+        let denial = execute_event(
+            EventRequest::new(run_id, "approve"),
+            &StaticGateway::new(EvaluationResult::deny(EvaluationFeedback::new(
+                "missing",
+                "missing proof",
+            ))),
+            &adapter,
+        );
+        assert!(denial.is_rejected());
+        denied_history = adapter.load_history(&run_id.into())?;
+        let request =
+            EventRequest::new(run_id, "approve").with_override(loop_core::StateVisitAttestation {
+                state_visit: 0,
+                owner: "owner".into(),
+                reason: "accept exception".into(),
+            });
+        let outcome = execute_event(
+            request,
+            &StaticGateway::new(EvaluationResult::allow_with_context_append(
+                ContextAppendEffect::new("MUST-NOT-APPEND", json!({})),
+            )),
+            &adapter,
+        );
+        assert!(outcome.is_completed(), "{outcome:?}");
+        assert_eq!(
+            outcome.value().unwrap().run.override_summary.override_count,
+            1
+        );
+    }
+    let adapter = SqlitePersistence::open(&path)?;
+    let history = adapter.load_history(&run_id.into())?;
+    assert_eq!(&history[..denied_history.len()], denied_history.as_slice());
+    assert!(matches!(
+        history.last().unwrap().action,
+        HistoryAction::Transition {
+            outcome: TransitionHistoryOutcome::Overridden { .. },
+            ..
+        }
+    ));
+    let evaluations = adapter.load_checked_evaluations(&run_id.into())?;
+    assert_eq!(evaluations.len(), 1);
+    assert!(evaluations[0].is_deny());
+    assert!(adapter.load_context_records(&run_id.into())?.is_empty());
+    adapter.load_show_data(&run_id.into())?;
+    // A later normal check-free final edge retains the permanent exception.
+    let terminal = execute_event(
+        EventRequest::new(run_id, "finish"),
+        &StaticGateway::new(EvaluationResult::Unsupported),
+        &adapter,
+    );
+    assert!(terminal.is_completed());
+    let summary = loop_core::OverrideSummary::new(1, Lifecycle::Final);
+    assert_eq!(terminal.value().unwrap().run.override_summary, summary);
+    assert_eq!(
+        adapter.load_show_data(&run_id.into())?.run.override_summary,
+        summary
+    );
+    assert_eq!(adapter.list_runs()?[0].override_summary, summary);
+    Ok(())
+}
+
+#[test]
+fn recovery_override_persistence_invalid_attestation_is_atomic(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = SqlitePersistence::open_in_memory()?;
+    create_observed(&adapter, "invalid")?;
+    let before = adapter.load_history(&"invalid".into())?;
+    let mut request = CommitTransitionRequest::new(
+        "invalid",
+        0.into(),
+        "start",
+        Transition::checked("start", "approve", "middle"),
+        Lifecycle::Active,
+    );
+    request.exception = Some(loop_core::TransitionOverride {
+        attestation: loop_core::StateVisitAttestation {
+            state_visit: 1,
+            owner: "owner".into(),
+            reason: "reason".into(),
+        },
+        skipped_bound_checks: vec![],
+        provider_evaluation: loop_core::SkippedProviderEvaluation::NotPerformed,
+    });
+    assert!(adapter.commit_transition(request.clone()).is_err());
+    request.exception.as_mut().unwrap().attestation.state_visit = 0;
+    request.context_append = Some(ContextAppendEffect::new("fake-allow", json!({})));
+    assert!(adapter.commit_transition(request).is_err());
+    assert_eq!(adapter.load_history(&"invalid".into())?, before);
+    assert!(adapter.load_context_records(&"invalid".into())?.is_empty());
+    Ok(())
 }
 
 #[test]

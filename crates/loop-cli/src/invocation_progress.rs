@@ -36,6 +36,8 @@ pub struct InvocationProgressSnapshot {
     pub slot_id: WorkSlotId,
     pub capture_dir: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub ownership: Option<Box<loop_core::ExecutionOwnershipState>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub graph: Option<GraphProgress>,
     pub traces: Vec<ProgressTrace>,
 }
@@ -162,6 +164,7 @@ where
         invocation_id: selected.invocation_id.clone(),
         slot_id: selected.slot_id.clone(),
         capture_dir,
+        ownership: selected.ownership.clone().map(Box::new),
         graph,
         traces,
     })
@@ -745,6 +748,7 @@ mod tests {
             invocation_id: "inv-1".into(),
             slot_id: "slot-1".into(),
             capture_dir: "/tmp/capture".to_owned(),
+            ownership: None,
             graph: None,
             traces: Vec::new(),
         };

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -49,6 +50,43 @@ def sha256_bytes(data: bytes) -> str:
 
 def sha256_file(path: Path) -> str:
     return sha256_bytes(path.read_bytes())
+
+
+def repository_proof_identity(repo: Path) -> str:
+    """Compact current-tree identity for local command receipts (not a policy).
+
+    HEAD/path names alone miss an edit to an already modified file. Include
+    Git's index/status and actual tracked/untracked contents, without asking
+    the driver to maintain a second file inventory. Ignored build outputs are
+    deliberately outside repository proof identity.
+    """
+    def git(*args: str) -> bytes:
+        return subprocess.check_output(["git", *args], cwd=repo, stderr=subprocess.PIPE)
+
+    digest = hashlib.sha256()
+
+    def add(value: bytes) -> None:
+        digest.update(len(value).to_bytes(8, "big"))
+        digest.update(value)
+
+    add(git("rev-parse", "HEAD"))
+    add(git("ls-files", "--stage", "-z"))
+    add(git("status", "--porcelain=v1", "--untracked-files=all", "-z"))
+    paths = sorted(set(git("ls-files", "--cached", "--others", "--exclude-standard", "-z").split(b"\0")) - {b""})
+    for name in paths:
+        path = repo / os.fsdecode(name)
+        add(name)
+        if path.is_symlink():
+            add(b"symlink")
+            add(os.fsencode(path.readlink()))
+        elif path.is_file():
+            add(str(path.stat().st_mode & 0o777).encode())
+            add(path.read_bytes())
+        elif not path.exists():
+            add(b"deleted")
+        else:
+            fail(f"unsupported repository proof entry: {path}")
+    return "sha256:" + digest.hexdigest()
 
 
 def cargo_metadata(repo: Path) -> dict[str, Any]:

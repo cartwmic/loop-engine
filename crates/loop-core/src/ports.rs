@@ -515,6 +515,9 @@ pub struct CommitTransitionRequest {
     /// transitions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_append: Option<ContextAppendEffect>,
+    /// Explicit exception; mutually exclusive with a provider context effect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exception: Option<crate::TransitionOverride>,
     /// Slot-visit subjects persisted in the same transaction as the committed
     /// target state. Empty when the target is not a work slot.
     pub slot_subjects: Vec<(WorkSlotId, String)>,
@@ -535,6 +538,7 @@ impl CommitTransitionRequest {
             transition,
             resulting_lifecycle,
             context_append: None,
+            exception: None,
             slot_subjects: Vec::new(),
         }
     }
@@ -555,7 +559,7 @@ impl CommitTransitionRequest {
     }
 }
 
-/// Result of a committed check-free transition or checked allow.
+/// Result of a committed check-free transition, checked allow, or explicit override.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CommitTransitionResult {
     pub run: Run,
@@ -647,6 +651,8 @@ pub struct CreateWorkSlotInvocationRequest {
     /// Snapshot of the opaque run identity at admission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frozen_run_identity: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controls: Option<crate::InvocationControls>,
     /// Optional validated assignment subset. `None` preserves full execution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignment_selection: Option<Vec<String>>,
@@ -683,9 +689,15 @@ impl CreateWorkSlotInvocationRequest {
             capture_dir: capture_dir.into(),
             routed_inputs: Vec::new(),
             frozen_run_identity: None,
+            controls: None,
             assignment_selection: None,
             invocation_input: None,
         }
+    }
+
+    pub fn with_controls(mut self, controls: crate::InvocationControls) -> Self {
+        self.controls = Some(controls);
+        self
     }
 
     pub fn with_frozen_run_identity(mut self, identity: Value) -> Self {
@@ -820,6 +832,8 @@ pub struct RunSummary {
     pub current_state: StateId,
     pub provider: Option<String>,
     pub artifact_root: Option<String>,
+    #[serde(default, flatten)]
+    pub override_summary: crate::OverrideSummary,
 }
 
 impl From<&Run> for RunSummary {
@@ -832,6 +846,7 @@ impl From<&Run> for RunSummary {
             current_state: run.current_state.clone(),
             provider: None,
             artifact_root: None,
+            override_summary: run.override_summary.clone(),
         }
     }
 }
@@ -856,9 +871,10 @@ pub trait Persistence {
     ) -> Result<AppendContextResult, PersistenceError>;
 
     /// Atomically conditionally commit a transition and its history entry.
-    /// The transition kind determines whether the committed entry represents
-    /// a check-free edge or a checked allow. A provider context append effect
-    /// may accompany only the checked-allow form.
+    /// An exception records an overridden outcome, never a checked allow.
+    /// Otherwise the transition kind determines check-free versus checked allow.
+    /// A provider context append effect may accompany only a checked allow;
+    /// it is mutually exclusive with an exception.
     fn commit_transition(
         &self,
         request: CommitTransitionRequest,
@@ -893,6 +909,20 @@ pub trait Persistence {
     /// Load the authoritative current run state.  Missing runs are returned
     /// as `PersistenceError::NotFound`, not as an empty successful value.
     fn load_authoritative_run(&self, run_id: &RunId) -> Result<Run, PersistenceError>;
+
+    /// Atomically validate observation/visit and append typed amendment history.
+    fn amend_binding(
+        &self,
+        _run_id: &RunId,
+        _slot_id: &WorkSlotId,
+        _request: crate::operations::amend_binding::Request,
+        _now: Timestamp,
+    ) -> Result<HistoryEntry, PersistenceError> {
+        Err(PersistenceError::failure(PersistenceFailure::new(
+            "binding-amendment-unsupported",
+            "persistence does not support binding amendments",
+        )))
+    }
 
     /// Return stable discovery projections for all runs.
     fn list_runs(&self) -> Result<Vec<RunSummary>, PersistenceError>;
@@ -974,8 +1004,17 @@ pub trait Persistence {
 /// conditional-write failures use [`PersistenceConflict`] instead.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PersistenceRejection {
-    RunNotActive { run_id: RunId, lifecycle: Lifecycle },
-    RunNotObserved { run_id: RunId },
+    RunNotActive {
+        run_id: RunId,
+        lifecycle: Lifecycle,
+    },
+    RunNotObserved {
+        run_id: RunId,
+    },
+    LiveOwnedWork {
+        run_id: RunId,
+        invocation_id: InvocationId,
+    },
 }
 
 impl PersistenceRejection {
@@ -983,6 +1022,7 @@ impl PersistenceRejection {
         match self {
             Self::RunNotActive { .. } => "run-not-active",
             Self::RunNotObserved { .. } => "run-not-observed",
+            Self::LiveOwnedWork { .. } => "live-owned-work",
         }
     }
 }
@@ -996,6 +1036,10 @@ impl fmt::Display for PersistenceRejection {
             Self::RunNotObserved { run_id } => write!(
                 formatter,
                 "run `{run_id}` must be observed with `show` before it can be mutated"
+            ),
+            Self::LiveOwnedWork { run_id, invocation_id } => write!(
+                formatter,
+                "invocation `{invocation_id}` owns live work or pending cleanup; wait or cancel-invocation {run_id} {invocation_id} before terminating"
             ),
         }
     }
@@ -1244,6 +1288,44 @@ pub trait WorkSlotProcess {
         _binding: &WorkSlotBinding,
     ) -> std::result::Result<Option<Vec<String>>, ProcessError> {
         Ok(None)
+    }
+
+    /// Bounded facade-specific read-only preparation, shared by preview and launch.
+    fn prepare_facade(
+        &self,
+        _binding: &WorkSlotBinding,
+        _provider: &ProviderAssociation,
+        _packet: &Value,
+    ) -> std::result::Result<Option<Value>, ProcessError> {
+        Ok(None)
+    }
+
+    /// Admit controls only for a known facade; core does not interpret provider argv.
+    fn prepare_controls(
+        &self,
+        _binding: &WorkSlotBinding,
+        _provider: &ProviderAssociation,
+        controls: &crate::InvocationControls,
+    ) -> std::result::Result<crate::InvocationControls, ProcessError> {
+        if controls != &crate::InvocationControls::default() {
+            return Err(ProcessError::new(
+                "unsupported-invocation-controls",
+                "bound executable does not support these controls",
+            ));
+        }
+        Ok(controls.clone())
+    }
+
+    /// Run a bounded, provider-opaque selector before primary work admission.
+    fn filter_context(
+        &self,
+        _filter: &crate::ContextFilter,
+        _packet: &Value,
+    ) -> std::result::Result<crate::ContextFilterSelection, ProcessError> {
+        Err(ProcessError::new(
+            "context-filter-unsupported",
+            "execution adapter does not support context filters",
+        ))
     }
 
     /// Spawn `loop-engine wait-invocation RUN_ID INVOCATION_ID` with piped stdin.

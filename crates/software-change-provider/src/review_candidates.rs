@@ -30,6 +30,13 @@ pub struct ReviewCandidatesDocument {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "status")]
 pub enum ReviewCandidate {
+    #[serde(rename = "verdict-ready")]
+    VerdictReady {
+        origin: CandidateOrigin,
+        record_id: String,
+        kind: String,
+        data: Value,
+    },
     #[serde(rename = "ready")]
     Ready {
         origin: CandidateOrigin,
@@ -37,6 +44,13 @@ pub enum ReviewCandidate {
         author: CandidateAuthor,
         result: String,
         findings: String,
+    },
+    #[serde(rename = "carried")]
+    Carried {
+        origin: CandidateOrigin,
+        axis: String,
+        author: CandidateAuthor,
+        applicability_id: String,
     },
     #[serde(rename = "malformed")]
     Malformed {
@@ -195,12 +209,13 @@ pub fn project(input: &Value) -> Result<ReviewCandidatesDocument, ProjectionErro
                 id: invocation_id.to_owned(),
                 assignment_id: assignment_id.to_owned(),
             };
-            candidates.push(project_assignment(
+            candidates.extend(project_assignment(
                 origin,
                 worker,
                 contract,
                 capture_dir,
                 worker_index,
+                slot_id,
             ));
         }
     }
@@ -285,78 +300,56 @@ fn project_assignment(
     contract: &Value,
     capture_dir: Option<&str>,
     worker_index: usize,
-) -> ReviewCandidate {
-    let selected_attempt = match worker.get("selected_attempt") {
-        None | Some(Value::Null) => None,
-        Some(value) => match value.as_u64().and_then(|number| u32::try_from(number).ok()) {
-            Some(number) if number > 0 => Some(number),
-            Some(_) | None => {
-                return ReviewCandidate::Unavailable {
-                    origin,
-                    diagnostic: "selected output metadata is unavailable".to_owned(),
-                }
-            }
-        },
-    };
-
-    let Some(_selected_attempt) = selected_attempt else {
-        return if reports_exhausted(capture_dir, worker_index) {
+    gate: &str,
+) -> Vec<ReviewCandidate> {
+    if worker.get("selected_attempt").is_none_or(Value::is_null) {
+        return vec![if reports_exhausted(capture_dir, worker_index) {
             ReviewCandidate::Exhausted {
                 origin,
                 diagnostic:
-                    "review output exhausted conformance attempts without a selected attempt"
-                        .to_owned(),
+                    "review output exhausted conformance attempts without a selected attempt".into(),
             }
         } else {
             ReviewCandidate::MissingSelection {
                 origin,
-                diagnostic: "assignment has no selected review output".to_owned(),
+                diagnostic: "assignment has no selected review output".into(),
             }
-        };
-    };
-
-    let Some(selected_digest) = worker.get("selected_output_sha256").and_then(Value::as_str) else {
-        return ReviewCandidate::Unavailable {
-            origin,
-            diagnostic: "selected output metadata is unavailable".to_owned(),
-        };
-    };
-    let Some(selected_path) = worker.get("selected_output_path").and_then(Value::as_str) else {
-        return ReviewCandidate::Unavailable {
-            origin,
-            diagnostic: "selected output metadata is unavailable".to_owned(),
-        };
-    };
-    if selected_digest.is_empty() || selected_path.is_empty() {
-        return ReviewCandidate::Unavailable {
-            origin,
-            diagnostic: "selected output metadata is unavailable".to_owned(),
-        };
+        }];
     }
-
-    let bytes = match read_selected_output(capture_dir, selected_path) {
-        Ok(bytes) => bytes,
-        Err(()) => {
-            return ReviewCandidate::Unavailable {
-                origin,
-                diagnostic: "selected review output is unavailable".to_owned(),
-            }
+    let bytes = (|| -> Result<Vec<u8>, String> {
+        if !worker["selected_attempt"]
+            .as_u64()
+            .is_some_and(|n| n > 0 && u32::try_from(n).is_ok())
+        {
+            return Err("selected output metadata is unavailable".into());
         }
+        let digest = worker["selected_output_sha256"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or("selected output metadata is unavailable")?;
+        let path = worker["selected_output_path"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or("selected output metadata is unavailable")?;
+        let bytes = read_selected_output(capture_dir, path)
+            .map_err(|_| "selected review output is unavailable")?;
+        if sha256_digest(&bytes) != digest {
+            return Err("selected review output digest does not match recorded digest".into());
+        }
+        Ok(bytes)
+    })();
+    let bytes = match bytes {
+        Ok(bytes) => bytes,
+        Err(diagnostic) => return vec![ReviewCandidate::Unavailable { origin, diagnostic }],
     };
-    if sha256_digest(&bytes) != selected_digest {
-        return ReviewCandidate::Unavailable {
-            origin,
-            diagnostic: "selected review output digest does not match recorded digest".to_owned(),
-        };
-    }
-
     let value = match parse_selected_value(&bytes) {
         Ok(value) => value,
-        Err(diagnostic) => {
-            return ReviewCandidate::Malformed { origin, diagnostic };
-        }
+        Err(diagnostic) => return vec![ReviewCandidate::Malformed { origin, diagnostic }],
     };
-    match normalize_review_output(contract, &value) {
+    if contract.pointer("/properties/judgments").is_some() {
+        return project_batch(origin, contract, &value, capture_dir, gate);
+    }
+    vec![match normalize_review_output(contract, &value) {
         Ok(judgment) => ReviewCandidate::Ready {
             origin,
             axis: judgment.axis,
@@ -365,7 +358,125 @@ fn project_assignment(
             findings: judgment.findings,
         },
         Err(diagnostic) => ReviewCandidate::Malformed { origin, diagnostic },
-    }
+    }]
+}
+
+fn project_batch(
+    origin: CandidateOrigin,
+    contract: &Value,
+    value: &Value,
+    capture_dir: Option<&str>,
+    gate: &str,
+) -> Vec<ReviewCandidate> {
+    let result = (|| -> Result<Vec<ReviewCandidate>, String> {
+        let capture = capture_dir.ok_or("missing capture directory")?;
+        let (captured_schema, location) =
+            crate::review_batch::captured_commission(Path::new(capture), &origin.assignment_id)?;
+        if captured_schema != *contract {
+            return Err("captured contract disagrees with selected assignment".into());
+        }
+        let subject = match gate {
+            "intent-review" | "intent-adversarial-review" => "intent.json",
+            "design-review" | "design-adversarial-review" => "design.json",
+            "plan-review" | "plan-adversarial-review" => "plan.json",
+            "implementation-review" | "implementation-adversarial-review" => {
+                "implementation-report.json"
+            }
+            "validation-review" | "validation-adversarial-review" => "validation-report.json",
+            _ => return Err("unknown review gate".into()),
+        };
+        let root = location["artifact_root"]
+            .as_str()
+            .ok_or("missing artifact root")?;
+        let target: Value = serde_json::from_slice(
+            &fs::read(Path::new(root).join(subject)).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+        let revision = target["revision"]
+            .as_str()
+            .ok_or("subject has no revision")?;
+        let rows = crate::review_batch::rows(contract, value, &location, gate, subject, revision)?;
+        let author = CandidateAuthor {
+            name: value["author"]["name"]
+                .as_str()
+                .ok_or("missing author name")?
+                .into(),
+            kind: value["author"]["kind"]
+                .as_str()
+                .ok_or("missing author kind")?
+                .into(),
+        };
+        let mut candidates: Vec<ReviewCandidate> = rows
+            .into_iter()
+            .map(|row| {
+                let axis = row["axis"].as_str().ok_or("missing axis")?.to_owned();
+                Ok(if let Some(reuse) = row.get("reuse") {
+                    ReviewCandidate::Carried {
+                        origin: origin.clone(),
+                        axis,
+                        author: author.clone(),
+                        applicability_id: reuse.as_str().ok_or("missing applicability ID")?.into(),
+                    }
+                } else {
+                    ReviewCandidate::Ready {
+                        origin: origin.clone(),
+                        axis,
+                        author: author.clone(),
+                        result: row["result"].as_str().ok_or("missing result")?.into(),
+                        findings: row["findings"].as_str().ok_or("missing findings")?.into(),
+                    }
+                })
+            })
+            .collect::<Result<_, String>>()?;
+        if let Some(verdicts) = value.get("validation_verdicts") {
+            if gate != "validation-review" {
+                return Err(
+                    "only ordinary validation commissions produce criterion/goal verdicts".into(),
+                );
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            for row in verdicts.as_array().ok_or("invalid validation_verdicts")? {
+                let id = row["record_id"]
+                    .as_str()
+                    .ok_or("missing verdict record_id")?;
+                let kind = row["kind"].as_str().ok_or("missing verdict kind")?;
+                let data = &row["data"];
+                let selected = if kind == "goal-verdict" {
+                    target["goal_verdict_ids"]
+                        .as_array()
+                        .is_some_and(|ids| ids.contains(&Value::String(id.into())))
+                } else if kind == "criterion-verdict" {
+                    target["criteria"].as_array().is_some_and(|rows| {
+                        rows.iter().any(|r| {
+                            r["criterion_id"] == data["criterion_id"]
+                                && r["verdict_ids"]
+                                    .as_array()
+                                    .is_some_and(|ids| ids.contains(&Value::String(id.into())))
+                        })
+                    })
+                } else {
+                    false
+                };
+                if !selected
+                    || !seen.insert(id)
+                    || data["author"] != value["author"]
+                    || data["subject_revision"] != revision
+                {
+                    return Err(
+                        "unassigned, duplicate, wrong-author or stale criterion verdict".into(),
+                    );
+                }
+                candidates.push(ReviewCandidate::VerdictReady {
+                    origin: origin.clone(),
+                    record_id: id.into(),
+                    kind: kind.into(),
+                    data: data.clone(),
+                });
+            }
+        }
+        Ok(candidates)
+    })();
+    result.unwrap_or_else(|diagnostic| vec![ReviewCandidate::Malformed { origin, diagnostic }])
 }
 
 fn reports_exhausted(capture_dir: Option<&str>, worker_index: usize) -> bool {
@@ -470,9 +581,10 @@ fn looks_like_review_contract(contract: &Value) -> bool {
     let Some(properties) = object.get("properties").and_then(Value::as_object) else {
         return false;
     };
-    REVIEW_FIELDS
-        .iter()
-        .all(|field| properties.contains_key(*field))
+    (properties.contains_key("author") && properties.contains_key("judgments"))
+        || REVIEW_FIELDS
+            .iter()
+            .all(|field| properties.contains_key(*field))
 }
 
 struct NormalizedJudgment {
@@ -952,10 +1064,12 @@ mod tests {
             .iter()
             .map(|candidate| match candidate {
                 ReviewCandidate::Ready { .. } => "ready",
+                ReviewCandidate::Carried { .. } => "carried",
                 ReviewCandidate::Malformed { .. } => "malformed",
                 ReviewCandidate::Unavailable { .. } => "unavailable",
                 ReviewCandidate::MissingSelection { .. } => "missing-selection",
                 ReviewCandidate::Exhausted { .. } => "exhausted",
+                ReviewCandidate::VerdictReady { .. } => "verdict-ready",
             })
             .collect::<Vec<_>>();
         assert_eq!(

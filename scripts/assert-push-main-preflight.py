@@ -272,6 +272,9 @@ def validate_preflight(preflight: str) -> None:
         "stock Cargo compatibility must precede the final lint/build gates",
     )
 
+    software_journey = preflight.split("- name: Run full software-change source journey", 1)[1].split("- name:", 1)[0]
+    require("--jobs 2" in software_journey, "software-change independent proof pool must explicitly use --jobs 2")
+
     # The public journey commands are separate YAML steps and therefore run
     # serially.  Keep their relative order explicit so a future refactor does
     # not accidentally launch competing Cargo consumers.
@@ -343,6 +346,7 @@ def self_test(dispatcher: str, preflight: str) -> int:
         ("format", "cargo fmt --all -- --check", "workspace format gate"),
         ("locked journey build", "cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider -p bookends-check", "locked journey binary build"),
         ("Generate-PRD profile", "python3 scripts/assert-generate-prd-profile.py", "Generate-PRD profile gate"),
+        ("journey job budget", "--jobs 2", "explicit independent proof job budget"),
         ("software-change discovery", "run: python3 scripts/software-change-journey.py\n", "software-change Bookends discovery surface"),
         ("policy-document discovery", "run: python3 scripts/policy-document-journey.py\n", "policy-document Bookends discovery surface"),
         ("research discovery", "run: python3 scripts/research-journey.py\n", "research Bookends discovery surface"),

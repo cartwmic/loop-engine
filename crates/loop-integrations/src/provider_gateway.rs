@@ -59,6 +59,46 @@ impl SubprocessProviderGateway {
         DEFAULT_TIMEOUT
     }
 
+    /// Execute the generic context-selection transport using the same bounded
+    /// subprocess protocol as provider calls. No context semantics live here.
+    pub fn filter_context(
+        &self,
+        filter: &loop_core::ContextFilter,
+        packet: &Value,
+    ) -> Result<loop_core::ContextFilterSelection, ProviderError> {
+        let association = ProviderAssociation::new(serde_json::json!({
+            "command": filter.command, "args": filter.args
+        }));
+        let bytes = self.call(
+            &association,
+            serde_json::to_vec(packet).map_err(|error| {
+                ProviderError::execution("context-filter-input", error.to_string())
+            })?,
+        )?;
+        serde_json::from_slice(&bytes)
+            .map_err(|error| ProviderError::execution("context-filter-output", error.to_string()))
+    }
+
+    /// Bounded JSON transport for the configured facade's read-only preparation.
+    pub fn prepare_facade(
+        &self,
+        binding: &loop_core::WorkSlotBinding,
+        packet: &Value,
+    ) -> Result<Value, ProviderError> {
+        let association = ProviderAssociation::new(
+            serde_json::json!({"command": binding.command, "args": binding.args}),
+        );
+        let bytes = self.call(
+            &association,
+            serde_json::to_vec(packet).map_err(|error| {
+                ProviderError::execution("facade-preparation-input", error.to_string())
+            })?,
+        )?;
+        serde_json::from_slice(&bytes).map_err(|error| {
+            ProviderError::execution("facade-preparation-output", error.to_string())
+        })
+    }
+
     fn call(
         &self,
         provider: &ProviderAssociation,

@@ -4,6 +4,7 @@
 //! configuration, and CLI concerns.  It contains durable/provider-bound value
 //! types and semantic operation outcomes used by later core layers.
 
+mod execution_contract;
 mod invocation;
 mod model;
 pub mod operations;
@@ -11,15 +12,21 @@ mod outcome;
 mod ports;
 mod workflow;
 
+pub use execution_contract::{
+    effective_binding, invocation_owns_work, resolve_context_filter, BindingAmendment,
+    CancellationAcknowledgment, ContextFilter, ContextFilterSelection, EffectiveBinding,
+    ExecutionOwnershipState, InvocationControls, OwnedExecution, StateVisitAttestation,
+};
 pub use invocation::{instruction_digest, project_invocation_status};
 pub use model::{
-    AllowResponse, ContextAppendEffect, ContextRecord, ContextRecordId, ControlRevision,
-    DurableEvaluation, DurableEvaluationResult, EvaluationFeedback, EvaluationRequest,
-    EvaluationResult, EventId, HistoryAction, HistoryEntry, InnerWorker, InvocationId, JsonValue,
-    Lifecycle, PriorEvaluation, ProjectedInvocationStatus, ProviderAssociation, ProviderSelector,
-    Run, RunId, SemanticSequence, State, StateId, Timestamp, Transition, TransitionHistoryOutcome,
-    TransitionKind, WaiterWrittenStatus, WorkSlot, WorkSlotBinding, WorkSlotId, WorkSlotInvocation,
-    Workflow, WorkflowId,
+    AllowResponse, CompletionMode, ContextAppendEffect, ContextRecord, ContextRecordId,
+    ControlRevision, DurableEvaluation, DurableEvaluationResult, EvaluationFeedback,
+    EvaluationRequest, EvaluationResult, EventId, HistoryAction, HistoryEntry, InnerWorker,
+    InvocationId, JsonValue, Lifecycle, OverrideSummary, PriorEvaluation,
+    ProjectedInvocationStatus, ProviderAssociation, ProviderSelector, Run, RunId, SemanticSequence,
+    SkippedBoundCheck, SkippedProviderEvaluation, State, StateId, Timestamp, Transition,
+    TransitionHistoryOutcome, TransitionKind, TransitionOverride, WaiterWrittenStatus, WorkSlot,
+    WorkSlotBinding, WorkSlotId, WorkSlotInvocation, Workflow, WorkflowId,
 };
 pub use operations::{
     execute_append, execute_event, execute_history, execute_invoke, execute_list, execute_show,

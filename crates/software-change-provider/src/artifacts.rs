@@ -606,6 +606,22 @@ pub(crate) fn extract_metadata(
     subject: &str,
     value: &Value,
 ) -> Result<ArtifactMetadata, MetadataInvariantError> {
+    extract_metadata_inner(subject, value, false)
+}
+
+/// V2 validation indexes bind repository/document identity through checkpoints,
+/// not a duplicated legacy coverage manifest.
+pub(crate) fn extract_index_metadata(
+    value: &Value,
+) -> Result<ArtifactMetadata, MetadataInvariantError> {
+    extract_metadata_inner("validation-report.json", value, true)
+}
+
+fn extract_metadata_inner(
+    subject: &str,
+    value: &Value,
+    index: bool,
+) -> Result<ArtifactMetadata, MetadataInvariantError> {
     let object = value
         .as_object()
         .ok_or_else(|| metadata_error(subject, "/", "artifact metadata requires an object"))?;
@@ -628,7 +644,7 @@ pub(crate) fn extract_metadata(
         ));
     }
 
-    let coverage = if is_report_subject(subject) {
+    let coverage = if is_report_subject(subject) && !index {
         match object.get("coverage") {
             Some(value) => Some(extract_coverage(subject, value)?),
             None => {
@@ -892,6 +908,8 @@ mod tests {
             "additionalProperties": false
         });
         parse_initial_input(&json!({
+            "contract_version": 2,
+            "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
             "config_version": "test-1",
             "review_policies": {},
             "artifact_schemas": {

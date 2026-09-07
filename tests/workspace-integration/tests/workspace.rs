@@ -45,3 +45,5 @@ mod software_change_contracts;
 mod software_change_plan_graph;
 #[path = "../../../crates/software-change-provider/tests/provider.rs"]
 mod software_change_provider;
+#[path = "../../../crates/software-change-provider/tests/recovery_dispatch.rs"]
+mod software_change_recovery_dispatch;

@@ -4,83 +4,37 @@
     "name": "validation-agent",
     "kind": "agent"
   },
-  "intent_revision": "r15",
-  "coverage": {
-    "commit": "repo-state-2026-08-12",
-    "documents": [
-      {
-        "path": "fictional-repo/README.md",
-        "revision": "v1.1"
-      },
-      {
-        "path": "fictional-repo/provider/README.md",
-        "revision": "v1.1"
-      },
-      {
-        "path": "fictional-repo/docs/PRD.md",
-        "revision": "reference-workflow-v3"
-      },
-      {
-        "path": "fictional-repo/loop-engine-software-change-provider-prd.md",
-        "revision": "v1.1"
-      },
-      {
-        "path": "fictional-repo/loop-engine-software-change-provider-technical-design.md",
-        "revision": "v1.1"
-      },
-      {
-        "path": "fictional-repo/loop-engine-software-change-provider-task-packets.md",
-        "revision": "v1.1"
-      },
-      {
-        "path": "fictional-repo/implementation-evidence/requirement-to-proof.md",
-        "revision": "v1.1"
-      },
-      {
-        "path": "fictional-repo/scripts/assert-doc-authority.py",
-        "revision": "v1.1"
-      },
-      {
-        "path": "fictional-repo/scripts/assert-requirement-proof.py",
-        "revision": "v1.1"
-      },
-      {
-        "path": "fictional-repo/scripts/production-journey.py",
-        "revision": "v1.1"
-      }
-    ]
-  },
-  "outcome": "A fresh operator can observe the software-change provider expose the frozen profile obligations, reject malformed artifacts before review evidence, require current-revision evidence, and reach the terminal state only after validation obligations pass; authoritative documentation names one product PRD and preserves the external semantic-review boundary.",
-  "requirements": [
+  "implementation_revision": "r15",
+  "command_evidence_ids": [
+    "calibration-2026-08-12"
+  ],
+  "criteria": [
     {
-      "requirement": "A caller can inspect the frozen policies and artifact schemas before evaluating a transition.",
-      "proof": "The supplied repository-state companion's scripts/production-journey.py::frozen_profile_is_inspectable_before_transition scenario records separate public start and show processes, observes the selected standard-7 policy IDs, author counts, artifact schemas, prompts, templates, protocol, and config version before any event, and observes byte-identical initial_input after denied and accepted events; these caller-visible assertions prove frozen policies and schemas are inspectable before transition evaluation. The cited a1, a15, and describe-protocol tests remain supporting seam proof."
+      "criterion_id": "AC-1",
+      "verdict_ids": [
+        "calibration-2026-08-12-AC-1"
+      ]
     },
     {
-      "requirement": "A malformed subject artifact is denied with each violated structural rule named.",
-      "proof": "The supplied repository-state companion's scripts/production-journey.py::malformed_artifact_denial_names_all_rules scenario appends one artifact simultaneously missing revision, containing an empty outcome, and containing an undeclared extra field; the public event response names /revision|required, /outcome|minLength, and /extra|additionalProperties in deterministic order, leaves current_state=intent, and does not report evidence satisfaction. The cited schema and evaluate tests remain supporting seam proof."
+      "criterion_id": "AC-2",
+      "verdict_ids": [
+        "calibration-2026-08-12-AC-2"
+      ]
     },
     {
-      "requirement": "A checked transition refuses stale, self-authored, duplicate-author, or configured-obligation-incomplete evidence.",
-      "proof": "The supplied repository-state companion's scripts/production-journey.py::evidence_denial_reports_each_configured_reason scenario appends stale-revision, self-authored, duplicate declared name-kind, and configured-axis-incomplete evidence; the public event response separately names every reason and leaves current_state=intent, while distinct non-subject current-revision evidence satisfying every configured axis and author count then permits intent-to-design. The cited evidence and evaluate tests remain supporting seam proof."
+      "criterion_id": "AC-3",
+      "verdict_ids": [
+        "calibration-2026-08-12-AC-3"
+      ]
     },
     {
-      "requirement": "The reference workflow reaches its terminal state only after its configured validation obligations are satisfied.",
-      "proof": "The supplied repository-state and exact script companions' scripts/production-journey.py::terminal_validation_gate scenario reads the frozen validation-adversarial-review policy IDs and required-author counts, records a denial naming each missing configured obligation with unchanged current_state=validation-adversarial-review and no successful transition, validates every appended record's gate, policy, subject revision, config version, pass result, non-subject identity, and distinct-author count against that frozen configuration, then records accepted progression to end, no final requestable events, and retained denial lineage; these inspectable observable assertions semantically prove the requirement rather than merely matching its bookends:LE-39 token."
+      "criterion_id": "AC-4",
+      "verdict_ids": [
+        "calibration-2026-08-12-AC-4"
+      ]
     }
   ],
-  "validation": [
-    "cargo test -p software-change-provider --lib schema::tests::instance_collects_object_rules_and_nested_properties passed",
-    "cargo test -p software-change-provider --test evaluate schema_deny_reports_every_simultaneous_structural_violation -- --exact passed",
-    "python3 scripts/production-journey.py passed with inspectable frozen-profile, exhaustive structural-denial, configured evidence-denial, unchanged-state, evidence-gated acceptance, terminal-state, and denial-lineage assertions in the supplied repository-state companion",
-    "cargo test -p software-change-provider --test embedded_data passed",
-    "cargo test -p software-change-provider --test shipped_data passed",
-    "cargo test --workspace passed",
-    "cargo clippy --workspace --all-targets passed",
-    "cargo fmt --all -- --check passed",
-    "python3 scripts/production-journey.py passed",
-    "python3 fictional-repo/scripts/assert-requirement-proof.py",
-    "python3 fictional-repo/scripts/assert-doc-authority.py",
-    "Docs-integrated coverage supplied exact mapped companions for every listed document; semantic review remained external to provider execution."
+  "goal_verdict_ids": [
+    "calibration-2026-08-12-goal"
   ]
 }

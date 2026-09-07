@@ -239,8 +239,7 @@ fn omitted_accepted_unresolved_finding_requires_explicit_disposition() {
         .iter()
         .any(|reason| reason.as_str().unwrap().contains("F-one")));
 
-    // A new subject revision starts a new latest-snapshot view; it must not be
-    // mistaken for an omitted same-revision disposition.
+    // A revision bump does not silently disposition an accepted finding.
     root.write_json(
         "intent.json",
         &json!({"revision": "2", "author": {"name": "owner", "kind": "human"}}),
@@ -274,7 +273,7 @@ fn omitted_accepted_unresolved_finding_requires_explicit_disposition() {
             ledger_record(3, ledger("intent-review", "intent.json", "2", json!([]))),
         ],
     );
-    assert_eq!(result, json!({"result": "allow"}));
+    assert_eq!(result["feedback"]["details"]["status"], "malformed");
 }
 
 #[test]
@@ -598,7 +597,7 @@ fn report_ledger_derives_current_checkpoint_instead_of_copying_state() {
                 "agent",
                 "implementation-report.json",
                 "r15",
-                "high-rigor-8",
+                "high-rigor-9",
             ),
             (sequence + 1) as u64,
         ));
@@ -665,7 +664,7 @@ fn advisory_proposal_is_inert_until_driver_appends_a_ledger() {
 }
 
 #[test]
-fn accepted_unresolved_entries_must_match_current_failing_evidence() {
+fn recovery_disposition_accepted_unresolved_blocks_independently_of_current_verdict() {
     let root = TestDir::new("ledger-set-agreement");
     root.write_json(
         "intent.json",
@@ -698,9 +697,12 @@ fn accepted_unresolved_entries_must_match_current_failing_evidence() {
     );
     assert_eq!(
         matching["feedback"]["code"],
-        "software-change-review-incomplete"
+        "software-change-finding-ledger-invalid"
     );
-    assert_eq!(matching["feedback"]["details"]["phase"], "evidence");
+    assert_eq!(
+        matching["feedback"]["details"]["status"],
+        "accepted_unresolved"
+    );
 
     let mut pass = pass_evidence();
     pass["findings"] = json!("");
@@ -718,11 +720,14 @@ fn accepted_unresolved_entries_must_match_current_failing_evidence() {
         mismatch["feedback"]["code"],
         "software-change-finding-ledger-invalid"
     );
-    assert_eq!(mismatch["feedback"]["details"]["status"], "set_mismatch");
+    assert_eq!(
+        mismatch["feedback"]["details"]["status"],
+        "accepted_unresolved"
+    );
 }
 
 #[test]
-fn rejected_advisory_resolved_and_stale_entries_have_empty_blocking_set() {
+fn recovery_disposition_nonblocking_historical_entries_do_not_replace_review_coverage() {
     let root = TestDir::new("ledger-dispositions");
     root.write_json(
         "intent.json",

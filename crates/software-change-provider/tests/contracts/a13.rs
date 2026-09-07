@@ -27,7 +27,15 @@ fn standard_profile_and_task_packet_template_carry_doc_integration_contract() {
             .collect();
         assert!(required.contains("revision"));
         assert!(required.contains("author"));
-        assert!(required.contains("coverage"));
+        if subject == "implementation-report.json" {
+            assert!(required.contains("coverage"));
+        } else {
+            // Documentation proof is retained evidence, not copied report prose.
+            assert!(required.contains("implementation_revision"));
+            assert!(required.contains("command_evidence_ids"));
+            assert!(required.contains("criteria"));
+            assert!(required.contains("goal_verdict_ids"));
+        }
     }
 
     let template_path = workspace_integration::package_root("software-change-provider")

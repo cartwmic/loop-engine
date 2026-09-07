@@ -244,6 +244,36 @@ pub fn load_profile(profile: &str) -> Value {
     serde_json::from_str(&text).unwrap_or_else(|error| panic!("invalid shipped config: {error}"))
 }
 
+/// Real named command captures and checkpointed index, with explicitly synthetic
+/// independent judgments. Seam fixtures only; public terminal proof lives in criteria.
+pub fn validation_fixture(input: &Value, repository: &Path) -> Vec<Value> {
+    let workflow = described_workflow(input);
+    let show = json!({"operation":"show", "status":"completed", "result":{
+        "current_state":"validation", "initial_input":input,
+        "work_slots":workflow["work_slots"], "context":[]}});
+    let helper = workspace_integration::package_root("software-change-provider")
+        .join("../../tests/fixtures/prepare-validation.py");
+    let mut command = Command::new("python3");
+    command
+        .arg(helper)
+        .arg("--provider")
+        .arg(provider_binary())
+        .arg("--engine")
+        .arg(workspace_integration::binary("loop-engine"))
+        .arg("--working-directory")
+        .arg(repository)
+        .args(["--revision", "r15"]);
+    let output = super::bounded_process::run_with_stdin(
+        &mut command,
+        "v2 validation fixture",
+        &serde_json::to_vec(&show).unwrap(),
+    )
+    .unwrap()
+    .output;
+    assert_exit(&output, 0);
+    response(&output)["records"].as_array().unwrap().clone()
+}
+
 pub fn load_fixture(name: &str) -> Value {
     let path = workspace_integration::package_root("software-change-provider")
         .join("data")
@@ -286,7 +316,7 @@ pub fn valid_metadata(revision: &str) -> Value {
 }
 
 pub fn axis_config(root: &TestDir, axis: &str) -> Value {
-    json!({
+    json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
         "config_version": "test-1",
         "artifact_root": root.value(),
         "review_policies": {
@@ -417,6 +447,21 @@ impl Engine {
             &self.gateway,
             &persistence,
         )
+    }
+
+    pub fn append_candidates(&self, run_id: &str, candidates: Vec<Value>) {
+        for candidate in candidates {
+            self.append(
+                run_id,
+                ContextRecord::new(
+                    candidate["record_id"].as_str().unwrap(),
+                    candidate["kind"].as_str().unwrap(),
+                    candidate["data"].clone(),
+                    0_u64.into(),
+                    Timestamp::from_unix_millis(0),
+                ),
+            );
+        }
     }
 
     pub fn append(&self, run_id: &str, record: ContextRecord) -> ContextRecord {

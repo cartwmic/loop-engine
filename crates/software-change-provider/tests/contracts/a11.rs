@@ -35,9 +35,9 @@ fn read_data(relative: &str) -> Vec<u8> {
 
 fn profile_name(config_version: &str) -> &'static str {
     match config_version {
-        "minimal-8" => "minimal",
-        "standard-8" => "standard",
-        "high-rigor-8" => "high-rigor",
+        "minimal-9" => "minimal",
+        "standard-9" => "standard",
+        "high-rigor-9" => "high-rigor",
         other => panic!("unknown shipped config version {other}"),
     }
 }
@@ -267,7 +267,17 @@ fn implementation_companion_path(commit: &str) -> &'static str {
     }
 }
 
+fn indexed_evidence(subject: &Value) -> Value {
+    match subject["command_evidence_ids"][0].as_str() {
+        Some("calibration-2026-08-12") => fixture_value("validation-evidence-2026-08-12"),
+        Some("calibration-2026-08-13") => fixture_value("validation-evidence-2026-08-13"),
+        Some(other) => panic!("unknown calibration evidence index {other}"),
+        None => subject.clone(),
+    }
+}
+
 fn implementation_companion_record(subject: &Value) -> Record {
+    let subject = indexed_evidence(subject);
     let commit = subject
         .get("coverage")
         .and_then(|coverage| coverage.get("commit"))
@@ -368,6 +378,7 @@ fn docs_companion_records(subject: &Value, gate: &str, axis: &str) -> Vec<Record
     if !(gate_family(gate) == "validation" && axis == "docs-integrated") {
         return Vec::new();
     }
+    let subject = indexed_evidence(subject);
     let documents = subject
         .get("coverage")
         .and_then(|coverage| coverage.get("documents"))
@@ -415,7 +426,18 @@ fn requirement_proof_companion_records(gate: &str, axis: &str) -> Vec<Record> {
 }
 
 fn companion_records(subject: &Value, gate: &str, axis: &str) -> Vec<Record> {
-    let mut records = repository_state_companion_records(subject, gate, axis);
+    let mut records = Vec::new();
+    if subject.get("command_evidence_ids").is_some() {
+        let id = subject["command_evidence_ids"][0].as_str().unwrap();
+        records.push(Record {
+            label: "companion:validation-evidence.json".into(),
+            content: read_data(&format!(
+                "calibration/fixtures/validation-evidence-{}.json",
+                id.strip_prefix("calibration-").unwrap()
+            )),
+        });
+    }
+    records.extend(repository_state_companion_records(subject, gate, axis));
     records.extend(docs_companion_records(subject, gate, axis));
     records.extend(requirement_proof_companion_records(gate, axis));
     records
@@ -589,6 +611,22 @@ fn manifest() -> Vec<Value> {
 #[test]
 fn calibration_manifest_binds_exact_source_record_stream_and_covers_profile_axes() {
     let entries = manifest();
+    // Mechanical draft rehash aid; the assertion below still rejects drift.
+    // This emits no semantic attestation and never writes the manifest.
+    let hashes: Vec<_> = entries
+        .iter()
+        .map(|entry| digest(&source_records_for_entry(entry.as_object().unwrap())))
+        .collect();
+    if entries
+        .iter()
+        .zip(&hashes)
+        .any(|(entry, hash)| entry["input_sha256"].as_str() != Some(hash))
+    {
+        eprintln!(
+            "CALIBRATION_HASHES={}",
+            serde_json::to_string(&hashes).unwrap()
+        );
+    }
     assert_eq!(entries.len() % 2, 0);
     let mut expected_keys = BTreeSet::new();
     for profile in PROFILES {
@@ -782,7 +820,7 @@ fn implementation_rows_have_total_commit_mapped_companion_coverage() {
         let entry = entry.as_object().expect("manifest row object");
         let gate = string_field(entry, "gate");
         let axis = string_field(entry, "axis");
-        let subject = fixture_value(string_field(entry, "fixture_id"));
+        let subject = indexed_evidence(&fixture_value(string_field(entry, "fixture_id")));
         let records = companion_records(&subject, gate, axis);
         if gate_family(gate) == "implementation" {
             implementation_rows += 1;
@@ -1147,7 +1185,7 @@ fn validation_docs_coverage_has_exact_mapped_companion_bytes() {
             continue;
         }
         docs_rows += 1;
-        let subject = fixture_value(string_field(entry, "fixture_id"));
+        let subject = indexed_evidence(&fixture_value(string_field(entry, "fixture_id")));
         let documents = subject["coverage"]["documents"]
             .as_array()
             .expect("docs-integrated coverage.documents");
@@ -1195,7 +1233,7 @@ fn validation_intent_delivered_has_inspectable_repository_state_companion() {
             continue;
         }
         intent_delivered_rows += 1;
-        let subject = fixture_value(string_field(entry, "fixture_id"));
+        let subject = indexed_evidence(&fixture_value(string_field(entry, "fixture_id")));
         let records = companion_records(&subject, gate, axis);
         let repository_state: Vec<&Record> = records
             .iter()
@@ -1248,7 +1286,7 @@ fn validation_requirement_proof_mapping_has_inspectable_public_proof_companions(
             continue;
         }
         rows += 1;
-        let subject = fixture_value(string_field(entry, "fixture_id"));
+        let subject = indexed_evidence(&fixture_value(string_field(entry, "fixture_id")));
         let records = companion_records(&subject, gate, axis);
         let labels: Vec<&str> = records.iter().map(|record| record.label.as_str()).collect();
         assert_eq!(
@@ -1632,7 +1670,7 @@ fn canonical_source_records_have_exact_order_and_labels() {
             entry["gate"] == "validation-review"
                 && entry["axis"] == "docs-integrated"
                 && entry["expected"] == "pass"
-                && entry["config_version"] == "standard-8"
+                && entry["config_version"] == "standard-9"
         })
         .expect("docs-integrated row");
     let entry = entry.as_object().expect("manifest row object");
@@ -1655,6 +1693,7 @@ fn canonical_source_records_have_exact_order_and_labels() {
             "required predecessor:data/calibration/fixtures/design-good.json",
             "required predecessor:data/calibration/fixtures/plan-good.json",
             "required predecessor:data/calibration/fixtures/implementation-report-good.json",
+            "companion:validation-evidence.json",
             "companion:fictional-repo/README.md",
             "companion:fictional-repo/docs/PRD.md",
             "companion:fictional-repo/implementation-evidence/requirement-to-proof.md",
@@ -1677,11 +1716,11 @@ fn canonical_request_json_has_exact_fields_and_no_trailing_newline() {
         "docs-integrated",
         "validation-report.json",
         "r15",
-        "standard-8",
+        "standard-9",
     );
     assert_eq!(
         request,
-        br#"{"gate":"validation-review","policy_id":"docs-integrated","subject":"validation-report.json","subject_revision":"r15","config_version":"standard-8"}"#
+        br#"{"gate":"validation-review","policy_id":"docs-integrated","subject":"validation-report.json","subject_revision":"r15","config_version":"standard-9"}"#
     );
     assert_ne!(request.last(), Some(&b'\n'));
 }
@@ -1694,7 +1733,7 @@ fn every_supplied_source_record_mutation_changes_digest() {
             entry["gate"] == "validation-review"
                 && entry["axis"] == "docs-integrated"
                 && entry["expected"] == "pass"
-                && entry["config_version"] == "standard-8"
+                && entry["config_version"] == "standard-9"
         })
         .expect("docs-integrated row");
     let entry = entry.as_object().expect("manifest row object");

@@ -273,13 +273,13 @@ class Journey:
             check=False,
         )
         help_text = help_run.stdout
-        primary = ("start", "list", "show", "append", "event", "history", "terminate", "invoke")
+        primary = ("start", "list", "show", "append", "event", "history", "terminate", "invoke", "amend-binding", "cancel-invocation")
         other = ("invocation-progress", "fan-out", "preview-bindings")
         hidden = ("wait-invocation", "stdin-exec", "fan-out-join")
-        # bookends:LE-72 — the real engine help keeps exactly eight primary operations and places the visible delegation commands outside that list while hiding internal helpers.
+        # bookends:LE-119 — real help exposes exactly ten primary operations, separate utilities and no internal helpers (recovery amendment draft).
         if (
             help_run.returncode != 0
-            or not all(f"  {name}\n" in help_text for name in primary)
+            or tuple(line.strip().split()[0] for line in help_text.split("Operations:\n", 1)[-1].split("Other commands:", 1)[0].splitlines() if line.strip()) != primary
             or not all(name in help_text for name in other)
             or any(name in help_text for name in hidden)
         ):

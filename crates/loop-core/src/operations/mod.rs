@@ -5,6 +5,7 @@
 //! atomicity and backend mechanics; operations only construct the semantic
 //! requests described by the ports.
 
+pub mod amend_binding;
 pub mod append;
 pub mod evaluation;
 pub mod event;
@@ -36,6 +37,32 @@ use crate::{
     ControlRevision, OperationOutcome, OutcomeIssue, Persistence, PersistenceError, ProviderError,
     ProviderResolutionError, RunId, WorkflowValidationError,
 };
+
+/// Shared quiescence guarantee for state departure (including future override).
+/// It is independent of the selected edge's bound completion requirement.
+pub fn require_quiescent_work<P, T>(
+    run: &crate::Run,
+    persistence: &P,
+    waiter_alive: impl Fn(u32) -> bool,
+) -> Result<(), OperationOutcome<T>>
+where
+    P: Persistence + ?Sized,
+{
+    if run.workflow.work_slots.is_empty() {
+        return Ok(());
+    }
+    let rows = persistence
+        .load_work_slot_invocations(&run.id)
+        .map_err(persistence_error)?;
+    for row in rows {
+        if crate::invocation_owns_work(&row, waiter_alive(row.waiter_pid)) {
+            return Err(OperationOutcome::rejected("live-owned-work", format!(
+                "invocation `{}` owns live work or pending cleanup (including overrun); wait or cancel-invocation {} {} before leaving this visit",
+                row.invocation_id, run.id, row.invocation_id)));
+        }
+    }
+    Ok(())
+}
 
 /// Classify a provider-resolution failure as an operation error.
 pub(crate) fn provider_resolution_error<T>(error: ProviderResolutionError) -> OperationOutcome<T> {
@@ -1096,6 +1123,7 @@ mod tests {
     #[test]
     fn list_returns_persistence_projection() {
         let summary = RunSummary {
+            override_summary: crate::OverrideSummary::default(),
             id: RunId::new("run-1"),
             label: Some("example".to_owned()),
             workflow_id: "workflow".into(),

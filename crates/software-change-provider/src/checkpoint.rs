@@ -449,6 +449,22 @@ pub(crate) fn current_target(subject: &str, artifact_root: &Path) -> Result<Opti
     })))
 }
 
+/// Reuse the checkpoint's canonical repository identity for command capture.
+pub(crate) fn repository_identity(cwd: &Path) -> Result<Value, String> {
+    let mut repository = collect_repository(cwd)?.identity;
+    let bytes = serde_json::to_vec(&RepositoryWithoutState {
+        head: repository.head.clone(),
+        index_sha256: repository.index_sha256.clone(),
+        status_sha256: repository.status_sha256.clone(),
+        entries: repository.entries.clone(),
+    })
+    .map_err(|e| e.to_string())?;
+    repository.state_sha256 = sha256_digest(&bytes);
+    // The checkpoint already retains the inventory. Command captures need only
+    // its canonical state identity, not another copy of every repository entry.
+    Ok(Value::String(repository.state_sha256))
+}
+
 fn build(
     phase: CheckpointPhase,
     artifact_root: &Path,

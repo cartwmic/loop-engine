@@ -22,6 +22,22 @@ pub struct EmbeddedFile {
 /// omissions or stale bytes.
 pub static FILES: &[EmbeddedFile] = &[
     EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/fixtures/validation-evidence-2026-08-12.json",
+        bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/validation-evidence-2026-08-12.json")),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/fixtures/validation-evidence-2026-08-13.json",
+        bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/validation-evidence-2026-08-13.json")),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/validation-report-schema.json",
+        bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/validation-report-schema.json")),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/recovery-contract-v2.json",
+        bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/recovery-contract-v2.json")),
+    },
+    EmbeddedFile {
         path: "crates/software-change-provider/data/calibration/PROCEDURE.md",
         bytes: include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),

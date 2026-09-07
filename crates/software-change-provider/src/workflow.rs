@@ -128,10 +128,10 @@ pub(crate) const PHASES: &[Phase] = &[
         name: "implementation",
         draft_state: "implement",
         draft_title: "Implement",
-        draft_instructions: "Perform external work against the accepted plan and frozen intent `operating_context`; do not add excluded hostile or multi-tenant requirements or waive stated outcomes and outside obligations. Document the implementation and validation report shapes using `crates/software-change-provider/data/templates/implementation-report.md` and `crates/software-change-provider/data/templates/validation-report.md`. Doc integration is part of this change: update authoritative repository documents rather than leaving a parallel change truth. Before `implementation-ready`, read run-frozen obligations via `show`.",
+        draft_instructions: "Perform external work against the accepted plan and frozen intent `operating_context`; do not add excluded hostile or multi-tenant requirements or waive stated outcomes and outside obligations. Document the implementation and validation report shapes using `crates/software-change-provider/data/templates/implementation-report.md` and `crates/software-change-provider/data/templates/validation-report.md`. Doc integration is part of this change: update authoritative repository documents rather than leaving a parallel change truth. Before `implementation-ready`, read run-frozen obligations via `show`. If the owner rejects earlier work, choose `revise-plan` to plan, `revise-design` to design, or `revise-intent` to explore directly; no implementation report is required for these check-free routes. First wait for owned work to finish or use `cancel-invocation` and verify cleanup, including elapsed-but-live work and pending cancellation. Routes preserve artifacts, captures, invocation and denial history; neither engine nor provider classifies the defect or rolls back the repository. Only routes in this run's stored graph are available; upgrading does not add them to historical runs.",
         draft_slot: "implement",
         ready_event: "implementation-ready",
-        draft_revises: &[],
+        draft_revises: &[REVISE_PLAN, REVISE_DESIGN, REVISE_INTENT],
         subject: "implementation-report.json",
         parent_review: "implementation-review",
         parent_review_title: "Implementation review",
@@ -245,7 +245,23 @@ pub(crate) fn describe_workflow(initial_input: Option<&Value>) -> Result<Workflo
     let review_policies = initial_input
         .and_then(Value::as_object)
         .and_then(|object| object.get("review_policies"));
-    stitch(review_policies, initial_input.is_some_and(overlay::enabled))
+    let mut workflow = stitch(review_policies, initial_input.is_some_and(overlay::enabled))?;
+    if initial_input.is_some_and(|v| v["contract_version"] == 2) {
+        for slot in &mut workflow.work_slots {
+            if slot.id.as_str().starts_with("validation") || slot.id.as_str() == "implement" {
+                slot.stdin_context_kinds.extend(
+                    [
+                        "command-evidence",
+                        "criterion-verdict",
+                        "goal-verdict",
+                        "criterion-revalidation",
+                    ]
+                    .map(str::to_owned),
+                );
+            }
+        }
+    }
+    Ok(workflow)
 }
 
 fn stitch(review_policies: Option<&Value>, bookends_enabled: bool) -> Result<Workflow, String> {
@@ -420,22 +436,15 @@ impl Hop {
 
     fn slot(self, event: &str) -> WorkSlot {
         let slot = WorkSlot::new(self.slot_id(), self.state_id(), event);
-        match self {
-            // Implementation workers receive the ledger through the bound
-            // runner so it can enrich each exact task without widening the
-            // inner worker stdin envelope. Other draft workers stay compact.
-            Self::Draft(phase) if phase.name == "implementation" => {
-                slot.with_stdin_context_kinds(vec![
-                    FINDING_LEDGER_KIND.to_owned(),
-                    REVIEW_EVIDENCE_KIND.to_owned(),
-                    loop_core::EVIDENCE_APPLICABILITY_KIND.to_owned(),
-                ])
-            }
-            Self::Draft(_) => slot,
-            Self::Parent(_) | Self::Adversarial(_) => {
-                slot.with_stdin_context_kinds(vec![FINDING_LEDGER_KIND.to_owned()])
-            }
-        }
+        // Preserve source records needed by provider projections; steering is
+        // eligible for every later draft/review, not only implementation.
+        slot.with_stdin_context_kinds(vec![
+            FINDING_LEDGER_KIND.to_owned(),
+            REVIEW_EVIDENCE_KIND.to_owned(),
+            loop_core::EVIDENCE_APPLICABILITY_KIND.to_owned(),
+            "user-steering".to_owned(),
+            "steering-incorporation".to_owned(),
+        ])
     }
 
     fn slot_id(self) -> &'static str {
@@ -562,12 +571,6 @@ mod tests {
             .unwrap_or_else(|| panic!("missing slot {id}"))
     }
 
-    fn is_review_slot_id(id: &str) -> bool {
-        PHASES
-            .iter()
-            .any(|phase| phase.parent_review == id || phase.adversarial_review == id)
-    }
-
     fn assert_nearest_revises(workflow: &Workflow) {
         for phase in PHASES {
             for review in [phase.parent_review, phase.adversarial_review] {
@@ -622,26 +625,74 @@ mod tests {
         let encoded = serde_json::to_value(workflow).expect("workflow JSON");
         for slot in encoded["work_slots"].as_array().expect("work_slots") {
             let id = slot["id"].as_str().expect("slot id");
-            if is_review_slot_id(id) || id == "implement" {
-                let expected = if id == "implement" {
-                    json!([
-                        FINDING_LEDGER_KIND,
-                        REVIEW_EVIDENCE_KIND,
-                        loop_core::EVIDENCE_APPLICABILITY_KIND
-                    ])
-                } else {
-                    json!([FINDING_LEDGER_KIND])
-                };
+            let expected = json!([
+                FINDING_LEDGER_KIND,
+                REVIEW_EVIDENCE_KIND,
+                loop_core::EVIDENCE_APPLICABILITY_KIND,
+                "user-steering",
+                "steering-incorporation"
+            ]);
+            assert_eq!(
+                slot.get("stdin_context_kinds"),
+                Some(&expected),
+                "slot {id} must support steering and stable source projection"
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_backtracking_only_implement_gains_three_check_free_owning_routes() {
+        for workflow in [
+            union(),
+            describe_workflow(Some(&json!({"review_policies": {}}))).unwrap(),
+        ] {
+            let routes: Vec<_> = workflow
+                .transitions
+                .iter()
+                .filter(|edge| {
+                    edge.source.as_str() == "implement" && edge.kind == TransitionKind::CheckFree
+                })
+                .map(|edge| (edge.event.as_str(), edge.target.as_str()))
+                .collect();
+            assert_eq!(
+                routes,
+                [
+                    ("revise-plan", "plan"),
+                    ("revise-design", "design"),
+                    ("revise-intent", "explore")
+                ]
+            );
+            for (event, _) in routes {
                 assert_eq!(
-                    slot.get("stdin_context_kinds"),
-                    Some(&expected),
-                    "ledger-aware slot {id} has unexpected stdin_context_kinds"
+                    duties_for("implement", event),
+                    Some(TransitionDuties::CheckFree)
                 );
-            } else {
-                assert!(
-                    slot.get("stdin_context_kinds").is_none(),
-                    "non-ledger draft slot {id} must omit stdin_context_kinds"
-                );
+            }
+            for state in ["explore", "design", "plan"] {
+                assert!(!workflow
+                    .transitions
+                    .iter()
+                    .any(|edge| edge.source.as_str() == state
+                        && edge.kind == TransitionKind::CheckFree));
+            }
+            assert_eq!(
+                check_free_target(&workflow, "validation", "revise-implementation"),
+                "implement"
+            );
+            let instructions = &workflow
+                .states
+                .iter()
+                .find(|state| state.id.as_str() == "implement")
+                .unwrap()
+                .instructions;
+            for phrase in [
+                "no implementation report",
+                "cancel-invocation",
+                "elapsed-but-live",
+                "stored graph",
+                "rolls back",
+            ] {
+                assert!(instructions.contains(phrase), "missing {phrase}");
             }
         }
     }
@@ -1065,26 +1116,24 @@ mod tests {
             "validation-review": [axis("delivery")]
         }));
         assert_review_slots_declare_finding_ledger(&mixed);
-        assert_eq!(
-            slot(&mixed, "intent-review").stdin_context_kinds,
-            vec![FINDING_LEDGER_KIND]
-        );
-        assert!(slot(&mixed, "intent-draft").stdin_context_kinds.is_empty());
-        assert!(slot(&mixed, "validation-draft")
-            .stdin_context_kinds
-            .is_empty());
-        assert_eq!(
-            slot(&mixed, "implement").stdin_context_kinds,
-            vec![
-                FINDING_LEDGER_KIND,
-                REVIEW_EVIDENCE_KIND,
-                loop_core::EVIDENCE_APPLICABILITY_KIND,
-            ]
-        );
-        assert_eq!(
-            slot(&mixed, "validation-review").stdin_context_kinds,
-            vec![FINDING_LEDGER_KIND]
-        );
+        for id in [
+            "intent-review",
+            "intent-draft",
+            "validation-draft",
+            "implement",
+            "validation-review",
+        ] {
+            assert_eq!(
+                slot(&mixed, id).stdin_context_kinds,
+                vec![
+                    FINDING_LEDGER_KIND,
+                    REVIEW_EVIDENCE_KIND,
+                    loop_core::EVIDENCE_APPLICABILITY_KIND,
+                    "user-steering",
+                    "steering-incorporation"
+                ]
+            );
+        }
     }
 
     #[test]

@@ -39,6 +39,8 @@ pub(crate) const SUBJECT_NAMES: &[&str] = &[
 ];
 
 const TOP_LEVEL_KEYS: &[&str] = &[
+    "contract_version",
+    "criterion_policy",
     "config_version",
     "artifact_root",
     "work_slot_bindings",
@@ -184,6 +186,9 @@ impl ValidatedConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ConfigViolation {
     TopLevelNotObject,
+    SemanticContract {
+        message: String,
+    },
     UnknownTopLevelKey {
         key: String,
     },
@@ -324,6 +329,7 @@ impl ConfigViolation {
     pub(crate) fn class(&self) -> &'static str {
         match self {
             Self::TopLevelNotObject => "top-level-shape",
+            Self::SemanticContract { .. } => "semantic-contract",
             Self::UnknownTopLevelKey { .. } => "unknown-top-level-key",
             Self::MissingConfigVersion => "config-version-missing",
             Self::ConfigVersionNotString => "config-version-not-string",
@@ -362,6 +368,7 @@ impl fmt::Display for ConfigViolation {
                     self.class()
                 )
             }
+            Self::SemanticContract { message } => write!(formatter, "{}: {message}", self.class()),
             Self::UnknownTopLevelKey { key } => {
                 write!(formatter, "{}: unknown top-level key `{key}`", self.class())
             }
@@ -540,6 +547,9 @@ pub(crate) fn parse_initial_input(
     };
 
     let mut violations = Vec::new();
+    if let Err(message) = crate::recovery_contract::RecoveryContract::from_input(initial_input) {
+        violations.push(ConfigViolation::SemanticContract { message });
+    }
     for key in root.keys() {
         if !TOP_LEVEL_KEYS.contains(&key.as_str()) {
             violations.push(ConfigViolation::UnknownTopLevelKey { key: key.clone() });
@@ -1075,6 +1085,8 @@ mod tests {
 
     fn empty_config() -> Value {
         json!({
+            "contract_version": 2,
+            "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
             "config_version": "test-1",
             "review_policies": {}
         })
@@ -1323,9 +1335,12 @@ mod tests {
 
     #[test]
     fn config_version_missing_non_string_and_empty_are_distinct() {
-        let missing = json!({"review_policies": {}});
-        let non_string = json!({"config_version": 1, "review_policies": {}});
-        let empty = json!({"config_version": "", "review_policies": {}});
+        let mut missing = empty_config();
+        missing.as_object_mut().unwrap().remove("config_version");
+        let mut non_string = empty_config();
+        non_string["config_version"] = json!(1);
+        let mut empty = empty_config();
+        empty["config_version"] = json!("");
         assert_eq!(
             classes(parse_initial_input(&missing).expect_err("missing version")),
             vec!["config-version-missing"]

@@ -73,6 +73,8 @@ pub(crate) struct InvokePacket {
     pub(crate) _invocation_input: Option<Value>,
     #[serde(default, rename = "standing_assignment_ids")]
     pub(crate) _standing_assignment_ids: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) controls: loop_core::InvocationControls,
 }
 
 /// Collected `fan-out` flags after the command name.  Zero `--worker` entries
@@ -89,7 +91,7 @@ pub struct FanOutArgs {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum FanOutMode {
     Bound {
-        packet: InvokePacket,
+        packet: Box<InvokePacket>,
         workers: Vec<WorkerCli>,
     },
     AdHoc {
@@ -482,7 +484,7 @@ pub(crate) fn detect_mode(
             "cannot combine an invoke packet on stdin with `--instructions`",
         )),
         (Some(packet), None) => Ok(FanOutMode::Bound {
-            packet,
+            packet: Box::new(packet),
             workers: parsed_args.workers,
         }),
         (None, Some(instructions_path)) => Ok(FanOutMode::AdHoc {
@@ -512,8 +514,22 @@ pub(crate) fn run_collector(
     let mode = detect_mode(parsed_args, stdin_bytes)?;
     match mode {
         FanOutMode::Bound { packet, workers } => {
-            let (workers, assignment_ids) =
+            let max_active = packet
+                .controls
+                .max_active
+                .map(|n| u32::try_from(n.get()))
+                .transpose()
+                .map_err(|_| CollectorError::Invalid("max_active exceeds supported limit".into()))?
+                .or(max_active);
+            let (mut workers, assignment_ids) =
                 select_bound_workers(&workers, packet.assignment_selection.as_deref())?;
+            if packet.controls.force_fresh {
+                for worker in &mut workers {
+                    if let Some(schema) = &mut worker.full_output_schema {
+                        apply_force_fresh_contract(schema)?;
+                    }
+                }
+            }
             ensure_workers(&workers)?;
             if packet.capture_dir.is_empty() {
                 return Err(CollectorError::Invalid(
@@ -527,7 +543,12 @@ pub(crate) fn run_collector(
             let payloads = workers
                 .iter()
                 .map(|worker| {
-                    bound_worker_payload(worker, &artifact_root, packet.context.as_deref())
+                    bound_worker_payload(
+                        worker,
+                        &artifact_root,
+                        packet.context.as_deref(),
+                        packet.controls.force_fresh.then_some(&packet.controls),
+                    )
                 })
                 .collect::<Vec<_>>();
             let output_dir = absolute_from_cwd(cwd, Path::new(&packet.capture_dir));
@@ -573,6 +594,28 @@ pub(crate) fn run_collector(
             )
         }
     }
+}
+
+/// Providers can declare an additional opaque constraint for force-fresh
+/// execution. Without it a schema-valid carried row could satisfy a fresh
+/// assignment. Core never learns the provider's row or reference semantics;
+/// the effective schema is frozen in the ordinary worker capture spec.
+fn apply_force_fresh_contract(schema: &mut Value) -> Result<(), ParseError> {
+    if let Some(constraint) = schema.get("x-loop-engine-force-fresh").cloned() {
+        validate_full_schema_declaration(&constraint)?;
+        let object = schema
+            .as_object_mut()
+            .expect("schema with annotation is an object");
+        let branches = object
+            .entry("allOf")
+            .or_insert_with(|| Value::Array(Vec::new()));
+        branches
+            .as_array_mut()
+            .ok_or_else(|| ParseError::new("full_output_schema.allOf must be an array"))?
+            .push(constraint);
+        validate_full_schema_declaration(schema)?;
+    }
+    Ok(())
 }
 
 /// Hidden `fan-out-join --capture-dir ABS`: write `summary.json` from spec and
@@ -731,12 +774,13 @@ fn run_complete_schema_attempt(
         };
         command.env("PI_CODING_AGENT_SESSION_DIR", sessions);
     }
-    let mut child = command.spawn().map_err(|error| {
-        CollectorError::Failed(format!(
-            "could not spawn complete-schema worker `{}`: {error}",
-            worker.command
-        ))
-    })?;
+    let mut child =
+        loop_integrations::ownership::spawn_admitted(&mut command).map_err(|error| {
+            CollectorError::Failed(format!(
+                "could not spawn complete-schema worker `{}`: {error}",
+                worker.command
+            ))
+        })?;
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(assignment).map_err(|error| {
             CollectorError::Failed(format!(
@@ -955,16 +999,23 @@ fn select_bound_workers(
     ))
 }
 
-fn compact_location_json(artifact_root: &str, context: Option<&[Value]>) -> Vec<u8> {
+fn compact_location_json(
+    artifact_root: &str,
+    context: Option<&[Value]>,
+    controls: Option<&loop_core::InvocationControls>,
+) -> Vec<u8> {
     #[derive(Serialize)]
     struct Location<'a> {
         artifact_root: &'a str,
         #[serde(skip_serializing_if = "Option::is_none")]
         context: Option<&'a [Value]>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        controls: Option<&'a loop_core::InvocationControls>,
     }
     serde_json::to_vec(&Location {
         artifact_root,
         context,
+        controls,
     })
     .expect("serializing location object cannot fail")
 }
@@ -973,8 +1024,9 @@ fn bound_worker_payload(
     worker: &WorkerCli,
     artifact_root: &str,
     context: Option<&[Value]>,
+    controls: Option<&loop_core::InvocationControls>,
 ) -> Vec<u8> {
-    let location = compact_location_json(artifact_root, context);
+    let location = compact_location_json(artifact_root, context, controls);
     match &worker.preamble {
         Some(preamble) => compose_preamble_payload(preamble, Some(&location), b""),
         None => {
@@ -1230,6 +1282,7 @@ fn emit_graph_yaml(
         .unwrap_or_else(|| engine.to_owned());
     let capture_dir = path_to_string(capture_root);
     let mut yaml = String::from("type: graph\n");
+    yaml.push_str(&loop_integrations::ownership::dagu_environment_yaml());
     if let Some(max_active) = max_active {
         yaml.push_str("max_active_steps: ");
         yaml.push_str(&max_active.to_string());
@@ -1983,6 +2036,24 @@ mod tests {
     }
 
     #[test]
+    fn recovery_batch_force_fresh_applies_only_the_declared_opaque_constraint() {
+        let mut schema = json!({"type":"object", "properties":{"cached":{"type":"boolean"}},
+            "x-loop-engine-force-fresh":{"properties":{"cached":{"const":false}}}});
+        assert!(complete_schema_validation_errors(br#"{"cached":true}"#, &schema, None).is_empty());
+        let original = schema.clone();
+        apply_force_fresh_contract(&mut schema).unwrap();
+        assert_ne!(schema, original);
+        assert!(
+            !complete_schema_validation_errors(br#"{"cached":true}"#, &schema, None).is_empty()
+        );
+        assert!(
+            complete_schema_validation_errors(br#"{"cached":false}"#, &schema, None).is_empty()
+        );
+        let mut invalid = json!({"x-loop-engine-force-fresh":{"type":"invalid"}});
+        assert!(apply_force_fresh_contract(&mut invalid).is_err());
+    }
+
+    #[test]
     fn full_schema_retry_limit_is_fixed_at_one() {
         let schema = full_review_schema("axis-a", "reviewer-a");
         for wrapper in [
@@ -2221,7 +2292,7 @@ mod tests {
             full_output_schema: None,
         };
         assert_eq!(
-            bound_worker_payload(&worker, "/tmp/artifacts", None),
+            bound_worker_payload(&worker, "/tmp/artifacts", None, None),
             b"{\"artifact_root\":\"/tmp/artifacts\"}\n"
         );
         let schema_only = WorkerCli {
@@ -2231,7 +2302,7 @@ mod tests {
             ..worker
         };
         assert_eq!(
-            bound_worker_payload(&schema_only, "/absolute/root", None),
+            bound_worker_payload(&schema_only, "/absolute/root", None, None),
             b"{\"artifact_root\":\"/absolute/root\"}\n"
         );
     }
@@ -2249,7 +2320,7 @@ mod tests {
             json!({"id": "ctx-old", "kind": "kind-a", "data": {"rev": "1"}}),
             json!({"id": "ctx-new", "kind": "kind-a", "data": {"rev": "2"}}),
         ];
-        let payload = bound_worker_payload(&worker, "/tmp/artifacts", Some(&records));
+        let payload = bound_worker_payload(&worker, "/tmp/artifacts", Some(&records), None);
         let parsed: Value = serde_json::from_slice(&payload[..payload.len() - 1]).expect("json");
         assert_eq!(
             parsed,
@@ -2267,7 +2338,7 @@ mod tests {
             preamble: Some("role".to_owned()),
             ..worker
         };
-        let framed = bound_worker_payload(&with_preamble, "/tmp/artifacts", Some(&records));
+        let framed = bound_worker_payload(&with_preamble, "/tmp/artifacts", Some(&records), None);
         let framed_text = String::from_utf8(framed).expect("utf8");
         assert!(framed_text.starts_with("role\n{"));
         assert!(framed_text.ends_with("\n---\n\n"));
@@ -2285,7 +2356,7 @@ mod tests {
             full_output_schema: None,
         };
         assert_eq!(
-            bound_worker_payload(&worker, "quoted/\"root\\tail", None),
+            bound_worker_payload(&worker, "quoted/\"root\\tail", None, None),
             b"role\n{\"artifact_root\":\"quoted/\\\"root\\\\tail\"}\n---\n\n"
         );
         assert_eq!(

@@ -77,6 +77,9 @@ pub(crate) enum EvidenceDiagnostic {
     },
     Failed {
         findings: String,
+        source: String,
+        author: AuthorIdentity,
+        remedy: String,
     },
     Malformed {
         reasons: Vec<String>,
@@ -145,10 +148,9 @@ pub(crate) struct EvidenceEvaluation {
     pub(crate) diagnostics: Vec<AxisDiagnostic>,
     pub(crate) informational: Vec<AxisDiagnostic>,
     pub(crate) inert_records: Vec<InertEvidence>,
-    /// Current conforming failing evidence keyed by policy and exact finding
-    /// text. This is a mechanical projection for finding-ledger set
-    /// agreement; it is not a semantic interpretation of the text.
-    pub(crate) failing_findings: BTreeSet<(String, String)>,
+    /// Raw failures remain failures; these source IDs satisfied a judgment
+    /// obligation only through an explicit driver disposition.
+    pub(crate) satisfied_by_disposition: Vec<String>,
 }
 
 impl EvidenceEvaluation {
@@ -168,10 +170,6 @@ impl EvidenceEvaluation {
         &self.inert_records
     }
 
-    pub(crate) fn failing_findings(&self) -> &BTreeSet<(String, String)> {
-        &self.failing_findings
-    }
-
     /// Convert details to JSON without exposing serialization concerns to the
     /// pipeline itself.  T06 may embed this value in its deny response.
     pub(crate) fn details_value(&self) -> Value {
@@ -181,6 +179,7 @@ impl EvidenceEvaluation {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ConformingEvidence {
+    pub(crate) source_id: String,
     pub(crate) gate: String,
     pub(crate) policy_id: String,
     pub(crate) result: EvidenceResult,
@@ -230,6 +229,33 @@ pub(crate) fn evaluate_evidence(
     axis_namespace: &BTreeMap<String, BTreeSet<String>>,
     artifact_root: Option<&Value>,
 ) -> EvidenceEvaluation {
+    evaluate_evidence_with_dispositions(
+        context,
+        gate,
+        subject,
+        current_revision,
+        subject_author,
+        config_version,
+        axes,
+        axis_namespace,
+        artifact_root,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn evaluate_evidence_with_dispositions(
+    context: &[ContextRecord],
+    gate: &str,
+    subject: &str,
+    current_revision: &str,
+    subject_author: &AuthorIdentity,
+    config_version: &str,
+    axes: &BTreeMap<String, PolicyAxis>,
+    axis_namespace: &BTreeMap<String, BTreeSet<String>>,
+    artifact_root: Option<&Value>,
+    ledger: Option<&crate::finding_ledger::FindingLedgerSnapshot>,
+) -> EvidenceEvaluation {
     let mut malformed: BTreeMap<String, Vec<String>> = axes
         .keys()
         .cloned()
@@ -258,13 +284,16 @@ pub(crate) fn evaluate_evidence(
             match attribution {
                 Attribution::Current { axis } => {
                     match parse_conforming(data, subject, artifact_root) {
-                        Ok(conforming) => record_conforming(
-                            &mut malformed,
-                            &mut unverified,
-                            &mut latest,
-                            axis,
-                            conforming,
-                        ),
+                        Ok(mut conforming) => {
+                            conforming.source_id = record.id.as_str().to_owned();
+                            record_conforming(
+                                &mut malformed,
+                                &mut unverified,
+                                &mut latest,
+                                axis,
+                                conforming,
+                            )
+                        }
                         Err(EvidenceParseError::Malformed(reasons)) => malformed
                             .get_mut(&axis)
                             .expect("attribution only returns configured axis")
@@ -354,7 +383,7 @@ pub(crate) fn evaluate_evidence(
     let mut diagnostics = Vec::new();
     let mut informational = Vec::new();
     let mut all_axes_satisfied = true;
-    let mut failing_findings = BTreeSet::new();
+    let mut satisfied_by_disposition = Vec::new();
 
     // Stages 4–6: latest-wins supersession happened above through the full
     // (axis, subject_revision, author) key.  Judge each axis against current
@@ -364,7 +393,7 @@ pub(crate) fn evaluate_evidence(
         let mut stale = Vec::new();
         let mut stale_config = Vec::new();
         let mut distinct_present = BTreeSet::new();
-        let mut pass_authors = BTreeSet::new();
+        let mut satisfied_authors = BTreeSet::new();
         let mut current_records_present = 0usize;
 
         for ((record_axis, _revision, _author), record) in &latest {
@@ -389,19 +418,43 @@ pub(crate) fn evaluate_evidence(
 
             // Subject-author evidence is structurally valid but never counts
             // toward any axis, using exact (name, kind) equality.
-            if record.author == *subject_author {
+            if record.author == *subject_author
+                || ledger.is_some_and(|ledger| {
+                    ledger.findings.iter().any(|finding| {
+                        finding.disposition
+                            == crate::finding_ledger::FindingDisposition::RetiredAuthor
+                            && context.iter().any(|source| {
+                                source.id.as_str() == finding.source.record_id()
+                                    && source.data.get("author")
+                                        == Some(&serde_json::json!(record.author))
+                            })
+                    })
+                })
+            {
                 continue;
             }
 
+            let disposition = ledger.and_then(|ledger| ledger.disposition_for(&record.source_id));
+            if disposition == Some(crate::finding_ledger::FindingDisposition::RetiredAuthor) {
+                continue;
+            }
             current_records_present += 1;
             distinct_present.insert(record.author.clone());
             match record.result {
                 EvidenceResult::Pass => {
-                    pass_authors.insert(record.author.clone());
+                    satisfied_authors.insert(record.author.clone());
                 }
                 EvidenceResult::Fail => {
-                    failing_findings.insert((axis.clone(), record.findings.clone()));
-                    failed_findings.push(record.findings.clone());
+                    if disposition.is_some() {
+                        satisfied_authors.insert(record.author.clone());
+                        satisfied_by_disposition.push(record.source_id.clone());
+                    } else {
+                        failed_findings.push(EvidenceDiagnostic::Failed {
+                            findings: record.findings.clone(), source: record.source_id.clone(),
+                            author: record.author.clone(),
+                            remedy: "append a reasoned rejection/resolution of this exact source, or record reviewer retirement with a roster change and replacement coverage".to_owned(),
+                        });
+                    }
                 }
             }
         }
@@ -415,8 +468,8 @@ pub(crate) fn evaluate_evidence(
         let has_malformed = !malformed_reasons.is_empty();
         let has_unverified = !unverified_reasons.is_empty();
         let has_fail = !failed_findings.is_empty();
-        let enough_passes = pass_authors.len() as u64 >= policy.required_authors();
-        let satisfied = !has_malformed && !has_unverified && !has_fail && enough_passes;
+        let enough_judgments = satisfied_authors.len() as u64 >= policy.required_authors();
+        let satisfied = !has_malformed && !has_unverified && !has_fail && enough_judgments;
 
         if !satisfied {
             all_axes_satisfied = false;
@@ -426,11 +479,7 @@ pub(crate) fn evaluate_evidence(
                     required: policy.required_authors(),
                 });
             }
-            axis_diagnostics.extend(
-                failed_findings
-                    .into_iter()
-                    .map(|findings| EvidenceDiagnostic::Failed { findings }),
-            );
+            axis_diagnostics.extend(failed_findings);
             if has_malformed {
                 axis_diagnostics.push(EvidenceDiagnostic::Malformed {
                     reasons: malformed_reasons.clone(),
@@ -485,7 +534,7 @@ pub(crate) fn evaluate_evidence(
         diagnostics,
         informational,
         inert_records,
-        failing_findings,
+        satisfied_by_disposition,
     }
 }
 
@@ -651,6 +700,7 @@ fn parse_conforming(
     }
 
     Ok(ConformingEvidence {
+        source_id: String::new(),
         gate,
         policy_id,
         result,
@@ -671,6 +721,24 @@ fn parse_applicable_evidence(
     expected_subject: &str,
     current_revision: &str,
     artifact_root: Option<&Value>,
+) -> Result<ConformingEvidence, EvidenceParseError> {
+    parse_applicable_evidence_at(
+        context,
+        applicability_record,
+        expected_subject,
+        current_revision,
+        artifact_root,
+        false,
+    )
+}
+
+fn parse_applicable_evidence_at(
+    context: &[ContextRecord],
+    applicability_record: &ContextRecord,
+    expected_subject: &str,
+    current_revision: &str,
+    artifact_root: Option<&Value>,
+    captured_batch: bool,
 ) -> Result<ConformingEvidence, EvidenceParseError> {
     let applicability = serde_json::from_value::<EvidenceApplicability>(
         applicability_record.data.clone(),
@@ -708,6 +776,7 @@ fn parse_applicable_evidence(
         expected_subject,
         current_revision,
         artifact_root,
+        captured_batch,
     )
     .map_err(|reason| EvidenceParseError::Unverified(vec![reason]))?;
 
@@ -752,8 +821,42 @@ fn parse_applicable_evidence(
     )?;
     // The driver explicitly attests that the immutable judgment applies to
     // this current target. It is not a semantic inference by the provider.
+    evidence.source_id = source.id.as_str().to_owned();
     evidence.subject_revision = current_revision.to_owned();
     Ok(evidence)
+}
+
+/// A batch may carry only a source already authorized in its launch snapshot.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn validate_batch_reuse(
+    context: &[ContextRecord],
+    id: &str,
+    gate: &str,
+    axis: &str,
+    author: &Value,
+    subject: &str,
+    revision: &str,
+    artifact_root: Option<&Value>,
+) -> Result<(), String> {
+    let records: Vec<_> = context.iter().filter(|r| r.id.as_str() == id).collect();
+    if records.len() != 1 || records[0].kind != EVIDENCE_APPLICABILITY_KIND {
+        return Err(format!(
+            "reuse `{id}` is not an authorized captured applicability record"
+        ));
+    }
+    // Verify the original commission's target identity, not today's checkpoint.
+    // Later promotion of this source separately verifies the new live target.
+    let evidence =
+        parse_applicable_evidence_at(context, records[0], subject, revision, artifact_root, true)
+            .map_err(|e| format!("reuse `{id}` is invalid: {e:?}"))?;
+    if evidence.gate != gate
+        || evidence.policy_id != axis
+        || author.get("name").and_then(Value::as_str) != Some(evidence.author.name())
+        || author.get("kind").and_then(Value::as_str) != Some(evidence.author.kind())
+    {
+        return Err(format!("reuse `{id}` has wrong gate, axis or author"));
+    }
+    Ok(())
 }
 
 /// Return whether an applicability record validly promotes one immutable
@@ -847,6 +950,7 @@ fn validate_applicability_target(
     expected_subject: &str,
     current_revision: &str,
     artifact_root: Option<&Value>,
+    captured_batch: bool,
 ) -> Result<(), String> {
     let target = serde_json::from_value::<ApplicabilityTarget>(value.clone())
         .map_err(|error| format!("target is not a valid current-target object: {error}"))?;
@@ -860,10 +964,22 @@ fn validate_applicability_target(
             "evidence-applicability target revision is stale (expected `{current_revision}`)"
         ));
     }
-    let expected_checkpoint = checkpoint::current_target(
-        expected_subject,
-        Path::new(artifact_root.and_then(Value::as_str).unwrap_or_default()),
-    )?;
+    let expected_checkpoint = if captured_batch {
+        match expected_subject {
+            "implementation-report.json" => Some(
+                serde_json::json!({"phase": "implementation", "report_revision": current_revision}),
+            ),
+            "validation-report.json" => Some(
+                serde_json::json!({"phase": "validation", "report_revision": current_revision}),
+            ),
+            _ => None,
+        }
+    } else {
+        checkpoint::current_target(
+            expected_subject,
+            Path::new(artifact_root.and_then(Value::as_str).unwrap_or_default()),
+        )?
+    };
     if target.checkpoint != expected_checkpoint {
         return Err(format!(
             "evidence-applicability target checkpoint is not current (expected {})",
@@ -936,7 +1052,7 @@ fn validate_stable_origin(
             "engine-resolved assignment does not match concise origin assignment_id".to_owned(),
         );
     }
-    verify_engine_selected_output(&engine, policy_id, author, result, findings)
+    verify_engine_selected_output(&engine, policy_id, author, result, findings, data)
 }
 
 fn verify_engine_selected_output(
@@ -945,6 +1061,7 @@ fn verify_engine_selected_output(
     author: &AuthorIdentity,
     result: EvidenceResult,
     findings: &str,
+    data: &Map<String, Value>,
 ) -> Result<(), String> {
     if origin.selected_attempt == 0 {
         return Err("engine-resolved selected_attempt must be positive".to_owned());
@@ -990,9 +1107,6 @@ fn verify_engine_selected_output(
     let object = value
         .as_object()
         .ok_or_else(|| "engine-resolved selected output is not a JSON object".to_owned())?;
-    if object.get("axis").and_then(Value::as_str) != Some(policy_id) {
-        return Err("judgment axis disagrees with review-evidence policy_id".to_owned());
-    }
     let output_author = object
         .get("author")
         .and_then(Value::as_object)
@@ -1002,6 +1116,35 @@ fn verify_engine_selected_output(
     {
         return Err("judgment author disagrees with review-evidence author".to_owned());
     }
+    let object = if object.contains_key("judgments") {
+        let (schema, location) =
+            crate::review_batch::captured_commission(&capture, &origin.assignment_id)?;
+        let rows = crate::review_batch::rows(
+            &schema,
+            &value,
+            &location,
+            data.get("gate").and_then(Value::as_str).unwrap_or_default(),
+            data.get("subject")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            data.get("subject_revision")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        )?;
+        let row = rows
+            .into_iter()
+            .find(|row| row["axis"] == policy_id)
+            .ok_or("judgment axis disagrees with review-evidence policy_id")?;
+        if row.get("reuse").is_some() {
+            return Err("carried row cannot be appended as fresh review-evidence; use its original applicability reference".into());
+        }
+        row.as_object().ok_or("invalid batch row")?
+    } else {
+        if object.get("axis").and_then(Value::as_str) != Some(policy_id) {
+            return Err("judgment axis disagrees with review-evidence policy_id".to_owned());
+        }
+        object
+    };
     if object.get("result").and_then(Value::as_str) != Some(result.as_str()) {
         return Err("judgment result disagrees with review-evidence result".to_owned());
     }
@@ -1134,6 +1277,8 @@ mod tests {
 
     fn config_with_axes(required_authors: u64) -> crate::config::ValidatedConfig {
         let mut config = json!({
+            "contract_version": 2,
+            "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
             "config_version": RUN_VERSION,
             "review_policies": {
                 GATE: [{"id": "axis", "description": "axis", "required_authors": required_authors}]
@@ -1151,6 +1296,8 @@ mod tests {
 
     fn config_with_two_axes() -> crate::config::ValidatedConfig {
         let config = json!({
+            "contract_version": 2,
+            "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
             "config_version": RUN_VERSION,
             "review_policies": {
                 GATE: [
@@ -1165,6 +1312,8 @@ mod tests {
 
     fn config_with_two_gates() -> crate::config::ValidatedConfig {
         let mut config = json!({
+            "contract_version": 2,
+            "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
             "config_version": RUN_VERSION,
             "review_policies": {
                 GATE: [{"id": "axis", "description": "axis"}],
@@ -1551,7 +1700,7 @@ mod tests {
         assert!(!result.is_satisfied());
         assert!(result.diagnostics().iter().any(|axis| {
             axis.diagnostics.iter().any(|diagnostic| {
-                matches!(diagnostic, EvidenceDiagnostic::Failed { findings } if findings == "other failure")
+                matches!(diagnostic, EvidenceDiagnostic::Failed { findings, .. } if findings == "other failure")
             })
         }));
     }

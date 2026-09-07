@@ -61,7 +61,13 @@ fn envelope(command: &str, args: Vec<Value>, packet: Value) -> Value {
 }
 
 fn seed_running_invocation(database: &Path, run_id: &str, invocation_id: &str) {
-    seed_running_invocation_with_capture(database, run_id, invocation_id, String::new());
+    let capture = database.parent().unwrap().join(invocation_id);
+    seed_running_invocation_with_capture(
+        database,
+        run_id,
+        invocation_id,
+        capture.to_string_lossy(),
+    );
 }
 
 fn seed_running_invocation_with_capture(
@@ -133,6 +139,105 @@ fn spawn_wait_invocation(
 }
 
 #[test]
+fn recovery_ownership_waiter_exit_cannot_finalize_after_stop_admission() {
+    use loop_integrations::ownership::{Admission, CompletionReceipt};
+    use std::time::{Duration, Instant};
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("loop.db");
+    let capture = directory.path().join("inv-race");
+    let marker = directory.path().join("started");
+    let release = directory.path().join("release");
+    seed_running_invocation(&database, "run-race", "inv-race");
+    let packet = envelope(
+        "sh",
+        vec![
+            json!("-c"),
+            json!("printf capture-output; printf partial > \"$1\"; while ! test -f \"$2\"; do sleep 0.01; done; exit 0"),
+            json!("_"),
+            json!(marker),
+            json!(release),
+        ],
+        worker_packet("run-race"),
+    );
+    let mut command = Command::new(workspace_integration::binary("loop-engine"));
+    command
+        .arg("--database")
+        .arg(&database)
+        .args(["wait-invocation", "run-race", "inv-race"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    super::bounded_process::prepare_process_group(&mut command);
+    let mut waiter = command.spawn().unwrap();
+    waiter
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&serde_json::to_vec(&packet).unwrap())
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !marker.exists() {
+        assert!(Instant::now() < deadline, "worker did not start");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let persistence = SqlitePersistence::open(&database).unwrap();
+    let running = persistence
+        .load_work_slot_invocations(&"run-race".into())
+        .unwrap()
+        .remove(0);
+    assert!(running.ownership.as_ref().unwrap().live_owned_work);
+    // Even an elapsed allowance and a deliberately absent recorded waiter do
+    // not erase ownership or project terminal failure before cleanup.
+    assert_eq!(
+        loop_core::project_invocation_status(&running, Timestamp::from_unix_millis(100_000), true),
+        loop_core::ProjectedInvocationStatus::Overrun
+    );
+    assert_eq!(
+        loop_core::project_invocation_status(&running, Timestamp::from_unix_millis(100_000), false),
+        loop_core::ProjectedInvocationStatus::Overrun
+    );
+    let admission = Admission::acquire(&capture.join("ownership")).unwrap();
+    admission
+        .admit_stop(&json!({"invocation_id":"inv-race","reason":"completion race"}))
+        .unwrap();
+    std::fs::write(&release, "exit now").unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    // Waiter completion cannot cross the lock while cancellation is admitted.
+    assert!(persistence
+        .load_work_slot_invocations(&"run-race".into())
+        .unwrap()[0]
+        .status
+        .is_none());
+    drop(admission);
+    let output = super::bounded_process::wait_existing(waiter, "ownership racing waiter").unwrap();
+    assert!(!output.status.success());
+    let receipt: CompletionReceipt = serde_json::from_slice(
+        &std::fs::read(capture.join("ownership/waiter-completion.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        receipt.exit_code, 0,
+        "actual exit is not rewritten as failure"
+    );
+    let row = persistence
+        .load_work_slot_invocations(&"run-race".into())
+        .unwrap()
+        .remove(0);
+    assert!(
+        row.status.is_none(),
+        "only verified cleanup may finalize cancellation"
+    );
+    let ownership = row.ownership.unwrap();
+    assert!(ownership.cleanup_pending);
+    assert!(!ownership.live_owned_work);
+    assert_eq!(std::fs::read_to_string(marker).unwrap(), "partial");
+    assert_eq!(
+        std::fs::read_to_string(capture.join("ownership/stdout")).unwrap(),
+        "capture-output"
+    );
+}
+
+#[test]
 fn wait_invocation_worker_exit_0_stores_succeeded() {
     let directory = tempdir().expect("tempdir");
     let database = directory.path().join("loop.db");
@@ -177,7 +282,7 @@ fn wait_invocation_worker_exit_7_stores_failed() {
 }
 
 #[test]
-fn wait_invocation_waiter_is_the_worker_parent() {
+fn recovery_ownership_wait_invocation_publishes_worker_parent_before_execution() {
     let directory = tempdir().expect("tempdir");
     let database = directory.path().join("loop.db");
     let ppid_file = directory.path().join("ppid.txt");
@@ -187,7 +292,7 @@ fn wait_invocation_waiter_is_the_worker_parent() {
         "sh",
         vec![
             json!("-c"),
-            json!("printf %s \"$PPID\" > \"$1\"; exit 0"),
+            json!("test -s \"$LOOP_ENGINE_OWNERSHIP_DIRECTORY/ownership.json\" || exit 91; printf %s \"$PPID\" > \"$1\"; exit 0"),
             json!("_"),
             json!(ppid_file.to_string_lossy().into_owned()),
         ],
@@ -208,7 +313,6 @@ fn wait_invocation_waiter_is_the_worker_parent() {
         .stderr(Stdio::piped());
     super::bounded_process::prepare_process_group(&mut waiter_command);
     let mut waiter = waiter_command.spawn().expect("spawn wait-invocation");
-    let waiter_pid = waiter.id();
     {
         let mut stdin = waiter.stdin.take().expect("waiter stdin");
         stdin
@@ -221,7 +325,13 @@ fn wait_invocation_waiter_is_the_worker_parent() {
     assert!(status.success(), "{status:?}");
 
     let recorded = std::fs::read_to_string(&ppid_file).expect("read ppid file");
-    assert_eq!(recorded, waiter_pid.to_string());
+    let ownership = loop_integrations::ownership::read_ownership(
+        directory.path().join("inv-wait-ppid").to_str().unwrap(),
+    )
+    .unwrap()
+    .expect("published ownership");
+    assert_eq!(recorded, ownership.root_pid.to_string());
+    assert_eq!(ownership.root_pid, ownership.process_group_id);
 }
 
 #[test]

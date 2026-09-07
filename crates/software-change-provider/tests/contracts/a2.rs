@@ -11,7 +11,7 @@ use support::{provider_binary, Engine, TestDir};
 fn missing_policies_errors_on_first_check_and_leaves_engine_state_unchanged() {
     let state = TestDir::new("a2-missing-state");
     let engine = Engine::new(state.path().join("missing.sqlite"));
-    let run = engine.start_ok("missing-policies", json!({"config_version": "standard-1"}));
+    let run = engine.start_ok("missing-policies", json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "custom-v2"}));
     assert_eq!(run.workflow.states.len(), 16);
     let slot_ids: Vec<_> = run
         .workflow
@@ -28,14 +28,25 @@ fn missing_policies_errors_on_first_check_and_leaves_engine_state_unchanged() {
         .iter()
         .find(|slot| slot.id.as_str() == "intent-draft")
         .expect("intent-draft");
-    assert!(draft.stdin_context_kinds.is_empty());
+    assert!(draft
+        .stdin_context_kinds
+        .contains(&"user-steering".to_owned()));
     let review = run
         .workflow
         .work_slots
         .iter()
         .find(|slot| slot.id.as_str() == "intent-review")
         .expect("intent-review");
-    assert_eq!(review.stdin_context_kinds, ["finding-ledger"]);
+    assert_eq!(
+        review.stdin_context_kinds,
+        [
+            "finding-ledger",
+            "review-evidence",
+            "evidence-applicability",
+            "user-steering",
+            "steering-incorporation"
+        ]
+    );
 
     let outcome = engine.event("missing-policies", "intent-ready");
     let issue = match outcome {
@@ -56,7 +67,7 @@ fn missing_policies_errors_on_first_check_and_leaves_engine_state_unchanged() {
 }
 
 #[test]
-fn explicitly_empty_policies_walk_to_end_with_allocated_artifact_root() {
+fn empty_review_policy_preserves_allocation_but_no_longer_waives_final_criterion_proof() {
     let state = TestDir::new("a2-empty-state");
     let repository = state.path().join("repository");
     fs::create_dir_all(&repository).expect("create empty-policy repository");
@@ -90,7 +101,7 @@ fn explicitly_empty_policies_walk_to_end_with_allocated_artifact_root() {
     fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755))
         .expect("chmod provider wrapper");
     let engine = Engine::with_command(state.path().join("empty.sqlite"), &wrapper);
-    let input = json!({"config_version": "none", "review_policies": {}});
+    let input = json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "none", "review_policies": {}});
     engine.start_ok("empty-policies", input);
 
     let artifact_root = state.path().join("runs").join("empty-policies");
@@ -146,7 +157,6 @@ fn explicitly_empty_policies_walk_to_end_with_allocated_artifact_root() {
         "design-ready",
         "plan-ready",
         "implementation-ready",
-        "passed",
     ] {
         let result = engine.event("empty-policies", event);
         assert!(
@@ -155,6 +165,13 @@ fn explicitly_empty_policies_walk_to_end_with_allocated_artifact_root() {
         );
     }
 
-    assert_eq!(engine.current_state("empty-policies").as_str(), "end");
-    assert_eq!(engine.lifecycle("empty-policies"), Lifecycle::Final);
+    let outcome = engine.event("empty-policies", "passed");
+    assert!(matches!(outcome, OperationOutcome::Rejected(ref issue)
+        if issue.code == "software-change-criterion-incomplete"));
+    assert_eq!(
+        engine.current_state("empty-policies").as_str(),
+        "validation"
+    );
+    assert_eq!(engine.lifecycle("empty-policies"), Lifecycle::Active);
+    // The matching complete reviewless terminal path is recovery_criterion_public_*.
 }

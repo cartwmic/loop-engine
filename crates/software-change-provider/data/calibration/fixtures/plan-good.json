@@ -316,5 +316,17 @@
       "from": "acceptance-proof",
       "to": "authoritative-doc-integration"
     }
+  ],
+  "proof_commands": [
+    {
+      "id": "repository-readable",
+      "command": "python3",
+      "args": [
+        "-c",
+        "from pathlib import Path; assert Path('.git').is_dir(); print('isolated repository observable')"
+      ],
+      "owner": "driver",
+      "obligation": "The deterministic fixture observes its selected Git repository; semantic outcome review remains external."
+    }
   ]
 }

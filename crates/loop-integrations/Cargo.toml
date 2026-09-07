@@ -10,6 +10,7 @@ autotests = false
 path = "src/lib.rs"
 
 [dependencies]
+libc = "0.2"
 loop-core = { path = "../loop-core" }
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

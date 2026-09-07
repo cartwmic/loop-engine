@@ -212,6 +212,12 @@ fn walk_shipped_profile_to_end(profile_name: &str) {
         .sum::<usize>();
 
     for (ready, parent, adversarial, subject) in phases {
+        if subject == "validation-report.json" {
+            engine.append_candidates(
+                profile_name,
+                support::validation_fixture(&input, &repository),
+            );
+        }
         let outcome = engine.event(profile_name, ready);
         assert!(
             matches!(outcome, OperationOutcome::Completed(_)),

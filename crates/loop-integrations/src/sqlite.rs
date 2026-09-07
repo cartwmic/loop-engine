@@ -147,6 +147,111 @@ impl SqlitePersistence {
         })
     }
 
+    /// Called only after the active controller verified disappearance, including
+    /// zombies. The stop marker remains blocking across a crash between the
+    /// catalog commit and the acknowledgment file; retry can finish that write.
+    pub fn acknowledge_cancellation(
+        &self,
+        run_id: &RunId,
+        invocation_id: &InvocationId,
+        completed_at: Timestamp,
+        acknowledgment: &loop_core::CancellationAcknowledgment,
+        deadline: std::time::Instant,
+    ) -> Result<(), PersistenceError> {
+        let fail = |error: std::io::Error| {
+            PersistenceError::failure(PersistenceFailure::new(
+                "cancellation-acknowledgment-failed",
+                error.to_string(),
+            ))
+        };
+        let row = self
+            .load_work_slot_invocations(run_id)?
+            .into_iter()
+            .find(|row| row.invocation_id == *invocation_id)
+            .ok_or_else(|| {
+                PersistenceError::failure(PersistenceFailure::new(
+                    "invocation-not-found",
+                    "cancellation target missing",
+                ))
+            })?;
+        let directory = crate::ownership::directory(&row.capture_dir);
+        let admission =
+            crate::ownership::Admission::acquire_until(&directory, deadline).map_err(fail)?;
+        if !admission.stopped()
+            || !directory.join("cleanup-verified.json").is_file()
+            || crate::ownership::live_owned_work(&row.capture_dir).map_err(fail)?
+        {
+            return Err(PersistenceError::failure(PersistenceFailure::new(
+                "cancellation-cleanup-pending",
+                "cleanup has not been verified",
+            )));
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(fail(std::io::Error::other(
+                "cancellation acknowledgment deadline",
+            )));
+        }
+        let receipt = std::fs::read(directory.join("waiter-completion.json"))
+            .ok()
+            .map(|bytes| serde_json::from_slice::<crate::ownership::CompletionReceipt>(&bytes))
+            .transpose()
+            .map_err(|error| fail(std::io::Error::other(error)))?;
+        let mut connection = self.lock()?;
+        connection
+            .busy_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            .map_err(sqlite_failure)?;
+        let transaction = begin_immediate(&mut connection)?;
+        let result = (|| {
+            let run = load_required_run(&transaction, run_id)?;
+            if std::time::Instant::now() >= deadline {
+                return Err(fail(std::io::Error::other(
+                    "cancellation acknowledgment deadline",
+                )));
+            }
+            let changed = transaction
+                .execute(
+                    "UPDATE work_slot_invocations SET status = 'failed', exit_code = ?1,
+                 completed_at = ?2, inner_workers_json = ?3, completion_snapshot_json = ?3
+                 WHERE run_id = ?4 AND invocation_id = ?5 AND status IS NULL",
+                    params![
+                        receipt.as_ref().map(|r| r.exit_code),
+                        completed_at.as_unix_millis(),
+                        encode_json(
+                            &receipt
+                                .as_ref()
+                                .map(|r| r.inner_workers.clone())
+                                .unwrap_or_default(),
+                            "cancelled inner workers"
+                        )?,
+                        run_id.as_str(),
+                        invocation_id.as_str()
+                    ],
+                )
+                .map_err(sqlite_failure)?;
+            if changed == 1 {
+                let sequence = next_sequence(run.last_sequence)?;
+                let history = HistoryEntry::invocation_status_changed(
+                    sequence,
+                    completed_at,
+                    invocation_id.clone(),
+                    WaiterWrittenStatus::Failed,
+                );
+                insert_history(&transaction, run_id, &history)?;
+                update_last_sequence(&transaction, run_id, sequence)?;
+            } else if row.status != Some(WaiterWrittenStatus::Failed) {
+                return Err(PersistenceError::failure(PersistenceFailure::new(
+                    "cancellation-conflict",
+                    "target is not pending cancellation",
+                )));
+            }
+            Ok(())
+        })();
+        finish_transaction(transaction, result)?;
+        admission
+            .write("cleanup-acknowledged.json", acknowledgment)
+            .map_err(fail)
+    }
+
     fn lock(&self) -> Result<MutexGuard<'_, Connection>, PersistenceError> {
         self.connection.lock().map_err(|_| {
             PersistenceError::failure(PersistenceFailure::new(
@@ -216,6 +321,67 @@ impl Persistence for SqlitePersistence {
         finish_transaction(transaction, result)
     }
 
+    fn amend_binding(
+        &self,
+        run_id: &RunId,
+        slot_id: &WorkSlotId,
+        request: loop_core::operations::amend_binding::Request,
+        now: Timestamp,
+    ) -> Result<HistoryEntry, PersistenceError> {
+        let mut connection = self.lock()?;
+        let transaction = begin_immediate(&mut connection)?;
+        let result = (|| {
+            let raw = load_raw_run(&transaction, run_id)?
+                .ok_or_else(|| PersistenceError::not_found(run_id.clone()))?;
+            let run = load_required_run(&transaction, run_id)?;
+            require_active(&run)?;
+            require_observed(&raw)?;
+            verify_revision_and_source(
+                &run,
+                loop_core::ControlRevision::from_u64(request.state_visit),
+                &run.current_state,
+            )?;
+            if !run
+                .workflow
+                .work_slots
+                .iter()
+                .any(|slot| slot.id == *slot_id)
+            {
+                return Err(PersistenceError::failure(PersistenceFailure::new(
+                    "unknown-work-slot",
+                    format!("unknown work slot `{slot_id}`"),
+                )));
+            }
+            let original = loop_core::effective_binding(&run, slot_id)
+                .transpose()
+                .map_err(|message| {
+                    PersistenceError::failure(PersistenceFailure::new(
+                        "invalid-work-slot-binding",
+                        message,
+                    ))
+                })?;
+            let sequence = next_sequence(run.last_sequence)?;
+            let history = HistoryEntry::new(
+                sequence,
+                now,
+                HistoryAction::BindingAmended {
+                    amendment: loop_core::BindingAmendment {
+                        slot_id: slot_id.clone(),
+                        state_visit: request.state_visit,
+                        owner: request.owner,
+                        reason: request.reason,
+                        original,
+                        effective: request.binding,
+                    },
+                },
+            );
+            insert_history(&transaction, run_id, &history)?;
+            update_last_sequence(&transaction, run_id, sequence)?;
+            Ok(history)
+        })();
+        finish_transaction(transaction, result)
+    }
+
     fn append_context(
         &self,
         request: AppendContextRequest,
@@ -275,7 +441,19 @@ impl Persistence for SqlitePersistence {
         &self,
         request: CommitTransitionRequest,
     ) -> Result<CommitTransitionResult, PersistenceError> {
-        if request.context_append.is_some() && request.transition.kind.is_check_free() {
+        if request.exception.as_ref().is_some_and(|exception| {
+            exception.attestation.state_visit != request.expected_control_revision.as_u64()
+                || exception.attestation.owner.trim().is_empty()
+                || exception.attestation.reason.trim().is_empty()
+        }) {
+            return Err(PersistenceError::failure(PersistenceFailure::new(
+                "invalid-override",
+                "override requires the expected visit and nonempty owner/reason",
+            )));
+        }
+        if request.context_append.is_some()
+            && (request.transition.kind.is_check_free() || request.exception.is_some())
+        {
             return Err(PersistenceError::failure(PersistenceFailure::new(
                 "sqlite-invalid-context-effect",
                 "provider context append effects require a checked transition",
@@ -336,7 +514,10 @@ impl Persistence for SqlitePersistence {
                 transition_sequence,
                 occurred_at,
                 request.transition.clone(),
-                TransitionHistoryOutcome::Committed,
+                match request.exception.clone() {
+                    Some(exception) => TransitionHistoryOutcome::Overridden { exception },
+                    None => TransitionHistoryOutcome::Committed,
+                },
             );
             transaction
                 .execute(
@@ -425,6 +606,23 @@ impl Persistence for SqlitePersistence {
             require_active(&run)?;
             require_observed(&raw)?;
 
+            // Check the same ownership barrier as state departure while holding
+            // the mutation transaction, so termination cannot strand cancellation.
+            for invocation in read_work_slot_invocations(&transaction, &request.run_id)? {
+                #[cfg(unix)]
+                let waiter_alive = unsafe { libc::kill(invocation.waiter_pid as i32, 0) == 0 };
+                #[cfg(not(unix))]
+                let waiter_alive = false;
+                if loop_core::invocation_owns_work(&invocation, waiter_alive) {
+                    return Err(PersistenceError::rejected(
+                        PersistenceRejection::LiveOwnedWork {
+                            run_id: request.run_id.clone(),
+                            invocation_id: invocation.invocation_id,
+                        },
+                    ));
+                }
+            }
+
             let sequence = next_sequence(run.last_sequence)?;
             let revision = next_revision(run.control_revision)?;
             let occurred_at = current_timestamp()?;
@@ -504,9 +702,13 @@ impl Persistence for SqlitePersistence {
             let (id, label, workflow_id, lifecycle, current_state, provider, artifact_root) =
                 row.map_err(sqlite_failure)?;
             Ok(RunSummary {
-                id: RunId::new(id),
+                id: RunId::new(id.clone()),
                 label,
                 workflow_id: loop_core::WorkflowId::new(workflow_id),
+                override_summary: loop_core::OverrideSummary::from_history(
+                    &read_history_entries(&connection, &RunId::from(id.clone()))?,
+                    parse_lifecycle(&lifecycle)?,
+                ),
                 lifecycle: parse_lifecycle(&lifecycle)?,
                 current_state: StateId::new(current_state),
                 provider,
@@ -635,6 +837,8 @@ impl Persistence for SqlitePersistence {
             )
             .with_routed_inputs(request.routed_inputs.clone())
             .with_assignment_selection(request.assignment_selection.clone());
+            let mut invocation = invocation;
+            invocation.controls = request.controls.clone();
             let invocation = match request.frozen_run_identity.clone() {
                 Some(identity) => invocation.with_frozen_run_identity(identity),
                 None => invocation,
@@ -647,8 +851,8 @@ impl Persistence for SqlitePersistence {
                         allowed_time_ms, status, exit_code, completed_at,
                         capture_dir, inner_workers_json, assignment_selection_json,
                         invocation_input_json, routed_inputs_json, frozen_run_identity_json,
-                        completion_snapshot_json
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL, NULL, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                        completion_snapshot_json, controls_json
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL, NULL, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
                     params![
                         request.run_id.as_str(),
                         request.invocation_id.as_str(),
@@ -678,6 +882,7 @@ impl Persistence for SqlitePersistence {
                             .map(|identity| encode_json(identity, "frozen run identity"))
                             .transpose()?,
                         encode_json(&Vec::<InnerWorker>::new(), "completion snapshot")?,
+                        request.controls.as_ref().map(|controls| encode_json(controls, "invocation controls")).transpose()?,
                     ],
                 )
                 .map_err(sqlite_failure)?;
@@ -701,6 +906,69 @@ impl Persistence for SqlitePersistence {
         &self,
         request: CompleteWorkSlotInvocationRequest,
     ) -> Result<CompleteWorkSlotInvocationResult, PersistenceError> {
+        // Same short lock as helper admission and the future cancellation
+        // controller. Keep it through the terminal transaction: neither side
+        // can turn a cancellation-admitted exit into ordinary success.
+        let invocation = self
+            .load_work_slot_invocations(&request.run_id)?
+            .into_iter()
+            .find(|row| row.invocation_id == request.invocation_id);
+        let admission = invocation
+            .as_ref()
+            .filter(|row| row.ownership.is_some())
+            .map(|row| {
+                crate::ownership::Admission::acquire(&crate::ownership::directory(&row.capture_dir))
+            })
+            .transpose()
+            .map_err(|error| {
+                PersistenceError::failure(PersistenceFailure::new(
+                    "ownership-admission-failed",
+                    error.to_string(),
+                ))
+            })?;
+        let current = self
+            .load_work_slot_invocations(&request.run_id)?
+            .into_iter()
+            .find(|row| row.invocation_id == request.invocation_id);
+        if let Some(admission) = admission.as_ref().filter(|admission| {
+            current.as_ref().is_some_and(|row| {
+                row.status.is_none()
+                    || (admission.stopped() && row.status == Some(WaiterWrittenStatus::Failed))
+            })
+        }) {
+            admission
+                .record_completion(&crate::ownership::CompletionReceipt {
+                    exit_code: request.exit_code,
+                    inner_workers: request.inner_workers.clone(),
+                })
+                .map_err(|error| {
+                    PersistenceError::failure(PersistenceFailure::new(
+                        "ownership-completion-failed",
+                        error.to_string(),
+                    ))
+                })?;
+            if admission.stopped() {
+                // Cleanup can win just before the released waiter gets CPU.
+                // Preserve its later actual waitpid/capture facts, never change
+                // the controller's failed outcome or completion timestamp.
+                if current
+                    .as_ref()
+                    .is_some_and(|row| row.status == Some(WaiterWrittenStatus::Failed))
+                {
+                    let connection = self.lock()?;
+                    connection.execute(
+                        "UPDATE work_slot_invocations SET exit_code = ?1, inner_workers_json = ?2,
+                         completion_snapshot_json = ?2 WHERE run_id = ?3 AND invocation_id = ?4 AND status = 'failed'",
+                        params![request.exit_code, encode_json(&request.inner_workers, "cancelled waiter completion")?,
+                            request.run_id.as_str(), request.invocation_id.as_str()],
+                    ).map_err(sqlite_failure)?;
+                }
+                return Err(PersistenceError::failure(PersistenceFailure::new(
+                    "cancellation-cleanup-pending",
+                    "actual waiter exit retained; only verified cancellation cleanup may finalize this invocation",
+                )));
+            }
+        }
         let mut connection = self.lock()?;
         let transaction = begin_immediate(&mut connection)?;
         let result = (|| {
@@ -925,6 +1193,14 @@ fn ensure_work_slot_invocation_columns(connection: &Connection) -> Result<(), Pe
             )
             .map_err(sqlite_failure)?;
     }
+    if !columns.iter().any(|name| name == "controls_json") {
+        connection
+            .execute(
+                "ALTER TABLE work_slot_invocations ADD COLUMN controls_json TEXT",
+                [],
+            )
+            .map_err(sqlite_failure)?;
+    }
     if !columns.iter().any(|name| name == "routed_inputs_json") {
         connection
             .execute(
@@ -1049,7 +1325,17 @@ fn load_raw_run(
 fn load_required_run(connection: &Connection, run_id: &RunId) -> Result<Run, PersistenceError> {
     let raw = load_raw_run(connection, run_id)?
         .ok_or_else(|| PersistenceError::not_found(run_id.clone()))?;
-    decode_run(raw)
+    let mut run = decode_run(raw)?;
+    let history = read_history_entries(connection, run_id)?;
+    run.override_summary = loop_core::OverrideSummary::from_history(&history, run.lifecycle);
+    run.binding_amendments = history
+        .into_iter()
+        .filter_map(|entry| match entry.action {
+            HistoryAction::BindingAmended { amendment } => Some(amendment),
+            _ => None,
+        })
+        .collect();
+    Ok(run)
 }
 
 fn decode_run(raw: StoredRun) -> Result<Run, PersistenceError> {
@@ -1255,6 +1541,7 @@ fn read_checked_evaluations(
                 outcome,
             } if transition.kind.is_checked() => {
                 let evaluation = match outcome {
+                    TransitionHistoryOutcome::Overridden { .. } => return None,
                     TransitionHistoryOutcome::Committed => DurableEvaluation {
                         transition,
                         result: DurableEvaluationResult::Allow,
@@ -1415,6 +1702,7 @@ fn decode_work_slot_invocation(
     routed_inputs_json: String,
     frozen_run_identity_json: Option<String>,
     completion_snapshot_json: String,
+    controls_json: Option<String>,
 ) -> Result<WorkSlotInvocation, PersistenceError> {
     let waiter_pid = u32::try_from(from_sqlite_u64(waiter_pid, "waiter pid")?).map_err(|_| {
         PersistenceError::failure(PersistenceFailure::new(
@@ -1468,6 +1756,33 @@ fn decode_work_slot_invocation(
         invocation = invocation
             .with_frozen_run_identity(decode_json(&identity_json, "frozen run identity")?);
     }
+    invocation.controls = controls_json
+        .map(|raw| decode_json(&raw, "invocation controls"))
+        .transpose()?;
+    if !invocation.capture_dir.is_empty() {
+        if let Some(execution) =
+            crate::ownership::read_ownership(&invocation.capture_dir).map_err(|error| {
+                PersistenceError::failure(PersistenceFailure::new(
+                    "ownership-read-failed",
+                    error.to_string(),
+                ))
+            })?
+        {
+            invocation.ownership = Some(loop_core::ExecutionOwnershipState {
+                execution,
+                live_owned_work: crate::ownership::live_owned_work(&invocation.capture_dir)
+                    .unwrap_or(true),
+                cleanup_pending: crate::ownership::cleanup_pending(&invocation.capture_dir),
+                cancellation: crate::ownership::cancellation_state(&invocation.capture_dir)
+                    .map_err(|error| {
+                        PersistenceError::failure(PersistenceFailure::new(
+                            "cancellation-read-failed",
+                            error.to_string(),
+                        ))
+                    })?,
+            });
+        }
+    }
     Ok(invocation)
 }
 
@@ -1490,6 +1805,7 @@ type InvocationRow = (
     String,
     Option<String>,
     String,
+    Option<String>,
 );
 
 fn invocation_row_from_query(row: &rusqlite::Row<'_>) -> rusqlite::Result<InvocationRow> {
@@ -1512,6 +1828,7 @@ fn invocation_row_from_query(row: &rusqlite::Row<'_>) -> rusqlite::Result<Invoca
         row.get(15)?,
         row.get(16)?,
         row.get(17)?,
+        row.get(18)?,
     ))
 }
 
@@ -1526,7 +1843,7 @@ fn load_one_work_slot_invocation(
                     waiter_pid, started_at, allowed_time_ms, status, exit_code, completed_at,
                     capture_dir, inner_workers_json, assignment_selection_json,
                     invocation_input_json, routed_inputs_json, frozen_run_identity_json,
-                    completion_snapshot_json
+                    completion_snapshot_json, controls_json
              FROM work_slot_invocations
              WHERE run_id = ?1 AND invocation_id = ?2",
             params![run_id.as_str(), invocation_id.as_str()],
@@ -1554,6 +1871,7 @@ fn load_one_work_slot_invocation(
                 routed_inputs_json,
                 frozen_run_identity_json,
                 completion_snapshot_json,
+                controls_json,
             )| {
                 decode_work_slot_invocation(
                     invocation_id,
@@ -1574,6 +1892,7 @@ fn load_one_work_slot_invocation(
                     routed_inputs_json,
                     frozen_run_identity_json,
                     completion_snapshot_json,
+                    controls_json,
                 )
             },
         )
@@ -1590,7 +1909,7 @@ fn read_work_slot_invocations(
                     waiter_pid, started_at, allowed_time_ms, status, exit_code, completed_at,
                     capture_dir, inner_workers_json, assignment_selection_json,
                     invocation_input_json, routed_inputs_json, frozen_run_identity_json,
-                    completion_snapshot_json
+                    completion_snapshot_json, controls_json
              FROM work_slot_invocations
              WHERE run_id = ?1
              ORDER BY started_at ASC, invocation_id ASC",
@@ -1620,6 +1939,7 @@ fn read_work_slot_invocations(
             routed_inputs_json,
             frozen_run_identity_json,
             completion_snapshot_json,
+            controls_json,
         ) = row.map_err(sqlite_failure)?;
         decode_work_slot_invocation(
             invocation_id,
@@ -1640,6 +1960,7 @@ fn read_work_slot_invocations(
             routed_inputs_json,
             frozen_run_identity_json,
             completion_snapshot_json,
+            controls_json,
         )
     })
     .collect()
@@ -1819,18 +2140,24 @@ mod tests {
             .load_show_data(&"run-capture-roundtrip".into())
             .expect("observe run");
         let created = adapter
-            .create_work_slot_invocation(CreateWorkSlotInvocationRequest::new(
-                "run-capture-roundtrip",
-                "inv-1",
-                "slot-1",
-                WorkSlotBinding::new("/bin/sh", vec!["-c".to_owned(), "exit 0".to_owned()]),
-                "digest",
-                "subject-a",
-                1,
-                Timestamp::from_unix_millis(500),
-                1_000,
-                "/captures/slot-1/inv-1",
-            ))
+            .create_work_slot_invocation(
+                CreateWorkSlotInvocationRequest::new(
+                    "run-capture-roundtrip",
+                    "inv-1",
+                    "slot-1",
+                    WorkSlotBinding::new("/bin/sh", vec!["-c".to_owned(), "exit 0".to_owned()]),
+                    "digest",
+                    "subject-a",
+                    1,
+                    Timestamp::from_unix_millis(500),
+                    1_000,
+                    "/captures/slot-1/inv-1",
+                )
+                .with_controls(loop_core::InvocationControls {
+                    max_active: std::num::NonZeroUsize::new(2),
+                    force_fresh: true,
+                }),
+            )
             .expect("create invocation");
         assert_eq!(created.invocation.capture_dir, "/captures/slot-1/inv-1");
         assert!(created.invocation.inner_workers.is_empty());
@@ -1867,6 +2194,8 @@ mod tests {
         assert_eq!(loaded[0].status, Some(WaiterWrittenStatus::Succeeded));
         assert_eq!(loaded[0].exit_code, Some(0));
         assert_eq!(loaded[0].inner_workers[0].exit_code, 7);
+        assert_eq!(loaded[0].controls, created.invocation.controls);
+        assert!(loaded[0].controls.as_ref().unwrap().force_fresh);
     }
 
     #[test]
@@ -1908,9 +2237,28 @@ mod tests {
                     );",
                 )
                 .expect("create pre-change schema");
+            connection.execute(
+                "INSERT INTO runs (id, workflow_id, workflow_json, provider_association_json, initial_input_json, current_state, lifecycle, control_revision, last_sequence, created_at) VALUES ('historic', 'test-workflow', ?1, '{}', '{}', 'start', 'active', 0, 1, 100)",
+                [serde_json::to_string(&workflow()).unwrap()],
+            ).expect("retain the pre-change parent run");
+            connection.execute(
+                "INSERT INTO work_slot_invocations (run_id, invocation_id, slot_id, binding_json, instruction_digest, subject, waiter_pid, started_at, allowed_time_ms, status, exit_code, completed_at) VALUES ('historic', 'old-attempt', 'slot-1', ?1, 'original-digest', 'original-visit', 1, 100, 250, 'failed', 7, 200)",
+                [r#"{"command":"old-worker","args":["original-model"]}"#],
+            ).expect("retain an actual pre-change invocation row");
         }
 
         let adapter = SqlitePersistence::open(&path).expect("open after alter");
+        let historical =
+            read_work_slot_invocations(&adapter.lock().unwrap(), &"historic".into()).unwrap();
+        assert_eq!(
+            historical[0].binding,
+            WorkSlotBinding::new("old-worker", vec!["original-model".into()])
+        );
+        assert_eq!(historical[0].status, Some(WaiterWrittenStatus::Failed));
+        assert_eq!(historical[0].exit_code, Some(7));
+        assert_eq!(historical[0].allowed_time_ms, 250);
+        assert!(historical[0].controls.is_none());
+        assert!(historical[0].binding.context_filter.is_none());
         adapter
             .create_run(create_run("run-legacy-alter"))
             .expect("create run after alter");

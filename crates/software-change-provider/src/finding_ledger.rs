@@ -3,7 +3,7 @@
 //! The provider treats this data as an opaque record of driver decisions.  It
 //! only checks the frozen mechanical contract: closed JSON shape, freshness,
 //! identifier membership, stable IDs, immutable source-record references, and
-//! agreement with the current failing review evidence. It does not classify findings or
+//! exact-source dispositions. It does not classify findings or
 //! choose their disposition, owner, or route.
 
 use crate::checkpoint;
@@ -91,6 +91,7 @@ pub(crate) enum FindingDisposition {
     Accepted,
     Rejected,
     Advisory,
+    RetiredAuthor,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -114,6 +115,31 @@ pub(crate) struct FindingLedgerSnapshot {
 }
 
 impl FindingLedgerSnapshot {
+    pub(crate) fn disposition_for(&self, source_id: &str) -> Option<FindingDisposition> {
+        let findings = self
+            .findings
+            .iter()
+            .filter(|f| f.source.record_id() == source_id)
+            .collect::<Vec<_>>();
+        if findings.is_empty() || findings.iter().any(|f| f.is_accepted_unresolved()) {
+            return None;
+        }
+        if findings
+            .iter()
+            .any(|f| f.disposition == FindingDisposition::RetiredAuthor)
+        {
+            return Some(FindingDisposition::RetiredAuthor);
+        }
+        findings
+            .iter()
+            .find(|f| {
+                f.disposition == FindingDisposition::Rejected
+                    || (f.disposition == FindingDisposition::Accepted
+                        && f.status == FindingStatus::Resolved)
+            })
+            .map(|f| f.disposition)
+    }
+
     pub(crate) fn accepted_unresolved(&self) -> impl Iterator<Item = &Finding> {
         self.findings
             .iter()
@@ -142,9 +168,8 @@ pub(crate) enum FindingLedgerStatus {
     CheckpointInvalid {
         diagnostic: String,
     },
-    SetMismatch {
-        accepted_unresolved: BTreeSet<(String, String)>,
-        failing_evidence: BTreeSet<(String, String)>,
+    Blocked {
+        findings: Vec<Value>,
     },
 }
 
@@ -163,7 +188,7 @@ impl FindingLedgerEvaluation {
     #[allow(dead_code)]
     pub(crate) fn current_snapshot(&self) -> Option<&FindingLedgerSnapshot> {
         match &self.status {
-            FindingLedgerStatus::Present | FindingLedgerStatus::SetMismatch { .. } => {
+            FindingLedgerStatus::Present | FindingLedgerStatus::Blocked { .. } => {
                 self.snapshot.as_ref()
             }
             FindingLedgerStatus::Missing
@@ -197,13 +222,10 @@ impl FindingLedgerEvaluation {
                 "status": "checkpoint_invalid",
                 "diagnostic": diagnostic
             }),
-            FindingLedgerStatus::SetMismatch {
-                accepted_unresolved,
-                failing_evidence,
-            } => serde_json::json!({
-                "status": "set_mismatch",
-                "accepted_unresolved": set_to_values(accepted_unresolved),
-                "failing_evidence": set_to_values(failing_evidence)
+            FindingLedgerStatus::Blocked { findings } => serde_json::json!({
+                "status": "accepted_unresolved",
+                "findings": findings,
+                "remedy": "explicitly resolve or reject each exact source in a later ledger snapshot"
             }),
         }
     }
@@ -222,7 +244,6 @@ pub(crate) fn evaluate_finding_ledger(
     subject: &str,
     current_revision: &str,
     config: &ValidatedConfig,
-    failing_evidence: &BTreeSet<(String, String)>,
 ) -> FindingLedgerEvaluation {
     // Report subjects are bound to the provider-generated checkpoint. The
     // snapshot no longer carries a copied repository digest; derive and
@@ -313,16 +334,44 @@ pub(crate) fn evaluate_finding_ledger(
         };
     }
 
-    let accepted_unresolved = snapshot
+    for finding in &snapshot.findings {
+        if finding.disposition == FindingDisposition::RetiredAuthor {
+            let source = context
+                .iter()
+                .find(|r| r.id.as_str() == finding.source.record_id())
+                .expect("parsed source exists");
+            let author = evidence::AuthorIdentity::new(
+                source.data["author"]["name"]
+                    .as_str()
+                    .expect("parsed author"),
+                source.data["author"]["kind"]
+                    .as_str()
+                    .expect("parsed author"),
+            );
+            if let Err(reason) = validate_retirement(context, gate, &author, u64::MAX) {
+                return FindingLedgerEvaluation {
+                    status: FindingLedgerStatus::Malformed {
+                        reasons: vec![reason],
+                    },
+                    snapshot: Some(snapshot),
+                };
+            }
+        }
+    }
+    let findings = snapshot
         .accepted_unresolved()
-        .map(|finding| (finding.policy_id.clone(), finding.statement.clone()))
-        .collect::<BTreeSet<_>>();
-    if &accepted_unresolved != failing_evidence {
+        .map(|finding| {
+            let source = context
+                .iter()
+                .find(|record| record.id.as_str() == finding.source.record_id());
+            serde_json::json!({"id": finding.id, "source": finding.source.record_id(),
+            "policy_id": finding.policy_id, "statement": finding.statement,
+            "author": source.and_then(|record| record.data.get("author"))})
+        })
+        .collect::<Vec<_>>();
+    if !findings.is_empty() {
         return FindingLedgerEvaluation {
-            status: FindingLedgerStatus::SetMismatch {
-                accepted_unresolved,
-                failing_evidence: failing_evidence.clone(),
-            },
+            status: FindingLedgerStatus::Blocked { findings },
             snapshot: Some(snapshot),
         };
     }
@@ -640,6 +689,7 @@ fn finding_to_value(finding: &Finding) -> Value {
             FindingDisposition::Accepted => "accepted",
             FindingDisposition::Rejected => "rejected",
             FindingDisposition::Advisory => "advisory",
+            FindingDisposition::RetiredAuthor => "retired-author",
         },
         "reason": finding.reason,
         "owner_phase": finding.owner_phase,
@@ -827,6 +877,12 @@ fn parse_finding(
     let statement = required_non_empty_string(object, "statement", &mut reasons);
     let disposition = parse_disposition(object.get("disposition"), &path, &mut reasons);
     let reason = required_non_empty_string(object, "reason", &mut reasons);
+    if reason
+        .as_deref()
+        .is_some_and(|reason| reason.trim().is_empty())
+    {
+        reasons.push(format!("`{path}.reason` must not be blank"));
+    }
     let owner_phase = parse_owner_phase(object.get("owner_phase"), &path, &mut reasons);
     let task_ids = parse_string_array(
         object.get("task_ids"),
@@ -874,9 +930,32 @@ fn parse_finding(
         );
     }
 
-    if let Some(config) = config {
+    let current_snapshot = !context.iter().any(|record| {
+        record.kind == FINDING_LEDGER_KIND
+            && ledger_record_matches_pair(record, gate, subject)
+            && record.sequence.as_u64() > snapshot_sequence
+    }) && read_json_under_root(artifact_root, subject)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("revision")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .as_deref()
+        == Some(subject_revision);
+    let current_unresolved = current_snapshot
+        && disposition == Some(FindingDisposition::Accepted)
+        && status == Some(FindingStatus::Unresolved);
+    if let Some(config) = config.filter(|_| current_unresolved) {
         if let Some(policy_id) = policy_id.as_ref() {
-            if !configured_policy_id(config, gate, policy_id) {
+            let criterion_source = source.as_ref().is_some_and(|s| {
+                context.iter().any(|r| {
+                    r.id.as_str() == s.record_id()
+                        && matches!(r.kind.as_str(), "criterion-verdict" | "goal-verdict")
+                })
+            });
+            if !criterion_source && !configured_policy_id(config, gate, policy_id) {
                 reasons.push(format!(
                     "`{path}.policy_id` is not configured on gate `{gate}`"
                 ));
@@ -893,7 +972,7 @@ fn parse_finding(
         }
     }
     if let Some(task_ids) = task_ids.as_ref() {
-        if !task_ids.is_empty() {
+        if current_unresolved && !task_ids.is_empty() {
             match current_plan_task_ids(artifact_root) {
                 Ok(current) => {
                     for task_id in task_ids {
@@ -933,7 +1012,7 @@ fn parse_source(
     path: &str,
     gate: &str,
     subject: &str,
-    subject_revision: &str,
+    _subject_revision: &str,
     policy_id: Option<&str>,
     statement: Option<&str>,
     disposition: Option<FindingDisposition>,
@@ -991,6 +1070,58 @@ fn parse_source(
         ));
         return None;
     }
+    if matches!(record.kind.as_str(), "criterion-verdict" | "goal-verdict") {
+        let checked = (|| -> Result<(), String> {
+            let root = Path::new(
+                artifact_root
+                    .and_then(Value::as_str)
+                    .ok_or("missing artifact_root")?,
+            );
+            crate::validation::source(&record.data, &record.kind, context, root)?;
+            if subject != "validation-report.json" || gate != "validation-review" {
+                return Err("criterion sources belong to validation-review ledger".into());
+            }
+            let expected = record
+                .data
+                .get("criterion_id")
+                .and_then(Value::as_str)
+                .unwrap_or("goal");
+            if policy_id != Some(expected) {
+                return Err("criterion source identity differs from finding policy_id".into());
+            }
+            let statements: Vec<String> = serde_json::from_value(record.data["findings"].clone())
+                .map_err(|e| e.to_string())?;
+            if record.data["result"] == "fail" && statement != Some(statements.join("\\n").as_str())
+            {
+                return Err("criterion finding statement differs from original source".into());
+            }
+            if disposition == Some(FindingDisposition::Accepted)
+                && status == Some(FindingStatus::Unresolved)
+                && record.data["result"] != "fail"
+            {
+                return Err("unresolved finding must name failing criterion source".into());
+            }
+            if disposition == Some(FindingDisposition::RetiredAuthor) {
+                validate_retirement(
+                    context,
+                    gate,
+                    &evidence::AuthorIdentity::new(
+                        record.data["author"]["name"].as_str().unwrap(),
+                        record.data["author"]["kind"].as_str().unwrap(),
+                    ),
+                    snapshot_sequence,
+                )?;
+            }
+            Ok(())
+        })();
+        if let Err(e) = checked {
+            reasons.push(format!("`{path}.source`: {e}"));
+            return None;
+        }
+        return Some(FindingSource::ContextRecord {
+            record_id: record_id.to_owned(),
+        });
+    }
     if record.kind != "review-evidence" {
         reasons.push(format!(
             "`{path}.source.id` must reference a review-evidence context record"
@@ -1033,25 +1164,13 @@ fn parse_source(
             "`{path}.source.id` evidence policy_id does not match the finding"
         ));
     }
-    if source_evidence.subject_revision != subject_revision {
-        let applicable = context.iter().any(|candidate| {
-            candidate.kind == loop_core::EVIDENCE_APPLICABILITY_KIND
-                && candidate.sequence > record.sequence
-                && candidate.sequence.as_u64() < snapshot_sequence
-                && evidence::applicability_covers_source(
-                    context,
-                    candidate,
-                    record_id,
-                    subject,
-                    subject_revision,
-                    artifact_root,
-                )
-        });
-        if !applicable {
-            reasons.push(format!(
-                "`{path}.source.id` evidence revision `{}` is stale for snapshot revision `{subject_revision}`",
-                source_evidence.subject_revision
-            ));
+    // A finding retains its original evidence, not a claim that an old verdict
+    // applies to the current revision. Freshness belongs to review aggregation.
+    if disposition == Some(FindingDisposition::RetiredAuthor) {
+        if let Err(error) =
+            validate_retirement(context, gate, &source_evidence.author, snapshot_sequence)
+        {
+            reasons.push(format!("`{path}`: {error}"));
         }
     }
     if source_evidence.result == evidence::EvidenceResult::Fail
@@ -1077,6 +1196,88 @@ fn parse_source(
     })
 }
 
+fn validate_retirement(
+    context: &[ContextRecord],
+    gate: &str,
+    author: &evidence::AuthorIdentity,
+    before_sequence: u64,
+) -> Result<(), String> {
+    let mut records = context
+        .iter()
+        .filter(|r| {
+            r.kind == "reviewer-manifest"
+                && r.data.get("gate").and_then(Value::as_str) == Some(gate)
+                && r.sequence.as_u64() < before_sequence
+        })
+        .collect::<Vec<_>>();
+    records.sort_by_key(|r| r.sequence);
+    let mut was_present = false;
+    let mut currently_present = false;
+    let mut latest_error = None;
+    for record in records {
+        let parsed_roster = (|| -> Result<BTreeSet<evidence::AuthorIdentity>, String> {
+            let object = record
+                .data
+                .as_object()
+                .ok_or("reviewer-manifest must be an object")?;
+            if !unknown_fields(object, &["gate", "authors", "reason"], "reviewer-manifest")
+                .is_empty()
+                || object
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .is_none_or(|s| s.trim().is_empty())
+            {
+                return Err(format!(
+                    "reviewer-manifest {} has invalid shape or missing reason",
+                    record.id
+                ));
+            }
+            let authors = object
+                .get("authors")
+                .and_then(Value::as_array)
+                .ok_or("reviewer-manifest authors must be an array")?;
+            let mut roster = BTreeSet::new();
+            for value in authors {
+                let object = value.as_object().ok_or("invalid manifest author")?;
+                let author = evidence::AuthorIdentity::new(
+                    object
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                    object
+                        .get("kind")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                );
+                if !unknown_fields(object, AUTHOR_FIELDS, "reviewer-manifest.author").is_empty()
+                    || !author.is_valid()
+                {
+                    return Err("invalid manifest author".to_owned());
+                }
+                if !roster.insert(author) {
+                    return Err("reviewer-manifest has duplicate authors".to_owned());
+                }
+            }
+            Ok(roster)
+        })();
+        match parsed_roster {
+            Ok(roster) => {
+                currently_present = roster.contains(author);
+                was_present |= currently_present;
+                latest_error = None;
+            }
+            Err(reason) => latest_error = Some(reason),
+        }
+    }
+    if let Some(reason) = latest_error {
+        return Err(reason);
+    }
+    if !was_present || currently_present {
+        return Err(format!("retired-author {} ({}) requires a reasoned reviewer-manifest change showing prior presence and current absence on {gate}; record the roster change and obtain replacement coverage", author.name, author.kind));
+    }
+    Ok(())
+}
+
 fn parse_disposition(
     value: Option<&Value>,
     path: &str,
@@ -1086,9 +1287,10 @@ fn parse_disposition(
         Some("accepted") => Some(FindingDisposition::Accepted),
         Some("rejected") => Some(FindingDisposition::Rejected),
         Some("advisory") => Some(FindingDisposition::Advisory),
+        Some("retired-author") => Some(FindingDisposition::RetiredAuthor),
         Some(_) => {
             reasons.push(format!(
-                "`{path}.disposition` must be accepted, rejected, or advisory"
+                "`{path}.disposition` must be accepted, rejected, advisory, or retired-author"
             ));
             None
         }
@@ -1196,25 +1398,27 @@ fn validate_combination(
                 None => reasons.push(format!("`{path}.owner_phase` is required for accepted findings")),
             }
         }
-        FindingDisposition::Rejected | FindingDisposition::Advisory => {
+        FindingDisposition::Rejected
+        | FindingDisposition::Advisory
+        | FindingDisposition::RetiredAuthor => {
             if !matches!(status, FindingStatus::Recorded | FindingStatus::Stale) {
                 reasons.push(format!(
-                    "`{path}` rejected and advisory findings must have status recorded or stale"
+                    "`{path}` rejected, advisory, and retired-author findings must have status recorded or stale"
                 ));
             }
             if owner_phase.is_some() {
                 reasons.push(format!(
-                    "`{path}.owner_phase` must be null for rejected or advisory findings"
+                    "`{path}.owner_phase` must be null for rejected, advisory, or retired-author findings"
                 ));
             }
             if !task_ids.is_empty() {
                 reasons.push(format!(
-                    "`{path}.task_ids` must be empty for rejected or advisory findings"
+                    "`{path}.task_ids` must be empty for rejected, advisory, or retired-author findings"
                 ));
             }
             if !review_axes.is_empty() {
                 reasons.push(format!(
-                    "`{path}.review_axes` must be empty for rejected or advisory findings"
+                    "`{path}.review_axes` must be empty for rejected, advisory, or retired-author findings"
                 ));
             }
         }
@@ -1265,36 +1469,30 @@ fn check_id_continuity(snapshots: &[FindingLedgerSnapshot]) -> Result<(), Vec<St
         }
     }
 
-    // Within one subject revision, an accepted unresolved finding cannot
-    // disappear from a later valid snapshot.  Keep the previous snapshot for
-    // each revision so an intervening revision cannot hide an omission.  The
-    // driver must carry it forward with an explicit resolved or stale status
-    // (or leave it unresolved).
-    let mut previous_unresolved_by_revision: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // A revision bump does not disposition an accepted unresolved finding.
+    // Require an explicit later status, including across subject revisions.
+    let mut unresolved = BTreeSet::new();
     for snapshot in snapshots {
-        let current_ids = snapshot
-            .findings
-            .iter()
-            .map(|finding| finding.id.as_str())
-            .collect::<BTreeSet<_>>();
-        if let Some(previous_unresolved) =
-            previous_unresolved_by_revision.get(&snapshot.subject_revision)
-        {
-            for finding_id in previous_unresolved {
-                if !current_ids.contains(finding_id.as_str()) {
-                    reasons.push(format!(
-                        "accepted unresolved finding `{finding_id}` was omitted from a later snapshot; record resolved or stale explicitly"
-                    ));
-                }
+        for finding in &snapshot.findings {
+            if finding.is_accepted_unresolved() {
+                unresolved.insert(finding.id.as_str());
+            } else {
+                unresolved.remove(finding.id.as_str());
             }
         }
-        previous_unresolved_by_revision.insert(
-            snapshot.subject_revision.clone(),
-            snapshot
-                .accepted_unresolved()
-                .map(|finding| finding.id.clone())
-                .collect(),
-        );
+    }
+    if let Some(latest) = snapshots.last() {
+        for finding_id in unresolved {
+            if !latest
+                .findings
+                .iter()
+                .any(|finding| finding.id == finding_id)
+            {
+                reasons.push(format!(
+                    "accepted unresolved finding `{finding_id}` was omitted from a later snapshot; record resolved, rejected, retired-author, or stale explicitly"
+                ));
+            }
+        }
     }
 
     if reasons.is_empty() {
@@ -1415,17 +1613,6 @@ fn valid_finding_id(value: &str) -> bool {
     })
 }
 
-fn set_to_values(set: &BTreeSet<(String, String)>) -> Vec<Value> {
-    set.iter()
-        .map(|(policy_id, statement)| {
-            serde_json::json!({
-                "policy_id": policy_id,
-                "statement": statement
-            })
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1464,6 +1651,8 @@ mod tests {
 
     fn config(root: &TempRoot) -> ValidatedConfig {
         parse_initial_input(&json!({
+            "contract_version": 2,
+            "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
             "config_version": "test-1",
             "artifact_root": root.value(),
             "review_policies": {"intent-review": [{"id": "axis", "description": "axis"}, {"id": "other-axis", "description": "other"}]},
@@ -1553,7 +1742,6 @@ mod tests {
             "intent.json",
             "r1",
             &config,
-            &BTreeSet::new(),
         );
         assert!(matches!(
             result.status,
@@ -1573,7 +1761,6 @@ mod tests {
             "intent.json",
             "r1",
             &config,
-            &BTreeSet::new(),
         );
         assert!(result.is_satisfied());
     }

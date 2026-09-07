@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 REQUIRED_KEYS = ("run_id", "slot_id", "artifact_root", "instruction_body", "capture_dir")
+OPTIONAL_KEYS = ("context", "standing_assignment_ids", "assignment_selection", "invocation_input", "controls")
 
 
 def main() -> int:
@@ -29,9 +30,18 @@ def main() -> int:
     if missing:
         sys.stderr.write(f"dummy worker packet missing keys: {', '.join(missing)}\n")
         return 1
-    extra = sorted(set(packet) - set(REQUIRED_KEYS))
+    extra = sorted(set(packet) - set(REQUIRED_KEYS) - set(OPTIONAL_KEYS))
     if extra:
         sys.stderr.write(f"dummy worker packet has extra keys: {', '.join(extra)}\n")
+        return 1
+
+    for key in ("context", "standing_assignment_ids", "assignment_selection"):
+        if key in packet and (not isinstance(packet[key], list) or
+                not all(isinstance(item, dict if key == "context" else str) for item in packet[key])):
+            sys.stderr.write(f"dummy worker {key} has invalid transport shape\n")
+            return 1
+    if "controls" in packet and not isinstance(packet["controls"], dict):
+        sys.stderr.write("dummy worker controls must be an object\n")
         return 1
 
     artifact_root = packet["artifact_root"]

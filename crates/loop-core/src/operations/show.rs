@@ -16,8 +16,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, fmt};
 
-const WORK_SLOT_BINDINGS_KEY: &str = "work_slot_bindings";
-
 /// Caller-supplied run identity for a `show` read.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Request {
@@ -98,6 +96,8 @@ pub struct WorkSlotInvocationView {
     pub invocation_id: InvocationId,
     pub slot_id: WorkSlotId,
     pub binding: WorkSlotBinding,
+    /// Exact immutable context selected before this invocation started.
+    pub routed_inputs: Vec<crate::ContextRecord>,
     pub instruction_digest: String,
     pub subject: String,
     pub status: ProjectedInvocationStatus,
@@ -116,6 +116,10 @@ pub struct WorkSlotInvocationView {
     /// projection carries it without interpreting provider semantics.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invocation_input: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub controls: Option<crate::InvocationControls>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ownership: Option<crate::ExecutionOwnershipState>,
     /// Provider-free change report projected from durable invocation records.
     pub change_report: InvocationChangeReport,
 }
@@ -125,9 +129,9 @@ const OVERLAY_MEANING_SUCCEEDED: &str =
 const OVERLAY_MEANING_FAILED: &str =
     "Overlay failed means the bound CLI exited nonzero or the waiter vanished.";
 const OVERLAY_MEANING_RUNNING: &str =
-    "Overlay running means the waiter is alive and allowed time has not elapsed.";
+    "Overlay running means the waiter or owned work is live, or cancellation cleanup is pending, and allowed time has not elapsed.";
 const OVERLAY_MEANING_OVERRUN: &str =
-    "Overlay overrun means allowed time elapsed while the waiter is alive; run show immediately before re-invoking the same slot.";
+    "Overlay overrun means allowed time elapsed, not permission to retry; live owned work or pending cleanup blocks retry and state departure. Wait, or use cancel-invocation when local ownership is recorded; historical invocations without ownership are unsupported cancellation targets. Then show before retry.";
 
 fn overlay_meaning(status: ProjectedInvocationStatus) -> &'static str {
     match status {
@@ -170,6 +174,7 @@ impl WorkSlotInvocationView {
             invocation_id: record.invocation_id.clone(),
             slot_id: record.slot_id.clone(),
             binding: record.binding.clone(),
+            routed_inputs: record.routed_inputs.clone(),
             instruction_digest: record.instruction_digest.clone(),
             subject: record.subject.clone(),
             status,
@@ -184,6 +189,8 @@ impl WorkSlotInvocationView {
             inner_workers,
             assignment_selection: record.assignment_selection.clone(),
             invocation_input: record.invocation_input.clone(),
+            controls: record.controls.clone(),
+            ownership: record.ownership.clone(),
             change_report: InvocationChangeReport {
                 identity: record.invocation_id.clone(),
                 standing: false,
@@ -205,6 +212,8 @@ pub struct RunChangeReport {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ShowProjection {
+    #[serde(default, flatten)]
+    pub override_summary: crate::OverrideSummary,
     pub run_id: RunId,
     pub label: Option<String>,
     pub workflow_id: WorkflowId,
@@ -213,6 +222,9 @@ pub struct ShowProjection {
     pub current_state_title: String,
     pub current_state_instructions: String,
     pub initial_input: Value,
+    pub state_visit: u64,
+    pub binding_amendments: Vec<crate::BindingAmendment>,
+    pub effective_bindings: BTreeMap<String, WorkSlotBinding>,
     pub context: Vec<crate::ContextRecord>,
     pub requestable_events: Vec<RequestableEvent>,
     /// One latest durable allow/deny record for every exact checked
@@ -278,21 +290,14 @@ pub fn latest_evaluations(evaluations: &[DurableEvaluation]) -> Vec<DurableEvalu
 }
 
 fn bound_slot_for_current_state(run: &Run) -> Option<(&WorkSlot, WorkSlotBinding)> {
-    let Value::Object(map) = &run.initial_input else {
-        return None;
-    };
-    let Some(Value::Object(bindings)) = map.get(WORK_SLOT_BINDINGS_KEY) else {
-        return None;
-    };
     for slot in &run.workflow.work_slots {
         if slot.state != run.current_state {
             continue;
         }
-        let Some(value) = bindings.get(slot.id.as_str()) else {
+        let Some(binding) = crate::effective_binding(run, &slot.id) else {
             continue;
         };
-        let binding = serde_json::from_value::<WorkSlotBinding>(value.clone())
-            .unwrap_or_else(|_| WorkSlotBinding::new(String::new(), Vec::new()));
+        let binding = binding.unwrap_or_else(|_| WorkSlotBinding::new(String::new(), Vec::new()));
         return Some((slot, binding));
     }
     None
@@ -339,13 +344,7 @@ pub struct PlanTaskVisibility {
 }
 
 fn binding_for_slot(run: &Run, slot_id: &WorkSlotId) -> Option<WorkSlotBinding> {
-    let Value::Object(map) = &run.initial_input else {
-        return None;
-    };
-    let Value::Object(bindings) = map.get(WORK_SLOT_BINDINGS_KEY)? else {
-        return None;
-    };
-    serde_json::from_value(bindings.get(slot_id.as_str())?.clone()).ok()
+    crate::effective_binding(run, slot_id)?.ok()
 }
 
 fn current_routed_inputs(
@@ -759,7 +758,7 @@ fn current_state_instructions_for(run: &Run, stored: &str) -> String {
         Some((slot, binding)) => {
             let args = serde_json::to_string(&binding.args).unwrap_or_else(|_| "[]".to_owned());
             format!(
-                "Bound work slot `{slot_id}` is configured. Frozen worker CLI: command={command} args={args}. Legal start: loop-engine invoke {run_id} {slot_id}. Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. Captures are at the named capture directory on the invocation view and invoke result. The driver triages worker output, appends provider-shaped records, then requests the shown event. On overrun run show immediately before re-invoking the same slot. On failed inspect capture_dir/summary.json and captured stdout before stderr. Consult the change report of record before reuse. For review reuse, append one evidence-applicability record referencing the original evidence, current target, attesting driver, and short reason; semantic applicability remains the driver's judgment.",
+                "Bound work slot `{slot_id}` is configured. Frozen worker CLI: command={command} args={args}. Legal start: loop-engine invoke {run_id} {slot_id}. Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. Captures are at the named capture directory on the invocation view and invoke result. The driver triages worker output, appends provider-shaped records, then requests the shown event. On overrun wait; cancel-invocation requires recorded local ownership and refuses historical invocations without it. Live owned work and pending cleanup block retry and state departure. On failed inspect capture_dir/summary.json and captured stdout before stderr. Consult the change report of record before reuse. For review reuse, append one evidence-applicability record referencing the original evidence, current target, attesting driver, and short reason; semantic applicability remains the driver's judgment.",
                 slot_id = slot.id,
                 command = binding.command,
                 run_id = run.id,
@@ -871,7 +870,23 @@ pub fn project_with_invocations_and_subjects(
             .collect(),
     };
 
+    let effective_bindings = data
+        .run
+        .workflow
+        .work_slots
+        .iter()
+        .filter_map(|slot| {
+            Some((
+                slot.id.to_string(),
+                crate::effective_binding(&data.run, &slot.id)?.ok()?,
+            ))
+        })
+        .collect();
     Ok(ShowProjection {
+        override_summary: data.run.override_summary.clone(),
+        state_visit: data.run.control_revision.as_u64(),
+        binding_amendments: data.run.binding_amendments.clone(),
+        effective_bindings,
         run_id: data.run.id,
         label: data.run.label,
         workflow_id: data.run.workflow.id,
@@ -904,10 +919,26 @@ where
         Ok(data) => data,
         Err(error) => return persistence_error(error),
     };
-    let invocations = match persistence.load_work_slot_invocations(&request.run_id) {
+    let mut invocations = match persistence.load_work_slot_invocations(&request.run_id) {
         Ok(invocations) => invocations,
         Err(error) => return persistence_error(error),
     };
+    // A waiter may commit completion and exit after the first database read.
+    // Sample liveness once, then refresh dead-waiter rows before calling them
+    // failed. Otherwise a successful completion can flicker through failure.
+    let liveness: BTreeMap<_, _> = invocations
+        .iter()
+        .map(|row| (row.waiter_pid, process.waiter_alive(row.waiter_pid)))
+        .collect();
+    if invocations
+        .iter()
+        .any(|row| row.status.is_none() && !liveness[&row.waiter_pid])
+    {
+        invocations = match persistence.load_work_slot_invocations(&request.run_id) {
+            Ok(invocations) => invocations,
+            Err(error) => return persistence_error(error),
+        };
+    }
     let mut current_subjects = BTreeMap::new();
     for slot_id in invocations
         .iter()
@@ -926,7 +957,7 @@ where
         data,
         &invocations,
         now,
-        |pid| process.waiter_alive(pid),
+        |pid| liveness.get(&pid).copied().unwrap_or(true),
         &current_subjects,
     ) {
         Ok(projection) => OperationOutcome::completed(projection),
@@ -1380,6 +1411,7 @@ mod tests {
             "invocation_id",
             "overlay_meaning",
             "remaining_allowed_ms",
+            "routed_inputs",
             "slot_id",
             "started_at",
             "status",
@@ -1452,8 +1484,9 @@ mod tests {
             OVERLAY_MEANING_OVERRUN
         );
         assert!(
-            OVERLAY_MEANING_OVERRUN.contains("immediately before re-invoking"),
-            "overrun overlay_meaning must require show before re-invoke: {OVERLAY_MEANING_OVERRUN}"
+            OVERLAY_MEANING_OVERRUN
+                .contains("use cancel-invocation when local ownership is recorded"),
+            "overrun must name the live-work wait/cancel remedy: {OVERLAY_MEANING_OVERRUN}"
         );
         assert!(projection.work_slot_invocations[3].inner_workers.is_empty());
         assert_eq!(projection.work_slot_invocations[0].remaining_allowed_ms, 0);
@@ -1500,7 +1533,7 @@ mod tests {
             "Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work.",
             "Captures are at the named capture directory on the invocation view and invoke result.",
             "The driver triages worker output, appends provider-shaped records, then requests the shown event.",
-            "On overrun run show immediately before re-invoking the same slot.",
+            "On overrun wait; cancel-invocation requires recorded local ownership and refuses historical invocations without it. Live owned work and pending cleanup block retry and state departure.",
             "On failed inspect capture_dir/summary.json and captured stdout before stderr.",
         ];
         let mut cursor = 0;

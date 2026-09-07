@@ -2,16 +2,14 @@
 
 use super::{persistence_error, require_current_observation, show};
 use crate::{
-    instruction_digest, project_invocation_status, ContextRecord, CreateWorkSlotInvocationRequest,
-    InvocationId, OperationOutcome, Persistence, ProcessError, ProjectedInvocationStatus, RunId,
-    Timestamp, WaiterSpawnArgs, WorkSlotBinding, WorkSlotId, WorkSlotProcess,
+    instruction_digest, ContextRecord, CreateWorkSlotInvocationRequest, InvocationId,
+    OperationOutcome, Persistence, ProcessError, RunId, Timestamp, WaiterSpawnArgs,
+    WorkSlotBinding, WorkSlotId, WorkSlotProcess,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-
-const WORK_SLOT_BINDINGS_KEY: &str = "work_slot_bindings";
 
 /// Caller-supplied values needed to invoke a bound work slot.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -28,6 +26,10 @@ pub struct Request {
     /// and transports this value; the provider owns its meaning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invocation_input: Option<Value>,
+    #[serde(default)]
+    pub controls: crate::InvocationControls,
+    #[serde(default)]
+    pub preview: bool,
 }
 
 impl Request {
@@ -44,6 +46,8 @@ impl Request {
             database: database.into(),
             assignment_selection: None,
             invocation_input: None,
+            controls: crate::InvocationControls::default(),
+            preview: false,
         }
     }
 
@@ -68,6 +72,8 @@ pub struct Result {
     pub started_at: Timestamp,
     pub allowed_time_ms: u64,
     pub capture_dir: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<Value>,
 }
 
 #[derive(Serialize)]
@@ -85,6 +91,8 @@ struct WorkerPacket {
     invocation_input: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     standing_assignment_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    controls: Option<crate::InvocationControls>,
 }
 
 #[derive(Serialize)]
@@ -140,7 +148,7 @@ where
         );
     };
 
-    let Some(binding) = bound_worker(&run.initial_input, &request.slot_id) else {
+    let Some(binding) = crate::effective_binding(&run, &request.slot_id) else {
         return OperationOutcome::rejected(
             "unbound-work-slot",
             format!(
@@ -163,6 +171,12 @@ where
         );
     }
 
+    let controls =
+        match process.prepare_controls(&binding, &run.provider_association, &request.controls) {
+            Ok(controls) => controls,
+            Err(error) => return process_error(error),
+        };
+
     let assignment_selection = match validate_assignment_selection(
         process,
         &binding,
@@ -180,14 +194,12 @@ where
         .iter()
         .filter(|record| record.slot_id == request.slot_id)
     {
-        let projected =
-            project_invocation_status(record, now, process.waiter_alive(record.waiter_pid));
-        if projected == ProjectedInvocationStatus::Running {
+        if crate::invocation_owns_work(record, process.waiter_alive(record.waiter_pid)) {
             return OperationOutcome::rejected(
                 "work-slot-already-running",
                 format!(
-                    "work slot `{}` already has a running invocation",
-                    request.slot_id
+                    "work slot `{}` has live owned work or pending cleanup in invocation `{}` (including overrun); wait or cancel-invocation {} {} before retry",
+                    request.slot_id, record.invocation_id, request.run_id, record.invocation_id
                 ),
             );
         }
@@ -256,6 +268,93 @@ where
         return outcome;
     }
 
+    let forwarded_context = match prepare_context(
+        process,
+        &binding,
+        &run,
+        &request.slot_id,
+        &artifact_root,
+        &json!({"max_active": controls.max_active, "force_fresh": controls.force_fresh, "timeout_ms": allowed_time_ms}),
+        forwarded_context,
+    ) {
+        Ok(context) => context,
+        Err(error) => return process_error(error),
+    };
+
+    // Freeze standing before admission, using the same projection as show.
+    let standing_assignment_ids =
+        if controls.force_fresh || (forwarded_context.is_some() && invocations.is_empty()) {
+            Some(Vec::new())
+        } else if forwarded_context.is_some() {
+            let context = match persistence.load_context_records(&request.run_id) {
+                Ok(context) => context,
+                Err(error) => return persistence_error(error),
+            };
+            let data = crate::ShowData {
+                run: run.clone(),
+                context,
+                checked_evaluations: Vec::new(),
+            };
+            let mut subjects = std::collections::BTreeMap::new();
+            for id in invocations
+                .iter()
+                .map(|item| item.slot_id.clone())
+                .collect::<BTreeSet<_>>()
+            {
+                match persistence.get_current_slot_subject(&request.run_id, &id) {
+                    Ok(Some(subject)) => {
+                        subjects.insert(id, subject);
+                    }
+                    Ok(None) => {}
+                    Err(error) => return persistence_error(error),
+                }
+            }
+            match show::project_with_invocations_and_subjects(
+                data,
+                &invocations,
+                now,
+                |_| false,
+                &subjects,
+            ) {
+                Ok(projection) => Some(show::standing_assignment_ids(&projection)),
+                Err(error) => return OperationOutcome::error(error.code(), error.to_string()),
+            }
+        } else {
+            None
+        };
+    let mut preparation_packet = json!({
+        "run_id": request.run_id, "slot_id": request.slot_id, "artifact_root": artifact_root,
+        "instruction_body": instruction_body, "capture_dir": artifact_root,
+        "context": forwarded_context, "invocation_input": request.invocation_input,
+        "standing_assignment_ids": standing_assignment_ids, "controls": controls, "preview": true
+    });
+    preparation_packet
+        .as_object_mut()
+        .expect("packet object")
+        .retain(|_, value| !value.is_null());
+    let facade_preparation =
+        match process.prepare_facade(&binding, &run.provider_association, &preparation_packet) {
+            Ok(prepared) => prepared,
+            Err(error) => return process_error(error),
+        };
+    if request.preview {
+        return OperationOutcome::completed(Result {
+            invocation_id: request.invocation_id,
+            slot_id: request.slot_id.clone(),
+            started_at: now,
+            allowed_time_ms,
+            capture_dir: String::new(),
+            preview: Some(json!({
+                "slot_id": request.slot_id, "state_visit": run.control_revision,
+                "binding": binding, "controls": controls, "allowed_time_ms": allowed_time_ms,
+                "context": forwarded_context, "assignment_selection": assignment_selection,
+                "invocation_input": request.invocation_input, "instruction_body": instruction_body,
+                "artifact_root": artifact_root, "standing_assignment_ids": standing_assignment_ids,
+                "facade_preparation": facade_preparation
+            })),
+        });
+    }
+
     let capture_dir_path =
         capture_dir_path(&artifact_root, &request.slot_id, &request.invocation_id);
     let capture_dir = capture_dir_path.to_string_lossy().into_owned();
@@ -287,6 +386,7 @@ where
         allowed_time_ms,
         capture_dir.clone(),
     )
+    .with_controls(controls.clone())
     .with_routed_inputs(forwarded_context.clone().unwrap_or_default())
     .with_frozen_run_identity(json!({
         "provider": run.provider_association.as_json(),
@@ -294,56 +394,9 @@ where
     }))
     .with_assignment_selection(assignment_selection.clone())
     .with_invocation_input(request.invocation_input.clone());
-    let created = match persistence.create_work_slot_invocation(create) {
-        Ok(created) => created,
-        Err(error) => return persistence_error(error),
-    };
-
-    // Compute standing identities only after the new invocation is durable.
-    // This deliberately reuses the public show projection: a prior successful
-    // sidecar result is not enough unless that assignment is standing there.
-    let standing_assignment_ids = if forwarded_context.is_some() && invocations.is_empty() {
-        Some(Vec::new())
-    } else if forwarded_context.is_some() {
-        let context = match persistence.load_context_records(&request.run_id) {
-            Ok(context) => context,
-            Err(error) => return persistence_error(error),
-        };
-        let mut invocations = invocations;
-        invocations.push(created.invocation.clone());
-        let data = crate::ShowData {
-            run: run.clone(),
-            context,
-            checked_evaluations: Vec::new(),
-        };
-        let mut current_subjects = std::collections::BTreeMap::new();
-        for slot_id in invocations
-            .iter()
-            .map(|item| item.slot_id.clone())
-            .collect::<std::collections::BTreeSet<_>>()
-        {
-            match persistence.get_current_slot_subject(&request.run_id, &slot_id) {
-                Ok(Some(subject)) => {
-                    current_subjects.insert(slot_id, subject);
-                }
-                Ok(None) => {}
-                Err(error) => return persistence_error(error),
-            }
-        }
-        let projection = match show::project_with_invocations_and_subjects(
-            data,
-            &invocations,
-            now,
-            |_| false,
-            &current_subjects,
-        ) {
-            Ok(projection) => projection,
-            Err(error) => return OperationOutcome::error(error.code(), error.to_string()),
-        };
-        Some(show::standing_assignment_ids(&projection))
-    } else {
-        None
-    };
+    if let Err(error) = persistence.create_work_slot_invocation(create) {
+        return persistence_error(error);
+    }
 
     let envelope = WaiterEnvelope {
         command: binding.command,
@@ -358,6 +411,7 @@ where
             assignment_selection,
             invocation_input: request.invocation_input,
             standing_assignment_ids,
+            controls: (controls != crate::InvocationControls::default()).then_some(controls),
         },
     };
     let envelope_json = match serde_json::to_vec(&envelope) {
@@ -379,7 +433,35 @@ where
         started_at: now,
         allowed_time_ms,
         capture_dir,
+        preview: None,
     })
+}
+
+/// Shared launch/preview seam. Selection is bounded by the slot's eligible
+/// kinds; the callback cannot replace records or protected execution values.
+pub fn prepare_context<P: WorkSlotProcess + ?Sized>(
+    process: &P,
+    binding: &WorkSlotBinding,
+    run: &crate::Run,
+    slot_id: &WorkSlotId,
+    artifact_root: &str,
+    controls: &Value,
+    eligible: Option<Vec<ContextRecord>>,
+) -> std::result::Result<Option<Vec<ContextRecord>>, ProcessError> {
+    let Some(filter) = &binding.context_filter else {
+        return Ok(eligible);
+    };
+    let records = eligible.unwrap_or_default();
+    let packet = json!({
+        "run_id": run.id, "slot_id": slot_id,
+        "work_slots": run.workflow.work_slots,
+        "artifact_root": artifact_root, "controls": controls,
+        "context": records,
+    });
+    let selection = process.filter_context(filter, &packet)?;
+    crate::resolve_context_filter(&records, &selection)
+        .map(Some)
+        .map_err(|message| ProcessError::new("invalid-context-filter-selection", message))
 }
 
 fn validate_assignment_selection<P: WorkSlotProcess + ?Sized>(
@@ -429,27 +511,6 @@ fn validate_assignment_selection<P: WorkSlotProcess + ?Sized>(
         }
     }
     Ok(Some(requested.to_vec()))
-}
-
-fn bound_worker(
-    initial_input: &Value,
-    slot_id: &WorkSlotId,
-) -> Option<std::result::Result<WorkSlotBinding, String>> {
-    let Value::Object(map) = initial_input else {
-        return None;
-    };
-    let bindings_value = map.get(WORK_SLOT_BINDINGS_KEY)?;
-    let Value::Object(bindings) = bindings_value else {
-        return None;
-    };
-    let binding = bindings.get(slot_id.as_str())?;
-    Some(
-        serde_json::from_value::<WorkSlotBinding>(binding.clone()).map_err(|error| {
-            format!(
-                "work_slot_bindings[{slot_id}] must be an object with exactly {{command, args}}: {error}"
-            )
-        }),
-    )
 }
 
 fn artifact_root_from_input(initial_input: &Value) -> String {
@@ -956,7 +1017,7 @@ mod tests {
     }
 
     #[test]
-    fn overlay_overrun_is_not_already_running_and_invoke_is_accepted() {
+    fn recovery_cancellation_overrun_live_waiter_refuses_retry() {
         let artifacts = tempfile::tempdir().expect("temp artifact root");
         let artifact_root = artifacts.path().to_string_lossy().into_owned();
         let (persistence, process, log) = harness(sample_run(bound_input(&artifact_root)));
@@ -973,8 +1034,13 @@ mod tests {
             30_000,
         );
 
-        assert!(outcome.is_completed(), "{outcome:?}");
-        assert_eq!(&*log.borrow(), &["spawn", "create", "send"]);
+        assert!(outcome.is_rejected(), "{outcome:?}");
+        assert!(outcome
+            .issue()
+            .unwrap()
+            .message
+            .contains("cancel-invocation"));
+        assert!(log.borrow().is_empty());
         assert!(!process.waited.get());
     }
 

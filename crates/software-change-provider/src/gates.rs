@@ -12,7 +12,7 @@ use crate::artifacts::{
 use crate::checkpoint;
 use crate::config::parse_initial_input;
 use crate::criterion::{self, CriterionViolation};
-use crate::evidence::{evaluate_evidence, AuthorIdentity as EvidenceAuthorIdentity};
+use crate::evidence::AuthorIdentity as EvidenceAuthorIdentity;
 use crate::finding_ledger::evaluate_finding_ledger;
 use crate::overlay;
 use crate::protocol::{allow_response, deny_response, unsupported_response, EvaluateRequest};
@@ -146,7 +146,13 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
         // semantic evidence or a finding ledger is configured. Schema-only
         // draft hops need no metadata extraction.
         if gate.is_some() {
-            match extract_metadata(subject, document.value()) {
+            let extracted =
+                if subject == "validation-report.json" && initial_input["contract_version"] == 2 {
+                    crate::artifacts::extract_index_metadata(document.value())
+                } else {
+                    extract_metadata(subject, document.value())
+                };
+            match extracted {
                 Ok(value) => metadata = Some(value),
                 Err(error) => return EvaluationOutcome::EvaluationError(error.to_string()),
             }
@@ -254,6 +260,35 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
         }
     }
 
+    // Explicit v2 policy only: historical profile bytes never acquire criteria.
+    if subject == "validation-report.json" && initial_input.get("contract_version").is_some() {
+        let result = (|| {
+            let root = std::path::Path::new(
+                config
+                    .artifact_root()
+                    .and_then(Value::as_str)
+                    .ok_or("missing artifact_root")?,
+            );
+            let bytes = std::fs::read(root.join(subject)).map_err(|e| e.to_string())?;
+            let report: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+            crate::validation::evaluate(
+                &initial_input,
+                &request.context,
+                root,
+                &report,
+                request.transition.source.as_str() != "validation"
+                    || request.transition.target.as_str() == "end",
+            )
+        })();
+        if let Err(error) = result {
+            return EvaluationOutcome::Response(deny_response(
+                "software-change-criterion-incomplete",
+                "criterion validation incomplete",
+                Some(json!({"diagnostic":error})),
+            ));
+        }
+    }
+
     if overlay_on && is_passed(request) && !bookends_is_green(bookends_report.as_ref()) {
         return EvaluationOutcome::Response(bookends_red_deny(
             request,
@@ -273,31 +308,12 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
     if let (Some(gate), Some(metadata)) = (gate, metadata.as_ref()) {
         let subject_author =
             EvidenceAuthorIdentity::new(metadata.author().name(), metadata.author().kind());
-        let evidence = axes.map(|axes| {
-            evaluate_evidence(
-                &request.context,
-                gate,
-                subject,
-                metadata.revision(),
-                &subject_author,
-                config.config_version(),
-                axes,
-                config.axis_namespace(),
-                config.artifact_root(),
-            )
-        });
-        let failing_evidence = evidence
-            .as_ref()
-            .map(|evaluation| evaluation.failing_findings())
-            .cloned()
-            .unwrap_or_default();
         let ledger = evaluate_finding_ledger(
             &request.context,
             gate,
             subject,
             metadata.revision(),
             &config,
-            &failing_evidence,
         );
         if !ledger.is_satisfied() {
             let mut details = ledger
@@ -313,6 +329,20 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
                 Some(Value::Object(details)),
             ));
         }
+        let evidence = axes.map(|axes| {
+            crate::evidence::evaluate_evidence_with_dispositions(
+                &request.context,
+                gate,
+                subject,
+                metadata.revision(),
+                &subject_author,
+                config.config_version(),
+                axes,
+                config.axis_namespace(),
+                config.artifact_root(),
+                ledger.current_snapshot(),
+            )
+        });
         if let Some(evidence) = evidence {
             if !evidence.is_satisfied() {
                 let details = evidence.details_value();
@@ -321,6 +351,7 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
                     "diagnostics": details.get("diagnostics").cloned().unwrap_or(Value::Array(Vec::new())),
                     "informational": details.get("informational").cloned().unwrap_or(Value::Array(Vec::new())),
                     "inert_records": details.get("inert_records").cloned().unwrap_or(Value::Array(Vec::new())),
+                    "satisfied_by_disposition": details.get("satisfied_by_disposition").cloned().unwrap_or(Value::Array(Vec::new())),
                     "prior_denials": prior_denials(request),
                 });
                 return EvaluationOutcome::Response(deny_response(

@@ -13,8 +13,12 @@ mod finding_ledger;
 mod gates;
 mod overlay;
 mod protocol;
+mod recovery_contract;
+mod review_batch;
+mod review_candidates;
 mod run_plan_graph;
 mod schema;
+mod validation;
 mod workflow;
 
 use protocol::{DescribeRequest, EvaluateRequest};
@@ -66,12 +70,49 @@ fn run() -> i32 {
                 }
             };
         }
+        Some(command) if command == "run-validation" || command == "validation-command" => {
+            let rest: Vec<String> = args.map(|s| s.to_string_lossy().into_owned()).collect();
+            let result = if command == "validation-command" {
+                validation::capture(&rest)
+            } else {
+                serde_json::from_reader(io::stdin())
+                    .map_err(|e| e.to_string())
+                    .and_then(|show| validation::run(&rest, &show))
+            };
+            return match result {
+                Ok(value) => {
+                    println!("{value}");
+                    if value.get("commands_passed") == Some(&json!(false)) {
+                        1
+                    } else {
+                        0
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{command:?}: {e}");
+                    2
+                }
+            };
+        }
+        Some(command) if command == "commission" => {
+            let rest = match args
+                .map(|arg| arg.into_string())
+                .collect::<Result<Vec<_>, _>>()
+            {
+                Ok(rest) => rest,
+                Err(_) => {
+                    eprintln!("commission arguments must be UTF-8");
+                    return 2;
+                }
+            };
+            return software_change_provider::commission::run_from_stdin(&rest);
+        }
         Some(command) if command == "review-candidates" => {
             if args.next().is_some() {
                 eprintln!("review-candidates accepts no additional arguments");
                 return 2;
             }
-            return software_change_provider::review_candidates::run_from_stdin();
+            return review_candidates::run_from_stdin();
         }
         Some(command) if command == "checkpoint" => {
             let rest = match args
@@ -189,7 +230,7 @@ fn run_protocol() -> i32 {
 
 fn provider_help() -> i32 {
     println!(
-        "software-change\n\nUsage:\n  software-change < stdin\n  software-change data-dump DIR\n  software-change checkpoint --phase implementation|validation --artifact-root ABS --working-directory ABS\n  software-change review-candidates\n  software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--task ID ... | --tasks ID,ID,...] [--max-active N]\n  software-change --help | -h\n  software-change --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nReview candidates:\n  review-candidates  read one completed `show` JSON envelope from stdin and emit inert selected-review candidates\n\nData:\n  data-dump  materialize embedded provider data under DIR\n\nPlan graph:\n  run-plan-graph  requires --working-directory ABS (one existing driver-selected directory for every selected task and summarizer; no Git/worktree management) and executes plan.json as a Dagu type:graph (--max-active N; omitted means {MAX_CONCURRENCY} ordinary tasks) with a mandatory summarizer"
+        "software-change\n\nUsage:\n  software-change < stdin\n  software-change data-dump DIR\n  software-change checkpoint --phase implementation|validation --artifact-root ABS --working-directory ABS\n  software-change review-candidates\n  software-change commission [--slot SLOT] [--task TASK]\n  software-change run-validation --engine ABS --working-directory ABS --revision REV [--commands ID,...] [--timeout-ms N]\n  software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--task ID ... | --tasks ID,ID,...] [--max-active N]\n  software-change --help | -h\n  software-change --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nReview candidates:\n  review-candidates  read one completed `show` JSON envelope from stdin and emit inert selected-review candidates\n\nData:\n  data-dump  materialize embedded provider data under DIR\n\nPlan graph:\n  run-plan-graph  requires --working-directory ABS (one existing driver-selected directory for every selected task and summarizer; no Git/worktree management) and executes plan.json as a Dagu type:graph (--max-active N; omitted means {MAX_CONCURRENCY} ordinary tasks) with a mandatory summarizer"
     );
     0
 }
@@ -449,7 +490,7 @@ fn execute_stdin_exec(args: StdinExecArgs) -> i32 {
     if let Some(session_dir) = session_dir.as_ref() {
         command.env(PI_CODING_AGENT_SESSION_DIR, session_dir);
     }
-    let mut child = match command.spawn() {
+    let mut child = match loop_integrations::ownership::spawn_admitted(&mut command) {
         Ok(child) => child,
         Err(error) => {
             return stdin_exec_failed(
@@ -535,6 +576,16 @@ fn describe(request: Value) -> i32 {
         Ok(_) => return protocol_error("describe request has the wrong operation".into()),
         Err(error) => return protocol_error(format!("invalid describe request: {error}")),
     };
+    // Bare describe remains topology discovery, not execution admission.
+    if let Some(input) = request
+        .initial_input
+        .as_ref()
+        .filter(|v| v.get("config_version").is_some() || v.get("contract_version").is_some())
+    {
+        if let Err(message) = recovery_contract::RecoveryContract::from_input(input) {
+            return protocol_error(message);
+        }
+    }
     match workflow::describe_workflow(request.initial_input.as_ref()) {
         Ok(workflow) => write_json(&workflow),
         Err(message) => protocol_error(message),

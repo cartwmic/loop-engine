@@ -2,6 +2,7 @@
 
 pub use loop_core::{ProviderError, ProviderGateway, ProviderResolutionError, ProviderResolver};
 
+pub mod ownership;
 mod provider;
 mod provider_gateway;
 mod sqlite;

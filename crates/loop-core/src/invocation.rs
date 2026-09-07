@@ -1,15 +1,10 @@
 //! Shared invocation helpers: instruction digest and the reader overlay.
 //!
-//! LOCKED (do not reopen):
-//! - Reader overlay: ONE loop-core function used later by show, history, event,
-//!   invoke, and bound-slot-gate. Stored waiter-written statuses are ONLY
-//!   `succeeded` and `failed`. `running` means the waiter is still alive. If
-//!   stored status is unwritten AND waiter alive AND elapsed from started_at >=
-//!   allowed_time_ms, project `overrun`. Overlay-overrun is terminal for
-//!   retry: invoke MUST NOT reject as already-running. If waiter pid is gone
-//!   and no terminal status was written, project `failed` (crash residual).
-//!   Waiter does not write `overrun`. Later CLIs do not waitpid the original
-//!   worker.
+//! - One shared reader overlay keeps stored terminal status distinct from
+//!   liveness and elapsed allowance. Retained owned work and pending cleanup
+//!   keep an invocation live despite waiter loss. Overrun never grants retry
+//!   permission. Historical records without ownership retain their old reads.
+//!   Cancellation is finalized only by verified cleanup, not waiter loss.
 //! - Overlay is a PURE loop-core function: it does not probe OS processes.
 //!   Signature: stored record + `now: Timestamp` + `waiter_alive: bool` →
 //!   projected status `running|succeeded|failed|overrun`. Callers supply
@@ -37,7 +32,9 @@ pub fn project_invocation_status(
     match record.status {
         Some(WaiterWrittenStatus::Succeeded) => ProjectedInvocationStatus::Succeeded,
         Some(WaiterWrittenStatus::Failed) => ProjectedInvocationStatus::Failed,
-        None if !waiter_alive => ProjectedInvocationStatus::Failed,
+        None if !crate::invocation_owns_work(record, waiter_alive) => {
+            ProjectedInvocationStatus::Failed
+        }
         None => {
             let elapsed_ms = elapsed_millis(record.started_at, now);
             if elapsed_ms >= record.allowed_time_ms {

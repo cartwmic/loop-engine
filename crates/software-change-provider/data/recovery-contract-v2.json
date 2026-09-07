@@ -1,0 +1,54 @@
+{
+  "status": "active-v2-contract-examples-not-gate-evidence",
+  "declaration": {
+    "contract_version": 2,
+    "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}
+  },
+  "profile_versions": ["minimal-9", "standard-9", "high-rigor-9"],
+  "examples": {
+    "finding-ledger": {"schema_version": "1", "gate": "design-review", "subject": "design.json", "subject_revision": "2", "author": {"name": "driver", "kind": "agent"}, "findings": [{"id": "F-1", "source": {"kind": "context-record", "id": "original-fail"}, "policy_id": "correctness", "statement": "Original finding retained verbatim", "disposition": "rejected", "reason": "Driver rejects the claim with retained evidence", "owner_phase": null, "task_ids": [], "review_axes": [], "status": "recorded"}]},
+    "reviewer-manifest": {"gate": "design-review", "authors": [{"name": "reviewer", "kind": "agent"}], "reason": "current roster"},
+    "user-steering": {"target": {"kind": "tasks", "plan_revision": "1", "ids": ["T01"]}, "instruction": "Run only the assigned focused proof", "supersedes": []},
+    "grouped-review": {"author": {"name": "reviewer", "kind": "agent"}, "judgments": [{"axis": "correctness", "result": "pass", "findings": []}, {"axis": "maintainability", "reuse": "carry-maintainability"}]},
+    "proof-command": {"id": "focused-contracts", "command": "cargo", "args": ["test", "-p", "loop-core", "--lib", "execution_contract"], "owner": "T01", "obligation": "Contract serialization and rejection"},
+    "criterion-verdict": {"criterion_id": "AC-1", "subject": "validation-report.json", "subject_revision": "1", "checkpoint": "validation-checkpoint.json", "author": {"name": "reviewer", "kind": "agent"}, "result": "pass", "findings": [], "evidence_context_ids": ["command-focused-contracts"]},
+    "goal-verdict": {"subject": "validation-report.json", "subject_revision": "1", "checkpoint": "validation-checkpoint.json", "author": {"name": "reviewer", "kind": "agent"}, "result": "pass", "findings": [], "evidence_context_ids": ["command-focused-contracts"]},
+    "criterion-index": {"criterion_id": "AC-1", "verdict_ids": ["criterion-ac-1"]},
+    "goal-index": {"goal_verdict_ids": ["goal-verdict-1"]}
+  },
+  "schemas": {
+    "proof-command": {
+      "type": "object",
+      "required": ["id", "command", "args", "owner", "obligation"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "command": {"type": "string", "minLength": 1},
+        "args": {"type": "array", "items": {"type": "string"}},
+        "owner": {"type": "string", "minLength": 1},
+        "obligation": {"type": "string", "minLength": 1}
+      }
+    },
+    "criterion-index": {
+      "type": "object",
+      "required": ["criterion_id", "verdict_ids"],
+      "additionalProperties": false,
+      "properties": {
+        "criterion_id": {"type": "string", "minLength": 1},
+        "verdict_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "goal-index": {
+      "type": "object",
+      "required": ["goal_verdict_ids"],
+      "additionalProperties": false,
+      "properties": {
+        "goal_verdict_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+      }
+    }
+  },
+  "pending": [
+    "Calibration semantic attestations remain pending; example records and preselected index IDs never satisfy a live gate by themselves.",
+    "Requirement wording and new IDs remain proposals until owner acceptance and commit."
+  ]
+}

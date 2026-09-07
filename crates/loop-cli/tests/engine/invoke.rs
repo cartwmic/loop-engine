@@ -10,6 +10,44 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tempfile::tempdir;
 
+#[test]
+fn recovery_execution_controls_public_scenario() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = Command::new("python3")
+        .current_dir(&root)
+        .args([
+            "scripts/software-change-journey.py",
+            "--mode",
+            "source",
+            "--engine",
+        ])
+        .arg(workspace_integration::binary("loop-engine"))
+        .arg("--provider")
+        .arg(workspace_integration::binary("software-change"))
+        .args(["--data-root", ".", "--work-root"])
+        .arg(
+            std::env::temp_dir().join(format!("recovery-execution-central-{}", std::process::id())),
+        )
+        .args([
+            "--profile",
+            "crates/software-change-provider/data/configs/high-rigor.json",
+            "--traversal-depth",
+            "full",
+            "--scenario",
+            "execution-controls",
+        ])
+        .bounded_output("execution controls public scenario")
+        .expect("run execution controls public scenario");
+    assert!(
+        output.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout)
+        .contains("recovery execution-controls scenario passed"));
+}
+
 fn workflow() -> Workflow {
     Workflow::new(
         "test-workflow",
@@ -23,6 +61,7 @@ fn workflow() -> Workflow {
             Transition::checked("start", "approve", "middle"),
             Transition::checked("start", "retry", "start"),
             Transition::check_free("middle", "finish", "done"),
+            Transition::check_free("start", "rescope", "done"),
         ],
     )
     .with_work_slots(vec![WorkSlot::new("slot-1", "start", "approve")])
@@ -467,7 +506,7 @@ fn invoke_already_running_live_waiter_is_rejected() {
 }
 
 #[test]
-fn invoke_overlay_overrun_is_not_already_running() {
+fn recovery_cancellation_invoke_overrun_refuses_live_retry() {
     let directory = tempdir().expect("tempdir");
     let database = directory.path().join("loop.db");
     let packet_file = directory.path().join("packet.json");
@@ -513,11 +552,15 @@ fn invoke_overlay_overrun_is_not_already_running() {
         .expect("create overrun record");
 
     let output = run_invoke(&database, &[], "run-overrun", "slot-1");
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(output.status.code(), Some(10), "{output:?}");
+    let refusal: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(refusal["message"]
+        .as_str()
+        .unwrap()
+        .contains("cancel-invocation"));
     let invocations = load_invocations(&database, "run-overrun");
-    assert_eq!(invocations.len(), 2);
-
-    wait_until_terminal(&database, "run-overrun", 2, Duration::from_secs(5));
+    assert_eq!(invocations.len(), 1);
+    assert!(!packet_file.exists());
     terminate_pid(live_pid);
     let _ = live.kill();
     let _ = live.wait();
@@ -592,7 +635,7 @@ fn invoke_happy_path_writes_worker_packet_without_command() {
 }
 
 #[test]
-fn invoke_worker_ppid_equals_waiter_pid_not_invoke() {
+fn invoke_worker_ppid_equals_published_admission_root_not_invoke() {
     let directory = tempdir().expect("tempdir");
     let database = directory.path().join("loop.db");
     let ppid_file = directory.path().join("ppid.txt");
@@ -632,10 +675,13 @@ fn invoke_worker_ppid_equals_waiter_pid_not_invoke() {
     assert_eq!(output.status.code(), Some(0), "{output:?}");
 
     wait_until_terminal(&database, "run-ppid", 1, Duration::from_secs(5));
-    let waiter_pid = load_invocations(&database, "run-ppid")[0].waiter_pid;
+    let invocation = load_invocations(&database, "run-ppid").remove(0);
+    let owned = invocation.ownership.unwrap();
     let recorded = std::fs::read_to_string(&ppid_file).expect("read ppid file");
-    assert_eq!(recorded, waiter_pid.to_string());
+    assert_eq!(recorded, owned.execution.root_pid.to_string());
+    assert_ne!(recorded, invocation.waiter_pid.to_string());
     assert_ne!(recorded, invoke_pid.to_string());
+    assert!(!owned.live_owned_work && !owned.cleanup_pending);
 }
 
 #[test]
@@ -711,7 +757,7 @@ fn invoke_packet_is_not_present_on_worker_argv() {
 }
 
 #[test]
-fn elapsed_time_overrun_then_retry_show_history_gate() {
+fn recovery_cancellation_elapsed_time_requires_cleanup_before_retry_and_departure() {
     let directory = tempdir().expect("tempdir");
     let database = directory.path().join("loop.db");
     let artifact_root = directory.path().to_string_lossy().into_owned();
@@ -733,6 +779,22 @@ fn elapsed_time_overrun_then_retry_show_history_gate() {
     impl Drop for KillWaiters {
         fn drop(&mut self) {
             for invocation in load_invocations(&self.database, &self.run_id) {
+                if invocation
+                    .ownership
+                    .as_ref()
+                    .is_some_and(|o| o.live_owned_work || o.cleanup_pending)
+                {
+                    let _ = Command::new(workspace_integration::binary("loop-engine"))
+                        .args([
+                            "--database",
+                            self.database.to_str().unwrap(),
+                            "--json",
+                            "cancel-invocation",
+                            &self.run_id,
+                            invocation.invocation_id.as_str(),
+                        ])
+                        .bounded_output("failed fixture cancellation cleanup");
+                }
                 terminate_pid(invocation.waiter_pid);
             }
         }
@@ -855,11 +917,39 @@ fn elapsed_time_overrun_then_retry_show_history_gate() {
     assert_eq!(event_json["status"], "rejected");
     assert_eq!(event_json["code"], "bound-slot-invocation-required");
 
+    let refused = run_invoke(&database, &[], "run-elapsed-overrun", "slot-1");
+    assert_eq!(refused.status.code(), Some(10), "{refused:?}");
+    let public = |args: &[&str]| {
+        let output = Command::new(workspace_integration::binary("loop-engine"))
+            .args(["--database", database.to_str().unwrap(), "--json"])
+            .args(args)
+            .bounded_output("public cancellation barrier")
+            .unwrap();
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    let departure = public(&["event", "run-elapsed-overrun", "rescope"]);
+    assert_eq!(departure["code"], "live-owned-work", "{departure}");
+    let cancelled = public(&["cancel-invocation", "run-elapsed-overrun", &invocation_id]);
+    assert_eq!(cancelled["status"], "completed", "{cancelled}");
     let second = run_invoke(&database, &[], "run-elapsed-overrun", "slot-1");
     assert_eq!(second.status.code(), Some(0), "{second:?}");
     let parsed_second: Value = serde_json::from_slice(&second.stdout).expect("second invoke json");
-    assert_eq!(parsed_second["status"], "completed");
-    assert_ne!(parsed_second["code"], "work-slot-already-running");
+    let second_id = parsed_second["result"]["invocation_id"].as_str().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while load_invocations(&database, "run-elapsed-overrun")[1]
+        .ownership
+        .is_none()
+    {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        public(&["cancel-invocation", "run-elapsed-overrun", second_id])["status"],
+        "completed"
+    );
+    public(&["show", "run-elapsed-overrun"]);
+    let departure = public(&["event", "run-elapsed-overrun", "rescope"]);
+    assert_eq!(departure["status"], "completed", "{departure}");
 }
 
 #[test]

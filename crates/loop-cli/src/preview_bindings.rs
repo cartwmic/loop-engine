@@ -65,6 +65,8 @@ pub(crate) struct DaguCheck {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct SlotPreview {
     pub(crate) slot_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) context_filter: Option<loop_core::ContextFilter>,
     pub(crate) command: String,
     pub(crate) args: Vec<String>,
     pub(crate) workers: Vec<PreviewWorker>,
@@ -222,9 +224,9 @@ fn bindings_map(value: Value) -> Result<Map<String, Value>, PreviewError> {
 }
 
 fn preview_slot(slot_id: &str, value: Value) -> Result<SlotPreview, PreviewError> {
-    let binding: BindingCli = serde_json::from_value(value).map_err(|error| {
+    let binding: loop_core::WorkSlotBinding = serde_json::from_value(value).map_err(|error| {
         PreviewError::new(format!(
-            "work_slot_bindings[{slot_id}] must be an object with exactly string `command` and array-of-string `args`: {error}"
+            "work_slot_bindings[{slot_id}] requires string `command`, array-of-string `args`, and optional closed `context_filter`: {error}"
         ))
     })?;
     let workers = nested_workers(slot_id, &binding.args)?;
@@ -237,6 +239,7 @@ fn preview_slot(slot_id: &str, value: Value) -> Result<SlotPreview, PreviewError
     let preview_args = redact_nested_preambles(&binding.args);
     Ok(SlotPreview {
         slot_id: slot_id.to_owned(),
+        context_filter: binding.context_filter,
         command: binding.command,
         args: preview_args,
         workers: workers.into_iter().map(PreviewWorker::from).collect(),
@@ -505,6 +508,20 @@ mod tests {
     use crate::{execute, EXIT_COMPLETED, EXIT_INVALID_INVOCATION};
     use serde_json::json;
     use std::io::Cursor;
+
+    #[test]
+    fn recovery_steering_preview_preserves_closed_filter_binding() {
+        let filter = json!({"command":"/absolute/software-change","args":["commission"]});
+        let source = json!({"intent-draft":{"command":"worker","args":[],"context_filter":filter}});
+        let report = preview(&source.to_string(), false).unwrap();
+        assert_eq!(
+            serde_json::to_value(&report.bindings[0]).unwrap()["context_filter"],
+            filter
+        );
+        let mut invalid = source;
+        invalid["intent-draft"]["context_filter"]["instruction_body"] = json!("rewrite");
+        assert!(preview(&invalid.to_string(), false).is_err());
+    }
 
     fn worker_json(command: &str, args: &[&str]) -> String {
         json!({"command": command, "args": args}).to_string()

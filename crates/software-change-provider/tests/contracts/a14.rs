@@ -113,6 +113,9 @@ const EXPECTED_TRANSITIONS: &[(&str, &str, &str, &str)] = &[
         "implementation-review",
         "checked",
     ),
+    ("implement", "revise-plan", "plan", "check-free"),
+    ("implement", "revise-design", "design", "check-free"),
+    ("implement", "revise-intent", "explore", "check-free"),
     (
         "implementation-review",
         "approved",
@@ -319,32 +322,30 @@ fn subject_for_review(source: &str) -> &'static str {
     }
 }
 
-#[test]
-fn owning_phase_routes_are_requestable_committed_and_persisted_on_fresh_runs() {
+fn assert_owning_phase_route(index: usize) {
     assert_eq!(OWNING_PHASE_ROUTES.len(), 10);
-
-    for (index, &(source, event, target)) in OWNING_PHASE_ROUTES.iter().enumerate() {
-        let state = TestDir::new(&format!("a14-route-state-{index}"));
-        let repository = state.path().join("repository");
-        fs::create_dir_all(&repository).expect("create route repository");
-        fs::write(repository.join("marker.txt"), b"baseline\n").expect("write route marker");
-        for args in [
-            vec!["init", "-q"],
-            vec!["config", "user.name", "software-change a14"],
-            vec!["config", "user.email", "a14@example.invalid"],
-            vec!["config", "commit.gpgsign", "false"],
-            vec!["add", "-A"],
-            vec!["commit", "-qm", "baseline"],
-        ] {
-            assert!(Command::new("git")
-                .args(args)
-                .current_dir(&repository)
-                .status()
-                .expect("run git")
-                .success());
-        }
-        let wrapper = state.path().join("provider-wrapper.py");
-        fs::write(
+    let (source, event, target) = OWNING_PHASE_ROUTES[index];
+    let state = TestDir::new(&format!("a14-route-state-{index}"));
+    let repository = state.path().join("repository");
+    fs::create_dir_all(&repository).expect("create route repository");
+    fs::write(repository.join("marker.txt"), b"baseline\n").expect("write route marker");
+    for args in [
+        vec!["init", "-q"],
+        vec!["config", "user.name", "software-change a14"],
+        vec!["config", "user.email", "a14@example.invalid"],
+        vec!["config", "commit.gpgsign", "false"],
+        vec!["add", "-A"],
+        vec!["commit", "-qm", "baseline"],
+    ] {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&repository)
+            .status()
+            .expect("run git")
+            .success());
+    }
+    let wrapper = state.path().join("provider-wrapper.py");
+    fs::write(
             &wrapper,
             format!(
                 "#!/usr/bin/env python3\nimport os\nos.chdir({repository:?})\nos.execv({provider:?}, [{provider:?}] + os.sys.argv[1:])\n",
@@ -353,125 +354,195 @@ fn owning_phase_routes_are_requestable_committed_and_persisted_on_fresh_runs() {
             ),
         )
         .expect("write provider wrapper");
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755))
-            .expect("chmod provider wrapper");
-        let engine = Engine::with_command(state.path().join("route.sqlite"), &wrapper);
-        let run_id = format!("a14-route-{index}");
-        let mut policies = serde_json::Map::new();
-        policies.insert(
-            source.to_owned(),
-            json!([{"id": "axis", "description": "test axis"}]),
-        );
-        let subject = subject_for_review(source);
-        let mut schemas = serde_json::Map::new();
-        schemas.insert(subject.to_owned(), metadata_schema());
-        engine.start_ok(
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755))
+        .expect("chmod provider wrapper");
+    let engine = Engine::with_command(state.path().join("route.sqlite"), &wrapper);
+    let run_id = format!("a14-route-{index}");
+    let mut policies = serde_json::Map::new();
+    policies.insert(
+        source.to_owned(),
+        json!([{"id": "axis", "description": "test axis"}]),
+    );
+    let subject = subject_for_review(source);
+    let mut schemas = serde_json::Map::new();
+    schemas.insert(
+        subject.to_owned(),
+        if source == "validation-review" {
+            support::load_profile("minimal")["artifact_schemas"][subject].clone()
+        } else {
+            metadata_schema()
+        },
+    );
+    engine.start_ok(
             &run_id,
-            json!({
+            json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
                 "config_version": "a14-route-test",
                 "review_policies": policies,
                 "artifact_schemas": schemas
             }),
         );
-        let shown = engine.show(&run_id);
-        let root = shown.initial_input["artifact_root"]
-            .as_str()
-            .expect("allocated artifact_root");
+    let shown = engine.show(&run_id);
+    let root = shown.initial_input["artifact_root"]
+        .as_str()
+        .expect("allocated artifact_root");
+    fs::write(
+        Path::new(root).join(subject),
+        serde_json::to_vec(&valid_metadata("1")).expect("serialize subject"),
+    )
+    .expect("write subject artifact");
+    if matches!(source, "implementation-review" | "validation-review") {
+        fs::write(Path::new(root).join("intent.json"), br#"{"revision":"1"}"#)
+            .expect("write checkpoint intent");
+        fs::write(Path::new(root).join("design.json"), br#"{"revision":"1"}"#)
+            .expect("write checkpoint design");
+        fs::write(Path::new(root).join("plan.json"), br#"{"revision":"1"}"#)
+            .expect("write checkpoint plan");
         fs::write(
-            Path::new(root).join(subject),
-            serde_json::to_vec(&valid_metadata("1")).expect("serialize subject"),
+            Path::new(root).join("implementation-report.json"),
+            serde_json::to_vec(&valid_metadata("1")).expect("serialize implementation report"),
         )
-        .expect("write subject artifact");
-        if matches!(source, "implementation-review" | "validation-review") {
-            fs::write(Path::new(root).join("intent.json"), br#"{"revision":"1"}"#)
-                .expect("write checkpoint intent");
-            fs::write(Path::new(root).join("design.json"), br#"{"revision":"1"}"#)
-                .expect("write checkpoint design");
-            fs::write(Path::new(root).join("plan.json"), br#"{"revision":"1"}"#)
-                .expect("write checkpoint plan");
+        .expect("write implementation report");
+    }
+    if source == "validation-review" {
+        for name in [
+            "intent",
+            "design",
+            "plan",
+            "implementation-report",
+            "validation-report",
+        ] {
             fs::write(
-                Path::new(root).join("implementation-report.json"),
-                serde_json::to_vec(&valid_metadata("1")).expect("serialize implementation report"),
+                Path::new(root).join(format!("{name}.json")),
+                serde_json::to_vec(&support::load_fixture(&format!("{name}-good.json"))).unwrap(),
             )
-            .expect("write implementation report");
+            .unwrap();
         }
-        if source == "validation-review" {
-            fs::write(
-                Path::new(root).join("validation-report.json"),
-                serde_json::to_vec(&valid_metadata("1")).expect("serialize validation report"),
-            )
-            .expect("write validation report");
-        }
-        let create_checkpoint = |phase: &str| {
-            let output = Command::new(provider_binary())
-                .args([
-                    "checkpoint",
-                    "--phase",
-                    phase,
-                    "--artifact-root",
-                    root,
-                    "--working-directory",
-                    repository.to_str().expect("repository path"),
-                ])
-                .current_dir(&repository)
-                .bounded_output("software-change contract checkpoint")
-                .expect("run checkpoint");
-            assert!(
-                output.status.success(),
-                "checkpoint {phase} failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        };
-        if matches!(source, "implementation-review" | "validation-review") {
-            create_checkpoint("implementation");
-        }
-        if source == "validation-review" {
-            create_checkpoint("validation");
-        }
+    }
+    let create_checkpoint = |phase: &str| {
+        let output = Command::new(provider_binary())
+            .args([
+                "checkpoint",
+                "--phase",
+                phase,
+                "--artifact-root",
+                root,
+                "--working-directory",
+                repository.to_str().expect("repository path"),
+            ])
+            .current_dir(&repository)
+            .bounded_output("software-change contract checkpoint")
+            .expect("run checkpoint");
+        assert!(
+            output.status.success(),
+            "checkpoint {phase} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    if matches!(source, "implementation-review" | "validation-review") {
+        create_checkpoint("implementation");
+    }
+    if source == "validation-review" {
+        create_checkpoint("validation");
+    }
 
-        for progress_event in draft_events_to_review(source) {
-            let outcome = engine.event(&run_id, progress_event);
-            match outcome {
-                OperationOutcome::Completed(_) => {}
-                other => {
-                    panic!("expected checked progress {progress_event} to commit, got {other:?}")
-                }
+    for progress_event in draft_events_to_review(source) {
+        if *progress_event == "validation-ready" {
+            engine.append_candidates(
+                &run_id,
+                support::validation_fixture(&shown.initial_input, &repository),
+            );
+        }
+        let outcome = engine.event(&run_id, progress_event);
+        match outcome {
+            OperationOutcome::Completed(_) => {}
+            other => {
+                panic!("expected checked progress {progress_event} to commit, got {other:?}")
             }
         }
-        assert_eq!(
-            engine.current_state(&run_id).as_str(),
-            source,
-            "fresh run did not reach route source"
-        );
-
-        let shown = engine.show(&run_id);
-        let routes: Vec<_> = shown
-            .requestable_events
-            .iter()
-            .filter(|candidate| candidate.event.as_str() == event)
-            .collect();
-        assert_eq!(
-            routes.len(),
-            1,
-            "route {source}/{event} not uniquely exposed"
-        );
-        let route = routes[0];
-        assert_eq!(route.target.as_str(), target);
-        assert_eq!(route.kind, TransitionKind::CheckFree);
-
-        let outcome = engine.event(&run_id, event);
-        let committed = match outcome {
-            OperationOutcome::Completed(result) => result,
-            other => panic!("expected {source}/{event} to commit, got {other:?}"),
-        };
-        assert_eq!(committed.run.current_state.as_str(), target);
-
-        // `authoritative` and `show` each reopen persistence, proving target
-        // survived the event call rather than only appearing in its response.
-        assert_eq!(engine.authoritative(&run_id).current_state.as_str(), target);
-        assert_eq!(engine.show(&run_id).current_state.as_str(), target);
     }
+    assert_eq!(
+        engine.current_state(&run_id).as_str(),
+        source,
+        "fresh run did not reach route source"
+    );
+
+    let shown = engine.show(&run_id);
+    let routes: Vec<_> = shown
+        .requestable_events
+        .iter()
+        .filter(|candidate| candidate.event.as_str() == event)
+        .collect();
+    assert_eq!(
+        routes.len(),
+        1,
+        "route {source}/{event} not uniquely exposed"
+    );
+    let route = routes[0];
+    assert_eq!(route.target.as_str(), target);
+    assert_eq!(route.kind, TransitionKind::CheckFree);
+
+    let outcome = engine.event(&run_id, event);
+    let committed = match outcome {
+        OperationOutcome::Completed(result) => result,
+        other => panic!("expected {source}/{event} to commit, got {other:?}"),
+    };
+    assert_eq!(committed.run.current_state.as_str(), target);
+
+    // `authoritative` and `show` each reopen persistence, proving target
+    // survived the event call rather than only appearing in its response.
+    assert_eq!(engine.authoritative(&run_id).current_state.as_str(), target);
+    assert_eq!(engine.show(&run_id).current_state.as_str(), target);
+}
+
+#[test]
+fn owning_phase_route_design_review_revise_intent() {
+    assert_owning_phase_route(0);
+}
+
+#[test]
+fn owning_phase_route_plan_review_revise_design() {
+    assert_owning_phase_route(1);
+}
+
+#[test]
+fn owning_phase_route_plan_review_revise_intent() {
+    assert_owning_phase_route(2);
+}
+
+#[test]
+fn owning_phase_route_implementation_review_revise_plan() {
+    assert_owning_phase_route(3);
+}
+
+#[test]
+fn owning_phase_route_implementation_review_revise_design() {
+    assert_owning_phase_route(4);
+}
+
+#[test]
+fn owning_phase_route_implementation_review_revise_intent() {
+    assert_owning_phase_route(5);
+}
+
+#[test]
+fn owning_phase_route_validation_review_revise_implementation() {
+    assert_owning_phase_route(6);
+}
+
+#[test]
+fn owning_phase_route_validation_review_revise_plan() {
+    assert_owning_phase_route(7);
+}
+
+#[test]
+fn owning_phase_route_validation_review_revise_design() {
+    assert_owning_phase_route(8);
+}
+
+#[test]
+fn owning_phase_route_validation_review_revise_intent() {
+    assert_owning_phase_route(9);
 }
 
 #[test]
@@ -505,7 +576,13 @@ fn describe_matches_snapshot_and_engine_prd_reference_topology() {
         "  ├─ revise [check-free] → plan",
         "  ├─ revise-design [check-free] → design",
         "plan-adversarial-review\n  ├─ approved [checked] → implement",
-        "implement\n  └─ implementation-ready [checked] → implementation-review",
+        concat!(
+            "implement\n",
+            "  ├─ implementation-ready [checked] → implementation-review\n",
+            "  ├─ revise-plan [check-free] → plan\n",
+            "  ├─ revise-design [check-free] → design\n",
+            "  └─ revise-intent [check-free] → explore",
+        ),
         "implementation-review\n  ├─ approved [checked] → implementation-adversarial-review",
         "  ├─ revise [check-free] → implement",
         "  ├─ revise-plan [check-free] → plan",

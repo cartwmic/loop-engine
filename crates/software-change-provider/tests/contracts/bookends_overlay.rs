@@ -164,7 +164,20 @@ fn described_workflow_in(cwd: &Path, initial_input: &Value) -> Value {
     support::response(&output)
 }
 
-fn evaluate_in(cwd: &Path, initial_input: Value, transition: Value, context: Value) -> Value {
+fn evaluate_in(cwd: &Path, initial_input: Value, transition: Value, mut context: Value) -> Value {
+    if transition["source"]
+        .as_str()
+        .unwrap()
+        .starts_with("validation")
+    {
+        for (index, candidate) in support::validation_fixture(&initial_input, cwd)
+            .into_iter()
+            .enumerate()
+        {
+            context.as_array_mut().unwrap().push(json!({"id":candidate["record_id"],
+                "kind":candidate["kind"], "data":candidate["data"], "sequence":100 + index, "created_at":100 + index}));
+        }
+    }
     let workflow = described_workflow_in(cwd, &initial_input);
     let output = run_provider_in(
         cwd,
@@ -198,29 +211,6 @@ fn intent_with_live_ids(ids: Value) -> Value {
         }
     }
     intent
-}
-
-fn metadata_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "revision": {"type": "string", "minLength": 1},
-            "author": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "minLength": 1},
-                    "kind": {
-                        "type": "string",
-                        "enum": ["human", "agent", "script"]
-                    }
-                },
-                "required": ["name", "kind"],
-                "additionalProperties": false
-            }
-        },
-        "required": ["revision", "author"],
-        "additionalProperties": false
-    })
 }
 
 fn schema_rules(value: &Value) -> Vec<String> {
@@ -372,12 +362,13 @@ fn overlay_on_tombstoned_linked_id_deny() {
 
 fn overlay_validation_config(root: &TestDir) -> Value {
     json!({
+        "contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
         "config_version": "test-1",
         "artifact_root": root.path().to_string_lossy().to_string(),
         "extra": {"bookends": {"enabled": true}},
         "review_policies": {},
         "artifact_schemas": {
-            "validation-report.json": metadata_schema()
+            "validation-report.json": load_profile("minimal")["artifact_schemas"]["validation-report.json"].clone()
         }
     })
 }
@@ -389,7 +380,13 @@ fn write_checkpoints(repo: &Repo, artifacts: &TestDir) {
         "plan.json",
         "implementation-report.json",
     ] {
-        artifacts.write_json(name, &json!({"revision": "1"}));
+        let fixture = name.replace(".json", "-good.json");
+        let value = if name == "intent.json" {
+            intent_with_disposition(not_applicable_disposition())
+        } else {
+            load_fixture(&fixture)
+        };
+        artifacts.write_json(name, &value);
     }
     for phase in ["implementation", "validation"] {
         let output = Command::new(provider_binary())
@@ -415,6 +412,7 @@ fn write_checkpoints(repo: &Repo, artifacts: &TestDir) {
     // Validation proof is admitted only after implementation proof has been
     // accepted by the provider transition that records its immutable history.
     let config = json!({
+        "contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
         "config_version": "test-1",
         "artifact_root": artifacts.path().to_string_lossy().to_string(),
         "review_policies": {}
@@ -495,7 +493,9 @@ fn refresh_validation_checkpoint(repo: &Repo, artifacts: &TestDir) {
 fn refresh_implementation_checkpoint(repo: &Repo, artifacts: &TestDir) {
     // The checkpoint history is content-addressed and rejects two proofs for
     // the same implementation report revision after the intent changes.
-    artifacts.write_json("implementation-report.json", &json!({"revision": "2"}));
+    let mut implementation = load_fixture("implementation-report-good.json");
+    implementation["revision"] = json!("2");
+    artifacts.write_json("implementation-report.json", &implementation);
     let output = Command::new(provider_binary())
         .args([
             "checkpoint",
@@ -516,6 +516,7 @@ fn refresh_implementation_checkpoint(repo: &Repo, artifacts: &TestDir) {
     );
 
     let config = json!({
+        "contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
         "config_version": "test-1",
         "artifact_root": artifacts.path().to_string_lossy().to_string(),
         "review_policies": {}
@@ -556,7 +557,7 @@ fn overlay_on_checker_red_denies_passed() {
 }
 
 #[test]
-fn overlay_on_checker_green_allows_schema_only_passed() {
+fn overlay_on_checker_green_and_complete_criterion_proof_allow_passed() {
     let repo = Repo::new();
     enable_green_prd(&repo, live_prd());
     let artifacts = TestDir::new("green-passed");
@@ -686,6 +687,7 @@ fn overlay_on_greenwash_fails_bypass_not_green() {
 
     let schema = load_profile("high-rigor")["artifact_schemas"]["validation-report.json"].clone();
     let config = json!({
+        "contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
         "config_version": "test-1",
         "artifact_root": artifacts.path().to_string_lossy().to_string(),
         "extra": {"bookends": {"enabled": true}},

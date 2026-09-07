@@ -9,10 +9,11 @@ mod config;
 mod criterion;
 mod dagu;
 mod overlay;
+mod recovery_contract;
 mod schema;
 
+pub mod commission;
 pub mod embedded_data;
-pub mod review_candidates;
 
 pub use dagu::{names_for_capture_root, resolve_dagu, write_locator, DaguError, DaguLocator};
 

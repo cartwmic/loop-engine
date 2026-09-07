@@ -196,7 +196,8 @@ jobs:
             --data-root "$GITHUB_WORKSPACE" \
             --work-root "$RUNNER_TEMP/software-change-journey-work" \
             --profile crates/software-change-provider/data/configs/high-rigor.json \
-            --traversal-depth full
+            --traversal-depth full \
+            --jobs 2
       - name: Run policy-document source journeys
         shell: bash
         run: |

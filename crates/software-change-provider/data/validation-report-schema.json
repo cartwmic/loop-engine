@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["revision", "author", "implementation_revision", "command_evidence_ids", "criteria", "goal_verdict_ids"],
+  "properties": {
+    "revision": {"type": "string", "minLength": 1},
+    "author": {"type": "object", "additionalProperties": false, "required": ["name", "kind"], "properties": {"name": {"type": "string", "minLength": 1}, "kind": {"type": "string", "enum": ["human", "agent", "script"]}}},
+    "implementation_revision": {"type": "string", "minLength": 1},
+    "command_evidence_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "criteria": {"type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["criterion_id", "verdict_ids"], "properties": {"criterion_id": {"type": "string", "pattern": "^AC-[1-9][0-9]*$"}, "verdict_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}}}},
+    "goal_verdict_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+  }
+}

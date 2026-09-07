@@ -197,32 +197,25 @@ fn describe_empty_review_policies_omits_reviews_and_uses_passed_on_validation_dr
         .find(|slot| slot["id"] == "validation-draft")
         .expect("validation-draft");
     assert_eq!(validation_draft["event"], "passed");
-    assert!(validation_draft.get("stdin_context_kinds").is_none());
+    assert!(validation_draft["stdin_context_kinds"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("user-steering")));
 }
 
 #[test]
-fn describe_live_review_slots_declare_finding_ledger_and_drafts_omit_it() {
+fn describe_all_live_slots_declare_steering_and_projection_sources() {
     let workflow = describe_workflow(json!({"operation": "describe"}));
     for slot in workflow["work_slots"].as_array().expect("work_slots") {
         let id = slot["id"].as_str().expect("id");
-        let is_review = id.ends_with("-review");
-        if is_review || id == "implement" {
-            let expected = if id == "implement" {
-                json!([
-                    "finding-ledger",
-                    "review-evidence",
-                    "evidence-applicability"
-                ])
-            } else {
-                json!(["finding-ledger"])
-            };
-            assert_eq!(slot.get("stdin_context_kinds"), Some(&expected), "{id}");
-        } else {
-            assert!(
-                slot.get("stdin_context_kinds").is_none(),
-                "non-ledger draft slot {id} must omit stdin_context_kinds"
-            );
-        }
+        let expected = json!([
+            "finding-ledger",
+            "review-evidence",
+            "evidence-applicability",
+            "user-steering",
+            "steering-incorporation"
+        ]);
+        assert_eq!(slot.get("stdin_context_kinds"), Some(&expected), "{id}");
     }
 }
 

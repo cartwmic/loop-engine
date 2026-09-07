@@ -560,6 +560,7 @@ dependencies = [
 name = "loop-integrations"
 version = "0.18.0"
 dependencies = [
+ "libc",
  "loop-core",
  "rusqlite",
  "serde",
@@ -995,7 +996,9 @@ name = "software-change-provider"
 version = "0.18.0"
 dependencies = [
  "bookends-check",
+ "jsonschema",
  "loop-core",
+ "loop-integrations",
  "serde",
  "serde_json",
  "sha2",

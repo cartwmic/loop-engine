@@ -71,7 +71,7 @@ OVERLAY_MEANING_SUCCEEDED = (
     "Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work."
 )
 OVERLAY_MEANING_RUNNING = (
-    "Overlay running means the waiter is alive and allowed time has not elapsed."
+    "Overlay running means the waiter or owned work is live, or cancellation cleanup is pending, and allowed time has not elapsed."
 )
 BOUND_PREAMBLE_SEPARATOR = b"---\n\n"
 GRAPH_STDIN_SEPARATOR = "\n---\n\n"
@@ -207,7 +207,7 @@ def assert_bound_redaction(
         f"{OVERLAY_MEANING_SUCCEEDED} "
         "Captures are at the named capture directory on the invocation view and invoke result. "
         "The driver triages worker output, appends provider-shaped records, then requests the shown event. "
-        "On overrun run show immediately before re-invoking the same slot. "
+        "On overrun wait; cancel-invocation requires recorded local ownership and refuses historical invocations without it. Live owned work and pending cleanup block retry and state departure. "
         "On failed inspect capture_dir/summary.json and captured stdout before stderr. "
         "Consult the change report of record before reuse. "
         "For review reuse, append one evidence-applicability record referencing the "
@@ -452,7 +452,8 @@ def assert_packet_receipt(
         raise WorkSlotJourneyFailure(f"missing dummy worker receipt {path}: {error}") from error
     if not isinstance(packet, dict):
         raise WorkSlotJourneyFailure(f"receipt is not an object: {path}")
-    if set(packet) != PACKET_KEYS:
+    optional = {"context", "standing_assignment_ids", "assignment_selection", "invocation_input", "controls"}
+    if not PACKET_KEYS <= set(packet) or set(packet) - PACKET_KEYS - optional:
         raise WorkSlotJourneyFailure(f"receipt field set mismatch: {sorted(packet)}")
     if packet["run_id"] != run_id or packet["slot_id"] != slot_id:
         raise WorkSlotJourneyFailure(f"receipt identity mismatch: {packet}")
@@ -538,6 +539,8 @@ def prove_bound_visit(
         raise WorkSlotJourneyFailure(
             f"receipt capture_dir {packet.get('capture_dir')!r} != overlay {overlay.get('capture_dir')!r}"
         )
+    if packet.get("context", []) != overlay.get("routed_inputs", []):
+        raise WorkSlotJourneyFailure("worker receipt differs from frozen routed context")
     expected_digest = hashlib.sha256(
         packet["instruction_body"].encode("utf-8")
     ).hexdigest()
@@ -3593,7 +3596,9 @@ def prove_selected_attempt_ledger_linkage(
         )
     # bookends:LE-92 — a public provider denial reaches evidence only after the driver ledger validates the selected retry attempt through its immutable context-record source.
     denied = engine_call(["event", run_id, "approved"])
-    if denied.get("status") != "rejected" or denied.get("code") != "software-change-review-incomplete":
+    if (denied.get("status") != "rejected"
+        or denied.get("code") != "software-change-finding-ledger-invalid"
+        or denied.get("details", {}).get("status") != "accepted_unresolved"):
         raise WorkSlotJourneyFailure(
             f"selected-attempt ledger linkage did not reach review evidence: {denied}"
         )
@@ -3837,7 +3842,7 @@ def prove_selected_attempt_ledger_linkage(
                 "review_axes": [],
                 "status": "recorded",
             },
-            "not configured",
+            "evidence policy_id does not match",
         ),
         (
             "unknown-task",
@@ -3846,12 +3851,12 @@ def prove_selected_attempt_ledger_linkage(
                 "source": {"kind": "context-record", "id": "selected-attempt-evidence-fail"},
                 "policy_id": "selected-axis",
                 "statement": "selected-attempt finding",
-                "disposition": "rejected",
-                "reason": "negative task reference",
-                "owner_phase": None,
+                "disposition": "accepted",
+                "reason": "negative current unresolved task reference; historical resolved routing is retained separately",
+                "owner_phase": "implementation",
                 "task_ids": ["missing-task"],
-                "review_axes": [],
-                "status": "recorded",
+                "review_axes": ["selected-axis"],
+                "status": "unresolved",
             },
             "missing-task",
         ),
@@ -3893,6 +3898,13 @@ def prove_selected_attempt_ledger_linkage(
             or needle not in json.dumps(denied)
         ):
             raise WorkSlotJourneyFailure(f"{label} ledger reference was not denied: {denied}")
+        if label == "unknown-task":
+            # Correct the deliberately mistaken acceptance explicitly. A later
+            # empty snapshot cannot erase an accepted-unresolved declaration.
+            corrected = dict(negative_finding)
+            corrected.update(disposition="rejected", status="recorded", owner_phase=None,
+                task_ids=[], review_axes=[], reason="Driver rejects the deliberately invalid task routing; original source remains retained.")
+            baseline_ledger = {**baseline_ledger, "findings": [corrected]}
         restored = engine_call(
             [
                 "append",
@@ -4455,7 +4467,7 @@ def invoke_until_status(
                 if match.get("slot_id") != slot_id:
                     raise WorkSlotJourneyFailure(f"overlay has wrong slot: {match}")
                 return match
-            if last_status in ("succeeded", "failed", "overrun") and last_status != expected:
+            if last_status in ("succeeded", "failed") and last_status != expected:
                 raise WorkSlotJourneyFailure(
                     f"bound worker ended {last_status}, expected {expected}: {match}"
                 )
@@ -4896,13 +4908,13 @@ def prove_bound_fan_out_overrun(
     fixture_root: Path,
     work_dir: Path,
 ) -> list[str]:
-    """Prove reader overrun, immediate show, and retry admission via public CLI."""
+    """Prove overrun blocks live retry; cancellation permits a fresh attempt."""
     work_dir.mkdir(parents=True, exist_ok=True)
     run_id = "bound-fan-out-overrun"
     slot_id = "design-review"
     binding = fan_out_binding(
         engine=engine,
-        workers=[stdin_worker_cli(work_dir / "overrun.stdin", ("--sleep", "0.5"))],
+        workers=[stdin_worker_cli(work_dir / "overrun.stdin", ("--sleep", "2"))],
     )
     engine_call, artifact_root, profile = _start_isolated_software_change(
         engine=engine,
@@ -4922,7 +4934,7 @@ def prove_bound_fan_out_overrun(
     )
     database = work_dir / "run" / "loop.sqlite"
 
-    def invoke_with_short_budget() -> dict[str, Any]:
+    def invoke_with_short_budget(expected="completed") -> dict[str, Any]:
         completed = subprocess.run(
             [
                 str(engine),
@@ -4945,8 +4957,8 @@ def prove_bound_fan_out_overrun(
             raise WorkSlotJourneyFailure(
                 f"overrun invoke returned non-JSON: {error}; stderr={completed.stderr!r}"
             ) from error
-        if value.get("status") != "completed":
-            raise WorkSlotJourneyFailure(f"short-budget invoke failed: {value}")
+        if value.get("status") != expected:
+            raise WorkSlotJourneyFailure(f"short-budget invoke expected {expected}: {value}")
         return value
 
     first_started = invoke_with_short_budget()
@@ -4966,6 +4978,22 @@ def prove_bound_fan_out_overrun(
         for item in immediately_shown["result"]["work_slot_invocations"]
         if item.get("invocation_id") == first_id
     )
+    refused = invoke_with_short_budget("rejected")
+    if "cancel-invocation" not in refused.get("message", ""):
+        raise WorkSlotJourneyFailure(f"overrun refusal omitted wait/cancel remedy: {refused}")
+    # A 20ms allowance can elapse before the waiter publishes ownership on a
+    # loaded host. The real worker's receipt proves admission/publication, not
+    # just elapsed time. Preserve the live retry refusal above and cancellation
+    # assertion below; do not treat unsupported-yet ownership as cleanup.
+    ownership_deadline = time.monotonic() + 10
+    while not (work_dir / "overrun.stdin").exists():
+        if time.monotonic() >= ownership_deadline:
+            raise WorkSlotJourneyFailure("overrun worker never published its stdin receipt")
+        time.sleep(0.02)
+    cancelled = engine_call(["cancel-invocation", run_id, first_id])
+    if cancelled.get("status") != "completed" or not cancelled["result"].get("cancelled"):
+        raise WorkSlotJourneyFailure(f"overrun cleanup did not finish: {cancelled}")
+    engine_call(["show", run_id])
     retry_started = invoke_with_short_budget()
     second_id = retry_started["result"]["invocation_id"]
     second = _wait_overlay_status(
@@ -4977,7 +5005,7 @@ def prove_bound_fan_out_overrun(
     )
     if (
         first_view.get("status") != "overrun"
-        or first_view.get("overlay_meaning", "").find("run show immediately") < 0
+        or "use cancel-invocation when local ownership is recorded" not in first_view.get("overlay_meaning", "")
         or second_id == first_id
         or second.get("status") != "overrun"
         or Path(first["capture_dir"]) == Path(second["capture_dir"])
@@ -4986,10 +5014,10 @@ def prove_bound_fan_out_overrun(
             f"overrun retry was not inspectable or isolated: first={first_view}; "
             f"second={second}"
         )
-    time.sleep(0.7)
+    _wait_overlay_status(engine_call, run_id, second_id, expected="succeeded", timeout_s=15.0)
     return [
-        "overrun remains a reader overlay and is not already-running",
-        "driver show occurs immediately before retry",
+        "overrun remains a reader overlay and blocks live retry",
+        "verified cancellation precedes fresh retry",
         "overrun and retry captures remain distinct and inspectable",
         "no live model",
     ]
@@ -5370,7 +5398,7 @@ def _wait_overlay_status(
             if last_status == expected:
                 return match
             if (
-                last_status in ("succeeded", "failed", "overrun")
+                last_status in ("succeeded", "failed")
                 and last_status != expected
             ):
                 raise WorkSlotJourneyFailure(
@@ -5825,7 +5853,9 @@ def prove_overlay_running_bound_fan_out_progress(
         ordinary_names=("w0", "w1"),
         require_session=True,
     )
-    _assert_yaml_omits_max_active_steps(Path(capture_dir))
+    # Invocation preparation snapshots the omitted default as the worker count;
+    # the same two-way concurrency is now explicit in the emitted graph.
+    _assert_yaml_max_active_steps(Path(capture_dir), 2)
     _assert_progress_traces(snapshot, require_session=True)
     succeeded = _wait_overlay_status(
         engine_call, run_id, invocation_id, expected="succeeded", timeout_s=20.0

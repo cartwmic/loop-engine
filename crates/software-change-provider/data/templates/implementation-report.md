@@ -1,6 +1,6 @@
 # Implementation report
 
-Report what implementation delivered against accepted plan.
+Report what implementation delivered against accepted plan. Preserve actual focused command outcomes and remaining proof honestly; a provisional report does not claim the driver-owned stable-tree matrix, document audits, requirement acceptance, benchmark comparison, hosted exact-commit checks or later live dogfood passed. Workers run assigned focused checks; reviewers consume retained evidence rather than repeat suites. The designated proof owner supplies complete final validation and repeats only invalidated checks.
 
 Required metadata:
 

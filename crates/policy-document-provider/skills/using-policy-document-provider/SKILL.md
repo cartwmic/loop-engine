@@ -15,7 +15,7 @@ Workflow: `prepare → deterministic-review → semantic-review → end`. `ready
 
 `using-loop-engine` (`skills/using-loop-engine/SKILL.md`) is a **required companion**. This skill does not replace it. The closed driving minimum below is what you cannot skip when this skill is loaded alone; load the companion for full engine semantics.
 
-**Run-state commands:** `start`, `list`, `show`, `append`, `event`, `history`, `terminate`, and `invoke`.
+**Run-state commands:** `start`, `list`, `show`, `append`, `event`, `history`, `terminate`, `invoke`, `amend-binding`, and `cancel-invocation`.
 
 **Non-run-state commands:** `fan-out` and `preview-bindings`. They do not start, advance, or record a run.
 
@@ -27,7 +27,7 @@ Workflow: `prepare → deterministic-review → semantic-review → end`. `ready
 
 **Observation before mutation:** `show` of the current state and instructions arms that state visit for `append`, `event`, `invoke`, and `terminate`. Run it again after every transition, including a transition back to the same state. `list`, `history`, and `invocation-progress` do not arm mutation. Completed invocation views expose assignment/selected-attempt identity and a provider-free change report; those records remain inert until the driver appends provider-shaped evidence.
 
-**Lock-in-before-start:** do not call `start` until the user confirms (1) bind or not (which slot IDs), (2) exact `{command, args}` per bound slot, and (3) model identity in those frozen args (nested `--worker` / `--task-worker` count) or explicit unpinned-default acceptance. Bindings freeze and cannot be patched.
+**Lock-in-before-start:** do not call `start` until the user confirms (1) bind or not (which slot IDs), (2) exact `{command, args}` per bound slot, and (3) model identity in those frozen args (nested `--worker` / `--task-worker` count) or explicit unpinned-default acceptance. Initial bindings freeze; owner-attested amend-binding corrects future execution only. Load the required engine companion for invoke preview/controls, recorded-ownership cancellation and exceptional event override. Overrun/cleanup-pending work blocks retry and departure. Cancellation's ten-second deadline is per controller acquisition/resumption, not across unbounded operator delay after interruption; existing work may persist while later admission remains blocked. Override stays permanently labeled, never document conformance or reviewer pass. Software-change-specific records/batching are not supported here. Simple-first/YAGNI/KISS apply; avoid complexity without meaningful current need.
 
 Run `loop-engine preview-bindings` on the JSON you will freeze before `start`. `describe` and `evaluate` remain deterministic and do not invoke a model. Provider contract: `crates/policy-document-provider/README.md`. Target constraints: `crates/policy-document-provider/data/target-guidance.md`. Semantic evidence contract: `crates/policy-document-provider/data/reviewer-protocol.md`.
 
@@ -247,14 +247,14 @@ Heading aliases are case-insensitive; profiles do not require exact heading spel
 
 1. `show` and read current instructions plus immutable `initial_input` (including `work_slot_bindings` when present), `work_slots`, and `work_slot_invocations` (`assignment_selection`, per-worker assignment/selected-attempt identity, `overlay_meaning`, `elapsed_ms`, `remaining_allowed_ms`, `capture_dir`, `inner_workers`), plus the provider-free `change_report`; especially inspect `mode`, target, profile version, deterministic policies, and semantic policies. This observation arms only the current state visit. Repeat this step after every transition before the next append, event, invoke, or terminate.
 2. In `prepare`, author or revise target externally. Request `ready` to enter deterministic review.
-3. In `deterministic-review`, if that slot is bound, `invoke` it and poll overlay until `succeeded` / `failed` / `overrun`; on `overrun`, run `show` immediately before re-invoking; on failure, inspect `capture_dir/summary.json` and captured stdout before stderr. Overlay `succeeded` is worker exit 0, not provider acceptance. Request `passed` only after overlay `succeeded`, or immediately if unbound. On `policy-document-nonconforming`, fix every reported violation, request check-free `revise`, then repeat from `prepare`.
+3. In `deterministic-review`, if that slot is bound, `invoke` it and poll overlay until `succeeded` / `failed` / `overrun`; on `overrun`, wait or cancel owned work and verify cleanup, then observe before retry; on failure, inspect `capture_dir/summary.json` and captured stdout before stderr. Overlay `succeeded` is worker exit 0, not provider acceptance. Request `passed` only after overlay `succeeded`, or immediately if unbound. On `policy-document-nonconforming`, fix every reported violation, request check-free `revise`, then repeat from `prepare`.
 4. After deterministic approval, compute lowercase SHA-256 over exact current bytes:
 
    ```sh
    TARGET_SHA256=$(shasum -a 256 "$TARGET" | awk '{print $1}')
    ```
 
-5. For semantic review: if `semantic-review` is bound, `invoke` it and poll overlay until `succeeded` / `failed` / `overrun`; on `overrun`, run `show` immediately before re-invoking; on failure, inspect `capture_dir/summary.json` and captured stdout before stderr; then read worker output. If unbound, commission external review yourself. Overlay `succeeded` is collector/worker exit 0, not that the review passed. Either way, cover every frozen semantic policy. Give each reviewer current target bytes or path, policy `description`, `example_prompt`, and relevant project evidence. Reviewer judges one axis and returns `pass` or actionable `fail` findings. You still triage and append; a bound worker does not write records.
+5. For semantic review: if `semantic-review` is bound, `invoke` it and poll overlay until `succeeded` / `failed` / `overrun`; on `overrun`, wait or cancel owned work and verify cleanup, then observe before retry; on failure, inspect `capture_dir/summary.json` and captured stdout before stderr; then read worker output. If unbound, commission external review yourself. Overlay `succeeded` is collector/worker exit 0, not that the review passed. Either way, cover every frozen semantic policy. Give each reviewer current target bytes or path, policy `description`, `example_prompt`, and relevant project evidence. Reviewer judges one axis and returns `pass` or actionable `fail` findings. You still triage and append; a bound worker does not write records.
 6. Append one `review-evidence` record per axis judgment, bound to exact target ID, digest, and profile version.
 7. Request semantic `passed`. On denial, use diagnostics to supersede malformed evidence with a later conforming record, address standing failures, or supply missing current passes. Any target byte change invalidates prior evidence: request `revise`, rerun deterministic review, recompute digest, and commission fresh semantic verdicts.
 

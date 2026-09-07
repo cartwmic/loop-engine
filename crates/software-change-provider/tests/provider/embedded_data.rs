@@ -55,8 +55,16 @@ fn temporary_path(label: &str) -> PathBuf {
 }
 
 fn dump(destination: &Path) -> std::process::Output {
-    let mut command = Command::new(workspace_integration::binary("software-change"));
-    command.arg("data-dump").arg(destination);
+    // A relocated executable and unrelated cwd must not load checkout data.
+    let binary = destination.parent().unwrap().join("software-change");
+    if !binary.exists() {
+        fs::copy(workspace_integration::binary("software-change"), &binary).unwrap();
+    }
+    let mut command = Command::new(binary);
+    command
+        .current_dir(destination.parent().unwrap())
+        .arg("data-dump")
+        .arg(destination);
     super::bounded_process::run(&mut command, "software-change data-dump")
         .expect("data-dump process should spawn")
 }
@@ -83,6 +91,51 @@ fn data_dump_matches_tree_and_refuses_existing_targets_without_writing() {
     collect_files(&destination, &destination, &mut dumped);
     let expected = embedded_data_files();
     assert_eq!(dumped, expected);
+    let data = destination.join("crates/software-change-provider/data");
+    for name in ["minimal", "standard", "high-rigor"] {
+        let mut profile: serde_json::Value =
+            serde_json::from_slice(&fs::read(data.join(format!("configs/{name}.json"))).unwrap())
+                .unwrap();
+        assert_eq!(profile["config_version"], format!("{name}-9"));
+        assert_eq!(profile["contract_version"], 2);
+        assert_eq!(
+            profile["criterion_policy"],
+            serde_json::json!({"required_authors":1,"goal_required_authors":1})
+        );
+        assert!(profile.get("work_slot_bindings").is_none());
+        profile["artifact_root"] = serde_json::json!(root);
+        fs::copy(
+            data.join("calibration/fixtures/intent-good.json"),
+            root.join("intent.json"),
+        )
+        .unwrap();
+        let mut command = Command::new(root.join("software-change"));
+        command.current_dir(&root);
+        let request = serde_json::json!({"operation":"describe","initial_input":profile});
+        let output = super::bounded_process::run_with_stdin(
+            &mut command,
+            "relocated describe",
+            &serde_json::to_vec(&request).unwrap(),
+        )
+        .unwrap()
+        .output;
+        assert!(output.status.success(), "{:?}", output.stderr);
+        let workflow: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let request = serde_json::json!({"operation":"evaluate","initial_input":profile,"workflow":workflow,
+            "context":[],"prior_evaluations":[],"transition":workflow["transitions"][0]});
+        let output = super::bounded_process::run_with_stdin(
+            &mut command,
+            "relocated evaluate",
+            &serde_json::to_vec(&request).unwrap(),
+        )
+        .unwrap()
+        .output;
+        assert!(output.status.success(), "{:?}", output.stderr);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+            serde_json::json!({"result":"allow"})
+        );
+    }
 
     let existing_target =
         destination.join("crates/software-change-provider/data/configs/standard.json");

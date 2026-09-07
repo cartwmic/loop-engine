@@ -325,12 +325,15 @@ impl WorkSlot {
     }
 }
 
-/// Binding value type with exactly `{command, args}`. `command: String`. `args: Vec<String>` — the same argv list type loop-integrations already uses for process argument lists (`ProviderDefinition.args` / `ProviderInvocation.args`). `#[serde(deny_unknown_fields)]`.
+/// Closed worker binding with an optional reference-only context selector.
+/// Historical bindings omit `context_filter`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkSlotBinding {
     pub command: String,
     pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_filter: Option<crate::ContextFilter>,
 }
 
 impl WorkSlotBinding {
@@ -338,6 +341,7 @@ impl WorkSlotBinding {
         Self {
             command: command.into(),
             args,
+            context_filter: None,
         }
     }
 }
@@ -355,9 +359,9 @@ pub enum WaiterWrittenStatus {
 /// Reader-overlay projection of an invocation. Overrun is NOT stored.
 ///
 /// Stored waiter-written statuses are ONLY `succeeded` and `failed`.
-/// `running` means the waiter is still alive. Overlay-overrun is terminal
-/// for retry: invoke MUST NOT reject as already-running. If waiter pid is
-/// gone and no terminal status was written, project `failed` (crash residual).
+/// `running` means the waiter/owned work is live or cleanup is pending.
+/// Overrun is diagnostic, never retry permission. Only a historical invocation
+/// with no retained live ownership projects failed from waiter loss alone.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProjectedInvocationStatus {
@@ -440,6 +444,9 @@ pub struct WorkSlotInvocation {
     pub instruction_digest: String,
     pub subject: String,
     pub waiter_pid: u32,
+    /// Engine-owned process observation; absent for historical invocations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ownership: Option<crate::ExecutionOwnershipState>,
     pub started_at: Timestamp,
     pub allowed_time_ms: u64,
     pub status: Option<WaiterWrittenStatus>,
@@ -455,6 +462,9 @@ pub struct WorkSlotInvocation {
     /// `None` is an unknown legacy value and therefore fails closed in show.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frozen_run_identity: Option<Value>,
+    /// Admitted attempt controls; absence preserves historical meaning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controls: Option<crate::InvocationControls>,
     /// Immutable completion snapshot used to detect mutation of a recorded
     /// result without consulting captures.
     #[serde(default)]
@@ -493,6 +503,7 @@ impl WorkSlotInvocation {
             instruction_digest: instruction_digest.into(),
             subject: subject.into(),
             waiter_pid,
+            ownership: None,
             started_at,
             allowed_time_ms,
             status,
@@ -502,10 +513,16 @@ impl WorkSlotInvocation {
             inner_workers,
             routed_inputs: Vec::new(),
             frozen_run_identity: None,
+            controls: None,
             recorded_inner_workers: Vec::new(),
             assignment_selection: None,
             invocation_input: None,
         }
+    }
+
+    pub fn with_controls(mut self, controls: crate::InvocationControls) -> Self {
+        self.controls = Some(controls);
+        self
     }
 
     pub fn with_frozen_run_identity(mut self, identity: Value) -> Self {
@@ -683,6 +700,12 @@ pub struct Run {
     pub provider_association: ProviderAssociation,
     /// Immutable opaque JSON supplied at run creation.
     pub initial_input: Value,
+    /// Derived from typed immutable history; absent for historical runs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub binding_amendments: Vec<crate::BindingAmendment>,
+    /// Derived only from immutable transition history.
+    #[serde(default, flatten)]
+    pub override_summary: OverrideSummary,
     pub current_state: StateId,
     pub lifecycle: Lifecycle,
     /// Opaque to core semantics; persistence compares it conditionally.
@@ -711,6 +734,8 @@ impl Run {
             workflow,
             provider_association,
             initial_input,
+            binding_amendments: Vec::new(),
+            override_summary: OverrideSummary::new(0, lifecycle),
             current_state: current_state.into(),
             lifecycle,
             control_revision,
@@ -1157,12 +1182,84 @@ impl From<AllowResponse> for EvaluationResult {
     }
 }
 
+/// Permanent exceptional-progression projection, not a provider verdict.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct OverrideSummary {
+    pub has_overrides: bool,
+    pub override_count: u64,
+    pub completion_mode: Option<CompletionMode>,
+}
+
+impl OverrideSummary {
+    pub fn new(override_count: u64, lifecycle: Lifecycle) -> Self {
+        Self {
+            has_overrides: override_count > 0,
+            override_count,
+            completion_mode: (lifecycle == Lifecycle::Final).then_some(if override_count > 0 {
+                CompletionMode::CompletedWithOverrides
+            } else {
+                CompletionMode::Completed
+            }),
+        }
+    }
+
+    pub fn from_history(history: &[HistoryEntry], lifecycle: Lifecycle) -> Self {
+        Self::new(
+            history
+                .iter()
+                .filter(|entry| {
+                    matches!(
+                        entry.action,
+                        HistoryAction::Transition {
+                            outcome: TransitionHistoryOutcome::Overridden { .. },
+                            ..
+                        }
+                    )
+                })
+                .count() as u64,
+            lifecycle,
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CompletionMode {
+    Completed,
+    CompletedWithOverrides,
+}
+
+/// Mechanically known completion obligation skipped for the selected bound slot.
+/// This is not a claim about any unseen provider diagnostics.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SkippedBoundCheck {
+    pub slot_id: WorkSlotId,
+    pub check: String,
+    pub instruction_digest: String,
+    pub subject: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TransitionOverride {
+    pub attestation: crate::StateVisitAttestation,
+    pub skipped_bound_checks: Vec<SkippedBoundCheck>,
+    pub provider_evaluation: SkippedProviderEvaluation,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SkippedProviderEvaluation {
+    NotPerformed,
+    NotApplicable,
+}
+
 /// Outcome stored in a transition history entry.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "outcome", rename_all = "lowercase")]
 pub enum TransitionHistoryOutcome {
     Committed,
     Denied { feedback: EvaluationFeedback },
+    Overridden { exception: TransitionOverride },
 }
 
 impl TransitionHistoryOutcome {
@@ -1176,7 +1273,7 @@ impl TransitionHistoryOutcome {
 
     pub fn feedback(&self) -> Option<&EvaluationFeedback> {
         match self {
-            Self::Committed => None,
+            Self::Committed | Self::Overridden { .. } => None,
             Self::Denied { feedback } => Some(feedback),
         }
     }
@@ -1187,6 +1284,9 @@ impl TransitionHistoryOutcome {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum HistoryAction {
     RunCreated,
+    BindingAmended {
+        amendment: crate::BindingAmendment,
+    },
     ContextAppended {
         context_record_id: ContextRecordId,
     },

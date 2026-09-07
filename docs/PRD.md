@@ -5,6 +5,8 @@
 **Compatibility:** Clean-slate successor; no v1 compatibility requirement
 **Amended:** 2026-08-22
 
+> **Recovery amendment draft (plan r5): owner acceptance and commit pending.** The recovery wording integrated below and the explicitly marked requirement amendments are proposals against the implemented contract, not a claim of accepted policy or completed audits. Existing titles and amendment history are retained; LE-51 remains tombstoned. Historical runs retain their original obligations. The owner must accept the exact diff; the driver completes document audits before final proof.
+
 ## 1. Product
 
 Loop Engine is a small, durable workflow coordination system for work performed by humans, AI agents, scripts, or external systems.
@@ -146,7 +148,7 @@ Cycles and revision paths are normal workflow topology.
 
 A **check-free** transition declares that its stored graph edge is sufficient authorization to progress. It does not invoke provider evaluation.
 
-A **checked** transition requires provider `allow` before it may commit.
+A **checked** transition normally requires provider `allow` before it may commit. Explicit owner-attested override is a distinct exceptional transition outcome, never a provider allow.
 
 Final states must have no outgoing transitions. A run whose initial state is final begins in the `final` lifecycle. Terminal runs expose no requestable events.
 
@@ -253,9 +255,13 @@ defined checked transition denied
 explicit termination
 invocation started {invocation_id}
 invocation status changed {invocation_id, status}
+future binding amended
+explicitly overridden transition
 ```
 
-Invocation status in history is waiter-written `succeeded` or `failed` only. Overlay `overrun` is a reader projection on `show` (`work_slot_invocations.status`) and is not a history action. `invoke` rejections (unknown slot, unbound slot, already-running) and waiter/worker spawn failures remain operation results, not semantic history.
+Cancellation request, controller-attempt and cleanup details are retained in engine-owned ownership receipts and exposed by invocation inspection. They are not separate semantic history actions; verified cancellation acknowledgment records the terminal invocation-status change.
+
+Invocation terminal status is engine-written `succeeded` or `failed`. The waiter records ordinary completion; admitted cancellation requires the controller's verified cleanup acknowledgment before terminal failure. Overlay `overrun` is a reader projection on `show` (`work_slot_invocations.status`) and is not a history action. `invoke` rejections (unknown slot, unbound slot, already-running) and waiter/worker spawn failures remain operation results, not semantic history.
 
 A transition history entry exposes the relevant:
 
@@ -264,7 +270,7 @@ event
 source state
 target state
 checked/check-free
-outcome: committed | denied
+outcome: committed | denied | overridden
 evaluation feedback when denied
 ordering/time
 ```
@@ -318,7 +324,7 @@ The following are product invariants:
 3. **The engine resolves transitions from the run's stored workflow snapshot.**
 4. **Providers validate; they do not route.** They may allow, deny, or be unable to evaluate the selected checked transition.
 5. **Each run retains its creation-time workflow topology and state instructions.**
-6. **A check-free transition is authorized by its stored graph edge alone.**
+6. **A check-free transition needs no provider evaluation.** Observation, active lifecycle and the live-owned-work barrier still apply; no route authorizes overlapping writers.
 7. **Rejected or errored event requests leave current state unchanged.**
 8. **A committed transition and its required history entry are atomic.**
 9. **A durable checked-transition denial and its feedback are recorded atomically.**
@@ -329,7 +335,7 @@ The following are product invariants:
 
 ## 6. User-Facing Operations
 
-The semantic v0.1 surface contains eight primary operations. Exact CLI spelling remains evolvable during v0.x.
+The proposed recovery surface contains ten primary operations. Exact CLI spelling remains evolvable during v0.x.
 
 | Operation | Purpose |
 |---|---|
@@ -340,7 +346,9 @@ The semantic v0.1 surface contains eight primary operations. Exact CLI spelling 
 | `event` | Request workflow progress |
 | `history` | Inspect semantic run history |
 | `terminate` | Explicitly close an active run |
-| `invoke` | Start a bound work-slot worker |
+| `invoke` | Preview or start a bound work-slot worker |
+| `amend-binding` | Owner-attested future execution correction |
+| `cancel-invocation` | Stop and verify cleanup of current invocation-owned work |
 
 ### 6.1 Start
 
@@ -364,7 +372,7 @@ Incomplete, ambiguous, or improvable work belongs in the workflow's initial stat
 
 If the initial state is final, the run is created final.
 
-When object initial input contains `work_slot_bindings`, the engine freezes a map from slot ID to `{command, args}`. Omitted key and `{}` both mean no bindings. Start rejects an unknown slot ID (not in the provider `describe` catalog snapshot for this workflow), unknown fields on a binding object, and non-object values. Start does not parse `fan-out` or `run-plan-graph` argv. If the initial state is a work slot, the engine mints a **slot-visit** subject for that visit via set-current-subject.
+When object initial input contains `work_slot_bindings`, the engine freezes the initial map from slot ID to `{command, args, context_filter?}`. An optional filter is `{command,args}`. Ordered owner-attested amendments derive effective future bindings without rewriting this initial map. Omitted key and `{}` both mean no bindings. Start rejects an unknown slot ID (not in the provider `describe` catalog snapshot for this workflow), unknown fields on a binding object, and non-object values. Start does not parse `fan-out` or `run-plan-graph` argv. If the initial state is a work slot, the engine mints a **slot-visit** subject for that visit via set-current-subject.
 
 ### 6.2 Show
 
@@ -387,7 +395,7 @@ work_slots (catalog snapshot: id, state, event, optional stdin_context_kinds; no
 work_slot_invocations (invocation_id, slot_id, binding snapshot, optional assignment_selection, instruction_digest, subject, overlay status, overlay_meaning, elapsed_ms, remaining_allowed_ms, capture_dir, inner_workers, started_at, allowed_time_ms, optional exit_code, optional completed_at)
 ```
 
-`work_slot_invocations.status` is the reader overlay result `running` | `succeeded` | `failed` | `overrun`, not a raw waiter-written row when overlay applies. `waiter_pid` is internal and is not in `show`. Each invocation view also reports `overlay_meaning`, `elapsed_ms`, `remaining_allowed_ms`, `capture_dir`, and `inner_workers` (`command`, `args`, `exit_code` in argv or task order after the bound CLI finishes; empty while overlay is `running` or when no summary was copied). Completed invocations additionally project a durable provider-free change report: subject revision, assignment and binding, run identity, declared output contract, and routed inputs for assignments; and task definition/packet, dependencies, routed inputs, worker binding, and the task-recorded repository effect for plan-task results. The run-level `change_report` exposes `assignments` and recorded `plan_task_results`. The former `change_report.judgments` show field is tombstoned: `assignments` contains the same generic assignment records under the renamed public key; provider reviewer judgments remain provider content, not this schema. Unknown report inputs are changed. `show` does not spawn a provider and does not read capture files. Overlay meaning: succeeded means the bound CLI exited 0, not that the provider accepted the work; failed means the bound CLI exited nonzero or the waiter vanished; running means the waiter is alive and allowed time has not elapsed; overrun means allowed time elapsed while the waiter is alive; run `show` immediately before re-invoking the same slot. When the current state is a bound slot, `current_state_instructions` names the slot ID plus the frozen CLI binding `{command, args}` and that the legal start is `loop-engine invoke RUN_ID SLOT_ID`; it omits the stored work body. Bound-instruction triage order: overlay succeeded means the bound CLI exited 0, not that the provider accepted the work; captures are at the named capture directory on the invocation view and invoke result; the driver triages worker output, appends provider-shaped records, then requests the shown event; on overrun run `show` immediately before re-invoking the same slot; on failed inspect `capture_dir/summary.json` and captured stdout before stderr. Do not redact to only the invoke CLI. Unbound current states keep the stored instruction body.
+`work_slot_invocations.status` is the reader overlay result `running` | `succeeded` | `failed` | `overrun`, not a raw waiter-written row when overlay applies. `waiter_pid` is internal and is not in `show`. Each invocation view also reports `overlay_meaning`, `elapsed_ms`, `remaining_allowed_ms`, `capture_dir`, and `inner_workers` (`command`, `args`, `exit_code` in argv or task order after the bound CLI finishes; empty while overlay is `running` or when no summary was copied). Completed invocations additionally project a durable provider-free change report: subject revision, assignment and binding, run identity, declared output contract, and routed inputs for assignments; and task definition/packet, dependencies, routed inputs, worker binding, and the task-recorded repository effect for plan-task results. The run-level `change_report` exposes `assignments` and recorded `plan_task_results`. The former `change_report.judgments` show field is tombstoned: `assignments` contains the same generic assignment records under the renamed public key; provider reviewer judgments remain provider content, not this schema. Unknown report inputs are changed. `show` remains provider-free and reads engine-owned ownership/cancellation metadata under `capture_dir`; semantic interpretation of worker output remains the driver's duty. Overlay meaning: succeeded means the bound CLI exited 0, not that the provider accepted the work; failed means the bound CLI exited nonzero or the waiter vanished; running means the waiter is alive and allowed time has not elapsed; overrun means allowed time elapsed while the waiter is alive; wait or cancel owned work and verify cleanup, then observe before retry. Missing waiter liveness is not cleanup proof. When the current state is a bound slot, `current_state_instructions` names the slot ID plus the frozen CLI binding `{command, args}` and that the legal start is `loop-engine invoke RUN_ID SLOT_ID`; it omits the stored work body. Bound-instruction triage order: overlay succeeded means the bound CLI exited 0, not that the provider accepted the work; captures are at the named capture directory on the invocation view and invoke result; the driver triages worker output, appends provider-shaped records, then requests the shown event; on overrun wait or cancel owned work and verify cleanup, then observe before retry; on failed inspect `capture_dir/summary.json` and captured stdout before stderr. Do not redact to only the invoke CLI. Unbound current states keep the stored instruction body.
 
 The projection is the **chronologically latest durable evaluation** for each exact checked transition. An `allow` supersedes any earlier `deny`, and a later `deny` likewise supersedes an earlier `allow`. When the latest result is `deny`, its actionable feedback is exposed.
 
@@ -437,7 +445,7 @@ For a matching transition, the engine:
 
 1. loads the authoritative active run;
 2. resolves the exact transition from the stored workflow;
-3. if the edge is a **bound** work slot (present in frozen `work_slot_bindings`), requires an overlay-`succeeded` invocation matching slot ID, `instruction_digest` (SHA-256 of the stored instruction body UTF-8 bytes, lowercase hex), and the current **slot-visit** subject from get-current-subject; overlay `running`, `failed`, or `overrun` do not allow the edge; this gate runs before provider `evaluate` and never waits; check-free edges are ungated;
+3. if the edge is a **bound** work slot (present in frozen `work_slot_bindings`), requires an overlay-`succeeded` invocation matching slot ID, `instruction_digest` (SHA-256 of the stored instruction body UTF-8 bytes, lowercase hex), and the current **slot-visit** subject from get-current-subject; overlay `running`, `failed`, or `overrun` do not allow the normal edge; this gate runs before provider `evaluate` and never waits. All departures first require quiescent owned work; check-free edges omit provider and bound-success checks. An explicit override may skip those checks only after quiescence;
 4. for a check-free transition, atomically commits the target state and one aggregate history entry without invoking the provider;
 5. for a checked transition, constructs the evaluation request and asks the provider to evaluate that exact transition;
 6. after the provider returns `allow` or `deny`, verifies that the run is still active and remains in the source state against which evaluation began;
@@ -472,7 +480,7 @@ durable artifact location when the run has one
 
 ### 6.7 Terminate
 
-`terminate` requires a current `show` observation, then closes an active run without provider evaluation and records one termination history entry. An unobserved termination is rejected without changing lifecycle or semantic history.
+`terminate` requires a current `show` observation and quiescent invocation-owned work, then closes an active run without provider evaluation and records one termination history entry. Live work, including overrun or pending cleanup, rejects termination without changing lifecycle or semantic history; wait or cancel and verify cleanup before terminating. An unobserved termination is also rejected.
 
 Final and terminated runs cannot be terminated again.
 
@@ -488,9 +496,9 @@ Conceptually:
 loop-engine [--database DB] [--json] [--timeout-ms MS] invoke RUN_ID SLOT_ID [--assignment ID ... | --assignments ID,...]
 ```
 
-`invoke` requires a current `show` observation before it starts bound work-slot work. It is rejected for an unknown slot ID, an unbound slot (no frozen `work_slot_bindings` entry), or an overlay-`running` invocation (live waiter). Overlay `overrun`, `failed`, and `succeeded` are not already-running; overlay-`overrun` is terminal for retry and a later `invoke` of the same slot is accepted. The driver must run `show` immediately before re-invoking an overrun slot so a waiter that completed after the earlier observation does not cause redundant work.
+`invoke` requires current `show` observation and an effective bound catalog slot. Live owned work, including elapsed-but-live work or pending cleanup, blocks retry. Overrun is diagnostic, not terminal retry permission: wait for completion or cancel and verify cleanup, then observe again. `--preview` resolves the effective binding, controls and context without an invocation, capture or primary worker. `--controls` accepts only positive `max_active` and boolean `force_fresh`; unsupported executable/control combinations refuse. `--timeout-ms`, opaque `--input` and enumerable assignment selection remain separate controls; input and assignment selection are mutually exclusive.
 
-On accept, the engine snapshots the frozen `{command, args}` binding, the stored instruction body, `instruction_digest`, and the current slot-visit subject (get-current-subject only; `invoke` does not mint). It allocates `capture_dir` as `{artifact_root}/work-slot-captures/{slot_id}/{invocation_id}`, creates that directory, stores it on the invocation record, and returns it on the invoke result. Empty `artifact_root` is an error before spawn. It creates a running engine-authored invocation record. `append` cannot write that table. `allowed_time_ms` equals the invoke/provider timeout (`--timeout-ms`, or the same timeout the provider path already uses). The waiter is the only writer of terminal `succeeded`/`failed` plus `exit_code`.
+On accept, the engine snapshots the effective binding, controls, selected context, the stored instruction body, `instruction_digest`, and the current slot-visit subject (get-current-subject only; `invoke` does not mint). It allocates `capture_dir` as `{artifact_root}/work-slot-captures/{slot_id}/{invocation_id}`, creates that directory, stores it on the invocation record, and returns it on the invoke result. Empty `artifact_root` is an error before spawn. It creates a running engine-authored invocation record. `append` cannot write that table. `allowed_time_ms` equals the invoke/provider timeout (`--timeout-ms`, or the same timeout the provider path already uses). The waiter writes ordinary terminal status and actual exit/capture facts. After cancellation admission only verified controller cleanup acknowledgment may finalize failure; waiter loss alone does not prove owned work has stopped.
 
 The same `loop-engine` binary then starts hidden `wait-invocation` as a child `invoke` does not waitpid. That waiter is parent of the bound worker: it spawns `{command, args}`, waitpids the worker, writes terminal `succeeded` or `failed` plus `exit_code`, then exits. After waitpid, if `capture_dir/summary.json` is well-formed, the waiter also stores inner `command`/`args`/`exit_code` on the invocation; overlay remains the bound CLI process exit (0 → succeeded). Missing or malformed summary stores empty `inner_workers` and does not change overlay. The waiter is not a daemon and not a sibling of the worker. A vanished waiter with no terminal status is overlay-`failed`.
 
@@ -528,7 +536,7 @@ The `loop-engine` binary also exposes `fan-out`. It is **not** a ninth primary o
 loop-engine fan-out [--worker JSON]... [--instructions FILE] [--max-active N]
 ```
 
-Workers come only from repeated `--worker` JSON objects. The nested object is strict: required `command` (string) and `args` (array of strings), plus optional `preamble` (string), legacy `output_schema` whose complete supported shape is `{"required":["key", ...]}`, and additive `full_output_schema` containing a complete JSON Schema (or the explicit `{schema, retry_limit: 1}` wrapper). The legacy contract remains required-key presence only; the full contract's retry limit is fixed at one. Unknown or malformed fields are rejected. This nested type does not change the outer work-slot binding type, which remains exactly `{command,args}`. Zero `--worker` entries fail closed.
+Workers come only from repeated `--worker` JSON objects. The nested object is strict: required `command` (string) and `args` (array of strings), plus optional `preamble` (string), legacy `output_schema` whose complete supported shape is `{"required":["key", ...]}`, and additive `full_output_schema` containing a complete JSON Schema (or the explicit `{schema, retry_limit: 1}` wrapper). The legacy contract remains required-key presence only; the full contract's retry limit is fixed at one. Unknown or malformed fields are rejected. This nested type does not change the outer work-slot binding type, which is `{command,args,context_filter?}`; the optional filter is `{command,args}`. Zero `--worker` entries fail closed.
 
 Bound mode reads the existing invoke packet (including `capture_dir`, plus optional `context`, `assignment_selection`, and provider-free `standing_assignment_ids` supplied by invoke) and rejects `--instructions`. Fan-out enforces assignment selection and accepts but does not interpret standing IDs. Bound stdin does not dump `instruction_body`. A worker without `preamble` receives compact JSON with exactly absolute `artifact_root` plus one LF, and `context` when the invoke packet carried it, including when it declares only `output_schema`. A worker with `preamble` receives, in exact order: the decoded preamble bytes unchanged; exactly one appended LF only when those bytes do not already end in LF; compact JSON serialized from `artifact_root` plus `context` when forwarded; one LF; literal `---\n\n`; and no instruction body. The location object contains no `capture_dir` or duplicate run/slot identity. Digest input and gate matching do not change. Ad hoc mode has no invoke packet: with `preamble` it emits the preamble, the same conditional LF, literal `---\n\n`, then unchanged instruction-file bytes, with no fabricated artifact-root context; without `preamble`, instruction bytes remain byte-identical. Ad-hoc success prints exactly one JSON summary object (`dagu --quiet`). Re-invoke uses a new capture directory and a new home; prior captures are not overwritten.
 
@@ -536,7 +544,7 @@ Bound mode honors `packet.capture_dir`: it writes per-worker stdout/stderr under
 
 The facade waitpids `dagu start` for the whole graph and on success prints a JSON summary that is not a run-state envelope and not a provider evidence schema. It encodes no harness. `--help` omits hidden `fan-out-join`.
 
-When a work slot is frozen to `loop-engine` args that begin with `fan-out`, the legal start remains `loop-engine invoke RUN_ID SLOT_ID`; repeated `--assignment ID` or one `--assignments ID,...` may select a named enumerable subset. Omission runs every frozen assignment. Empty, duplicate, unknown, and non-enumerable selections refuse before the waiter starts, and the validated selection is recorded on the invocation while the frozen binding remains unchanged. `invoke` execs that frozen argv with the existing worker packet on stdin. Callers who want reviewers put `--worker` JSON objects in those frozen binding args at start after `preview-bindings` and lock-in; bindings cannot be patched mid-run. A usable review binding is caller-supplied `--worker` objects frozen at `start` — not a stock zero-worker `fan-out` argv.
+When a work slot is frozen to `loop-engine` args that begin with `fan-out`, the legal start remains `loop-engine invoke RUN_ID SLOT_ID`; repeated `--assignment ID` or one `--assignments ID,...` may select a named enumerable subset. Omission runs every frozen assignment. Empty, duplicate, unknown, and non-enumerable selections refuse before the waiter starts, and the validated selection is recorded on the invocation while the frozen binding remains unchanged. `invoke` execs that frozen argv with the existing worker packet on stdin. Callers who want reviewers put `--worker` JSON objects in those frozen binding args at start after `preview-bindings` and lock-in; future binding corrections use the explicit owner-attested `amend-binding` operation; initial input and past invocations are never patched. A usable review binding is caller-supplied `--worker` objects frozen at `start` — not a stock zero-worker `fan-out` argv.
 
 `software-change run-plan-graph` is an argv command of the software-change provider binary, not an engine operation. Its required invocation is `software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--task ID ... | --tasks ID,ID,...] [--max-active N]`; optional direct selection runs selected plan-task roots plus their dependants and refuses missing prerequisites before Dagu starts. ABS must be one existing absolute directory selected and maintained by the driver. Omission, relative paths, nonexistent paths, and non-directories are rejected before any Dagu graph worker starts. Bound mode honors `packet.capture_dir` (per-task or `ad-hoc-repair/` output plus `summary.json`). The selected directory is the graph-level cwd for every selected plan task and the summarizer, or for the single repair worker; successful execution must use a Git working tree so the provider can write its implementation checkpoint, but the provider does not create, discover, select, reuse, merge, clean, or otherwise manage or suggest worktrees. Hidden `software-change stdin-exec` uses the same argv as `loop-engine stdin-exec` and is omitted from `--help`/`--version`; plan-graph uses `--exit-mode propagate` only. Each invocation emits a local Dagu `type:graph` under `capture_dir/dagu-home/` (fail-fast, no `continue_on`) and waitpids `dagu start`. Omitted `--max-active` remains `max_active_steps` 4 ordinary plan tasks; `--max-active N` is at most N ordinary plan tasks. While overlay is `running`, drivers poll `show` for overlay and `invocation-progress` for inner graph/traces; `dagu status` / `dagu history` remain the underlying surface, not the driver-facing path. Overlay remains the facade process exit. Full and selected-plan modes run a mandatory `summarizer` after the ordinary tasks; it is the sole writer of `artifact_root/implementation-report.json` in those modes. A bound implementation invocation may instead carry the exact disjoint input `{"repair_finding_ids":["F-..."]}`. That path is only for current accepted unresolved implementation findings whose driver-authored `task_ids` is empty because no frozen task honestly owns the correction. The provider verifies current ledger and implementation-checkpoint identity before mutation, runs exactly one frozen `ad-hoc-repair` worker, runs no plan task or summarizer, leaves `plan-task-results.json` unchanged, requires the worker to write a schema-valid implementation report linked to the frozen plan with a revision unused by the pre-repair proof or accepted implementation-proof history, and then creates a fresh checkpoint. Its ordinary summary records the generic worker/output/routed-finding facts plus provider-derived pre/post report revisions and repository-state identities. Task-owned defects use the existing bound `{plan_revision,task_roots}` selection; materially wrong decomposition revises the plan. There is no direct unbound repair flag. When `--task-worker` is omitted, the default inner worker is `pi --print --no-skills --no-extensions`; it does not pass `--no-context-files` and does not pass `--tools`, so bash, edit, write, and AGENTS.md remain available. That omitted-`--task-worker` fallback does not add `-e` paths. Bound implement is opt-in; shipped software-change profiles omit `work_slot_bindings`.
 
@@ -548,7 +556,7 @@ The `loop-engine` binary also exposes `preview-bindings` with `fan-out` and `inv
 loop-engine preview-bindings [JSON|@FILE]
 ```
 
-Omitted operand reads stdin; `@FILE` reads that path; otherwise the operand is inline JSON. Accepted JSON is a `work_slot_bindings` map or an object containing that key. The outer binding remains strict `{command,args}`. It expands strict nested `--task-worker` `{command,args}` objects and extended nested fan-out `--worker` objects, reporting `has_preamble`, legacy `output_schema.required`, and `full_output_schema` without exposing preamble text. It lists detected `--model` values and warns on unpinned `pi`, PATH versus absolute command, missing `--no-skills`, `--no-extensions` without `-e`, and the 30-second invoke default. Missing `--no-extensions` is not a required warning. It also reports a `dagu` PATH check (minimum 2.14.0): ok with resolved path and version, or a warning naming the path or that PATH lookup found nothing. Warnings alone exit 0; `fan-out` and `software-change run-plan-graph` execute fail-close on the same condition before any worker spawn. Isolated Dagu home is `capture_dir/dagu-home/` with locator `capture_dir/dagu-locator.json` keys `dagu_home`, `dag_name`, and `run_name` (`fanout-<capture-dir-name>` for fan-out, `plan-graph-<capture-dir-name>` for plan-graph). loop-engine and software-change release packages do not contain, vendor, or install `dagu`. It exits nonzero on malformed input and when any `fan-out` binding has zero `--worker` entries. `start` still does not parse `fan-out` argv; preview is the fail-closed check for that freeze.
+Omitted operand reads stdin; `@FILE` reads that path; otherwise the operand is inline JSON. Accepted JSON is a `work_slot_bindings` map or an object containing that key. The outer binding remains closed `{command,args,context_filter?}`; a filter is closed `{command,args}`. It expands strict nested `--task-worker` `{command,args}` objects and extended nested fan-out `--worker` objects, reporting `has_preamble`, legacy `output_schema.required`, and `full_output_schema` without exposing preamble text. It lists detected `--model` values and warns on unpinned `pi`, PATH versus absolute command, missing `--no-skills`, `--no-extensions` without `-e`, and the 30-second invoke default. Missing `--no-extensions` is not a required warning. It also reports a `dagu` PATH check (minimum 2.14.0): ok with resolved path and version, or a warning naming the path or that PATH lookup found nothing. Warnings alone exit 0; `fan-out` and `software-change run-plan-graph` execute fail-close on the same condition before any worker spawn. Isolated Dagu home is `capture_dir/dagu-home/` with locator `capture_dir/dagu-locator.json` keys `dagu_home`, `dag_name`, and `run_name` (`fanout-<capture-dir-name>` for fan-out, `plan-graph-<capture-dir-name>` for plan-graph). loop-engine and software-change release packages do not contain, vendor, or install `dagu`. It exits nonzero on malformed input and when any `fan-out` binding has zero `--worker` entries. `start` still does not parse `fan-out` argv; preview is the fail-closed check for that freeze.
 
 ## 7. Operation Outcomes
 
@@ -797,7 +805,10 @@ plan-adversarial-review
   └─ revise-intent [check-free] → explore
 
 implement
-  └─ implementation-ready [checked] → implementation-review
+  ├─ implementation-ready [checked] → implementation-review
+  ├─ revise-plan [check-free] → plan
+  ├─ revise-design [check-free] → design
+  └─ revise-intent [check-free] → explore
 
 implementation-review
   ├─ approved [checked] → implementation-adversarial-review
@@ -1083,7 +1094,8 @@ while context.lifecycle == active:
         invoke the named slot
         poll show until work_slot_invocations overlay status is succeeded,
           failed, or overrun; do not perform the stored work body
-        on overlay overrun, run show immediately before re-invoking
+        on overlay overrun, wait or cancel owned work and verify cleanup;
+          then run show before retry or departure
         on failure, inspect summary.json and captured output before stderr
     else:
         perform current state's instructions
@@ -1421,8 +1433,9 @@ durable `allow` and `deny` results.
 - Coverage: e2e/journey
 
 ### LE-72: The primary caller surface remains eight operations (`start`, `list`, `show`, `append`, `event`, `history`, `terminate`, `invoke`). Visible `invocation-progress`, `fan-out`, and `preview-bindings` are other commands, not a ninth primary. `fan-out` and `preview-bindings` do not open the run database. `invocation-progress` opens the catalog; a query failure does not flip overlay.
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
+
+> **Proposed retirement, recovery r5:** LE-119 replaces the eight-operation count with two explicit execution-control operations. The original title remains historical.
 
 ### LE-73: The semantic provider interface remains `describe` + `evaluate`.
 - Status: live
@@ -1471,8 +1484,9 @@ durable `allow` and `deny` results.
 - Coverage: e2e/journey
 
 ### LE-84: Overlay `overrun` is terminal for retry: a later `invoke` of the same slot is not already-running, but the driver runs `show` immediately before re-invoking. Failed and overrun records remain inspectable and never count as success. On failure the driver inspects `summary.json` and captured output before stderr. Overlay succeeded remains the bound CLI exiting 0 even when stored `inner_workers` contain a nonzero `exit_code`.
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
+
+> **Proposed retirement, recovery r5:** elapsed allowance cannot authorize overlapping live work. LE-110 replaces retry permission; history and capture inspection remain required.
 
 ### LE-85: When a slot has no binding, the driver may perform that job and no invocation record is required. When the binding set is empty, a run can still complete with the driver performing the work.
 - Status: live
@@ -1576,6 +1590,8 @@ Direct `--task`/`--tasks` selection and bound software-change implement invocati
 
 > **Amendment history — this proposal was accepted through owner-delegated artifact review on 2026-08-26; its authority is established only by a separate commit.** For Loop Engine and the software-change provider, assume a trusted sole owner and well-intentioned, instruction-following drivers. Provenance serves only fresh resume, focused invalidation, honest bypass, debugging, and visible history. Capture each fact once under a stable engine-owned identity and reference that origin; keep ordinary driver-authored metadata small. Trust explicit driver declarations of materiality and evidence applicability except for cheap mechanical identity mismatches. Prefer the narrowest honest correction, preserve valid work, and do not replay still-valid work merely for ceremony. Actual failures, findings, overrides, evidence, checkpoints, and terminal history remain visible. Every proposed provenance field, identity dimension, gate, state, or replay rule must identify the observed ordinary-use failure it prevents and explain why existing durable state, history, capture, or driver judgment is insufficient. This preserves LE-18 and the engine/caller/provider ownership boundary: core assigns context no truth or provenance, callers perform work externally, and providers evaluate the exact selected transition without routing or judging semantic truth. It adds no engine truth model, gate, state, replay system, or provenance framework.
 
+> **Proposed LE-107 amendment, recovery r5 — owner acceptance pending:** Simple-first, YAGNI and KISS govern Loop Engine as a whole and every provider it generates, ships or uses. Start with the simplest adequate solution. Added complexity requires a documented meaningful current requirement or observed ordinary-use failure and a brief explanation, in the ordinary design, of why an adequate simpler approach is insufficient. Gold-plating, productionization for its own sake, speculative defense-in-depth and adversarial guards without that basis are not wanted. Current implementation, architecture, communication protocols, schemas, dependencies and internal mechanisms have no presumption of preservation. A simpler replacement or removal is in scope when it meaningfully reduces complexity, scope, footguns or ordinary-use failures; change for novelty and compatibility scaffolding solely to preserve incidental design are not justified. Keep driver-authored provenance small and capture mechanical facts once, while retaining honest failures, findings, exceptions and rich engine history. Trust explicit materiality/applicability declarations except cheap identity mismatches. Review judges the ordinary design and delivered outcomes; no separate justification framework, gate or metadata inventory is required. Policy-document and research gain common simplicity/execution guidance, not software-change-specific finding or criterion features.
+
 ### LE-108: A bound software-change implementation can capture one focused no-task repair without replaying valid plan work.
 - Status: live
 - Coverage: e2e/journey
@@ -1586,13 +1602,77 @@ Direct `--task`/`--tasks` selection and bound software-change implement invocati
 - Status: live
 - Coverage: e2e/journey
 
+### 14.10 Proposed recovery amendments (owner acceptance pending)
+
+The following exact qualifications amend existing live records without renaming their titles: LE-6 and LE-83 describe **normal** checked progression; LE-113 adds the explicit exceptional mode. LE-5 and LE-54 remain provider-free but subject to LE-110's live-work barrier. LE-22 visibility gains the delivered recipient selection in LE-114, not revival of LE-51. LE-46's failed evidence blocks when not discharged by LE-115; a discharged fail is not a pass. LE-75–LE-78 and LE-101 retain initial settings but expose/snapshot effective future settings under LE-111. LE-79 and LE-81 describe ordinary waiter completion; cancellation finalization belongs to LE-112 and missing waiter liveness is not cleanup proof. LE-82 retains its overlay vocabulary, never retry authority. Its no-capture-read clause is qualified: provider-free `show` reads engine-owned ownership/cancellation metadata under `capture_dir`; worker-output interpretation remains the driver's duty. LE-88–LE-90 retain transport and distinct axis obligations while LE-118 changes software-change's default constructor allocation. LE-92 uses exact-source dispositions, not text-set equality. LE-95–LE-97 require normal accepted implementation-proof history and LE-116's final index; override does not fabricate them. LE-98 observation also arms amend-binding and cancellation admission; an outstanding cancellation can be resumed. LE-109 expands grouped selected output into inert per-axis and criterion/goal candidates. Older amendment scope exclusions describe those earlier changes, not a prohibition of this explicit amendment.
+
+### LE-110: Live invocation-owned work blocks retry and state departure until completion or verified cleanup.
+- Status: live
+- Coverage: e2e/journey
+
+Overrun is elapsed allowance, not retry permission. The barrier also blocks termination so an inactive run cannot strand its owned work. Wait or cancel, verify cleanup, then observe again. Inspect failed captures before retry; process success is not provider acceptance. New software-change implement graphs expose check-free revise-plan, revise-design and revise-intent without a report for rejected work. The driver selects the owner; no repository rollback or automatic invalidation occurs. Old stored graphs gain no edges.
+
+### LE-111: Future execution corrections preserve frozen policy and past effective attempts.
+- Status: live
+- Coverage: e2e/journey
+
+An observed current visit permits owner-attested amend-binding for one catalog slot using state_visit, owner, reason and a closed replacement binding. It changes future command/args/context_filter only, not initial input, topology, schemas, semantic policy or past attempts; an already-started attempt retains its commission. Show exposes original and effective bindings; invoke preview resolves the same preparation without primary launch. Ordinary max_active, force_fresh, timeout and applicable task/review selection require no amendment. Unsupported controls refuse. Fresh execution creates new captures without implicit standing reuse; selected tasks cannot claim unselected prerequisites ran fresh, and force-fresh review cannot use carried rows. This does not erase an arbitrary worker CLI's private sessions.
+
+### LE-112: Cancellation stops and verifies cleanup of only the current invocation-owned local process tree.
+- Status: live
+- Coverage: e2e/journey
+
+Cancel-invocation validates run, current visit and recorded ownership, not arbitrary caller PIDs. Ownership is published behind a worker-start barrier; a durable stop marker under shared admission locking prevents later task/summarizer launch. The controller directly requests Dagu/direct-worker shutdown, escalates and verifies process disappearance/reaping before acknowledging terminal invocation failure. The run neither advances nor terminates and available captures survive. Each control acquisition/resumption has one monotonic ten-second deadline, at most three seconds graceful shutdown; phases do not reset it. Controller interruption remains incomplete: operator delay is unbounded, already-running work may persist, and later admission remains blocked. Retry resumes the same request with a new recorded ten-second attempt, never relabeling earlier interruption/timeout as success. Unverified cleanup keeps the barrier. Waiter loss does not defeat recorded ownership. Wrong-run/nonrunning targets without outstanding cancellation refuse without mutation; historical missing ownership is unsupported, not cancellable by assumption.
+
+### LE-113: Owner-attested exceptional progression remains permanently distinct from normal completion.
+- Status: live
+- Coverage: e2e/journey
+
+Event --override names the current state_visit, owner, reason and one available edge after observation and quiescence. Stale/malformed/unavailable requests refuse without override history. Durable outcome overridden retains attestation, exact edge, known skipped bound checks and provider evaluation as not performed (not applicable for check-free). It does not invent unseen checks, artifacts, reviewer passes or Bookends GREEN, or rewrite denials and failures. Later edges require their own proof or separate exception. Show/list/history expose permanent has_overrides/count; final lifecycle stays final with completion_mode completed-with-overrides rather than completed.
+
+### LE-114: Applicable durable software-change steering reaches only its named later commissions.
+- Status: live
+- Coverage: e2e/journey
+
+A shared provider selector supports unbound commission inspection, opaque bound context filtering and exact plan-task packets. User-steering names all, slots, or current-plan tasks; explicit whole-record supersession and append order replace inferred merging. Unknown recipients/references refuse, stale task revisions are visible and not applied, and task instructions do not spread to dependants or summarizer. A launched attempt retains its original selection. Execution owner/argv updates name existing proof obligations and a reason without revising unchanged outcomes, decomposition or proof. Unbound incorporation records are testimony, not proof of obedience; public proof must show delivered steering changing work.
+
+### LE-115: Reasoned exact-source finding dispositions discharge failures without rewriting judgments or weakening author floors.
+- Status: live
+- Coverage: e2e/journey
+
+Software-change counts distinct current independent non-retired judgments: a pass or a fail explicitly rejected/resolved by its exact evidence identity. Discharged failures are satisfied-by-disposition, not passes. Undispositioned fails and accepted-unresolved findings block with source/author/remedy diagnostics; a revision bump does not resolve the latter. Historical resolved sources/routing remain inspectable without false applicability. Reasoned retired-author disposition requires recorded gate roster change showing departure and replacement coverage; retired authors do not count. Source/capture mismatches remain mechanical denials; semantic disposition belongs to the driver.
+
+### LE-116: Final software-change validation indexes complete independent current-criterion and whole-intent evidence at one checkpoint.
+- Status: live
+- Coverage: e2e/journey
+
+Contract v2 uses current frozen AC-N identities and independent criterion_policy, separate from review-axis author counts. The accepted plan names runnable proof_commands and owners; command captures retain actual argv/cwd, exit, elapsed time, output and repository identity. Failed, missing or incomplete proof cannot pass. The fixed report indexes command evidence, exactly one selected verdict set per criterion and a separate goal judgment; omissions, duplicates, unknown/stale/self-authored/unsupported evidence refuse. Prechosen unused record IDs are only names: checkpoint the index before genuine append --record-id judgments, with no placeholders or reservations. Validation-ready may leave verdicts pending for live review; approval or reviewless draft-to-end requires completeness. Ordinary axes consume the collection; challenge does not recommission it. After repair name affected criteria and supply fresh verdicts; explicitly carry unaffected original evidence to the current report/checkpoint with driver/reason and visible original author/result. Material repair requires fresh goal judgment; only explained report-index-only correction may carry it. Unresolved criterion failures block under exact-source dispositions. Normal validation retains accepted implementation-proof-history for the same tree.
+
+### LE-117: Focused workers and bounded isolated proof jobs preserve complete final proof without duplicated suite ownership.
+- Status: live
+- Coverage: e2e/journey
+
+Workers run assigned focused checks; one designated proof owner runs the complete serialized final stable-tree matrix and repeats only invalidated checks. Reviewers consume retained results rather than rerunning suites. The public journey uses one explicit jobs budget (default two, serial one) only for independent isolated work, preserves dependent run ordering and full inventory, prebuilds binaries, uses private targets for actual compiling jobs, propagates failure and verifies descendant cleanup. Repeated comparable measurements must show targeted lower wall time, with clippy/source journeys and available launch/retry/token/cost observations reported separately, never an invented baseline or universal speedup. Hosted exact-commit proof and later real dogfood remain pending until observed.
+
+### LE-118: Shipped software-change review construction defaults to one commission per used author per gate with distinct axis verdicts.
+- Status: live
+- Coverage: e2e/journey
+
+Assign policies to their first N roster authors and preserve profile order within each batch. Ordinary/challenge gates remain separate, author floors unchanged and shipped profiles unbound. Every assigned axis appears exactly once; mixed pass/fail is conforming output, not approval. Missing/duplicate/unknown axes refuse with only one same-worker correction and retained raw attempts. Candidate normalization expands fresh rows with the same invocation/assignment origin and labels confirmation-only applicability references carried. Unaffected rows require prior exact author/axis/target authorization; failed required axes still block absent exact-source disposition. Justified one-axis commissions use the same shape without a batching profile setting.
+
+### LE-119: The public recovery surface adds amend-binding and cancel-invocation without adding provider semantic operations.
+- Status: live
+- Coverage: e2e/journey
+
+The ten primary operations are start, list, show, append, event, history, terminate, invoke, amend-binding and cancel-invocation. Invocation-progress, fan-out and preview-bindings remain other commands with their existing catalog boundaries. Describe/evaluate remain the provider semantic interface; provider utilities perform no semantic judgment. New software-change profiles explicitly declare contract_version 2, minimal-9/standard-9/high-rigor-9 and criterion_policy counts of one each. The new provider explicitly refuses older semantic contracts; retain fixed old providers for old execution. Provider-free historical reads preserve original obligations and evidence meaning, with absent ownership/control metadata treated as absent capability. No active-run migration, compatibility scaffold or bootstrap rewrite is required.
+
 ## 15. Complexity Guardrails
 
 v0.1 deliberately targets:
 
 ```text
 provider semantic operations: 2
-primary caller operations:    8
+primary caller operations:    10 (proposed recovery amendment)
 active states per run:        1
 background services:          0
 automatic workflow retries:    0
@@ -1606,7 +1686,7 @@ prompt-generation subsystems:  0
 review-orchestration subsystems: 0
 ```
 
-A new core concept or subsystem must solve a demonstrated limitation of a reference workflow or real integration.
+A new core concept or subsystem must solve a demonstrated limitation of a reference workflow or real integration. Simple-first, YAGNI and KISS apply product-wide under the proposed LE-107 amendment; existing mechanisms have no presumption of preservation.
 
 Early `0.x` interfaces remain evolvable rather than formally frozen.
 

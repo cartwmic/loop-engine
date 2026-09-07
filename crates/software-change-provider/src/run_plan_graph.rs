@@ -80,6 +80,10 @@ pub(crate) struct InvokePacket {
     /// When present, sidecar standing results must also be members.
     #[serde(default)]
     pub(crate) standing_assignment_ids: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) controls: loop_core::InvocationControls,
+    #[serde(default)]
+    pub(crate) preview: bool,
 }
 
 /// The closed provider-owned selection object carried by a bound invocation.
@@ -637,6 +641,11 @@ struct StepOutcome {
 fn execute_from_packet(args: &RunPlanGraphArgs, raw_packet: &str) -> Result<(), ExecuteError> {
     let packet =
         parse_invoke_packet(raw_packet).map_err(|error| ExecuteError::usage(error.to_string()))?;
+    let mut effective_args = args.clone();
+    if let Some(max_active) = packet.controls.max_active {
+        effective_args.max_active = max_active.get();
+    }
+    let args = &effective_args;
     let invocation_selection = packet
         .invocation_input
         .as_ref()
@@ -689,6 +698,10 @@ fn execute_from_packet(args: &RunPlanGraphArgs, raw_packet: &str) -> Result<(), 
             &args.working_directory,
         )
         .map_err(ExecuteError::usage)?;
+        if packet.preview {
+            println!("{}", serde_json::json!({"prepared": true}));
+            return Ok(());
+        }
         let dagu = resolve_dagu().map_err(|error| ExecuteError::failed(error.to_string()))?;
         return run_ad_hoc_repair(
             args,
@@ -703,10 +716,14 @@ fn execute_from_packet(args: &RunPlanGraphArgs, raw_packet: &str) -> Result<(), 
         );
     }
 
-    let standing_assignment_ids = packet
-        .standing_assignment_ids
-        .as_ref()
-        .map(|ids| ids.iter().cloned().collect::<HashSet<_>>());
+    let standing_assignment_ids = if packet.controls.force_fresh {
+        Some(HashSet::new())
+    } else {
+        packet
+            .standing_assignment_ids
+            .as_ref()
+            .map(|ids| ids.iter().cloned().collect::<HashSet<_>>())
+    };
     let invocation_plan_selection =
         invocation_selection
             .as_ref()
@@ -720,7 +737,18 @@ fn execute_from_packet(args: &RunPlanGraphArgs, raw_packet: &str) -> Result<(), 
         &plan,
         standing_assignment_ids.as_ref(),
         invocation_plan_selection,
-    )?;
+    ).map_err(|error| {
+        if packet.controls.force_fresh {
+            ExecuteError::usage(format!("{error}; force-fresh selected execution cannot reuse unselected prerequisites: use full execution or a normal standing-aware subset"))
+        } else { error }
+    })?;
+    if packet.preview {
+        println!(
+            "{}",
+            serde_json::json!({"prepared": true, "selected_tasks": selected_order, "max_active": args.max_active})
+        );
+        return Ok(());
+    }
     let requested_selection = invocation_plan_selection
         .map(|selection| selection.task_roots.as_slice())
         .or(args.task_selection.as_deref());
@@ -1102,7 +1130,22 @@ fn run_dagu_graph(
         ))
     })?;
     let summarizer_stdin_path = summarizer_dir.join("stdin");
-    let summarizer_stdin = summarizer_stdin(artifact_root, capture_root, plan_path)?;
+    let mut summarizer_stdin = summarizer_stdin(artifact_root, capture_root, plan_path)?;
+    if let Some(context) = finding_context {
+        let plan = software_change_provider::commission::load_plan(artifact_root)
+            .map_err(ExecuteError::failed)?
+            .ok_or_else(|| ExecuteError::failed("missing plan.json"))?;
+        let steering =
+            software_change_provider::commission::task_steering(context, &plan, "summarizer")
+                .map_err(ExecuteError::failed)?;
+        if !steering.is_empty() {
+            summarizer_stdin.push_str(&format!(
+                "\nSteering context:\n{}",
+                serde_json::to_string(&steering)
+                    .map_err(|e| ExecuteError::failed(e.to_string()))?
+            ));
+        }
+    }
     fs::write(&summarizer_stdin_path, summarizer_stdin).map_err(|error| {
         ExecuteError::failed(format!(
             "could not write {}: {error}",
@@ -1937,7 +1980,9 @@ fn emit_graph_yaml(
     max_active: usize,
 ) -> String {
     let _ = dag_name;
-    let mut yaml = String::from("type: graph\nworking_dir: ");
+    let mut yaml = String::from("type: graph\n");
+    yaml.push_str(&loop_integrations::ownership::dagu_environment_yaml());
+    yaml.push_str("working_dir: ");
     yaml.push_str(&yaml_double_quoted(&path_to_string(working_directory)));
     yaml.push_str("\nmax_active_steps: ");
     yaml.push_str(&max_active.to_string());
@@ -1991,7 +2036,9 @@ fn emit_repair_yaml(
     working_directory: &Path,
     step: &PreparedStep,
 ) -> String {
-    let mut yaml = String::from("type: graph\nworking_dir: ");
+    let mut yaml = String::from("type: graph\n");
+    yaml.push_str(&loop_integrations::ownership::dagu_environment_yaml());
+    yaml.push_str("working_dir: ");
     yaml.push_str(&yaml_double_quoted(&path_to_string(working_directory)));
     yaml.push_str("\nmax_active_steps: 1\nsteps:\n");
     yaml.push_str("  - name: ");
@@ -2063,6 +2110,17 @@ fn project_task_finding_context(
         project_implementation_findings_at(context, artifact_root, task_id, working_directory)
             .map_err(ExecuteError::failed)?;
     object.insert("finding_context".to_owned(), Value::Array(findings));
+    let plan = software_change_provider::commission::load_plan(artifact_root)
+        .map_err(ExecuteError::failed)?
+        .ok_or_else(|| ExecuteError::failed("missing plan.json"))?;
+    let steering = software_change_provider::commission::task_steering(context, &plan, task_id)
+        .map_err(ExecuteError::failed)?;
+    if !steering.is_empty() {
+        object.insert(
+            "steering_context".to_owned(),
+            serde_json::to_value(steering).map_err(|e| ExecuteError::failed(e.to_string()))?,
+        );
+    }
     Ok(task)
 }
 

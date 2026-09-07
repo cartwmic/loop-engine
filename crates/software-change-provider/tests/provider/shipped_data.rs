@@ -305,9 +305,9 @@ fn all_profiles_pass_production_config_validation_and_have_exact_subjects() {
     for profile in PROFILES {
         let config = load_profile(profile);
         let expected_version = match *profile {
-            "minimal" => "minimal-8",
-            "standard" => "standard-8",
-            "high-rigor" => "high-rigor-8",
+            "minimal" => "minimal-9",
+            "standard" => "standard-9",
+            "high-rigor" => "high-rigor-9",
             _ => unreachable!("unknown profile {profile}"),
         };
         assert_eq!(config["config_version"], expected_version);
@@ -357,8 +357,8 @@ fn all_profiles_pass_production_config_validation_and_have_exact_subjects() {
                 ),
                 (
                     "validation-report.json".into(),
-                    "intent_revision".into(),
-                    "intent.json".into(),
+                    "implementation_revision".into(),
+                    "implementation-report.json".into(),
                 ),
             ]
         );
@@ -549,16 +549,23 @@ fn shipped_review_prompts_and_calibration_fixtures_expose_the_new_boundaries() {
         .to_string()
         .contains("speculative plugin registry"));
     let validation: Value = serde_json::from_str(&shipped_text(
-        "data/calibration/fixtures/validation-report-good.json",
+        "data/calibration/fixtures/validation-evidence-2026-08-12.json",
     ))
     .unwrap();
     assert!(validation.to_string().contains("semantically prove"));
     assert!(validation.to_string().contains("bookends:LE-39"));
     let activity_only: Value = serde_json::from_str(&shipped_text(
-        "data/calibration/fixtures/validation-report-defective.json",
+        "data/calibration/fixtures/validation-evidence-2026-08-13.json",
     ))
     .unwrap();
     assert_eq!(activity_only["requirements"][0]["proof"], "bookends:LE-39");
+    let index: Value = serde_json::from_str(&shipped_text(
+        "data/calibration/fixtures/validation-report-good.json",
+    ))
+    .unwrap();
+    assert!(index.get("requirements").is_none());
+    assert_eq!(index["command_evidence_ids"][0], "calibration-2026-08-12");
+    assert_eq!(index["criteria"].as_array().unwrap().len(), 4);
 }
 
 #[test]
@@ -869,11 +876,22 @@ fn shipped_profiles_describe_live_graph_and_keep_one_to_one_counterparts() {
 }
 
 #[test]
-fn report_schemas_require_coverage_manifest() {
+fn implementation_keeps_coverage_and_validation_is_a_checkpoint_bound_index() {
     for profile in PROFILES {
         let config = load_profile(profile);
         let schemas = object(&config["artifact_schemas"], "artifact_schemas");
-        for subject in ["implementation-report.json", "validation-report.json"] {
+        let validation = &schemas["validation-report.json"];
+        let shipped_index: Value =
+            serde_json::from_str(include_str!("../../data/validation-report-schema.json")).unwrap();
+        assert_eq!(validation, &shipped_index);
+        assert_eq!(config["contract_version"], 2);
+        assert_eq!(
+            config["criterion_policy"],
+            serde_json::json!({"required_authors": 1, "goal_required_authors": 1})
+        );
+        assert!(config.get("work_slot_bindings").is_none());
+        {
+            let subject = "implementation-report.json";
             let schema = object(&schemas[subject], subject);
             let required: BTreeSet<&str> = array(schema.get("required").unwrap(), "required")
                 .iter()
@@ -940,6 +958,12 @@ fn reviewer_protocol_defines_convergence_contract() {
         "context-record",
         "engine-resolved",
         "current target",
+        "exact source record",
+        "satisfied-by-disposition",
+        "reviewer-manifest",
+        "retired authors do not count",
+        "source revision is historical identity",
+        "only current accepted-unresolved routing",
     ] {
         assert!(
             protocol.to_ascii_lowercase().contains(clause),
@@ -956,6 +980,8 @@ fn reviewer_protocol_defines_convergence_contract() {
         "repository_state",
         "unchanged-carry",
         "override-carry",
+        "evidence-set agreement",
+        "equality between accepted-unresolved",
     ] {
         assert!(
             !protocol.to_ascii_lowercase().contains(forbidden),
@@ -1020,16 +1046,31 @@ fn authoritative_docs_integrate_convergence_contract_and_routes() {
         "sixteen-state",
         "intent-review",
         "validation-review",
-        "revise-implementation",
         "intent-draft",
         "validation-draft",
-        "quiet, progress, and thrash",
     ] {
         assert!(
             agents_lower.contains(clause),
             "AGENTS.md missing live-graph clause: {clause}"
         );
     }
+    // AGENTS routes drivers to the owning procedure instead of duplicating it.
+    assert!(agents.contains(
+        "](skills/using-software-change-provider/SKILL.md#proportional-late-finding-guide)"
+    ));
+    let skill = shipped_text("skills/using-software-change-provider/SKILL.md");
+    let late_finding_guide = skill
+        .split_once("## Proportional late-finding guide\n")
+        .expect("linked late-finding heading must exist")
+        .1
+        .split("\n## ")
+        .next()
+        .expect("late-finding section");
+    assert!(late_finding_guide.contains("revise-implementation"));
+    assert!(agents.contains("](data/reviewer-protocol.md)"));
+    assert!(shipped_text("data/reviewer-protocol.md")
+        .to_ascii_lowercase()
+        .contains("quiet, progress, and thrash"));
 }
 
 #[test]
@@ -1106,14 +1147,14 @@ fn review_worker_preamble_carries_yagni_bar_and_confirmation_stdin_rule() {
         "extra mechanism",
         "unlisted requirements",
         "hypothetical-future",
-        "confirmation consumes the durable finding-ledger history",
-        "does not search again except for fix-introduced holes",
+        "latest driver finding-ledger disposition",
+        "confirmation revisits affected judgments and fix-introduced holes",
         "bound workers do not use previously overlooked",
         "operating_context",
         "threat_boundary",
         "outside_obligations",
-        "review_axes",
-        "never waive a stated outcome",
+        "every assigned axis",
+        "or waive stated outcomes",
     ] {
         assert!(
             preamble.contains(clause),
@@ -1148,6 +1189,9 @@ fn run_review_constructor(
             "engine",
             "/tmp/loop-engine-constructor-proof",
             "--arg",
+            "provider",
+            "/tmp/software-change-constructor-proof",
+            "--arg",
             "pi",
             "/tmp/pi-constructor-proof",
             "--arg",
@@ -1156,6 +1200,9 @@ fn run_review_constructor(
             "--arg",
             "bridge",
             "/tmp/claude-bridge-extension",
+            "--arg",
+            "separate_axes_reason",
+            "",
             "--rawfile",
             "base_preamble",
             crate_dir
@@ -1229,35 +1276,20 @@ fn constructor_rejects_draft_slots_and_accepts_intent_and_adversarial_review() {
         "intent-review constructor args",
     );
     assert_eq!(binding_args[0], "fan-out");
-    let expected_schema = json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["axis", "author", "result", "findings"],
-        "properties": {
-            "axis": {"type": "string", "minLength": 1},
-            "author": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["name", "kind"],
-                "properties": {
-                    "name": {"type": "string", "minLength": 1},
-                    "kind": {"type": "string", "enum": ["human", "agent", "script"]}
-                }
-            },
-            "result": {"type": "string", "enum": ["pass", "fail"]},
-            "findings": {"type": "string"}
-        },
-        "oneOf": [
-            {"properties": {"result": {"const": "pass"}, "findings": {"const": ""}}},
-            {"properties": {"result": {"const": "fail"}, "findings": {"type": "string", "minLength": 1}}}
-        ]
-    });
+    let expected_schema: Value =
+        serde_json::from_str(&shipped_text("data/review-worker-output-schema.json")).unwrap();
+    assert_eq!(expected_schema["required"], json!(["author", "judgments"]));
+    assert_eq!(
+        binding_args.len(),
+        3,
+        "all intent axes belong to one author batch"
+    );
     let high_rigor = load_profile("high-rigor");
     let intent_policies = array(
         &object(&high_rigor["review_policies"], "review_policies")["intent-review"],
         "intent-review policies",
     );
-    for (worker_index, worker_pair) in binding_args[1..].as_chunks::<2>().0.iter().enumerate() {
+    for worker_pair in binding_args[1..].as_chunks::<2>().0.iter() {
         assert_eq!(worker_pair[0], "--worker");
         let worker: Value = serde_json::from_str(string(&worker_pair[1], "constructor worker"))
             .expect("constructor worker must be JSON");
@@ -1266,15 +1298,24 @@ fn constructor_rejects_draft_slots_and_accepts_intent_and_adversarial_review() {
             "constructor must not emit legacy output_schema: {worker}"
         );
         let mut expected_worker_schema = expected_schema.clone();
-        expected_worker_schema["properties"]["axis"]["const"] = json!(string(
-            &object(&intent_policies[worker_index], "intent policy")["id"],
-            "policy id"
-        ));
+        let axes: Vec<_> = intent_policies.iter().map(|p| p["id"].clone()).collect();
+        let rows = &mut expected_worker_schema["properties"]["judgments"];
+        rows["minItems"] = json!(axes.len());
+        rows["maxItems"] = json!(axes.len());
+        for branch in rows["items"]["oneOf"].as_array_mut().unwrap() {
+            branch["properties"]["axis"]["enum"] = json!(axes);
+        }
+        rows["allOf"] = json!(axes
+            .iter()
+            .map(|axis| json!({"contains": {
+                "type": "object", "required": ["axis"], "properties": {"axis": {"const": axis}}
+            }}))
+            .collect::<Vec<_>>());
         expected_worker_schema["properties"]["author"]["const"] =
             json!({"name": "reviewer-a", "kind": "agent"});
         assert_eq!(
             worker["full_output_schema"], expected_worker_schema,
-            "constructor must emit assignment-specific axis and author constants"
+            "constructor must emit exact assigned axis coverage and author constants"
         );
     }
 

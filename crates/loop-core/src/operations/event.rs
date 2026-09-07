@@ -14,10 +14,10 @@ use crate::{
     TransitionResolutionError, WorkSlotId,
 };
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use serde_json::Value;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const WORK_SLOT_BINDINGS_KEY: &str = "work_slot_bindings";
 const BOUND_SLOT_INVOCATION_REQUIRED: &str = "bound-slot-invocation-required";
 static VISIT_SUBJECT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -30,6 +30,8 @@ pub struct Request {
     /// [`Request::new`]; tests that need overrun control it with [`Request::with_now`].
     #[serde(default = "current_timestamp")]
     pub now: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_attestation: Option<crate::StateVisitAttestation>,
 }
 
 impl Request {
@@ -38,11 +40,17 @@ impl Request {
             run_id: run_id.into(),
             event: event.into(),
             now: current_timestamp(),
+            override_attestation: None,
         }
     }
 
     pub fn with_now(mut self, now: Timestamp) -> Self {
         self.now = now;
+        self
+    }
+
+    pub fn with_override(mut self, attestation: crate::StateVisitAttestation) -> Self {
+        self.override_attestation = Some(attestation);
         self
     }
 
@@ -59,7 +67,9 @@ pub type Result = CommitTransitionResult;
 ///
 /// The first read is authoritative: it verifies existence/activity and
 /// resolves the requested event from the run's stored workflow and current
-/// state.  Check-free edges go directly to a conditional atomic commit.  A
+/// state. An explicit override retains observation and quiescence guards,
+/// then commits exceptional history without bound completion or evaluation.
+/// Ordinary check-free edges go directly to a conditional atomic commit. A
 /// checked edge captures one durable snapshot, ends persistence activity,
 /// invokes the provider, and conditionally commits or records the result
 /// against the snapshot's original control point.
@@ -99,20 +109,43 @@ where
         Err(error) => return transition_resolution_error(error),
     };
 
+    if let Some(attestation) = &request.override_attestation {
+        if attestation.owner.trim().is_empty() || attestation.reason.trim().is_empty() {
+            return OperationOutcome::rejected(
+                "invalid-override",
+                "owner and reason must be nonempty",
+            );
+        }
+        if attestation.state_visit != run.control_revision.as_u64() {
+            return OperationOutcome::rejected(
+                "stale-state-visit",
+                "override must name the current observed state visit",
+            );
+        }
+    }
+
     // Preserve the pre-existing bound-slot refusal before adding the
     // observation guard. A caller missing both prerequisites must still see
     // the actionable bound-slot reason that made the event invalid already.
-    if transition.kind.is_checked() {
+    if request.override_attestation.is_none() && transition.kind.is_checked() {
         if let Some(rejected) = enforce_bound_slot_gate(&run, &transition, persistence, request.now)
         {
             return rejected;
         }
     }
 
+    if let Err(outcome) = super::require_quiescent_work(&run, persistence, waiter_pid_is_alive) {
+        return outcome;
+    }
+
     if let Err(outcome) =
         require_current_observation::<P, Result>(persistence, &run.id, run.control_revision)
     {
         return outcome;
+    }
+
+    if let Some(attestation) = request.override_attestation {
+        return commit_override(&run, &transition, attestation, persistence);
     }
 
     if transition.kind.is_check_free() {
@@ -217,6 +250,64 @@ where
     )
     .with_slot_subjects(slot_subjects);
 
+    match persistence.commit_transition(request) {
+        Ok(result) => OperationOutcome::completed(result),
+        Err(error) => persistence_error(error),
+    }
+}
+
+fn commit_override<P: Persistence + ?Sized>(
+    run: &crate::Run,
+    transition: &Transition,
+    attestation: crate::StateVisitAttestation,
+    persistence: &P,
+) -> OperationOutcome<Result> {
+    let lifecycle = match target_lifecycle(&run.workflow, transition) {
+        Ok(value) => value,
+        Err(issue) => return OperationOutcome::error_with_issue(issue),
+    };
+    let mut skipped_bound_checks = Vec::new();
+    if transition.kind.is_checked() {
+        for slot in run.workflow.work_slots.iter().filter(|slot| {
+            slot.state == run.current_state
+                && slot.event == transition.event
+                && crate::effective_binding(run, &slot.id).is_some()
+        }) {
+            let subject = match persistence.get_current_slot_subject(&run.id, &slot.id) {
+                Ok(subject) => subject,
+                Err(error) => return persistence_error(error),
+            };
+            let state = run
+                .workflow
+                .states
+                .iter()
+                .find(|state| state.id == slot.state)
+                .expect("resolved source state");
+            skipped_bound_checks.push(crate::SkippedBoundCheck {
+                slot_id: slot.id.clone(),
+                check: "succeeded-invocation-matching-slot-instruction-digest-and-current-visit-subject".into(),
+                instruction_digest: instruction_digest(&state.instructions),
+                subject,
+            });
+        }
+    }
+    let mut request = CommitTransitionRequest::new(
+        run.id.clone(),
+        run.control_revision,
+        run.current_state.clone(),
+        transition.clone(),
+        lifecycle,
+    )
+    .with_slot_subjects(slot_subjects_for_state(&run.workflow, &transition.target));
+    request.exception = Some(crate::TransitionOverride {
+        attestation,
+        skipped_bound_checks,
+        provider_evaluation: if transition.kind.is_checked() {
+            crate::SkippedProviderEvaluation::NotPerformed
+        } else {
+            crate::SkippedProviderEvaluation::NotApplicable
+        },
+    });
     match persistence.commit_transition(request) {
         Ok(result) => OperationOutcome::completed(result),
         Err(error) => persistence_error(error),
@@ -358,14 +449,6 @@ fn overlay_status_label(status: ProjectedInvocationStatus) -> &'static str {
     }
 }
 
-fn slot_is_bound(initial_input: &Value, slot_id: &WorkSlotId) -> bool {
-    initial_input
-        .as_object()
-        .and_then(|map| map.get(WORK_SLOT_BINDINGS_KEY))
-        .and_then(Value::as_object)
-        .is_some_and(|bindings| bindings.contains_key(slot_id.as_str()))
-}
-
 fn mint_visit_subject(slot_id: &WorkSlotId) -> String {
     let millis = current_timestamp().as_unix_millis();
     let suffix = VISIT_SUBJECT_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -398,9 +481,7 @@ where
         .work_slots
         .iter()
         .find(|slot| slot.state == run.current_state && slot.event == transition.event)?;
-    if !slot_is_bound(&run.initial_input, &slot.id) {
-        return None;
-    }
+    let _binding = crate::effective_binding(run, &slot.id)?;
 
     let expected_digest = match run
         .workflow
@@ -453,10 +534,14 @@ where
     } else {
         overlay_notes.join(", ")
     };
+    let live_remedy = invocations.iter().find(|row|
+        crate::invocation_owns_work(row, waiter_pid_is_alive(row.waiter_pid)))
+        .map(|row| format!("; invocation `{}` owns live work or pending cleanup: wait or cancel-invocation {} {} before retry or state departure",
+            row.invocation_id, run.id, row.invocation_id)).unwrap_or_default();
     Some(OperationOutcome::rejected(
         BOUND_SLOT_INVOCATION_REQUIRED,
         format!(
-            "bound work slot `{}` requires a succeeded invocation matching slot id, instruction digest, and current visit subject; overlay was {overlay_desc}",
+            "bound work slot `{}` requires a succeeded invocation matching slot id, instruction digest, and current visit subject; overlay was {overlay_desc}{live_remedy}",
             slot.id
         ),
     ))
@@ -814,6 +899,132 @@ mod tests {
                 crate::TransitionHistoryOutcome::Denied { feedback },
             ),
             run,
+        }
+    }
+
+    fn attestation() -> crate::StateVisitAttestation {
+        crate::StateVisitAttestation {
+            state_visit: 4,
+            owner: "owner".into(),
+            reason: "explicit exception".into(),
+        }
+    }
+
+    #[test]
+    fn recovery_override_skips_bound_completion_and_evaluation_not_obligation_history() {
+        let persistence = bound_checked_persistence(Vec::new(), Some("visit-current"));
+        let gateway = FakeGateway::default();
+        let outcome = execute(
+            Request::new("run-1", "approve").with_override(attestation()),
+            &gateway,
+            &persistence,
+        );
+        assert!(outcome.is_completed());
+        assert!(gateway.requests.borrow().is_empty());
+        assert!(persistence.snapshot_requests.borrow().is_empty());
+        assert!(persistence.denial_requests.borrow().is_empty());
+        let commits = persistence.commit_requests.borrow();
+        let exception = commits[0].exception.as_ref().unwrap();
+        assert_eq!(exception.attestation, attestation());
+        assert_eq!(
+            exception.provider_evaluation,
+            crate::SkippedProviderEvaluation::NotPerformed
+        );
+        assert_eq!(exception.skipped_bound_checks.len(), 1);
+        assert_eq!(exception.skipped_bound_checks[0].slot_id.as_str(), "slot-1");
+        assert_eq!(
+            exception.skipped_bound_checks[0].subject.as_deref(),
+            Some("visit-current")
+        );
+        assert_eq!(commits[0].context_append, None);
+    }
+
+    #[test]
+    fn recovery_override_refuses_stale_empty_unavailable_and_terminal_without_mutation() {
+        for (visit, owner, reason, event, lifecycle, code) in [
+            (
+                3,
+                "owner",
+                "reason",
+                "approve",
+                Lifecycle::Active,
+                "stale-state-visit",
+            ),
+            (
+                4,
+                " ",
+                "reason",
+                "approve",
+                Lifecycle::Active,
+                "invalid-override",
+            ),
+            (
+                4,
+                "owner",
+                " ",
+                "approve",
+                Lifecycle::Active,
+                "invalid-override",
+            ),
+            (
+                4,
+                "owner",
+                "reason",
+                "missing",
+                Lifecycle::Active,
+                "event-unavailable",
+            ),
+            (
+                4,
+                "owner",
+                "reason",
+                "approve",
+                Lifecycle::Final,
+                "run-not-active",
+            ),
+        ] {
+            let persistence = FakePersistence::with_run(run(lifecycle, "start"));
+            let gateway = FakeGateway::default();
+            let request =
+                Request::new("run-1", event).with_override(crate::StateVisitAttestation {
+                    state_visit: visit,
+                    owner: owner.into(),
+                    reason: reason.into(),
+                });
+            let outcome = execute(request, &gateway, &persistence);
+            assert_eq!(outcome.issue().unwrap().code, code);
+            assert!(persistence.commit_requests.borrow().is_empty());
+            assert!(persistence.denial_requests.borrow().is_empty());
+            assert!(gateway.requests.borrow().is_empty());
+        }
+    }
+
+    #[test]
+    fn recovery_override_cannot_bypass_live_or_elapsed_work() {
+        for now in [1500, 90000] {
+            let persistence = bound_checked_persistence(
+                vec![sample_invocation(
+                    "slot-1",
+                    start_instructions_digest(),
+                    "visit-current",
+                    None,
+                    alive_pid(),
+                    1000,
+                    5000,
+                )],
+                Some("visit-current"),
+            );
+            let gateway = FakeGateway::default();
+            let outcome = execute(
+                Request::new("run-1", "approve")
+                    .with_now(Timestamp::from_unix_millis(now))
+                    .with_override(attestation()),
+                &gateway,
+                &persistence,
+            );
+            assert_eq!(outcome.issue().unwrap().code, "live-owned-work");
+            assert!(persistence.commit_requests.borrow().is_empty());
+            assert!(gateway.requests.borrow().is_empty());
         }
     }
 

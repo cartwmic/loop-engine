@@ -56,6 +56,7 @@ const CRITERION_ID_SCHEMA_PATHS: &[&str] = &[
     "/properties/tasks/items/properties/criterion_ids/items",
     "/properties/validation/items/properties/criterion_id",
     "/properties/requirements/items/properties/criterion_id",
+    "/properties/criteria/items/properties/criterion_id",
 ];
 
 /// Return exact keyword allowlist for one schema type.

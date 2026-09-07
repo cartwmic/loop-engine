@@ -5,6 +5,7 @@
 //! core operation outcome.  Workflow and provider policy remain in the core
 //! and integration crates respectively.
 
+mod cancel_invocation;
 mod dagu;
 mod fan_out;
 mod invocation_progress;
@@ -104,14 +105,26 @@ pub enum PrimaryCommand {
     Event {
         run_id: RunId,
         event: String,
+        override_attestation: Option<core::StateVisitAttestation>,
     },
     History(RunId),
+    AmendBinding {
+        run_id: RunId,
+        slot_id: String,
+        request: core::operations::amend_binding::Request,
+    },
     Terminate(RunId),
+    CancelInvocation {
+        run_id: RunId,
+        invocation_id: InvocationId,
+    },
     Invoke {
         run_id: RunId,
         slot_id: String,
         assignment_selection: Option<Vec<String>>,
         invocation_input: Option<Value>,
+        controls: core::InvocationControls,
+        preview: bool,
     },
 }
 
@@ -124,7 +137,9 @@ impl PrimaryCommand {
             Self::Append(_) => "append",
             Self::Event { .. } => "event",
             Self::History(_) => "history",
+            Self::AmendBinding { .. } => "amend-binding",
             Self::Terminate(_) => "terminate",
+            Self::CancelInvocation { .. } => "cancel-invocation",
             Self::Invoke { .. } => "invoke",
         }
     }
@@ -263,6 +278,9 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
     let mut worker_index = None;
     let mut compact = false;
     let mut assignment_selection: Option<Vec<String>> = None;
+    let mut invoke_controls = None;
+    let mut event_override = None;
+    let mut invoke_preview = false;
     let mut assignment_flags_seen = false;
     let mut assignments_option_seen = false;
 
@@ -697,6 +715,57 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
                     index += 1;
                     continue;
                 }
+                value if value == "--override" || value.starts_with("--override=") => {
+                    if event_override.is_some() {
+                        return Err(CliError::new(
+                            "invalid-invocation",
+                            "--override may be supplied once",
+                        ));
+                    }
+                    let raw = if let Some(raw) = value.strip_prefix("--override=") {
+                        index += 1;
+                        raw.to_owned()
+                    } else {
+                        next_option_value(args, &mut index, token)?
+                    };
+                    event_override = Some(
+                        serde_json::from_value::<core::StateVisitAttestation>(parse_json_source(
+                            &raw,
+                            "event override",
+                        )?)
+                        .map_err(|error| CliError::new("invalid-override", error.to_string()))?,
+                    );
+                    continue;
+                }
+                "--preview" => {
+                    invoke_preview = true;
+                    index += 1;
+                    continue;
+                }
+                value if value == "--controls" || value.starts_with("--controls=") => {
+                    if invoke_controls.is_some() {
+                        return Err(CliError::new(
+                            "invalid-invocation",
+                            "--controls may be supplied once",
+                        ));
+                    }
+                    let raw = if let Some(raw) = value.strip_prefix("--controls=") {
+                        index += 1;
+                        raw.to_owned()
+                    } else {
+                        next_option_value(args, &mut index, token)?
+                    };
+                    invoke_controls = Some(
+                        serde_json::from_value::<core::InvocationControls>(parse_json_source(
+                            &raw,
+                            "invocation controls",
+                        )?)
+                        .map_err(|error| {
+                            CliError::new("invalid-invocation-controls", error.to_string())
+                        })?,
+                    );
+                    continue;
+                }
                 "--assignment" => {
                     if assignments_option_seen {
                         return Err(CliError::new(
@@ -803,6 +872,18 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
     }
     options.compact = compact;
 
+    if command_name != "event" && event_override.is_some() {
+        return Err(CliError::new(
+            "invalid-invocation",
+            "--override requires event",
+        ));
+    }
+    if command_name != "invoke" && (invoke_controls.is_some() || invoke_preview) {
+        return Err(CliError::new(
+            "invalid-invocation",
+            "--controls and --preview require invoke",
+        ));
+    }
     if command_name != "invoke" && assignment_selection.is_some() {
         return Err(CliError::new(
             "invalid-invocation",
@@ -936,7 +1017,7 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
     reject_capture_dir_option(&capture_dir)?;
     reject_worker_index_option(&worker_index)?;
 
-    let command = parse_primary_command(
+    let mut command = parse_primary_command(
         &command_name,
         positionals,
         provider,
@@ -951,6 +1032,20 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
         assignment_selection,
     )?;
 
+    if let PrimaryCommand::Event {
+        override_attestation,
+        ..
+    } = &mut command
+    {
+        *override_attestation = event_override;
+    }
+    if let PrimaryCommand::Invoke {
+        controls, preview, ..
+    } = &mut command
+    {
+        *controls = invoke_controls.unwrap_or_default();
+        *preview = invoke_preview;
+    }
     Ok(ParsedRequest::Operation { options, command })
 }
 
@@ -1135,6 +1230,7 @@ fn parse_primary_command(
             Ok(PrimaryCommand::Event {
                 run_id: run.into(),
                 event,
+                override_attestation: None,
             })
         }
         "history" => {
@@ -1171,6 +1267,23 @@ fn parse_primary_command(
             )?;
             Ok(PrimaryCommand::Terminate(run.into()))
         }
+        "cancel-invocation" => {
+            let run = required(run_id.or_else(|| take_positional(&mut positionals)), "run ID")?;
+            let id = required(take_positional(&mut positionals), "invocation ID")?;
+            ensure_no_positionals(&positionals, name)?;
+            reject_unrelated_options(name, provider, input, label, start_id, kind, data, record_id, event)?;
+            Ok(PrimaryCommand::CancelInvocation { run_id:run.into(), invocation_id:id.into() })
+        }
+        "amend-binding" => {
+            let run = required(run_id.or_else(|| take_positional(&mut positionals)), "run ID")?;
+            let slot_id = required(take_positional(&mut positionals), "slot ID")?;
+            let raw = required(take_positional(&mut positionals), "amendment JSON")?;
+            ensure_no_positionals(&positionals, name)?;
+            reject_unrelated_options(name, provider, input, label, start_id, kind, data, record_id, event)?;
+            let request = serde_json::from_value(parse_json_source(&raw, "binding amendment")?)
+                .map_err(|error| CliError::new("invalid-binding-amendment", error.to_string()))?;
+            Ok(PrimaryCommand::AmendBinding { run_id: run.into(), slot_id, request })
+        }
         "invoke" => {
             let run = run_id.or_else(|| take_positional(&mut positionals));
             let run = required(run, "run ID")?;
@@ -1202,6 +1315,8 @@ fn parse_primary_command(
                 slot_id: slot,
                 assignment_selection,
                 invocation_input,
+                controls: core::InvocationControls::default(),
+                preview: false,
             })
         }
         _ => Err(CliError::new(
@@ -1675,7 +1790,7 @@ fn execute_stdin_exec(args: StdinExecArgs) -> Execution {
     if let Some(session_dir) = session_dir.as_ref() {
         command.env(PI_CODING_AGENT_SESSION_DIR, session_dir);
     }
-    let mut child = match command.spawn() {
+    let mut child = match loop_integrations::ownership::spawn_admitted(&mut command) {
         Ok(child) => child,
         Err(error) => {
             return stdin_exec_failed(
@@ -1839,36 +1954,71 @@ fn wait_for_worker_and_complete(
     invocation_id: InvocationId,
     envelope: WaiterEnvelope,
 ) -> Result<(), CliError> {
-    let mut child = Command::new(&envelope.command)
-        .args(&envelope.args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| {
-            CliError::new(
-                "worker-spawn-failed",
-                format!("could not spawn waiter worker: {error}"),
-            )
-        })?;
-
-    let packet = serde_json::to_vec(&envelope.worker_packet).map_err(|error| {
-        CliError::new(
-            "worker-packet-serialization-failed",
-            format!("could not serialize worker packet: {error}"),
-        )
-    })?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        if let Err(error) = stdin.write_all(&packet) {
-            if error.kind() != io::ErrorKind::BrokenPipe {
-                return Err(CliError::new(
-                    "worker-stdin-write-failed",
-                    format!("could not write worker packet to stdin: {error}"),
-                ));
-            }
-        }
+    let invocation = persistence
+        .load_work_slot_invocations(&run_id)
+        .map_err(|error| CliError::new(error.code(), error.to_string()))?
+        .into_iter()
+        .find(|row| row.invocation_id == invocation_id)
+        .ok_or_else(|| CliError::new("invocation-not-found", "waiter invocation is absent"))?;
+    let capture_dir = invocation.capture_dir.as_str();
+    if capture_dir.is_empty() {
+        return Err(CliError::new(
+            "ownership-unavailable",
+            "invocation has no capture directory",
+        ));
     }
+    let directory = loop_integrations::ownership::directory(capture_dir);
+    let ownership_error =
+        |error: io::Error| CliError::new("ownership-publication-failed", error.to_string());
+    let admission =
+        loop_integrations::ownership::Admission::acquire(&directory).map_err(ownership_error)?;
+    if admission.stopped() {
+        return Err(CliError::new(
+            "cancellation-pending",
+            "worker launch inhibited",
+        ));
+    }
+    admission
+        .write("worker-packet.json", &envelope.worker_packet)
+        .map_err(ownership_error)?;
+    let mut command = Command::new(std::env::current_exe().map_err(ownership_error)?);
+    command
+        .args(["stdin-exec", "--stdin-file"])
+        .arg(directory.join("worker-packet.json"))
+        .args(["--exit-mode", "propagate", "--"])
+        .arg(&envelope.command)
+        .args(&envelope.args)
+        .env(loop_integrations::ownership::OWNERSHIP_ENV, &directory)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(
+            fs::File::create(directory.join("stdout")).map_err(ownership_error)?,
+        ))
+        .stderr(Stdio::from(
+            fs::File::create(directory.join("stderr")).map_err(ownership_error)?,
+        ));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command.spawn().map_err(ownership_error)?;
+    let owned = loop_core::OwnedExecution {
+        root_pid: child.id(),
+        process_group_id: child.id(),
+        admission_directory: directory.clone(),
+        graph_locator: envelope
+            .args
+            .first()
+            .filter(|arg| matches!(arg.as_str(), "fan-out" | "run-plan-graph"))
+            .map(|_| Path::new(capture_dir).join("dagu-locator.json")),
+    };
+    if let Err(error) = admission.publish(&owned) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(ownership_error(error));
+    }
+    // The helper cannot admit primary work before this publication is durable.
+    drop(admission);
 
     let status = child.wait().map_err(|error| {
         CliError::new(
@@ -1876,7 +2026,7 @@ fn wait_for_worker_and_complete(
             format!("could not wait for waiter worker: {error}"),
         )
     })?;
-    let exit_code = status.code().unwrap_or(1);
+    let exit_code = inner_waitpid_as_i32(status);
     let written = if status.success() {
         WaiterWrittenStatus::Succeeded
     } else {
@@ -2113,6 +2263,124 @@ impl WorkSlotProcess for CliWorkSlotProcess {
         Ok(fan_out::enumerate_bound_assignments(binding))
     }
 
+    fn prepare_facade(
+        &self,
+        binding: &core::WorkSlotBinding,
+        provider: &core::ProviderAssociation,
+        packet: &Value,
+    ) -> std::result::Result<Option<Value>, ProcessError> {
+        if provider
+            .as_json()
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(|command| {
+                same_executable_file(Path::new(command), Path::new(&binding.command))
+            })
+            && binding
+                .args
+                .first()
+                .is_some_and(|arg| arg == "run-plan-graph")
+        {
+            let result = SubprocessProviderGateway::default()
+                .prepare_facade(binding, packet)
+                .map_err(|error| ProcessError::new(error.code(), error.to_string()))?;
+            if result.get("prepared") != Some(&Value::Bool(true)) {
+                return Err(ProcessError::new(
+                    "facade-preparation-failed",
+                    "configured plan-graph facade did not confirm preparation",
+                ));
+            }
+            return Ok(Some(result));
+        }
+        Ok(None)
+    }
+
+    fn prepare_controls(
+        &self,
+        binding: &core::WorkSlotBinding,
+        provider: &core::ProviderAssociation,
+        controls: &core::InvocationControls,
+    ) -> std::result::Result<core::InvocationControls, ProcessError> {
+        let fan_out = same_executable_file(&self.binary, Path::new(&binding.command))
+            && binding.args.first().is_some_and(|arg| arg == "fan-out");
+        let plan_graph = provider
+            .as_json()
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(|command| {
+                same_executable_file(Path::new(command), Path::new(&binding.command))
+            })
+            && binding
+                .args
+                .first()
+                .is_some_and(|arg| arg == "run-plan-graph");
+        if !fan_out && !plan_graph {
+            if controls != &core::InvocationControls::default() {
+                return Err(ProcessError::new("unsupported-invocation-controls", "controls require the actual engine fan-out or configured software-change run-plan-graph facade"));
+            }
+            return Ok(controls.clone());
+        }
+        let mut effective = controls.clone();
+        if fan_out {
+            let parsed = fan_out::parse_fan_out_args(binding.args.iter().skip(1))
+                .map_err(|error| ProcessError::new("invalid-fan-out-binding", error.to_string()))?;
+            if parsed.workers.is_empty() || parsed.instructions_path.is_some() {
+                return Err(ProcessError::new(
+                    "invalid-fan-out-binding",
+                    "bound fan-out requires workers and no ad-hoc instructions file",
+                ));
+            }
+            if effective.max_active.is_none() {
+                effective.max_active = parsed
+                    .max_active
+                    .and_then(|n| std::num::NonZeroUsize::new(n as usize))
+                    .or_else(|| std::num::NonZeroUsize::new(parsed.workers.len()));
+            }
+            if effective
+                .max_active
+                .is_some_and(|n| u32::try_from(n.get()).is_err())
+            {
+                return Err(ProcessError::new(
+                    "invalid-invocation-controls",
+                    "fan-out max_active exceeds supported limit",
+                ));
+            }
+            return Ok(effective);
+        }
+        if effective.max_active.is_none() {
+            let mut args = binding.args.iter();
+            while let Some(arg) = args.next() {
+                let raw = if arg == "--max-active" {
+                    args.next().map(String::as_str)
+                } else {
+                    arg.strip_prefix("--max-active=")
+                };
+                if let Some(raw) = raw {
+                    effective.max_active = Some(raw.parse().map_err(|_| {
+                        ProcessError::new(
+                            "invalid-invocation-controls",
+                            "invalid bound --max-active",
+                        )
+                    })?);
+                }
+            }
+            if plan_graph && effective.max_active.is_none() {
+                effective.max_active = std::num::NonZeroUsize::new(4);
+            }
+        }
+        Ok(effective)
+    }
+
+    fn filter_context(
+        &self,
+        filter: &loop_core::ContextFilter,
+        packet: &Value,
+    ) -> std::result::Result<loop_core::ContextFilterSelection, ProcessError> {
+        SubprocessProviderGateway::default()
+            .filter_context(filter, packet)
+            .map_err(|error| ProcessError::new(error.code(), error.to_string()))
+    }
+
     fn spawn_wait_invocation(
         &self,
         args: WaiterSpawnArgs,
@@ -2252,13 +2520,28 @@ fn execute_operation(options: CliOptions, command: PrimaryCommand) -> Execution 
                 core::execute_append(request, &persistence).map(CliAppendContextResult::from);
             render_operation(operation, output, &outcome)
         }
-        PrimaryCommand::Event { run_id, event } => {
-            let outcome =
-                core::execute_event(EventRequest::new(run_id, event), &gateway, &persistence)
-                    .map(CliCommitTransitionResult::from);
+        PrimaryCommand::Event {
+            run_id,
+            event,
+            override_attestation,
+        } => {
+            let mut request = EventRequest::new(run_id, event);
+            request.override_attestation = override_attestation;
+            let outcome = core::execute_event(request, &gateway, &persistence)
+                .map(CliCommitTransitionResult::from);
             render_operation(operation, output, &outcome)
         }
         PrimaryCommand::History(run_id) => {
+            let summary = match persistence.load_authoritative_run(&run_id) {
+                Ok(run) => run.override_summary,
+                Err(error) => {
+                    return render_operation_error(
+                        operation,
+                        output,
+                        CliError::new(error.code(), error.to_string()),
+                    )
+                }
+            };
             let outcome =
                 core::execute_history(HistoryRequest::new(run_id), &persistence).map(|history| {
                     history
@@ -2266,11 +2549,52 @@ fn execute_operation(options: CliOptions, command: PrimaryCommand) -> Execution 
                         .map(CliHistoryEntry::from)
                         .collect::<Vec<_>>()
                 });
-            render_operation(operation, output, &outcome)
+            let mut rendered = render_operation(operation, output, &outcome);
+            if outcome.is_completed() {
+                // Preserve the historical result array; run-wide metadata lives
+                // on the history envelope rather than duplicating every row.
+                if output == OutputFormat::Json {
+                    let mut envelope: Value =
+                        serde_json::from_str(&rendered.stdout).expect("rendered envelope");
+                    let fields = serde_json::to_value(&summary).expect("override summary");
+                    envelope
+                        .as_object_mut()
+                        .expect("envelope object")
+                        .extend(fields.as_object().expect("summary object").clone());
+                    rendered.stdout = format!("{envelope}\n");
+                } else {
+                    rendered.stdout.push_str(&format!(
+                        "override summary: {}\n",
+                        serde_json::to_string(&summary).expect("override summary")
+                    ));
+                }
+            }
+            rendered
         }
         PrimaryCommand::Terminate(run_id) => {
             let outcome = core::execute_terminate(TerminateRunRequest::new(run_id), &persistence)
                 .map(CliTerminateResult::from);
+            render_operation(operation, output, &outcome)
+        }
+        PrimaryCommand::CancelInvocation {
+            run_id,
+            invocation_id,
+        } => {
+            let outcome = cancel_invocation::execute(&persistence, run_id, invocation_id);
+            render_operation(operation, output, &outcome)
+        }
+        PrimaryCommand::AmendBinding {
+            run_id,
+            slot_id,
+            request,
+        } => {
+            let outcome = core::operations::amend_binding::execute(
+                &run_id,
+                &slot_id.into(),
+                request,
+                &persistence,
+                now_timestamp(),
+            );
             render_operation(operation, output, &outcome)
         }
         PrimaryCommand::Invoke {
@@ -2278,6 +2602,8 @@ fn execute_operation(options: CliOptions, command: PrimaryCommand) -> Execution 
             slot_id,
             assignment_selection,
             invocation_input,
+            controls,
+            preview,
         } => {
             let binary = match std::env::current_exe() {
                 Ok(binary) => binary,
@@ -2294,10 +2620,12 @@ fn execute_operation(options: CliOptions, command: PrimaryCommand) -> Execution 
             };
             let process = CliWorkSlotProcess { binary };
             let allowed_time_ms = timeout.as_millis().min(u64::MAX as u128) as u64;
-            let request =
+            let mut request =
                 InvokeRequest::new(run_id, slot_id, new_invocation_id(), paths.database.clone())
                     .with_assignment_selection(assignment_selection)
                     .with_invocation_input(invocation_input);
+            request.controls = controls;
+            request.preview = preview;
             let outcome = core::execute_invoke(
                 request,
                 &persistence,
@@ -2305,7 +2633,12 @@ fn execute_operation(options: CliOptions, command: PrimaryCommand) -> Execution 
                 now_timestamp(),
                 allowed_time_ms,
             )
-            .map(CliInvokeResult::from);
+            .map(|result| match result.preview.clone() {
+                Some(preview) => preview,
+                None => {
+                    serde_json::to_value(CliInvokeResult::from(result)).expect("invoke result JSON")
+                }
+            });
             render_operation(operation, output, &outcome)
         }
     }
@@ -2569,6 +2902,8 @@ fn new_invocation_id() -> InvocationId {
 /// metadata; those fields are deliberately not represented by this CLI DTO.
 #[derive(Clone, Debug, Serialize)]
 struct CliRun {
+    #[serde(flatten)]
+    override_summary: core::OverrideSummary,
     id: core::RunId,
     label: Option<String>,
     workflow: core::Workflow,
@@ -2582,6 +2917,7 @@ struct CliRun {
 impl From<core::Run> for CliRun {
     fn from(run: core::Run) -> Self {
         Self {
+            override_summary: run.override_summary,
             id: run.id,
             label: run.label,
             workflow: run.workflow,
@@ -2679,6 +3015,8 @@ impl From<core::InvokeResult> for CliInvokeResult {
 
 #[derive(Clone, Debug, Serialize)]
 struct CliRunSummary {
+    #[serde(flatten)]
+    override_summary: core::OverrideSummary,
     id: core::RunId,
     label: Option<String>,
     workflow_id: core::WorkflowId,
@@ -2691,6 +3029,7 @@ struct CliRunSummary {
 impl From<core::RunSummary> for CliRunSummary {
     fn from(summary: core::RunSummary) -> Self {
         Self {
+            override_summary: summary.override_summary,
             id: summary.id,
             label: summary.label,
             workflow_id: summary.workflow_id,
@@ -2704,6 +3043,8 @@ impl From<core::RunSummary> for CliRunSummary {
 
 #[derive(Clone, Debug, Serialize)]
 struct CliShowProjection {
+    #[serde(flatten)]
+    override_summary: core::OverrideSummary,
     run_id: core::RunId,
     label: Option<String>,
     workflow_id: core::WorkflowId,
@@ -2712,6 +3053,9 @@ struct CliShowProjection {
     current_state_title: String,
     current_state_instructions: String,
     initial_input: Value,
+    state_visit: u64,
+    binding_amendments: Vec<core::BindingAmendment>,
+    effective_bindings: std::collections::BTreeMap<String, core::WorkSlotBinding>,
     context: Vec<core::ContextRecord>,
     requestable_events: Vec<core::RequestableEvent>,
     latest_evaluations: Vec<core::DurableEvaluation>,
@@ -2723,6 +3067,7 @@ struct CliShowProjection {
 impl From<core::ShowProjection> for CliShowProjection {
     fn from(projection: core::ShowProjection) -> Self {
         Self {
+            override_summary: projection.override_summary,
             run_id: projection.run_id,
             label: projection.label,
             workflow_id: projection.workflow_id,
@@ -2731,6 +3076,9 @@ impl From<core::ShowProjection> for CliShowProjection {
             current_state_title: projection.current_state_title,
             current_state_instructions: projection.current_state_instructions,
             initial_input: projection.initial_input,
+            state_visit: projection.state_visit,
+            binding_amendments: projection.binding_amendments,
+            effective_bindings: projection.effective_bindings,
             context: projection.context,
             requestable_events: projection.requestable_events,
             latest_evaluations: projection.latest_evaluations,
@@ -2864,7 +3212,17 @@ fn render_compact_show(
     [
         "completed show --compact".to_owned(),
         run,
-        format!("lifecycle: {}", compact_lifecycle(projection.lifecycle)),
+        format!(
+            "lifecycle: {}; has_overrides: {}; override_count: {}; completion_mode: {}",
+            compact_lifecycle(projection.lifecycle),
+            projection.override_summary.has_overrides,
+            projection.override_summary.override_count,
+            match projection.override_summary.completion_mode {
+                Some(core::CompletionMode::Completed) => "completed",
+                Some(core::CompletionMode::CompletedWithOverrides) => "completed-with-overrides",
+                None => "none",
+            }
+        ),
         format!(
             "state: {} ({})",
             compact_text(projection.current_state.as_str()),
@@ -3155,7 +3513,7 @@ fn usage(command: Option<&str>) -> String {
                 + "the engine resolves the selected attempt and capture metadata. Evidence reuse uses\n"
                 + "kind evidence-applicability with {origin,target,attesting_driver,reason}.\n"
         }
-        Some("event") => "Usage: loop-engine [options] event <run-id> <event>\n".to_owned(),
+        Some("event") => "Usage: loop-engine [options] event <run-id> <event> [--override JSON]\n\nOverride: {\"state_visit\":0,\"owner\":\"OWNER\",\"reason\":\"REASON\"}. Requires the current observed visit and quiescent work; skips only this edge's completion/evaluation checks and permanently labels the run.\n".to_owned(),
         Some("show") => {
             "Usage: loop-engine [options] show [--compact] <run-id>\n\n".to_owned()
                 + "Without --compact, human output is the detailed projection. --compact is\n"
@@ -3164,8 +3522,12 @@ fn usage(command: Option<&str>) -> String {
         Some("history") => "Usage: loop-engine [options] history <run-id>\n".to_owned(),
         Some("terminate") => "Usage: loop-engine [options] terminate <run-id>\n".to_owned(),
         Some("invoke") => {
-            "Usage: loop-engine [options] invoke <run-id> <slot-id> [--assignment ID ... | --assignments ID,...]\n"
+            "Usage: loop-engine [options] invoke <run-id> <slot-id> [--assignment ID ... | --assignments ID,... | --input JSON] [--preview] [--controls JSON]\n\n"
                 .to_owned()
+                + "--preview prepares effective binding, context, selection and controls without an invocation, capture or primary worker.\n"
+                + "--controls accepts positive max_active and boolean force_fresh for the actual engine fan-out or configured software-change plan-graph facade; unsupported controls refuse.\n"
+                + "--timeout-ms retains this attempt's allowance (elapsed allowance does not stop live work). Controls and binding are immutable for the started attempt.\n"
+                + "Force-fresh supplies no standing reuse; a selected plan missing fresh prerequisites requires full execution or a normal standing-aware subset.\n"
         }
         Some("list") => "Usage: loop-engine [options] list\n".to_owned(),
         Some("fan-out") => {
@@ -3183,6 +3545,17 @@ fn usage(command: Option<&str>) -> String {
                 + "                           Bound mode reads the invoke packet from stdin instead.\n"
                 + "  --max-active N           At most N worker steps run at once. Omitted means\n"
                 + "                           uncapped concurrent worker start.\n"
+        }
+        Some("cancel-invocation") => {
+            "Usage: loop-engine [options] cancel-invocation RUN_ID INVOCATION_ID\n\nStop owned local work without advancing the workflow. Ten seconds per acquired/resumed controller attempt, at most three seconds graceful shutdown. An interrupted attempt stays incomplete; retry this command. The stop marker blocks later task/summarizer admission even during an unbounded operator delay. Only verified process disappearance and reaping acknowledges failed cancellation. Captures remain.\n".to_owned()
+        }
+        Some("amend-binding") => {
+            "Usage: loop-engine [options] amend-binding RUN_ID SLOT_ID JSON\n\n"
+                .to_owned()
+                + "Correct a future binding using {state_visit,owner,reason,binding}. Read show\n"
+                + "first for state_visit. Binding is {command,args,context_filter?}. Original\n"
+                + "input and past invocations remain immutable; history retains old/new values.\n"
+                + "This does not amend policy, topology, schemas or author counts.\n"
         }
         Some("preview-bindings") => {
             "Usage: loop-engine [options] preview-bindings [JSON|@FILE]\n\n"
@@ -3218,7 +3591,9 @@ fn usage(command: Option<&str>) -> String {
                 + "  event\n"
                 + "  history\n"
                 + "  terminate\n"
-                + "  invoke\n\n"
+                + "  invoke\n"
+                + "  amend-binding RUN_ID SLOT_ID JSON\n"
+                + "  cancel-invocation RUN_ID INVOCATION_ID\n\n"
                 + "Other commands:\n"
                 + "  invocation-progress RUN_ID [INVOCATION_ID]\n"
                 + "                             Snapshot capture_dir graph liveness and traces\n"
@@ -3446,6 +3821,39 @@ mod tests {
         assert_eq!(options.database, Some(PathBuf::from("/tmp/loop.db")));
         assert_eq!(options.provider_timeout, Some(Duration::from_millis(17)));
         assert!(matches!(command, PrimaryCommand::Start(_)));
+    }
+
+    #[test]
+    fn recovery_execution_controls_and_preview_parser() {
+        let parsed = parse_args([
+            "invoke",
+            "run",
+            "slot",
+            "--preview",
+            "--controls",
+            r#"{"max_active":2,"force_fresh":true}"#,
+        ])
+        .unwrap();
+        let ParsedRequest::Operation {
+            command: PrimaryCommand::Invoke {
+                controls, preview, ..
+            },
+            ..
+        } = parsed
+        else {
+            panic!("invoke")
+        };
+        assert!(preview && controls.force_fresh);
+        assert_eq!(controls.max_active.unwrap().get(), 2);
+        for raw in [
+            r#"{"max_active":0}"#,
+            r#"{"policy":{}}"#,
+            r#"{"force_fresh":1}"#,
+        ] {
+            assert!(parse_args(["invoke", "run", "slot", "--controls", raw]).is_err());
+        }
+        assert!(parse_args(["show", "run", "--preview"]).is_err());
+        assert!(parse_args(["fan-out", "--preview"]).is_err());
     }
 
     #[test]
@@ -3984,6 +4392,7 @@ mod tests {
             invocation_id: "inv-1".into(),
             slot_id: "slot-1".into(),
             binding: core::WorkSlotBinding::new("worker", vec!["--flag".to_owned()]),
+            routed_inputs: Vec::new(),
             instruction_digest: "digest".to_owned(),
             subject: "subject".to_owned(),
             status: core::ProjectedInvocationStatus::Running,
@@ -3998,6 +4407,8 @@ mod tests {
             inner_workers: Vec::new(),
             assignment_selection: None,
             invocation_input: None,
+            controls: None,
+            ownership: None,
             change_report: core::operations::show::InvocationChangeReport {
                 identity: "inv-1".into(),
                 standing: false,
@@ -4008,6 +4419,7 @@ mod tests {
             },
         };
         let projection = CliShowProjection {
+            override_summary: core::OverrideSummary::default(),
             run_id: "run-1".into(),
             label: Some("compact test".to_owned()),
             workflow_id: "workflow".into(),
@@ -4016,6 +4428,9 @@ mod tests {
             current_state_title: "Draft".to_owned(),
             current_state_instructions: "Do work".to_owned(),
             initial_input: json!({}),
+            state_visit: 0,
+            binding_amendments: Vec::new(),
+            effective_bindings: Default::default(),
             context: Vec::new(),
             requestable_events: vec![core::operations::RequestableEvent::from_transition(
                 &transition,
@@ -4034,6 +4449,7 @@ mod tests {
                 invocation_id: "inv-1".into(),
                 slot_id: "slot-1".into(),
                 capture_dir: "/tmp/capture".to_owned(),
+                ownership: None,
                 graph: Some(invocation_progress::GraphProgress {
                     locator: DaguLocator {
                         dagu_home: "/tmp/dagu".to_owned(),
@@ -4065,7 +4481,10 @@ mod tests {
         let lines = output.lines().collect::<Vec<_>>();
         assert_eq!(lines[0], "completed show --compact");
         assert!(lines[1].starts_with("run: run-1"));
-        assert_eq!(lines[2], "lifecycle: active");
+        assert_eq!(
+            lines[2],
+            "lifecycle: active; has_overrides: false; override_count: 0; completion_mode: none"
+        );
         assert_eq!(lines[3], "state: draft (Draft)");
         assert_eq!(lines[4], "requestable events: approve -> done (checked)");
         assert!(lines[5].contains("latest checked result: allow event=approve"));

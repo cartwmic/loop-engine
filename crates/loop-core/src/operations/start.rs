@@ -221,7 +221,7 @@ fn work_slot_bindings_rejection(
             return Some(OperationOutcome::rejected(
                 "invalid-work-slot-binding",
                 format!(
-                    "work_slot_bindings[{slot_id}] must be an object with exactly {{command, args}}: {error}"
+                    "work_slot_bindings[{slot_id}] must be an object with {{command, args, context_filter?}}: {error}"
                 ),
             ));
         }
