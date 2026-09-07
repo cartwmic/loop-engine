@@ -29,6 +29,15 @@ def prove(journey):
         captures.append({"argv": [str(a) for a in args], "cwd": str(cwd), "exit": p.returncode,
                          "stdout": p.stdout, "stderr": p.stderr})
         (root / "external.json").write_text(json.dumps(captures, indent=2))
+        if p.returncode != expected:
+            executions = list(root.glob("**/validation-execution-*"))
+            if executions:
+                latest = max(executions, key=lambda path: path.stat().st_mtime_ns)
+                for path in sorted(latest.rglob("*")):
+                    if path.is_file() and path.name in ("stdout", "stderr", "inner_exit.json", "summary.json"):
+                        detail = path.read_text(errors="replace")
+                        if detail:
+                            print(f"capture diagnostic {path}:\n{detail[:12000]}", file=sys.stderr)
         assert p.returncode == expected, captures[-1]
         return json.loads(p.stdout) if p.stdout.strip().startswith("{") else p.stdout
     author = {"name": "implementer", "kind": "agent"}
