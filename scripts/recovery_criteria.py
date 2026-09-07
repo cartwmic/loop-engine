@@ -326,8 +326,12 @@ print(json.dumps({"author":author,"judgments":[{"axis":"delivery","result":"pass
     f=start("capture-start-failure",False)
     report=run(f,"v1"); checkpoint(f,"validation"); complete_rows(f,report)
     before=f.show()["context"]
-    external([journey.provider,"run-validation","--engine","/usr/bin/false" if Path('/usr/bin/false').exists() else '/bin/false',"--working-directory",repo,"--revision","v2"],
+    failed_engine=root/"failed-capture-engine"
+    failed_engine.write_text("#!/bin/sh\nprintf 'capture-backend-sentinel\\n' >&2\nexit 20\n")
+    failed_engine.chmod(0o755)
+    external([journey.provider,"run-validation","--engine",failed_engine,"--working-directory",repo,"--revision","v2"],
              {"status":"completed","operation":"show","result":f.show()},expected=2)
+    assert "capture-backend-sentinel" in captures[-1]["stderr"], captures[-1]
     assert f.show()["context"]==before
     assert json.loads((f.artifacts/"validation-report.json").read_text())["revision"]=="v2"
     event(f,"passed","rejected","checkpoint")

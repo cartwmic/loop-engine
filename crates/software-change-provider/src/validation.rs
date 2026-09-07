@@ -350,8 +350,13 @@ pub(crate) fn run(args: &[String], show: &Value) -> Result<Value, String> {
             .map_err(|e| e.to_string())?;
         fs::write(receipt.join(format!("{}.stderr", spec.id)), &output.stderr)
             .map_err(|e| e.to_string())?;
-        let summary: Value = serde_json::from_slice(&output.stdout)
-            .map_err(|e| format!("capture failed ({}): {e}", output.status))?;
+        let summary: Value = serde_json::from_slice(&output.stdout).map_err(|e| {
+            format!(
+                "capture failed ({}): {e}; stderr: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )
+        })?;
         let summary_path = Path::new(text(&summary, "output_dir")?).join("summary.json");
         let stored = read(&summary_path)?;
         let row = stored["workers"]
