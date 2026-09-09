@@ -378,7 +378,7 @@ When object initial input contains `work_slot_bindings`, the engine freezes the 
 
 `show` is the primary resumption and actor interface.
 
-A single call must expose enough information to continue normal work, including:
+Full inspection (`show --view full`) exposes the information below. Ordinary `show` provides the focused current-action view and references to omitted material; status-only observation does not arm mutation, as specified in LE-20.
 
 ```text
 run ID / label
@@ -391,13 +391,14 @@ all context records in durable append order
 requestable events
 each event's target and whether it is checked
 latest durable evaluation for each checked transition that has been evaluated
+complete evaluation_history with original identities and ordering
 work_slots (catalog snapshot: id, state, event, optional stdin_context_kinds; no instruction body)
 work_slot_invocations (invocation_id, slot_id, binding snapshot, optional assignment_selection, instruction_digest, subject, overlay status, overlay_meaning, elapsed_ms, remaining_allowed_ms, capture_dir, inner_workers, started_at, allowed_time_ms, optional exit_code, optional completed_at)
 ```
 
 `work_slot_invocations.status` is the reader overlay result `running` | `succeeded` | `failed` | `overrun`, not a raw waiter-written row when overlay applies. `waiter_pid` is internal and is not in `show`. Each invocation view also reports `overlay_meaning`, `elapsed_ms`, `remaining_allowed_ms`, `capture_dir`, and `inner_workers` (`command`, `args`, `exit_code` in argv or task order after the bound CLI finishes; empty while overlay is `running` or when no summary was copied). Completed invocations additionally project a durable provider-free change report: subject revision, assignment and binding, run identity, declared output contract, and routed inputs for assignments; and task definition/packet, dependencies, routed inputs, worker binding, and the task-recorded repository effect for plan-task results. The run-level `change_report` exposes `assignments` and recorded `plan_task_results`. The former `change_report.judgments` show field is tombstoned: `assignments` contains the same generic assignment records under the renamed public key; provider reviewer judgments remain provider content, not this schema. Unknown report inputs are changed. `show` remains provider-free and reads engine-owned ownership/cancellation metadata under `capture_dir`; semantic interpretation of worker output remains the driver's duty. Overlay meaning: succeeded means the bound CLI exited 0, not that the provider accepted the work; failed means the bound CLI exited nonzero or the waiter vanished; running means the waiter is alive and allowed time has not elapsed; overrun means allowed time elapsed while the waiter is alive; wait or cancel owned work and verify cleanup, then observe before retry. Missing waiter liveness is not cleanup proof. When the current state is a bound slot, `current_state_instructions` names the slot ID plus the frozen CLI binding `{command, args}` and that the legal start is `loop-engine invoke RUN_ID SLOT_ID`; it omits the stored work body. Bound-instruction triage order: overlay succeeded means the bound CLI exited 0, not that the provider accepted the work; captures are at the named capture directory on the invocation view and invoke result; the driver triages worker output, appends provider-shaped records, then requests the shown event; on overrun wait or cancel owned work and verify cleanup, then observe before retry; on failed inspect `capture_dir/summary.json` and captured stdout before stderr. Do not redact to only the invoke CLI. Unbound current states keep the stored instruction body.
 
-The projection is the **chronologically latest durable evaluation** for each exact checked transition. An `allow` supersedes any earlier `deny`, and a later `deny` likewise supersedes an earlier `allow`. When the latest result is `deny`, its actionable feedback is exposed.
+The `latest_evaluations` projection is the **chronologically latest durable evaluation** for each exact checked transition. An `allow` supersedes any earlier `deny`, and a later `deny` likewise supersedes an earlier `allow`. When the latest result is `deny`, its actionable feedback is exposed.
 
 The projection is scoped to exact checked transitions, not merely currently requestable events. This preserves useful review feedback across revision edges without turning evaluation results into context records.
 
@@ -700,7 +701,7 @@ That feedback becomes durable semantic history and is available to later evaluat
 
 `unsupported` means the current provider implementation cannot evaluate the stored workflow/action. It is surfaced as an `error`, does not advance the run, does not enter semantic history, and does not enter evaluation lineage.
 
-Providers cannot route to another state or create context records through `evaluate` in v0.1.
+Providers cannot route to another state through `evaluate`. An `allow` may include an optional opaque `context_append` effect (`kind` and `data`), which the engine persists atomically with the exact checked transition; this does not grant provider routing authority or engine-level truth semantics to the context.
 
 ### 8.5 Provider Association and Evolution
 
@@ -1206,6 +1207,8 @@ active run's stored states, transitions, work-slot catalog, or instructions.
 - Status: live
 - Coverage: e2e/journey
 
+Ordinary `show` provides current action instructions; separate status-only and full inspection views remain available. Status-only observation does not arm mutation. Action and full instruction reads arm the current visit. Optional provider-authored action guidance remains opaque to core; absent legacy guidance means unknown normalized obligations, not zero obligations, and preserves the existing bound-invocation or external-work path and access to frozen policy. Full inspection retains complete configuration, context and invocation/change-report evidence with original identities and ordering. The focused action view exposes current obligations, active work, source-located blockers with explicit freshness or uncertainty, and references for omitted material; unrelated completed invocations and historical context do not enlarge it.
+
 ### LE-21: Workflow-specific external work identity required for handoff is durably represented through opaque workflow data or instructions rather than ambient session state.
 - Status: live
 - Coverage: e2e/journey
@@ -1223,6 +1226,8 @@ actor-private memory.
 ### LE-23: `show` preserves review feedback across revision edges by exposing the chronologically latest durable evaluation per checked-transition lineage.
 - Status: live
 - Coverage: e2e/journey
+
+Full inspection also exposes every durably recorded checked allow/deny evaluation in original semantic-sequence order, preserving its identity, exact transition, feedback, sequence and occurred_at. This complete evaluation history is available in full inspection itself, alongside the unchanged latest-per-transition projection. Overrides remain separate history, not synthetic provider evaluations; unrecorded operational failures are not fabricated as evaluations.
 
 ### LE-24: Later durable evaluations supersede earlier ones in either direction: `allow` can supersede `deny`, and `deny` can supersede `allow`.
 - Status: live
@@ -1552,6 +1557,8 @@ durable `allow` and `deny` results.
 - Status: live
 - Coverage: e2e/journey
 
+`show` exposes a deterministic provider-free, fail-closed change report for assignment records and recorded plan-task results. Full inspection reports covered subject, assignment/binding, policy/configuration, output-contract, routed-input, task-definition/packet, dependency, worker-binding, and task-recorded repository-effect dimensions; unknown inputs are changed; standing records and results are visible from the durable run without provider execution or capture-file reads. Ordinary action inspection exposes selected relevant change-report facts and references to full inspection rather than unrelated historical reports.
+
 ### LE-101: `invoke` may select only named enumerable assignments using the existing invoke path. Empty, duplicate, unknown, or non-enumerable selections refuse before a worker starts; argv that resembles fan-out behind an executable other than the current engine remains non-enumerable; omitted selection runs the frozen binding in full; the validated selection is durable and never rewrites the frozen binding.
 - Status: live
 - Coverage: e2e/journey
@@ -1646,7 +1653,7 @@ Software-change counts distinct current independent non-retired judgments: a pas
 - Status: live
 - Coverage: e2e/journey
 
-Contract v2 uses current frozen AC-N identities and independent criterion_policy, separate from review-axis author counts. The accepted plan names runnable proof_commands and owners; command captures retain actual argv/cwd, exit, elapsed time, output and repository identity. Failed, missing or incomplete proof cannot pass. The fixed report indexes command evidence, exactly one selected verdict set per criterion and a separate goal judgment; omissions, duplicates, unknown/stale/self-authored/unsupported evidence refuse. Prechosen unused record IDs are only names: checkpoint the index before genuine append --record-id judgments, with no placeholders or reservations. Validation-ready may leave verdicts pending for live review; approval or reviewless draft-to-end requires completeness. Ordinary axes consume the collection; challenge does not recommission it. After repair name affected criteria and supply fresh verdicts; explicitly carry unaffected original evidence to the current report/checkpoint with driver/reason and visible original author/result. Material repair requires fresh goal judgment; only explained report-index-only correction may carry it. Unresolved criterion failures block under exact-source dispositions. Normal validation retains accepted implementation-proof-history for the same tree.
+Contract v2 uses current frozen AC-N identities and independent criterion_policy, separate from review-axis author counts. The accepted plan names runnable proof_commands and owners; command captures retain actual argv/cwd, exit, elapsed time, output and repository identity. Failed, missing or incomplete proof cannot pass. The fixed report indexes command evidence, exactly one selected verdict set per criterion and a separate goal judgment; omissions, duplicates, unknown/stale/self-authored/unsupported evidence refuse. Prechosen unused record IDs are only names: checkpoint the index before genuine append --record-id judgments, with no placeholders or reservations. Validation-ready may leave verdicts pending for live review; approval or reviewless draft-to-end requires completeness. Ordinary axes consume the collection; challenge does not recommission it. After repair name affected criteria and supply fresh verdicts; explicitly carry unaffected original evidence to the current report/checkpoint with driver/reason and visible original author/result. Material repair requires fresh goal judgment; only explained report-index-only correction may carry it. Unresolved criterion failures block under exact-source dispositions. Normal validation retains accepted implementation-proof-history for the same tree. Explicit driver-added `validation-command` records may strengthen the effective command collection using new distinct IDs; they cannot replace frozen required IDs, waive proof or create acceptance criteria. `proof_updates` remains execution correction for existing IDs, not an addition path. The complete index includes declared supplemental commands and their real selected execution evidence; missing, failed, stale or incomplete evidence is not passing proof. Validation preparation is inert: it may reuse applicable retained execution to prepare command-evidence candidates, an index draft and independent criterion/goal commissions, but does not execute proof, append evidence, checkpoint, issue judgments or progress the run. Repository report receipts and native provider/checkpoint identities remain distinct and are checked under their existing contracts. The driver inspects and finalizes/checkpoints the index before commissioning the required independent judgments.
 
 ### LE-117: Focused workers and bounded isolated proof jobs preserve complete final proof without duplicated suite ownership.
 - Status: live
@@ -1658,13 +1665,61 @@ Workers run assigned focused checks; one designated proof owner runs the complet
 - Status: live
 - Coverage: e2e/journey
 
-Assign policies to their first N roster authors and preserve profile order within each batch. Ordinary/challenge gates remain separate, author floors unchanged and shipped profiles unbound. Every assigned axis appears exactly once; mixed pass/fail is conforming output, not approval. Missing/duplicate/unknown axes refuse with only one same-worker correction and retained raw attempts. Candidate normalization expands fresh rows with the same invocation/assignment origin and labels confirmation-only applicability references carried. Unaffected rows require prior exact author/axis/target authorization; failed required axes still block absent exact-source disposition. Justified one-axis commissions use the same shape without a batching profile setting.
+Assign policies to their first N roster authors and preserve profile order within each batch. Ordinary/challenge gates remain separate, author floors unchanged and shipped profiles unbound. Every assigned axis appears exactly once; mixed pass/fail is conforming output, not approval. Missing/duplicate/unknown axes refuse with only one same-worker correction and retained raw attempts. Candidate normalization expands fresh rows with the same invocation/assignment origin and labels confirmation-only applicability references carried. Unaffected rows require prior exact author/axis/target authorization; failed required axes still block absent exact-source disposition. Justified one-axis commissions use the same shape without a batching profile setting. Inert validation preparation may prepare independent criterion/goal commissions from the current complete evidence index. Criterion, goal and axis judgments may share an author's commission while retaining their distinct coverage, configured independent-author obligations and current report/checkpoint identities; preparation supplies no verdict. Ordinary validation axes consume the collection and challenge review does not recommission it or rerun its proof.
 
 ### LE-119: The public recovery surface adds amend-binding and cancel-invocation without adding provider semantic operations.
 - Status: live
 - Coverage: e2e/journey
 
 The ten primary operations are start, list, show, append, event, history, terminate, invoke, amend-binding and cancel-invocation. Invocation-progress, fan-out and preview-bindings remain other commands with their existing catalog boundaries. Describe/evaluate remain the provider semantic interface; provider utilities perform no semantic judgment. New software-change profiles explicitly declare contract_version 2, minimal-9/standard-9/high-rigor-9 and criterion_policy counts of one each. The new provider explicitly refuses older semantic contracts; retain fixed old providers for old execution. Provider-free historical reads preserve original obligations and evidence meaning, with absent ownership/control metadata treated as absent capability. No active-run migration, compatibility scaffold or bootstrap rewrite is required.
+
+### LE-120: A provider-agnostic Loop Engine monitoring command exposes ongoing run and external-work status and completion/attention notifications without model polling or workflow authority.
+- Status: live
+- Coverage: e2e/journey
+
+Status distinguishes workflow, helper execution, worker outcome, output conformance and semantic judgment or its absence; missing, stale and conflicting evidence stays explicit. The same generic public interface supports different providers, run invocations, bound/unbound graphs and fan-out, and validation commands. A waiting caller can receive machine-consumable completion/attention notifications. Observer restart preserves execution/evidence and observation never approves, advances, retries or cancels work.
+
+### LE-121: Drivers can execute and capture serial proof matrices or one command with preserved failures, verified abort cleanup and explicit valid-prefix resume.
+- Status: live
+- Coverage: e2e/journey
+
+The executor streams output and retains actual execution evidence, stops later admissions on failure, and never relabels earlier attempts. Resume refuses stale execution identity, missing evidence and unresolved cleanup. Execution success is not semantic approval; existing test commands remain the proof implementations.
+
+### LE-122: Optional iterative semantic status summaries remain evidence-grounded, cost-bounded and separate from deterministic monitoring and workflow authority.
+- Status: live
+- Coverage: e2e/journey
+
+An operator-configured external completion command receives selected evidence/source locators and a fallible previous summary, explains changed evidence, explicitly corrects errors, retains prior outputs and discloses uncertainty and available usage/cost. No model API or harness is hard-coded. Missing, invalid or failed output never counts as a fresh summary; cadence and call limits bound automatic calls. Summary failure or budget exhaustion does not stop deterministic monitoring, work or alter workflow state.
+
+### LE-123: Software-change driver guidance exposes an explicit human/driver-owned Git checkpoint decision at the existing pre-review boundary.
+- Status: live
+- Coverage: e2e/journey
+
+After implementation triage, the driver seeks owner authorization, inspects the staged surface and verifies any resulting commit before review. Workers do not commit independently; no new workflow state or automatic engine/provider Git lifecycle is introduced. Pending or declined authorization is not a commit.
+
+### LE-124: A separate post-commit delivery pointer can connect reviewed run/tree evidence to matching landed content and observed hosted outcomes without rewriting terminal evidence.
+- Status: live
+- Coverage: e2e/journey
+
+The driver-owned pointer refuses content mismatches, preserves pending versus observed Git/hosted facts and does not authorize delivery or imply semantic approval. Existing terminal reports and run records remain immutable.
+
+### LE-125: Bookends continuity preserves full/shallow-clone parity and never treats unavailable required parent history as first adoption.
+- Status: live
+- Coverage: e2e/journey
+
+Live-ID disappearance, tombstone removal, reassignment and revival are refused in both full and CI-equivalent shallow clones. The gate obtains required parent history or fails closed, while genuine first adoption remains valid; this does not expand continuity to the entire push range.
+
+### LE-126: Bookends bypass permission requires durable local invocation evidence and remains distinct from GREEN.
+- Status: live
+- Coverage: e2e/journey
+
+Retain invocation time, repository/revision, bypass class/reason and outcome locally. Recording failure refuses bypass permission to push; normal GREEN/RED behavior is preserved and runtime evidence is not committed.
+
+### LE-127: Bound model-worker context remains compact and usable without losing meaningful records or weakening durable evidence verification.
+- Status: live
+- Coverage: e2e/journey
+
+Repeated engine-owned binding, preamble and schema evidence does not overwhelm meaningful bound model-worker context. Preserve original meaningful context IDs, judgments and ordering, current assignments and necessary instructions, full durable history and engine/provider verification evidence. Deterministic and other non-model consumers retain necessary data. Actual bound fan-out proof demonstrates compact delivered input and genuine evidence verification, including invalid-evidence refusal; separate plan-graph regression preserves correct inputs, output and evidence handling.
 
 ## 15. Complexity Guardrails
 
