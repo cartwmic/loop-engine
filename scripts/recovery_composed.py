@@ -83,7 +83,7 @@ p=json.load(open(sys.argv[1]))
 def call(*args):
     r=subprocess.run([p['engine'],'--database',p['database'],'--json',*args],text=True,capture_output=True,check=True)
     return json.loads(r.stdout)
-show=call('show',p['run_id']); s=show['result']; history=call('history',p['run_id'])
+show=call('show','--view','full',p['run_id']); s=show['result']; history=call('history',p['run_id'])
 root=Path(s['initial_input']['artifact_root'])
 files={n:json.loads((root/n).read_text()) for n in ['intent.json','plan.json','implementation-report.json','implementation-checkpoint.json']}
 for n in ['validation-report.json','validation-checkpoint.json']:

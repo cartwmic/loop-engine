@@ -2,23 +2,23 @@
 
 ## Overview
 
-Loop Engine is a **pull-based gated state machine** for work performed outside the engine. A driver — human, agent, or script — reads current state, does the work, appends evidence, and requests an event. The engine accepts or rejects. It does not run the work, schedule the next job, or choose the next state.
+Loop Engine is a **pull-based gated state machine** for work performed outside the engine. A driver — human, agent, or script — reads current state, does the work, appends evidence, and requests an event. The progression kernel accepts or rejects the requested transition; it does not autonomously perform primary work or choose work to run. Caller-requested execution helpers such as `invoke`, `fan-out`, and `capture-command` can launch external processes without choosing or approving workflow transitions.
 
-The everyday analog is a **strict issue tracker**: `show` is the ticket (where you are, which transitions are legal, how a fresh actor resumes); `event` is a transition you request rather than a status you type. Unlike GitHub Issues, the caller cannot set state, a normal checked edge requires provider `allow` (an explicit owner exception is separately and permanently labeled), and a deny survives a new session and a more fluent model. For quick human correlation, `show --compact` is a concise projection of that same ticket; the detailed JSON `show` and `invocation-progress` operations remain the machine-readable authorities.
+The everyday analog is a **strict issue tracker**: `show` is the ticket (where you are, which transitions are legal, how a fresh actor resumes); `event` is a transition you request rather than a status you type. Unlike GitHub Issues, the caller cannot set state, a normal checked edge requires provider `allow` (an explicit owner exception is separately and permanently labeled), and a deny survives a new session and a more fluent model. In current source, ordinary `show` is the focused action view; `show --view status` (or human-readable `show --compact`) observes without arming mutation. Use `show --view full` for complete frozen input, context, evaluation history and invocation/change-report evidence, and `invocation-progress` for inner progress.
 
-The engine owns durable progression. The caller owns execution. Humans and agents use the same commands, evidence, and gates.
+The engine owns durable progression. The caller directs execution, including any use of engine execution helpers. Humans and agents use the same commands, evidence, and gates.
 
 ```text
 show → perform work externally → append evidence → request an event → accept or reject → repeat
 ```
 
-Latest published release as of 2026-09-06 is v0.18.0 (`MIT OR Apache-2.0`). The living product requirements are [docs/PRD.md](docs/PRD.md). Agent CLI semantics are [docs/agent-usage.md](docs/agent-usage.md). Checkout operating rules for agents are [AGENTS.md](AGENTS.md). When a repository enables Bookends, its configured living PRD is the sole requirement-ID authority; README.md and AGENTS.md remain outside Bookends coverage.
+The preserved released baseline for this source work is v0.19.0 (`MIT OR Apache-2.0`). The focused views, monitoring/capture helpers and default compact bound delivery described here are candidate source functionality, not a claim of published availability or completed final proof. The living product requirements are [docs/PRD.md](docs/PRD.md). Agent CLI semantics are [docs/agent-usage.md](docs/agent-usage.md). Checkout operating rules for agents are [AGENTS.md](AGENTS.md). When a repository enables Bookends, its configured living PRD is the sole requirement-ID authority; README.md and AGENTS.md remain outside Bookends coverage.
 
 ### Why not a workflow engine, Temporal, or an FSM library
 
 DAG and job orchestrators (Airflow, Dagu, and kin) **push**: the runtime fires the next ready node, owns workers, retries, and queues. Loop Engine **waits to be asked**. Cycles and revise edges are normal topology, not a DAG to flatten. A job DAG still belongs **inside** a work slot (for example a plan of CLI workers). It does not replace the run.
 
-**Temporal** is the closest durable-workflow cousin, and still the wrong shape. Temporal **runs your workflow function**: the runtime replays history, schedules activities, and resumes the orchestration after sleeps, signals, and worker polls. Activity workers pull jobs the workflow has already decided to run. Routing lives in code the runtime executes. Loop Engine never runs a workflow function. A driver pulls `show` and requests an event; the provider only `allow`s, `deny`s, or returns `unsupported` for that exact edge. Temporal is durable *execution* of orchestration. Loop Engine is durable *progression authority* for work it does not perform. Use Temporal (or Dagu) where a slot needs a push DAG of workers. Do not encode `approved` vs `revise` as Temporal control flow — that puts routing back in the thing that did the work.
+**Temporal** is the closest durable-workflow cousin, and still the wrong shape. Temporal **runs your workflow function**: the runtime replays history, schedules activities, and resumes the orchestration after sleeps, signals, and worker polls. Activity workers pull jobs the workflow has already decided to run. Routing lives in code the runtime executes. Loop Engine's progression kernel does not run a workflow function; caller-requested execution helpers are a separate boundary. A driver pulls `show` and requests an event; the provider only `allow`s, `deny`s, or returns `unsupported` for that exact edge. Temporal is durable *execution* of orchestration. Loop Engine is durable *progression authority* for externally performed work directed by the caller. Use Temporal (or Dagu) where a slot needs a push DAG of workers. Do not encode `approved` vs `revise` as Temporal control flow — that puts routing back in the thing that did the work.
 
 Typical state-machine libraries **push events into** a machine (`send`) and assume something else is driving. Loop Engine is the driver protocol: one primary read (`show`) is enough for a new actor to resume without the last conversation.
 
@@ -54,7 +54,7 @@ Reference providers:
 
 ### Prebuilt GitHub Releases
 
-The recovery and contract-v2 interfaces described below are absent from v0.18.0. Build the checkout containing those changes to use them; GitHub-source installs contain only committed source. Released binaries carry their matching profiles through `data-dump`.
+The v0.18.0 installation examples below are historical pinned examples, not a way to install the current candidate interfaces. Build the checkout containing the changes to try them; GitHub-source installs contain only committed source. Released binaries carry their matching profiles through `data-dump`.
 
 Current releases publish separate cargo-dist archives for all four binaries and supported targets:
 
@@ -106,7 +106,7 @@ cargo install --git https://github.com/cartwmic/loop-engine policy-document-prov
 cargo install --git https://github.com/cartwmic/loop-engine research-provider --bin research --locked
 ```
 
-Or build all four binaries from a checkout:
+For a checkout build, install [rustup](https://rustup.rs/) and native build tools (macOS Command Line Tools or a Linux C compiler/linker toolchain, also needed for bundled SQLite). `rust-toolchain.toml` pins Rust 1.98.0; this is the checkout toolchain, not a public MSRV promise. Run from the repository root:
 
 ```sh
 cargo build --release -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider
@@ -114,16 +114,17 @@ cargo build --release -p loop-cli -p software-change-provider -p policy-document
 # target/release/software-change
 # target/release/policy-document
 # target/release/research
+export PATH="$PWD/target/release:$PATH"
 ```
 
 ## Usage
 
-`loop-engine` stores run state in a SQLite catalog and snapshots provider association, workflow topology, and state instructions at `start`. For normal production use, omit `--database` and `artifact_root` unless the human explicitly asked to isolate that session; the engine then uses the user-level catalog and an engine-owned per-run artifact directory. When those options and database environment variables are unset, the catalog is `$LOOP_ENGINE_HOME/loop.db`, `$LOOP_HOME/loop.db`, `$XDG_DATA_HOME/loop-engine/loop.db`, or `$HOME/.local/share/loop-engine/loop.db` in that order. `show` gives the current work and available events. Follow the [CLI reference](docs/agent-usage.md) for observation before mutations and the [engine skill](skills/using-loop-engine/SKILL.md) for driving procedure.
+`loop-engine` stores run state in a SQLite catalog and snapshots provider association, workflow topology, and state instructions at `start`. For normal production use, omit `--database` and `artifact_root` unless the human explicitly asked to isolate that session; the engine then uses the user-level catalog and an engine-owned per-run artifact directory. Before start, load canonical [Deterministic setup](skills/using-loop-engine/SKILL.md#deterministic-setup) to inspect overrides and resolve the effective catalog; other runs or old preferences do not authorize isolation. `show` gives the current work and available events. Follow the [CLI reference](docs/agent-usage.md) for observation before mutations and the [engine skill](skills/using-loop-engine/SKILL.md) for driving procedure.
 
 ```text
 loop-engine [--database DB] [--config CONFIG] [--json] [--timeout-ms MS] start [--id RUN_ID] PROVIDER INITIAL_JSON [LABEL]
 loop-engine [--database DB] [--json] list
-loop-engine [--database DB] [--json] show [--compact] RUN_ID
+loop-engine [--database DB] [--json] show [--view action|status|full | --compact] RUN_ID
 loop-engine [--database DB] [--json] append [--record-id RECORD_ID] RUN_ID KIND DATA_JSON
 loop-engine [--database DB] [--json] event RUN_ID EVENT_ID [--override JSON]
 loop-engine [--database DB] [--json] history RUN_ID
@@ -137,7 +138,11 @@ software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--t
 loop-engine preview-bindings [JSON|@FILE]
 ```
 
-The first ten forms are the primary run-state operations in this source checkout. `show --compact RUN_ID` is a human-readable mode of `show`; it adds no operation. Use `--json show` and `--json invocation-progress` for machine-readable state and inner progress. `--json show --compact` is rejected. The remaining forms cover invocation inspection, ad hoc workers, binding previews, and the software-change provider's plan graph.
+The first ten forms are the primary run-state operations in this source checkout. `show --compact RUN_ID` is a human-readable mode of `show`; it adds no operation. Use `--json show` for current action, `--json show --view full` for complete evidence and helper input, and `--json invocation-progress` for inner progress. `--compact` aliases non-arming status in JSON or text; combining it with full view is rejected. The remaining forms cover invocation inspection, ad hoc workers, binding previews, and the software-change provider's plan graph.
+
+Current source also provides `loop-engine capture-command`, `capture-matrix`, and `capture-abort` for serial command/matrix execution and retained failure evidence, and `loop-engine monitor` for deterministic observation with optional separately budgeted advisory summaries. Neither approves, advances, retries or cancels workflow work. See [operational UX contracts](docs/operational-ux-contracts.md) for exact forms, cleanup and resume rules. The [coordinator skill](skills/coordinating-loop-engine/SKILL.md) helps separate run drivers, ownership and escalation; it does not replace provider procedures or authorize starts.
+
+Bound fan-out delivery is compact by default for every worker, not model-selected: only engine-owned top-level `data.loop_engine_origin` is omitted from cloned context records. Meaningful context and concise origins remain. Full routed-input snapshots are captured independently for verification; captured stdin stays truthful. Ad-hoc instruction bytes and plan-graph task/summarizer boundaries are unchanged. A successful process or mechanically valid capture is not semantic acceptance.
 
 For binding, capture, evidence and checkpoint procedures, load the [engine skill](skills/using-loop-engine/SKILL.md) and [software-change skill](crates/software-change-provider/skills/using-software-change-provider/SKILL.md).
 
@@ -164,7 +169,7 @@ EOF
   start software-change "@$profile" "my run"
 ```
 
-`start` initial input and `append` data accept JSON inline, `@FILE`, or `-` (stdin). `start` returns the run ID at `result.run.id`; reuse the same catalog and run ID for later operations. With `--json`, exit `0` is `completed`, `10` is `rejected` (follow feedback), `20` is `error` (re-read `show`), and `2` is `invalid-invocation`. Full handoff, binding, capture, and review procedures are in [AGENTS.md](AGENTS.md), [docs/agent-usage.md](docs/agent-usage.md), [skills/using-loop-engine/SKILL.md](skills/using-loop-engine/SKILL.md), and the provider skills. `loop-engine --help` and `--version` work before operations; `software-change` and `research` also support `--help`/`--version` and `data-dump`, while `policy-document` accepts `data-dump DIR` on argv and otherwise reads JSON on stdin.
+`start` initial input and `append` data accept JSON inline, `@FILE`, or `-` (stdin). `start` returns the run ID at `result.run.id`; reuse the same catalog and run ID for later operations. With `--json`, exit `0` is `completed`, `10` is `rejected` (follow feedback), `20` is `error` (re-read `show`), and `2` is `invalid-invocation`. Full handoff, binding, capture, and review procedures are in [AGENTS.md](AGENTS.md), [docs/agent-usage.md](docs/agent-usage.md), [skills/using-loop-engine/SKILL.md](skills/using-loop-engine/SKILL.md), and the provider skills. `loop-engine --help` and `--version` work before operations; `software-change` and `research` also support `--help`/`--version` and `data-dump`, while current-source `policy-document` accepts `data-dump DIR` and `commission FROZEN_PROFILE_JSON` on argv and otherwise reads protocol JSON on stdin.
 
 ### Recovery in the current source contract
 
@@ -174,14 +179,16 @@ Owner-attested `event --override` preserves failures and skipped checks and perm
 
 Current-source software-change profiles declare contract v2 (`minimal-9`, `standard-9`, `high-rigor-9`). Older semantic profiles require their fixed original provider; stored graphs retain their original routes. No active-run migration is provided. Policy-document and research keep their own evidence contracts.
 
-The integrated recovery requirement wording is a draft pending owner acceptance/commit and document audits. Simple-first, YAGNI and KISS apply product-wide: complexity needs a meaningful current reason and inadequate simpler alternative in the ordinary design; current architecture/protocol/dependency choices need not be preserved for their own sake. Focused deterministic proof does not establish semantic review, final benchmark acceptance, hosted exact-commit proof or later live dogfood.
+Unrelated recovery requirement amendments retain their pending status. Source integration alone does not establish committed PRD authority, semantic acceptance or final identity-bound proof: exact human acceptance, authorized commit and required evidence are separate duties. The calibration manifest records actual row status; calibration approval does not replace document review, exhaustive clause review or stable-tree measurements. Simple-first, YAGNI and KISS apply product-wide: complexity needs a meaningful current reason and inadequate simpler alternative in the ordinary design; current architecture/protocol/dependency choices need not be preserved for their own sake. Focused deterministic proof does not establish semantic review, final benchmark acceptance, hosted exact-commit proof or later live dogfood.
 
 ## Adoption limits
 
 The v0.1 scope is deliberately local and narrow ([docs/PRD.md](docs/PRD.md), especially its non-goals and authority invariants):
 
 - no distributed execution, multi-user authentication, workflow migration, or special sensitive-data handling;
+- no parallel or hierarchical workflow states, child workflows, or compensation; parallel workers inside a slot are not parallel workflow progression;
 - one logical mutating actor per run;
+- transition atomicity covers engine-owned state and history, not provider observations of external files together with transition commits. The engine does not lock or version external work; callers needing approval of an exact artifact revision must arrange external identity/revision controls;
 - CLI and provider validation may evolve, but a stored run's workflow topology and provider association remain frozen;
 - shipped binaries are the supported interface; workspace crates are not public API.
 
@@ -189,7 +196,7 @@ The v0.1 scope is deliberately local and narrow ([docs/PRD.md](docs/PRD.md), esp
 
 An enabled repository configures one living markdown PRD and explicit proof surfaces in `bookends.toml`. The `bookends-check` library/CLI parses the PRD, resolves `bookends:LE-<n>` citations, checks live and optional contract coverage, and verifies tracked, non-skipped files are collected by named required-CI commands. It compares only with the immediately preceding committed PRD: exact ID plus title is identity, retirement keeps an exact-title tombstone, and tombstones cannot disappear or revive. `bookends-check candidate PRD.md` validates only candidate grammar.
 
-Repository gates use `scripts/bookends-check-gate.sh`, which prints `GREEN`, `RED`, or `BYPASS`. Only an explicit `BOOKENDS_BYPASS=<class>:<reason>` bypasses a red gate, and its printed output is the invocation evidence. README.md and AGENTS.md are not coverage classes. The software-change overlay is off by default; enable it only on a per-run copy of a shipped profile with `extra.bookends.enabled: true`. Its artifact IDs, live-ID checks, validation gate, and worker citation instructions are documented in the provider skill.
+Repository gates use `scripts/bookends-check-gate.sh`, which prints `GREEN`, `RED`, or `BYPASS`. Only an explicit `BOOKENDS_BYPASS=<class>:<reason>` can bypass a red gate. Current source also requires durable local invocation evidence; a recording failure refuses bypass permission. BYPASS is never GREEN. Required parent history must be available in shallow clones or continuity fails closed; the scope remains the immediate parent, not every pushed transition. README.md and AGENTS.md are not coverage classes. The software-change overlay is off by default; enable it only on a per-run copy of a shipped profile with `extra.bookends.enabled: true`. Its artifact IDs, live-ID checks, validation gate, and worker citation instructions are documented in the provider skill.
 
 A repository without a schema-valid git PRD can use the research provider's [Generate-PRD skill](crates/research-provider/skills/using-generate-prd/SKILL.md) and `crates/research-provider/data/configs/generate-prd.json` to produce a provisional `prd-candidate.md` with per-requirement tracked evidence. Validate it with `bookends-check candidate prd-candidate.md`; the parser-only command does not check coverage, CI, or continuity. A human must accept or reject the candidate before any commit to `docs/PRD.md`; the path never auto-edits that file or commits.
 
@@ -197,132 +204,15 @@ A repository without a schema-valid git PRD can use the research provider's [Gen
 
 Supported publication matrix is exactly four applications (`loop-cli`, `software-change-provider`, `policy-document-provider`, `research-provider`) by two native targets (`aarch64-apple-darwin`, `x86_64-unknown-linux-gnu`). `dist plan` describes this matrix; it does not compile or run archives.
 
-The ordinary local Rust test path uses the exact `cargo-nextest` version pinned in `.config/nextest.toml`:
+After the pinned tool setup in [checkout validation](AGENTS.md#workflow), the supported local Rust test entry is:
 
 ```sh
-cargo install cargo-nextest --version 0.9.143 --locked
-python3 scripts/assert-nextest.py
 python3 scripts/run-nextest.py
 ```
 
-`run-nextest.py` is the fresh-binary contract. It builds the current
-production and reference-fixture binaries, hands their direct active-target
-paths to the central suite through `LOOP_ENGINE_TEST_BINARY_HANDOFF`, runs
-workspace unit tests and the one `workspace-integration/workspace` target with
-nextest process isolation, and then runs owning-crate doctests through Cargo.
-Focused iteration uses `python3 scripts/run-nextest.py --filter
-TEST_SUBSTRING` or `python3 scripts/run-central-tests.py --filter
-TEST_SUBSTRING`; the intentionally wedged timeout test is proved separately
-with `python3 scripts/prove-nextest-timeout.py`. Nextest does not run
-doctests, and the normal path does not use workspace-wide `--test-threads=1`.
+Completion also requires workspace checks, public source journeys and applicable release/archive proof. Load [AGENTS Workflow](AGENTS.md#workflow) for the required commands and [testing/cache procedure](docs/agent-usage.md#workspace-rust-test-and-preflight-path) for test handoffs, topology, tool pins and cache proof. Local proof does not establish hosted exact-commit success, and a macOS archive test does not prove Linux behavior.
 
-The central topology and current source-inventory assertions consume a fresh
-compiler-artifact stream and require exactly one integration-test executable
-across the workspace:
-
-```sh
-python3 scripts/run-central-tests.py \
-  --no-run \
-  --compiler-artifacts /tmp/central-test-artifacts.jsonl \
-  --handoff-output /tmp/stock-cargo-handoff.json
-python3 scripts/assert-test-topology.py --compiler-artifacts /tmp/central-test-artifacts.jsonl
-python3 scripts/assert-test-inventory.py \
-  --compiler-artifacts /tmp/central-test-artifacts.jsonl --current-only
-```
-
-The handoff rejects missing, stale, hashed, non-executable, and
-outside-target candidates. Stock Cargo remains an independent final
-compatibility gate; it does not route through `run-central-tests.py`:
-
-```sh
-LOOP_ENGINE_TEST_BINARY_HANDOFF=/tmp/stock-cargo-handoff.json \
-  cargo test --workspace
-```
-
-The repository-owned dependency audit pins `cargo-machete` and checks its
-exact version before scanning the whole workspace:
-
-```sh
-cargo install cargo-machete --version 0.9.2 --locked
-python3 scripts/dependency-audit.py
-```
-
-For local cache proof, `python3 scripts/sccache-proof.py proof --artifact
-/tmp/testing-sccache.json` compiles equivalent real Rust inputs into two
-isolated temporary target directories and requires a positive warm cache hit.
-It never uses `cargo clean` or leaves cache data in the repository. Required
-GitHub-hosted preflight pins sccache 0.17.0 through
-`mozilla-actions/sccache-action@v0.0.11`, exports the ephemeral
-`ACTIONS_RESULTS_URL` and `ACTIONS_RUNTIME_TOKEN` values required by that
-backend, starts it before any Cargo compilation, and emits startup/final
-statistics; no repository secret is used.
-The final preflight matrix is serialized on one stable revision in this
-order: tool installation and checks, dependency audit, generated-release
-assertions, Bookends, ordinary nextest plus doctests, timeout proof, central
-topology/inventory, stock Cargo, clippy/fmt and locked builds, no-argument
-journey discovery, the Generate-PRD profile check, journey self-tests, all
-four public source journeys, and final hosted sccache statistics plus total
-wall time. Local focused or static checks do not claim the hosted run.
-
-Run baseline checks, the dependency audit, generated-workflow validation, plan assertion, and full source-tree public-boundary journeys before release handoff:
-
-```sh
-python3 scripts/dependency-audit.py
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-cargo fmt --all -- --check
-dist generate --check
-dist plan --output-format=json > /tmp/loop-engine-dist-plan.json
-python3 scripts/assert-dist-plan.py --self-test
-python3 scripts/assert-dist-plan.py /tmp/loop-engine-dist-plan.json
-python3 scripts/assert-release-gates.py
-python3 scripts/assert-push-main-preflight.py
-python3 scripts/software-change-journey.py --self-test
-python3 scripts/research-journey.py --self-test
-python3 scripts/generate-prd-journey.py --self-test
-python3 scripts/assert-generate-prd-profile.py
-scripts/bookends-check-gate.sh
-cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider -p bookends-check
-python3 scripts/software-change-journey.py \
-  --mode source \
-  --engine target/debug/loop-engine \
-  --provider target/debug/software-change \
-  --data-root "$PWD" \
-  --work-root "${TMPDIR:-/tmp}/loop-engine-software-change-journey" \
-  --profile crates/software-change-provider/data/configs/high-rigor.json \
-  --traversal-depth full
-for mode in draft audit; do
-  python3 scripts/policy-document-journey.py \
-    --engine target/debug/loop-engine \
-    --provider target/debug/policy-document \
-    --profile crates/policy-document-provider/data/readme.json \
-    --mode "$mode"
-done
-python3 scripts/research-journey.py \
-  --mode source \
-  --engine target/debug/loop-engine \
-  --provider target/debug/research \
-  --profile crates/research-provider/data/configs/standard.json
-python3 scripts/generate-prd-journey.py \
-  --mode source \
-  --engine target/debug/loop-engine \
-  --provider target/debug/research \
-  --checker target/debug/bookends-check \
-  --profile crates/research-provider/data/configs/generate-prd.json
-```
-
-Build local host-target archives and smoke extracted binaries before handoff. Use only a newly approved, unpublished release tag; never reuse an existing public tag:
-
-```sh
-TAG=vX.Y.Z
-dist build --tag="$TAG" --artifacts=local --target=aarch64-apple-darwin
-```
-
-Run packaged smoke with extracted `loop-engine`, `software-change`, `policy-document`, and `research` paths. Each provider must materialize embedded data, and all provider journeys must run outside checkout; policy-document covers both draft and audit modes, and the research packaged journey materializes embedded data via `data-dump` / `--mode packaged`. A macOS host build proves only macOS arm64; Linux x86_64 native build and archive smoke remain CI proof when no Linux host is available.
-
-Journey evidence records are synthetic and schema-conforming. They prove deterministic policy mechanics, routing, aggregation, persistence, sparse work-slot `invoke` via `scripts/dummy-work-slot-worker.py`, and contracted fan-out stdin/conformance via `scripts/dummy-stdin-worker.py`; they do not prove semantic review quality. Source full mode additionally uses separate CLI processes and real temporary Git repositories to prove context forwarding, driver ledger/proposal routing, preserved retry attempts, report-only denial, every named implementation/validation state invalidation, validation recovery, and current-tree final proof. Dummy inner workers prove Dagu-backed `fan-out` and `run-plan-graph` facade contracts (compact `artifact_root` stdin, bound `capture_dir/summary.json`, per-index or per-task stdout/stderr). The bound plan-graph journey freezes a driver-owned symlink alias, requires the checkout's `.git` marker, and checks every task and summarizer cwd with filesystem-equivalence semantics. The plan-graph dummy writes `implementation-report.json` only when stdin is the summarizer assignment. `python3 scripts/software-change-journey.py --self-test` must print `worker-data skill/root policy assertions passed` after the three provider skill constructors and root AGENTS rules pass. Source full mode must print `contracted fan-out failure` after the bound conforming/refusal overlay proof.
-
-A software-change aggregate `implementation-report.json` for this checkout is checked by `scripts/assert-implementation-report.py` (`--report`, `--revision`, `--plan-revision`, `--matrix`; prove with `--self-test`). It consumes the supplied plan matrix and actual command receipts, rejecting missing/failed/pending local proof; the check itself is retained externally, and after-authorization work remains separate. See [the receipt contract](docs/implementation-report-proof.md). That checker is not a publication gate. It requires `coverage.commit` to be current `git rev-parse HEAD` plus `+uncommitted-worktree` and `changed_surface` to match `git status --porcelain=v1 --untracked-files=all` pathnames.
+Synthetic journeys prove deterministic mechanics, not semantic review quality. Implementation reports index actual execution evidence; missing, failed or pending proof cannot establish completion. The [receipt contract](docs/implementation-report-proof.md) and [handoff procedure](AGENTS.md#completion-and-handoff) own identity and report checks. The report checker is not a publication gate.
 
 ### Publication path
 
@@ -340,4 +230,4 @@ Historical `v0.2.0`, `v0.2.1`, and `v0.2.2` tags remain immutable. `v0.2.2` was 
 
 ### Direct pushes to main
 
-Direct pushes to `main` run `.github/workflows/push-to-main.yml`. That read-only dispatcher checks out the pushed SHA, computes the pinned cargo-dist 0.32.0 plan, and calls reusable `preflight.yml`; preflight installs operator-provided `dagu` 2.14.0 onto `PATH` (into `$RUNNER_TEMP`, not dist artifacts or crate packages), starts pinned sccache before Cargo compilation, and owns the nextest/doctest path, timeout and one-target/inventory assertions, dependency audit, direct stock Cargo compatibility, warning-denying clippy, formatting, locked builds, Bookends, generated-release checks, cache statistics/total wall time, and every public source journey. A missing `dagu` or tool fails those tests rather than a skip. The dispatcher has no publication job. `.github/workflows/release.yml` remains cargo-dist-generated and dispatch-only.
+Direct pushes to `main` run the read-only [push preflight](.github/workflows/push-to-main.yml) for the pushed SHA; they do not publish. Required proof and tool setup live in [AGENTS Workflow](AGENTS.md#workflow) and [reusable preflight](.github/workflows/preflight.yml). `.github/workflows/release.yml` remains cargo-dist-generated and dispatch-only.

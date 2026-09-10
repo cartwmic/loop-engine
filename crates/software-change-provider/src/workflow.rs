@@ -252,6 +252,7 @@ pub(crate) fn describe_workflow(initial_input: Option<&Value>) -> Result<Workflo
                 slot.stdin_context_kinds.extend(
                     [
                         "command-evidence",
+                        "validation-command",
                         "criterion-verdict",
                         "goal-verdict",
                         "criterion-revalidation",
@@ -260,6 +261,27 @@ pub(crate) fn describe_workflow(initial_input: Option<&Value>) -> Result<Workflo
                 );
             }
         }
+    }
+    for state in &mut workflow.states {
+        if state.is_final {
+            continue;
+        }
+        let policies = review_policies.and_then(|p| p.get(state.id.as_str()));
+        let axes = policies.and_then(Value::as_array).map(|rows| {
+            rows.iter().map(|row| serde_json::json!({
+                "id": row["id"],
+                "required_authors": row.get("required_authors").cloned().unwrap_or(Value::from(1))
+            })).collect::<Vec<_>>()
+        });
+        state.action_guidance = Some(serde_json::json!({
+            "review_axes": axes,
+            "policy_status": if review_policies.is_some() { "frozen" } else { "unknown: inspect full initial_input" },
+            "criterion_policy": initial_input.and_then(|v| v.get("criterion_policy")),
+            "repair": "Keep validation-report-only corrections in validation. For an implementation defect owned by a frozen task, select that task and its dependants. Use repair_finding_ids only for an accepted unresolved implementation finding honestly owned by no task. Revise plan/design/intent only when that phase obligation is materially wrong; reconfirm affected downstream proof and explicitly carry unaffected original evidence.",
+            "review": "First review is comprehensive. Confirm accepted fixes and fix-introduced holes, with explicit unaffected applicability; no rerun-until-pass. Falsify circular proof and evidence compatible with opposite outcomes against frozen obligations, without adding axes.",
+            "execution": "Bound: invoke the shown frozen slot; do not perform its worker body. Unbound: follow the provider skill externally. Triage captures before append or progression. Budget serial tasks, summarizer, proof and review together; overrun is attention, not retry permission.",
+            "git": "After implementation triage and before independent review, ask the owner for the Git decision. Inspect staged names and diff; perform or confirm only the owner-authorized human/driver commit and verify its resulting identity with `git rev-parse HEAD`, or record pending/declined without Git changes or claiming a created commit. Workers do not independently commit. A commit changes proof identity: refresh invalidated receipts/report/checkpoints before review; then keep source/Git identity stable. This reminder grants no authorization."
+        }));
     }
     Ok(workflow)
 }

@@ -25,11 +25,12 @@ threads-required = "num-cpus"
 filter = 'test(show_projects_durable_change_report_without_capture_files)'
 threads-required = "num-cpus"
 
-# The composed criterion journey performs many ordered public-CLI operations.
-# Reserve the test slots instead of letting competing tests exhaust its deadline.
+# This composed public-CLI journey takes about 78s even without competing tests.
+# Keep its slot reservation and a bounded 180s deadline; ordinary tests stay at 60s.
 [[profile.default.overrides]]
 filter = 'test(recovery_criterion_public_commands_checkpoint_repair_carry_and_terminal)'
 threads-required = "num-cpus"
+slow-timeout = { period = "30s", terminate-after = 6, grace-period = "0s", on-timeout = "fail" }
 
 [[profile.default.overrides]]
 filter = 'test(process_timeout_probe)'

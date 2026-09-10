@@ -72,13 +72,13 @@
   "validation": [
     "cargo test -p software-change-provider --lib schema::tests::instance_collects_object_rules_and_nested_properties passed",
     "cargo test -p software-change-provider --test evaluate schema_deny_reports_every_simultaneous_structural_violation -- --exact passed",
-    "python3 scripts/production-journey.py passed with inspectable frozen-profile, exhaustive structural-denial, configured evidence-denial, unchanged-state, evidence-gated acceptance, terminal-state, and denial-lineage assertions in the supplied repository-state companion",
+    "python3 scripts/production-journey.py --engine fictional-repo/target/debug/loop-engine --config fictional-repo/implementation-evidence/providers.toml --profile fictional-repo/provider/data/configs/standard.json --fixtures fictional-repo/implementation-evidence/journey-fixtures --terminal-run-id terminal-validation-proof passed with inspectable frozen-profile, exhaustive structural-denial, configured evidence-denial, unchanged-state, evidence-gated acceptance, terminal-state, and denial-lineage assertions in the supplied repository-state companion",
     "cargo test -p software-change-provider --test embedded_data passed",
     "cargo test -p software-change-provider --test shipped_data passed",
     "cargo test --workspace passed",
     "cargo clippy --workspace --all-targets passed",
     "cargo fmt --all -- --check passed",
-    "python3 scripts/production-journey.py passed",
+    "python3 scripts/production-journey.py --engine fictional-repo/target/debug/loop-engine --config fictional-repo/implementation-evidence/providers.toml --profile fictional-repo/provider/data/configs/standard.json --fixtures fictional-repo/implementation-evidence/journey-fixtures --terminal-run-id terminal-validation-proof passed",
     "python3 fictional-repo/scripts/assert-requirement-proof.py",
     "python3 fictional-repo/scripts/assert-doc-authority.py",
     "Docs-integrated coverage supplied exact mapped companions for every listed document; semantic review remained external to provider execution."

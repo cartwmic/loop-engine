@@ -221,6 +221,8 @@ pub struct ShowProjection {
     pub current_state: StateId,
     pub current_state_title: String,
     pub current_state_instructions: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_guidance: Option<Value>,
     pub initial_input: Value,
     pub state_visit: u64,
     pub binding_amendments: Vec<crate::BindingAmendment>,
@@ -232,6 +234,10 @@ pub struct ShowProjection {
     /// sequence.  This intentionally includes transitions that are no longer
     /// requestable from the current state.
     pub latest_evaluations: Vec<DurableEvaluation>,
+    /// Every durable checked allow/deny, with original identities and sequence.
+    /// Empty when decoding legacy projections, not invented from latest results.
+    #[serde(default)]
+    pub evaluation_history: Vec<DurableEvaluation>,
     /// Catalog snapshot from `run.workflow.work_slots` (`id`, `state`, `event`).
     pub work_slots: Vec<WorkSlot>,
     /// Deterministic report of durable worker assignments and plan-task
@@ -758,7 +764,7 @@ fn current_state_instructions_for(run: &Run, stored: &str) -> String {
         Some((slot, binding)) => {
             let args = serde_json::to_string(&binding.args).unwrap_or_else(|_| "[]".to_owned());
             format!(
-                "Bound work slot `{slot_id}` is configured. Frozen worker CLI: command={command} args={args}. Legal start: loop-engine invoke {run_id} {slot_id}. Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. Captures are at the named capture directory on the invocation view and invoke result. The driver triages worker output, appends provider-shaped records, then requests the shown event. On overrun wait; cancel-invocation requires recorded local ownership and refuses historical invocations without it. Live owned work and pending cleanup block retry and state departure. On failed inspect capture_dir/summary.json and captured stdout before stderr. Consult the change report of record before reuse. For review reuse, append one evidence-applicability record referencing the original evidence, current target, attesting driver, and short reason; semantic applicability remains the driver's judgment.",
+                "Bound work slot `{slot_id}` is configured. Frozen worker CLI: command={command} args={args}. Legal start: loop-engine invoke {run_id} {slot_id}. Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. Captures are at the named capture directory on the invocation view and invoke result. The driver triages worker output, appends provider-shaped records, then requests the shown event. On overrun wait; cancel-invocation requires recorded local ownership and refuses historical invocations without it. Live owned work and pending cleanup block retry and state departure. Run show immediately before reinvoking the same slot. On failed inspect capture_dir/summary.json and captured stdout before stderr. Consult the change report of record before reuse. For review reuse, append one evidence-applicability record referencing the original evidence, current target, attesting driver, and short reason; semantic applicability remains the driver's judgment.",
                 slot_id = slot.id,
                 command = binding.command,
                 run_id = run.id,
@@ -882,7 +888,11 @@ pub fn project_with_invocations_and_subjects(
             ))
         })
         .collect();
+    let mut evaluation_history = data.checked_evaluations.clone();
+    evaluation_history.sort_by_key(|evaluation| evaluation.sequence);
     Ok(ShowProjection {
+        action_guidance: current_state.action_guidance.clone(),
+        evaluation_history,
         override_summary: data.run.override_summary.clone(),
         state_visit: data.run.control_revision.as_u64(),
         binding_amendments: data.run.binding_amendments.clone(),
@@ -915,7 +925,27 @@ where
     P: Persistence + ?Sized,
     Proc: WorkSlotProcess + ?Sized,
 {
-    let data = match persistence.load_show_data(&request.run_id) {
+    execute_view(request, persistence, process, now, true)
+}
+
+/// Provider-free status uses a separate persistence read and never arms mutation.
+pub fn execute_view<P, Proc>(
+    request: Request,
+    persistence: &P,
+    process: &Proc,
+    now: Timestamp,
+    arm: bool,
+) -> OperationOutcome<ShowProjection>
+where
+    P: Persistence + ?Sized,
+    Proc: WorkSlotProcess + ?Sized,
+{
+    let loaded = if arm {
+        persistence.load_show_data(&request.run_id)
+    } else {
+        persistence.load_status_data(&request.run_id)
+    };
+    let data = match loaded {
         Ok(data) => data,
         Err(error) => return persistence_error(error),
     };
@@ -1131,6 +1161,60 @@ mod tests {
             capture_dir,
             inner_workers,
         )
+    }
+
+    #[test]
+    fn additive_guidance_and_history_preserve_legacy_decoding() {
+        let edge = Transition::checked("start", "submit", "review");
+        let deny = DurableEvaluation::deny(
+            edge.clone(),
+            EvaluationFeedback::new("no", "fix"),
+            SemanticSequence::new(1),
+            Timestamp::from_unix_millis(1),
+        );
+        let allow = DurableEvaluation::allow(
+            edge.clone(),
+            SemanticSequence::new(2),
+            Timestamp::from_unix_millis(2),
+        );
+        let last = DurableEvaluation::deny(
+            edge,
+            EvaluationFeedback::new("again", "fix again"),
+            SemanticSequence::new(3),
+            Timestamp::from_unix_millis(3),
+        );
+        let mut data = show_data(
+            "start",
+            Lifecycle::Active,
+            vec![],
+            vec![last.clone(), deny.clone(), allow.clone()],
+        );
+        data.run.workflow.states[0].action_guidance = Some(json!({"provider-owned": ["exact", 2]}));
+        let projection = project(data).unwrap();
+        assert_eq!(
+            projection.evaluation_history,
+            vec![deny, allow, last.clone()]
+        );
+        assert_eq!(projection.latest_evaluations, vec![last]);
+        assert_eq!(
+            projection.action_guidance,
+            Some(json!({"provider-owned": ["exact", 2]}))
+        );
+        let mut legacy = serde_json::to_value(&projection).unwrap();
+        legacy.as_object_mut().unwrap().remove("evaluation_history");
+        legacy.as_object_mut().unwrap().remove("action_guidance");
+        let decoded: ShowProjection = serde_json::from_value(legacy).unwrap();
+        assert!(decoded.evaluation_history.is_empty());
+        assert!(decoded.action_guidance.is_none());
+        let state: State = serde_json::from_value(
+            json!({"id":"old", "title":"Old", "instructions":"work", "final":false}),
+        )
+        .unwrap();
+        assert!(state.action_guidance.is_none());
+        assert!(serde_json::to_value(state)
+            .unwrap()
+            .get("action_guidance")
+            .is_none());
     }
 
     #[test]
@@ -1534,6 +1618,7 @@ mod tests {
             "Captures are at the named capture directory on the invocation view and invoke result.",
             "The driver triages worker output, appends provider-shaped records, then requests the shown event.",
             "On overrun wait; cancel-invocation requires recorded local ownership and refuses historical invocations without it. Live owned work and pending cleanup block retry and state departure.",
+            "Run show immediately before reinvoking the same slot.",
             "On failed inspect capture_dir/summary.json and captured stdout before stderr.",
         ];
         let mut cursor = 0;

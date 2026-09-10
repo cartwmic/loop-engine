@@ -383,6 +383,8 @@ fn write_checkpoints(repo: &Repo, artifacts: &TestDir) {
         let fixture = name.replace(".json", "-good.json");
         let value = if name == "intent.json" {
             intent_with_disposition(not_applicable_disposition())
+        } else if name == "plan.json" {
+            support::executable_fixture_plan()
         } else {
             load_fixture(&fixture)
         };
@@ -431,6 +433,59 @@ fn write_checkpoints(repo: &Repo, artifacts: &TestDir) {
     );
     support::assert_exit(&output, 0);
     assert_eq!(support::response(&output), json!({"result": "allow"}));
+}
+
+#[test]
+fn executable_fixture_plan_captures_assertions_without_changing_calibration() {
+    let original = load_fixture("plan-good.json");
+    let plan = support::executable_fixture_plan();
+    let repo = Repo::new();
+    repo.write("marker.txt", "fixture baseline\n");
+    repo.commit_all("fixture baseline");
+    let captures = TestDir::new("fixture-command-captures");
+    let capture = |spec: &Value| {
+        let mut command = Command::new(provider_binary());
+        command.args([
+            "validation-command",
+            repo.path().to_str().unwrap(),
+            &serde_json::to_string(spec).unwrap(),
+            "30000",
+        ]);
+        let output = super::bounded_process::run_with_stdin(
+            &mut command,
+            "fixture protocol assertion capture",
+            &serde_json::to_vec(&json!({
+                "artifact_root": captures.path(), "inherit_environment": ["PATH"]
+            }))
+            .unwrap(),
+        )
+        .unwrap()
+        .output;
+        support::assert_exit(&output, 0);
+        let result = support::response(&output);
+        let receipt: Value =
+            serde_json::from_slice(&fs::read(result["capture_receipt"].as_str().unwrap()).unwrap())
+                .unwrap();
+        assert_eq!(receipt["cleanup"], "complete");
+        assert_eq!(result["timed_out"], false);
+        result
+    };
+    for spec in plan["proof_commands"].as_array().unwrap() {
+        assert_eq!(capture(spec)["exit_code"], 0);
+    }
+    let mut failing = plan["proof_commands"][0].clone();
+    failing["args"][1] = json!(failing["args"][1].as_str().unwrap().replace(
+        "workflow['id'] == 'software-change'",
+        "workflow['id'] == 'deliberately-wrong'"
+    ));
+    assert_ne!(failing, plan["proof_commands"][0]);
+    let failed = capture(&failing);
+    assert_eq!(failed["exit_code"], 1);
+    assert!(failed["stderr"]
+        .as_str()
+        .unwrap()
+        .contains("AssertionError"));
+    assert_eq!(load_fixture("plan-good.json"), original);
 }
 
 fn validation_artifact() -> Value {

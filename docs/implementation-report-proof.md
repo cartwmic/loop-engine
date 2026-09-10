@@ -84,6 +84,11 @@ Retain failed/earlier attempts and select the appropriate current receipt; never
 rewrite a failure into a success. The complete current matrix, not this example,
 determines required coverage.
 
+The [operational UX contract](operational-ux-contracts.md#capture-t03) maps common
+capture attempts to these receipts. Actual child argv and repository identity
+remain mandatory; native provider fan-out evidence is a separate linkage, not
+an interchangeable receipt. Preparation does not fabricate either format.
+
 Each receipt uses ordinary subprocess capture facts:
 
 ```json
@@ -145,6 +150,41 @@ comparison fails even alongside a narrative speedup claim. The benchmark
 harness owns dataset completeness/comparability and improvement decisions. The
 checker uses its actual command exit and retained output, not a second copy of
 benchmark policy.
+
+## Separate delivery pointer
+
+After review, preserve the implementation report and its complete native
+implementation checkpoint (including `repository.entries`), or select that exact
+checkpoint from retained `implementation-proof-history`. Do not assemble a
+changed-path inventory or substitute the current checkout. The checkpoint's
+complete path/content-digest/Git-mode entries reconstruct reviewed content
+identity, including deletions; historical HEAD/index/status are not equivalence
+criteria. Missing reconstruction or a report/checkpoint digest mismatch refuses.
+
+```sh
+python3 scripts/delivery-pointer.py \
+  --report /absolute/reviewed/implementation-report.json \
+  --checkpoint /absolute/reviewed/implementation-checkpoint.json \
+  --run-reference /absolute/run-reference.json \
+  --repository /absolute/repository \
+  --output /absolute/delivery.json
+```
+
+This records Git and hosted facts as pending. Only after separately authorized
+Git delivery, add `--commit FULL_SHA`; every committed path, content digest,
+executable bit and symlink must match, not just changed files. Metadata-only
+commit differences are accepted. No Git action is authorized or executed by
+this utility. Run-reference is a retained nonempty JSON object identifying the
+reviewed run; the utility preserves its locator/digest, not semantic approval.
+
+Optional `--hosted-evidence FILE` accepts a JSON object with `status` equal to
+`pending`, `success` or `failure`. Observed outcomes require the matched `commit`
+and a nonempty `url`; these are supplied observations, not a remote verification
+or semantic judgment. Omitted hosted facts stay pending even after matching Git.
+Repeated use of the same output path creates `.2`, `.3`, etc. without replacing
+old records, and links the previous generation by locator/digest. Reviewed
+identities cannot change within that sequence. Use one serial driver per output.
+Neither terminal records nor pre-commit reports are rewritten.
 
 ## Focused public proof
 

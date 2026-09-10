@@ -35,6 +35,8 @@ fn show(database: &std::path::Path) -> Value {
             database.to_str().expect("database path"),
             "--json",
             "show",
+            "--view",
+            "full",
             "report-run",
         ])
         .bounded_output("loop-engine change-report")
@@ -183,7 +185,10 @@ fn show_projects_durable_change_report_without_capture_files() {
         .as_str()
         .unwrap()
         .contains("does-not-exist"));
-    assert_eq!(first, show(&database));
+    let mut repeated = show(&database);
+    assert!(repeated["result"]["observed_at"].as_i64().is_some());
+    repeated["result"]["observed_at"] = first["result"]["observed_at"].clone();
+    assert_eq!(first, repeated);
 
     // A file left in the shared directory is deliberately not a task result.
     // The report stays unchanged because it uses only the task's recorded
@@ -191,7 +196,8 @@ fn show_projects_durable_change_report_without_capture_files() {
     let shared_remainder = directory.path().join("shared-working-directory");
     std::fs::create_dir_all(&shared_remainder).expect("shared directory");
     std::fs::write(shared_remainder.join("remainder.txt"), b"not task-a").expect("remainder");
-    let after_shared_remainder = show(&database);
+    let mut after_shared_remainder = show(&database);
+    after_shared_remainder["result"]["observed_at"] = first["result"]["observed_at"].clone();
     assert_eq!(
         after_shared_remainder["result"]["change_report"]["plan_task_results"][0]["dimensions"]
             ["repository_effect"]["changed"],

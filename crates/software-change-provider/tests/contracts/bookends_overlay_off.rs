@@ -12,7 +12,7 @@ const PROFILES: &[&str] = &["minimal", "standard", "high-rigor"];
 fn write_good_artifacts(root: &TestDir) {
     root.write_json("intent.json", &load_fixture("intent-good.json"));
     root.write_json("design.json", &load_fixture("design-good.json"));
-    root.write_json("plan.json", &load_fixture("plan-good.json"));
+    root.write_json("plan.json", &support::executable_fixture_plan());
     root.write_json(
         "implementation-report.json",
         &load_fixture("implementation-report-good.json"),

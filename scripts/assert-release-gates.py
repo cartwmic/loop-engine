@@ -113,8 +113,8 @@ def main() -> int:
         fail("release.yml lost cargo-dist generated ownership")
     if "  workflow_dispatch:" not in workflow or re.search(r"^  push:", workflow, re.MULTILINE):
         fail("release workflow must be dispatch-only, without tag-push trigger")
-    if 'python3 "$GITHUB_WORKSPACE/scripts/software-change-journey.py"' not in archive_smoke:
-        fail("archive smoke must invoke software-change runner through absolute GITHUB_WORKSPACE path")
+    if 'python3 "$GITHUB_WORKSPACE/scripts/packaged-smoke.py"' not in archive_smoke:
+        fail("archive smoke must invoke the shared packaged entry point")
     if "version=2.14.0" not in archive_smoke or "github.com/dagu-org/dagu/releases/download/v${version}/" not in archive_smoke:
         fail("archive smoke must install operator-provided dagu 2.14.0")
     if "echo \"$bin\" >> \"$GITHUB_PATH\"" not in archive_smoke:
@@ -124,33 +124,23 @@ def main() -> int:
     if "continue-on-error" in archive_smoke:
         fail("archive smoke must not skip a missing dagu")
     dagu_at = archive_smoke.find("Install operator-provided dagu")
-    journey_at = archive_smoke.find('python3 "$GITHUB_WORKSPACE/scripts/software-change-journey.py"')
+    journey_at = archive_smoke.find('python3 "$GITHUB_WORKSPACE/scripts/packaged-smoke.py"')
     if dagu_at < 0 or journey_at < 0 or dagu_at > journey_at:
         fail("archive smoke must install dagu onto PATH before journeys")
     if "dagu_${version}_darwin_arm64.tar.gz" not in archive_smoke or "dagu_${version}_linux_amd64.tar.gz" not in archive_smoke:
         fail("archive smoke must install platform dagu archives for macos-arm64 and linux-amd64")
-    if 'python3 "$GITHUB_WORKSPACE/scripts/policy-document-journey.py"' not in archive_smoke:
-        fail("archive smoke must invoke policy-document runner through absolute GITHUB_WORKSPACE path")
-    if 'python3 "$GITHUB_WORKSPACE/scripts/research-journey.py"' not in archive_smoke:
-        fail("archive smoke must invoke research runner through absolute GITHUB_WORKSPACE path")
-    if 'for app in loop-cli software-change-provider policy-document-provider research-provider' not in archive_smoke:
-        fail("archive smoke must extract all four release applications")
-    if '"$policy_provider" data-dump "$policy_data_root"' not in archive_smoke:
-        fail("archive smoke must materialize policy-document profiles from packaged binary")
-    if 'for mode in draft audit' not in archive_smoke:
-        fail("archive smoke must exercise both policy-document modes")
-    if 'research_data_root="$RUNNER_TEMP/research-data-$target"' not in archive_smoke:
-        fail("archive smoke must isolate a unique empty research dump root")
-    if '--data-root "$research_data_root"' not in archive_smoke:
-        fail("archive smoke must pass the isolated research dump root to the packaged journey")
-    if '-name research -perm -u+x' not in archive_smoke:
-        fail("archive smoke must locate the packaged research executable")
-    if 'cd "$smoke_cwd"' not in archive_smoke:
-        fail("archive smoke must change into its isolated temporary cwd")
-    if 'test "$(pwd -P)" != "$checkout_root"' not in archive_smoke:
-        fail("archive smoke lost outside-checkout cwd assertion")
-    if 'test -z "$(ls -A "$smoke_cwd")"' not in archive_smoke:
-        fail("archive smoke lost empty-cwd assertion")
+    for token in ('--mode archive', '--expected-version', '--platform', '--output-root',
+                  '--package-identity', '--checksum', '--archive', 'app_version', 'if: always()'):
+        if token not in archive_smoke:
+            fail(f"archive smoke missing explicit input/capture contract: {token}")
+    shared = (ROOT / 'scripts/packaged-smoke.py').read_text(encoding='utf-8')
+    for token in ('scripts/software-change-journey.py', 'scripts/policy-document-journey.py',
+                  'scripts/research-journey.py', 'checked-prefix', '("draft", "audit")',
+                  'data-dump', 'ROOT in output.parents', 'cwd=cwd', 'checksum/provenance mismatch'):
+        if token not in shared:
+            fail(f"shared packaged smoke lost journey/input contract: {token}")
+    if 'bookends-check' in shared:
+        fail('packaged smoke must not invent a distributed Bookends checker')
     for name, reusable in (("preflight", ROOT / ".github/workflows/preflight.yml"),
                            ("archive smoke", ARCHIVE_SMOKE_WORKFLOW)):
         try:

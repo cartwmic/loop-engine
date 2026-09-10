@@ -28,6 +28,8 @@ The judgment is candidate data, not provider evidence. The worker does not condu
 
 All eight fields are required. `result` is exactly `pass` or `fail`; `findings` is a string and is non-empty for `fail`. Author identity is exact `(name, kind)`. `subject` must match gate subject. `subject_revision` and `config_version` must name what was reviewed and which frozen config judged it.
 
+Within current revision/config and independent-author evidence, the latest conforming record in append order wins for each `(axis, subject_revision, author.name, author.kind)`. Any remaining current fail blocks even when other authors supply enough passes. Obtain genuine conforming reconsideration from the same exact author for that subject revision/config, or fix the actual subject, bump its revision and obtain fresh independent evidence. Another reviewer's pass cannot clear that standing fail; a gratuitous revision bump must not evade an accepted defect. Malformed attributable evidence is different: a later conforming record for that axis clears its malformed-evidence block, not another author's conforming fail.
+
 Evidence gates are `verify` (subject `verification.json`) and `synthesize` (subject `report.json`). Scope and gather checked events are schema and revision-link only.
 
 ## Failure burden and scope

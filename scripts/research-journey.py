@@ -74,7 +74,7 @@ def expect_denial(response: dict[str, Any], code: str, phase: str) -> dict[str, 
 
 
 def show_state(engine: Path, database: Path, run_id: str, state: str) -> dict[str, Any]:
-    shown = call(engine, database, ["show", run_id])
+    shown = call(engine, database, ["show", "--view", "full", run_id])
     if shown.get("status") != "completed":
         raise JourneyFailure(f"show failed: {shown}")
     result = shown["result"]
@@ -320,16 +320,21 @@ class Journey:
             token in archive_smoke
             for token in (
                 "for app in loop-cli software-change-provider policy-document-provider research-provider",
-                'research_provider="$(find "$extract" -type f -name research -perm -u+x -print -quit)"',
-                'test -n "$research_provider"',
-                'research_data_root="$RUNNER_TEMP/research-data-$target"',
-                'mkdir -p "$extract" "$software_work_root" "$research_data_root" "$smoke_cwd"',
-                'python3 "$GITHUB_WORKSPACE/scripts/research-journey.py" --mode packaged --engine "$engine" --provider "$research_provider" --data-root "$research_data_root" --profile standard.json',
+                'python3 "$GITHUB_WORKSPACE/scripts/packaged-smoke.py"',
+                '--mode archive --expected-version "$version" --platform "$target"',
+                '--package-identity "$identity"',
             )
         ):
             raise JourneyFailure(
-                "archive smoke does not extract and run the packaged research journey"
+                "archive smoke does not invoke the shared packaged smoke"
             )
+        shared = (ROOT / "scripts/packaged-smoke.py").read_text(encoding="utf-8")
+        if not all(token in shared for token in (
+            'scripts/research-journey.py', '"--mode", "packaged"',
+            '"--data-root", research_data', '"--profile", "standard.json"',
+            'archive.extractall', 'extract.rglob(name)',
+        )):
+            raise JourneyFailure("shared packaged smoke lost research extraction/data/journey")
 
     # bookends:LE-69 — the source journey runs the real cargo-dist plan and the existing plan and release-gate assertions that include research-provider.
     def _assert_release_plan(self) -> None:

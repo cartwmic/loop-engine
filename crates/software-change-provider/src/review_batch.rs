@@ -19,8 +19,9 @@ pub(crate) fn validate_schema(schema: &Value, value: &Value) -> Result<(), Strin
     }
 }
 
-/// Read the same frozen full contract and compact location delivered to this
-/// assignment. No copied per-axis identities or driver-authored capture inventory.
+/// Read the frozen contract and delivered location/controls. New projected
+/// captures verify against the independently retained full routed context;
+/// unmarked captures keep their original stdin context. No driver inventory.
 pub(crate) fn captured_commission(
     capture: &Path,
     assignment: &str,
@@ -57,10 +58,22 @@ pub(crate) fn captured_commission(
         .lines()
         .next_back()
         .ok_or("missing compact location")?;
-    let location: Value =
+    let mut location: Value =
         serde_json::from_str(location).map_err(|e| format!("invalid captured location: {e}"))?;
     if !location["artifact_root"].is_string() {
         return Err("captured location has no artifact_root".into());
+    }
+    if let Some(format) = spec.get("capture_format") {
+        if format != "bound-context-projection-v1" {
+            return Err("unsupported captured context format".into());
+        }
+        let snapshot = worker
+            .get("routed_inputs")
+            .filter(|value| value.is_array())
+            .ok_or("missing or malformed full captured context snapshot")?;
+        serde_json::from_value::<Vec<ContextRecord>>(snapshot.clone())
+            .map_err(|e| format!("invalid full captured context snapshot: {e}"))?;
+        location["context"] = snapshot.clone();
     }
     Ok((worker["full_output_schema"].clone(), location))
 }

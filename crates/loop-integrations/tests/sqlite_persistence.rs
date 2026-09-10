@@ -189,7 +189,7 @@ fn historical_software_change_public_reads_preserve_absent_capabilities_and_refu
         println!("HISTORICAL_ENVELOPE {} {}", args.join(" "), value);
         Ok(value)
     };
-    let shown = call(&["show", "historical"])?;
+    let shown = call(&["show", "historical", "--view", "full"])?;
     assert_eq!(shown["status"], "completed");
     let result = &shown["result"];
     assert_eq!(result["initial_input"], input);
@@ -219,7 +219,7 @@ fn historical_software_change_public_reads_preserve_absent_capabilities_and_refu
         .contains("unsupported software-change semantic contract"));
     assert!(refusal.to_string().contains("fixed original provider"));
     assert_eq!(call(&["history", "historical"])?, before);
-    let after = call(&["show", "historical"])?;
+    let after = call(&["show", "historical", "--view", "full"])?;
     assert_eq!(after["result"]["initial_input"], input);
     assert_eq!(after["result"]["context"], result["context"]);
     assert_eq!(after["result"]["state_visit"], result["state_visit"]);
@@ -565,6 +565,9 @@ fn unobserved_mutations_refuse_and_self_loop_requires_reobservation(
     let adapter = SqlitePersistence::open_in_memory()?;
     adapter.create_run(create_request("run-observation"))?;
 
+    assert!(!adapter.observation_is_current(&"run-observation".into(), 0_u64.into())?);
+    let passive = adapter.load_status_data(&"run-observation".into())?;
+    assert_eq!(passive.run.id.as_str(), "run-observation");
     assert!(!adapter.observation_is_current(&"run-observation".into(), 0_u64.into())?);
     for error in [
         adapter

@@ -129,6 +129,11 @@ def check_receipt(path: Path, row: dict[str, Any], argv: list[str], identity: st
         except OSError as error:
             raise ReportError(f"missing {key} capture: {error}") from error
     passed = code == 0 and not receipt["timed_out"] and receipt["spawn_error"] is None
+    # Common capture preserves the actual child exit (including a cooperative
+    # parent's exit 0 during abort). These execution facts must not become a
+    # report pass. Legacy receipts without the additive fields retain their form.
+    passed = passed and receipt.get("signal") is None and receipt.get("aborted", False) is False
+    passed = passed and receipt.get("capture_error") is None and receipt.get("cleanup", "complete") == "complete"
     markers = strings(row.get("expected_stdout_contains", []), "expected_stdout_contains")
     passed = passed and all(marker in streams["stdout"] for marker in markers)
     return ("passed" if passed else "failed"), start, finish

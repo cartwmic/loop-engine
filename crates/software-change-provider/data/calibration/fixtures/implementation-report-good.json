@@ -69,7 +69,7 @@
     {"proof": "cargo test --workspace passed"},
     {"proof": "cargo clippy --workspace --all-targets passed"},
     {"proof": "cargo fmt --all -- --check passed"},
-    {"proof": "python3 scripts/production-journey.py passed"},
+    {"proof": "python3 scripts/production-journey.py --engine fictional-repo/target/debug/loop-engine --config fictional-repo/implementation-evidence/providers.toml --profile fictional-repo/provider/data/configs/standard.json --fixtures fictional-repo/implementation-evidence/journey-fixtures --terminal-run-id terminal-validation-proof passed"},
     {"proof": "python3 fictional-repo/scripts/assert-requirement-proof.py"},
     {"proof": "python3 fictional-repo/scripts/assert-doc-authority.py"},
     {"proof": "Docs-integrated coverage supplied every listed fictional companion; semantic review remained external to provider mechanics."}

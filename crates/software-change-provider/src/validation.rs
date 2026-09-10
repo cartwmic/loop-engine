@@ -1,14 +1,13 @@
 //! Named deterministic execution and checkpoint-bound external judgments.
 //! No catalog writes or semantic judgment. Pending names are never records.
-use crate::{checkpoint, criterion, recovery_contract::RecoveryContract};
+use crate::{checkpoint, criterion, protocol::ProofCommand, recovery_contract::RecoveryContract};
 use loop_core::ContextRecord;
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::BTreeSet,
     fs,
     path::Path,
-    process::{Command, Stdio},
+    process::Command,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -67,15 +66,6 @@ fn record<'a>(context: &'a [ContextRecord], id: &str) -> Result<&'a ContextRecor
     }
     Ok(found[0])
 }
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-struct ProofCommand {
-    id: String,
-    command: String,
-    args: Vec<String>,
-    owner: String,
-    obligation: String,
-}
 fn commands(values: &Value) -> Result<Vec<ProofCommand>, String> {
     let commands: Vec<ProofCommand> =
         serde_json::from_value(values.clone()).map_err(|e| format!("proof_commands: {e}"))?;
@@ -110,113 +100,252 @@ pub(crate) fn capture(args: &[String]) -> Result<Value, String> {
     let cwd = Path::new(&args[0]);
     let spec: ProofCommand = serde_json::from_str(&args[1]).map_err(|e| e.to_string())?;
     let before = checkpoint::repository_identity(cwd)?;
-    let started = Instant::now();
-    let output = timed_command(&spec, cwd, timeout);
-    let elapsed_ms = started.elapsed().as_millis();
+    let (receipt, index, receipt_path) = timed_command(&spec, cwd, timeout)?;
     let after = checkpoint::repository_identity(cwd)?;
-    Ok(match output {
-        Ok((out, timed_out)) => {
-            json!({"spec":spec,"cwd":cwd,"repository_before":before,"repository_after":after,"elapsed_ms":elapsed_ms,"exit_code":out.status.code(),"stdout":String::from_utf8_lossy(&out.stdout),"stderr":String::from_utf8_lossy(&out.stderr),"spawn_error":null,"timed_out":timed_out})
-        }
-        Err(e) => {
-            json!({"spec":spec,"cwd":cwd,"repository_before":before,"repository_after":after,"elapsed_ms":elapsed_ms,"exit_code":null,"stdout":"","stderr":"","spawn_error":e.to_string(),"timed_out":false})
-        }
-    })
+    let attempt = receipt_path.parent().ok_or("receipt has no parent")?;
+    let stdout = fs::read(attempt.join("stdout")).map_err(|e| e.to_string())?;
+    let stderr = fs::read(attempt.join("stderr")).map_err(|e| e.to_string())?;
+    if receipt["cleanup"] != "complete"
+        || !receipt["capture_error"].is_null()
+        || receipt["aborted"] == true
+    {
+        return Err(format!(
+            "common capture did not complete: {}",
+            receipt_path.display()
+        ));
+    }
+    Ok(
+        json!({"spec":spec,"cwd":cwd,"repository_before":before,"repository_after":after,"elapsed_ms":(receipt["wall_seconds"].as_f64().ok_or("missing capture duration")? * 1000.0) as u64,"exit_code":receipt["exit_code"],"stdout":String::from_utf8_lossy(&stdout),"stderr":String::from_utf8_lossy(&stderr),"spawn_error":receipt["spawn_error"],"timed_out":receipt["timed_out"],"capture_index":index,"capture_receipt":receipt_path}),
+    )
 }
 
 fn timed_command(
     spec: &ProofCommand,
     cwd: &Path,
     timeout: u64,
-) -> std::io::Result<(std::process::Output, bool)> {
+) -> Result<(Value, std::path::PathBuf, std::path::PathBuf), String> {
+    use loop_integrations::capture::{run_matrix_with_forwarding, Matrix, Row};
     use std::io::Read;
-    use std::time::Duration;
-    let mut command = Command::new(&spec.command);
-    command
-        .args(&spec.args)
+    let mut bytes = String::new();
+    std::io::stdin()
+        .read_to_string(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    let packet: Value = if bytes.trim().is_empty() {
+        json!({})
+    } else {
+        serde_json::from_str(&bytes).map_err(|e| format!("validation capture instructions: {e}"))?
+    };
+    let base = packet
+        .get("artifact_root")
+        .and_then(Value::as_str)
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    if !base.is_absolute() || !base.is_dir() {
+        return Err("capture artifact_root must be an existing absolute directory".into());
+    }
+    let repository = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
         .current_dir(cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(unix)]
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !repository.status.success() {
+        return Err("capture requires a Git repository".into());
+    }
+    let repository = std::path::PathBuf::from(String::from_utf8_lossy(&repository.stdout).trim());
+    if base
+        .canonicalize()
+        .map_err(|e| e.to_string())?
+        .starts_with(repository.canonicalize().map_err(|e| e.to_string())?)
     {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
+        return Err("capture artifact_root must be outside the checkout".into());
     }
-    let mut child = command.spawn()?;
-    let pid = child.id();
-    let (send, recv) = std::sync::mpsc::channel();
-    let mut out = child.stdout.take().unwrap();
-    let mut err = child.stderr.take().unwrap();
-    let other = send.clone();
-    std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let result = out.read_to_end(&mut bytes).map(|_| bytes);
-        let _ = send.send((true, result));
-    });
-    std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let result = err.read_to_end(&mut bytes).map(|_| bytes);
-        let _ = other.send((false, result));
-    });
-    let start = Instant::now();
-    let mut status = None;
-    let mut stdout = None;
-    let mut stderr = None;
-    let mut timed_out = false;
-    loop {
-        while let Ok((out, result)) = recv.try_recv() {
-            if out {
-                stdout = Some(result?)
-            } else {
-                stderr = Some(result?)
-            }
+    let root = base.join(format!(
+        "validation-capture-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&root).map_err(|e| e.to_string())?;
+    let inherited = packet
+        .get("inherit_environment")
+        .cloned()
+        .unwrap_or(json!([]));
+    let environment = packet.get("environment").cloned().unwrap_or(json!({}));
+    let row = Row {
+        id: spec.id.clone(),
+        argv: std::iter::once(spec.command.clone())
+            .chain(spec.args.clone())
+            .collect(),
+        environment: serde_json::from_value(environment).map_err(|e| e.to_string())?,
+        inherit_environment: serde_json::from_value(inherited).map_err(|e| e.to_string())?,
+        timeout_ms: timeout,
+        obligations: vec![spec.obligation.clone()],
+    };
+    run_matrix_with_forwarding(&Matrix { rows: vec![row] }, cwd, &root, false, true)
+        .map_err(|e| e.to_string())?;
+    let index = root.join("index.json");
+    let selected = read(&index)?;
+    let path = std::path::PathBuf::from(text(&selected["receipts"][0], "receipt")?);
+    Ok((read(&path)?, index, path))
+}
+
+fn capture_row(
+    spec: &ProofCommand,
+    settings: &Value,
+) -> Result<loop_integrations::capture::Row, String> {
+    Ok(loop_integrations::capture::Row {
+        id: spec.id.clone(),
+        argv: std::iter::once(spec.command.clone())
+            .chain(spec.args.clone())
+            .collect(),
+        environment: serde_json::from_value(
+            settings.get("environment").cloned().unwrap_or(json!({})),
+        )
+        .map_err(|e| e.to_string())?,
+        inherit_environment: serde_json::from_value(
+            settings
+                .get("inherit_environment")
+                .cloned()
+                .unwrap_or(json!([])),
+        )
+        .map_err(|e| e.to_string())?,
+        timeout_ms: settings["timeout_ms"]
+            .as_u64()
+            .filter(|n| *n > 0)
+            .ok_or("missing positive timeout_ms")?,
+        obligations: vec![spec.obligation.clone()],
+    })
+}
+
+/// Inert draft only: no execution, file writes, checkpoint or catalog mutation.
+pub(crate) fn prepare(input: &Value) -> Result<Value, String> {
+    let show = &input["show"];
+    if show["operation"] != "show"
+        || show["status"] != "completed"
+        || show["result"]["current_state"] != "validation"
+    {
+        return Err("prepare-validation requires completed full validation show".into());
+    }
+    let cwd = Path::new(text(input, "working_directory")?);
+    if !cwd.is_absolute() || !cwd.is_dir() {
+        return Err("working_directory must exist and be absolute".into());
+    }
+    let revision = text(input, "revision")?;
+    let packet = &show["result"];
+    let root = Path::new(text(&packet["initial_input"], "artifact_root")?);
+    let policy = contract(&packet["initial_input"])?;
+    let commission =
+        software_change_provider::commission::inspect(show, Some("validation-draft"), None)?;
+    let mut specs = commands(&commission["commission"]["proof_commands"])?;
+    let mut seen: BTreeSet<_> = specs.iter().map(|s| s.id.clone()).collect();
+    let mut additions = vec![];
+    for value in input
+        .get("additions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let spec = commands(&json!([value]))?.remove(0);
+        if !seen.insert(spec.id.clone()) {
+            return Err("addition duplicates/replaces a proof ID".into());
         }
-        if status.is_none() {
-            status = child.try_wait()?;
-        }
-        if status.is_some() && stdout.is_some() && stderr.is_some() {
-            break;
-        }
-        if start.elapsed() >= Duration::from_millis(timeout) {
-            timed_out = true;
-            #[cfg(unix)]
+        additions.push(json!({"kind":"validation-command","record_id":format!("validation-{revision}-addition-{}",spec.id),"data":spec}));
+        specs.push(spec);
+    }
+    let indexes: Vec<String> =
+        serde_json::from_value(input["capture_indexes"].clone()).map_err(|e| e.to_string())?;
+    let settings = &input["execution_settings"];
+    let implementation = read(&root.join("implementation-report.json"))?;
+    let intent = read(&root.join("intent.json"))?;
+    let prefix = format!("validation-{revision}");
+    let author = author_identity(&input["author"])?;
+    let mut report = json!({"revision":revision,"author":author,"implementation_revision":implementation["revision"],"command_evidence_ids":[],"criteria":[],"goal_verdict_ids":[]});
+    let mut diagnostics = vec![];
+    let mut candidates = vec![];
+    for spec in &specs {
+        let id = format!("{prefix}-command-{}", spec.id);
+        report["command_evidence_ids"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(id));
+        let row = capture_row(spec, settings)?;
+        let mut valid = vec![];
+        for index in &indexes {
+            let path = match contained(root, Path::new(index)) {
+                Ok(path) => path,
+                Err(error) => {
+                    diagnostics.push(format!("{}: {error}", spec.id));
+                    continue;
+                }
+            };
+            let selection = match read(&path) {
+                Ok(value) => value,
+                Err(error) => {
+                    diagnostics.push(format!("{}: {error}", spec.id));
+                    continue;
+                }
+            };
+            if !selection["receipts"]
+                .as_array()
+                .is_some_and(|r| r.iter().any(|s| s["id"] == spec.id))
             {
-                // Only the process group created for this command, never a caller PID.
-                // procps 3.x needs `--` to disambiguate the negative group operand.
-                let _ = Command::new("/bin/kill")
-                    .args(["-KILL", "--", &format!("-{pid}")])
-                    .status();
+                continue;
             }
-            if status.is_none() {
-                let _ = child.kill();
-                status = Some(child.wait()?);
+            match loop_integrations::capture::verify_selected(&path, &row, cwd) {
+                Ok(_) => valid.push(path),
+                Err(e) => diagnostics.push(format!("{}: {e}", spec.id)),
             }
-            for _ in 0..2 {
-                if stdout.is_some() && stderr.is_some() {
-                    break;
-                }
-                let (out, result) = recv.recv_timeout(Duration::from_secs(5)).map_err(|e| {
-                    std::io::Error::other(format!("command cleanup incomplete: {e}"))
-                })?;
-                if out {
-                    stdout = Some(result?)
-                } else {
-                    stderr = Some(result?)
-                }
-            }
-            break;
         }
-        std::thread::sleep(Duration::from_millis(10));
+        if valid.len() != 1 {
+            diagnostics.push(format!(
+                "{}: expected one valid selected receipt, got {}",
+                spec.id,
+                valid.len()
+            ));
+            continue;
+        }
+        candidates.push(json!({"kind":"command-evidence","record_id":id,"data":{"proof_id":spec.id,"spec":spec,"execution_settings":settings,"capture":{"format":"common-capture-v1","index":valid[0]}}}));
     }
-    Ok((
-        std::process::Output {
-            status: status.unwrap(),
-            stdout: stdout.unwrap(),
-            stderr: stderr.unwrap(),
-        },
-        timed_out,
-    ))
+    let mut batches = vec![];
+    for criterion in current_criteria(&intent)? {
+        let ids: Vec<_> = (1..=policy.criterion_policy.required_authors.get())
+            .map(|n| format!("{prefix}-{criterion}-{n}"))
+            .collect();
+        report["criteria"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"criterion_id":criterion,"verdict_ids":ids}));
+        for id in ids {
+            batches.push(json!({"kind":"criterion-verdict","record_id":id,"criterion_id":criterion,"status":"pending-finalized-index-checkpoint"}));
+        }
+    }
+    let goals: Vec<_> = (1..=policy.criterion_policy.goal_required_authors.get())
+        .map(|n| format!("{prefix}-goal-{n}"))
+        .collect();
+    report["goal_verdict_ids"] = json!(goals);
+    for id in goals {
+        batches.push(json!({"kind":"goal-verdict","record_id":id,"status":"pending-finalized-index-checkpoint"}));
+    }
+    let mut names = BTreeSet::new();
+    for row in additions
+        .iter()
+        .chain(candidates.iter())
+        .chain(batches.iter())
+    {
+        let id = text(row, "record_id")?;
+        if !names.insert(id)
+            || packet["context"]
+                .as_array()
+                .is_some_and(|rows| rows.iter().any(|r| r["id"] == id))
+        {
+            return Err("preselected record ID collision; choose a fresh report revision".into());
+        }
+    }
+    Ok(
+        json!({"report_draft":report,"addition_candidates":additions,"command_candidates":candidates,"diagnostics":diagnostics,"commands_complete":diagnostics.is_empty(),"judgment_batches":batches,"excluded_authors":[author,implementation["author"]],"status":"draft-only"}),
+    )
 }
 
 pub(crate) fn run(args: &[String], show: &Value) -> Result<Value, String> {
@@ -391,6 +520,25 @@ fn command_evidence(
     current_repository: Option<&Value>,
     require_pass: bool,
 ) -> Result<Value, String> {
+    if data["capture"]["format"] == "common-capture-v1" {
+        let declared: ProofCommand =
+            serde_json::from_value(data["spec"].clone()).map_err(|e| e.to_string())?;
+        if expected.is_some_and(|s| s != &declared) {
+            return Err("common capture differs from effective proof obligation".into());
+        }
+        let spec = &declared;
+        let index = contained(root, Path::new(text(&data["capture"], "index")?))?;
+        let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+        let row = capture_row(spec, &data["execution_settings"])?;
+        let (_, receipt) = loop_integrations::capture::verify_selected(&index, &row, &cwd)
+            .map_err(|e| e.to_string())?;
+        if data["proof_id"] != spec.id {
+            return Err("common capture proof ID mismatch".into());
+        }
+        // This format uses report-proof identity. Provider checkpoint validation
+        // independently checks its own identity; never substitute their digests.
+        return Ok(receipt);
+    }
     let summary_path = contained(root, Path::new(text(&data["capture"], "summary")?))?;
     let summary = read(&summary_path)?;
     let assignment = text(&data["capture"], "assignment_id")?;

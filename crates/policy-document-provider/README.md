@@ -4,11 +4,13 @@
 
 `policy-document` is the release- and source-distributed external provider for PRD section 11. It never edits the target, invokes a reviewer, or judges semantic quality. It reads exact UTF-8 target bytes, applies run-frozen deterministic policies, and aggregates externally supplied semantic verdicts bound to the current digest.
 
-Fixed topology is `prepare` → `deterministic-review` → `semantic-review` → `end`; both revision edges are check-free. Initial input is closed JSON containing `schema_version`, `profile_version`, `mode` (`draft` or `audit`), absolute target `{id,path}`, non-empty deterministic policies, and non-empty semantic policies. Reserved `artifact_root` is accepted and ignored. The provider is not required to write artifact files. Other unknown `initial_input` keys still fail. Agent procedure for this crate is [AGENTS.md](AGENTS.md). Drive a run with [skills/using-policy-document-provider/SKILL.md](skills/using-policy-document-provider/SKILL.md).
+Fixed topology is `prepare` → `deterministic-review` → `semantic-review` → `end`; both revision edges are check-free. Initial input is closed JSON containing `schema_version`, `profile_version`, `mode` (`draft` or `audit`), absolute target `{id,path}`, non-empty deterministic policies, and non-empty semantic policies. Reserved `artifact_root` and `work_slot_bindings` are accepted and ignored by this provider. This provider-only treatment does not bypass the engine's binding validation at normal `start`; arbitrary binding JSON is not a supported engine-start contract. The provider is not required to write artifact files. Other unknown `initial_input` keys still fail. Agent procedure for this crate is [AGENTS.md](AGENTS.md). Drive a run with [skills/using-policy-document-provider/SKILL.md](skills/using-policy-document-provider/SKILL.md).
 
 README profile `readme-2` supplies title, purpose, onboarding, usage, validation, command, and local-reference deterministic floors; those floors are unchanged. Semantic axes add honest fitness, verifiable claims, and troubleshooting sharp edges, and tighten audience navigation so README does not impersonate AGENTS.md. AGENTS profile `agents-2` supplies scope/authority, workflow/validation, completion/handoff, command, and local-reference floors; those floors are unchanged, and no title or exact heading spelling is required. Semantic axes add non-discoverable sharp edges, ambiguity resolution, signal density, and living config, and tighten operational precision, authority resolution, and risk-boundary sufficiency.
 
 ## Setup
+
+Run from the repository root with [rustup](https://rustup.rs/) and native C compiler/linker tools installed (macOS Command Line Tools or the Linux build toolchain). The checkout pins Rust 1.98.0, not a public minimum supported version.
 
 ```sh
 cargo build --release -p loop-cli -p policy-document-provider
@@ -24,7 +26,7 @@ Dump refuses to overwrite any directory entry, including dangling symlinks. On w
 - `/tmp/policy-data/crates/policy-document-provider/data/semantic-review-worker-output-schema.json`
 - `/tmp/policy-data/crates/policy-document-provider/data/target-guidance.md`
 
-Copy chosen JSON profile, set `mode`, and replace target path with an absolute path. Keep target ID `README.md` or `AGENTS.md` for shipped profiles. The shipped skill uses the dumped worker files and that same selected profile to construct one assigned semantic-review worker per configured axis and required author, then previews and hash-confirms the resulting profile before starting it unchanged.
+Copy chosen JSON profile, set `mode`, and replace target path with an absolute path. Keep target ID `README.md` or `AGENTS.md` for shipped profiles. The shipped skill uses the dumped worker files and that same selected profile to construct assigned semantic-review workers, then previews and hash-confirms the resulting profile before starting it unchanged. Current semantic policies reject `required_authors` as an unknown field: the provider requires at least one current pass and no standing fail per axis, not a configurable author floor. The generic constructor's roster/count handling does not extend that public input contract.
 
 ## Usage
 
@@ -36,33 +38,29 @@ command = "/absolute/path/to/target/release/policy-document"
 args = []
 ```
 
-Then start with the copied profile. When the human did not explicitly ask to isolate in that session, omit `--database` and omit `artifact_root`. That start stores the run in the user-level catalog and uses an engine-owned per-run artifact directory. This is the production start, not a usual-case option beside a prudent isolate alternative. Existing start examples that already omit both flags remain examples of this required start. Independent runs sharing the user-level catalog do not clobber each other, because each run already receives an engine-owned per-run artifact directory. Occupancy of the catalog by other runs, and fear of affecting those runs, are not reasons to pass `--database` or a nonempty `artifact_root`. An agent must not pass `--database` or a nonempty `artifact_root` unless the human explicitly asked to isolate in that session. Isolation is not a self-chosen precaution. `--database /path/to/dir/loop.db` isolates SQLite and `/path/to/dir/runs/<id>/`. A nonempty `artifact_root` isolates files to a caller-chosen absolute existing directory. Do not treat a prior session's isolation preference as standing authority. Reserved `artifact_root` is accepted and ignored; the provider is not required to write artifact files.
+Before starting with the copied profile, load [Setup](skills/using-policy-document-provider/SKILL.md#setup), including canonical engine Deterministic setup. Use the normal user catalog: no database or artifact override unless the human explicitly requests isolation in this session; other runs and old preferences confer no permission. The engine owns durable run storage and records/injects `artifact_root`; this provider ignores that reserved field and reads absolute `target.path`.
 
 ```sh
-loop-engine --json --config /tmp/policy-document-providers.toml \
+./target/release/loop-engine --json --config /tmp/policy-document-providers.toml \
   start --id docs-audit policy-document @/tmp/readme.json "README audit"
-loop-engine --json show docs-audit
-loop-engine --json event docs-audit ready
-loop-engine --json show docs-audit
-loop-engine --json event docs-audit passed
+./target/release/loop-engine --json show docs-audit
 ```
 
-`start` returns the run ID at `result.run.id`. `show` of the current state and instructions arms only that state visit for `append`, `event`, `invoke`, and `terminate`; call it again after every transition, including a return to the same state. `list`, `history`, and `invocation-progress` do not arm mutation. Completed invocation views expose assignment and selected-attempt identity plus a provider-free change report, but those records are inert until the driver appends policy-document evidence. Request `ready` after authoring the target, then checked `passed` for deterministic review. On `policy-document-nonconforming`, fix every reported violation, request check-free `revise`, and repeat from `prepare`.
+`start` returns the run ID at `result.run.id`. Draft means authoring/revision intent; audit means assessment of existing bytes. Both have identical provider mechanics and neither enforces caller read-only work. Corrections remain caller-owned and require authorization. Follow the skill's [Run loop](skills/using-policy-document-provider/SKILL.md#run-loop) for observation, review and revision.
 
 ## External evidence
 
-Provider never invokes reviewer/model and never edits target. Compute digest over exact bytes (for example `shasum -a 256 /absolute/path/to/README.md`) and append one evidence record per configured semantic axis:
+Current-source `policy-document commission "$FROZEN_PROFILE_JSON"` consumes a completed full-show envelope (or bound filter packet) to prepare explicitly selected historical review context, not a verdict. See [Explicit historical review context](skills/using-policy-document-provider/SKILL.md#explicit-historical-review-context) for selection and receipt freshness. Historical findings never become current proof by attachment.
 
-```sh
-loop-engine --json show docs-audit
-loop-engine --json append \
-  --record-id product-fidelity-review docs-audit review-evidence \
-  '{"gate":"semantic-review","policy_id":"product-fidelity","result":"pass","findings":"","author":{"name":"reviewer","kind":"agent"},"target_id":"README.md","target_sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","profile_version":"readme-2"}'
-```
+For digest-bound evidence shape and recording, use [Evidence record](skills/using-policy-document-provider/SKILL.md#evidence-record) and [Evidence rules](skills/using-policy-document-provider/SKILL.md#evidence-rules). The provider never invokes a reviewer/model or edits the target. Candidate focused views and default compact delivery with independent full verification do not change document evidence rules or upgrade released v0.19.0 runs. Monitor/advisory output cannot approve a document; source integration is not a semantic audit.
 
 Evidence requires exact frozen fields and enums. One current pass and no current standing fail are required per semantic axis. Malformed attributable evidence blocks until any later shape-conforming record for that axis. Wrong profile, target, or digest is stale and never satisfies current conformance. Any target byte change requires fresh evidence.
 
 Reviewer identity, digest, and verdict remain caller claims, not signatures or provenance. Provider reads target once per evaluation but cannot lock it between evaluation and engine transition commit. Evaluation receives a fixed context snapshot; a concurrent append can be absent from an in-flight decision. Serialize `append` and `event` operations per run using one logical mutator.
+
+## Limitations
+
+The bounded Markdown parser recognizes ATX headings outside fences, and closed fenced blocks containing a nonblank, noncomment line—not executable commands. It checks inline links/images and line-leading `@` imports, not reference-style or HTML links. It does not execute commands or validate remote links, anchors, or every Markdown reference. Local references must remain within the target directory; percent-encoded and absolute paths are rejected. The resolver can normalize `sub/../file` inside that directory, but crate authoring rules prohibit `..` in Markdown links outright.
 
 ## Validation
 
@@ -71,8 +69,8 @@ Run source journeys against shipped profile bytes:
 ```sh
 for mode in draft audit; do
   python3 scripts/policy-document-journey.py \
-    --engine target/debug/loop-engine \
-    --provider target/debug/policy-document \
+    --engine target/release/loop-engine \
+    --provider target/release/policy-document \
     --profile crates/policy-document-provider/data/readme.json \
     --mode "$mode"
 done

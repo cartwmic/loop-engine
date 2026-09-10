@@ -26,7 +26,7 @@ def prove_bindings(engine, provider):
         return value.get("result", value)
 
     def show():
-        return call(["show", "binding-correction"])
+        return call(["show", "--view", "full", "binding-correction"])
 
     worker = root / "worker.py"
     worker.write_text('''import json, pathlib, sys, time
@@ -127,7 +127,7 @@ print(json.dumps({'record_ids':[r['id'] for r in p['context']]}))
     assert sum(row["action"]["kind"] == "binding_amended" for row in history) == 1
     call(["--config", str(config), "start", "--id", "unobserved", "software-change", json.dumps(profile)])
     call(["amend-binding", "unobserved", "intent-draft", json.dumps(request)], "rejected")
-    call(["show", "unobserved"])
+    call(["show", "--view", "full", "unobserved"])
     call(["terminate", "unobserved"])
     call(["terminate", "binding-correction"])
     # Bounded preparation kills/reaps a stalled filter, with no primary launch.
@@ -135,11 +135,11 @@ print(json.dumps({'record_ids':[r['id'] for r in p['context']]}))
         "command": sys.executable, "args": [str(worker)],
         "context_filter": {"command": sys.executable, "args": ["-c", "import os,pathlib,sys,time;sys.stdin.read();pathlib.Path(" + repr(str(root / "filter.pid")) + ").write_text(str(os.getpid()));time.sleep(90)"]}}})
     call(["--config", str(config), "start", "--id", "stalled-filter", "software-change", json.dumps(stalled)])
-    call(["show", "stalled-filter"])
+    call(["show", "--view", "full", "stalled-filter"])
     began = time.monotonic()
     refusal = call(["invoke", "stalled-filter", "intent-draft", "--preview"], "error")
     assert "timeout" in json.dumps(refusal) and time.monotonic() - began < 40
-    assert not call(["show", "stalled-filter"])["work_slot_invocations"]
+    assert not call(["show", "--view", "full", "stalled-filter"])["work_slot_invocations"]
     import os
     try:
         os.kill(int((root / "filter.pid").read_text()), 0)
@@ -172,7 +172,7 @@ def prove_facades(engine, provider, checkout, work_root=None):
         return value.get("result", value)
 
     def show(run="graph-controls"):
-        return call(["show", run])
+        return call(["show", "--view", "full", run])
 
     def wait(result, run="graph-controls"):
         deadline = time.monotonic() + 120

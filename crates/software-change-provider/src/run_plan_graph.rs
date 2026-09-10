@@ -576,11 +576,6 @@ struct CaptureWorker<'a> {
 }
 
 #[derive(Serialize)]
-struct CaptureSummary<'a> {
-    workers: Vec<CaptureWorker<'a>>,
-}
-
-#[derive(Serialize)]
 struct RepairAssignment<'a> {
     kind: &'static str,
     plan_revision: &'a str,
@@ -1672,7 +1667,29 @@ fn write_plan_summary(
         });
     }
     let path = capture_root.join(SUMMARY_FILE);
-    let bytes = serde_json::to_vec_pretty(&CaptureSummary { workers }).map_err(|error| {
+    // The old workers array intentionally contains ordinary tasks only. Add a
+    // generic execution inventory and auxiliary receipt so observers need not
+    // interpret plan semantics or infer summarizer success from helper exit.
+    let summarizer_output = capture_root.join("summarizer/stdout");
+    let auxiliary_workers: Vec<Value> = outcomes.get("summarizer").into_iter().map(|outcome| {
+        json!({
+            "assignment_id": "summarizer",
+            "exit_code": outcome.exit_code,
+            "selected_output_path": summarizer_output,
+            "selected_output_sha256": sha256_digest_file(&summarizer_output).ok().map(|s| format!("sha256:{s}"))
+        })
+    }).collect();
+    let expected_assignment_ids: Vec<&str> = steps
+        .iter()
+        .map(|s| s.name.as_str())
+        .chain(std::iter::once("summarizer"))
+        .collect();
+    let bytes = serde_json::to_vec_pretty(&json!({
+        "workers": workers,
+        "auxiliary_workers": auxiliary_workers,
+        "expected_assignment_ids": expected_assignment_ids
+    }))
+    .map_err(|error| {
         ExecuteError::failed(format!(
             "could not serialize capture summary {}: {error}",
             path.display()
@@ -2649,8 +2666,10 @@ mod tests {
             &summarizer,
             MAX_CONCURRENCY,
         );
+        assert!(yaml.starts_with("type: graph\n"), "{yaml}");
         assert!(
-            yaml.starts_with("type: graph\nworking_dir: \"/tmp/selected-checkout\"\n"),
+            yaml.lines()
+                .any(|line| line == "working_dir: \"/tmp/selected-checkout\""),
             "{yaml}"
         );
         assert_eq!(yaml.matches("working_dir:").count(), 1, "{yaml}");

@@ -50,7 +50,7 @@ All fresh per-axis evidence from a batch shares its real invocation/assignment o
 A fresh driver may inspect completed bound review output with the exact pipe:
 
 ```sh
-"$ENGINE" --json show "$RUN_ID" | "$PROVIDER" review-candidates
+"$ENGINE" --json show "$RUN_ID" --view full | "$PROVIDER" review-candidates
 ```
 
 This provider command reads the ordinary completed `show` envelope from stdin. It expands eligible batches in durable invocation/assignment order, then frozen axis order (not worker output order). Fresh rows become per-axis candidates; reuse rows become separately labeled `carried` references with `applicability_id` and no new result/findings. `ready` means only that the selected bytes were found under the engine-named capture, matched the recorded digest, and conformed mechanically to the frozen review contract; its stable origin is `{ "kind": "selected-assignment-output", "id": "INVOCATION_ID", "assignment_id": "ASSIGNMENT_ID" }`, alongside normalized `axis`, `author`, `result`, and `findings`. `malformed`, `unavailable`, `missing-selection`, and `exhausted` are mechanical diagnostics, not reviewer verdicts, and omit judgment fields.

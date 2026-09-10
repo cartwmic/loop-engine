@@ -6,7 +6,27 @@
 
 use loop_core::{ContextRecord, DurableEvaluation, Transition, Workflow};
 use serde::Deserialize;
+
 use serde_json::{json, Value};
+/// Inert `validation-command` context data. Supplemental IDs must be new;
+/// consumers validate against frozen required IDs before using this record.
+/// Appending it does not execute, waive proof, or create acceptance criteria.
+pub(crate) use software_change_provider::commission::ProofCommand;
+
+#[cfg(test)]
+mod command_contract_tests {
+    use super::*;
+
+    #[test]
+    fn additive_command_uses_existing_fields_without_execution_or_waivers() {
+        let value = json!({"id":"extra", "command":"checker", "args":[], "owner":"driver", "obligation":"additional proof"});
+        let command: ProofCommand = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(command).unwrap(), value);
+        let mut waiver = value;
+        waiver["replaces"] = json!("required-command");
+        assert!(serde_json::from_value::<ProofCommand>(waiver).is_err());
+    }
+}
 
 /// The input envelope accepted by `describe`.
 ///

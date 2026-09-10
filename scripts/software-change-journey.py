@@ -143,7 +143,7 @@ def _review_stdin_kinds(slot_ids: Sequence[str]) -> dict[str, list[str]]:
     return {
         slot_id: ["finding-ledger", "review-evidence", "evidence-applicability",
                   "user-steering", "steering-incorporation"] + (
-                      ["command-evidence", "criterion-verdict", "goal-verdict", "criterion-revalidation"]
+                      ["command-evidence", "validation-command", "criterion-verdict", "goal-verdict", "criterion-revalidation"]
                       if slot_id == "implement" or slot_id.startswith("validation") else [])
         for slot_id in slot_ids
     }
@@ -380,6 +380,44 @@ class Journey:
         if self.mode == "source":
             self._validate_scenario_fixtures()
 
+    def _run_operational_ux_cases(self) -> None:
+        """Run existing public cases only from the full source traversal."""
+        assert self.run_dir is not None
+        binary_dir = self.engine.parent
+        for name in ("loop-engine", "software-change", "policy-document", "research", "bookends-check"):
+            binary = binary_dir / name
+            if not binary.is_file() or not os.access(binary, os.X_OK):
+                raise JourneyFailure(f"operational UX binary missing or not executable: {binary}")
+        if self.provider != binary_dir / "software-change":
+            raise JourneyFailure("operational UX requires the selected provider beside the engine")
+        cases = (
+            "monitor",  # bookends:LE-120 — monitor_case: live notifications, unknown judgments, no cancellation.
+            "capture",  # bookends:LE-121 — capture_case: real exit 7, immutable receipts, stale-resume refusal.
+            "summary",  # bookends:LE-122 — summary_case: selected sources, retained failures and budget exhaustion.
+            "guidance",  # bookends:LE-123 — guidance_case: constructors and emitted Git checkpoint guidance, not human approval.
+            "delivery",  # bookends:LE-124 — delivery_case: pending/matched pointers and content mismatch refusal.
+            # bookends:LE-125 — bookends_case: full/shallow continuity and missing-parent refusal.
+            # bookends:LE-126 — bookends_case: durable bypass receipts and recording-failure refusal.
+            "bookends",
+        )
+        output = self.run_dir / "operational-ux"
+        output.mkdir()
+        for case in cases:
+            argv = [
+                sys.executable, str(Path(__file__).with_name("operational-ux-journey.py")),
+                "--case", case, "--binary-dir", str(binary_dir),
+                # These six cases do not read released_root. This existing source
+                # directory satisfies only the CLI parser, not release validation.
+                "--released-root", str(self.data_root), "--output-root", str(output),
+            ]
+            (output / f"{case}.argv.json").write_text(json.dumps(argv) + "\n")
+            with (output / f"{case}.stdout").open("wb") as stdout, (output / f"{case}.stderr").open("wb") as stderr:
+                result = subprocess.run(argv, stdout=stdout, stderr=stderr, check=False)
+            (output / f"{case}.exit.json").write_text(json.dumps({"exit_code": result.returncode}) + "\n")
+            if result.returncode != 0:
+                raise JourneyFailure(f"operational UX {case} failed ({result.returncode}); captures: {output}")
+            print(f"operational UX {case} passed; captures: {output}")
+
     def _validate_scenario_fixtures(self) -> None:
         assert self.fixture_root is not None
         for subject, fixture in SUBJECTS.items():
@@ -421,7 +459,12 @@ class Journey:
         successor_route_cases = 0
         if self.mode == "source" and self.depth == "full":
             self._run_full_source()
+            # bookends:LE-127 — recovery_batch calls work_slot_journey's
+            # assert_projected_fan_out_capture for compact stdin and full evidence;
+            # recovery inventory checks invalid-evidence refusal, while the full
+            # source traversal above executes the plan-graph regressions.
             self._run_recovery_inventory()
+            self._run_operational_ux_cases()
             successor_route_cases = len(SUCCESSOR_ROUTE_CASES)
         else:
             self._run_checked_prefix()
@@ -616,6 +659,47 @@ class Journey:
             if self.mode == "source" and subject == "intent.json":
                 continue
             shutil.copy2(self.fixture_root / fixture, self.artifact_root / subject)
+        self._prepare_fixture_proof_commands(self.artifact_root)
+
+    def _prepare_fixture_proof_commands(self, artifacts: Path) -> None:
+        """Freeze executable protocol assertions in the runtime plan copy only.
+
+        The calibration's fictional Cargo workspace does not exist in the
+        checkpoint repository. These commands prove fixture protocol behavior,
+        not workspace correctness or semantic review quality.
+        """
+        plan_path = artifacts / "plan.json"
+        plan = self._read_json(plan_path, "runtime fixture plan")
+        cases = [
+            ("fixture-topology", {"operation": "describe"},
+             "assert p.returncode == 0 and not p.stderr; "
+             "v=json.loads(p.stdout); "
+             "assert v['id']=='software-change' and v['initial_state']=='explore'; "
+             "assert {'explore','implement','validation','end'} <= {s['id'] for s in v['states']}; "
+             "assert any(t['source']=='validation' and t['event']=='validation-ready' for t in v['transitions'])",
+             "Assert public describe exposes the expected workflow, phases and validation-ready transition."),
+            ("fixture-unknown-operation", {"operation": "not-a-provider-operation"},
+             "assert p.returncode == 2 and not p.stdout and p.stderr",
+             "Assert unknown public operations refuse with protocol exit 2, diagnostics and no response."),
+            ("fixture-malformed-json", None,
+             "assert p.returncode == 2 and not p.stdout and p.stderr",
+             "Assert malformed public JSON refuses with protocol exit 2, diagnostics and no response."),
+            ("fixture-unknown-field", {"operation": "describe", "unexpected": True},
+             "assert p.returncode == 2 and not p.stdout and p.stderr",
+             "Assert closed public describe parsing rejects unknown envelope fields without a response."),
+        ]
+        plan["proof_commands"] = []
+        for name, request, assertion, obligation in cases:
+            raw = "{" if request is None else json.dumps(request)
+            script = (
+                "import json,subprocess; "
+                f"p=subprocess.run([{str(self.provider)!r}],input={raw!r},text=True,capture_output=True); "
+                "print(json.dumps({'exit':p.returncode,'stdout':p.stdout,'stderr':p.stderr}),flush=True); "
+                + assertion
+            )
+            plan["proof_commands"].append({"id": name, "command": sys.executable,
+                "args": ["-c", script], "owner": "driver", "obligation": obligation})
+        _write_json(plan_path, plan)
 
     def _write_provider_config(self) -> None:
         assert self.provider_config is not None
@@ -915,7 +999,7 @@ class Journey:
 
     def _show_for(self, run_id: str, *, state: str, event: str) -> Dict[str, Any]:
         response = self._engine_for(
-            run_id, ["show", run_id], state=state, event=event
+            run_id, ["show", "--view", "full", run_id], state=state, event=event
         )
         self._expect_status(response, "completed", event=event, state=state)
         return response["result"]
@@ -2276,7 +2360,7 @@ class Journey:
         spec = importlib.util.spec_from_file_location("validation_fixture", helper)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        shown = call(["show", run_id])
+        shown = call(["show", "--view", "full", run_id])
         self._expect_status(shown, "completed", event="show", state="validation")
         result = module.prepare(self.provider, self.engine, repository, shown, revision)
         ledgers = [r for r in shown["result"]["context"] if r["kind"] == "finding-ledger"
@@ -2287,7 +2371,7 @@ class Journey:
             result["records"].insert(0, {"record_id": f"validation-index-ledger-{revision}",
                 "kind": "finding-ledger", "data": ledger})
         for row in result["records"]:
-            call(["show", run_id])
+            call(["show", "--view", "full", run_id])
             response = call(["append", "--record-id=" + row["record_id"], run_id,
                 row["kind"], json.dumps(row["data"])])
             self._expect_status(response, "completed", event="append", state="validation")
@@ -2605,6 +2689,7 @@ class Journey:
                 )
         for subject, fixture in SUBJECTS.items():
             shutil.copy2(self.fixture_root / fixture, artifacts / subject)
+        self._prepare_fixture_proof_commands(artifacts)
         profile = self._read_json(
             self.data_root / STITCHED_PROFILE_SUBPATH, f"{mutation} minimal profile"
         )
@@ -2632,7 +2717,7 @@ class Journey:
             ]
         )
         self._expect_status(started, "completed", event="start", state="explore")
-        initial_observed = call(["show", run_id])
+        initial_observed = call(["show", "--view", "full", run_id])
         self._expect_status(initial_observed, "completed", event="show", state="explore")
         for event, target in (
             ("intent-ready", "design"),
@@ -2641,7 +2726,7 @@ class Journey:
         ):
             response = call(["event", run_id, event])
             self._expect_status(response, "completed", event=event, state=target)
-            observed = call(["show", run_id])
+            observed = call(["show", "--view", "full", run_id])
             self._expect_status(observed, "completed", event="show", state=target)
             if response.get("result", {}).get("run", {}).get("current_state") != target:
                 raise JourneyFailure(f"{mutation} did not reach {target}: {response}")
@@ -2769,7 +2854,7 @@ class Journey:
         self._expect_status(fresh_ledger_result, "completed", event="append", state="validation-review")
         final = call(["event", run_id, "passed"])
         self._expect_status(final, "completed", event="passed", state="validation-review")
-        shown = call(["show", run_id])
+        shown = call(["show", "--view", "full", run_id])
         self._expect_status(shown, "completed", event="show", state="end")
         result = shown.get("result", {})
         if result.get("current_state") != "end" or result.get("lifecycle") != "final":
@@ -3802,7 +3887,7 @@ else:
 
     def _scenario_show(self, database: Path, run_id: str) -> Dict[str, Any]:
         response = self._scenario_engine_call(
-            database, ["show", run_id], cwd=self.data_root
+            database, ["show", "--view", "full", run_id], cwd=self.data_root
         )
         self._expect_status(response, "completed", event="show", state="boundary")
         return response["result"]
@@ -3825,7 +3910,7 @@ else:
         )
         missing_after_invalid = self._scenario_engine_call(
             invalid_database,
-            ["show", "le2-invalid-run"],
+            ["show", "--view", "full", "le2-invalid-run"],
             cwd=self.data_root,
         )
 
@@ -3898,7 +3983,7 @@ else:
         run_id = "le13-final-outgoing-run"
         started = self._scenario_start(database, provider_config, run_id, input_path)
         missing = self._scenario_engine_call(
-            database, ["show", run_id], cwd=self.data_root
+            database, ["show", "--view", "full", run_id], cwd=self.data_root
         )
         # bookends:LE-13 — the public start rejects a production-provider final state with an outgoing transition before creating a run.
         if (
@@ -3983,6 +4068,9 @@ else:
             database, ["terminate", run_id], cwd=self.data_root
         )
         after_show = self._scenario_show(database, run_id)
+        # Sample time is observation metadata, not a terminal-run mutation.
+        if "observed_at" in after_show:
+            after_show["observed_at"] = before_show["observed_at"]
         after_history = self._scenario_engine_call(
             database, ["history", run_id], cwd=self.data_root
         )
@@ -4635,7 +4723,7 @@ else:
         invalid_followups = {
             name: self._scenario_engine_call(
                 scenario_dir / f"{name}.sqlite",
-                ["show", name],
+                ["show", "--view", "full", name],
                 cwd=self.data_root,
             )
             for name in invalid_variants
@@ -4783,7 +4871,7 @@ else:
             deadline = time.monotonic() + 30.0
             last: Optional[Dict[str, Any]] = None
             while time.monotonic() < deadline:
-                response = engine_call(["show", run_id])
+                response = engine_call(["show", "--view", "full", run_id])
                 if response.get("status") != "completed":
                     raise JourneyFailure(
                         f"Package 7b show failed while waiting: {response}",
@@ -4813,14 +4901,14 @@ else:
 
         def show_only() -> tuple[bytes, Dict[str, Any]]:
             completed = subprocess.run(
-                [str(self.engine), "--database", str(database), "--json", "show", run_id],
+                [str(self.engine), "--database", str(database), "--json", "show", "--view", "full", run_id],
                 cwd=self.data_root,
                 capture_output=True,
                 check=False,
             )
             if completed.returncode != 0:
                 raise JourneyFailure(
-                    "Package 7b ordinary show failed: "
+                    "Package 7b explicit full show failed: "
                     + completed.stderr.decode("utf-8", "replace"),
                     state="design-review",
                     event="show",
@@ -4829,13 +4917,13 @@ else:
                 envelope = json.loads(completed.stdout)
             except json.JSONDecodeError as error:
                 raise JourneyFailure(
-                    f"Package 7b ordinary show returned non-JSON: {error}",
+                    f"Package 7b explicit full show returned non-JSON: {error}",
                     state="design-review",
                     event="show",
                 ) from error
             if not isinstance(envelope, dict) or envelope.get("status") != "completed":
                 raise JourneyFailure(
-                    f"Package 7b ordinary show was not completed: {envelope}",
+                    f"Package 7b explicit full show was not completed: {envelope}",
                     state="design-review",
                     event="show",
                 )
@@ -4966,7 +5054,7 @@ else:
         foreign_result = foreign_show.get("result")
         if not isinstance(foreign_result, dict):
             raise JourneyFailure(
-                f"Package 7b ordinary show omitted a mutable result: {first_show}",
+                f"Package 7b explicit full show omitted a mutable result: {first_show}",
                 state="design-review",
                 event="show",
             )
@@ -5105,7 +5193,7 @@ else:
 
         # Candidate inspection alone cannot satisfy the bound edge or the provider gate.
         inert_before_driver = engine_call(["event", run_id, "approved"])
-        inert_show = engine_call(["show", run_id])
+        inert_show = engine_call(["show", "--view", "full", run_id])
         if (
             inert_before_driver.get("status") != "rejected"
             or inert_before_driver.get("code") != "bound-slot-invocation-required"
@@ -5167,7 +5255,7 @@ else:
             )
         expected_target = expected_target_candidates[0].get("target")
         inert_without_records = engine_call(["event", run_id, "approved"])
-        inert_without_records_show = engine_call(["show", run_id])
+        inert_without_records_show = engine_call(["show", "--view", "full", run_id])
         if (
             inert_without_records.get("status") != "rejected"
             or inert_without_records_show.get("result", {}).get("current_state") != "design-review"
@@ -5230,7 +5318,7 @@ else:
                 event="append",
             )
         approved = engine_call(["event", run_id, "approved"])
-        final_show = engine_call(["show", run_id])
+        final_show = engine_call(["show", "--view", "full", run_id])
         contexts = final_show.get("result", {}).get("context", [])
         context_ids = [record.get("id") for record in contexts if isinstance(record, dict)]
         if (
@@ -5258,7 +5346,7 @@ else:
             "driver triage accepts ready and rejects exhausted before ordinary append",
             "driver-authored review-evidence and finding-ledger permit checked progression",
         ]
-        # bookends:LE-109 — this named Package 7b source scenario pipes ordinary show into review-candidates, proves selected retry/exhaustion and raw preservation, denies inert inspection, and advances only after explicit driver records.
+        # bookends:LE-109 — this named Package 7b source scenario pipes explicit full show into review-candidates, proves selected retry/exhaustion and raw preservation, denies inert inspection, and advances only after explicit driver records.
         print(
             "Package 7b review-candidates scenario passed: selected retry, exhausted assignment, "
             "raw capture preservation, deterministic repeated inspection, inert-before-records, "
@@ -5348,6 +5436,7 @@ else:
             (artifacts / subject).write_text(
                 json.dumps(value, indent=2) + "\n", encoding="utf-8"
             )
+        self._prepare_fixture_proof_commands(artifacts)
         profile = self._read_json(
             self.data_root / PROFILE_SUBPATH, "overlay-off high-rigor profile"
         )
@@ -5663,6 +5752,7 @@ else:
             (artifacts / subject).write_text(
                 json.dumps(value, indent=2) + "\n", encoding="utf-8"
             )
+        self._prepare_fixture_proof_commands(artifacts)
         return {
             "criterion_types": [disposition["type"] for disposition in dispositions],
         }
@@ -5990,6 +6080,7 @@ else:
 
             for subject, fixture in SUBJECTS.items():
                 shutil.copy2(self.fixture_root / fixture, artifact_root / subject)
+            self._prepare_fixture_proof_commands(artifact_root)
 
             self._start_run(self.run_id)
             shown = self._assert_show("explore", "stitched-start")
@@ -7341,7 +7432,7 @@ def assert_worker_data_skill_and_root_policy() -> None:
         "delivered stable references use context-record or invocation/assignment identities",
         "Frozen requirements this crate's acceptance suite traces to (R1–R29",
         "`software-change --help`/`-h` names `describe`, `evaluate`, `data-dump`, `checkpoint`, `review-candidates`, `commission`, `run-validation`, and `run-plan-graph`",
-        "`review-candidates` reads one completed ordinary `show` envelope from stdin",
+        "`review-candidates` reads one completed `show --view full` envelope from stdin",
     )
     # LE-107 — the self-test checks referential root/provider operational summaries against the PRD authority boundary.
     for label, text, fragments in (

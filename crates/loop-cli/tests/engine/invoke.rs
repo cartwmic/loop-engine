@@ -264,6 +264,8 @@ fn invoke_fan_out_subset_starts_only_selected_assignment_and_records_it() {
             database.to_str().expect("utf-8 database path"),
             "--json",
             "show",
+            "--view",
+            "full",
             "run-subset",
         ])
         .bounded_output("loop-engine invoke")
@@ -827,6 +829,8 @@ fn recovery_cancellation_elapsed_time_requires_cleanup_before_retry_and_departur
             database.to_str().expect("utf-8 database path"),
             "--json",
             "show",
+            "--view",
+            "full",
             "run-elapsed-overrun",
         ])
         .bounded_output("loop-engine invoke")
@@ -947,7 +951,7 @@ fn recovery_cancellation_elapsed_time_requires_cleanup_before_retry_and_departur
         public(&["cancel-invocation", "run-elapsed-overrun", second_id])["status"],
         "completed"
     );
-    public(&["show", "run-elapsed-overrun"]);
+    public(&["show", "--view", "full", "run-elapsed-overrun"]);
     let departure = public(&["event", "run-elapsed-overrun", "rescope"]);
     assert_eq!(departure["status"], "completed", "{departure}");
 }
@@ -1015,6 +1019,8 @@ fn invoke_opaque_input_is_received_and_survives_sqlite_reopen() {
             database.to_str().expect("utf-8 database path"),
             "--json",
             "show",
+            "--view",
+            "full",
             "run-opaque-input",
         ])
         .bounded_output("loop-engine invoke")

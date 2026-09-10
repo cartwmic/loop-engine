@@ -244,6 +244,44 @@ pub fn load_profile(profile: &str) -> Value {
     serde_json::from_str(&text).unwrap_or_else(|error| panic!("invalid shipped config: {error}"))
 }
 
+/// Adapt only a runtime plan copy, before checkpointing/approval. Calibration
+/// commands describe a fictional workspace, not these temporary repositories.
+pub fn executable_fixture_plan() -> Value {
+    let mut plan = load_fixture("plan-good.json");
+    let script = r#"import json, subprocess, sys
+operation = sys.argv[2]
+result = subprocess.run([sys.argv[1]], input=json.dumps({'operation': operation}), text=True, capture_output=True)
+print(result.stdout, end='')
+print(result.stderr, file=sys.stderr, end='')
+if operation == 'describe':
+    assert result.returncode == 0, result.returncode
+    workflow = json.loads(result.stdout)
+    assert workflow['id'] == 'software-change'
+    assert workflow['initial_state'] == 'explore'
+    assert {'source': 'explore', 'event': 'intent-ready', 'target': 'intent-review', 'kind': 'checked'} in workflow['transitions']
+else:
+    assert result.returncode == 2, result.returncode
+    assert result.stderr and not result.stdout
+"#;
+    plan["proof_commands"] = json!([
+        {
+            "id": "fixture-describe-contract",
+            "command": "python3",
+            "args": ["-c", script, provider_binary(), "describe"],
+            "owner": "fixture-driver",
+            "obligation": "Synthetic fixture: assert public describe identity, initial state and checked intent edge; not workspace or semantic criterion proof."
+        },
+        {
+            "id": "fixture-invalid-operation-refusal",
+            "command": "python3",
+            "args": ["-c", script, provider_binary(), "fixture-unknown-operation"],
+            "owner": "fixture-driver",
+            "obligation": "Synthetic fixture: assert unknown protocol operation exits 2 with stderr and no stdout."
+        }
+    ]);
+    plan
+}
+
 /// Real named command captures and checkpointed index, with explicitly synthetic
 /// independent judgments. Seam fixtures only; public terminal proof lives in criteria.
 pub fn validation_fixture(input: &Value, repository: &Path) -> Vec<Value> {

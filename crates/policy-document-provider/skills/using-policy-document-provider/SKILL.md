@@ -15,9 +15,7 @@ Workflow: `prepare → deterministic-review → semantic-review → end`. `ready
 
 `using-loop-engine` (`skills/using-loop-engine/SKILL.md`) is a **required companion**. This skill does not replace it. The closed driving minimum below is what you cannot skip when this skill is loaded alone; load the companion for full engine semantics.
 
-**Run-state commands:** `start`, `list`, `show`, `append`, `event`, `history`, `terminate`, `invoke`, `amend-binding`, and `cancel-invocation`.
-
-**Non-run-state commands:** `fan-out` and `preview-bindings`. They do not start, advance, or record a run.
+**Shared controls:** follow the engine companion's **Choose an observation** and **Capture external commands** for passive `monitor`, optional summaries and capture/abort/resume. Monitor is JSONL; capture streams raw output. Neither supplies semantic verdicts or permission to advance.
 
 **Envelopes:** `completed`, `rejected`, `error`, and `invalid-invocation`. Parse JSON even on nonzero exit. Treat only `completed` as success.
 
@@ -25,13 +23,15 @@ Workflow: `prepare → deterministic-review → semantic-review → end`. `ready
 
 **Overlay meaning:** overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. You still triage worker output, append provider-shaped records, and request the shown event.
 
-**Observation before mutation:** `show` of the current state and instructions arms that state visit for `append`, `event`, `invoke`, and `terminate`. Run it again after every transition, including a transition back to the same state. `list`, `history`, and `invocation-progress` do not arm mutation. Completed invocation views expose assignment/selected-attempt identity and a provider-free change report; those records remain inert until the driver appends provider-shaped evidence.
+**Observation before mutation:** action `show` (default) gives instructions and arms the visit for `append`, `event`, `invoke`, and `terminate`; repeat after every transition. Use `show --view full` for frozen input, complete context, invocation/change reports and commission input. Status/compact, monitor, list, history and invocation-progress never arm. Wait through passive monitor; inspect retained outputs separately.
 
-**Lock-in-before-start:** do not call `start` until the user confirms (1) bind or not (which slot IDs), (2) exact `{command, args}` per bound slot, and (3) model identity in those frozen args (nested `--worker` / `--task-worker` count) or explicit unpinned-default acceptance. Initial bindings freeze; owner-attested amend-binding corrects future execution only. Load the required engine companion for invoke preview/controls, recorded-ownership cancellation and exceptional event override. Overrun/cleanup-pending work blocks retry and departure. Cancellation's ten-second deadline is per controller acquisition/resumption, not across unbounded operator delay after interruption; existing work may persist while later admission remains blocked. Override stays permanently labeled, never document conformance or reviewer pass. Software-change-specific records/batching are not supported here. Simple-first/YAGNI/KISS apply; avoid complexity without meaningful current need.
+**Lock-in-before-start:** do not call `start` until the user confirms (1) bind or not (which slot IDs), (2) exact `{command, args}` per bound slot, and (3) model identity in those frozen args (nested `--worker` / `--task-worker` count) or explicit unpinned-default acceptance. Initial bindings freeze; `amend-binding` corrects future execution only. Before invoke controls, cancellation or override, read the engine companion's **Execution recovery minimum** and its referenced contract. Overrun/cleanup-pending work blocks retry and departure; override never supplies document conformance. Software-change-specific records/batching are unsupported. Apply simple-first/YAGNI/KISS.
 
 Run `loop-engine preview-bindings` on the JSON you will freeze before `start`. `describe` and `evaluate` remain deterministic and do not invoke a model. Provider contract: `crates/policy-document-provider/README.md`. Target constraints: `crates/policy-document-provider/data/target-guidance.md`. Semantic evidence contract: `crates/policy-document-provider/data/reviewer-protocol.md`.
 
 ## Setup
+
+Before start, load repository `skills/using-loop-engine/SKILL.md`, **Deterministic setup**, and follow its catalog/override inspection procedure. Use the normal user catalog; only an explicit human isolation request in this session authorizes database or artifact overrides. Other runs and old preferences do not authorize isolation.
 
 ```sh
 cargo build -p loop-cli -p policy-document-provider
@@ -57,7 +57,7 @@ Shipped profiles omit `work_slot_bindings` (or `{}`). Cataloged slots are `deter
 
 Review workers return judgments only. The driver owns deterministic checks, `show`, `append`, `event`, and progression. A worker process exiting 0 is not enough: contracted output must conform mechanically, and the driver must still verify its values and semantic fitness before appending evidence.
 
-For a driver-performed run, omit `work_slot_bindings` or set `"work_slot_bindings": {}`. To bind review, use the constructor below instead of hand-writing one generic worker. It accepts only `SLOT_ID=semantic-review`, reads `.semantic_policies` from the same per-run `PROFILE` that will be started, and emits workers in policy order and then required-author roster order. Missing `required_authors` means one. The ordered `ROSTER` file is a JSON array of exact `{author,model}` objects; author labels must be pairwise distinct. Every generated worker freezes the exact provider preamble and output schema from `data-dump`, exact profile `mode` and complete `target`, policy `id` and `example_prompt`, claimed author, model argv, provider, and slot.
+For a driver-performed run, omit `work_slot_bindings` or set `"work_slot_bindings": {}`. To bind review, use the constructor below instead of hand-writing one generic worker. It accepts only `SLOT_ID=semantic-review`, reads `.semantic_policies` from the same per-run `PROFILE` that will be started, and emits workers in policy order and then required-author roster order. Leave `semantic_policies[].required_authors` absent: this provider rejects the field even though the generic constructor can normalize it. Shipped policies require one current pass per axis. The ordered `ROSTER` file is a JSON array of exact `{author,model}` objects; author labels must be pairwise distinct. Every generated worker freezes the exact provider preamble and output schema from `data-dump`, exact profile `mode` and complete `target`, policy `id` and `example_prompt`, claimed author, model argv, provider, and slot.
 
 The constructor fails before preview or start on unsupported/empty/malformed input, atomically rewrites the same `PROFILE`, hashes and displays its exact resulting bytes and extracted bindings, previews those bindings, and asks the caller to confirm by typing that hash. It rechecks the hash immediately before starting that unchanged file. There is no post-preview merge. Set every path variable to an absolute caller-local value; do not put machine-local paths in this skill.
 
@@ -117,6 +117,7 @@ def worker($profile; $policy; $reviewer; $schema):
           example_prompt: $policy.example_prompt,
           author: $reviewer.author,
           mode: $profile.mode,
+          profile_version: $profile.profile_version,
           target: $profile.target
         } | tojson)
     ),
@@ -174,7 +175,10 @@ def worker($profile; $policy; $reviewer; $schema):
   ] | add) as $worker_args
 | .work_slot_bindings = (
     ($profile.work_slot_bindings // {})
-    + {($slot): {command: $loop_engine, args: (["fan-out"] + $worker_args)}}
+    + {($slot): ({command: $loop_engine, args: (["fan-out"] + $worker_args)}
+        + (if $profile.work_slot_bindings[$slot].context_filter != null
+           then {context_filter: $profile.work_slot_bindings[$slot].context_filter}
+           else {} end))}
   )
 JQ
 )
@@ -225,7 +229,7 @@ CURRENT_PROFILE_SHA256=$(profile_sha256 "$PROFILE")
 
 This constructor intentionally does not bind `deterministic-review`; deterministic checking remains a driver duty. The generated reviewer preamble makes the frozen assignment authoritative and treats the later state instruction body as driver context only. The mechanically forwarded `artifact_root` context is irrelevant to policy-document review because the assignment already freezes the complete external target object.
 
-When the human did not explicitly ask to isolate in that session, omit `--database` and omit `artifact_root`. That start stores the run in the user-level catalog and uses an engine-owned per-run artifact directory. This is the production start, not a usual-case option beside a prudent isolate alternative. Existing start examples that already omit both flags remain examples of this required start. Independent runs sharing the user-level catalog do not clobber each other, because each run already receives an engine-owned per-run artifact directory. Occupancy of the catalog by other runs, and fear of affecting those runs, are not reasons to pass `--database` or a nonempty `artifact_root`. An agent must not pass `--database` or a nonempty `artifact_root` unless the human explicitly asked to isolate in that session. Isolation is not a self-chosen precaution. `--database /path/to/dir/loop.db` isolates SQLite and `/path/to/dir/runs/<id>/`. A nonempty `artifact_root` isolates files to a caller-chosen absolute existing directory. Do not treat a prior session's isolation preference as standing authority.
+Follow the required canonical setup above for normal-catalog start and owner-only isolation.
 
 ```sh
 loop-engine --json --config "$PROVIDER_CONFIG" \
@@ -245,18 +249,78 @@ Heading aliases are case-insensitive; profiles do not require exact heading spel
 
 ## Run loop
 
-1. `show` and read current instructions plus immutable `initial_input` (including `work_slot_bindings` when present), `work_slots`, and `work_slot_invocations` (`assignment_selection`, per-worker assignment/selected-attempt identity, `overlay_meaning`, `elapsed_ms`, `remaining_allowed_ms`, `capture_dir`, `inner_workers`), plus the provider-free `change_report`; especially inspect `mode`, target, profile version, deterministic policies, and semantic policies. This observation arms only the current state visit. Repeat this step after every transition before the next append, event, invoke, or terminate.
+1. Read action `show` for instructions, events and work locators. Use full for frozen mode, target, profile version/policies, context and invocation/change reports. Repeat actionable observation after every transition before mutation.
 2. In `prepare`, author or revise target externally. Request `ready` to enter deterministic review.
-3. In `deterministic-review`, if that slot is bound, `invoke` it and poll overlay until `succeeded` / `failed` / `overrun`; on `overrun`, wait or cancel owned work and verify cleanup, then observe before retry; on failure, inspect `capture_dir/summary.json` and captured stdout before stderr. Overlay `succeeded` is worker exit 0, not provider acceptance. Request `passed` only after overlay `succeeded`, or immediately if unbound. On `policy-document-nonconforming`, fix every reported violation, request check-free `revise`, then repeat from `prepare`.
+3. In `deterministic-review`, if that slot is bound, `invoke` it, monitor until completion or attention, then inspect action/full show and captures; on `overrun`, wait or cancel owned work and verify cleanup, then observe before retry; on failure, inspect `capture_dir/summary.json` and captured stdout before stderr. Overlay `succeeded` is worker exit 0, not provider acceptance. Request `passed` only after overlay `succeeded`, or immediately if unbound. On `policy-document-nonconforming`, fix every reported violation, request check-free `revise`, then repeat from `prepare`.
 4. After deterministic approval, compute lowercase SHA-256 over exact current bytes:
 
    ```sh
    TARGET_SHA256=$(shasum -a 256 "$TARGET" | awk '{print $1}')
    ```
 
-5. For semantic review: if `semantic-review` is bound, `invoke` it and poll overlay until `succeeded` / `failed` / `overrun`; on `overrun`, wait or cancel owned work and verify cleanup, then observe before retry; on failure, inspect `capture_dir/summary.json` and captured stdout before stderr; then read worker output. If unbound, commission external review yourself. Overlay `succeeded` is collector/worker exit 0, not that the review passed. Either way, cover every frozen semantic policy. Give each reviewer current target bytes or path, policy `description`, `example_prompt`, and relevant project evidence. Reviewer judges one axis and returns `pass` or actionable `fail` findings. You still triage and append; a bound worker does not write records.
+5. For semantic review: if `semantic-review` is bound, `invoke` it, monitor until completion or attention, then inspect action/full show and captures; on `overrun`, wait or cancel owned work and verify cleanup, then observe before retry; on failure, inspect `capture_dir/summary.json` and captured stdout before stderr; then read worker output. If unbound, commission external review yourself. Overlay `succeeded` is collector/worker exit 0, not that the review passed. Either way, cover every frozen semantic policy. Give each reviewer current target bytes or path, policy `description`, `example_prompt`, and relevant project evidence. Reviewer judges one axis and returns `pass` or actionable `fail` findings. You still triage and append; a bound worker does not write records.
 6. Append one `review-evidence` record per axis judgment, bound to exact target ID, digest, and profile version.
 7. Request semantic `passed`. On denial, use diagnostics to supersede malformed evidence with a later conforming record, address standing failures, or supply missing current passes. Any target byte change invalidates prior evidence: request `revise`, rerun deterministic review, recompute digest, and commission fresh semantic verdicts.
+
+## Explicit historical review context
+
+No selection means no prior-findings attachment. Existing frozen catalogs and
+already launched packets are unchanged. Historical context never supplies a
+current pass or rewrites a verdict. Selecting is a driver decision, not relevance
+inference by core.
+
+For a **new** bound run that needs selection, set this filter under the per-run
+profile's `work_slot_bindings.semantic-review` **before** running the constructor.
+It preserves the supplied filter while constructing worker arguments, then displays,
+hashes, previews and confirms the final profile. Freeze the profile JSON
+(without `work_slot_bindings`) as the
+literal second argument, not a mutable file path:
+
+```json
+{"context_filter":{"command":"/absolute/path/policy-document","args":["commission","<literal frozen profile JSON>"]}}
+```
+
+Do not splice this into a profile after confirmation. Unfiltered bindings retain
+the old no-attachment catalog. For unbound review the new catalog advertises the
+same eligible kinds; run the same `policy-document commission "$FROZEN_PROFILE_JSON"`
+with a completed `loop-engine --json show --view full "$RUN_ID"` envelope on stdin.
+The result contains selected original `context`, `current_target` and diagnostics.
+Hand that packet to reviewers alongside current target bytes and frozen policies.
+For bound review the existing engine filter transports those same original records;
+the active selection's `receipt` delivers current-target identity and diagnostics
+in bound stdin too. Successful filter stderr is not delivery. Legacy receipt-less
+selections remain supported with unknown receipt freshness, not claimed current identity.
+Reviewer framing must label every attached source historical, compare
+its target/profile/digest to current bytes, and never treat attachment as proof.
+
+After full `show`, prepare proposed `review-context-selection` data:
+
+```json
+{"target_id":"README.md","slot_id":"semantic-review","record_ids":["original-finding-id"],"supersedes":"previous-selection-id"}
+```
+
+Add this proposed data as top-level `selection_data` to the completed full-show
+envelope, then pipe it to `policy-document commission "$FROZEN_PROFILE_JSON"`.
+Save stdout as `selection.json`: it is appendable data with a provider-calculated
+`receipt` (`current_target` and per-source `diagnostics`), not an engine record.
+Append it through ordinary `append --record-id ... "$RUN_ID" review-context-selection
+@selection.json`, observe again, then invoke. This receipt-bearing path is required
+for current identity/diagnostic delivery. Never invent record IDs/timestamps inside
+the data or hand-author the receipt. Both commission forms recheck a supplied receipt
+against current bytes/profile and sources and refuse mismatches before launch.
+After a target change, prepare a new proposal without the old receipt and append it
+with a new record ID, superseding the previous selection; prior packets stay immutable.
+
+Omit `supersedes` for the first selection. The latest sequence for the exact target
+and slot controls future commissions; `record_ids: []` explicitly clears the
+attachment. Supersession references must name an earlier selection for that same
+target/slot. Selected IDs must name original earlier `review-evidence`; unknown,
+duplicate, non-evidence or non-prior references refuse preparation. Unselected
+material is omitted. Originals, including the active selection, are transported
+in original context order without rewriting. Stale originals are explicitly
+historical context, not current proof; diagnostics retain supersession identities.
+A target edit still requires the normal deterministic recheck and fresh digest-bound
+verdicts. Old selection records and launched packets are never changed.
 
 ## Evidence record
 

@@ -1,3 +1,4 @@
+mod commission;
 mod config;
 mod document;
 mod embedded_data;
@@ -20,6 +21,10 @@ fn run() -> i32 {
     let mut args = std::env::args_os();
     let _ = args.next();
     if let Some(command) = args.next() {
+        if command == "commission" {
+            let args: Vec<String> = args.map(|arg| arg.to_string_lossy().into_owned()).collect();
+            return commission::run(&args);
+        }
         if command == "data-dump" {
             let Some(dest) = args.next() else {
                 eprintln!("usage: policy-document data-dump DIR");
@@ -58,8 +63,17 @@ fn run() -> i32 {
 fn describe(value: Value) -> i32 {
     match serde_json::from_value::<DescribeRequest>(value) {
         Ok(req) if req.operation == "describe" => {
-            let _ = req.initial_input;
-            write_json(&workflow::workflow())
+            let binding = req
+                .initial_input
+                .as_ref()
+                .and_then(|input| input.get("work_slot_bindings"))
+                .and_then(|bindings| bindings.get("semantic-review"));
+            // Existing unfiltered bindings must not begin receiving all history.
+            if binding.is_some_and(|b| b.get("context_filter").is_none_or(Value::is_null)) {
+                write_json(&workflow::legacy_workflow())
+            } else {
+                write_json(&workflow::workflow())
+            }
         }
         Ok(_) => protocol_error("describe request has wrong operation".into()),
         Err(e) => protocol_error(format!("invalid describe request: {e}")),
@@ -77,7 +91,7 @@ fn evaluate(value: Value) -> i32 {
     }
 }
 fn evaluation_response(request: &EvaluateRequest) -> Result<Value, String> {
-    if request.workflow != workflow::workflow() {
+    if request.workflow != workflow::workflow() && request.workflow != workflow::legacy_workflow() {
         return Ok(protocol::unsupported());
     }
     let checked = request.transition.kind == TransitionKind::Checked;

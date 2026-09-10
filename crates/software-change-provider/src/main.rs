@@ -70,6 +70,25 @@ fn run() -> i32 {
                 }
             };
         }
+        Some(command) if command == "prepare-validation" => {
+            if args.next().is_some() {
+                eprintln!("prepare-validation takes one JSON packet on stdin");
+                return 2;
+            }
+            return match serde_json::from_reader(io::stdin())
+                .map_err(|e| e.to_string())
+                .and_then(|input| validation::prepare(&input))
+            {
+                Ok(value) => {
+                    println!("{value}");
+                    0
+                }
+                Err(error) => {
+                    eprintln!("prepare-validation: {error}");
+                    2
+                }
+            };
+        }
         Some(command) if command == "run-validation" || command == "validation-command" => {
             let rest: Vec<String> = args.map(|s| s.to_string_lossy().into_owned()).collect();
             let result = if command == "validation-command" {
@@ -230,7 +249,7 @@ fn run_protocol() -> i32 {
 
 fn provider_help() -> i32 {
     println!(
-        "software-change\n\nUsage:\n  software-change < stdin\n  software-change data-dump DIR\n  software-change checkpoint --phase implementation|validation --artifact-root ABS --working-directory ABS\n  software-change review-candidates\n  software-change commission [--slot SLOT] [--task TASK]\n  software-change run-validation --engine ABS --working-directory ABS --revision REV [--commands ID,...] [--timeout-ms N]\n  software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--task ID ... | --tasks ID,ID,...] [--max-active N]\n  software-change --help | -h\n  software-change --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nReview candidates:\n  review-candidates  read one completed `show` JSON envelope from stdin and emit inert selected-review candidates\n\nData:\n  data-dump  materialize embedded provider data under DIR\n\nPlan graph:\n  run-plan-graph  requires --working-directory ABS (one existing driver-selected directory for every selected task and summarizer; no Git/worktree management) and executes plan.json as a Dagu type:graph (--max-active N; omitted means {MAX_CONCURRENCY} ordinary tasks) with a mandatory summarizer"
+        "software-change\n\nUsage:\n  software-change < stdin\n  software-change data-dump DIR\n  software-change checkpoint [--json] --phase implementation|validation --artifact-root ABS --working-directory ABS\n  software-change review-candidates\n  software-change prepare-validation < packet.json\n  software-change commission [--slot SLOT] [--task TASK]\n  software-change run-validation --engine ABS --working-directory ABS --revision REV [--commands ID,...] [--timeout-ms N]\n  software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--task ID ... | --tasks ID,ID,...] [--max-active N]\n  software-change --help | -h\n  software-change --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nReview candidates:\n  review-candidates  read one completed `show` JSON envelope from stdin and emit inert selected-review candidates\n\nData:\n  data-dump  materialize embedded provider data under DIR\n\nPlan graph:\n  run-plan-graph  requires --working-directory ABS (one existing driver-selected directory for every selected task and summarizer; no Git/worktree management) and executes plan.json as a Dagu type:graph (--max-active N; omitted means {MAX_CONCURRENCY} ordinary tasks) with a mandatory summarizer"
     );
     0
 }
@@ -267,6 +286,10 @@ fn parse_checkpoint_args(args: &[String]) -> Result<CheckpointArgs, String> {
     let mut index = 0;
     while index < args.len() {
         let token = &args[index];
+        if token == "--json" {
+            index += 1;
+            continue;
+        }
         let (name, inline) = if let Some(value) = token.strip_prefix("--phase=") {
             ("--phase", Some(value.to_owned()))
         } else if token == "--phase" {

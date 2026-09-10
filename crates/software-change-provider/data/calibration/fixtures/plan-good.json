@@ -234,7 +234,7 @@
       ],
       "validation": [
         "cargo test --workspace",
-        "python3 scripts/production-journey.py",
+        "python3 scripts/production-journey.py --engine fictional-repo/target/debug/loop-engine --config fictional-repo/implementation-evidence/providers.toml --profile fictional-repo/provider/data/configs/standard.json --fixtures fictional-repo/implementation-evidence/journey-fixtures --terminal-run-id terminal-validation-proof",
         "python3 fictional-repo/scripts/assert-requirement-proof.py"
       ],
       "handoff": "Produce the acceptance tests, scripts/production-journey.py public outcome captures, fictional-repo/implementation-evidence/requirement-to-proof.md, and fictional-repo/scripts/assert-requirement-proof.py; authoritative-doc-integration consumes this proof matrix, checker, public scenarios, and successful workspace output."
@@ -319,14 +319,32 @@
   ],
   "proof_commands": [
     {
-      "id": "repository-readable",
-      "command": "python3",
-      "args": [
-        "-c",
-        "from pathlib import Path; assert Path('.git').is_dir(); print('isolated repository observable')"
-      ],
+      "id": "workspace-tests",
+      "command": "cargo",
+      "args": ["test", "--workspace"],
       "owner": "driver",
-      "obligation": "The deterministic fixture observes its selected Git repository; semantic outcome review remains external."
+      "obligation": "Run the plan's protocol, schema, evidence, reference-data, transition and acceptance tests; assert the named observable contracts, not only process exit."
+    },
+    {
+      "id": "public-outcome-journey",
+      "command": "python3",
+      "args": ["scripts/production-journey.py", "--engine", "fictional-repo/target/debug/loop-engine", "--config", "fictional-repo/implementation-evidence/providers.toml", "--profile", "fictional-repo/provider/data/configs/standard.json", "--fixtures", "fictional-repo/implementation-evidence/journey-fixtures", "--terminal-run-id", "terminal-validation-proof"],
+      "owner": "driver",
+      "obligation": "Assert frozen-profile inspection, exhaustive structural denial, configured evidence denial and terminal validation with retained denial lineage. Fictional setup supplies the built engine, provider TOML, unchanged standard-7 profile and named JSON fixtures; terminal-validation-proof is prepared at validation-adversarial-review without satisfying final evidence. These are fictional paths and setup, not current-run execution claims."
+    },
+    {
+      "id": "requirement-proof-map",
+      "command": "python3",
+      "args": ["fictional-repo/scripts/assert-requirement-proof.py"],
+      "owner": "driver",
+      "obligation": "Check all four exact acceptance requirements against the named executable proofs and supplied repository-state inventory."
+    },
+    {
+      "id": "document-authority",
+      "command": "python3",
+      "args": ["fictional-repo/scripts/assert-doc-authority.py"],
+      "owner": "driver",
+      "obligation": "Check authoritative document presence, singular PRD authority, exact acceptance coverage and relative Markdown links."
     }
   ]
 }

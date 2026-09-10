@@ -28,11 +28,12 @@ Before using amend-binding, invoke controls, overrun recovery, cancel-invocation
 ## Workflow
 
 ```sh
-cargo test -p policy-document-provider
+cargo test -p policy-document-provider --bin policy-document
+python3 scripts/run-nextest.py --filter policy_document
 cargo fmt --all -- --check
 ```
 
-Crate tests are not a substitute for the public-boundary journeys. After any crate change, run the locked build and both source journeys against shipped profile bytes from the repository root:
+Run these commands from the repository root. The package `--bin policy-document` command covers binary unit tests only; integration suites live in the central workspace target and use the fresh-binary filtered runner above. These focused checks do not replace the root completion gate or public-boundary journeys. After any crate change, run the locked build and both source journeys against shipped profile bytes from the repository root:
 
 ```sh
 cargo build --locked -p loop-cli -p policy-document-provider
@@ -47,17 +48,29 @@ done
 
 Immediately before production `start`, follow the skill's [Setup](skills/using-policy-document-provider/SKILL.md#setup) for the provider TOML, per-run profile, binding confirmation and exact `--json --config` start form. Use the target/profile and mode rules above and an absolute UTF-8 `target.path`.
 
-Drive production `start` of this provider with `loop-engine`. When the human did not explicitly ask to isolate in that session, omit `--database` and omit `artifact_root`. That start stores the run in the user-level catalog and uses an engine-owned per-run artifact directory. This is the production start, not a usual-case option beside a prudent isolate alternative. Existing start examples that already omit both flags remain examples of this required start. Independent runs sharing the user-level catalog do not clobber each other, because each run already receives an engine-owned per-run artifact directory. Occupancy of the catalog by other runs, and fear of affecting those runs, are not reasons to pass `--database` or a nonempty `artifact_root`. An agent must not pass `--database` or a nonempty `artifact_root` unless the human explicitly asked to isolate in that session. Isolation is not a self-chosen precaution. `--database /path/to/dir/loop.db` isolates SQLite and `/path/to/dir/runs/<id>/`. A nonempty `artifact_root` isolates files to a caller-chosen absolute existing directory. Do not treat a prior session's isolation preference as standing authority.
+Leave `semantic_policies[].required_authors` absent and use the shipped profile shape: the current provider rejects that field even though the generic binding constructor can process it. Constructor/preview success does not establish provider input validity. See [README Setup](README.md#setup).
+
+Drive production `start` of this provider with `loop-engine`. Use the normal user catalog. No database or artifact override unless the human explicitly requests isolation in this session; other runs and old preferences do not authorize isolation. Before start, load [Setup](skills/using-policy-document-provider/SKILL.md#setup), including canonical engine Deterministic setup.
 
 Topology is `prepare → deterministic-review → semantic-review → end`. `ready` and both `revise` events are check-free. Both `passed` events are checked; final semantic approval reruns deterministic checks against current bytes before evidence aggregation. The provider never edits the target.
 
-Local markdown links in this crate's documents must resolve under this crate directory. Do not use `..` in those links; the resolver treats parent segments as escapes. Refer to repository-root files in prose instead.
+Local markdown links in this crate's documents must resolve under this crate directory. Do not use `..` in those links. The resolver rejects escapes outside the target directory; this crate authoring rule is stricter than its within-directory normalization. Refer to repository-root files in prose instead.
 
-`policy-document` accepts `data-dump DIR` on argv. It does not implement `--help` or `--version`; other argv is an error. Describe and evaluate remain one JSON request on stdin.
+Do use ATX headings and closed command fences recognized by the bounded Markdown parser. A closed fence does not prove executability; reference-style/HTML links and anchors are not validated. Independently check commands and unsupported references before claiming conformance; see [Limitations](README.md#limitations).
+
+Current candidate source defaults `show` to action; status-only `show --view status` and human `show --compact` do not arm mutation, while action/full reads do. Use `show --view full` for full policies, context, change reports and commission input. Preserve released v0.19.0 operations for frozen runs; candidate source does not upgrade them.
+
+`policy-document` accepts `data-dump DIR` and `commission "$FROZEN_PROFILE_JSON"` on argv. It does not implement `--help` or `--version`; other argv is an error. Describe and evaluate remain one JSON request on stdin.
 
 Dump refuses to overwrite any destination entry, including dangling symlinks. On write failure, rollback removes only files created by that invocation.
 
+Before selecting historical findings, follow the skill's [explicit historical review context](skills/using-policy-document-provider/SKILL.md#explicit-historical-review-context): explicit source IDs and supersession, full-show input, provider-derived receipt, fresh receipt after target edits, and no attachment without selection. Bound receipts deliver current-target diagnostics; historical evidence is not current acceptance. Do not hand-author receipt identity or treat successful filter stderr as delivery.
+
+Bound fan-out compact delivery omits only engine-owned top-level `data.loop_engine_origin` from cloned records. Preserve meaningful context, truthful stdin and independent full verification snapshots; do not infer a provider verdict from delivery or monitor output. Source document integration does not replace independent final-byte review.
+
 Before appending semantic evidence, follow the skill's [Run loop](skills/using-policy-document-provider/SKILL.md#run-loop) and [Evidence record](skills/using-policy-document-provider/SKILL.md#evidence-record) for the exact command and eight-field shape. Append one `review-evidence` record per semantic axis, bound to exact `target_id`, lowercase SHA-256 of current target bytes, and frozen `profile_version`. Serialize `append` and `event`. Any target byte change invalidates prior evidence: `revise`, rerun deterministic review, recompute the digest, and commission fresh verdicts. Reviewer identity and verdicts are caller claims, not signatures.
+
+Do follow [Evidence rules](skills/using-policy-document-provider/SKILL.md#evidence-rules) for aggregation recovery: each standing fail needs a later current, conforming pass from the same exact `author.name` and `author.kind`; another author's pass does not clear it. Attributable malformed evidence also blocks; use that section's later shape-conforming-record recovery, which is distinct from superseding a standing fail.
 
 ## Completion and Handoff
 

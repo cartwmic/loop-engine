@@ -1,59 +1,74 @@
 # Backlog
 
-Open work and candidates—not a delivery commitment or requirement authority. `docs/PRD.md` owns requirements. Inclusion preserves an idea; it does not mean it will be done.
+Open work and candidates—not a delivery commitment or requirement authority. `docs/PRD.md` owns requirements. Inclusion preserves an idea; it does not mean it will be done. Favor demonstrated per-run gains and avoided rework over speculative machinery.
 
-The numbered groups rank expected impact on UX, friction, efficiency, output quality and time to finish a run, with higher-impact items first within each group. Favor repeated per-run gains and avoided rework over speculative machinery. This is not an execution sequence; effort and dependencies still matter. Evidence: [recovery retrospective](docs/recovery-run-retrospective.md).
+## Reconciled state — 2026-09-10
 
-## Correctness exceptions — separate from the UX ranking
+The operational UX slice is implemented in this checkout and completed normal software-change acceptance in run `run-1788837444516894000-1-44395`: `end`, `final`, `completed`, zero overrides. Its final proof contains 54 local matrix commands plus the external implementation-report checker, independent acceptance of 20 criteria and a separate whole-goal judgment. This is local completion, not release or deployment.
 
-These retain their existing significance regardless of convenience or expected speedup.
+HEAD `e131de567ecb5dbf8bb077b611ca651db6fc180c` commits the two owner-accepted PRD amendments, including LE-120–127. Implementation and subsequent skill/backlog edits remain uncommitted. The terminal run's evidence binds its reviewed tree; later documentation edits are separate and do not inherit those current-tree receipts. Unrelated recovery requirement drafts remain proposals.
 
-- **Shallow-CI continuity — release blocker:** Fetch enough parent history and fail closed when a shallow checkout cannot supply it. Full and CI-equivalent shallow clones must reject live-ID disappearance, tombstone removal, reassignment and revival; genuine first adoption must remain valid.
-- **Durable bypass evidence — release blocker:** Record invocation time, repository/revision, bypass class/reason and outcome locally. If recording fails, the bypass must not permit the push. Preserve normal GREEN/RED behavior and keep BYPASS distinct from GREEN.
-- **Cancellation identity:** Prevent resumed cancellation from confusing a reused PID/PGID with the original owned process. This risk remains unreproduced and unrepaired. Any investigation must respect the existing provider refusal; a simulation is not proof of actual OS reuse.
+Retained evidence under that run's artifact root: `finish-phase/final-completion/completed-handoff.json`, `proof/receipts.json`, `audit/final.json`, `finish-phase/documents-final-r2.json`, and `measurements/guidance-repair/comparison.json`. The [v0.19.0 recovery retrospective](docs/recovery-run-retrospective.md) remains historical, including its exceptional completion; it does not describe this normally completed UX run.
 
-## 1. Biggest per-run gains
+## Completed UX slice — implemented and locally verified
 
-Reduce repeated context loading, unnecessary repair loops, monitoring tokens and manual proof handling.
+These are no longer open implementation candidates. Public command details and proof boundaries are in [operational UX contracts](docs/operational-ux-contracts.md).
 
-- **Focused `show` output:** Separate concise status, agent-readable next-action context and explicit full inspection. Routine output should surface current instructions, available actions, current blockers and active work without repeating entire configuration, context and invocation histories or detailed change reports. Keep full evidence retrievable; reuse existing projections and provider-owned filtering rather than making core interpret opaque findings.
-- **Surgical-first `show` guidance:** Bring actual bound and unbound instructions into line with the skill: prefer validation-local correction, selected task repair or honest no-task ad-hoc repair. Explain downstream invalidation costs and reserve deeper backtracking for materially wrong upstream obligations. Reduce repeated boilerplate without hiding these choices, current obligations or necessary guidance behind generic bound invocation instructions.
-- **Deterministic progress monitor:** Cover software-change runs, invocations, bound/unbound plan graphs and fan-out, plus validation commands. Refresh human-readable status outside the model loop; notify the agent only on completion or when attention/judgment is needed. Reuse focused status projections, `invocation-progress` and structured captures rather than repeatedly consuming full `show` dumps. Keep workflow state, helper completion, worker outcome and review judgment distinct; report unknown data honestly. No automatic approval, advancement, retry or cancellation.
-- **pi-subagents:** Fix `launchContractDigest` recovery compatibility; expose reliable selected-attempt results that separate execution, output validity, harness acceptance and judgment; independently review the lifecycle fixes. Validate through the public tool, including compaction, revival and partial parallel completion—without descriptor edits or disabled compaction.
-- **Reusable matrix/capture runner:** Extract the run-local executor's live output, atomic receipts, failure stopping, verified abort cleanup and valid-prefix resume. Reuse existing test runners and report checks; remove fixed run paths and command counts. Prove failure, stale-resume and descendant-cleanup paths, not just successful commands.
-- **Validation orchestration/finalization:** Consider combining named command execution, independent AC/goal review, driver-added validation and report-index finalization in the existing validation phase. Reuse current helpers and allow batched verdicts. Preserve driver judgment; neither a new state nor a new test runner is presumed necessary.
+| Former backlog item | Completed outcome |
+|---|---|
+| Focused `show` output; required-author visibility | Default action, passive status/compact and explicit full views; provider-authored normalized obligations; full evidence remains retrievable. |
+| Surgical-first `show` guidance | Bound and unbound instructions prefer validation-local correction, owning-task selection or honest no-task repair; upstream revision remains proportional to the defect. |
+| Deterministic progress monitor | Passive, source-specific completion/attention for runs, invocations and captures; workflow, helper, worker, conformance and judgment remain distinct. |
+| Reusable matrix/capture runner | Streaming commands, immutable receipts, serial failure stopping, owned abort and verified-prefix resume. Broader cancellation-identity limits remain below. |
+| Validation orchestration/finalization | Retained command preparation, supplemental proof, fixed report index/checkpoint and batched independent criterion/goal judgments within existing phases. |
+| Driver guidance; circular-proof detection | Outcome/risk discovery, scoped comprehensive and confirmation review, serial-budget guidance and meaningful falsification in existing review prompts. |
+| Policy-document finding delivery | Explicit historical selection/supersession and provider-derived current-target diagnostics reach review commissions. |
+| Calibration and real v2 use | All 138 genuine owner-inspected calibration returns integrated (69 expected pass / 69 expected fail); normal v2 run acceptance completed. |
+| Semantic proof audit | All 121 live requirements / 124 clauses audited: requirements 107 pass, 13 unknown, 1 fail; clauses 110 pass, 13 unknown, 1 fail. Audit completion does not close its nonpasses. |
+| Current documentation | Eight README/AGENTS targets received 64 current passing semantic-axis judgments at the accepted checkpoint. Historical reports and unrelated draft authority were preserved. |
+| Multi-run coordinator/prompter skill | Provider-driver handoffs, explicit ownership/model policy, passive monitoring, blocked return and independent peer resume; actual fresh-driver exercise retained. |
+| CLI consistency; Generate-PRD wording | `checkpoint --json` support, corrected fan-out instruction help and honest bounded fixture-lookup wording. Actual extraction still requires repository discovery. |
+| Shared packaged smoke | One [wrapper](scripts/packaged-smoke.py) for local archives, installed binaries and CI, with explicit package identity and reused public journeys. |
+| Pre-review Git checkpoint | Guidance requires the owner's decision, staged-diff inspection and verification of an authorized human/driver commit; workers cannot commit independently. |
+| Post-commit delivery pointer | [Pointer tooling](scripts/delivery-pointer.py) exists and rejects mismatched content. Creating this run's actual landed-commit/hosted pointer remains pending. |
+| Shallow-CI continuity; durable bypass evidence | Required history fails closed; local bypass receipts must persist before BYPASS. Local proof passed; hosted release execution remains pending. |
+| Optional semantic status summaries | Explicit command/model budget, cadence and retained restart state; summaries remain advisory and cannot control progression. |
 
-## 2. Better judgments and fewer review loops
+Repeated five-sample local measurements are complete: large output-size reductions, faster status, slight action/serial timing regressions. They establish no general, whole-run or hosted speedup. Synthetic journeys prove mechanics, not semantic review quality.
 
-Improve what passes review and prevent avoidable rejections, rediscovery and repeated commissioning.
+The subsequent six-skill follow-up adds explicit observation, monitoring, capture/resume and validation-preparation procedures and removes duplicated API prose. It is repository-source work, not installed-skill deployment or an amendment to the terminal run's proof.
 
-- **Driver guidance:** Interview the owner for concrete outcomes, boundaries and testable acceptance criteria before freezing intent. Apply YAGNI/KISS within the explicitly stated project/run risk profile; do not import broader enterprise or hostile-actor assumptions. High rigor means stronger scrutiny, not expanded threat scope; accepted risks do not waive stated outcomes. Keep packets bounded, distinguish execution/output/judgment, avoid rerun-until-pass, and estimate serial work honestly. Use existing progress interfaces rather than model-driven polling.
-- **Circular-proof detection:** Calibrate existing review prompts against injected conclusions, unchanged observations and proof compatible with opposite outcomes. Require meaningful falsification and honest task dependencies before adding axes.
-- **Required-author visibility:** Show normalized per-gate author counts before rejection, preferably in existing instructions/commission output. Distinguish omitted gates from insufficient review.
-- **Policy-document finding delivery:** Forward driver-selected prior finding/evidence references into current review commissions, with explicit supersession. Durable storage alone does not deliver findings to workers.
-- **Calibration and real v2 use:** Complete the 138 pending calibration attestations and an ordinary v2 software-change run. Synthetic journeys do not establish semantic review quality.
-- **Semantic proof audit:** Audit every live requirement and each conjunctive clause. Retain a revision-bound matrix linking requirement identity, citation, public scenario/call path, actual assertion and gap disposition. Mark unavailable historical proof unknown; later citation edits need ordinary review, not another exhaustive audit.
-- **Current documentation:** Correct stale acceptance, audit and release labels after checking accepted versus committed wording. Explain why an implementation override can leave missing proof history and cause later denials; do not imply automatic downstream waivers. Leave historical reports unchanged.
+## Delivery pending — owner authorization required
 
-## 3. Easier startup and delivery
+- **Implementation landing:** Inspect and authorize the implementation/skill/backlog commit. The accepted PRD commit alone does not deliver the implementation.
+- **Hosted exact-commit proof:** After landing, run the applicable push-to-main preflight for that exact commit, including hosted cache statistics and wall time. Local receipts do not establish hosted success.
+- **Publication and deployment:** Versioning, push, release dispatch, installation and skill synchronization remain separate owner-controlled work; none is implied by local completion.
+- **Actual delivery pointer:** After observing the matching landed tree and hosted result, create the separate pointer. Keep terminal reports immutable; later changes must not be presented as the reviewed tree.
 
-Reduce setup and handoff work; these help less frequently than the per-state and per-review changes above.
+## Open correctness and proof follow-ups
 
-- **Multi-run coordinator/prompter skill:** Distill the practice of one coordinator agent delegating several concurrent software-change runs to separate driver agents. Make bound/unbound startup prompts, work ownership, monitoring, escalation and handoff easy to establish. Reuse per-run skills rather than duplicate their workflow; stay independent of Herdr or any particular multiplexer.
-- **CLI consistency:** Decide whether `software-change checkpoint` should accept `--json` despite already returning JSON; fix `fan-out --help` to show when worker instructions are required.
-- **Generate-PRD wording:** Replace the claimed contrary-evidence search with an honest description of the three predetermined extract lookups. No new search infrastructure is needed.
-- **Shared packaged smoke:** Use one implementation for local archives, installed binaries and CI, parameterized by binaries/version/platform. Reuse the public journeys outside the checkout; reject bad checksums and versions.
-- **Pre-review Git checkpoint:** Decide how the driver creates and verifies an owner-authorized commit after implementation triage and before review. A repository checkpoint is not a Git commit; workers must not commit a shared checkout independently.
-- **Post-commit delivery pointer:** Separately link a completed run's reviewed report/tree to the matching landed commit and later hosted result. Keep terminal reports immutable and refuse content mismatches.
-- **Chezmoi:** Retain immutable-tag skill synchronization as dotfiles tooling, with exact-byte checks, orphan refusal, targeted apply and link verification.
+- **Cancellation identity:** General PID/PGID-incarnation safety remains unresolved. The common-capture PID/start checks are a narrow mitigation, with second-resolution and check-then-signal limits. They do not establish atomic ownership or repair historical PID-only captures. Actual OS reuse remains unreproduced; respect existing refusals and never fabricate cleanup acknowledgment.
+- **LE-79 contract divergence:** The PRD's direct-parent/waitpid wording differs from the intervening ownership wrapper. The audit retained a fail, and the owner deferred correction. Decide whether that topology is an intentional contract before changing code or requirements; no wrong exit, lost output or unsafe cleanup was established by this mismatch alone.
+- **Inherited audit unknowns:** LE-2, LE-8, LE-9, LE-11, LE-15, LE-26, LE-30, LE-31, LE-32, LE-37, LE-40, LE-43 and LE-57 retain their exact audit dispositions. Gaps cover graph variants, public history-failure rollback, exact evaluate-request lineage, catalog/lifecycle/entry conjuncts, same-topology/different-policy runs and current failed policy-document judgment. Supporting seam tests and narrower public proofs do not close these facets.
+- **Historical actor compliance:** Specific retained skill-read evidence does not establish every historical actor's reading or semantic obedience. Do not backdate attestations or introduce a new metadata framework merely to claim closure.
+- **Research bound authoring handoff:** Reviewer-only `verify`/`synthesize` bindings do not assign production of their subject artifacts. The skill now warns to leave these slots unbound absent a supported authoring handoff. A complete bound procedure and completed-outcome proof remain open; constructor conformance alone is insufficient.
 
-The pi-subagents and chezmoi items belong to their respective projects, not Loop Engine core.
+## Performance follow-ups
 
-## 4. Broader requirement-policy decisions
+- **Software-change journey optimization:** Reduce the full source journey's wall time without weakening public-boundary coverage, evidence freshness or cleanup guarantees. The retained skill-update batch spent 661 seconds of 754 seconds in this journey. Profile costs before choosing fixes: two fixture copies each included 454 unrelated historical fan-out captures (13,166 files / 116 MB); process supervision and repeated Git/content hashing are additional candidates whose individual costs remain unmeasured. Start with excluding irrelevant runtime artifacts from fixtures, then address measured bottlenecks. Compare repeated equivalent before/after runs; preserve failure, recovery and cancellation scenarios. Make focused checks usable for narrow edits so prose changes do not routinely replay the full journey.
 
-Potentially valuable, but wider in scope and less directly tied to routine run friction. Establish the desired contract before adding enforcement.
+## External-project follow-ups
 
-- **Requirements versus specifications:** Separate enduring outcomes and intentional compatibility promises from encodings, implementation choices and test/release mechanics. Preserve accepted meaning and ID continuity; not every goal, rationale or journey deserves an ID.
+- **pi-subagents:** Fix `launchContractDigest` recovery compatibility; expose reliable selected-attempt results separating execution, output validity, harness acceptance and judgment; independently review lifecycle fixes. The descriptor refusal recurred during the skill audit. Validate through the public tool, including compaction, revival and partial parallel completion—without descriptor edits or disabled compaction.
+- **Chezmoi:** Retain immutable-tag skill synchronization as dotfiles tooling, with exact-byte checks, orphan refusal, targeted apply and link verification. Loop Engine source edits do not complete that deployment work.
+
+These belong to their respective projects, not Loop Engine core.
+
+## Broader requirement-policy decisions
+
+Establish the desired contract before adding enforcement. The completed conformance audit did not perform this abstraction-level cleanup.
+
+- **Requirements versus specifications:** Keep required outcomes, necessary architectural constraints (the implementation's required shape), and intentional compatibility promises in the PRD. Move incidental algorithms, encodings, internal topology and test/release mechanics to specifications unless they are themselves intentional contracts. Audit abstraction level separately from conformance: matching the current implementation does not establish that its details belong in requirements. Preserve accepted meaning and ID continuity; obtain owner approval for changed obligations rather than weakening them to fit code. Not every goal, rationale or journey deserves an ID.
 - **PRD migration:** Agree source-preservation rules, normative authority and document structure before extracting IDs. Review actual candidate/source bytes for clause completeness, invented meaning and coverage feasibility—not merely a synthesis about them. Reuse existing profiles/axes where possible; test omissions, duplicates, non-requirements, contradictions and wrong-target reviews. Keep grammar validity, traceability and semantic acceptance separate.
 - **Traceability breadth:** Decide whether downstream AC references should be mandatory and which additional intent obligations need PRD mapping. Keep unmatched requirements as honest proposals for human acceptance, not forced links or automatic IDs for every datum.
 - **Historical requirement backfill:** Consider auditing selected past runs for enduring obligations missing from the current PRD. Propose evidence-backed additions or amendments for owner review; do not rewrite historical records or infer requirements from every old implementation choice.
@@ -62,22 +77,21 @@ Potentially valuable, but wider in scope and less directly tied to routine run f
 - **Citation-surface decision:** Consider rejecting citations outside approved proof paths, while distinguishing real citations from examples, fixtures, generated/vendor content and skip directives.
 - **Public contract coverage:** Consider enabling the optional `contract` class for genuine public boundaries, with collected, ID-linked assertions—not duplicate journeys or internal-seam tests.
 
-## 5. Conditional or exploratory
+## Conditional or exploratory
 
-Revisit after the simpler improvements reveal what is still worth building.
+Revisit only when an observed need justifies more work.
 
-- **Optional semantic status summaries:** Let a dedicated summarizer explain an ongoing run using new evidence and its previous summary, without requiring the driver to narrate progress. Keep this separate from deterministic monitoring: it spends model tokens and must not turn interpretation into workflow authority.
-- **Benchmark helper:** Extract collection/comparison only with a maintained comparable workload. Require repeated samples, declared concurrency and cleanup; do not freeze the historical workload or treat pilots as final evidence.
+- **Benchmark helper:** Run-local repeated collection/comparison is complete; a reusable extraction remains conditional on a maintained comparable workload. Preserve declared concurrency, cleanup and measurement limits rather than freezing this historical workload.
 - **Delta-only revised plans:** Assess whether a genuinely necessary plan revision can describe only remaining work while referencing already-delivered work and proof, without false incompleteness findings. This is not established by current proof. Prefer existing selected/ad-hoc repair when the plan itself is still sound; do not presume a generalized replay mechanism.
-- **Cross-provider calibration:** Finish existing calibration first; establish shared needs and gold-judgment ownership before building a neutral framework.
+- **Cross-provider calibration:** The software-change calibration prerequisite is complete. Establish shared needs and gold-judgment ownership before building a neutral framework.
 - **Generalized replay:** Revisit only if ordinary v2 work exposes repeated replacement traversal that existing repair, carry and backtracking cannot address. Do not clone runtime state.
 - **Prototype-to-spec workflow:** Explore a low-ceremony path for disposable prototypes only if existing research/orchestration cannot serve it. Prototype output is learning, not production code or frozen requirements by default.
 
 ## Reproduce before ranking
 
-Unverified leads from external runs; inspect the current public path before proposing fixes:
+Remaining unverified leads from external runs; check whether the current public path already addresses each report before proposing more changes:
 
-- Multiline worker argv, hard-kill terminal capture, ad-hoc capture placement, graph help and timeout discoverability.
-- Missing `author.kind`/malformed envelopes and verdict reversal on unchanged subject bytes. Any normalization must preserve identity and original judgment, never invent a verdict.
-- Pi session mtime, hidden process arguments, Dagu completion visibility and shell-probe reliability claims from another machine.
-- Upgrade compatibility beyond supported historical reads, and reviewer strictness/author-count effects. Establish the actual failure or calibration result first.
+- Multiline worker argv, hard-kill terminal capture and ad-hoc capture placement. Fan-out instruction help is corrected; remaining graph-help and timeout-discoverability complaints need a specific current example.
+- Missing `author.kind`/malformed envelopes and verdict reversal on unchanged subject bytes. Shape-only correction must preserve identity and original judgment; never invent a verdict.
+- Pi session mtime, hidden process arguments, Dagu completion visibility and shell-probe reliability claims from another machine. Existing monitor/progress interfaces do not prove every external report resolved.
+- Upgrade compatibility beyond supported historical reads, and reviewer strictness/author-count effects beyond the completed calibration. Establish the actual failure before expanding scope.

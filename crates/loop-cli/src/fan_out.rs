@@ -186,6 +186,8 @@ pub(crate) enum ContractStatus {
 /// Durable per-invocation spec consumed by join and the facade fallback.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct FanOutSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    capture_format: Option<String>,
     workers: Vec<FanOutSpecWorker>,
 }
 
@@ -537,7 +539,6 @@ pub(crate) fn run_collector(
                 ));
             }
             let dagu = resolve_dagu().map_err(|error| CollectorError::Failed(error.to_string()))?;
-            let engine = loop_engine_exe()?;
             let artifact_root = absolute_from_cwd(cwd, Path::new(&packet.artifact_root));
             let artifact_root = path_to_string(&artifact_root);
             let payloads = workers
@@ -554,10 +555,10 @@ pub(crate) fn run_collector(
             let output_dir = absolute_from_cwd(cwd, Path::new(&packet.capture_dir));
             run_dagu_graph(
                 &dagu,
-                &engine,
                 &workers,
                 &assignment_ids,
                 &payloads,
+                Some(packet.context.as_deref().unwrap_or_default()),
                 &output_dir,
                 max_active,
             )
@@ -568,7 +569,6 @@ pub(crate) fn run_collector(
         } => {
             ensure_workers(&workers)?;
             let dagu = resolve_dagu().map_err(|error| CollectorError::Failed(error.to_string()))?;
-            let engine = loop_engine_exe()?;
             let instructions_path = absolute_from_cwd(cwd, &instructions_path);
             let base_payload = fs::read(&instructions_path).map_err(|error| {
                 CollectorError::Invalid(format!(
@@ -585,10 +585,10 @@ pub(crate) fn run_collector(
             let assignment_ids = (0..workers.len()).map(assignment_id).collect::<Vec<_>>();
             run_dagu_graph(
                 &dagu,
-                &engine,
                 &workers,
                 &assignment_ids,
                 &payloads,
+                None,
                 &output_dir,
                 max_active,
             )
@@ -1026,7 +1026,20 @@ fn bound_worker_payload(
     context: Option<&[Value]>,
     controls: Option<&loop_core::InvocationControls>,
 ) -> Vec<u8> {
-    let location = compact_location_json(artifact_root, context, controls);
+    // Delivery-only projection: never mutate authoritative records or nested data.
+    let projected = context.map(|records| {
+        records
+            .iter()
+            .cloned()
+            .map(|mut record| {
+                if let Some(data) = record.get_mut("data").and_then(Value::as_object_mut) {
+                    data.remove("loop_engine_origin");
+                }
+                record
+            })
+            .collect::<Vec<_>>()
+    });
+    let location = compact_location_json(artifact_root, projected.as_deref(), controls);
     match &worker.preamble {
         Some(preamble) => compose_preamble_payload(preamble, Some(&location), b""),
         None => {
@@ -1090,10 +1103,10 @@ fn loop_engine_exe() -> Result<PathBuf, CollectorError> {
 
 fn run_dagu_graph(
     dagu: &Path,
-    engine: &Path,
     workers: &[WorkerCli],
     assignment_ids: &[String],
     payloads: &[Vec<u8>],
+    full_bound_context: Option<&[Value]>,
     output_dir: &Path,
     max_active: Option<u32>,
 ) -> Result<FanOutSummary, CollectorError> {
@@ -1115,7 +1128,8 @@ fn run_dagu_graph(
         .map_err(|error| CollectorError::Failed(error.to_string()))?;
     let home = PathBuf::from(&locator.dagu_home);
     write_isolated_home_files(&home)?;
-    let engine = fs::canonicalize(engine).unwrap_or_else(|_| engine.to_path_buf());
+    let engine = loop_engine_exe()?;
+    let engine = fs::canonicalize(&engine).unwrap_or(engine);
     let engine_str = path_to_string(&engine);
 
     let mut spec_workers = Vec::new();
@@ -1140,9 +1154,12 @@ fn run_dagu_graph(
             args: worker.args.clone(),
             output_schema: worker.output_schema.clone(),
             full_output_schema: worker.full_output_schema.clone(),
-            routed_inputs: serde_json::from_slice::<Value>(&payloads[index])
-                .ok()
-                .and_then(|value| value.get("context").cloned()),
+            routed_inputs: match full_bound_context {
+                Some(records) => Some(Value::Array(records.to_vec())),
+                None => serde_json::from_slice::<Value>(&payloads[index])
+                    .ok()
+                    .and_then(|value| value.get("context").cloned()),
+            },
             stdin_path: path_to_string(&stdin_path),
             stdout_path: path_to_string(&worker_dir.join("stdout")),
             stderr_path: path_to_string(&worker_dir.join("stderr")),
@@ -1150,6 +1167,7 @@ fn run_dagu_graph(
         });
     }
     let spec = FanOutSpec {
+        capture_format: full_bound_context.map(|_| "bound-context-projection-v1".to_owned()),
         workers: spec_workers,
     };
     write_spec(&output_dir, &spec)?;
@@ -1843,7 +1861,7 @@ fn locate_stdout_value(bytes: &[u8]) -> Result<Value, String> {
         [] => {
             return Err(format!(
                 "stdout bare JSON is malformed: {bare_error}; stdout contains no JSON fenced block"
-            ))
+            ));
         }
         [opening] => *opening,
         _ => return Err("stdout contains multiple JSON fenced blocks".to_owned()),
@@ -2467,6 +2485,7 @@ mod tests {
     #[test]
     fn emitted_yaml_is_type_graph_without_continue_on_or_retry() {
         let spec = FanOutSpec {
+            capture_format: None,
             workers: vec![FanOutSpecWorker {
                 assignment_id: "worker-0".to_owned(),
                 command: "echo".to_owned(),
@@ -2487,7 +2506,8 @@ mod tests {
             &spec,
             None,
         );
-        assert!(yaml.starts_with("type: graph\nsteps:\n"), "{yaml}");
+        assert!(yaml.starts_with("type: graph\n"), "{yaml}");
+        assert!(yaml.lines().any(|line| line == "steps:"), "{yaml}");
         assert!(yaml.contains("action: exec"), "{yaml}");
         assert!(yaml.contains("name: \"w0\""), "{yaml}");
         assert!(yaml.contains("name: \"join\""), "{yaml}");
@@ -2502,6 +2522,7 @@ mod tests {
     #[test]
     fn max_active_two_emits_max_active_steps_two_and_join_depends_on_every_worker() {
         let spec = FanOutSpec {
+            capture_format: None,
             workers: vec![
                 FanOutSpecWorker {
                     assignment_id: "worker-0".to_owned(),
@@ -2536,10 +2557,12 @@ mod tests {
             &spec,
             Some(2),
         );
+        assert!(yaml.starts_with("type: graph\n"), "{yaml}");
         assert!(
-            yaml.starts_with("type: graph\nmax_active_steps: 2\nsteps:\n"),
+            yaml.lines().any(|line| line == "max_active_steps: 2"),
             "{yaml}"
         );
+        assert!(yaml.lines().any(|line| line == "steps:"), "{yaml}");
         assert!(yaml.contains("name: \"w0\""), "{yaml}");
         assert!(yaml.contains("name: \"w1\""), "{yaml}");
         assert!(yaml.contains("name: \"join\""), "{yaml}");
@@ -2565,6 +2588,7 @@ mod tests {
         fs::write(&sidecar, br#"{"exit_code":3}"#).expect("sidecar");
         let unstarted_dir = directory.path().join("1");
         let spec = FanOutSpec {
+            capture_format: None,
             workers: vec![
                 FanOutSpecWorker {
                     assignment_id: "worker-0".to_owned(),

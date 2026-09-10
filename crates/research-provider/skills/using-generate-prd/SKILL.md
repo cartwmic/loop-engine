@@ -15,11 +15,7 @@ Drive the run with the **existing** `research` binary and `crates/research-provi
 
 ## Hard rules
 
-A human must accept or reject the candidate before any commit to docs/PRD.md.
-Never auto-commit.
-Never mint IDs outside the published grammar.
-Never call software-change evaluate.
-Never invoke a model from the research provider binary itself.
+Keep the candidate outside `docs/PRD.md` until explicit human acceptance and separate commit authorization. Never auto-commit. Never mint IDs outside the published grammar.
 
 Published grammar (prose path `crates/bookends-check/schema/prd.md`): live IDs are `LE-<n>` with `<n>` = `[1-9][0-9]*` and no leading zeros. Candidate IDs are proposals; they are not authoritative until a human accepts and commits them into the repository PRD. Do not allocate Compass `PREFIX-N` or `@spec:` tokens.
 
@@ -46,10 +42,10 @@ Subject files under the allocated `artifact_root` stay `brief.json`, `sources.js
 
 ## External extract work
 
-Do the primary work outside Loop Engine, then record it in the subject artifacts.
+Do the primary work outside Loop Engine, then record it in the subject artifacts. Follow the research companion's per-gate loop: action `show` for driving, full for frozen input/context, passive `monitor` for waiting. The engine companion covers captured external commands and optional advisory summaries; execution receipts and summary prose do not establish requirement truth or candidate acceptance.
 
 1. **Scope** — question is to extract a schema-valid living markdown PRD candidate for the current repository. Name observable acceptance, constraints, and non-goals. Do not present a chosen PRD as the question.
-2. **Gather** — search this repository. Record sources with stable ids, locators to tracked files or tests, and exact extracts later verification can check. `brief_revision` must equal current `brief.json` revision.
+2. **Gather** — investigate this repository without a predetermined requirement list. This is discovery and synthesis, not lookup of an already-known PRD. Separate observed behavior, stated obligations, conflicting evidence and unknown intent; do not promote every implementation detail into a requirement. Search this repository. Record sources with stable ids, locators to tracked files or tests, and exact extracts later verification can check. `brief_revision` must equal current `brief.json` revision.
 3. **Verify** — author claims with cited `source_ids`, support, and a genuine challenge. Each proposed requirement's supporting evidence must be reviewable in the repository. Request `verified` before commissioning review.
 4. **Synthesize** — write a cited conclusion that emits the candidate markdown plus per-requirement repository evidence citations. Canonical live-record spelling is `### LE-<n>:`, `- Status: live`, and `- Coverage: e2e/journey`. Then write the same human-facing candidate to `prd-candidate.md` under the run artifact root. Do not write it to `docs/PRD.md`. Request `completed` before commissioning review.
 5. **Parse-check** — after the run reaches `end`, validate the candidate with the real parser-only command: `bookends-check candidate prd-candidate.md`. This checks grammar only; it does not claim coverage, completeness, or semantic correctness.

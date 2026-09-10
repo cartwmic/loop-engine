@@ -139,7 +139,7 @@ class Fixture:
         return value.get("result", value)
 
     def show(self):
-        return self.call(["show", self.name])
+        return self.call(["show", "--view", "full", self.name])
 
     def invocation(self):
         return next(r for r in self.show()["work_slot_invocations"] if r["invocation_id"] == self.result["invocation_id"])

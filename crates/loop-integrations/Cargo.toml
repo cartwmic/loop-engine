@@ -11,6 +11,8 @@ path = "src/lib.rs"
 
 [dependencies]
 libc = "0.2"
+sha2 = "0.10"
+jsonschema = { version = "0.50.1", default-features = false }
 loop-core = { path = "../loop-core" }
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

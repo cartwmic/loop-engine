@@ -1,0 +1,18 @@
+---
+name: coordinating-loop-engine
+description: Delegate independent Loop Engine work to provider drivers and resume durable handoffs without controlling peer runs. Use when coordinating multiple outcomes or providers.
+---
+
+# Coordinate independent drivers
+
+Outcome: each driver can finish or return a durable blocker independently, without chat history or control over another driver's run.
+
+1. Confirm the desired outcomes, acceptance boundaries, risks and non-goals. Ask the owner to supply checkout/write ownership and coordination ownership; do not allocate worktrees, invent a scheduler, or infer permission to share a writer. Stop on ambiguous ownership.
+2. Select the appropriate provider procedure: repository paths `crates/software-change-provider/skills/using-software-change-provider/SKILL.md`, `crates/policy-document-provider/skills/using-policy-document-provider/SKILL.md`, or `crates/research-provider/skills/using-research-provider/SKILL.md` (Generate-PRD additionally uses `using-generate-prd/SKILL.md` beside it). Read the selected skill and the [engine skill](../using-loop-engine/SKILL.md) before delegating. The coordinator does not replace provider policy.
+3. Obtain exact owner-confirmed role/model assignments and profile/binding bytes/hash/preview through those procedures. Verify each model against `pi --list-models` and pass it explicitly; no default, fallback or substitution. Independent driver launches need their own authority even when a different run has frozen bindings.
+4. Give each driver a durable handoff: outcome; provider and required skill; working directory and source references; owner-supplied write/coordination ownership; model/binding confirmation references; approved serial budget; monitor and escalation owner; run ID and actual catalog path if started; artifact/output locators; next observation and return destination. Omit production isolation overrides unless the owner explicitly requested isolation this session.
+5. Follow the engine skill's **Choose an observation**: `loop-engine monitor --run RUN_A --run RUN_B --json --attention-seconds 300` watches independent sources; attach external executions with `--capture-dir ABS`. Notify the responsible driver on source-specific completion/attention, not routine samples. Stop the observer when finished; it does not stop work. Use `--engine ABS` for released compatibility. Optional summaries need a confirmed command/model and budget, and remain advisory. Observing authorizes no mutation or cancellation; each driver reads its own action/full show before acting.
+6. A blocked driver returns the durable reason, completed outcomes, retained failed captures, unresolved ownership/cleanup, required owner decision and resume references. Keep successful peers independent; do not cancel, restart or advance them to unblock another. Resume from the named current run observation and files, not a chat summary. Budget serial closure, proof and review honestly; escalate before expensive unapproved re-execution.
+7. Return execution facts, output conformance and external judgment separately. Task exit 0 is not semantic approval. Preserve pending calibration, owner decisions and Git/hosted delivery; do not manufacture final completion.
+
+Example: a research driver returns a missing-source blocker while a document driver completes its own authorized outcome. Retain both run/output references. Ask the source owner for the missing material, then return it only to the blocked research driver, which observes its own current state before resuming. The coordinator never requests an event on the completed document run.

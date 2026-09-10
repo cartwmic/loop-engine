@@ -32,17 +32,18 @@ pub(crate) fn head_commit(repo: &Path) -> Result<Option<String>, String> {
 }
 
 pub(crate) fn first_parent(repo: &Path, commit: &str) -> Result<Option<String>, String> {
-    match git_output(repo, &["rev-parse", "--verify", &format!("{commit}^1")]) {
-        Ok(parent) => Ok(parent.lines().next().map(str::to_owned)),
-        Err(error)
-            if error.contains("Needed a single revision")
-                || error.contains("unknown revision")
-                || error.contains("bad revision") =>
-        {
-            Ok(None)
-        }
-        Err(error) => Err(error),
+    // Read the actual commit headers: revision traversal hides parents at a
+    // shallow boundary and must not turn that boundary into a root commit.
+    let object = git_output(repo, &["cat-file", "commit", commit])?;
+    let parent = object
+        .lines()
+        .take_while(|line| !line.is_empty())
+        .find_map(|line| line.strip_prefix("parent "));
+    if let Some(parent) = parent {
+        git_output(repo, &["cat-file", "commit", parent])
+            .map_err(|error| format!("required parent history unavailable ({parent}): {error}"))?;
     }
+    Ok(parent.map(str::to_owned))
 }
 
 pub(crate) fn read_text(repo: &Path, rel: &str) -> Result<Option<String>, String> {
@@ -54,17 +55,16 @@ pub(crate) fn read_text(repo: &Path, rel: &str) -> Result<Option<String>, String
 }
 
 pub(crate) fn show_blob(repo: &Path, commit: &str, path: &str) -> Result<Option<String>, String> {
-    let spec = format!("{commit}:{path}");
-    match git_output(repo, &["show", &spec]) {
-        Ok(text) => Ok(Some(text)),
-        Err(err)
-            if err.contains("does not exist") || err.contains("exists on disk, but not in") =>
-        {
-            Ok(None)
-        }
-        Err(err) if err.contains("bad revision") || err.contains("invalid object") => Ok(None),
-        Err(err) => Err(err),
+    // Absence is established by a successfully resolved tree, not stderr text.
+    git_output(repo, &["cat-file", "commit", commit])?;
+    let entry = git_output(
+        repo,
+        &["ls-tree", "-z", commit, "--", &format!(":(literal){path}")],
+    )?;
+    if entry.is_empty() {
+        return Ok(None);
     }
+    git_output(repo, &["show", &format!("{commit}:{path}")]).map(Some)
 }
 
 pub(crate) fn git_pathspec(spec: &str) -> String {

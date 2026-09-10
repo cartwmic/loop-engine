@@ -778,6 +778,19 @@ impl Persistence for SqlitePersistence {
         finish_transaction(transaction, result)
     }
 
+    fn load_status_data(&self, run_id: &RunId) -> Result<ShowData, PersistenceError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction().map_err(sqlite_failure)?;
+        let result = (|| {
+            Ok(ShowData {
+                run: load_required_run(&transaction, run_id)?,
+                context: read_context_records(&transaction, run_id)?,
+                checked_evaluations: read_checked_evaluations(&transaction, run_id)?,
+            })
+        })();
+        finish_transaction(transaction, result)
+    }
+
     fn load_show_data(&self, run_id: &RunId) -> Result<ShowData, PersistenceError> {
         let mut connection = self.lock()?;
         let transaction = connection

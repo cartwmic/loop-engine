@@ -208,6 +208,9 @@ pub struct State {
     pub id: StateId,
     pub title: String,
     pub instructions: String,
+    /// Provider-authored driver guidance; core preserves opaque JSON, not policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_guidance: Option<Value>,
     #[serde(rename = "final")]
     pub is_final: bool,
 }
@@ -223,6 +226,7 @@ impl State {
             id: id.into(),
             title: title.into(),
             instructions: instructions.into(),
+            action_guidance: None,
             is_final,
         }
     }

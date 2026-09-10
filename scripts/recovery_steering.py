@@ -31,7 +31,7 @@ def prove(journey):
         return value
 
     def show():
-        return call(["show", "steering"])
+        return call(["show", "--view", "full", "steering"])
 
     def append(record_id, data, kind="user-steering"):
         show()
@@ -151,12 +151,12 @@ print(output)
         write(root / (name + ".json"), bad_profile)
         call(["--config", str(config), "start", "--id", name, "software-change", "@" + str(root / (name + ".json")), name])
         for record_id in ["one", "two"]:
-            call(["show", name])
+            call(["show", "--view", "full", name])
             call(["append", name, "--kind", "user-steering", "--record-id", record_id, json.dumps({"target": {"kind": "all"}, "instruction": record_id})])
-        call(["show", name])
+        call(["show", "--view", "full", name])
         call(["invoke", name, "intent-draft"], "error")
         assert not marker.exists()
-        assert not call(["show", name])["result"]["work_slot_invocations"]
+        assert not call(["show", "--view", "full", name])["result"]["work_slot_invocations"]
     append("invalid-target", {"target": {"kind": "slots", "ids": ["missing"]}, "instruction": "invalid"})
     before = len(show()["result"]["work_slot_invocations"])
     call(["invoke", "steering", "implement"], "error")
@@ -188,17 +188,17 @@ else:
     write(root / "graph-profile.json", graph_profile)
     call(["--config", str(config), "start", "--id", "graph-steering", "software-change", "@" + str(root / "graph-profile.json"), "graph"])
     for event in ["intent-ready", "design-ready", "plan-ready"]:
-        call(["show", "graph-steering"])
+        call(["show", "--view", "full", "graph-steering"])
         call(["event", "graph-steering", event])
     for record_id, data in [("global", {"target": {"kind": "all"}, "instruction": "global"}),
                             ("exact", {"target": {"kind": "tasks", "plan_revision": "1", "ids": ["A"]}, "instruction": "exact-A"})]:
-        call(["show", "graph-steering"])
+        call(["show", "--view", "full", "graph-steering"])
         call(["append", "graph-steering", "--kind", "user-steering", "--record-id", record_id, json.dumps(data)])
-    call(["show", "graph-steering"])
+    call(["show", "--view", "full", "graph-steering"])
     graph = call(["--timeout-ms", "120000", "invoke", "graph-steering", "implement", "--input", json.dumps({"plan_revision": "1", "task_roots": ["A", "B"]})])["result"]
     deadline = time.monotonic() + 120
     while True:
-        invocation = next(i for i in call(["show", "graph-steering"])["result"]["work_slot_invocations"] if i["invocation_id"] == graph["invocation_id"])
+        invocation = next(i for i in call(["show", "--view", "full", "graph-steering"])["result"]["work_slot_invocations"] if i["invocation_id"] == graph["invocation_id"])
         if invocation.get("completed_at") is not None:
             assert invocation["status"] == "succeeded", invocation
             break

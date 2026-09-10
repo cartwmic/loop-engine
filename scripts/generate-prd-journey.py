@@ -65,7 +65,7 @@ def cli_call(engine: Path, database: Path, arguments: Sequence[str]) -> dict[str
 
 
 def show_state(engine: Path, database: Path, state: str) -> dict[str, Any]:
-    response = cli_call(engine, database, ["show", RUN_ID])
+    response = cli_call(engine, database, ["show", "--view", "full", RUN_ID])
     if response.get("status") != "completed":
         fail(f"show failed: {response}")
     result = response.get("result")

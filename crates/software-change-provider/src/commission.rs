@@ -5,6 +5,17 @@ use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::path::Path;
 
+/// An additive validation obligation, never a replacement or a verdict.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ProofCommand {
+    pub id: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub owner: String,
+    pub obligation: String,
+}
+
 pub const STEERING_KIND: &str = "user-steering";
 pub const INCORPORATION_KIND: &str = "steering-incorporation";
 
@@ -191,6 +202,27 @@ pub fn select(
                 proof["args"] = json!(update.args.as_ref().expect("validated argv"));
             }
         }
+    }
+    let mut proof_ids: BTreeSet<String> = proof_commands
+        .iter()
+        .filter_map(|p| p["id"].as_str().map(str::to_owned))
+        .collect();
+    for record in records.iter().filter(|r| r.kind == "validation-command") {
+        let command: ProofCommand = serde_json::from_value(record.data.clone())
+            .map_err(|e| format!("invalid validation-command `{}`: {e}", record.id))?;
+        if [
+            &command.id,
+            &command.command,
+            &command.owner,
+            &command.obligation,
+        ]
+        .iter()
+        .any(|s| s.trim().is_empty())
+            || !proof_ids.insert(command.id.clone())
+        {
+            return Err(format!("validation-command `{}` has blank fields or duplicates/replaces an existing proof ID", record.id));
+        }
+        proof_commands.push(serde_json::to_value(command).map_err(|e| e.to_string())?);
     }
     let record_ids = records
         .iter()

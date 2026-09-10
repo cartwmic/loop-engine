@@ -412,9 +412,14 @@ fn assert_owning_phase_route(index: usize) {
             "implementation-report",
             "validation-report",
         ] {
+            let fixture = if name == "plan" {
+                support::executable_fixture_plan()
+            } else {
+                support::load_fixture(&format!("{name}-good.json"))
+            };
             fs::write(
                 Path::new(root).join(format!("{name}.json")),
-                serde_json::to_vec(&support::load_fixture(&format!("{name}-good.json"))).unwrap(),
+                serde_json::to_vec(&fixture).unwrap(),
             )
             .unwrap();
         }

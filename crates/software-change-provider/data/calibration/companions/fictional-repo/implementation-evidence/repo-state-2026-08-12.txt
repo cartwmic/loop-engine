@@ -130,7 +130,7 @@ result: formatting check completed with no differences
 command: cargo test -p software-change-provider --test evaluate schema_deny_reports_every_simultaneous_structural_violation -- --exact
 exit status: 0
 result: checker-to-denial integration reported required, enum, minLength, and additionalProperties path/rule pairs in deterministic order
-command: python3 scripts/production-journey.py
+command: python3 scripts/production-journey.py --engine fictional-repo/target/debug/loop-engine --config fictional-repo/implementation-evidence/providers.toml --profile fictional-repo/provider/data/configs/standard.json --fixtures fictional-repo/implementation-evidence/journey-fixtures --terminal-run-id terminal-validation-proof
 exit status: 0
 result: production journey passed
 command: test -s fictional-repo/README.md && test -s fictional-repo/provider/README.md && test -s fictional-repo/docs/PRD.md && test -s fictional-repo/implementation-evidence/requirement-to-proof.md && test -s fictional-repo/scripts/assert-requirement-proof.py
@@ -145,7 +145,8 @@ result: authority, exact acceptance coverage, and relative Markdown links passed
 
 ## Public operator journey scenarios (bookends:LE-39)
 
-command: python3 scripts/production-journey.py
+fictional setup: fictional-repo/target/debug/loop-engine is built; fictional-repo/implementation-evidence/providers.toml registers the fictional provider; fictional-repo/provider/data/configs/standard.json is unchanged standard-7; fictional-repo/implementation-evidence/journey-fixtures contains the script's named artifact/evidence JSON files. terminal-validation-proof is prepared at validation-adversarial-review with the current validation report but without final satisfying evidence. This static fictional setup is not an actual current-run capture.
+command: python3 scripts/production-journey.py --engine fictional-repo/target/debug/loop-engine --config fictional-repo/implementation-evidence/providers.toml --profile fictional-repo/provider/data/configs/standard.json --fixtures fictional-repo/implementation-evidence/journey-fixtures --terminal-run-id terminal-validation-proof
 command exit status: 0
 caller boundary: separate loop-engine start, show, append, event, and final-show processes against one durable run
 

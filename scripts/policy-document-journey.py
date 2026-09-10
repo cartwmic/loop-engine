@@ -200,6 +200,10 @@ def assert_semantic_review_constructor(engine: Path) -> None:
             dest = root / f"{label}.json"
             copied = load_json(source_profile)
             copied["target"]["path"] = str(target_file.resolve())
+            selected_filter = None
+            if label == "agents-2":
+                selected_filter = {"command": "/tmp/policy-document-selector", "args": ["commission", json.dumps(copied)]}
+                copied["work_slot_bindings"] = {"semantic-review": {"context_filter": selected_filter}}
             target_file.write_text("# target\n", encoding="utf-8")
             write_json(dest, copied)
             source = load_json(dest)
@@ -208,6 +212,7 @@ def assert_semantic_review_constructor(engine: Path) -> None:
             if not isinstance(bindings, dict) or "semantic-review" not in bindings:
                 raise AssertionError(f"{label} constructor omitted semantic-review bindings")
             assert bindings == result["work_slot_bindings"]
+            assert bindings["semantic-review"].get("context_filter") == selected_filter
             workers = fan_out_workers(bindings["semantic-review"], engine=dummy_engine)
             policies = source["semantic_policies"]
             assert all("required_authors" not in policy for policy in policies), label
@@ -411,7 +416,7 @@ def expect_denial(response: dict[str, Any], code: str, phase: str) -> dict[str, 
 
 
 def show_state(engine: Path, database: Path, run_id: str, state: str) -> dict[str, Any]:
-    shown = call(engine, database, ["show", run_id])
+    shown = call(engine, database, ["show", "--view", "full", run_id])
     assert shown["status"] == "completed", shown
     assert shown["result"]["current_state"] == state, shown
     return shown["result"]

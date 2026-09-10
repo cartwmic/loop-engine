@@ -17,6 +17,7 @@ fn main() -> ExitCode {
 }
 
 fn run(args: Vec<String>) -> Result<ExitCode, io::Error> {
+    let invoked_at = std::time::SystemTime::now();
     let invocation = match parse_args(&args) {
         Ok(invocation) => invocation,
         Err(ParseOutcome::Help) => {
@@ -65,6 +66,20 @@ fn run(args: Vec<String>) -> Result<ExitCode, io::Error> {
             Ok(ExitCode::from(1))
         }
         CheckStatus::Bypass { class, reason } => {
+            if let Err(error) = retain_bypass(
+                &repo,
+                opts.receipt_root.as_deref(),
+                class,
+                reason,
+                invoked_at,
+            ) {
+                writeln!(stdout, "RED")?;
+                writeln!(
+                    stdout,
+                    "bypass receipt unavailable; permission refused: {error}"
+                )?;
+                return Ok(ExitCode::from(1));
+            }
             writeln!(stdout, "BYPASS")?;
             writeln!(stdout, "{class}")?;
             writeln!(stdout, "{reason}")?;
@@ -77,6 +92,7 @@ fn run(args: Vec<String>) -> Result<ExitCode, io::Error> {
 struct Opts {
     repo: Option<PathBuf>,
     bypass: Option<(String, String)>,
+    receipt_root: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -108,6 +124,7 @@ fn parse_args(args: &[String]) -> Result<Invocation, ParseOutcome> {
     }
     let mut repo = None;
     let mut bypass = None;
+    let mut receipt_root = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -121,6 +138,19 @@ fn parse_args(args: &[String]) -> Result<Invocation, ParseOutcome> {
                     return Err(ParseOutcome::Usage("missing value for --repo".into()));
                 }
                 repo = Some(PathBuf::from(value));
+            }
+            "--receipt-root" => {
+                i += 1;
+                let value = args.get(i).ok_or_else(|| {
+                    ParseOutcome::Usage("missing value for --receipt-root".into())
+                })?;
+                let path = PathBuf::from(value);
+                if !path.is_absolute() {
+                    return Err(ParseOutcome::Usage(
+                        "--receipt-root must be absolute".into(),
+                    ));
+                }
+                receipt_root = Some(path);
             }
             "--bypass" => {
                 if bypass.is_some() {
@@ -140,7 +170,11 @@ fn parse_args(args: &[String]) -> Result<Invocation, ParseOutcome> {
         }
         i += 1;
     }
-    Ok(Invocation::Check(Opts { repo, bypass }))
+    Ok(Invocation::Check(Opts {
+        repo,
+        bypass,
+        receipt_root,
+    }))
 }
 
 fn run_candidate(path: &PathBuf) -> Result<ExitCode, io::Error> {
@@ -189,12 +223,93 @@ fn parse_bypass(value: &str) -> Result<(String, String), ParseOutcome> {
     Ok((class.to_string(), reason.to_string()))
 }
 
+// A receipt is write-once, synced before permission, and outside the checkout.
+fn retain_bypass(
+    repo: &std::path::Path,
+    root: Option<&std::path::Path>,
+    class: &str,
+    reason: &str,
+    invoked_at: std::time::SystemTime,
+) -> io::Result<()> {
+    use std::process::Command;
+    use std::time::UNIX_EPOCH;
+    let repository = fs::canonicalize(repo)?;
+    let root = match root {
+        Some(root) => root.to_path_buf(),
+        None => env::var_os("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
+            .ok_or_else(|| io::Error::other("no local state directory"))?
+            .join("bookends-check/bypasses"),
+    };
+    fs::create_dir_all(&root)?;
+    let root = fs::canonicalize(root)?;
+    let git_root = Command::new("git")
+        .current_dir(&repository)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()?;
+    if git_root.status.success()
+        && root.starts_with(fs::canonicalize(
+            String::from_utf8_lossy(&git_root.stdout).trim(),
+        )?)
+    {
+        return Err(io::Error::other(
+            "receipt root must be outside the repository",
+        ));
+    }
+    let revision = Command::new("git")
+        .current_dir(&repository)
+        .args(["rev-parse", "--verify", "HEAD"])
+        .output()?;
+    let revision = if revision.status.success() {
+        String::from_utf8_lossy(&revision.stdout).trim().to_owned()
+    } else {
+        format!(
+            "unavailable: {}",
+            String::from_utf8_lossy(&revision.stderr).trim()
+        )
+    };
+    let now = invoked_at
+        .duration_since(UNIX_EPOCH)
+        .map_err(io::Error::other)?;
+    let receipt = std::collections::BTreeMap::from([
+        (
+            "invoked_at_utc_unix_seconds",
+            format!("{}.{:09}", now.as_secs(), now.subsec_nanos()),
+        ),
+        ("repository", repository.display().to_string()),
+        ("revision", revision),
+        ("class", class.to_owned()),
+        ("reason", reason.to_owned()),
+        ("outcome", "BYPASS".to_owned()),
+    ]);
+    let bytes = serde_yaml::to_string(&receipt).map_err(io::Error::other)?;
+    let path = root.join(format!("{}-{}.yaml", now.as_nanos(), std::process::id()));
+    let pending = path.with_extension("pending");
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&pending)?;
+    file.write_all(bytes.as_bytes())?;
+    let mut permissions = file.metadata()?.permissions();
+    permissions.set_readonly(true);
+    file.set_permissions(permissions)?;
+    file.sync_all()?;
+    // Publish a complete receipt without ever replacing an existing record.
+    fs::hard_link(&pending, &path)?;
+    fs::remove_file(pending)?;
+    fs::File::open(root)?.sync_all()?;
+    Ok(())
+}
+
 fn print_help() {
     println!(
         "Usage: bookends-check [--repo <path>] [--bypass <class>:<reason>]\n\
          Usage: bookends-check candidate <markdown-path>\n\n\
          Evaluate the enabled bookends graph, or parse-only validate a PRD\
-         candidate. First stdout line is GREEN, RED, or BYPASS."
+         candidate. First stdout line is GREEN, RED, or BYPASS.\n\
+         --receipt-root <absolute-path> overrides local bypass receipt storage.\n\
+         Bypass permission requires a synced write-once receipt (default: $XDG_STATE_HOME/bookends-check/bypasses or $HOME/.local/state/bookends-check/bypasses)."
     );
 }
 

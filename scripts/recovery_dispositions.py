@@ -61,14 +61,14 @@ def prove(journey):
         write(directory / "profile.json", profile)
         write(artifacts / "intent.json", {"revision": "1", "author": author("subject")})
         call(db, ["--config", str(config), "start", "--id", name, "software-change", "@" + str(directory / "profile.json"), name])
-        call(db, ["show", name])
+        call(db, ["show", "--view", "full", name])
         call(db, ["event", name, "intent-ready"])
-        call(db, ["show", name])
+        call(db, ["show", "--view", "full", name])
         return db, name, artifacts
 
     def append(run, kind, record_id, data):
         db, name, _ = run
-        call(db, ["show", name])
+        call(db, ["show", "--view", "full", name])
         call(db, ["append", name, "--kind", kind, "--record-id", record_id, json.dumps(data)])
 
     def review(run, record_id, reviewer, result="fail", revision="1"):
@@ -100,12 +100,12 @@ def prove(journey):
 
     def event(run, allowed=False, contains=None):
         db, name, _ = run
-        call(db, ["show", name])
+        call(db, ["show", "--view", "full", name])
         result = call(db, ["event", name, "approved"], "completed" if allowed else "rejected")
         if contains:
             assert contains in json.dumps(result), result
         if allowed:
-            show = call(db, ["show", name])
+            show = call(db, ["show", "--view", "full", name])
             assert show["result"]["current_state"] == "design", show
         return result
 
@@ -129,7 +129,7 @@ def prove(journey):
     event(run, contains="a2")
     ledger(run, [finding("a"), finding("a2"), finding("b", "accepted", "resolved")])
     event(run, allowed=True)
-    show = call(run[0], ["show", run[1]])
+    show = call(run[0], ["show", "--view", "full", run[1]])
     records = show["result"]["context"]
     assert next(r["data"] for r in records if r["id"] == "a") == original
     call(run[0], ["history", run[1]])
@@ -187,7 +187,7 @@ def prove(journey):
     resolved["review_axes"] = ["historical-axis"]
     ledger(run, [resolved], "3")
     event(run, allowed=True)
-    show = call(run[0], ["show", run[1]])
+    show = call(run[0], ["show", "--view", "full", run[1]])
     records = show["result"]["context"]
     assert not any(r["kind"] == "evidence-applicability" for r in records)
     assert next(r for r in records if r["id"] == "historical")["data"]["subject_revision"] == "1"
@@ -210,7 +210,7 @@ def prove(journey):
     capture = Path(invoked["result"]["capture_dir"])
     deadline = time.monotonic() + 30
     while True:
-        shown = call(run[0], ["show", run[1]])
+        shown = call(run[0], ["show", "--view", "full", run[1]])
         invocation = next(i for i in shown["result"]["work_slot_invocations"] if i["invocation_id"] == invocation_id)
         if invocation.get("completed_at") is not None:
             assert invocation["status"] == "succeeded", invocation

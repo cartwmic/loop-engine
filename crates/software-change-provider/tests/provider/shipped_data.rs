@@ -998,9 +998,22 @@ fn authoritative_docs_integrate_convergence_contract_and_routes() {
     let provider_prd = shipped_text("docs/prd.md");
     let provider_readme = shipped_text("README.md");
     let engine_prd = shipped_text("../../docs/PRD.md");
+    let skill = shipped_text("skills/using-software-change-provider/SKILL.md");
+    let linked_guidance = format!("{skill}\n{}", shipped_text("data/reviewer-protocol.md"));
+    // The README routes readers to procedure instead of duplicating it.
+    for link in [
+        "](skills/using-software-change-provider/SKILL.md#per-gate-loop)",
+        "](skills/using-software-change-provider/SKILL.md#proportional-late-finding-guide)",
+        "](data/reviewer-protocol.md)",
+    ] {
+        assert!(
+            provider_readme.contains(link),
+            "README missing route: {link}"
+        );
+    }
     for (name, text) in [
         ("provider PRD", provider_prd.as_str()),
-        ("provider README", provider_readme.as_str()),
+        ("README-linked guidance", linked_guidance.as_str()),
         ("engine PRD", engine_prd.as_str()),
     ] {
         for clause in [
@@ -1058,7 +1071,6 @@ fn authoritative_docs_integrate_convergence_contract_and_routes() {
     assert!(agents.contains(
         "](skills/using-software-change-provider/SKILL.md#proportional-late-finding-guide)"
     ));
-    let skill = shipped_text("skills/using-software-change-provider/SKILL.md");
     let late_finding_guide = skill
         .split_once("## Proportional late-finding guide\n")
         .expect("linked late-finding heading must exist")

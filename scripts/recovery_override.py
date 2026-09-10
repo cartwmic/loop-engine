@@ -45,7 +45,7 @@ class Fixture:
         return value.get("result", value)
 
     def show(self):
-        return self.result(["show", self.name])
+        return self.result(["show", "--view", "full", self.name])
 
     def history(self):
         return self.call(["history", self.name])
@@ -83,7 +83,7 @@ class Fixture:
             assert {key: surface[key] for key in expected} == expected, surface
         if terminal:
             assert show["lifecycle"] == "final" and not show["requestable_events"]
-        for args in (["show", self.name], ["show", self.name, "--compact"], ["history", self.name], ["list"]):
+        for args in (["show", "--view", "full", self.name], ["show", self.name, "--compact"], ["history", self.name], ["list"]):
             human = self.call(args, human=True)
             assert "override_count" in human and "has_overrides" in human, human
             if terminal:

@@ -18,7 +18,9 @@ Agent procedure for this crate is [AGENTS.md](AGENTS.md). Drive a standard run w
 
 ## Setup
 
-Standalone releases are published for macOS arm64 and Linux x86_64. Each provider archive contains the `research` executable and both project license texts; verify its `.sha256` checksum before installation.
+Standalone releases are published for macOS arm64 and Linux x86_64. At [Loop Engine releases](https://github.com/cartwmic/loop-engine/releases), choose one release tag and download its matching platform archives for both `research-provider` and `loop-cli` (the latter contains `loop-engine`). Verify the published `.sha256` checksums and place both executables on PATH. No development build is required for binary users.
+
+From that same release page, download and extract GitHub's **Source code** archive for the same tag. It contains the required engine companion `skills/using-loop-engine/SKILL.md` and its related `docs/` guidance. Read those matching files together with the provider skill before start; do not substitute latest-main guidance for an installed release. Keep this guidance checkout separate from the chosen `DATA_ROOT` below: `research data-dump` supplies only the provider tree, not the engine companion.
 
 An installed provider binary carries its shipped workflow data. Materialize that data under a caller-chosen root:
 
@@ -40,7 +42,9 @@ Keep machine-specific `providers.toml` outside committed repository files and pa
 For repository development, build from the checkout instead:
 
 ```sh
+# Run from the repository root.
 cargo build -p research-provider
+DATA_ROOT="$PWD"
 ```
 
 This produces `target/debug/research`; the checkout's `crates/research-provider/data/` tree supplies the development copies of shipped data.
@@ -52,31 +56,38 @@ Build the engine binary too, or replace `target/debug/loop-engine` below with an
 ```sh
 cargo build -p loop-cli -p research-provider -p bookends-check
 ENGINE=target/debug/loop-engine
+DATA_ROOT="$PWD"
+# Register command = "/absolute/checkout/target/debug/research" for this build.
 PROVIDER_CONFIG="/absolute/path/to/your/providers.toml"
 ```
 
-Copy the selected profile to a run-specific file. For installed binaries after `data-dump`, source profiles from `$DATA_ROOT`; for checkout development, set `DATA_ROOT="$PWD"` first. When the human did not explicitly ask to isolate in that session, omit `--database` and omit `artifact_root`. That start stores the run in the user-level catalog and uses an engine-owned per-run artifact directory. This is the production start, not a usual-case option beside a prudent isolate alternative. Existing start examples that already omit both flags remain examples of this required start. Independent runs sharing the user-level catalog do not clobber each other, because each run already receives an engine-owned per-run artifact directory. Occupancy of the catalog by other runs, and fear of affecting those runs, are not reasons to pass `--database` or a nonempty `artifact_root`. An agent must not pass `--database` or a nonempty `artifact_root` unless the human explicitly asked to isolate in that session. Isolation is not a self-chosen precaution. `--database /path/to/dir/loop.db` isolates SQLite and `/path/to/dir/runs/<id>/`. A nonempty `artifact_root` isolates files to a caller-chosen absolute existing directory. Do not treat a prior session's isolation preference as standing authority. Then:
+Copy the selected profile to a run-specific file. For installed binaries after `data-dump`, source profiles from `$DATA_ROOT`; for checkout development, set `DATA_ROOT="$PWD"` first. Before start, load [Setup](skills/using-research-provider/SKILL.md#setup), including canonical engine Deterministic setup. Use the normal user catalog: no database or artifact override unless the human explicitly requests isolation in this session; other runs and old preferences confer no permission. Then:
 
 ```sh
-DATA_ROOT="$HOME/.local/share/research-provider"
-
 cp "$DATA_ROOT/crates/research-provider/data/configs/standard.json" /tmp/research-standard.json
 "$ENGINE" --json --config "$PROVIDER_CONFIG" \
   start research "@/tmp/research-standard.json" "research (standard)"
 ```
 
-`start` returns the run ID at `result.run.id`. The CLI accepts `@FILE` JSON input as shown above. Once the run exists, `show` reveals the allocated (or caller) `artifact_root` inside object `initial_input`. That `show` of current state and instructions arms only the current state visit for `append`, `event`, `invoke`, and `terminate`; call it again after every transition, including a return to the same state. `list`, `history`, and `invocation-progress` do not arm mutation. Completed invocation views expose assignment and selected-attempt identity plus a provider-free change report, but those records are inert until the driver appends research evidence. `start` may insert reserved `artifact_root` into object `initial_input` when the caller did not supply a nonempty path; object schemas that deny unknown keys must accept that field to remain evaluable; the engine does not skip injection, strip unknown keys, or classify providers. Subject files use the fixed filenames expected by the selected schema: `brief.json`, `sources.json`, `verification.json`, and `report.json`.
+`start` returns the run ID at `result.run.id`; `@FILE` supplies JSON input. The engine allocates `artifact_root` in object `initial_input`, visible through `show`. Closed initial-input schemas must allow that reserved field. Subject filenames are `brief.json`, `sources.json`, `verification.json`, and `report.json`.
+
+For observation, invocation evidence and progression, follow [AGENTS.md](AGENTS.md) and the skill's [Required companion and engine driving minimum](skills/using-research-provider/SKILL.md#required-companion-and-engine-driving-minimum). Current-source focused views and default compact delivery with independent full verification are candidate functionality, not upgrades to released v0.19.0 runs. Monitors and advisory summaries never supply research judgments or progression.
+
+## Compatibility limits
+
+Artifact schemas use a bounded language, not general JSON Schema: object supports `type`, `properties`, `required`, `additionalProperties`; array supports `type`, `items`, `minItems`; string supports `type`, `enum`, `minLength`. Numeric/boolean schemas, `$ref`, `oneOf`, and `pattern` are unsupported. See [the schema implementation](src/schema.rs).
 
 ## Validation
 
-Crate tests cover describe, evaluate, shipped data, and data-dump:
+From the repository root, the fresh-binary central runner covers the research integration suites, including describe, evaluate, shipped data and data-dump. The package command covers units only (`autotests = false`):
 
 ```sh
-cargo test -p research-provider
+python3 scripts/run-nextest.py --filter research
+cargo test -p research-provider --lib
 cargo clippy -p research-provider --all-targets -- -D warnings
 ```
 
-Source and packaged journeys live in `scripts/research-journey.py` at the repository root. Those journey commands are harness examples, distinct from the production start; do not copy isolation flags from them into production start. Crate tests remain the local proof surface for protocol, schema, evidence, and shipped data. `scripts/assert-generate-prd-profile.py` proves that the Generate-PRD profile uses the existing research binary and does not add a provider. The source Generate-PRD journey drives that profile with deterministic bound workers, writes `prd-candidate.md` plus exact repository evidence, reaches `end`, and runs `bookends-check candidate`; it does not edit `docs/PRD.md` or commit. The software-change journey `--self-test` executes this crate's verify and synthesize constructors against `data/configs/standard.json` and prints `worker-data skill/root policy assertions passed` only after worker count/order, axis/`example_prompt`/author/model metadata, required keys/data bytes/preview visibility, and fail-closed invalid cases pass.
+Source and packaged journeys live in `scripts/research-journey.py` at the repository root. Those journey commands are harness examples, distinct from the production start; do not copy isolation flags from them into production start. The central integration suites are the local proof surface for protocol, schema, evidence and shipped data; focused checks supplement the workspace completion gate in repository-root AGENTS.md. `scripts/assert-generate-prd-profile.py` proves that the Generate-PRD profile uses the existing research binary and does not add a provider. The source Generate-PRD journey drives that profile with deterministic bound workers, writes `prd-candidate.md` plus exact repository evidence, reaches `end`, and runs `bookends-check candidate`; it does not edit `docs/PRD.md` or commit. The software-change journey `--self-test` executes this crate's verify and synthesize constructors against `data/configs/standard.json` and prints `worker-data skill/root policy assertions passed` only after worker count/order, axis/`example_prompt`/author/model metadata, required keys/data bytes/preview visibility, and fail-closed invalid cases pass.
 
 ## Shipped data
 
@@ -87,7 +98,7 @@ These are the shipped files consumed by provider tests, guidance, and review pro
 - [data/configs/standard.json](data/configs/standard.json) (`config_version` `research-1`; verify axes `claim-grounded` and `adversarial`; synthesize axes `cited-conclusion` and `scope-faithful`)
 - [data/configs/generate-prd.json](data/configs/generate-prd.json) (the same research topology and schemas, with Generate-PRD templates)
 
-Generate-PRD candidate IDs are provisional proposals. A human must accept or reject `prd-candidate.md` before any commit to `docs/PRD.md`; the profile never auto-commits or claims semantic completeness.
+The synthetic Generate-PRD journey fixture performs three predetermined repository lookups; that bounded test is not an exhaustive semantic audit. Real extraction follows the [Generate-PRD skill](skills/using-generate-prd/SKILL.md), which requires repository discovery without a predetermined requirement list. Generate-PRD candidate IDs are provisional proposals. A human must accept or reject `prd-candidate.md` before any commit to `docs/PRD.md`; the profile never auto-commits or claims semantic completeness.
 
 ### Templates
 

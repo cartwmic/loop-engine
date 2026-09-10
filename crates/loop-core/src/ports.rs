@@ -959,6 +959,15 @@ pub trait Persistence {
     /// semantic history.
     fn load_show_data(&self, run_id: &RunId) -> Result<ShowData, PersistenceError>;
 
+    /// Consistent passive snapshot. Must never arm a visit or write history.
+    /// Older adapters refuse rather than fall back to the arming show read.
+    fn load_status_data(&self, _run_id: &RunId) -> Result<ShowData, PersistenceError> {
+        Err(PersistenceError::failure(PersistenceFailure::new(
+            "status-read-unsupported",
+            "this persistence adapter has no non-arming status read",
+        )))
+    }
+
     /// Create a running engine-authored invocation record (stored status
     /// `None`) and append `HistoryAction::InvocationStarted`.
     fn create_work_slot_invocation(

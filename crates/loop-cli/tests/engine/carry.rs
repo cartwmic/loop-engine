@@ -124,7 +124,7 @@ fn cli(database: &Path, args: &[&str]) -> (i32, Value, String) {
 }
 
 fn show(database: &Path) -> Value {
-    let (_, value, _) = cli(database, &["show", "stable-run"]);
+    let (_, value, _) = cli(database, &["show", "--view", "full", "stable-run"]);
     value
 }
 

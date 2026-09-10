@@ -10,6 +10,7 @@ from pathlib import Path
 
 def prove(journey):
     helpers = importlib.import_module("software-change-journey")
+    from work_slot_journey import assert_projected_fan_out_capture
     journey.work_root.mkdir(parents=True, exist_ok=True)
     root = Path(tempfile.mkdtemp(prefix="recovery-batch-", dir=journey.work_root))
     print(f"batched-review captures: {root}", flush=True)
@@ -73,15 +74,18 @@ def prove(journey):
         prefix = root / f"{len(transcript):04d}-{args[0]}"
         prefix.with_suffix(".stdout.json").write_bytes(proc.stdout)
         prefix.with_suffix(".stderr").write_bytes(proc.stderr)
-        transcript.append({"database": str(db), "argv": args, "exit": proc.returncode,
-                           "stdout": str(prefix.with_suffix(".stdout.json"))})
+        transcript.append({"database": str(db),
+                           "argv": [str(journey.engine), "--database", str(db), "--json", *args],
+                           "cwd": str(journey.data_root), "exit": proc.returncode,
+                           "stdout": str(prefix.with_suffix(".stdout.json")),
+                           "stderr": str(prefix.with_suffix(".stderr"))})
         write(root / "transcript.json", transcript)
         assert value["status"] == expected, value
         assert proc.returncode == {"completed": 0, "rejected": 10, "error": 20}[expected], value
         return value
 
     def show(run):
-        return call(run, ["show", run["id"]])
+        return call(run, ["show", "--view", "full", run["id"]])
 
     def append(run, kind, record, value):
         show(run)
@@ -109,8 +113,8 @@ import json, sys
 from pathlib import Path
 packet = sys.stdin.read()
 settings = json.loads(Path(__file__).with_name("mode.json").read_text())
-policies = json.loads(next(s.removeprefix("assigned_policies: ") for s in packet.splitlines() if s.startswith("assigned_policies: ")))
-name = next(s.removeprefix("required_author_claim: ") for s in packet.splitlines() if s.startswith("required_author_claim: "))
+policies = json.loads(next((s.removeprefix("assigned_policies: ") for s in packet.splitlines() if s.startswith("assigned_policies: ")), '[{"id":"alpha"},{"id":"beta"}]'))
+name = next((s.removeprefix("required_author_claim: ") for s in packet.splitlines() if s.startswith("required_author_claim: ")), "reviewer-a")
 rows = [{"axis": p["id"], "result": "pass", "findings": ""} for p in policies]
 mode = settings["mode"]
 if mode in ("mixed", "retry-mixed"):
@@ -124,11 +128,11 @@ if mode == "reuse": rows[-1] = {"axis": rows[-1]["axis"], "reuse": settings["reu
 # Deliberately reverse output order: candidates must use assignment order.
 output = {"author": {"name": name, "kind": "agent"}, "judgments": list(reversed(rows))}
 with Path(__file__).with_name("launches.jsonl").open("a") as f:
-    f.write(json.dumps({"argv": sys.argv, "mode": mode, "retry": "SCHEMA-CONFORMANCE RETRY" in packet, "output": output}) + "\\n")
+    f.write(json.dumps({"argv": sys.argv, "mode": mode, "stdin": packet, "retry": "SCHEMA-CONFORMANCE RETRY" in packet, "output": output}) + "\\n")
 print(json.dumps(output))
 '''
 
-    def start(name, mode="pass", required=1, separate=False):
+    def start(name, mode="pass", required=1, separate=False, plain=False):
         directory = root / name
         directory.mkdir()
         artifacts = directory / "artifacts"
@@ -154,6 +158,15 @@ print(json.dumps(output))
         built = subprocess.run(args, capture_output=True, check=True)
         profile_path.write_bytes(built.stdout)
         profile = json.loads(built.stdout)
+        if plain:
+            args = profile["work_slot_bindings"]["intent-review"]["args"]
+            for index, arg in enumerate(args):
+                if arg == "--worker":
+                    worker_cli = json.loads(args[index + 1])
+                    worker_cli.pop("preamble", None)
+                    worker_cli["args"] = []
+                    args[index + 1] = json.dumps(worker_cli)
+            write(profile_path, profile)
         write(artifacts / "intent.json", {"revision": "1", "author": author("subject")})
         run = {"id": name, "db": directory / "loop.sqlite", "artifacts": artifacts,
                "directory": directory, "profile": profile, "binding": profile["work_slot_bindings"]["intent-review"]}
@@ -179,6 +192,17 @@ print(json.dumps(output))
             invocation = next(i for i in shown["result"]["work_slot_invocations"] if i["invocation_id"] == identity)
             if invocation.get("completed_at") is not None:
                 assert invocation["status"] == expected, invocation
+                measurement = assert_projected_fan_out_capture(invocation)
+                launches = [json.loads(line) for line in (run["directory"] / "launches.jsonl").read_text().splitlines()]
+                spec = json.loads((Path(invocation["capture_dir"]) / "fan-out-spec.json").read_text())
+                for worker in spec["workers"]:
+                    delivered = Path(worker["stdin_path"]).read_text()
+                    assert any(launch["stdin"] == delivered for launch in launches)
+                    location = json.loads(delivered.removesuffix("---\n\n").rstrip().splitlines()[-1])
+                    assert location["artifact_root"] == str(run["artifacts"])
+                proof.setdefault("projection_measurements", []).append(dict(
+                    measurement, invocation_id=identity))
+                write(root / "proof.json", proof)
                 return shown, invocation
             assert time.monotonic() < deadline, invocation
             time.sleep(0.1)
@@ -190,8 +214,17 @@ print(json.dumps(output))
                                   capture_output=True, check=True)
             results.append(proc.stdout)
         assert results[0] == results[1], "normalization must be deterministic and read-only"
-        path = root / f"{invocation['invocation_id']}-candidates.json"
+        calls = proof.setdefault("candidate_calls", [])
+        path = root / f"{invocation['invocation_id']}-candidates-{len(calls):04d}.json"
         path.write_bytes(results[0])
+        input_path = path.with_suffix(".input.json")
+        write(input_path, shown)
+        stderr_path = path.with_suffix(".stderr")
+        stderr_path.write_bytes(proc.stderr)
+        calls.append({"argv": [str(journey.provider), "review-candidates"],
+            "cwd": str(Path.cwd()), "exit": proc.returncode, "stdin": str(input_path),
+            "stdout": str(path), "stderr": str(stderr_path), "identical_repetitions": 2})
+        write(root / "proof.json", proof)
         return [r for r in json.loads(results[0])["candidates"] if r["origin"]["id"] == invocation["invocation_id"]]
 
     def evidence(run, row, revision="1", record=None):
@@ -266,7 +299,11 @@ print(json.dumps(output))
 
     # Confirmation keeps the original binding and exact full axis set. A late
     # applicability append cannot authorize an already-started batch retroactively.
-    run = start("focused-confirmation")
+    run = start("focused-confirmation", plain=True)
+    append(run, "fixture-context", "meaningful-nested", {
+        "judgments": [{"result": "fail", "findings": "retain this meaningful statement"}],
+        "nested": {"loop_engine_origin": {"note": "ordinary nested data, not provenance"}},
+        "ordered": [3, 1, 2]})
     shown, first = invoke(run)
     for row in project(shown, first):
         evidence(run, row, record=row["axis"] + "-old")
@@ -296,7 +333,42 @@ print(json.dumps(output))
         json.dumps({"origin": {"kind": "selected-assignment-output", "id": forced["invocation_id"], "assignment_id": "worker-0"}})], "rejected")
     event(run)
     shown, current = invoke(run)
+    assert proof["projection_measurements"][-1]["engine_origins"] >= 2
+    full_before = show(run)
+    history_before = call(run, ["history", run["id"]])
+    capture_spec_path = Path(current["capture_dir"]) / "fan-out-spec.json"
+    original_spec = capture_spec_path.read_bytes()
     rows = project(shown, current)
+    evidence(run, rows[0], "2", "alpha-before-corruption")
+    for snapshot in (None, {}, [{"data": {}}]):
+        corrupted = json.loads(original_spec)
+        if snapshot is None:
+            del corrupted["workers"][0]["routed_inputs"]
+        else:
+            corrupted["workers"][0]["routed_inputs"] = snapshot
+        write(capture_spec_path, corrupted)
+        try:
+            assert project(show(run), current)[0]["status"] == "malformed"
+            event(run)  # Real provider evaluation must refuse the captured evidence too.
+        finally:
+            capture_spec_path.write_bytes(original_spec)
+    current_context = show(run)["result"]["context"]
+    assert current_context[:len(full_before["result"]["context"])] == full_before["result"]["context"]
+    current_history = call(run, ["history", run["id"]])["result"]
+    assert current_history[:len(history_before["result"])] == history_before["result"]
+    selected_output = Path(current["inner_workers"][0]["selected_output_path"])
+    original_output = selected_output.read_bytes()
+    selected_output.write_bytes(original_output + b" ")
+    try:
+        assert project(show(run), current)[0]["status"] != "ready"
+        event(run)
+    finally:
+        selected_output.write_bytes(original_output)
+    show(run)
+    call(run, ["append", run["id"], "--kind", "review-evidence", "--record-id", "wrong-assignment",
+        json.dumps({"origin": {"kind": "selected-assignment-output", "id": current["invocation_id"],
+                              "assignment_id": "not-the-selected-worker"}})], "rejected")
+    rows = project(show(run), current)
     assert [r["status"] for r in rows] == ["ready", "carried"]
     assert rows[1]["applicability_id"] == "carry-beta"
     assert rows[0]["origin"] == rows[1]["origin"]

@@ -2,8 +2,9 @@ use loop_core::{ContextRecord, DurableEvaluation, Transition, Workflow};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-/// `initial_input` is accepted and ignored so engine start can always send the
-/// caller object. Topology stays input-independent. Unknown keys fail closed.
+/// Topology stays input-independent. Describe uses optional initial bindings only
+/// to preserve the no-attachment catalog for older unfiltered bound workers.
+/// Unknown request keys fail closed.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DescribeRequest {

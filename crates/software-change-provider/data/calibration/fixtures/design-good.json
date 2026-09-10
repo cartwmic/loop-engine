@@ -83,7 +83,7 @@
   "risks": [
     {
       "risk": "An author may edit an artifact materially without changing its declared revision.",
-      "mitigation": "Trust this residual explicitly and recheck the current declared artifact at every approval boundary."
+      "mitigation": "The external actor must bump the revision and obtain renewed review for material edits; recheck the current declared artifact at every approval boundary. The provider still trusts declared revisions and cannot detect dishonest same-revision edits. Only the intent's immaterial-edit residual is accepted; no hashing, locking, or provider-side semantic enforcement is added."
     },
     {
       "risk": "A shipped profile may contain an unsupported bounded-schema keyword or revision-link mismatch, making configured obligations unavailable or misapplied.",

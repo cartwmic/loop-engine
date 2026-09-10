@@ -63,62 +63,28 @@ jobs:
         run: |
           set -euo pipefail
           target='${{ matrix.target }}'
-          extract="$RUNNER_TEMP/extracted-$target"
-          software_data_root="$RUNNER_TEMP/software-change-data-$target"
-          software_work_root="$RUNNER_TEMP/software-change-work-$target"
-          policy_data_root="$RUNNER_TEMP/policy-document-data-$target"
-          research_data_root="$RUNNER_TEMP/research-data-$target"
-          smoke_cwd="$RUNNER_TEMP/packaged-smoke-cwd-$target"
-          checkout_root="$(cd "$GITHUB_WORKSPACE" && pwd -P)"
-          rm -rf \
-            "$extract" "$software_data_root" "$software_work_root" \
-            "$policy_data_root" "$research_data_root" "$smoke_cwd"
-          mkdir -p "$extract" "$software_work_root" "$research_data_root" "$smoke_cwd"
-
+          version="$(python3 -c 'import json,sys; v={r["app_version"] for r in json.load(open(sys.argv[1]))["releases"]}; assert len(v)==1; print(v.pop())' "$RUNNER_TEMP/dist-plan.json")"
+          identity="$RUNNER_TEMP/package-identity-$target.json"
+          args=()
           for app in loop-cli software-change-provider policy-document-provider research-provider; do
-            archive="target/distrib/${app}-${target}.tar.xz"
-            test -f "$archive"
-            tar -xJf "$archive" -C "$extract"
+            archive="$GITHUB_WORKSPACE/target/distrib/${app}-${target}.tar.xz"
+            checksum="$(awk '{print $1}' "$archive.sha256")"
+            args+=(--archive "$app=$archive" --checksum "$app=$checksum")
           done
-
-          engine="$(find "$extract" -type f -name loop-engine -perm -u+x -print -quit)"
-          software_provider="$(find "$extract" -type f -name software-change -perm -u+x -print -quit)"
-          policy_provider="$(find "$extract" -type f -name policy-document -perm -u+x -print -quit)"
-          research_provider="$(find "$extract" -type f -name research -perm -u+x -print -quit)"
-          test -n "$engine"
-          test -n "$software_provider"
-          test -n "$policy_provider"
-          test -n "$research_provider"
-
-          # Packaged proof must not inherit checkout-relative provider data or cwd.
-          cd "$smoke_cwd"
-          test "$(pwd -P)" != "$checkout_root"
-          test -z "$(ls -A "$smoke_cwd")"
-          printf 'packaged smoke cwd outside checkout: %s (checkout: %s)\n' \
-            "$(pwd -P)" "$checkout_root"
-          python3 "$GITHUB_WORKSPACE/scripts/software-change-journey.py" \
-            --mode packaged \
-            --engine "$engine" \
-            --provider "$software_provider" \
-            --data-root "$software_data_root" \
-            --work-root "$software_work_root" \
-            --profile high-rigor.json \
-            --traversal-depth checked-prefix
-
-          "$policy_provider" data-dump "$policy_data_root"
-          policy_profile="$policy_data_root/crates/policy-document-provider/data/readme.json"
-          test -f "$policy_profile"
-          for mode in draft audit; do
-            python3 "$GITHUB_WORKSPACE/scripts/policy-document-journey.py" \
-              --engine "$engine" \
-              --provider "$policy_provider" \
-              --profile "$policy_profile" \
-              --mode "$mode"
-          done
-
-          python3 "$GITHUB_WORKSPACE/scripts/research-journey.py" \
-            --mode packaged \
-            --engine "$engine" \
-            --provider "$research_provider" \
-            --data-root "$research_data_root" \
-            --profile standard.json
+          python3 - "$identity" "$version" "$target" "$GITHUB_WORKSPACE/target/distrib" <<'PYIDENTITY'
+          import json, pathlib, sys
+          output, version, target, root = sys.argv[1:]
+          apps = ('loop-cli', 'software-change-provider', 'policy-document-provider', 'research-provider')
+          hashes = {app: (pathlib.Path(root) / f'{app}-{target}.tar.xz.sha256').read_text().split()[0] for app in apps}
+          pathlib.Path(output).write_text(json.dumps(dict(version=version, platform=target, sha256=hashes)))
+          PYIDENTITY
+          python3 "$GITHUB_WORKSPACE/scripts/packaged-smoke.py" \
+            --mode archive --expected-version "$version" --platform "$target" \
+            --output-root "$RUNNER_TEMP/packaged-smoke-$target" \
+            --package-identity "$identity" "${args[@]}"
+      - name: Preserve packaged smoke captures
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: packaged-smoke-${{ matrix.target }}
+          path: ${{ runner.temp }}/packaged-smoke-${{ matrix.target }}/

@@ -192,6 +192,8 @@ fn run_show_json(database: &Path, run_id: &str, path: OsString) -> std::process:
             "--database",
             database.to_str().expect("utf-8 database"),
             "show",
+            "--view",
+            "full",
             run_id,
         ])
         .env("PATH", path)
@@ -291,9 +293,15 @@ fn public_compact_show_covers_running_completed_and_unavailable_progress() {
     let running_again = run_show_compact(&database, "run-compact-running", dagu_path.clone());
     assert!(running_again.status.success());
     assert_eq!(
-        running.stdout, running_again.stdout,
-        "compact output must not change with observation time for unchanged running state"
+        running_text.lines().take(8).collect::<Vec<_>>(),
+        String::from_utf8_lossy(&running_again.stdout)
+            .lines()
+            .take(8)
+            .collect::<Vec<_>>(),
+        "concise status header remains stable; the dated status details carry sample time"
     );
+    assert!(running_text.contains("\"mutation_armed\":false"));
+    assert!(running_text.contains("\"observed_at\":"));
     assert!(load_status(&database, "run-compact-running").is_none());
 
     let running_progress = run_progress(&database, "run-compact-running", dagu_path.clone());
@@ -429,7 +437,9 @@ fn public_compact_show_covers_running_completed_and_unavailable_progress() {
 }
 
 #[test]
-fn public_compact_json_combination_is_a_clear_parse_error() {
+fn public_compact_json_combination_is_non_arming_status() {
+    let root = tempdir().expect("tempdir");
+    let database = root.path().join("loop.sqlite");
     for selector in [
         "--json",
         "--machine-readable",
@@ -438,14 +448,21 @@ fn public_compact_json_combination_is_a_clear_parse_error() {
         "--output=json",
     ] {
         let output = Command::new(workspace_integration::binary("loop-engine"))
-            .args([selector, "show", "--compact", "run-1"])
-            .bounded_output("loop-engine incompatible compact JSON")
-            .expect("run incompatible compact JSON");
-        assert_eq!(output.status.code(), Some(2), "selector {selector}");
-        let payload: Value = serde_json::from_slice(&output.stdout).expect("JSON invocation error");
-        assert_eq!(payload["status"], "invalid-invocation");
-        assert!(payload["message"].as_str().unwrap().contains("human-only"));
-        assert!(payload["message"].as_str().unwrap().contains("--json"));
+            .args([
+                "--database",
+                database.to_str().unwrap(),
+                selector,
+                "show",
+                "--compact",
+                "run-1",
+            ])
+            .bounded_output("loop-engine compact JSON status")
+            .expect("run compact JSON");
+        assert_eq!(output.status.code(), Some(20), "selector {selector}");
+        let payload: Value =
+            serde_json::from_slice(&output.stdout).expect("JSON missing run error");
+        assert_eq!(payload["status"], "error");
+        assert_eq!(payload["code"], "run-not-found");
     }
 }
 

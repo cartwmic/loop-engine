@@ -199,7 +199,7 @@ def assert_bound_redaction(
     text = shown.get("current_state_instructions")
     if not isinstance(text, str) or not text:
         raise WorkSlotJourneyFailure("show omitted current_state_instructions")
-    args_json = json.dumps(list(args))
+    args_json = json.dumps(list(args), separators=(",", ":"))
     expected = (
         f"Bound work slot `{slot_id}` is configured. "
         f"Frozen worker CLI: command={command} args={args_json}. "
@@ -208,6 +208,7 @@ def assert_bound_redaction(
         "Captures are at the named capture directory on the invocation view and invoke result. "
         "The driver triages worker output, appends provider-shaped records, then requests the shown event. "
         "On overrun wait; cancel-invocation requires recorded local ownership and refuses historical invocations without it. Live owned work and pending cleanup block retry and state departure. "
+        "Run show immediately before reinvoking the same slot. "
         "On failed inspect capture_dir/summary.json and captured stdout before stderr. "
         "Consult the change report of record before reuse. "
         "For review reuse, append one evidence-applicability record referencing the "
@@ -385,7 +386,7 @@ def invoke_until_succeeded(
     deadline = time.monotonic() + timeout_s
     last_status = None
     while time.monotonic() < deadline:
-        shown = engine_call(["show", run_id])
+        shown = engine_call(["show", "--view", "full", run_id])
         if shown.get("status") != "completed":
             raise WorkSlotJourneyFailure(f"show after invoke failed: {shown}")
         projection = shown["result"]
@@ -489,7 +490,7 @@ def prove_bound_visit(
     stdin_context_kinds: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, Any]:
     """Prove sparse binding, redaction, gate, dummy packet, and history."""
-    shown_response = engine_call(["show", run_id])
+    shown_response = engine_call(["show", "--view", "full", run_id])
     if shown_response.get("status") != "completed":
         raise WorkSlotJourneyFailure(f"show failed: {shown_response}")
     shown = shown_response.get("result")
@@ -518,7 +519,7 @@ def prove_bound_visit(
         BOUND_SLOT_INVOCATION_REQUIRED,
         action="gated event",
     )
-    still = engine_call(["show", run_id])
+    still = engine_call(["show", "--view", "full", run_id])
     if still.get("status") != "completed":
         raise WorkSlotJourneyFailure(f"show after gated event failed: {still}")
     still_result = still.get("result")
@@ -706,6 +707,55 @@ def contracted_stdin_worker_cli(
     cli["preamble"] = preamble
     cli["output_schema"] = {"required": list(required)}
     return cli
+
+
+def assert_projected_fan_out_capture(invocation: Mapping[str, Any]) -> dict[str, int]:
+    """Compare truthful delivered bytes with independent, full bound routing."""
+    capture = Path(invocation["capture_dir"])
+    spec = json.loads((capture / "fan-out-spec.json").read_text())
+    # bookends:LE-127 — real bound invoke captures retain independent full routing;
+    # the assertions below compare actual stdin, meaningful context and byte reduction.
+    assert spec["capture_format"] == "bound-context-projection-v1"
+    full = invocation["routed_inputs"]
+    projected = json.loads(json.dumps(full))
+    origins = 0
+    for record in projected:
+        if "loop_engine_origin" in record.get("data", {}):
+            origins += 1
+            del record["data"]["loop_engine_origin"]
+    summary = json.loads((capture / "summary.json").read_text())
+    saved = {w["assignment_id"]: w for w in summary["workers"]}
+    for worker in invocation["inner_workers"]:
+        assert worker["routed_inputs"] == full
+    declared_args = invocation["binding"]["args"]
+    declarations = [json.loads(declared_args[i + 1]) for i, arg in enumerate(declared_args)
+                    if arg == "--worker"]
+    delivered_size = full_size = 0
+    for worker in spec["workers"]:
+        assert worker["routed_inputs"] == full
+        assert saved[worker["assignment_id"]]["routed_inputs"] == full
+        raw = Path(worker["stdin_path"]).read_bytes()
+        location_line = raw.removesuffix(b"---\n\n").rstrip().splitlines()[-1]
+        location = json.loads(location_line)
+        assert location.get("context", []) == projected
+        declaration = declarations[int(worker["assignment_id"].removeprefix("worker-"))]
+        preamble = declaration.get("preamble")
+        expected_bytes = location_line + b"\n"
+        if preamble is not None:
+            expected_bytes = preamble.encode() + (b"" if preamble.endswith("\n") else b"\n") + expected_bytes + b"---\n\n"
+        assert raw == expected_bytes, "current instructions and preamble composition changed"
+        if invocation["controls"].get("force_fresh"):
+            assert location["controls"] == invocation["controls"]
+        else:
+            assert "controls" not in location
+        equivalent = dict(location, context=full)
+        full_line = json.dumps(equivalent, separators=(",", ":"), ensure_ascii=False).encode()
+        delivered_size += len(raw)
+        full_size += len(raw) - len(location_line) + len(full_line)
+    if origins:
+        assert delivered_size < full_size
+    return {"engine_origins": origins, "delivered_bytes": delivered_size,
+            "equivalent_full_bytes": full_size}
 
 
 def compact_artifact_root_stdin(artifact_root: Path | str) -> bytes:
@@ -1371,7 +1421,7 @@ def _advance_software_change_to(
     artifact_root: Path,
     target: str,
 ) -> None:
-    shown = engine_call(["show", run_id])
+    shown = engine_call(["show", "--view", "full", run_id])
     if shown.get("status") != "completed":
         raise WorkSlotJourneyFailure(f"show before advance failed: {shown}")
     current = (shown.get("result") or {}).get("current_state")
@@ -1403,13 +1453,13 @@ def _advance_software_change_to(
                 record_prefix=f"{run_id}-",
             )
         _expect_event_state(engine_call, run_id, event, nxt)
-        observed = engine_call(["show", run_id])
+        observed = engine_call(["show", "--view", "full", run_id])
         if observed.get("status") != "completed":
             raise WorkSlotJourneyFailure(
                 f"show after advancing to {nxt} failed: {observed}"
             )
         if nxt == target:
-            shown = engine_call(["show", run_id])
+            shown = engine_call(["show", "--view", "full", run_id])
             if shown.get("status") != "completed":
                 raise WorkSlotJourneyFailure(
                     f"show after advancing to {target} failed: {shown}"
@@ -1470,7 +1520,7 @@ def _start_isolated_software_change(
             and len(operation) > 1
             and response.get("status") in {"completed", "rejected"}
         ):
-            observed = _engine_json(engine, database, ["show", run_id])
+            observed = _engine_json(engine, database, ["show", "--view", "full", run_id])
             if observed.get("status") != "completed":
                 raise WorkSlotJourneyFailure(
                     f"show after {operation[0]} failed: {observed}"
@@ -1496,7 +1546,7 @@ def _start_isolated_software_change(
     if started.get("status") != "completed":
         raise WorkSlotJourneyFailure(f"isolated start failed: {started}")
     if observe_start:
-        observed = engine_call(["show", run_id])
+        observed = engine_call(["show", "--view", "full", run_id])
         if observed.get("status") != "completed":
             raise WorkSlotJourneyFailure(f"isolated start observation failed: {observed}")
     return engine_call, artifact_root, profile
@@ -2559,7 +2609,7 @@ def prove_engine_standing_join(
     def engine_call(operation: Sequence[str]) -> dict[str, Any]:
         return _engine_json(engine, database, operation)
 
-    shown = engine_call(["show", run_id])
+    shown = engine_call(["show", "--view", "full", run_id])
     if shown.get("status") != "completed":
         raise WorkSlotJourneyFailure(f"standing join initial show failed: {shown}")
     recorded = invoke_until_succeeded(
@@ -2598,7 +2648,7 @@ def prove_engine_standing_join(
     finally:
         connection.close()
 
-    dirty_show = engine_call(["show", run_id])
+    dirty_show = engine_call(["show", "--view", "full", run_id])
     plan_results = dirty_show.get("result", {}).get("change_report", {}).get(
         "plan_task_results", []
     )
@@ -2651,7 +2701,7 @@ def prove_engine_standing_join(
                 f"retired {kind} operation was not rejected: {retired}"
             )
 
-    post_retirement_show = engine_call(["show", run_id])
+    post_retirement_show = engine_call(["show", "--view", "full", run_id])
     if post_retirement_show.get("status") != "completed":
         raise WorkSlotJourneyFailure(f"standing join re-show failed: {post_retirement_show}")
     post_results = post_retirement_show.get("result", {}).get("change_report", {}).get(
@@ -2834,6 +2884,13 @@ def prove_fan_out(*, engine: Path, work_dir: Path) -> list[str]:
         raise WorkSlotJourneyFailure(f"ad hoc collector omitted output_dir: {adhoc_summary}")
     _assert_capture_files(Path(adhoc_dir), ("0", "1"))
     _assert_yaml_omits_max_active_steps(Path(adhoc_dir))
+    json_looking = b'{"context":[{"data":{"loop_engine_origin":{"keep":"exact"}}}]}  '
+    instructions.write_bytes(json_looking)
+    json_adhoc = _run_binding(adhoc_binding, stdin=b"", cwd=adhoc_root)
+    assert json_adhoc.returncode == 0, json_adhoc.stderr
+    assert adhoc_a.read_bytes() == json_looking == adhoc_b.read_bytes()
+    json_capture = Path(_json_stdout(json_adhoc)["output_dir"])
+    assert "capture_format" not in json.loads((json_capture / "fan-out-spec.json").read_text())
 
     return [
         "PATH rewrite loop-engine -> built engine",
@@ -3066,7 +3123,7 @@ def _prove_self_loop_requires_reobservation(*, engine: Path, work_dir: Path) -> 
     )
     if started.get("status") != "completed":
         raise WorkSlotJourneyFailure(f"self-loop proof start failed: {started}")
-    observed = _engine_json(engine, database, ["show", run_id])
+    observed = _engine_json(engine, database, ["show", "--view", "full", run_id])
     if observed.get("status") != "completed":
         raise WorkSlotJourneyFailure(f"self-loop proof show failed: {observed}")
     looped = _engine_json(engine, database, ["event", run_id, "loop"])
@@ -3077,7 +3134,7 @@ def _prove_self_loop_requires_reobservation(*, engine: Path, work_dir: Path) -> 
         raise WorkSlotJourneyFailure(
             f"self-loop reused the prior observation token: {unobserved}"
         )
-    reobserved = _engine_json(engine, database, ["show", run_id])
+    reobserved = _engine_json(engine, database, ["show", "--view", "full", run_id])
     if reobserved.get("status") != "completed":
         raise WorkSlotJourneyFailure(f"self-loop re-show failed: {reobserved}")
     appended = _engine_json(
@@ -3127,7 +3184,7 @@ def prove_observation_before_mutation(
         raise WorkSlotJourneyFailure(
             f"list/invocation-progress unexpectedly armed append: {unarmed_append}"
         )
-    observed_start = _engine_json(engine, database, ["show", run_id])
+    observed_start = _engine_json(engine, database, ["show", "--view", "full", run_id])
     if observed_start.get("status") != "completed":
         raise WorkSlotJourneyFailure(f"show after safe-read proof failed: {observed_start}")
     invoke_until_succeeded(engine_call, run_id, "intent-draft", timeout_s=20.0)
@@ -3164,13 +3221,13 @@ def prove_observation_before_mutation(
     for operation, response in zip(operations, refusals):
         if response.get("status") != "rejected" or response.get("code") != "run-not-observed":
             raise WorkSlotJourneyFailure(f"unobserved {operation[0]} was not refused: {response}")
-    after = _engine_json(engine, database, ["show", run_id])
+    after = _engine_json(engine, database, ["show", "--view", "full", run_id])
     history_after = _engine_json(engine, database, ["history", run_id])
     if after.get("result", {}).get("current_state") != "intent-review":
         raise WorkSlotJourneyFailure(f"unobserved mutations changed state: {after}")
     if history_after.get("result") != history_after_event.get("result"):
         raise WorkSlotJourneyFailure("unobserved mutations changed semantic history")
-    armed = _engine_json(engine, database, ["show", run_id])
+    armed = _engine_json(engine, database, ["show", "--view", "full", run_id])
     if armed.get("status") != "completed":
         raise WorkSlotJourneyFailure(f"show did not arm mutation: {armed}")
     appended = _engine_json(
@@ -3254,7 +3311,7 @@ def prove_invoke_subset(
         )
     if overlay.get("assignment_selection") != ["worker-1"]:
         raise WorkSlotJourneyFailure(f"invoke subset was not durable: {overlay}")
-    shown = engine_call(["show", "invoke-subset"])
+    shown = engine_call(["show", "--view", "full", "invoke-subset"])
     if shown.get("status") != "completed":
         raise WorkSlotJourneyFailure(f"subset show failed: {shown}")
     frozen = shown.get("result", {}).get("initial_input", {}).get("work_slot_bindings", {})
@@ -3479,7 +3536,7 @@ def prove_selected_attempt_ledger_linkage(
         "routed_inputs",
     }.issubset(dimensions):
         raise WorkSlotJourneyFailure(f"judgment change report omitted covered dimensions: {invocation_report}")
-    repeated = engine_call(["show", run_id])
+    repeated = engine_call(["show", "--view", "full", run_id])
     repeated_invocation = next(
         item for item in repeated.get("result", {}).get("work_slot_invocations", [])
         if item.get("invocation_id") == overlay.get("invocation_id")
@@ -3602,7 +3659,7 @@ def prove_selected_attempt_ledger_linkage(
         raise WorkSlotJourneyFailure(
             f"selected-attempt ledger linkage did not reach review evidence: {denied}"
         )
-    failure_show = engine_call(["show", run_id])
+    failure_show = engine_call(["show", "--view", "full", run_id])
     failure_context = failure_show.get("result", {}).get("context", [])
     failure_ledger = next(
         (
@@ -3946,7 +4003,7 @@ def prove_selected_attempt_ledger_linkage(
         raise WorkSlotJourneyFailure(
             f"current applicability declaration was not appended: {applicability_result}"
         )
-    resumed = engine_call(["show", run_id])
+    resumed = engine_call(["show", "--view", "full", run_id])
     contexts = resumed.get("result", {}).get("context", [])
     applicability_record = next(
         (
@@ -4233,7 +4290,7 @@ def prove_subset_applicability_checked(
     if applicability_result.get("status") != "completed":
         raise WorkSlotJourneyFailure(f"applicability append failed: {applicability_result}")
 
-    shown = engine_call(["show", run_id])
+    shown = engine_call(["show", "--view", "full", run_id])
     context = shown.get("result", {}).get("context", [])
     declaration = next(
         (
@@ -4444,7 +4501,7 @@ def invoke_until_status(
     deadline = time.monotonic() + timeout_s
     last_status = None
     while time.monotonic() < deadline:
-        shown = engine_call(["show", run_id])
+        shown = engine_call(["show", "--view", "full", run_id])
         if shown.get("status") != "completed":
             raise WorkSlotJourneyFailure(f"show after invoke failed: {shown}")
         projection = shown["result"]
@@ -4970,7 +5027,7 @@ def prove_bound_fan_out_overrun(
         expected="overrun",
         timeout_s=5.0,
     )
-    immediately_shown = engine_call(["show", run_id])
+    immediately_shown = engine_call(["show", "--view", "full", run_id])
     if immediately_shown.get("status") != "completed":
         raise WorkSlotJourneyFailure(f"show before overrun retry failed: {immediately_shown}")
     first_view = next(
@@ -4993,7 +5050,7 @@ def prove_bound_fan_out_overrun(
     cancelled = engine_call(["cancel-invocation", run_id, first_id])
     if cancelled.get("status") != "completed" or not cancelled["result"].get("cancelled"):
         raise WorkSlotJourneyFailure(f"overrun cleanup did not finish: {cancelled}")
-    engine_call(["show", run_id])
+    engine_call(["show", "--view", "full", run_id])
     retry_started = invoke_with_short_budget()
     second_id = retry_started["result"]["invocation_id"]
     second = _wait_overlay_status(
@@ -5147,7 +5204,7 @@ def prove_bound_contracted_fan_out_failure(
         BOUND_SLOT_INVOCATION_REQUIRED,
         action="event after contracted collector failure",
     )
-    persisted = engine_call(["show", run_id])
+    persisted = engine_call(["show", "--view", "full", run_id])
     if persisted.get("status") != "completed":
         raise WorkSlotJourneyFailure(
             f"show after contracted collector failure failed: {persisted}"
@@ -5363,7 +5420,7 @@ def _show_invocation(
     run_id: str,
     invocation_id: str,
 ) -> dict[str, Any] | None:
-    shown = engine_call(["show", run_id])
+    shown = engine_call(["show", "--view", "full", run_id])
     if shown.get("status") != "completed":
         raise WorkSlotJourneyFailure(f"show after invoke failed: {shown}")
     invocations = (shown.get("result") or {}).get("work_slot_invocations")

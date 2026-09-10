@@ -12,6 +12,9 @@ mod invocation_progress;
 mod preview_bindings;
 
 pub use dagu::{names_for_capture_root, resolve_dagu, write_locator, DaguError, DaguLocator};
+#[cfg(unix)]
+pub mod capture;
+pub mod monitor;
 pub use fan_out::FanOutArgs;
 
 use loop_core::{
@@ -79,8 +82,9 @@ pub struct CliOptions {
     pub database: Option<PathBuf>,
     pub provider_config: Option<PathBuf>,
     pub provider_timeout: Option<Duration>,
-    /// Human-only compact rendering for the existing `show` operation.
+    /// Alias for the non-arming status view.
     pub compact: bool,
+    pub show_view: String,
 }
 
 impl Default for CliOptions {
@@ -91,6 +95,7 @@ impl Default for CliOptions {
             provider_config: None,
             provider_timeout: None,
             compact: false,
+            show_view: "action".to_owned(),
         }
     }
 }
@@ -277,6 +282,7 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
     let mut capture_dir = None;
     let mut worker_index = None;
     let mut compact = false;
+    let mut show_view_seen = false;
     let mut assignment_selection: Option<Vec<String>> = None;
     let mut invoke_controls = None;
     let mut event_override = None;
@@ -302,6 +308,29 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
                 }
                 "--human" => {
                     options.output = OutputFormat::Human;
+                    index += 1;
+                    continue;
+                }
+                "--view" => {
+                    show_view_seen = true;
+                    options.show_view = next_option_value(args, &mut index, token)?;
+                    if !matches!(options.show_view.as_str(), "action" | "status" | "full") {
+                        return Err(CliError::new(
+                            "invalid-invocation",
+                            "show --view must be action, status, or full",
+                        ));
+                    }
+                    continue;
+                }
+                value if value.starts_with("--view=") => {
+                    show_view_seen = true;
+                    options.show_view = value.trim_start_matches("--view=").to_owned();
+                    if !matches!(options.show_view.as_str(), "action" | "status" | "full") {
+                        return Err(CliError::new(
+                            "invalid-invocation",
+                            "show --view must be action, status, or full",
+                        ));
+                    }
                     index += 1;
                     continue;
                 }
@@ -864,11 +893,20 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
             "`--compact` is only valid for the existing show operation",
         ));
     }
-    if compact && options.output == OutputFormat::Json {
+    if show_view_seen && command_name != "show" {
         return Err(CliError::new(
             "invalid-invocation",
-            "show --compact is human-only and cannot be combined with --json, --format=json, or --output=json",
+            "--view is only valid for show",
         ));
+    }
+    if compact && options.show_view != "action" && options.show_view != "status" {
+        return Err(CliError::new(
+            "invalid-invocation",
+            "--compact conflicts with --view full",
+        ));
+    }
+    if compact {
+        options.show_view = "status".to_owned();
     }
     options.compact = compact;
 
@@ -2430,7 +2468,7 @@ impl WorkSlotProcess for CliWorkSlotProcess {
 
 fn execute_operation(options: CliOptions, command: PrimaryCommand) -> Execution {
     let output = options.output;
-    let compact = options.compact;
+    let show_view = options.show_view.clone();
     let operation = command.name();
 
     // Parse JSON before opening storage.  Malformed caller input is an
@@ -2495,16 +2533,19 @@ fn execute_operation(options: CliOptions, command: PrimaryCommand) -> Execution 
                 }
             };
             let now = now_timestamp();
-            let outcome = core::execute_show(
+            let outcome = core::operations::show::execute_view(
                 ShowRequest::new(run_id),
                 &persistence,
                 &CliWorkSlotProcess { binary },
                 now,
+                show_view != "status",
             )
             .map(CliShowProjection::from);
-            if compact {
-                render_show_compact(&persistence, &outcome, timeout, now)
+            if show_view == "status" && output == OutputFormat::Human {
+                render_show_compact(&persistence, &outcome, timeout, now, &paths.database)
             } else {
+                let outcome = outcome
+                    .map(|projection| show_packet(projection, &show_view, now, &paths.database));
                 render_operation(operation, output, &outcome)
             }
         }
@@ -3059,6 +3100,8 @@ struct CliShowProjection {
     context: Vec<core::ContextRecord>,
     requestable_events: Vec<core::RequestableEvent>,
     latest_evaluations: Vec<core::DurableEvaluation>,
+    evaluation_history: Vec<core::DurableEvaluation>,
+    action_guidance: Option<Value>,
     work_slots: Vec<core::WorkSlot>,
     change_report: core::operations::RunChangeReport,
     work_slot_invocations: Vec<core::operations::WorkSlotInvocationView>,
@@ -3082,11 +3125,146 @@ impl From<core::ShowProjection> for CliShowProjection {
             context: projection.context,
             requestable_events: projection.requestable_events,
             latest_evaluations: projection.latest_evaluations,
+            evaluation_history: projection.evaluation_history,
+            action_guidance: projection.action_guidance,
             work_slots: projection.work_slots,
             change_report: projection.change_report,
             work_slot_invocations: projection.work_slot_invocations,
         }
     }
+}
+
+/// Bound execution instructions and provider obligations remain opaque; this
+/// projection selects durable current facts, not provider-specific policy.
+fn show_packet(
+    projection: CliShowProjection,
+    view: &str,
+    now: Timestamp,
+    database: &Path,
+) -> Value {
+    let mut value = serde_json::to_value(&projection).expect("show projection serializes");
+    let object = value.as_object_mut().expect("show projection is an object");
+    object.insert("view".into(), json!(view));
+    object.insert("observed_at".into(), json!(now));
+    object.insert("mutation_armed".into(), json!(view != "status"));
+    object.insert(
+        "locators".into(),
+        json!({
+            "full": ["loop-engine", "--database", database, "--json", "show", projection.run_id, "--view", "full"],
+            "history": ["loop-engine", "--database", database, "--json", "history", projection.run_id],
+            "artifact_root": projection.initial_input.get("artifact_root"),
+            "context": "full.context", "invocations": "full.work_slot_invocations",
+            "evaluations": "full.evaluation_history"
+        }),
+    );
+    if view == "full" {
+        return value;
+    }
+    for key in [
+        "initial_input",
+        "context",
+        "binding_amendments",
+        "effective_bindings",
+        "evaluation_history",
+        "change_report",
+    ] {
+        object.remove(key);
+    }
+    let active: Vec<_> = projection
+        .work_slot_invocations
+        .iter()
+        .filter(|row| {
+            matches!(
+                row.status,
+                core::ProjectedInvocationStatus::Running | core::ProjectedInvocationStatus::Overrun
+            )
+        })
+        .collect();
+    object.insert(
+        "work_slot_invocations".into(),
+        json!(active
+            .iter()
+            .map(|row| json!({
+                "invocation_id": row.invocation_id, "slot_id": row.slot_id,
+                "status": row.status, "subject": row.subject, "started_at": row.started_at,
+                "allowed_time_ms": row.allowed_time_ms, "elapsed_ms": row.elapsed_ms,
+                "remaining_allowed_ms": row.remaining_allowed_ms,
+                "overlay_meaning": row.overlay_meaning, "capture_dir": row.capture_dir,
+                "ownership": row.ownership, "assignment_selection": row.assignment_selection,
+                "inner_workers": row.inner_workers.iter().map(|worker| json!({
+                    "assignment_id": worker.assignment_id, "exit_code": worker.exit_code,
+                    "selected_attempt": worker.selected_attempt,
+                    "selected_output_path": worker.selected_output_path,
+                    "selected_output_sha256": worker.selected_output_sha256
+                })).collect::<Vec<_>>(),
+                "locator": "full.work_slot_invocations"
+            }))
+            .collect::<Vec<_>>()),
+    );
+    let current_checks: Vec<_> = projection
+        .latest_evaluations
+        .iter()
+        .filter(|row| row.transition.source == projection.current_state)
+        .collect();
+    object.insert("latest_evaluations".into(), json!(current_checks));
+    object.insert("blocker_assessment".into(), json!({
+        "freshness": "unknown",
+        "reason": "Persisted checks are historical judgments, not a fresh evaluation of current work. No recent check does not establish no blockers.",
+        "sources": current_checks.iter().map(|row| json!({"sequence": row.sequence, "occurred_at": row.occurred_at, "transition": row.transition, "locator": "full.evaluation_history"})).collect::<Vec<_>>()
+    }));
+    if view == "status" {
+        object.remove("current_state_instructions");
+        object.remove("action_guidance");
+        object.remove("work_slots");
+    } else {
+        let slots: Vec<_> = projection
+            .work_slots
+            .iter()
+            .filter(|slot| slot.state == projection.current_state)
+            .collect();
+        object.insert("work_slots".into(), json!(slots));
+        let latest: Vec<_> = slots.iter().filter_map(|slot| {
+            projection.work_slot_invocations.iter()
+                .filter(|row| row.slot_id == slot.id)
+                .max_by_key(|row| row.started_at)
+                .map(|row| json!({"slot_id": slot.id, "invocation_id": row.invocation_id,
+                    "status": row.status, "capture_dir": row.capture_dir,
+                    "subject": row.subject, "standing": row.change_report.standing,
+                    "freshness": "inspect change report and applicability; execution is not approval",
+                    "locator": "full.work_slot_invocations"}))
+        }).collect();
+        let next = if projection.lifecycle.is_terminal() {
+            "Read-only terminal run; no work or progression is legal."
+        } else if !active.is_empty() {
+            "Inspect active captures or wait. Live ownership/pending cleanup blocks retry and departure; overrun is attention, not permission."
+        } else if !latest.is_empty() {
+            "Inspect latest current-slot execution sources and full change report; triage output/evidence before a shown event or a quiescent retry. Historical execution does not establish current applicability or approval."
+        } else if slots
+            .iter()
+            .any(|slot| projection.effective_bindings.contains_key(slot.id.as_str()))
+        {
+            "Start the bound work with its execution_paths command; do not perform the worker body yourself."
+        } else {
+            "Perform current instructions externally, append the required evidence, then request a shown event."
+        };
+        object.insert("next_action".into(), json!(next));
+        object.insert("latest_current_slot_execution".into(), json!(latest));
+        if slots
+            .iter()
+            .any(|slot| projection.effective_bindings.contains_key(slot.id.as_str()))
+        {
+            object.insert("current_state_instructions".into(), json!("Use the bound execution_paths commands, not the worker body. Read persisted action_guidance for exact provider obligations. Triages: inspect capture_dir/summary.json and stdout before stderr; exit 0 is execution only, not output validity or provider acceptance. Append required provider-shaped evidence then request a shown event. Live ownership or pending cleanup blocks retry and departure, including overrun: wait or cancel-invocation with recorded ownership, verify quiescence, then read action/full again. Consult full.change_report before reuse; review applicability must explicitly name original evidence, current target, driver and reason. Full retains the exact frozen command/args and original instructions."));
+        }
+        object.insert("execution_paths".into(), json!(slots.iter().map(|slot| {
+            if projection.effective_bindings.contains_key(slot.id.as_str()) {
+                json!({"slot_id": slot.id, "mode": "bound", "command": ["loop-engine", "--database", database, "invoke", projection.run_id, slot.id], "instruction": "Do not perform the bound worker body yourself. Wait for owned work to become quiescent before retry or departure; inspect capture and conformance before event."})
+            } else {
+                json!({"slot_id": slot.id, "mode": "unbound", "instruction": "Perform current_state_instructions externally; append required evidence then request a shown event."})
+            }
+        }).collect::<Vec<_>>()));
+        object.insert("guidance_status".into(), json!(if projection.action_guidance.is_some() { "persisted-provider-guidance" } else { "legacy-normalized-obligations-unknown; follow persisted current_state_instructions and frozen work_slots; inspect full for input/context" }));
+    }
+    value
 }
 
 /// Inner progress is deliberately subordinate to the normal show projection.
@@ -3119,6 +3297,7 @@ fn render_show_compact(
     outcome: &OperationOutcome<CliShowProjection>,
     timeout: Duration,
     now: Timestamp,
+    database: &Path,
 ) -> Execution {
     match outcome {
         OperationOutcome::Completed(projection) => {
@@ -3144,7 +3323,9 @@ fn render_show_compact(
             };
             Execution {
                 exit_code: EXIT_COMPLETED,
-                stdout: render_compact_show(projection, invocation, progress),
+                stdout: format!("{}status details (non-arming; all active ownership; historical checks have unknown freshness): {}\n",
+                    render_compact_show(projection, invocation, progress),
+                    show_packet(projection.clone(), "status", now, database)),
                 stderr: String::new(),
             }
         }
@@ -3515,9 +3696,10 @@ fn usage(command: Option<&str>) -> String {
         }
         Some("event") => "Usage: loop-engine [options] event <run-id> <event> [--override JSON]\n\nOverride: {\"state_visit\":0,\"owner\":\"OWNER\",\"reason\":\"REASON\"}. Requires the current observed visit and quiescent work; skips only this edge's completion/evaluation checks and permanently labels the run.\n".to_owned(),
         Some("show") => {
-            "Usage: loop-engine [options] show [--compact] <run-id>\n\n".to_owned()
-                + "Without --compact, human output is the detailed projection. --compact is\n"
-                + "human-only and summarizes the same show data plus opportunistic inner progress.\n"
+            "Usage: loop-engine [options] show [--compact] <run-id> [--view action|status|full]\n\n".to_owned()
+                + "Default action reveals current instructions and obligations. Full includes all checked evaluations.\n"
+                + "Action/full arm mutation; --compact aliases the non-arming status view, including JSON.\n"
+                + "All views are provider-free. Full-payload consumers must select --view full.\n"
         }
         Some("history") => "Usage: loop-engine [options] history <run-id>\n".to_owned(),
         Some("terminate") => "Usage: loop-engine [options] terminate <run-id>\n".to_owned(),
@@ -3541,7 +3723,7 @@ fn usage(command: Option<&str>) -> String {
                 + "Options:\n"
                 + "  --worker JSON            Strict nested worker object with command, args, and\n"
                 + "                           optional preamble, legacy output_schema, or full_output_schema; repeatable\n"
-                + "  --instructions FILE      Shared instructions file for ad hoc mode.\n"
+                + "  --instructions FILE      Required in ad-hoc mode; forbidden with bound invoke stdin.\n"
                 + "                           Bound mode reads the invoke packet from stdin instead.\n"
                 + "  --max-active N           At most N worker steps run at once. Omitted means\n"
                 + "                           uncapped concurrent worker start.\n"
@@ -3595,13 +3777,17 @@ fn usage(command: Option<&str>) -> String {
                 + "  amend-binding RUN_ID SLOT_ID JSON\n"
                 + "  cancel-invocation RUN_ID INVOCATION_ID\n\n"
                 + "Other commands:\n"
+                + "  monitor                   Passive selected-source JSONL completion/attention stream\n"
+                + "  capture-command           Stream one external command; --help for raw-stream contract\n"
+                + "  capture-matrix            Execute serial rows, stop on failure, explicitly --resume\n"
+                + "  capture-abort             Request and verify owned capture cleanup\n"
                 + "  invocation-progress RUN_ID [INVOCATION_ID]\n"
                 + "                             Snapshot capture_dir graph liveness and traces\n"
                 + "                             Opens the catalog; graph state is Dagu helper liveness\n"
                 + "                             --timeout-ms bounds helper spawns only\n"
                 + "  fan-out                    Run worker CLIs concurrently via a local Dagu graph\n"
                 + "                             --worker JSON          Nested worker contract; repeatable\n"
-                + "                             --instructions FILE    Shared instructions (ad hoc mode)\n"
+                + "                             --instructions FILE    Required ad hoc; forbidden with bound stdin\n"
                 + "                             --max-active N         Cap concurrent workers; omitted is uncapped\n"
                 + "  preview-bindings [JSON|@FILE]  Inspect work_slot_bindings without starting a run\n"
                 + "                             Omitted operand reads stdin; @FILE reads that path\n\n"
@@ -3657,7 +3843,7 @@ fn help_lists_fan_out_and_hides_wait_invocation() {
     let show_help = execute(["show", "--help"]);
     assert_eq!(show_help.exit_code, EXIT_COMPLETED);
     assert!(show_help.stdout.contains("show [--compact]"));
-    assert!(show_help.stdout.contains("human-only"));
+    assert!(show_help.stdout.contains("non-arming status"));
 
     let progress_help = execute(["invocation-progress", "--help"]);
     assert_eq!(progress_help.exit_code, EXIT_COMPLETED);
@@ -4086,7 +4272,7 @@ mod tests {
         let show_help = execute(["show", "--help"]);
         assert_eq!(show_help.exit_code, EXIT_COMPLETED);
         assert!(show_help.stdout.contains("show [--compact]"));
-        assert!(show_help.stdout.contains("human-only"));
+        assert!(show_help.stdout.contains("non-arming status"));
         let progress_help = execute(["invocation-progress", "--help"]);
         assert_eq!(progress_help.exit_code, EXIT_COMPLETED);
         assert!(progress_help.stdout.contains("invocation-progress"));
@@ -4238,11 +4424,13 @@ mod tests {
             "--format=json",
             "--output=json",
         ] {
-            let json_error = parse_args([selector, "show", "--compact", "run-1"])
-                .expect_err("compact show must reject JSON output");
-            assert_eq!(json_error.code, "invalid-invocation");
-            assert!(json_error.message.contains("human-only"));
-            assert!(json_error.message.contains("--json"));
+            let ParsedRequest::Operation { options, .. } =
+                parse_args([selector, "show", "--compact", "run-1"])
+                    .expect("compact status supports JSON")
+            else {
+                panic!("expected operation")
+            };
+            assert_eq!(options.show_view, "status");
         }
 
         let other_error =
@@ -4250,11 +4438,11 @@ mod tests {
         assert_eq!(other_error.code, "invalid-invocation");
         assert!(other_error.message.contains("only valid"));
 
-        let execution = execute(["--json", "show", "--compact", "run-1"]);
-        assert_eq!(execution.exit_code, EXIT_INVALID_INVOCATION);
-        let output: Value = serde_json::from_str(&execution.stdout).expect("JSON error");
-        assert_eq!(output["status"], "invalid-invocation");
-        assert!(output["message"].as_str().unwrap().contains("human-only"));
+        assert!(parse_args(["show", "run-1", "--view", "full"]).is_ok());
+        assert!(parse_args(["show", "run-1", "--view", "wrong"]).is_err());
+        assert!(parse_args(["show", "run-1", "--view=full"]).is_ok());
+        assert!(parse_args(["list", "--view", "action"]).is_err());
+        assert!(parse_args(["show", "run-1", "--compact", "--view", "full"]).is_err());
     }
 
     #[test]
@@ -4436,6 +4624,8 @@ mod tests {
                 &transition,
             )],
             latest_evaluations: vec![evaluation],
+            evaluation_history: vec![],
+            action_guidance: None,
             work_slots: vec![core::WorkSlot::new("slot-1", "draft", "approve")],
             change_report: core::operations::RunChangeReport {
                 assignments: Vec::new(),
@@ -4614,6 +4804,8 @@ printf '%s' '{"id":"cli-fixture","initial_state":"start","states":[{"id":"start"
             "--json".to_owned(),
             "show".to_owned(),
             run_id.clone(),
+            "--view".to_owned(),
+            "full".to_owned(),
             "--database".to_owned(),
             database.clone(),
         ]);
@@ -4715,6 +4907,8 @@ printf '%s' '{"id":"cli-fixture","initial_state":"start","states":[{"id":"start"
             "--json".to_owned(),
             "show".to_owned(),
             run_id.clone(),
+            "--view".to_owned(),
+            "full".to_owned(),
             "--database".to_owned(),
             database.clone(),
         ]);
@@ -4768,6 +4962,8 @@ printf '%s' '{"id":"cli-fixture","initial_state":"start","states":[{"id":"start"
         let show_human = execute([
             "show".to_owned(),
             human_run_id,
+            "--view".to_owned(),
+            "full".to_owned(),
             "--database".to_owned(),
             database.clone(),
         ]);

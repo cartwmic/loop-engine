@@ -560,11 +560,13 @@ dependencies = [
 name = "loop-integrations"
 version = "0.19.0"
 dependencies = [
+ "jsonschema",
  "libc",
  "loop-core",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "toml",
 ]
