@@ -31,6 +31,15 @@ def processes():
             continue
         pid, parent, group, state, started = fields
         table[int(pid)] = (int(parent), int(group), state, started)
+    if sys.platform.startswith("linux"):
+        # ps can report the inspection process after check_output has reaped it.
+        # /proc's children list is the current kernel-owned direct-child set.
+        children_path = Path(f"/proc/self/task/{os.getpid()}/children")
+        children = {int(pid) for pid in children_path.read_text().split()}
+        table = {
+            pid: row for pid, row in table.items()
+            if row[0] != os.getpid() or pid in children
+        }
     return table
 
 
@@ -70,6 +79,118 @@ def live_owned(job, table):
     }
 
 
+def direct_children(table):
+    """Return this pool process's direct children by PID and start identity."""
+    parent = os.getpid()
+    return {pid: row[3] for pid, row in table.items() if row[0] == parent}
+
+
+def _job_identity_state(jobs):
+    identities = {}
+    pids = set()
+    for job in jobs:
+        pids.update(job["owned"])
+        for pid, started in job.get("identities", {}).items():
+            identities[pid] = started
+    return identities, pids
+
+
+def remember_job_identities(jobs, history):
+    for job in jobs:
+        history.update(job.get("identities", {}))
+
+
+def discover_adopted(adopted, baseline, jobs, table, history):
+    """Track children reparented to this Linux subreaper.
+
+    A child that was already ours before the pool visit is caller-owned and is
+    never waited for.  New direct children are the only kernel-visible record
+    left when a descendant escaped ancestry sampling; retain their start-time
+    identities so PID reuse cannot turn cleanup into a guess.  Descendants of
+    an adopted child are retained as well, without using waitpid(-1).
+    """
+    if not sys.platform.startswith("linux"):
+        return []
+
+    job_identities, job_pids = _job_identity_state(jobs)
+    roots = {job["process"].pid for job in jobs}
+    new = []
+
+    def protected(pid, started):
+        if pid in roots or pid in job_pids:
+            expected = job_identities.get(pid)
+            if expected is not None and expected != started:
+                raise PoolFailure(f"owned PID {pid} changed process identity")
+            return True
+        if pid in adopted:
+            if adopted[pid] != started:
+                raise PoolFailure(f"adopted PID {pid} was reused before cleanup")
+            return True
+        if pid in baseline:
+            if baseline[pid] != started:
+                raise PoolFailure(f"caller-owned PID {pid} was reused during cleanup")
+            return True
+        if pid in history:
+            if history[pid] != started:
+                raise PoolFailure(f"known PID {pid} was reused during cleanup")
+            return True
+        return False
+
+    for pid, row in table.items():
+        if pid in roots or pid in job_pids:
+            expected = job_identities.get(pid)
+            if expected is not None and expected != row[3]:
+                raise PoolFailure(f"owned PID {pid} changed process identity")
+        elif pid in adopted and adopted[pid] != row[3]:
+            raise PoolFailure(f"adopted PID {pid} was reused before cleanup")
+        elif pid in baseline and baseline[pid] != row[3]:
+            raise PoolFailure(f"caller-owned PID {pid} was reused during cleanup")
+        elif pid in history and history[pid] != row[3]:
+            raise PoolFailure(f"known PID {pid} was reused during cleanup")
+        if row[0] != os.getpid() or protected(pid, row[3]):
+            continue
+        adopted[pid] = row[3]
+        history[pid] = row[3]
+        new.append(pid)
+
+    # A surviving adopted intermediate may retain descendants after it leaves
+    # the pool's direct-child list.  Follow parent identities, not PID guesses.
+    while True:
+        additions = []
+        for pid, row in table.items():
+            parent, _, _, started = row
+            if pid in adopted or protected(pid, started):
+                continue
+            parent_started = adopted.get(parent)
+            parent_row = table.get(parent)
+            if parent_started is None or parent_row is None or parent_row[3] != parent_started:
+                continue
+            adopted[pid] = started
+            history[pid] = started
+            additions.append(pid)
+        if not additions:
+            break
+        new.extend(additions)
+    return new
+
+
+def live_adopted(adopted, table):
+    return {
+        pid for pid, started in adopted.items()
+        if pid in table and table[pid][3] == started
+    }
+
+
+def reap_adopted(adopted):
+    if not sys.platform.startswith("linux"):
+        return
+    for pid in adopted:
+        try:
+            os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            pass
+
+
 def reap(job):
     job["process"].poll()
     if sys.platform.startswith("linux"):
@@ -80,18 +201,36 @@ def reap(job):
                 pass
 
 
-def cleanup(active):
+def cleanup(active, adopted, baseline, history):
     """Stop leaves first, keep parents available to reap, then verify absence."""
     start = time.monotonic()
     sent = []
+    adoption_error = None
+    adopted_live_seen = False
     while time.monotonic() - start < 8:
         table = processes()
+        try:
+            for job in active:
+                discover(job, table)
+            remember_job_identities(active, history)
+            discover_adopted(adopted, baseline, active, table, history)
+        except PoolFailure as error:
+            adoption_error = adoption_error or str(error)
         for job in active:
-            discover(job, table)
             reap(job)
-        live = set().union(*(live_owned(j, table) for j in active)) if active else set()
+        if any(not table[pid][2].startswith("Z") for pid in live_adopted(adopted, table)):
+            adopted_live_seen = True
+        reap_adopted(adopted)
+        # Do not signal a PID from the pre-wait process table: it may already
+        # have been reaped or reused by the time cleanup decides what remains.
+        table = processes()
+        live = set().union(
+            *(live_owned(j, table) for j in active), live_adopted(adopted, table)
+        ) if active else live_adopted(adopted, table)
         if not live:
-            return {"verified": True, "remaining_pids": [], "signals": sent,
+            return {"verified": adoption_error is None, "remaining_pids": [],
+                    "signals": sent, "adopted_live": adopted_live_seen,
+                    "adoption_error": adoption_error,
                     "wall_seconds": time.monotonic() - start}
         elapsed = time.monotonic() - start
         parents = {table[p][0] for p in live}
@@ -108,10 +247,12 @@ def cleanup(active):
                 pass
         time.sleep(0.05)
     table = processes()
-    remaining = sorted(
-        set().union(*(live_owned(j, table) for j in active)) if active else set()
-    )
-    return {"verified": not remaining, "remaining_pids": remaining, "signals": sent,
+    remaining = sorted(set().union(
+        *(live_owned(j, table) for j in active), live_adopted(adopted, table)
+    ) if active else live_adopted(adopted, table))
+    return {"verified": not remaining and adoption_error is None,
+            "remaining_pids": remaining, "signals": sent,
+            "adopted_live": adopted_live_seen, "adoption_error": adoption_error,
             "wall_seconds": time.monotonic() - start}
 
 
@@ -138,6 +279,11 @@ def _run(jobs, *, root, limit, timeout):
     names = [j["name"] for j in jobs]
     if not names or len(names) != len(set(names)):
         raise PoolFailure("proof inventory must be nonempty and unique")
+    # Existing direct children belong to the caller.  They may be zombies whose
+    # exit status the caller still needs, so never wait for them in this pool.
+    baseline = direct_children(processes())
+    adopted = {}
+    history = {}
     root = Path(root).resolve()
     root.mkdir(parents=True, exist_ok=False)
     # Adopt orphaned owned descendants on Linux so verification includes reaping.
@@ -145,8 +291,10 @@ def _run(jobs, *, root, limit, timeout):
         if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0):
             raise PoolFailure("cannot enable owned descendant reaping")
     report = {"status": "running", "job_limit": limit, "peak_jobs": 0,
-              "inventory": names, "activity": [], "jobs": [
-                  {"name": name, "status": "not-run"} for name in names]}
+              "inventory": names, "activity": [],
+              "caller_children": [{"pid": pid, "started": started}
+                                  for pid, started in sorted(baseline.items())],
+              "jobs": [{"name": name, "status": "not-run"} for name in names]}
     active = []
     cursor = 0
     started = time.monotonic()
@@ -167,8 +315,16 @@ def _run(jobs, *, root, limit, timeout):
             table = processes()
             for job in list(active):
                 discover(job, table)
+            remember_job_identities(active, history)
+            # A descendant can be reparented directly to this subreaper before
+            # its former ancestry is sampled.  Account for that kernel-owned
+            # child before checking any worker's exit.
+            discover_adopted(adopted, baseline, active, table, history)
+            for job in list(active):
                 # Reap adopted descendants while the job is still running.
                 reap(job)
+            reap_adopted(adopted)
+            for job in list(active):
                 code = job["process"].poll()
                 elapsed = time.monotonic() - job["started"]
                 if code is None and elapsed < timeout:
@@ -180,13 +336,34 @@ def _run(jobs, *, root, limit, timeout):
                     raise PoolFailure(f"{row['name']}: timed out after {timeout}s")
                 reap(job)
                 current_table = processes()
+                discover_adopted(adopted, baseline, active, current_table, history)
+                reap_adopted(adopted)
+                current_table = processes()
                 remaining = live_owned(job, current_table) - {job["process"].pid}
+                adopted_remaining = live_adopted(adopted, current_table)
                 result_path = Path(row["result_path"])
                 result = json.loads(result_path.read_text()) if result_path.exists() else {}
                 row["result"] = result
                 if code or result.get("status") != "passed" or remaining:
                     row["status"] = "failed"
-                    raise PoolFailure(f"{row['name']}: exit={code}, remaining={sorted(remaining)}, result={result}")
+                    raise PoolFailure(
+                        f"{row['name']}: exit={code}, remaining={sorted(remaining)}, "
+                        f"adopted_remaining={sorted(adopted_remaining)}, result={result}"
+                    )
+                if adopted_remaining:
+                    # Adoption is intentionally unattributed.  Keep this
+                    # completed primary in the active set while another
+                    # primary is still running; only the final primary
+                    # completion can establish that the adopted work leaked.
+                    if any(other is not job and other["process"].poll() is None
+                           for other in active):
+                        row["status"] = "waiting-adopted"
+                        continue
+                    row["status"] = "failed"
+                    raise PoolFailure(
+                        f"{row['name']}: exit={code}, remaining={sorted(remaining)}, "
+                        f"adopted_remaining={sorted(adopted_remaining)}, result={result}"
+                    )
                 row["status"] = "passed"
                 job["stdout"].close()
                 job["stderr"].close()
@@ -209,6 +386,9 @@ def _run(jobs, *, root, limit, timeout):
                 stderr = open(row["stderr"], "wb")
                 process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()),
                     "--worker", str(packet)], stdout=stdout, stderr=stderr, env=env, start_new_session=True)
+                # A reaped adopted PID may later be reused by a fresh worker;
+                # the Popen identity now owns that PID instead.
+                adopted.pop(process.pid, None)
                 row["pid"] = process.pid
                 active.append({"process": process, "owned": {process.pid}, "identities": {},
                                "row": row, "started": row["started_monotonic"],
@@ -223,8 +403,11 @@ def _run(jobs, *, root, limit, timeout):
         # Cleanup must itself not be interrupted into a false success.
         for sig in old_signals:
             signal.signal(sig, signal.SIG_IGN)
-        receipt = cleanup(active)
+        remember_job_identities(active, history)
+        receipt = cleanup(active, adopted, baseline, history)
         report["cleanup"] = receipt
+        report["adopted_children"] = [{"pid": pid, "started": started}
+                                       for pid, started in sorted(adopted.items())]
         for job in active:
             row = job["row"]
             if row["status"] == "running":
@@ -235,6 +418,7 @@ def _run(jobs, *, root, limit, timeout):
         for sig, handler in old_signals.items():
             signal.signal(sig, handler)
         report.update(status="passed" if not failure and receipt["verified"] and
+                      not receipt["adopted_live"] and
                       all(r["status"] == "passed" for r in report["jobs"]) else "failed",
                       error=failure, wall_seconds=time.monotonic() - started)
         save(root / "summary.json", report)
