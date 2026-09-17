@@ -25,6 +25,14 @@ threads-required = "num-cpus"
 filter = 'test(show_projects_durable_change_report_without_capture_files)'
 threads-required = "num-cpus"
 
+# This two-run T07 public case exceeded the ordinary 60s timeout in the hosted
+# full workflow while isolated local execution completed in about 28s. Reserve
+# all four configured nextest slots; an integer is deliberate because
+# "num-cpus" reserves host CPUs, not the profile's four-test pool.
+[[profile.default.overrides]]
+filter = 'test(backlog_t07_same_topology_different_frozen_policies_reject_foreign_evidence)'
+threads-required = 4
+
 # This composed public-CLI journey takes about 78s even without competing tests.
 # Keep its slot reservation and a bounded 180s deadline; ordinary tests stay at 60s.
 [[profile.default.overrides]]
