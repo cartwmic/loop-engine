@@ -162,6 +162,60 @@ assert (root / "switched").exists(), "readiness handshake timed out"
     assert child_pid not in proof_pool.processes(), delayed_report
     results["delayed-session-change"] = delayed_report
 
+    # A running Linux job waits for an adopted orphan to disappear. The pool
+    # must reap that zombie during active polling, before the job's deadline.
+    if sys.platform.startswith("linux"):
+        active_reap_root = root / "active-adopted-orphan"
+        active_reap_root.mkdir()
+        orphan_pid_path = active_reap_root / "orphan-pid"
+        waiting_path = active_reap_root / "waiting"
+        reaped_path = active_reap_root / "reaped"
+        active_reap_job = """\\
+import os
+import sys
+import time
+from pathlib import Path
+
+root = Path(sys.argv[1])
+intermediate = os.fork()
+if intermediate == 0:
+    orphan = os.fork()
+    if orphan == 0:
+        (root / "orphan-pid").write_text(str(os.getpid()))
+        os._exit(0)
+    os._exit(0)
+
+os.waitpid(intermediate, 0)
+deadline = time.monotonic() + 5
+while not (root / "orphan-pid").exists() and time.monotonic() < deadline:
+    time.sleep(.01)
+if not (root / "orphan-pid").exists():
+    raise SystemExit("orphan pid handshake timed out")
+(root / "waiting").write_text("job is waiting for adopted orphan disappearance\\n")
+pid = int((root / "orphan-pid").read_text())
+while time.monotonic() < deadline:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        (root / "reaped").write_text("adopted orphan disappeared\\n")
+        break
+    time.sleep(.01)
+else:
+    raise SystemExit("adopted orphan remained present until job deadline")
+"""
+        active_reap_report = proof_pool.run(
+            [{"name": "active-adopted-orphan", "command": [
+                sys.executable, "-c", active_reap_job, str(active_reap_root)
+            ]}],
+            root=active_reap_root / "pool", limit=1, timeout=10,
+        )
+        assert active_reap_report["status"] == "passed", active_reap_report
+        assert active_reap_report["cleanup"]["verified"], active_reap_report
+        assert active_reap_report["jobs"][0]["status"] == "passed", active_reap_report
+        assert orphan_pid_path.is_file() and waiting_path.is_file() and reaped_path.is_file(), active_reap_report
+        assert active_reap_report["jobs"][0]["wall_seconds"] < 5, active_reap_report
+        results["active-adopted-orphan"] = active_reap_report
+
     nested = {"name": "nested", "command": [sys.executable, "-c",
         f"import sys;sys.path.insert(0,{str(Path(__file__).resolve().parent)!r}); import proof_pool; "
         f"proof_pool.run([{{'name':'no'}}],root={str(root / 'forbidden')!r})"]}
@@ -178,7 +232,7 @@ assert (root / "switched").exists(), "readiness handshake timed out"
         results[f"target-{compiles}"] = report
     proof_pool.save(root / "self-test.json", results)
     print(json.dumps({"status": "passed", "proof": str(root / "self-test.json"),
-                      "assertions": "limits 1/2/3, ordered hops, serial, nonzero, queue, timeout, detached resistant descendant reaped, delayed session-change cleanup, nested refusal, private compile targets"}, indent=2))
+                      "assertions": "limits 1/2/3, ordered hops, serial, nonzero, queue, timeout, detached resistant descendant reaped, delayed session-change cleanup, active adopted orphan reaped before deadline, nested refusal, private compile targets"}, indent=2))
     return 0
 
 

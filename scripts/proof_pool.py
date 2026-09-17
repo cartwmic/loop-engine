@@ -167,6 +167,8 @@ def _run(jobs, *, root, limit, timeout):
             table = processes()
             for job in list(active):
                 discover(job, table)
+                # Reap adopted descendants while the job is still running.
+                reap(job)
                 code = job["process"].poll()
                 elapsed = time.monotonic() - job["started"]
                 if code is None and elapsed < timeout:
