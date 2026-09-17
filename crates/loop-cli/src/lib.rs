@@ -195,6 +195,9 @@ pub enum ParsedRequest {
     FanOutJoin {
         capture_dir: PathBuf,
     },
+    FanOutBarrier {
+        capture_dir: PathBuf,
+    },
     FanOutWorker {
         capture_dir: PathBuf,
         worker_index: usize,
@@ -629,6 +632,11 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
                     fan_out_tokens.push(value);
                     continue;
                 }
+                "--then" => {
+                    fan_out_tokens.push("--then".to_owned());
+                    index += 1;
+                    continue;
+                }
                 value if value.starts_with("--worker=") => {
                     fan_out_tokens.push("--worker".to_owned());
                     fan_out_tokens.push(
@@ -975,6 +983,18 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
         }
         reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
         return parse_fan_out_worker(capture_dir, worker_index, positionals);
+    }
+
+    if command_name == "fan-out-barrier" {
+        if let Some(option) = fan_out_tokens.first() {
+            return Err(CliError::new(
+                "invalid-invocation",
+                format!("unknown option `{option}`"),
+            ));
+        }
+        reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
+        reject_worker_index_option(&worker_index)?;
+        return parse_fan_out_barrier(capture_dir, positionals);
     }
 
     if command_name == "fan-out" {
@@ -1518,6 +1538,7 @@ where
         ParsedRequest::StdinExec { args } => execute_stdin_exec(args),
         ParsedRequest::FanOut { options, args } => execute_fan_out(options, args),
         ParsedRequest::FanOutJoin { capture_dir } => execute_fan_out_join(capture_dir),
+        ParsedRequest::FanOutBarrier { capture_dir } => execute_fan_out_barrier(capture_dir),
         ParsedRequest::FanOutWorker {
             capture_dir,
             worker_index,
@@ -1607,6 +1628,37 @@ fn execute_fan_out_worker(capture_dir: PathBuf, worker_index: usize) -> Executio
             exit_code: EXIT_ERROR,
             stdout: String::new(),
             stderr: format!("fan-out-worker error: {message}\n"),
+        },
+    }
+}
+
+fn parse_fan_out_barrier(
+    capture_dir: Option<String>,
+    positionals: Vec<String>,
+) -> Result<ParsedRequest, CliError> {
+    let capture_dir = required(capture_dir, "--capture-dir path")?;
+    ensure_no_positionals(&positionals, "fan-out-barrier")?;
+    Ok(ParsedRequest::FanOutBarrier {
+        capture_dir: PathBuf::from(capture_dir),
+    })
+}
+
+fn execute_fan_out_barrier(capture_dir: PathBuf) -> Execution {
+    match fan_out::run_fan_out_barrier(&capture_dir) {
+        Ok(()) => Execution {
+            exit_code: EXIT_COMPLETED,
+            stdout: String::new(),
+            stderr: String::new(),
+        },
+        Err(fan_out::CollectorError::Invalid(message)) => Execution {
+            exit_code: EXIT_INVALID_INVOCATION,
+            stdout: String::new(),
+            stderr: format!("fan-out-barrier error: {message}\n"),
+        },
+        Err(fan_out::CollectorError::Failed(message)) => Execution {
+            exit_code: EXIT_ERROR,
+            stdout: String::new(),
+            stderr: format!("fan-out-barrier error: {message}\n"),
         },
     }
 }
@@ -2040,22 +2092,35 @@ fn wait_for_worker_and_complete(
         command.process_group(0);
     }
     let mut child = command.spawn().map_err(ownership_error)?;
-    let owned = loop_core::OwnedExecution {
-        root_pid: child.id(),
-        process_group_id: child.id(),
-        admission_directory: directory.clone(),
-        graph_locator: envelope
-            .args
-            .first()
-            .filter(|arg| matches!(arg.as_str(), "fan-out" | "run-plan-graph"))
-            .map(|_| Path::new(capture_dir).join("dagu-locator.json")),
+    let root_process = match loop_integrations::ownership::read_process(child.id()) {
+        Ok(process) => process,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(ownership_error(error));
+        }
     };
-    if let Err(error) = admission.publish(&owned) {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(ownership_error(error));
+    if let Some(root_process) = root_process {
+        let owned = loop_core::OwnedExecution {
+            root_pid: child.id(),
+            process_group_id: root_process.process_group_id,
+            root_identity: Some(root_process.identity),
+            admission_directory: directory.clone(),
+            graph_locator: envelope
+                .args
+                .first()
+                .filter(|arg| matches!(arg.as_str(), "fan-out" | "run-plan-graph"))
+                .map(|_| Path::new(capture_dir).join("dagu-locator.json")),
+        };
+        if let Err(error) = admission.publish(&owned) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(ownership_error(error));
+        }
     }
     // The helper cannot admit primary work before this publication is durable.
+    // A child that already exited needs no ownership record; its wait handle
+    // still supplies the authoritative completion result.
     drop(admission);
 
     let status = child.wait().map_err(|error| {
@@ -2266,25 +2331,31 @@ fn same_executable_file(left: &Path, right: &Path) -> bool {
     }
 }
 
-#[cfg(unix)]
-mod unix_signal {
-    extern "C" {
-        pub fn kill(pid: i32, sig: i32) -> i32;
-    }
-}
-
 impl WorkSlotProcess for CliWorkSlotProcess {
     type Handle = CliWaiterHandle;
 
-    fn waiter_alive(&self, pid: u32) -> bool {
-        #[cfg(unix)]
-        {
-            unsafe { unix_signal::kill(pid as i32, 0) == 0 }
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = pid;
-            false
+    fn waiter_alive(&self, _pid: u32) -> bool {
+        // Numeric PID presence is not an ownership assertion. The identity-
+        // aware override below is the only production liveness path.
+        false
+    }
+
+    fn waiter_alive_for_identity(
+        &self,
+        pid: u32,
+        identity: Option<&loop_core::ProcessIdentity>,
+    ) -> bool {
+        match identity {
+            Some(identity) => {
+                loop_integrations::ownership::process_identity_matches(pid, Some(identity))
+                    .unwrap_or(false)
+            }
+            // Preserve passive reads for old, numeric-only records. Control
+            // paths with recorded ownership handle missing identity as
+            // unavailable and never use this fallback to signal.
+            None => loop_integrations::ownership::read_process(pid)
+                .map(|process| process.is_some())
+                .unwrap_or(false),
         }
     }
 
@@ -2426,7 +2497,7 @@ impl WorkSlotProcess for CliWorkSlotProcess {
         let database = args.database.to_str().ok_or_else(|| {
             ProcessError::new("invalid-database-path", "database path is not valid UTF-8")
         })?;
-        let child = Command::new(&self.binary)
+        let mut child = Command::new(&self.binary)
             .args([
                 "--database",
                 database,
@@ -2444,7 +2515,25 @@ impl WorkSlotProcess for CliWorkSlotProcess {
                     format!("could not spawn wait-invocation: {error}"),
                 )
             })?;
-        Ok(StartedWaiter::new(child.id(), CliWaiterHandle { child }))
+        let identity = match loop_integrations::ownership::read_process_identity(child.id()) {
+            Ok(Some(identity)) => identity,
+            Ok(None) => {
+                let _ = child.wait();
+                return Err(ProcessError::new(
+                    "waiter-identity-unavailable",
+                    "waiter exited before its native identity could be recorded",
+                ));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(ProcessError::new(
+                    "waiter-identity-unavailable",
+                    format!("could not read waiter native identity: {error}"),
+                ));
+            }
+        };
+        Ok(StartedWaiter::new(child.id(), CliWaiterHandle { child }).with_identity(identity))
     }
 
     fn send_envelope_and_detach(
@@ -3572,33 +3661,53 @@ fn serialize_projection_value<T: Serialize>(value: &T) -> Result<Value, CliError
     })
 }
 
+#[derive(Serialize)]
+struct JsonCompleted<'a, T> {
+    operation: &'a str,
+    status: &'static str,
+    result: &'a T,
+}
+
+#[derive(Serialize)]
+struct JsonIssue<'a> {
+    operation: &'a str,
+    status: &'static str,
+    code: &'a str,
+    message: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<&'a Value>,
+}
+
 /// Render a core operation outcome as one compact, valid JSON document.
 pub fn render_operation_json<T: Serialize>(
     operation: &str,
     outcome: &OperationOutcome<T>,
 ) -> Result<String, CliError> {
-    let mut object = serde_json::Map::new();
-    object.insert("operation".to_owned(), Value::String(operation.to_owned()));
+    // Serialize the caller-facing DTO directly.  The former map path first
+    // converted a completed DTO to Value and then serialized that Value again,
+    // which was measurable in the repeated full-show journey.
     match outcome {
-        OperationOutcome::Completed(value) => {
-            object.insert("status".to_owned(), Value::String("completed".to_owned()));
-            object.insert("result".to_owned(), serialize_projection_value(value)?);
-        }
-        OperationOutcome::Rejected(issue) | OperationOutcome::Error(issue) => {
-            let status = if matches!(outcome, OperationOutcome::Rejected(_)) {
-                "rejected"
-            } else {
-                "error"
-            };
-            object.insert("status".to_owned(), Value::String(status.to_owned()));
-            object.insert("code".to_owned(), Value::String(issue.code.clone()));
-            object.insert("message".to_owned(), Value::String(issue.message.clone()));
-            if let Some(details) = &issue.details {
-                object.insert("details".to_owned(), details.clone());
-            }
-        }
+        OperationOutcome::Completed(value) => serde_json::to_string(&JsonCompleted {
+            operation,
+            status: "completed",
+            result: value,
+        }),
+        OperationOutcome::Rejected(issue) => serde_json::to_string(&JsonIssue {
+            operation,
+            status: "rejected",
+            code: &issue.code,
+            message: &issue.message,
+            details: issue.details.as_ref(),
+        }),
+        OperationOutcome::Error(issue) => serde_json::to_string(&JsonIssue {
+            operation,
+            status: "error",
+            code: &issue.code,
+            message: &issue.message,
+            details: issue.details.as_ref(),
+        }),
     }
-    serde_json::to_string(&Value::Object(object)).map_err(|error| {
+    .map_err(|error| {
         CliError::new(
             "output-serialization-failed",
             format!("could not serialize operation output: {error}"),
@@ -3713,7 +3822,7 @@ fn usage(command: Option<&str>) -> String {
         }
         Some("list") => "Usage: loop-engine [options] list\n".to_owned(),
         Some("fan-out") => {
-            "Usage: loop-engine [options] fan-out [--worker JSON]... [--instructions FILE] [--max-active N]\n\n"
+            "Usage: loop-engine [options] fan-out [--worker JSON]... [--then --worker JSON ...] [--instructions FILE] [--max-active N]\n\n"
                 .to_owned()
                 + "Start one process per --worker concurrently as a local Dagu type:graph under\n"
                 + "an isolated home in the capture directory. Per-step progress is dagu status /\n"
@@ -3723,6 +3832,8 @@ fn usage(command: Option<&str>) -> String {
                 + "Options:\n"
                 + "  --worker JSON            Strict nested worker object with command, args, and\n"
                 + "                           optional preamble, legacy output_schema, or full_output_schema; repeatable\n"
+                + "  --then                   One divider between two non-empty worker groups;\n"
+                + "                           the second group waits for first-group completion/conformance\n"
                 + "  --instructions FILE      Required in ad-hoc mode; forbidden with bound invoke stdin.\n"
                 + "                           Bound mode reads the invoke packet from stdin instead.\n"
                 + "  --max-active N           At most N worker steps run at once. Omitted means\n"
@@ -3787,6 +3898,7 @@ fn usage(command: Option<&str>) -> String {
                 + "                             --timeout-ms bounds helper spawns only\n"
                 + "  fan-out                    Run worker CLIs concurrently via a local Dagu graph\n"
                 + "                             --worker JSON          Nested worker contract; repeatable\n"
+                + "                             --then                 Optional two-group execution barrier\n"
                 + "                             --instructions FILE    Required ad hoc; forbidden with bound stdin\n"
                 + "                             --max-active N         Cap concurrent workers; omitted is uncapped\n"
                 + "  preview-bindings [JSON|@FILE]  Inspect work_slot_bindings without starting a run\n"

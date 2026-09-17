@@ -8,7 +8,7 @@ use support::{Engine, TestDir};
 fn malformed_config_reaches_engine_as_error_without_advancing_run() {
     let state = TestDir::new("a7-state");
     let engine = Engine::new(state.path().join("a7.sqlite"));
-    let malformed = json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+    let malformed = json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
         "config_version": "test-1",
         "review_policies": {},
         "unexpected_top_level": true

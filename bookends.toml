@@ -6,5 +6,22 @@ pathspecs = [
   "scripts/policy-document-journey.py",
   "scripts/research-journey.py",
   "scripts/generate-prd-journey.py",
+  "crates/bookends-check/tests/backlog_t08_history.rs",
+  "crates/bookends-check/tests/backlog_t09_public.rs",
+  "crates/loop-cli/tests/engine/backlog_t01.rs",
+  "crates/loop-cli/tests/engine/backlog_t02.rs",
+  "crates/loop-cli/tests/engine/backlog_t03.rs",
+  "crates/loop-cli/tests/workers/backlog_t04.rs",
+]
+required_ci_jobs = ["baseline-and-source-journey"]
+
+[classes.contract]
+pathspecs = [
+  "crates/bookends-check/tests/backlog_t08_history.rs",
+  "crates/bookends-check/tests/backlog_t09_public.rs",
+  "crates/loop-cli/tests/engine/backlog_t01.rs",
+  "crates/loop-cli/tests/engine/backlog_t02.rs",
+  "crates/loop-cli/tests/engine/backlog_t03.rs",
+  "crates/loop-cli/tests/workers/backlog_t04.rs",
 ]
 required_ci_jobs = ["baseline-and-source-journey"]

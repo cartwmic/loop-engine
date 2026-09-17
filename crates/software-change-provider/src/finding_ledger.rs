@@ -1134,16 +1134,20 @@ fn parse_source(
         ));
         return None;
     }
-    let source_evidence =
-        match evidence::parse_evidence_record(&record.data, subject, artifact_root) {
-            Ok(evidence) => evidence,
-            Err(error) => {
-                reasons.push(format!(
-                    "`{path}.source.id` references invalid review evidence: {error}"
-                ));
-                return None;
-            }
-        };
+    let source_evidence = match evidence::parse_evidence_record_for_stage(
+        &record.data,
+        subject,
+        artifact_root,
+        config.is_some_and(|config| config.contract_version() == 3),
+    ) {
+        Ok(evidence) => evidence,
+        Err(error) => {
+            reasons.push(format!(
+                "`{path}.source.id` references invalid review evidence: {error}"
+            ));
+            return None;
+        }
+    };
     if source_evidence.gate != gate {
         reasons.push(format!(
             "`{path}.source.id` evidence gate `{}` does not match `{gate}`",

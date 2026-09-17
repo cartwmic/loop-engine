@@ -48,7 +48,7 @@ print(json.dumps({'record_ids':[r['id'] for r in p['context']]}))
     corrected = {"command": sys.executable, "args": [str(worker), "--model", "correct", "--extension", "new"]}
     for binding in (original, corrected):
         binding["context_filter"] = {"command": sys.executable, "args": [str(selector)]}
-    profile = {"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "recovery-execution-2", "artifact_root": str(artifacts),
+    profile = {"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "recovery-execution-3", "artifact_root": str(artifacts),
                "review_policies": {}, "work_slot_bindings": {"intent-draft": original}}
     config = root / "providers.toml"
     config.write_text('[providers.software-change]\ncommand = ' + json.dumps(provider) + '\n')
@@ -220,13 +220,16 @@ print(json.dumps({'task':name,'fresh':True,'repository_effect':{'kind':'fixture-
     schema = {"type": "object", "required": ["revision", "author"], "properties": {
         "revision": {"type": "string"}, "author": {"type": "object", "required": ["name", "kind"],
         "properties": {"name": {"type": "string"}, "kind": {"type": "string", "enum": ["human", "agent", "script"]}}}}}
-    profile = {"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "recovery-execution-2", "artifact_root": str(artifacts), "review_policies": {},
+    profile = {"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "recovery-execution-3", "artifact_root": str(artifacts), "review_policies": {},
         "artifact_schemas": {name: schema for name in ["intent.json", "design.json", "plan.json"]},
+        "revision_links": [{"from": "design.json", "field": "intent_revision", "to": "intent.json"},
+                          {"from": "plan.json", "field": "design_revision", "to": "design.json"}],
         "work_slot_bindings": {"implement": binding}}
-    for name in ["intent", "design"]:
-        (artifacts / (name + ".json")).write_text(json.dumps({"revision": "1", "author": {"name": "subject", "kind": "script"}}))
-    plan = {"revision": "1", "author": {"name": "subject", "kind": "script"},
-            "tasks": [{"id": n} for n in ["A", "B", "C"]], "dependency_graph": [{"from": "A", "to": "B"}]}
+    (artifacts / "intent.json").write_text(json.dumps({"revision": "1", "author": {"name": "subject", "kind": "script"},
+        "acceptance": [{"id": "AC-1", "statement": "execution controls preserve the selected task outcome"}]}))
+    (artifacts / "design.json").write_text(json.dumps({"revision": "1", "author": {"name": "subject", "kind": "script"}, "intent_revision": "1"}))
+    plan = {"revision": "1", "author": {"name": "subject", "kind": "script"}, "design_revision": "1",
+            "tasks": [{"id": n, "criterion_ids": ["AC-1"]} for n in ["A", "B", "C"]], "dependency_graph": [{"from": "A", "to": "B"}]}
     (artifacts / "plan.json").write_text(json.dumps(plan))
     plan_bytes = (artifacts / "plan.json").read_bytes()
     config = root / "providers.toml"

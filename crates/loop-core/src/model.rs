@@ -448,6 +448,10 @@ pub struct WorkSlotInvocation {
     pub instruction_digest: String,
     pub subject: String,
     pub waiter_pid: u32,
+    /// Native incarnation identity for the waiter. Absent for historical
+    /// invocations and for records created by older runtimes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiter_identity: Option<crate::ProcessIdentity>,
     /// Engine-owned process observation; absent for historical invocations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ownership: Option<crate::ExecutionOwnershipState>,
@@ -507,6 +511,7 @@ impl WorkSlotInvocation {
             instruction_digest: instruction_digest.into(),
             subject: subject.into(),
             waiter_pid,
+            waiter_identity: None,
             ownership: None,
             started_at,
             allowed_time_ms,
@@ -522,6 +527,16 @@ impl WorkSlotInvocation {
             assignment_selection: None,
             invocation_input: None,
         }
+    }
+
+    pub fn with_waiter_identity(mut self, identity: crate::ProcessIdentity) -> Self {
+        self.waiter_identity = Some(identity);
+        self
+    }
+
+    pub fn with_waiter_identity_opt(mut self, identity: Option<crate::ProcessIdentity>) -> Self {
+        self.waiter_identity = identity;
+        self
     }
 
     pub fn with_controls(mut self, controls: crate::InvocationControls) -> Self {

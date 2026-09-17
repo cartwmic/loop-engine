@@ -1323,13 +1323,15 @@ def _append_synthetic_gate_evidence(
             raise WorkSlotJourneyFailure(f"malformed {gate} axis: {entry}")
         axis = entry["id"]
         required_authors = int(entry.get("required_authors", 1))
+        stage = entry.get("review_stage", "aggregate")
         for index, suffix in enumerate(("a", "b")):
             if index >= max(2, required_authors):
                 break
-            record_id = f"{record_prefix}{gate}-{axis}-{suffix}"
+            record_id = f"{record_prefix}{gate}-{stage}-{axis}-{suffix}"
             data = {
                 "gate": gate,
                 "policy_id": axis,
+                "review_stage": stage,
                 "result": "pass",
                 "findings": "",
                 "author": {
@@ -3417,7 +3419,7 @@ def prove_selected_attempt_ledger_linkage(
         "if count == 0:\n"
         "    sys.stdout.write('{\\\"axis\\\":\\\"wrong\\\"}')\n"
         "else:\n"
-        "    sys.stdout.write(json.dumps({'axis':'selected-axis','author':{'name':'selected-worker','kind':'script'},'result':'fail','findings':'selected-attempt finding'}, separators=(',', ':')))\n"
+        "    sys.stdout.write(json.dumps({'review_stage':'aggregate','axis':'selected-axis','author':{'name':'selected-worker','kind':'script'},'result':'fail','findings':'selected-attempt finding'}, separators=(',', ':')))\n"
         "",
         encoding="utf-8",
     )
@@ -3432,14 +3434,16 @@ def prove_selected_attempt_ledger_linkage(
             "id": "selected-axis",
             "description": "Selected attempt linkage proof",
             "example_prompt": "Judge selected-axis only.",
+            "review_stage": "aggregate",
             "required_authors": 1,
         }
     ]
     custom_profile.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
     schema = {
         "type": "object",
-        "required": ["axis", "author", "result", "findings"],
+        "required": ["review_stage", "axis", "author", "result", "findings"],
         "properties": {
+            "review_stage": {"const": "aggregate"},
             "axis": {"const": "selected-axis"},
             "author": {"const": {"name": "selected-worker", "kind": "script"}},
             "result": {"enum": ["pass", "fail"]},
@@ -3555,6 +3559,7 @@ def prove_selected_attempt_ledger_linkage(
     evidence = {
         "gate": "design-review",
         "policy_id": "selected-axis",
+        "review_stage": "aggregate",
         "result": "fail",
         "findings": "selected-attempt finding",
         "author": {"name": "selected-worker", "kind": "script"},
@@ -3707,6 +3712,7 @@ def prove_selected_attempt_ledger_linkage(
     expected_evidence_fields = {
         "gate",
         "policy_id",
+        "review_stage",
         "result",
         "findings",
         "author",
@@ -4090,7 +4096,7 @@ def prove_subset_applicability_checked(
         "count = int(state.read_text()) if state.exists() else 0\n"
         "state.write_text(str(count + 1))\n"
         "sys.stdin.buffer.read()\n"
-        "print(json.dumps({'axis':'subset-applicability-axis','author':{'name':args.author,'kind':'script'},'result':'pass','findings':''}, separators=(',', ':')))\n",
+        "print(json.dumps({'review_stage':'aggregate','axis':'subset-applicability-axis','author':{'name':args.author,'kind':'script'},'result':'pass','findings':''}, separators=(',', ':')))\n",
         encoding="utf-8",
     )
     worker_script.chmod(0o755)
@@ -4104,14 +4110,16 @@ def prove_subset_applicability_checked(
             "id": "subset-applicability-axis",
             "description": "Subset applicability checked transition proof",
             "example_prompt": "Judge subset-applicability-axis only.",
+            "review_stage": "aggregate",
             "required_authors": 2,
         }
     ]
     custom_profile.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
     schema = {
         "type": "object",
-        "required": ["axis", "author", "result", "findings"],
+        "required": ["review_stage", "axis", "author", "result", "findings"],
         "properties": {
+            "review_stage": {"const": "aggregate"},
             "axis": {"const": "subset-applicability-axis"},
             "author": {"type": "object"},
             "result": {"const": "pass"},
@@ -4191,6 +4199,7 @@ def prove_subset_applicability_checked(
         evidence = {
             "gate": "design-review",
             "policy_id": "subset-applicability-axis",
+            "review_stage": "aggregate",
             "result": "pass",
             "findings": "",
             "author": {"name": author, "kind": "script"},
@@ -4243,6 +4252,7 @@ def prove_subset_applicability_checked(
     subset_evidence = {
         "gate": "design-review",
         "policy_id": "subset-applicability-axis",
+        "review_stage": "aggregate",
         "result": "pass",
         "findings": "",
         "author": {"name": "subset-worker-0", "kind": "script"},

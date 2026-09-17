@@ -10,12 +10,17 @@ mod continuity;
 mod eligibility;
 mod git;
 mod prd;
+mod publication;
 
 use std::io;
 use std::path::Path;
 
 pub use check::check_repo;
 pub use prd::{candidate_ids, validate_candidate};
+pub use publication::{
+    check_publication, parse_ref_updates, PublicationOptions, PublicationRange, PublicationReport,
+    RefUpdate, DEFAULT_MAX_COMMITS,
+};
 
 /// Outcome of one checker invocation. Bypass is never a green check.
 #[derive(Debug, Clone, PartialEq, Eq)]

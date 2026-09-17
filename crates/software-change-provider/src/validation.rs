@@ -645,6 +645,16 @@ pub(crate) fn source(
     context: &[ContextRecord],
     root: &Path,
 ) -> Result<(), String> {
+    source_with_verified_commands(data, kind, context, root, None)
+}
+
+fn source_with_verified_commands(
+    data: &Value,
+    kind: &str,
+    context: &[ContextRecord],
+    root: &Path,
+    verified_command_evidence_ids: Option<&BTreeSet<String>>,
+) -> Result<(), String> {
     let object = data.as_object().ok_or("verdict must be object")?;
     let fields = [
         "criterion_id",
@@ -695,7 +705,9 @@ pub(crate) fn source(
                 "unsupported evidence reference `{id}`; name retained command evidence"
             ));
         }
-        command_evidence(&evidence.data, root, None, None, data["result"] == "pass")?;
+        if !verified_command_evidence_ids.is_some_and(|ids| ids.contains(evidence.id.as_str())) {
+            command_evidence(&evidence.data, root, None, None, data["result"] == "pass")?;
+        }
     }
     Ok(())
 }
@@ -729,6 +741,9 @@ fn verify_verdict_origin(data: &Value, kind: &str) -> Result<Option<String>, Str
         return Err("verdict selected capture digest mismatch".into());
     }
     let raw: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    if raw.get("review_stage").and_then(Value::as_str) != Some("aggregate") {
+        return Err("criterion/goal verdicts must come from an aggregate review output".into());
+    }
     let mut claimed = data.clone();
     claimed.as_object_mut().unwrap().remove("origin");
     claimed
@@ -775,6 +790,11 @@ pub(crate) fn evaluate(
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let repository = checkpoint::repository_identity(&cwd)?;
     let mut executed = BTreeSet::new();
+    // This cache is deliberately scoped to this evaluation request. The
+    // command index above has already performed the full current-tree capture
+    // verification; source validation still checks every verdict and falls
+    // back to a fresh verification for historical/non-indexed evidence.
+    let mut verified_command_evidence_ids = BTreeSet::new();
     let command_ids = ids(&report["command_evidence_ids"])?;
     for id in &command_ids {
         let r = record(context, id)?;
@@ -790,6 +810,7 @@ pub(crate) fn evaluate(
             return Err("duplicate command proof ID".into());
         }
         command_evidence(&r.data, root, Some(spec), Some(&repository), true)?;
+        verified_command_evidence_ids.insert(id.clone());
     }
     if executed.len() != specs.len() {
         return Err("missing required named proof command".into());
@@ -861,7 +882,7 @@ pub(crate) fn evaluate(
         ));
     }
     for (criterion, verdict_ids, floor) in groups {
-        let mut authors = BTreeSet::new();
+        let mut authors: BTreeSet<(String, String)> = BTreeSet::new();
         for id in verdict_ids {
             if !selected_ids.insert(id.clone()) {
                 return Err("duplicate selected verdict ID".into());
@@ -921,7 +942,13 @@ pub(crate) fn evaluate(
             {
                 return Err("verdict kind or criterion identity mismatch".into());
             }
-            source(&original.data, kind, context, root)?;
+            source_with_verified_commands(
+                &original.data,
+                kind,
+                context,
+                root,
+                Some(&verified_command_evidence_ids),
+            )?;
             if verify_verdict_origin(&original.data, kind)?
                 .is_some_and(|id| id != original.id.as_str())
             {
@@ -948,7 +975,11 @@ pub(crate) fn evaluate(
                 );
                 continue;
             }
-            if !authors.insert(d["author"].to_string()) {
+            let author_key = (
+                text(&d["author"], "name")?.to_owned(),
+                text(&d["author"], "kind")?.to_owned(),
+            );
+            if !authors.insert(author_key) {
                 return Err("duplicate criterion author".into());
             }
             if !carried

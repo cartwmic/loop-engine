@@ -23,7 +23,7 @@ fn write_good_artifacts(root: &TestDir) {
     );
 }
 
-fn nonempty_axes(profile: &Value, gate: &str) -> Vec<(String, u64)> {
+fn nonempty_axes(profile: &Value, gate: &str) -> Vec<(String, String, u64)> {
     profile["review_policies"][gate]
         .as_array()
         .into_iter()
@@ -34,7 +34,13 @@ fn nonempty_axes(profile: &Value, gate: &str) -> Vec<(String, u64)> {
                 .get("required_authors")
                 .and_then(Value::as_u64)
                 .unwrap_or(1);
-            Some((id, required))
+            let stage = axis
+                .get("review_stage")
+                .or_else(|| axis.get("stage"))
+                .and_then(Value::as_str)
+                .unwrap_or("aggregate")
+                .to_owned();
+            Some((id, stage, required))
         })
         .collect()
 }
@@ -45,16 +51,17 @@ fn pass_gate(
     gate: &str,
     subject: &str,
     config_version: &str,
-    axes: &[(String, u64)],
+    axes: &[(String, String, u64)],
     last: bool,
 ) {
-    for (axis, required) in axes {
+    for (axis, stage, required) in axes {
         for author_index in 0..*required {
-            engine.append_evidence(
+            engine.append_evidence_stage(
                 run_id,
-                &format!("{run_id}-{gate}-{axis}-{author_index}"),
+                &format!("{run_id}-{gate}-{stage}-{axis}-{author_index}"),
                 gate,
                 axis,
+                stage,
                 "pass",
                 "",
                 &format!("reviewer-{author_index}"),

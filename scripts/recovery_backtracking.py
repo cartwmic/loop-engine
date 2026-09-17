@@ -51,13 +51,18 @@ class Fixture(ExecutionFixture):
             self.config.write_text('[providers.software-change]\ncommand = ' + json.dumps(str(self.proxy)) + '\n')
         schema = {"type": "object", "required": ["revision", "author"], "properties": {
             "revision": {"type": "string"}, "author": {"type": "object", "required": ["name", "kind"],
-                "properties": {"name": {"type": "string"}, "kind": {"type": "string", "enum": ["script"]}}}}}
-        profile = {"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "recovery-backtracking-2",
+                "properties": {"name": {"type": "string"}, "kind": {"type": "string", "enum": ["script"]}}},
+            "acceptance": {"type": "array", "items": {"type": "object", "required": ["id", "statement"],
+                "properties": {"id": {"type": "string"}, "statement": {"type": "string"}}}}}}
+        profile = {"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "recovery-backtracking-3",
             "artifact_root": str(self.artifacts), "review_policies": {},
             "artifact_schemas": {n + ".json": schema for n in ("intent", "design", "plan")},
+            "revision_links": [{"from": "design.json", "field": "intent_revision", "to": "intent.json"},
+                               {"from": "plan.json", "field": "design_revision", "to": "design.json"}],
             "work_slot_bindings": {"implement": {"command": sys.executable, "args": [str(self.worker), str(self.root)]}}}
-        for n in ("intent", "design"):
-            (self.artifacts / (n + ".json")).write_text(json.dumps({"revision": "1", "author": {"name": "fixture", "kind": "script"}}))
+        (self.artifacts / "intent.json").write_text(json.dumps({"revision": "1", "author": {"name": "fixture", "kind": "script"},
+            "acceptance": [{"id": "AC-1", "statement": "backtracking keeps rejected work observable"}]}))
+        (self.artifacts / "design.json").write_text(json.dumps({"revision": "1", "author": {"name": "fixture", "kind": "script"}, "intent_revision": "1"}))
         self.call(["--config", str(self.config), "start", "--id", name, "software-change", json.dumps(profile)])
         for event in ("intent-ready", "design-ready"):
             self.show()
@@ -66,7 +71,8 @@ class Fixture(ExecutionFixture):
             self.show()
             # A genuine provider denial is durable before the later rescope.
             self.call(["event", name, "plan-ready"], "rejected")
-        (self.artifacts / "plan.json").write_text(json.dumps({"revision": "1", "author": {"name": "fixture", "kind": "script"}}))
+        (self.artifacts / "plan.json").write_text(json.dumps({"revision": "1", "author": {"name": "fixture", "kind": "script"},
+            "design_revision": "1", "tasks": [{"id": "A", "criterion_ids": ["AC-1"]}], "dependency_graph": []}))
         self.show()
         self.call(["event", name, "plan-ready"])
         self.before = self.show()

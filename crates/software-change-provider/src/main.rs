@@ -32,6 +32,8 @@ use std::process::{self, Command, Stdio};
 
 const STDIN_EXEC_USAGE: &str =
     "usage: software-change stdin-exec --stdin-file ABS --exit-mode sidecar|propagate [--sidecar-file ABS] -- COMMAND [ARG]...";
+const RUN_PLAN_GRAPH_USAGE: &str =
+    "software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--task ID ... | --tasks ID,ID,...] [--max-active N]";
 const EXIT_STDIN_EXEC_ERROR: i32 = 20;
 
 fn main() {
@@ -69,6 +71,19 @@ fn run() -> i32 {
                     1
                 }
             };
+        }
+        Some(command) if command == "setup" => {
+            let rest = match args
+                .map(|arg| arg.into_string())
+                .collect::<Result<Vec<_>, _>>()
+            {
+                Ok(rest) => rest,
+                Err(_) => {
+                    eprintln!("setup arguments must be valid UTF-8");
+                    return 2;
+                }
+            };
+            return software_change_provider::setup::run_from_args(&rest);
         }
         Some(command) if command == "prepare-validation" => {
             if args.next().is_some() {
@@ -177,12 +192,16 @@ fn run() -> i32 {
                     return 2;
                 }
             };
+            if rest.len() == 1 && matches!(rest[0].as_str(), "--help" | "-h") {
+                println!(
+                    "Usage: {RUN_PLAN_GRAPH_USAGE} [--help]\n\nExecute the plan graph in the existing absolute working directory.\nThe command runs selected tasks and the mandatory summarizer through Dagu."
+                );
+                return 0;
+            }
             return match parse_run_plan_graph_args(&rest) {
                 Ok(parsed) => run_plan_graph::execute(&parsed),
                 Err(error) => {
-                    eprintln!(
-                        "{error}; usage: software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--task ID ... | --tasks ID,ID,...] [--max-active N]"
-                    );
+                    eprintln!("{error}; usage: {RUN_PLAN_GRAPH_USAGE}");
                     2
                 }
             };
@@ -249,7 +268,7 @@ fn run_protocol() -> i32 {
 
 fn provider_help() -> i32 {
     println!(
-        "software-change\n\nUsage:\n  software-change < stdin\n  software-change data-dump DIR\n  software-change checkpoint [--json] --phase implementation|validation --artifact-root ABS --working-directory ABS\n  software-change review-candidates\n  software-change prepare-validation < packet.json\n  software-change commission [--slot SLOT] [--task TASK]\n  software-change run-validation --engine ABS --working-directory ABS --revision REV [--commands ID,...] [--timeout-ms N]\n  software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--task ID ... | --tasks ID,ID,...] [--max-active N]\n  software-change --help | -h\n  software-change --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nReview candidates:\n  review-candidates  read one completed `show` JSON envelope from stdin and emit inert selected-review candidates\n\nData:\n  data-dump  materialize embedded provider data under DIR\n\nPlan graph:\n  run-plan-graph  requires --working-directory ABS (one existing driver-selected directory for every selected task and summarizer; no Git/worktree management) and executes plan.json as a Dagu type:graph (--max-active N; omitted means {MAX_CONCURRENCY} ordinary tasks) with a mandatory summarizer"
+        "software-change\n\nUsage:\n  software-change < stdin\n  software-change data-dump DIR\n  software-change setup --rigor minimal|standard|high --roster PATH --engine ABS --provider ABS --output PATH [--bookends] [--implementation PATH]\n  software-change checkpoint [--json] --phase implementation|validation --artifact-root ABS --working-directory ABS\n  software-change review-candidates\n  software-change prepare-validation < packet.json\n  software-change commission [--slot SLOT] [--task TASK] [--stage individual|aggregate]\n  software-change run-validation --engine ABS --working-directory ABS --revision REV [--commands ID,...] [--timeout-ms N]\n  software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--task ID ... | --tasks ID,ID,...] [--max-active N]\n  software-change --help | -h\n  software-change --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nReview candidates:\n  review-candidates  read one completed `show` JSON envelope from stdin and emit inert selected-review candidates\n\nData:\n  data-dump  materialize embedded provider data under DIR\n\nPlan graph:\n  run-plan-graph  requires --working-directory ABS (one existing driver-selected directory for every selected task and summarizer; no Git/worktree management) and executes plan.json as a Dagu type:graph (--max-active N; omitted means {MAX_CONCURRENCY} ordinary tasks) with a mandatory summarizer"
     );
     0
 }

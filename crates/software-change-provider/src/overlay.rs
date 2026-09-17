@@ -8,7 +8,7 @@
 #![allow(dead_code)]
 
 use serde_json::{json, Map, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 const REQUIREMENT_ID_PATTERN: &str = r"^LE-[1-9][0-9]*$";
 const PRD_TRACEABILITY_FIELD: &str = "prd_traceability";
@@ -61,7 +61,10 @@ pub(crate) fn apply(initial_input: &Value) -> Value {
         .get_mut("review_policies")
         .and_then(Value::as_object_mut)
     {
-        inject_axes(policies);
+        inject_axes(
+            policies,
+            initial_input["contract_version"].as_u64() == Some(3),
+        );
     }
     overlayed
 }
@@ -419,7 +422,7 @@ fn prd_traceability_schema() -> Value {
     })
 }
 
-fn inject_axes(policies: &mut Map<String, Value>) {
+fn inject_axes(policies: &mut Map<String, Value>, contract_v3: bool) {
     let gates: Vec<String> = policies.keys().cloned().collect();
     for gate in gates {
         let Some(axes) = policies.get_mut(&gate).and_then(Value::as_array_mut) else {
@@ -428,35 +431,74 @@ fn inject_axes(policies: &mut Map<String, Value>) {
         if axes.is_empty() {
             continue;
         }
-        push_axis_if_absent(
-            axes,
-            IDS_GROUNDED_ID,
-            IDS_GROUNDED_DESCRIPTION,
-            IDS_GROUNDED_PROMPT,
-        );
-        if VALIDATION_GATES.contains(&gate.as_str()) {
+        let stages = if contract_v3 {
+            let mut stages = BTreeMap::<String, u64>::new();
+            for axis in axes.iter() {
+                let stage = axis
+                    .get("review_stage")
+                    .or_else(|| axis.get("stage"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("aggregate")
+                    .to_owned();
+                let authors = axis
+                    .get("required_authors")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(1);
+                stages.entry(stage).or_insert(authors);
+            }
+            stages
+        } else {
+            BTreeMap::from([("aggregate".to_owned(), 1)])
+        };
+        for (stage, required_authors) in stages {
             push_axis_if_absent(
                 axes,
-                BYPASS_NOT_GREEN_ID,
-                BYPASS_NOT_GREEN_DESCRIPTION,
-                BYPASS_NOT_GREEN_PROMPT,
+                IDS_GROUNDED_ID,
+                IDS_GROUNDED_DESCRIPTION,
+                IDS_GROUNDED_PROMPT,
+                contract_v3.then_some(stage.as_str()),
+                required_authors,
             );
+            if VALIDATION_GATES.contains(&gate.as_str()) {
+                push_axis_if_absent(
+                    axes,
+                    BYPASS_NOT_GREEN_ID,
+                    BYPASS_NOT_GREEN_DESCRIPTION,
+                    BYPASS_NOT_GREEN_PROMPT,
+                    contract_v3.then_some(stage.as_str()),
+                    required_authors,
+                );
+            }
         }
     }
 }
 
-fn push_axis_if_absent(axes: &mut Vec<Value>, id: &str, description: &str, example_prompt: &str) {
-    let present = axes
-        .iter()
-        .any(|axis| axis.get("id").and_then(Value::as_str) == Some(id));
+fn push_axis_if_absent(
+    axes: &mut Vec<Value>,
+    id: &str,
+    description: &str,
+    example_prompt: &str,
+    review_stage: Option<&str>,
+    required_authors: u64,
+) {
+    let present = axes.iter().any(|axis| {
+        axis.get("id").and_then(Value::as_str) == Some(id)
+            && (!review_stage.is_some()
+                || axis.get("review_stage").and_then(Value::as_str) == review_stage)
+    });
     if present {
         return;
     }
-    axes.push(json!({
+    let mut axis = json!({
         "id": id,
         "description": description,
-        "example_prompt": example_prompt
-    }));
+        "example_prompt": example_prompt,
+        "required_authors": required_authors
+    });
+    if let Some(review_stage) = review_stage {
+        axis["review_stage"] = Value::String(review_stage.to_owned());
+    }
+    axes.push(axis);
 }
 
 #[cfg(test)]

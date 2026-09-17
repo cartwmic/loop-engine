@@ -173,11 +173,27 @@ pub(crate) fn default_task_worker() -> WorkerCli {
 
 /// Parse one worker CLI JSON object (`{command, args}`).
 pub(crate) fn parse_worker_cli_json(raw: &str) -> Result<WorkerCli, ParseError> {
-    serde_json::from_str(raw).map_err(|error| {
+    let worker: WorkerCli = serde_json::from_str(raw).map_err(|error| {
         ParseError::new(format!(
             "worker CLI JSON must be an object with exactly string `command` and array-of-string `args`: {error}"
         ))
-    })
+    })?;
+    if worker.command.contains(['\n', '\r']) {
+        return Err(ParseError::new(
+            "worker command cannot contain a line break",
+        ));
+    }
+    if let Some((index, _)) = worker
+        .args
+        .iter()
+        .enumerate()
+        .find(|(_, argument)| argument.contains(['\n', '\r']))
+    {
+        return Err(ParseError::new(format!(
+            "worker argument {index} cannot contain a line break"
+        )));
+    }
+    Ok(worker)
 }
 
 /// Parse the engine invoke packet from stdin JSON.

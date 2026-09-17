@@ -108,12 +108,17 @@ def software(engine, provider, checker, checkout, work_root):
     author = {"name": "subject", "kind": "script"}
     schema = {"type": "object", "required": ["revision", "author"], "properties": {
         "revision": {"type": "string"}, "author": {"type": "object", "required": ["name", "kind"],
-        "properties": {"name": {"type": "string"}, "kind": {"type": "string", "enum": ["human", "agent", "script"]}}}}}
-    profile = {"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "recovery-override-2", "artifact_root": str(f.artifacts),
+        "properties": {"name": {"type": "string"}, "kind": {"type": "string", "enum": ["human", "agent", "script"]}}},
+        "acceptance": {"type": "array", "items": {"type": "object", "required": ["id", "statement"],
+            "properties": {"id": {"type": "string"}, "statement": {"type": "string"}}}}}}
+    profile = {"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "recovery-override-3", "artifact_root": str(f.artifacts),
         "artifact_schemas": {name + ".json": schema for name in ("intent", "design", "plan")},
-        "review_policies": {"intent-review": [{"id": "axis", "description": "retained failure", "required_authors": 1}]},
+        "revision_links": [{"from": "design.json", "field": "intent_revision", "to": "intent.json"},
+                          {"from": "plan.json", "field": "design_revision", "to": "design.json"}],
+        "review_policies": {"intent-review": [{"id": "axis", "description": "retained failure", "review_stage": "aggregate", "required_authors": 1}]},
         "work_slot_bindings": {"implement": {"command": sys.executable, "args": ["-c", "raise SystemExit('MUST NOT RUN')"]}}}
-    (f.artifacts / "intent.json").write_text(json.dumps({"revision": "1", "author": author}))
+    (f.artifacts / "intent.json").write_text(json.dumps({"revision": "1", "author": author,
+        "acceptance": [{"id": "AC-1", "statement": "override retains the original failure and state"}]}))
     f.start(profile)
     # No observation may be manufactured by the attestation itself.
     f.refusal("intent-ready", {"state_visit": 0, "owner": "owner", "reason": "reason"}, code="run-not-observed")
@@ -127,7 +132,7 @@ def software(engine, provider, checker, checkout, work_root):
         f.refusal("approved", {**request, key: " \t"}, code="invalid-override")
     f.refusal("approved", {**request, "state_visit": request["state_visit"] - 1}, code="stale-state-visit")
     f.refusal("not-an-edge", request, code="event-unavailable")
-    review = {"gate": "intent-review", "policy_id": "axis", "result": "fail", "findings": "required outcome absent",
+    review = {"gate": "intent-review", "policy_id": "axis", "review_stage": "aggregate", "result": "fail", "findings": "required outcome absent",
         "author": {"name": "reviewer", "kind": "script"}, "subject": "intent.json", "subject_revision": "1",
         "config_version": profile["config_version"]}
     raw_review = subprocess.run([sys.executable, "-c", "import sys;sys.stdout.write(sys.stdin.read())"],
@@ -157,11 +162,18 @@ def software(engine, provider, checker, checkout, work_root):
     missing = f.result(["event", f.name, "design-ready"], "rejected")
     assert "design.json" in json.dumps(missing), missing
     f.override("design-ready")
+    # The exceptional design hop did not fabricate the missing artifact; the
+    # driver now supplies it before the later ordinary plan check.
+    (f.artifacts / "design.json").write_text(json.dumps({"revision": "1", "author": author, "intent_revision": "1"}))
     # A later ordinary edge remains ordinary, with its own schema obligation.
     f.show()
     f.result(["event", f.name, "plan-ready"], "rejected")
-    (f.artifacts / "plan.json").write_text(json.dumps({"revision": "1", "author": author}))
+    (f.artifacts / "plan.json").write_text(json.dumps({"revision": "1", "author": author,
+        "design_revision": "1", "tasks": [{"id": "A", "criterion_ids": ["AC-1"]}], "dependency_graph": []}))
     f.result(["event", f.name, "plan-ready"])
+    # The ordinary plan edge has consumed the supplied design; remove it again
+    # to preserve the fixture's original missing-artifact terminal assertion.
+    (f.artifacts / "design.json").unlink()
     f.show()
     denied_bound = f.result(["event", f.name, "implementation-ready"], "rejected")
     assert denied_bound["code"] == "bound-slot-invocation-required", denied_bound
@@ -250,7 +262,7 @@ class WorkFixture(ExecutionFixture):
             + "while not (root/'release').exists(): time.sleep(.01)\n")
         config = self.root / "providers.toml"
         config.write_text('[providers.software-change]\ncommand = ' + json.dumps(self.provider) + '\n')
-        profile = {"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "recovery-override-live-2", "artifact_root": str(self.artifacts),
+        profile = {"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "recovery-override-live-3", "artifact_root": str(self.artifacts),
             "review_policies": {}, "work_slot_bindings": {self.slot: {
                 "command": sys.executable, "args": [str(worker), str(self.root)]}}}
         self.call(["--config", str(config), "start", "--id", self.name, "software-change", json.dumps(profile)])

@@ -134,7 +134,7 @@ where
         }
     }
 
-    if let Err(outcome) = super::require_quiescent_work(&run, persistence, waiter_pid_is_alive) {
+    if let Err(outcome) = super::require_quiescent_work(&run, persistence) {
         return outcome;
     }
 
@@ -426,20 +426,6 @@ fn current_timestamp() -> Timestamp {
     Timestamp::from_unix_millis(millis)
 }
 
-#[cfg(unix)]
-fn waiter_pid_is_alive(pid: u32) -> bool {
-    extern "C" {
-        fn kill(pid: i32, sig: i32) -> i32;
-    }
-    unsafe { kill(pid as i32, 0) == 0 }
-}
-
-#[cfg(not(unix))]
-fn waiter_pid_is_alive(pid: u32) -> bool {
-    let _ = pid;
-    false
-}
-
 fn overlay_status_label(status: ProjectedInvocationStatus) -> &'static str {
     match status {
         ProjectedInvocationStatus::Running => "running",
@@ -513,7 +499,7 @@ where
     let mut overlay_notes = Vec::new();
     for record in &invocations {
         let overlay =
-            project_invocation_status(record, now, waiter_pid_is_alive(record.waiter_pid));
+            project_invocation_status(record, now, persistence.invocation_waiter_alive(record));
         if record.slot_id == slot.id {
             overlay_notes.push(overlay_status_label(overlay));
         }
@@ -535,7 +521,7 @@ where
         overlay_notes.join(", ")
     };
     let live_remedy = invocations.iter().find(|row|
-        crate::invocation_owns_work(row, waiter_pid_is_alive(row.waiter_pid)))
+        crate::invocation_owns_work(row, persistence.invocation_waiter_alive(row)))
         .map(|row| format!("; invocation `{}` owns live work or pending cleanup: wait or cancel-invocation {} {} before retry or state departure",
             row.invocation_id, run.id, row.invocation_id)).unwrap_or_default();
     Some(OperationOutcome::rejected(
@@ -865,6 +851,10 @@ mod tests {
             _run_id: &RunId,
         ) -> std::result::Result<Vec<crate::WorkSlotInvocation>, PersistenceError> {
             Ok(self.invocations.borrow().clone())
+        }
+
+        fn invocation_waiter_alive(&self, invocation: &WorkSlotInvocation) -> bool {
+            invocation.waiter_pid == std::process::id()
         }
     }
 

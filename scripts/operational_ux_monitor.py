@@ -137,12 +137,24 @@ else: print(json.dumps({'result':'allow'}))
     graph._engine_json = logged_engine_json
     try:
         graph_run = 'real-bound-plan-graph'
+        # The shipped v3 minimal profile now keeps every review phase live.
+        # This transport-only monitor fixture deliberately uses the same v3
+        # artifact/config bytes with review obligations empty so the public
+        # graph reaches implementation without fabricating semantic verdicts.
+        profile_source = root / 'minimal-operational.json'
+        profile_value = json.loads(
+            (checkout / 'crates/software-change-provider/data/configs/minimal.json').read_text()
+        )
+        profile_value['review_policies'] = {
+            gate: [] for gate in profile_value['review_policies']
+        }
+        profile_source.write_text(json.dumps(profile_value, indent=2))
         binding = graph.implement_graph_runner_binding(
             provider=real_provider, task_worker=graph.stdin_worker_cli(root/'graph-receipts'),
             working_directory=graph_work)
         graph_call, graph_root, profile = graph._start_isolated_software_change(
             engine=engine, provider=real_provider,
-            profile_source=checkout/'crates/software-change-provider/data/configs/minimal.json',
+            profile_source=profile_source,
             fixture_root=checkout/'crates/software-change-provider/data/calibration/fixtures',
             work_dir=root/'real-graph-run', run_id=graph_run, extra_bindings={'implement':binding})
         graph.invoke_until_succeeded(graph_call, graph_run, 'intent-draft', timeout_s=45)

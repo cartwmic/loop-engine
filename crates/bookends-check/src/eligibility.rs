@@ -1,9 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::path::Path;
-
-use crate::git;
+use crate::git::TreeReader;
 use crate::prd::{has_skip_marker, scan_citation_tokens};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The only CI collection forms used by the adopting repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,33 +14,21 @@ pub(crate) struct JobCommands {
     pub parsed: Vec<Collection>,
 }
 
-pub(crate) fn load_workflow_jobs(repo: &Path) -> Result<BTreeMap<String, JobCommands>, String> {
-    load_workflow_jobs_worktree(repo)
-}
-
-fn load_workflow_jobs_worktree(repo: &Path) -> Result<BTreeMap<String, JobCommands>, String> {
-    let dir = repo.join(".github").join("workflows");
-    if !dir.is_dir() {
-        return Ok(BTreeMap::new());
-    }
-    let tracked: BTreeSet<String> = git::tracked_files(repo)?.into_iter().collect();
+pub(crate) fn load_workflow_jobs<T: TreeReader>(
+    tree: &T,
+) -> Result<BTreeMap<String, JobCommands>, String> {
+    let tracked = tree.tracked_files()?;
     let mut jobs = BTreeMap::new();
-    let entries = fs::read_dir(&dir).map_err(|err| format!("read {}: {err}", dir.display()))?;
-    for entry in entries {
-        let entry = entry.map_err(|err| format!("read {}: {err}", dir.display()))?;
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+    for rel in tracked.iter().filter(|path| {
+        path.strip_prefix(".github/workflows/")
+            .is_some_and(|name| !name.contains('/') && name.ends_with(".yml"))
+    }) {
+        let Some(name) = rel.strip_prefix(".github/workflows/") else {
             continue;
         };
-        if !name.ends_with(".yml") {
-            continue;
-        }
-        let rel = format!(".github/workflows/{name}");
-        if !tracked.contains(&rel) {
-            continue;
-        }
-        let text =
-            fs::read_to_string(&path).map_err(|err| format!("read {}: {err}", path.display()))?;
+        let Some(text) = tree.read_text(rel)? else {
+            return Err(format!("cannot read tracked file {rel}"));
+        };
         merge_jobs(&mut jobs, parse_workflow_jobs(&text, name)?);
     }
     Ok(jobs)
@@ -165,34 +150,27 @@ fn is_repo_root_workdir(value: &str) -> bool {
 
 #[derive(Debug, Clone)]
 pub(crate) struct Package {
-    pub dir: String,
     targets: Vec<RustTarget>,
 }
 
 #[derive(Debug, Clone)]
 struct RustTarget {
-    path: String,
-    root: String,
-    kind: TargetKind,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum TargetKind {
-    Library,
-    Binary,
-    Integration,
+    /// The exact source files reachable from this Cargo target's root. A
+    /// directory prefix is not a collection: Rust only compiles files linked
+    /// by a module declaration (or an explicit `#[path]`).
+    files: BTreeSet<String>,
 }
 
 /// Read enough Cargo metadata to exclude targets that `cargo test
 /// --workspace` does not execute by default.  This is intentionally a
 /// workspace-only projection, not a general runner or manifest interpreter.
-pub(crate) fn workspace_packages(repo: &Path) -> Result<Vec<Package>, String> {
-    let Some(text) = git::read_text(repo, "Cargo.toml")? else {
+pub(crate) fn workspace_packages<T: TreeReader>(tree: &T) -> Result<Vec<Package>, String> {
+    let Some(text) = tree.read_text("Cargo.toml")? else {
         return Ok(Vec::new());
     };
     let root: toml::Value =
         toml::from_str(&text).map_err(|err| format!("parse Cargo.toml: {err}"))?;
-    let tracked = git::tracked_files(repo)?;
+    let tracked = tree.tracked_files()?;
     let mut dirs = Vec::new();
     if let Some(members) = root
         .get("workspace")
@@ -216,20 +194,20 @@ pub(crate) fn workspace_packages(repo: &Path) -> Result<Vec<Package>, String> {
         } else {
             format!("{dir}/Cargo.toml")
         };
-        let Some(text) = git::read_text(repo, &manifest_path)? else {
+        let Some(text) = tree.read_text(&manifest_path)? else {
             continue;
         };
         let manifest: toml::Value =
             toml::from_str(&text).map_err(|err| format!("parse {manifest_path}: {err}"))?;
         packages.push(Package {
-            targets: package_targets(&manifest, &dir, &tracked)?,
-            dir,
+            targets: package_targets(tree, &manifest, &dir, &tracked)?,
         });
     }
     Ok(packages)
 }
 
-fn package_targets(
+fn package_targets<T: TreeReader>(
+    tree: &T,
     manifest: &toml::Value,
     package_dir: &str,
     tracked: &[String],
@@ -249,12 +227,13 @@ fn package_targets(
         if let Some(table) = explicit_lib {
             if bool_field(table, "test", true)? {
                 targets.push(rust_target(
+                    tree,
+                    package_dir,
                     target_path(table, "src/lib.rs")?,
-                    TargetKind::Library,
-                ));
+                )?);
             }
         } else {
-            targets.push(rust_target("src/lib.rs".to_owned(), TargetKind::Library));
+            targets.push(rust_target(tree, package_dir, "src/lib.rs".to_owned())?);
         }
     }
 
@@ -265,7 +244,7 @@ fn package_targets(
             let path = target_path_with_default(table, "src/bin", ".rs")?;
             explicit_bins.insert(path.clone());
             if bool_field(table, "test", true)? {
-                targets.push(rust_target(path, TargetKind::Binary));
+                targets.push(rust_target(tree, package_dir, path)?);
             }
         }
     }
@@ -273,7 +252,7 @@ fn package_targets(
         if tracked_contains(tracked, package_dir, "src/main.rs")
             && !explicit_bins.contains("src/main.rs")
         {
-            targets.push(rust_target("src/main.rs".to_owned(), TargetKind::Binary));
+            targets.push(rust_target(tree, package_dir, "src/main.rs".to_owned())?);
         }
         for path in tracked_package_files(tracked, package_dir) {
             let Some(name) = path.strip_prefix("src/bin/") else {
@@ -283,7 +262,7 @@ fn package_targets(
                 && (!name.contains('/') || name.ends_with("/main.rs"))
                 && !explicit_bins.contains(&path)
             {
-                targets.push(rust_target(path, TargetKind::Binary));
+                targets.push(rust_target(tree, package_dir, path)?);
             }
         }
     }
@@ -295,7 +274,7 @@ fn package_targets(
             let path = target_path_with_default(table, "tests", ".rs")?;
             explicit_tests.insert(path.clone());
             if bool_field(table, "test", true)? {
-                targets.push(rust_target(path, TargetKind::Integration));
+                targets.push(rust_target(tree, package_dir, path)?);
             }
         }
     }
@@ -308,7 +287,7 @@ fn package_targets(
                 && (!name.contains('/') || name.ends_with("/main.rs"))
                 && !explicit_tests.contains(&path)
             {
-                targets.push(rust_target(path, TargetKind::Integration));
+                targets.push(rust_target(tree, package_dir, path)?);
             }
         }
     }
@@ -361,39 +340,445 @@ fn target_path_with_default(
     }
 }
 
-fn rust_target(path: String, kind: TargetKind) -> RustTarget {
-    let path = normalize_rel(&path);
-    let root = match kind {
-        TargetKind::Library => path
-            .rsplit_once('/')
-            .map(|(parent, _)| parent.to_owned())
-            .unwrap_or_default(),
-        TargetKind::Binary => {
-            let parent = path
-                .rsplit_once('/')
-                .map(|(parent, _)| parent)
-                .unwrap_or("");
-            let file = path.rsplit('/').next().unwrap_or(&path);
-            if file == "main.rs" {
-                parent.to_owned()
-            } else {
-                format!("{parent}/{}", file.trim_end_matches(".rs"))
-                    .trim_start_matches('/')
-                    .to_owned()
+fn rust_target<T: TreeReader>(
+    tree: &T,
+    package_dir: &str,
+    path: String,
+) -> Result<RustTarget, String> {
+    let path = join_module_path(package_dir, &normalize_rel(&path))
+        .ok_or_else(|| format!("Rust target path escapes the workspace: {package_dir}/{path}"))?;
+    Ok(RustTarget {
+        files: collect_rust_modules(tree, &path)?,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RustToken {
+    Ident(String),
+    String(String),
+    Punct(char),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExternalModule {
+    name: String,
+    path: Option<String>,
+    /// The directory against which this declaration resolves. Ordinary
+    /// modules use the logical module directory; `#[path]` uses the physical
+    /// directory of the containing source file.
+    module_dir: String,
+}
+
+/// Follow only source files linked by Rust's ordinary external-module forms.
+/// This deliberately does not try to classify tests or interpret macros: the
+/// collection question is lexical linkage, while whether an assertion is a
+/// good proof remains a review concern.
+fn collect_rust_modules<T: TreeReader>(tree: &T, root: &str) -> Result<BTreeSet<String>, String> {
+    let mut files = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    let root = normalize_rel(root);
+    collect_rust_module(tree, &root, &parent_dir(&root), &mut visited, &mut files)?;
+    Ok(files)
+}
+
+fn collect_rust_module<T: TreeReader>(
+    tree: &T,
+    file: &str,
+    module_dir: &str,
+    visited: &mut BTreeSet<(String, String)>,
+    files: &mut BTreeSet<String>,
+) -> Result<(), String> {
+    let file = normalize_rel(file);
+    let module_dir = normalize_rel(module_dir);
+    if !visited.insert((file.clone(), module_dir.clone())) {
+        return Ok(());
+    }
+    let Some(text) = tree.read_text(&file)? else {
+        // Cargo would reject a missing module during compilation.  It is not
+        // a proof file, though, so leave it out of the collection rather than
+        // treating an absent source blob as a directory-wide match.
+        return Ok(());
+    };
+    files.insert(file.clone());
+
+    for declaration in external_modules(&text, &module_dir, &parent_dir(&file)) {
+        let Some(child) = resolve_module_file(tree, &declaration)? else {
+            continue;
+        };
+        let child_dir = if declaration.path.is_some() {
+            // Rust's #[path] module is rooted at the physical directory that
+            // contains the selected file.  This is what lets the central
+            // workspace test target import another test root and retain that
+            // root's own `mod common;` linkage.
+            parent_dir(&child)
+        } else {
+            normal_module_dir(&child)
+        };
+        collect_rust_module(tree, &child, &child_dir, visited, files)?;
+    }
+    Ok(())
+}
+
+fn resolve_module_file<T: TreeReader>(
+    tree: &T,
+    declaration: &ExternalModule,
+) -> Result<Option<String>, String> {
+    let candidates = if let Some(path) = &declaration.path {
+        vec![join_module_path(
+            &declaration.module_dir,
+            &normalize_rel(path),
+        )]
+    } else {
+        vec![
+            join_module_path(&declaration.module_dir, &format!("{}.rs", declaration.name)),
+            join_module_path(
+                &declaration.module_dir,
+                &format!("{}/mod.rs", declaration.name),
+            ),
+        ]
+    };
+    for candidate in candidates.into_iter().flatten() {
+        if tree.read_text(&candidate)?.is_some() {
+            return Ok(Some(candidate));
+        }
+    }
+    Ok(None)
+}
+
+fn external_modules(text: &str, module_dir: &str, file_dir: &str) -> Vec<ExternalModule> {
+    let tokens = rust_tokens(text);
+    let mut modules = Vec::new();
+    scan_module_items(&tokens, 0, tokens.len(), module_dir, file_dir, &mut modules);
+    modules
+}
+
+fn scan_module_items(
+    tokens: &[RustToken],
+    start: usize,
+    end: usize,
+    module_dir: &str,
+    file_dir: &str,
+    modules: &mut Vec<ExternalModule>,
+) {
+    let mut index = start;
+    while index + 2 < end {
+        if matches!(tokens.get(index), Some(RustToken::Ident(value)) if value == "mod")
+            && matches!(tokens.get(index + 1), Some(RustToken::Ident(_)))
+        {
+            let Some(RustToken::Ident(name)) = tokens.get(index + 1) else {
+                index += 1;
+                continue;
+            };
+            match tokens.get(index + 2) {
+                Some(RustToken::Punct(';')) => {
+                    let path = path_attribute_before(tokens, index);
+                    modules.push(ExternalModule {
+                        name: name.clone(),
+                        module_dir: if path.is_some() {
+                            file_dir.to_owned()
+                        } else {
+                            module_dir.to_owned()
+                        },
+                        path,
+                    });
+                    index += 3;
+                    continue;
+                }
+                Some(RustToken::Punct('{')) => {
+                    if let Some(close) = matching_brace(tokens, index + 2, end) {
+                        let inline_dir = join_module_path(module_dir, name)
+                            .unwrap_or_else(|| module_dir.to_owned());
+                        scan_module_items(tokens, index + 3, close, &inline_dir, file_dir, modules);
+                        index = close + 1;
+                        continue;
+                    }
+                }
+                _ => {}
             }
         }
-        TargetKind::Integration => path
-            .rsplit_once('/')
-            .map(|(parent, file)| {
-                if file == "main.rs" {
-                    parent.to_owned()
-                } else {
-                    format!("{parent}/{}", file.trim_end_matches(".rs"))
+        if matches!(tokens.get(index), Some(RustToken::Punct('{'))) {
+            index = matching_brace(tokens, index, end)
+                .map(|close| close + 1)
+                .unwrap_or(end);
+        } else {
+            index += 1;
+        }
+    }
+}
+
+fn matching_brace(tokens: &[RustToken], open: usize, end: usize) -> Option<usize> {
+    let mut depth = 0;
+    for index in open..end {
+        match tokens.get(index) {
+            Some(RustToken::Punct('{')) => depth += 1,
+            Some(RustToken::Punct('}')) => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index);
                 }
-            })
-            .unwrap_or_else(|| path.trim_end_matches(".rs").to_owned()),
-    };
-    RustTarget { path, root, kind }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn path_attribute_before(tokens: &[RustToken], module_index: usize) -> Option<String> {
+    let mut cursor = module_index;
+    let mut path = None;
+    while cursor > 0 && matches!(tokens.get(cursor - 1), Some(RustToken::Punct(']'))) {
+        let close = cursor - 1;
+        let open = matching_open_bracket(tokens, close)?;
+        if open == 0 || !matches!(tokens.get(open - 1), Some(RustToken::Punct('#'))) {
+            break;
+        }
+        if let Some(value) = path_attribute_value(&tokens[open + 1..close]) {
+            path = Some(value);
+        }
+        cursor = open - 1;
+    }
+    path
+}
+
+fn matching_open_bracket(tokens: &[RustToken], close: usize) -> Option<usize> {
+    let mut depth = 0;
+    for index in (0..=close).rev() {
+        match tokens.get(index) {
+            Some(RustToken::Punct(']')) => depth += 1,
+            Some(RustToken::Punct('[')) => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn path_attribute_value(tokens: &[RustToken]) -> Option<String> {
+    match tokens {
+        [RustToken::Ident(name), RustToken::Punct('='), RustToken::String(value)]
+            if name == "path" =>
+        {
+            Some(value.clone())
+        }
+        _ => None,
+    }
+}
+
+fn rust_tokens(text: &str) -> Vec<RustToken> {
+    let bytes = text.as_bytes();
+    let mut tokens = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index].is_ascii_whitespace() {
+            index += 1;
+            continue;
+        }
+        if bytes[index] == b'/' && bytes.get(index + 1) == Some(&b'/') {
+            index = skip_line_comment(bytes, index + 2);
+            continue;
+        }
+        if bytes[index] == b'/' && bytes.get(index + 1) == Some(&b'*') {
+            index = skip_block_comment(bytes, index + 2);
+            continue;
+        }
+        if let Some((value, next)) = raw_string(bytes, index) {
+            tokens.push(RustToken::String(value));
+            index = next;
+            continue;
+        }
+        if bytes[index] == b'"' {
+            let (value, next) = quoted_string(bytes, index, b'"');
+            tokens.push(RustToken::String(value));
+            index = next;
+            continue;
+        }
+        if bytes[index] == b'\'' {
+            if let Some(next) = char_literal_end(bytes, index) {
+                index = next;
+                continue;
+            }
+            index += 1;
+            continue;
+        }
+        if is_ascii_ident_start(bytes[index]) {
+            let start = index;
+            index += 1;
+            while index < bytes.len() && is_ascii_ident_continue(bytes[index]) {
+                index += 1;
+            }
+            tokens.push(RustToken::Ident(
+                String::from_utf8_lossy(&bytes[start..index]).into_owned(),
+            ));
+            continue;
+        }
+        if matches!(
+            bytes[index],
+            b'#' | b'[' | b']' | b'(' | b')' | b'{' | b'}' | b'=' | b';'
+        ) {
+            tokens.push(RustToken::Punct(bytes[index] as char));
+        }
+        index += 1;
+    }
+    tokens
+}
+
+fn skip_line_comment(bytes: &[u8], mut index: usize) -> usize {
+    while index < bytes.len() && bytes[index] != b'\n' {
+        index += 1;
+    }
+    index
+}
+
+fn skip_block_comment(bytes: &[u8], mut index: usize) -> usize {
+    let mut depth = 1;
+    while index < bytes.len() && depth > 0 {
+        if bytes[index] == b'/' && bytes.get(index + 1) == Some(&b'*') {
+            depth += 1;
+            index += 2;
+        } else if bytes[index] == b'*' && bytes.get(index + 1) == Some(&b'/') {
+            depth -= 1;
+            index += 2;
+        } else {
+            index += 1;
+        }
+    }
+    index
+}
+
+fn raw_string(bytes: &[u8], index: usize) -> Option<(String, usize)> {
+    let mut marker = index;
+    if bytes.get(marker) == Some(&b'b') {
+        marker += 1;
+    }
+    if bytes.get(marker) != Some(&b'r') {
+        return None;
+    }
+    marker += 1;
+    let mut hashes = 0;
+    while bytes.get(marker) == Some(&b'#') {
+        hashes += 1;
+        marker += 1;
+    }
+    if bytes.get(marker) != Some(&b'"') {
+        return None;
+    }
+    let content_start = marker + 1;
+    let mut cursor = content_start;
+    while cursor < bytes.len() {
+        if bytes[cursor] == b'"'
+            && bytes
+                .get(cursor + 1..cursor + 1 + hashes)
+                .is_some_and(|suffix| suffix.iter().all(|byte| *byte == b'#'))
+        {
+            let end = cursor + 1 + hashes;
+            return Some((
+                String::from_utf8_lossy(&bytes[content_start..cursor]).into_owned(),
+                end,
+            ));
+        }
+        cursor += 1;
+    }
+    Some((
+        String::from_utf8_lossy(&bytes[content_start..]).into_owned(),
+        bytes.len(),
+    ))
+}
+
+fn quoted_string(bytes: &[u8], index: usize, quote: u8) -> (String, usize) {
+    let mut value = Vec::new();
+    let mut cursor = index + 1;
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            byte if byte == quote => {
+                return (String::from_utf8_lossy(&value).into_owned(), cursor + 1)
+            }
+            b'\\' if cursor + 1 < bytes.len() => {
+                value.push(match bytes[cursor + 1] {
+                    b'n' => b'\n',
+                    b'r' => b'\r',
+                    b't' => b'\t',
+                    other => other,
+                });
+                cursor += 2;
+            }
+            byte => {
+                value.push(byte);
+                cursor += 1;
+            }
+        }
+    }
+    (String::from_utf8_lossy(&value).into_owned(), bytes.len())
+}
+
+fn char_literal_end(bytes: &[u8], index: usize) -> Option<usize> {
+    let mut cursor = index + 1;
+    if cursor >= bytes.len() || bytes[cursor] == b'\n' || is_ascii_ident_continue(bytes[cursor]) {
+        return None;
+    }
+    while cursor < bytes.len() && bytes[cursor] != b'\n' {
+        if bytes[cursor] == b'\\' {
+            cursor = cursor.saturating_add(2);
+        } else if bytes[cursor] == b'\'' {
+            return Some(cursor + 1);
+        } else {
+            cursor += 1;
+        }
+    }
+    None
+}
+
+fn is_ascii_ident_start(byte: u8) -> bool {
+    byte == b'_' || byte.is_ascii_alphabetic()
+}
+
+fn is_ascii_ident_continue(byte: u8) -> bool {
+    byte == b'_' || byte.is_ascii_alphanumeric()
+}
+
+fn parent_dir(path: &str) -> String {
+    normalize_rel(path)
+        .rsplit_once('/')
+        .map(|(parent, _)| parent.to_owned())
+        .unwrap_or_default()
+}
+
+fn normal_module_dir(path: &str) -> String {
+    let path = normalize_rel(path);
+    let parent = parent_dir(&path);
+    let file = path.rsplit('/').next().unwrap_or(&path);
+    if file == "mod.rs" {
+        parent
+    } else {
+        let stem = file.strip_suffix(".rs").unwrap_or(file);
+        join_module_path(&parent, stem).unwrap_or(parent)
+    }
+}
+
+fn join_module_path(base: &str, child: &str) -> Option<String> {
+    let child = child.replace('\\', "/");
+    if child.starts_with('/')
+        || (child.len() >= 2
+            && child.as_bytes()[0].is_ascii_alphabetic()
+            && child.as_bytes()[1] == b':')
+    {
+        return None;
+    }
+    let mut parts = Vec::new();
+    let base = base.replace('\\', "/");
+    for part in base.split('/').chain(child.split('/')) {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            value => parts.push(value),
+        }
+    }
+    Some(parts.join("/"))
 }
 
 fn tracked_contains(tracked: &[String], package_dir: &str, relative: &str) -> bool {
@@ -457,48 +842,47 @@ pub(crate) fn collection_contains(
 ) -> bool {
     match collection {
         Collection::SingleFile(script) => normalize_rel(file) == normalize_rel(script),
-        Collection::WorkspaceRustTests => packages
-            .iter()
-            .any(|package| is_default_rust_test_file(file, package)),
-    }
-}
-
-fn is_default_rust_test_file(file: &str, package: &Package) -> bool {
-    let file = normalize_rel(file);
-    if !file.ends_with(".rs") {
-        return false;
-    }
-    let relative = if package.dir.is_empty() {
-        file.as_str()
-    } else {
-        let prefix = format!("{}/", package.dir);
-        match file.strip_prefix(&prefix) {
-            Some(relative) => relative,
-            None => return false,
+        Collection::WorkspaceRustTests => {
+            let file = normalize_rel(file);
+            packages.iter().any(|package| {
+                package
+                    .targets
+                    .iter()
+                    .any(|target| target.files.contains(&file))
+            })
         }
-    };
-    package
-        .targets
-        .iter()
-        .any(|target| target_contains(relative, target))
+    }
 }
 
-fn target_contains(file: &str, target: &RustTarget) -> bool {
-    if file == target.path {
+fn is_non_proof_surface(file: &str) -> bool {
+    let normalized = file.replace('\\', "/");
+    if matches!(
+        normalized
+            .rsplit('/')
+            .next()
+            .and_then(|name| name.rsplit_once('.')),
+        Some((
+            _,
+            "md" | "markdown" | "rst" | "txt" | "json" | "toml" | "yaml" | "yml"
+        ))
+    ) {
         return true;
     }
-    if target.root.is_empty() || !file.starts_with(&format!("{}/", target.root)) {
-        return false;
-    }
-    match target.kind {
-        TargetKind::Library => {
-            target.root != "src" || (file != "src/main.rs" && !file.starts_with("src/bin/"))
-        }
-        TargetKind::Binary => {
-            target.root != "src" || (file != "src/lib.rs" && !file.starts_with("src/bin/"))
-        }
-        TargetKind::Integration => true,
-    }
+
+    normalized.split('/').any(|part| {
+        matches!(
+            part,
+            "doc"
+                | "docs"
+                | "documentation"
+                | "example"
+                | "examples"
+                | "fixture"
+                | "fixtures"
+                | "generated"
+                | "vendor"
+        )
+    })
 }
 
 fn normalize_rel(path: &str) -> String {
@@ -512,14 +896,17 @@ pub(crate) struct IndexedCitation {
     pub skipped: bool,
 }
 
-pub(crate) fn index_class_files(
-    repo: &Path,
+pub(crate) fn index_class_files<T: TreeReader>(
+    tree: &T,
     files: &[String],
 ) -> Result<(Vec<IndexedCitation>, Vec<String>), Vec<String>> {
     let mut citations = Vec::new();
     let mut errors = Vec::new();
     for file in files {
-        let text = match git::read_text(repo, file) {
+        if is_non_proof_surface(file) {
+            continue;
+        }
+        let text = match tree.read_text(file) {
             Ok(Some(text)) => text,
             Ok(None) => {
                 errors.push(format!("cannot read tracked file {file}"));
@@ -606,5 +993,115 @@ mod tests {
         )
         .unwrap();
         assert_eq!(jobs["test"].parsed, vec![Collection::WorkspaceRustTests]);
+    }
+
+    #[derive(Default)]
+    struct MemoryTree {
+        files: BTreeMap<String, String>,
+    }
+
+    impl MemoryTree {
+        fn with(mut self, path: &str, text: &str) -> Self {
+            self.files.insert(path.to_owned(), text.to_owned());
+            self
+        }
+    }
+
+    impl TreeReader for MemoryTree {
+        fn tracked_files(&self) -> Result<Vec<String>, String> {
+            Ok(self.files.keys().cloned().collect())
+        }
+
+        fn pathspec_files(&self, _pathspecs: &[String]) -> Result<Vec<String>, String> {
+            self.tracked_files()
+        }
+
+        fn read_text(&self, rel: &str) -> Result<Option<String>, String> {
+            Ok(self.files.get(rel).cloned())
+        }
+    }
+
+    #[test]
+    fn workspace_collection_follows_declared_modules_not_source_directory() {
+        let tree = MemoryTree::default()
+            .with(
+                "Cargo.toml",
+                "[workspace]\nmembers = [\"crate_a\", \"tests/central\"]\n",
+            )
+            .with(
+                "crate_a/Cargo.toml",
+                "[package]\nname = \"crate_a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+            )
+            .with(
+                "crate_a/src/lib.rs",
+                "mod included;\n#[path = \"../../path_import.rs\"]\nmod imported;\n",
+            )
+            .with(
+                "crate_a/src/included.rs",
+                "mod nested;\n#[path = \"path_sibling.rs\"]\nmod sibling;\n",
+            )
+            .with("crate_a/src/included/nested.rs", "")
+            .with("crate_a/src/path_sibling.rs", "")
+            .with("crate_a/src/included/path_sibling.rs", "")
+            .with("crate_a/src/not_a_module.rs", "")
+            .with("path_import.rs", "")
+            .with(
+                "tests/central/Cargo.toml",
+                "[package]\nname = \"central\"\nversion = \"0.1.0\"\nedition = \"2021\"\nautotests = false\n[[test]]\nname = \"workspace\"\npath = \"tests/workspace.rs\"\n",
+            )
+            .with(
+                "tests/central/tests/workspace.rs",
+                "#[path = \"../../../central_import.rs\"]\nmod imported_test;\n",
+            )
+            .with("central_import.rs", "mod imported_child;\n")
+            .with("imported_child.rs", "");
+        let packages = workspace_packages(&tree).unwrap();
+        let collected = Collection::WorkspaceRustTests;
+        assert!(collection_contains(
+            "crate_a/src/lib.rs",
+            &collected,
+            &packages
+        ));
+        assert!(collection_contains(
+            "crate_a/src/included/nested.rs",
+            &collected,
+            &packages
+        ));
+        assert!(collection_contains(
+            "crate_a/src/path_sibling.rs",
+            &collected,
+            &packages
+        ));
+        assert!(!collection_contains(
+            "crate_a/src/included/path_sibling.rs",
+            &collected,
+            &packages
+        ));
+        assert!(!collection_contains(
+            "crate_a/path_import.rs",
+            &collected,
+            &packages
+        ));
+        assert!(collection_contains("path_import.rs", &collected, &packages));
+        assert!(collection_contains(
+            "tests/central/tests/workspace.rs",
+            &collected,
+            &packages
+        ));
+        assert!(collection_contains(
+            "central_import.rs",
+            &collected,
+            &packages
+        ));
+        assert!(collection_contains(
+            "imported_child.rs",
+            &collected,
+            &packages
+        ));
+        assert!(!collection_contains(
+            "crate_a/src/not_a_module.rs",
+            &collected,
+            &packages
+        ));
     }
 }

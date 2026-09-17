@@ -38,6 +38,13 @@ global-artifacts-jobs = ["./preflight", "./archive-smoke"]
 inherits = "release"
 lto = "thin"
 
+# Keep developer binaries representative of the measured journey without
+# disabling the assertions and overflow checks that protect debug proof paths.
+[profile.dev]
+opt-level = 1
+debug-assertions = true
+overflow-checks = true
+
 # Test binary resolution verifies full executable digests on every lookup.
 # Optimize hashing, not away the integrity checks or test deadlines.
 [profile.test.package.sha2]

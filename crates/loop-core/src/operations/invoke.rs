@@ -194,7 +194,12 @@ where
         .iter()
         .filter(|record| record.slot_id == request.slot_id)
     {
-        if crate::invocation_owns_work(record, process.waiter_alive(record.waiter_pid)) {
+        let waiter_alive = if record.ownership.is_some() && record.waiter_identity.is_none() {
+            false
+        } else {
+            process.waiter_alive_for_identity(record.waiter_pid, record.waiter_identity.as_ref())
+        };
+        if crate::invocation_owns_work(record, waiter_alive) {
             return OperationOutcome::rejected(
                 "work-slot-already-running",
                 format!(
@@ -374,6 +379,7 @@ where
         Err(error) => return process_error(error),
     };
 
+    let waiter_identity = waiter.identity.clone();
     let create = CreateWorkSlotInvocationRequest::new(
         request.run_id.clone(),
         request.invocation_id.clone(),
@@ -386,6 +392,7 @@ where
         allowed_time_ms,
         capture_dir.clone(),
     )
+    .with_waiter_identity_opt(waiter_identity)
     .with_controls(controls.clone())
     .with_routed_inputs(forwarded_context.clone().unwrap_or_default())
     .with_frozen_run_identity(json!({

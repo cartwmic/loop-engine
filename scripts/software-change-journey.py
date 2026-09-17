@@ -16,11 +16,11 @@ The evidence records are synthetic, conforming records.  They exercise schema,
 revision-link, author-independence, aggregation, routing, and persistence
 mechanics only; they are not semantic review judgments.
 
-``--self-test`` executes the three provider skill constructors against shipped
-profiles (software-change high-rigor design-review, policy-document semantic
-policies/target/mode, research verify and synthesize), asserts root AGENTS
-rules, and prints ``worker-data skill/root policy assertions passed`` only after
-all pass. Source full mode binds deterministic stdin-capturing workers that emit
+``--self-test`` executes the software-change setup utility and the two
+remaining provider skill constructors against shipped profiles (software-change
+high-rigor policy/stage setup, policy-document semantic policies/target/mode,
+research verify and synthesize), asserts root AGENTS rules, and prints
+``worker-data skill/root policy assertions passed`` only after all pass. Source full mode binds deterministic stdin-capturing workers that emit
 conforming JSON or exit-0 refusal text; after overlay failure, persisted
 summary/captures, and the compact one-key ``artifact_root`` stdin proof, it
 prints ``contracted fan-out failure``. It also drives the real engine/provider
@@ -137,6 +137,38 @@ COMPANION_SCENARIO_SUBPATH = Path(
     "crates/software-change-provider/data/calibration/companions/"
     "fictional-repo/scripts/production-journey.py"
 )
+RECOVERY_COMPLETION_MARKERS = {
+    "dispositions": "recovery dispositions scenario passed:",
+    "steering": "recovery steering passed:",
+    "execution-controls": "recovery execution-controls scenario passed",
+    "cancellation": "recovery cancellation scenario passed",
+    "backtracking": "recovery backtracking scenario passed:",
+    "override": "recovery override scenario passed:",
+    "batched-review": "recovery batched-review scenario passed:",
+    "criteria": "recovery criterion proof passed:",
+    "composed-recovery": "composed recovery journey passed:",
+}
+ENGINE_BOUNDARY_PROOF = [
+    "LE-2 malformed workflow rejected before run creation",
+    "LE-2 structurally valid cyclic production topology accepted",
+    "LE-13 final-state outgoing transition rejected before run creation",
+    "LE-14 initially-final run created with final lifecycle",
+    "LE-15 terminal append/event/terminate rejected without history change",
+    "LE-11 show retained frozen topology and instructions after describe change",
+    "LE-12 unsupported stored action and provider failure failed without state or history advancement",
+]
+PACKAGE_7B_PROOF = [
+    "selected retry output is ready and exposes normalized result/findings",
+    "exhausted assignment is a non-judgmental diagnostic",
+    "raw attempts and captures remain unchanged",
+    "worker attempt sentinels remain unchanged across repeated inspection",
+    "repeated candidate inspection is byte-identical",
+    "distinct durable invocations remain ordered without deduplication",
+    "candidate inspection is inert before driver records",
+    "foreign workflow identity is rejected before projection",
+    "driver triage accepts ready and rejects exhausted before ordinary append",
+    "driver-authored review-evidence and finding-ledger permit checked progression",
+]
 
 
 def _review_stdin_kinds(slot_ids: Sequence[str]) -> dict[str, list[str]]:
@@ -165,6 +197,7 @@ DUMMY_WORKER_PROOF = [
     "preview-bindings exits nonzero on zero-worker fan-out and creates no run",
     "preview-bindings warns when pi has --no-extensions and no -e",
     "opt-in dummy implement/review bindings may include -e args",
+    "provider constructors omit unused extension pairs and validate supplied paths",
     "PATH stub pi default argv --print --no-skills --no-extensions without --no-context-files or --tools",
     "bound fan-out show heartbeat overlay_meaning elapsed remaining capture_dir inner_workers",
     "contracted fan-out exit-0 conformance summary and failed-overlay capture persistence",
@@ -321,6 +354,7 @@ class Journey:
         self.engine_boundary_proof: List[str] = []
         self.bookends_proof: Optional[Path] = None
         self.criterion_overlay_proof: Dict[str, Path] = {}
+        self._operational_ux_outcomes: Dict[str, Any] = {}
         self.command_cwd: Optional[Path] = None
         self.command_env: Dict[str, str] = {}
         self.run_id = "journey-production-run"
@@ -380,8 +414,10 @@ class Journey:
         if self.mode == "source":
             self._validate_scenario_fixtures()
 
-    def _run_operational_ux_cases(self) -> None:
-        """Run existing public cases only from the full source traversal."""
+    def _run_operational_ux_cases(
+        self, *, global_jobs: Optional[List[Dict[str, Any]]] = None
+    ) -> None:
+        """Run independent operational cases under the existing bounded pool."""
         assert self.run_dir is not None
         binary_dir = self.engine.parent
         for name in ("loop-engine", "software-change", "policy-document", "research", "bookends-check"):
@@ -402,21 +438,184 @@ class Journey:
         )
         output = self.run_dir / "operational-ux"
         output.mkdir()
-        for case in cases:
+        script = Path(__file__).with_name("operational-ux-journey.py")
+        if global_jobs is None and getattr(self.args, "jobs", 2) == 1:
+            for case in cases:
+                argv = [
+                    sys.executable, str(script), "--case", case,
+                    "--binary-dir", str(binary_dir),
+                    # These cases do not read released_root. This existing source
+                    # directory satisfies only the CLI parser, not release validation.
+                    "--released-root", str(self.data_root), "--output-root", str(output),
+                ]
+                (output / f"{case}.argv.json").write_text(json.dumps(argv) + "\n")
+                case_environment = os.environ.copy()
+                case_environment["SOFTWARE_CHANGE_JOURNEY_ENGINE"] = str(self.engine)
+                case_environment["SOFTWARE_CHANGE_JOURNEY_PROVIDER"] = str(self.provider)
+                with (output / f"{case}.stdout").open("wb") as stdout, (output / f"{case}.stderr").open("wb") as stderr:
+                    result = subprocess.run(
+                        argv, stdout=stdout, stderr=stderr, env=case_environment, check=False
+                    )
+                (output / f"{case}.exit.json").write_text(json.dumps({"exit_code": result.returncode}) + "\n")
+                if result.returncode != 0:
+                    raise JourneyFailure(f"operational UX {case} failed ({result.returncode}); captures: {output}")
+                print(f"operational UX {case} passed; captures: {output}")
+            return
+
+        import proof_pool
+
+        env_binary = shutil.which("env") or "/usr/bin/env"
+        outcomes = {}
+        # guidance invokes the journey self-test, which owns its own proof pool.
+        # Keep that genuinely nested workflow outside this pool rather than
+        # multiplying budgets or weakening the existing self-test.
+        serial_case = "guidance"
+        serial_output = output / serial_case
+        serial_argv = [
+            env_binary,
+            f"SOFTWARE_CHANGE_JOURNEY_ENGINE={self.engine}",
+            f"SOFTWARE_CHANGE_JOURNEY_PROVIDER={self.provider}",
+            "PYTHONUNBUFFERED=1",
+            sys.executable,
+            str(script),
+            "--case", serial_case,
+            "--binary-dir", str(binary_dir),
+            "--released-root", str(self.data_root),
+            "--output-root", str(serial_output),
+        ]
+        serial_environment = os.environ.copy()
+        serial_environment["SOFTWARE_CHANGE_JOURNEY_ENGINE"] = str(self.engine)
+        serial_environment["SOFTWARE_CHANGE_JOURNEY_PROVIDER"] = str(self.provider)
+        serial_environment["PYTHONUNBUFFERED"] = "1"
+        serial = subprocess.run(
+            serial_argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=serial_environment,
+            check=False,
+        )
+        (output / "guidance.argv.json").write_text(json.dumps(serial_argv) + "\n", encoding="utf-8")
+        (output / "guidance.stdout").write_bytes(serial.stdout)
+        (output / "guidance.stderr").write_bytes(serial.stderr)
+        if serial.returncode != 0:
+            raise JourneyFailure(
+                f"operational UX guidance failed; inspect {output}",
+                state="end",
+                event="operational-ux",
+            )
+        try:
+            guidance_outcome = json.loads(
+                [line for line in serial.stdout.decode("utf-8", "replace").splitlines() if line][-1]
+            )
+        except (IndexError, json.JSONDecodeError) as error:
+            raise JourneyFailure(
+                f"operational UX guidance omitted its public outcome; inspect {output}",
+                state="end",
+                event="operational-ux",
+            ) from error
+        if guidance_outcome.get("case") != serial_case or guidance_outcome.get("status") != "passed":
+            raise JourneyFailure(
+                f"operational UX guidance reported an invalid outcome: {guidance_outcome}",
+                state="end",
+                event="operational-ux",
+            )
+        outcomes[serial_case] = guidance_outcome
+        self._operational_ux_outcomes = outcomes
+        print(f"operational UX guidance passed; captures: {guidance_outcome.get('artifact_root')}")
+
+        parallel_cases = tuple(case for case in cases if case != serial_case)
+        if global_jobs is not None:
+            # The five non-guidance cases all touch the maintained checkout's
+            # Git boundary.  Keep their measured safe cap of two by making two
+            # sequential batches, while each batch still occupies one slot in
+            # the caller's single global proof pool.
+            assert self.run_dir is not None
+            output = self.run_dir / "operational-ux"
+            for index, batch in enumerate((parallel_cases[:3], parallel_cases[3:]), start=1):
+                self._append_global_pool_job(
+                    global_jobs,
+                    name=f"operational-batch-{index}",
+                    kind="operational-batch",
+                    root=output / f"batch-{index}",
+                    cases=list(batch),
+                    binary_dir=str(binary_dir),
+                    released_root=str(self.data_root),
+                    script=str(script),
+                )
+            return
+
+        jobs = []
+        for case in parallel_cases:
+            case_output = output / case
             argv = [
-                sys.executable, str(Path(__file__).with_name("operational-ux-journey.py")),
-                "--case", case, "--binary-dir", str(binary_dir),
-                # These six cases do not read released_root. This existing source
-                # directory satisfies only the CLI parser, not release validation.
-                "--released-root", str(self.data_root), "--output-root", str(output),
+                env_binary,
+                f"SOFTWARE_CHANGE_JOURNEY_ENGINE={self.engine}",
+                f"SOFTWARE_CHANGE_JOURNEY_PROVIDER={self.provider}",
+                "PYTHONUNBUFFERED=1",
+                sys.executable,
+                str(script),
+                "--case", case,
+                "--binary-dir", str(binary_dir),
+                "--released-root", str(self.data_root),
+                "--output-root", str(case_output),
             ]
-            (output / f"{case}.argv.json").write_text(json.dumps(argv) + "\n")
-            with (output / f"{case}.stdout").open("wb") as stdout, (output / f"{case}.stderr").open("wb") as stderr:
-                result = subprocess.run(argv, stdout=stdout, stderr=stderr, check=False)
-            (output / f"{case}.exit.json").write_text(json.dumps({"exit_code": result.returncode}) + "\n")
-            if result.returncode != 0:
-                raise JourneyFailure(f"operational UX {case} failed ({result.returncode}); captures: {output}")
-            print(f"operational UX {case} passed; captures: {output}")
+            jobs.append({"name": case, "command": argv})
+        # These cases all exercise the maintained checkout's Git boundary and
+        # some also run their own bounded process fixtures. Two concurrent
+        # cases is the measured safe cap; the caller's global budget remains an
+        # upper bound and jobs=1 still takes the serial path above.
+        operational_limit = min(self.args.jobs, 2)
+        report = proof_pool.run(
+            jobs,
+            root=self.run_dir / "operational-ux-pool",
+            limit=operational_limit,
+            timeout=self.args.job_timeout,
+        )
+        report_path = self.run_dir / "operational-ux-pool-report.json"
+        report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        expected_peak = min(operational_limit, len(parallel_cases))
+        if report.get("status") != "passed" or report.get("peak_jobs") != expected_peak:
+            raise JourneyFailure(
+                f"operational UX pool failed; inspect {report_path}",
+                state="end",
+                event="operational-ux",
+            )
+        for case, row in zip(parallel_cases, report.get("jobs", [])):
+            if row.get("name") != case or row.get("status") != "passed" or row.get("exit_code") != 0:
+                raise JourneyFailure(
+                    f"operational UX {case} did not complete; inspect {report_path}",
+                    state="end",
+                    event="operational-ux",
+                )
+            outcome = None
+            for line in reversed(Path(row["stdout"]).read_text(encoding="utf-8", errors="replace").splitlines()):
+                if not line:
+                    continue
+                try:
+                    candidate = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(candidate, dict) and candidate.get("case") == case:
+                    outcome = candidate
+                    break
+            if not isinstance(outcome, dict) or outcome.get("status") != "passed":
+                raise JourneyFailure(
+                    f"operational UX {case} omitted its public outcome; inspect {report_path}",
+                    state="end",
+                    event="operational-ux",
+                )
+            if outcome.get("case") != case or outcome.get("status") != "passed":
+                raise JourneyFailure(
+                    f"operational UX {case} reported an invalid outcome: {outcome}",
+                    state="end",
+                    event="operational-ux",
+                )
+            outcomes[case] = outcome
+            print(f"operational UX {case} passed; captures: {outcome.get('artifact_root')}")
+        self._operational_ux_outcomes = outcomes
+        (self.run_dir / "operational-ux-results.json").write_text(
+            json.dumps(outcomes, indent=2) + "\n", encoding="utf-8"
+        )
 
     def _validate_scenario_fixtures(self) -> None:
         assert self.fixture_root is not None
@@ -459,12 +658,11 @@ class Journey:
         successor_route_cases = 0
         if self.mode == "source" and self.depth == "full":
             self._run_full_source()
-            # bookends:LE-127 — recovery_batch calls work_slot_journey's
-            # assert_projected_fan_out_capture for compact stdin and full evidence;
-            # recovery inventory checks invalid-evidence refusal, while the full
-            # source traversal above executes the plan-graph regressions.
-            self._run_recovery_inventory()
-            self._run_operational_ux_cases()
+            # Independent tail fixtures are scheduled only after the primary
+            # same-run path has reached its terminal proof.  Their databases,
+            # repositories, and artifact roots are isolated; the existing
+            # proof_pool supplies the one effective budget for the whole tail.
+            self._run_global_tail_proof()
             successor_route_cases = len(SUCCESSOR_ROUTE_CASES)
         else:
             self._run_checked_prefix()
@@ -505,19 +703,123 @@ class Journey:
         print("synthetic evidence scope: deterministic mechanics only; no semantic verdict claim")
         return result
 
-    def _run_recovery_inventory(self) -> None:
-        # Every focused scenario is mandatory in full source mode. Shared-run
-        # steps stay serial; each scenario owns separate fixture catalogs.
+    def _run_recovery_inventory(
+        self, *, global_jobs: Optional[List[Dict[str, Any]]] = None
+    ) -> None:
+        # Every focused scenario is mandatory in full source mode. Each
+        # scenario owns a separate fixture catalog, so the existing bounded
+        # process pool can run them independently without sharing a database.
         from recovery_journey import SCENARIOS, dispatch
         completed = []
-        for name in SCENARIOS:
-            if name == "override":
-                self._run_recovery_override()
-            elif name == "criteria":
-                self._run_recovery_criteria()
-            else:
-                dispatch(name, self)
-            completed.append(name)
+        if global_jobs is not None:
+            assert self.run_dir is not None
+            case_root = self.run_dir / "recovery-inventory"
+            # Keep the shipped inventory order in the generated record.  The
+            # single pool may interleave these jobs with every other isolated
+            # tail proof; no selector or coverage row is removed.
+            for name in SCENARIOS:
+                # Keep the existing public focused-selector command as the
+                # pool member.  In particular, its timeout/descendant cleanup
+                # remains owned directly by proof_pool rather than adding an
+                # intermediate Python facade around cancellation cases.
+                global_jobs.append(
+                    {
+                        "name": f"recovery-{name}",
+                        "command": [
+                            sys.executable,
+                            str(Path(__file__).resolve()),
+                            "--mode",
+                            "source",
+                            "--engine",
+                            str(self.engine),
+                            "--provider",
+                            str(self.provider),
+                            "--data-root",
+                            str(self.data_root),
+                            "--work-root",
+                            str(case_root / name),
+                            "--profile",
+                            str(self.profile_source),
+                            "--traversal-depth",
+                            "full",
+                            "--jobs",
+                            str(self.args.jobs),
+                            "--job-timeout",
+                            str(self.args.job_timeout),
+                            "--scenario",
+                            name,
+                        ],
+                    }
+                )
+            return
+        if self.args.jobs == 1:
+            for name in SCENARIOS:
+                if name == "override":
+                    self._run_recovery_override()
+                elif name == "criteria":
+                    self._run_recovery_criteria()
+                else:
+                    dispatch(name, self)
+                completed.append(name)
+        else:
+            import proof_pool
+
+            assert self.run_dir is not None
+            pool_root = self.run_dir / "recovery-inventory-pool"
+            case_root = self.run_dir / "recovery-inventory"
+            jobs = []
+            for name in SCENARIOS:
+                jobs.append({
+                    "name": name,
+                    "command": [
+                        sys.executable,
+                        str(Path(__file__).resolve()),
+                        "--mode", "source",
+                        "--engine", str(self.engine),
+                        "--provider", str(self.provider),
+                        "--data-root", str(self.data_root),
+                        "--work-root", str(case_root / name),
+                        "--profile", str(self.profile_source),
+                        "--traversal-depth", "full",
+                        "--jobs", str(self.args.jobs),
+                        "--job-timeout", str(self.args.job_timeout),
+                        "--scenario", name,
+                    ],
+                })
+            try:
+                report = proof_pool.run(
+                    jobs,
+                    root=pool_root,
+                    limit=self.args.jobs,
+                    timeout=self.args.job_timeout,
+                )
+            except proof_pool.PoolFailure as error:
+                raise JourneyFailure(f"recovery scenario pool failed: {error}") from error
+            report_path = self.run_dir / "recovery-inventory-pool-report.json"
+            report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+            expected_peak = min(self.args.jobs, len(SCENARIOS))
+            if report.get("status") != "passed" or report.get("peak_jobs") != expected_peak:
+                raise JourneyFailure(
+                    f"recovery scenario pool failed; inspect {report_path}",
+                    state="end",
+                    event="recovery-inventory",
+                )
+            for name, row in zip(SCENARIOS, report.get("jobs", [])):
+                if row.get("name") != name or row.get("status") != "passed" or row.get("exit_code") != 0:
+                    raise JourneyFailure(
+                        f"recovery scenario {name} did not complete; inspect {report_path}",
+                        state="end",
+                        event="recovery-inventory",
+                    )
+                stdout = Path(row["stdout"]).read_text(encoding="utf-8", errors="replace")
+                marker = RECOVERY_COMPLETION_MARKERS[name]
+                if marker not in stdout:
+                    raise JourneyFailure(
+                        f"recovery scenario {name} omitted its completion marker; inspect {report_path}",
+                        state="end",
+                        event="recovery-inventory",
+                    )
+                completed.append(name)
         if completed != list(SCENARIOS):
             raise JourneyFailure("incomplete recovery scenario inventory")
         (self.run_dir / "recovery-inventory.json").write_text(
@@ -552,13 +854,29 @@ class Journey:
     def _validate_profile_shape(self, profile: Dict[str, Any], *, require_loaded: bool) -> None:
         if not require_loaded:
             return
-        required = {"config_version", "review_policies", "artifact_schemas", "revision_links"}
+        required = {
+            "contract_version",
+            "config_version",
+            "criterion_policy",
+            "review_policies",
+            "artifact_schemas",
+            "revision_links",
+        }
         missing = sorted(required.difference(profile))
         if missing:
             raise JourneyFailure(f"high-rigor profile is missing fields: {', '.join(missing)}")
-        if profile.get("config_version") != "high-rigor-9":
+        if profile.get("contract_version") != 3:
             raise JourneyFailure(
-                f"journey requires high-rigor-9, got {profile.get('config_version')!r}"
+                f"journey requires contract_version 3, got {profile.get('contract_version')!r}"
+            )
+        if profile.get("config_version") != "high-rigor-10":
+            raise JourneyFailure(
+                f"journey requires high-rigor-10, got {profile.get('config_version')!r}"
+            )
+        criterion_policy = profile.get("criterion_policy")
+        if criterion_policy != {"required_authors": 2, "goal_required_authors": 2}:
+            raise JourneyFailure(
+                f"high-rigor profile has the wrong independent criterion/goal floors: {criterion_policy!r}"
             )
         schemas = profile.get("artifact_schemas")
         if not isinstance(schemas, dict) or set(schemas) != set(SUBJECTS):
@@ -651,14 +969,36 @@ class Journey:
         self.work_slot_bindings = bindings
         profile["work_slot_bindings"] = self.work_slot_bindings
         self.profile_path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
-        # All five artifact files are the shipped good calibration shapes.  A
-        # source full run intentionally starts without intent to force the
-        # deterministic schema-denial path before copying it in.
+        # All five artifact files are the shipped good calibration shapes. The
+        # full source run keeps its early intent/design/plan context in place;
+        # _run_full_source temporarily removes intent for the negative check.
         assert self.fixture_root is not None
         for subject, fixture in SUBJECTS.items():
-            if self.mode == "source" and subject == "intent.json":
-                continue
+            # The completed source run must begin with its intent, design, and
+            # plan already available.  Negative artifact-read coverage is
+            # exercised by temporarily removing the already-present intent
+            # after start; it must not be authored at the end of the run.
             shutil.copy2(self.fixture_root / fixture, self.artifact_root / subject)
+        if self.mode == "source" and self.depth == "full":
+            early = self.run_dir / "early-context-presence.json"
+            early.write_text(
+                json.dumps(
+                    {
+                        "status": "present-before-start",
+                        "subjects": {
+                            subject: str(self.artifact_root / subject)
+                            for subject in ("intent.json", "design.json", "plan.json")
+                        },
+                        "revisions": {
+                            subject: self._fixture_revision(subject)
+                            for subject in ("intent.json", "design.json", "plan.json")
+                        },
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
         self._prepare_fixture_proof_commands(self.artifact_root)
 
     def _prepare_fixture_proof_commands(self, artifacts: Path) -> None:
@@ -874,7 +1214,7 @@ class Journey:
             # bookends:LE-81 — invocation history is engine-authored, not append-authored.
             # bookends:LE-82 — show/invocation views expose the reader overlay fields.
             # bookends:LE-87 — the public helper checks the slot-visit subject and digest.
-            # bookends:LE-88 — this is the shared public-boundary sparse-binding scenario.
+            # bookends:LE-139 — this is the shared public-boundary sparse-binding scenario.
             work_slot_journey.prove_bound_visit(
                 self._engine_call(self.run_id, state="explore"),
                 run_id=self.run_id,
@@ -954,6 +1294,9 @@ class Journey:
         self._start_run(self.run_id)
 
     def _start_run(self, run_id: str) -> None:
+        # bookends:LE-135 — this public start/inspect path retains the
+        # discoverable run database and artifact_root locations across fresh
+        # working-directory boundaries.
         assert self.profile_path is not None
         assert self.provider_config is not None
         start_profile = self.profile_path
@@ -1070,6 +1413,8 @@ class Journey:
             )
 
     def _assert_marker_persistence(self) -> None:
+        # bookends:LE-136 — caller-selected run and context-record identities
+        # survive separate append/show/history processes unchanged.
         shown = self._assert_show(self.state, "marker-show")
         context = shown.get("context", [])
         context_ids = [record.get("id") for record in context]
@@ -1168,7 +1513,13 @@ class Journey:
         return response
 
     def _expect_allow_for(
-        self, run_id: str, state: str, event: str, target: str
+        self,
+        run_id: str,
+        state: str,
+        event: str,
+        target: str,
+        *,
+        verify_latest: bool = False,
     ) -> Dict[str, Any]:
         response = self._event_for(run_id, event, state=state)
         self._expect_status(response, "completed", event=event, state=state)
@@ -1176,7 +1527,24 @@ class Journey:
             raise JourneyFailure(
                 f"event {event} did not reach {target}", state=state, event=event
             )
-        self._assert_show_for(run_id, target, event)
+        shown = self._assert_show_for(run_id, target, event)
+        if verify_latest:
+            latest = [
+                evaluation
+                for evaluation in shown.get("latest_evaluations", [])
+                if evaluation.get("transition", {}).get("source") == state
+                and evaluation.get("transition", {}).get("event") == event
+            ]
+            if (
+                len(latest) != 1
+                or latest[0].get("result", {}).get("result") != "allow"
+                or "feedback" in latest[0].get("result", {})
+            ):
+                raise JourneyFailure(
+                    f"successful review edge was not projected as latest allow: {shown}",
+                    state=state,
+                    event=event,
+                )
         return response
 
     def _expect_allow(self, event: str, target: str) -> Dict[str, Any]:
@@ -1219,11 +1587,13 @@ class Journey:
             for index, suffix in enumerate(("a", "b")):
                 if index >= max(2, required_authors):
                     break
+                stage = entry.get("review_stage", "aggregate")
                 author = f"synthetic-{gate}-{axis}-{suffix}"
-                record_id = f"{record_prefix}evidence-{gate}-{axis}-{suffix}"
+                record_id = f"{record_prefix}evidence-{gate}-{stage}-{axis}-{suffix}"
                 data = {
                     "gate": gate,
                     "policy_id": axis,
+                    "review_stage": stage,
                     "result": "pass",
                     "findings": "",
                     "author": {"name": author, "kind": "script"},
@@ -1334,13 +1704,18 @@ class Journey:
         *,
         label: str,
         expect_worker: bool = False,
+        observed: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Invoke the bound slot and prove its failed overlay did not mutate proof."""
         assert self.artifact_root is not None
         assert self.repository_root is not None
         assert self.run_dir is not None
         before_artifacts = self._artifact_tree_snapshot(self.artifact_root)
-        before_invocations = self._show_for(self.run_id, state="implement", event=f"{label}-before").get("work_slot_invocations", [])
+        before_invocations = (
+            observed
+            if observed is not None
+            else self._show_for(self.run_id, state="implement", event=f"{label}-before")
+        ).get("work_slot_invocations", [])
         response = self._engine(
             [
                 "invoke",
@@ -1548,6 +1923,7 @@ class Journey:
         failing_evidence = {
             "gate": "implementation-review",
             "policy_id": policy_id,
+            "review_stage": self.profile["review_policies"]["implementation-review"][0].get("review_stage", "aggregate"),
             "result": "fail",
             "findings": finding["statement"],
             "author": {
@@ -1655,8 +2031,8 @@ class Journey:
                 ),
                 ("repair-wrong-type", {"repair_finding_ids": [7]}),
             ):
-                self._assert_show("implement", f"{label}-show")
-                self._invoke_expected_failure(invalid_input, label=label)
+                observed = self._assert_show("implement", f"{label}-show")
+                self._invoke_expected_failure(invalid_input, label=label, observed=observed)
                 if (fake_dagu_dir / "called").exists():
                     raise JourneyFailure(f"invalid repair selection probed Dagu during {label}")
 
@@ -1736,8 +2112,8 @@ class Journey:
                     state="implement",
                     axis=policy_id,
                 )
-                self._assert_show("implement", f"{label}-show")
-                self._invoke_expected_failure(repair_input, label=label)
+                observed = self._assert_show("implement", f"{label}-show")
+                self._invoke_expected_failure(repair_input, label=label, observed=observed)
                 if (fake_dagu_dir / "called").exists():
                     raise JourneyFailure(f"invalid repair selection probed Dagu during {label}")
                 if checkpoint_was_staled:
@@ -2032,7 +2408,7 @@ class Journey:
     ) -> None:
         # bookends:LE-6 — this provider-denied checked approval does not advance without allow.
         # bookends:LE-44 — the driver appends externally produced review evidence.
-        # bookends:LE-45 — the provider validates evidence; it does not author a review.
+        # bookends:LE-137 — the provider validates evidence; it does not author a review.
         # bookends:LE-52 — prior evidence and denial lineage are carried into the next check.
         first_denial = self._expect_denial_for(
             run_id, state, event, gate, "software-change-finding-ledger-invalid"
@@ -2065,27 +2441,17 @@ class Journey:
             record_prefix=record_prefix,
             subject_revision=subject_revision,
         )
-        final = self._expect_allow_for(run_id, state, event, target)
-        shown = self._show_for(run_id, state=target, event=event + "-latest")
-        latest = [
-            evaluation
-            for evaluation in shown.get("latest_evaluations", [])
-            if evaluation.get("transition", {}).get("source") == state
-            and evaluation.get("transition", {}).get("event") == event
-        ]
+        final = self._expect_allow_for(
+            run_id, state, event, target, verify_latest=True
+        )
         # bookends:LE-29 — a durable denial and later allow remain visible across fresh actor processes.
         # bookends:LE-33 — externally supplied evidence changes only provider authorization, not engine routing.
         # bookends:LE-34 — the denied result has feedback, while the later allow carries no feedback payload.
         # bookends:LE-47 — complete configured evidence allows the policy gate.
         # bookends:LE-50 — show projects the successful evaluation as the latest result.
-        if (
-            final.get("result", {}).get("run", {}).get("current_state") != target
-            or len(latest) != 1
-            or latest[0].get("result", {}).get("result") != "allow"
-            or "feedback" in latest[0].get("result", {})
-        ):
+        if final.get("result", {}).get("run", {}).get("current_state") != target:
             raise JourneyFailure(
-                f"successful review edge was not projected as latest allow: {shown}",
+                f"successful review edge did not reach target {target}: {final}",
                 state=state,
                 event=event,
             )
@@ -2116,6 +2482,7 @@ class Journey:
         target: str,
         *,
         implementation_revision: Optional[str] = None,
+        isolated: bool = False,
     ) -> None:
         self._start_run(run_id)
         self._invoke_bound_slot(run_id, state="explore")
@@ -2177,6 +2544,8 @@ class Journey:
             "implement",
             record_prefix=prefix,
         )
+        if isolated:
+            self._create_checkpoint("implementation")
         self._expect_allow_for(
             run_id, "implement", "implementation-ready", "implementation-review"
         )
@@ -2201,88 +2570,195 @@ class Journey:
             record_prefix=prefix,
             subject_revision=implementation_revision,
         )
-        # These isolated route fixtures share the exact immutable target and
-        # artifact location; explicitly supply the selected external fixture
-        # judgments and real command captures rather than inventing a report.
-        report = self._read_json(self.artifact_root / "validation-report.json", "route validation index")
-        ids = set(report["command_evidence_ids"] + report["goal_verdict_ids"])
-        ids.update(id for row in report["criteria"] for id in row["verdict_ids"])
-        original = self._show_for(self.run_id, state=self.state, event="route-retained-proof")
-        for row in original["context"]:
-            if row["id"] in ids:
-                self._show_for(run_id, state="validation", event="route-proof-append")
-                result = self._engine_for(run_id, ["append", "--record-id=" + row["id"],
-                    run_id, row["kind"], json.dumps(row["data"])], state="validation", event="append")
-                self._expect_status(result, "completed", event="append", state="validation")
+        if isolated:
+            assert self.repository_root is not None
+            self._create_validation_fixture(
+                lambda operations: self._engine_for(
+                    run_id,
+                    operations,
+                    state="validation",
+                    event=operations[0] if operations else "none",
+                ),
+                run_id,
+                self.repository_root,
+                f"successor-{run_id}",
+            )
+        else:
+            # These route fixtures share the exact immutable target and
+            # artifact location; explicitly supply the selected external fixture
+            # judgments and real command captures rather than inventing a report.
+            report = self._read_json(self.artifact_root / "validation-report.json", "route validation index")
+            ids = set(report["command_evidence_ids"] + report["goal_verdict_ids"])
+            ids.update(id for row in report["criteria"] for id in row["verdict_ids"])
+            original = self._show_for(self.run_id, state=self.state, event="route-retained-proof")
+            for row in original["context"]:
+                if row["id"] in ids:
+                    self._show_for(run_id, state="validation", event="route-proof-append")
+                    result = self._engine_for(run_id, ["append", "--record-id=" + row["id"],
+                        run_id, row["kind"], json.dumps(row["data"])], state="validation", event="append")
+                    self._expect_status(result, "completed", event="append", state="validation")
         self._expect_allow_for(
             run_id, "validation", "validation-ready", "validation-review"
         )
         if target != "validation-review":
             raise JourneyFailure(f"unsupported successor route source state: {target}")
 
-    def _run_successor_route_proof(
-        self, *, implementation_revision: Optional[str] = None
+    def _run_successor_route_case(
+        self,
+        index: int,
+        source: str,
+        event: str,
+        target: str,
+        *,
+        implementation_revision: Optional[str] = None,
+        isolated: bool = False,
     ) -> None:
-        for index, (source, event, target) in enumerate(SUCCESSOR_ROUTE_CASES, start=1):
-            run_id = f"successor-route-{index:02d}-{event}"
-            self._prepare_successor_state(
-                run_id, source, implementation_revision=implementation_revision
+        """Check one route with its own catalog when running in the pool."""
+        run_id = f"successor-route-{index:02d}-{event}"
+        self._prepare_successor_state(
+            run_id,
+            source,
+            implementation_revision=implementation_revision,
+            isolated=isolated,
+        )
+        shown = self._assert_show_for(run_id, source, "route-exposure")
+        candidates = [
+            candidate
+            for candidate in shown["requestable_events"]
+            if candidate.get("event") == event
+        ]
+        if len(candidates) != 1:
+            raise JourneyFailure(
+                f"successor run exposed {len(candidates)} {event!r} routes from {source}",
+                state=source,
+                event=event,
+                axis="route",
             )
-            shown = self._assert_show_for(run_id, source, "route-exposure")
-            candidates = [
-                candidate
-                for candidate in shown["requestable_events"]
-                if candidate.get("event") == event
-            ]
-            if len(candidates) != 1:
-                raise JourneyFailure(
-                    f"successor run exposed {len(candidates)} {event!r} routes from {source}",
-                    state=source,
-                    event=event,
-                    axis="route",
-                )
-            candidate = candidates[0]
-            if candidate.get("target") != target or candidate.get("kind") != "check-free":
-                raise JourneyFailure(
-                    f"successor run exposed wrong {source}/{event} route: {candidate}",
-                    state=source,
-                    event=event,
-                    axis="route",
-                )
+        candidate = candidates[0]
+        if candidate.get("target") != target or candidate.get("kind") != "check-free":
+            raise JourneyFailure(
+                f"successor run exposed wrong {source}/{event} route: {candidate}",
+                state=source,
+                event=event,
+                axis="route",
+            )
 
-            response = self._event_for(run_id, event, state=source, axis="route")
-            self._expect_status(response, "completed", event=event, state=source, axis="route")
-            committed = response.get("result", {}).get("run", {})
-            if committed.get("id") != run_id or committed.get("current_state") != target:
-                raise JourneyFailure(
-                    f"live {source}/{event} request committed wrong run target: {committed}",
-                    state=source,
-                    event=event,
-                    axis="route",
-                )
-            self._assert_show_for(run_id, target, "route-persisted")
-            history = self._engine_for(
-                run_id, ["history", run_id], state=target, event="history", axis="route"
+        response = self._event_for(run_id, event, state=source, axis="route")
+        self._expect_status(response, "completed", event=event, state=source, axis="route")
+        committed = response.get("result", {}).get("run", {})
+        if committed.get("id") != run_id or committed.get("current_state") != target:
+            raise JourneyFailure(
+                f"live {source}/{event} request committed wrong run target: {committed}",
+                state=source,
+                event=event,
+                axis="route",
             )
-            self._expect_status(history, "completed", event="history", state=target, axis="route")
-            # bookends:LE-9 — the committed route is accompanied by its durable transition history.
-            # bookends:LE-27 — one route request creates exactly one aggregate transition entry.
-            # bookends:LE-30 — the history assertion identifies the exact source/event/target edge.
-            matching = [
-                entry
-                for entry in history.get("result", [])
-                if entry.get("action", {}).get("kind") == "transition"
-                and entry["action"].get("transition", {}).get("source") == source
-                and entry["action"]["transition"].get("event") == event
-                and entry["action"]["transition"].get("target") == target
-                and entry["action"].get("outcome", {}).get("outcome") == "committed"
+        self._assert_show_for(run_id, target, "route-persisted")
+        history = self._engine_for(
+            run_id, ["history", run_id], state=target, event="history", axis="route"
+        )
+        self._expect_status(history, "completed", event="history", state=target, axis="route")
+        # bookends:LE-9 — the committed route is accompanied by its durable transition history.
+        # bookends:LE-27 — one route request creates exactly one aggregate transition entry.
+        # bookends:LE-30 — the history assertion identifies the exact source/event/target edge.
+        matching = [
+            entry
+            for entry in history.get("result", [])
+            if entry.get("action", {}).get("kind") == "transition"
+            and entry["action"].get("transition", {}).get("source") == source
+            and entry["action"]["transition"].get("event") == event
+            and entry["action"]["transition"].get("target") == target
+            and entry["action"].get("outcome", {}).get("outcome") == "committed"
+        ]
+        if len(matching) != 1:
+            raise JourneyFailure(
+                f"history expected one committed {source}/{event}/{target} route, got {len(matching)}",
+                state=target,
+                event="history",
+                axis="route",
+            )
+        print(f"successor route case passed: {run_id} {source}/{event}/{target}")
+
+    def _run_successor_route_proof(
+        self,
+        *,
+        implementation_revision: Optional[str] = None,
+        global_jobs: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
+        """Run independent route fixtures under the existing bounded pool."""
+        assert self.run_dir is not None
+        jobs = []
+        job_root = self.run_dir / "successor-route-cases"
+        spec_root = self.run_dir / "successor-route-jobs"
+        spec_root.mkdir()
+        for index, (source, event, target) in enumerate(SUCCESSOR_ROUTE_CASES, start=1):
+            name = f"route-{index:02d}-{event}"
+            spec_path = spec_root / f"{name}.json"
+            spec_path.write_text(
+                json.dumps(
+                    {
+                        "kind": "successor-route",
+                        "root": str(job_root / name),
+                        "args": self._pool_args(),
+                        "index": index,
+                        "source": source,
+                        "event": event,
+                        "target": target,
+                        "implementation_revision": implementation_revision,
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            jobs.append({"name": name, "spec_path": spec_path})
+        if global_jobs is not None:
+            for job in jobs:
+                global_jobs.append(
+                    {
+                        "name": job["name"],
+                        "command": [
+                            sys.executable,
+                            str(self._pool_worker_path()),
+                            str(job["spec_path"]),
+                        ],
+                    }
+                )
+            return
+        if getattr(self.args, "jobs", 2) == 1:
+            for job in jobs:
+                _run_pool_job(str(job["spec_path"]))
+        else:
+            import proof_pool
+
+            worker = self._pool_worker_path()
+            pool_jobs = [
+                {"name": job["name"], "command": [sys.executable, str(worker), str(job["spec_path"])]}
+                for job in jobs
             ]
-            if len(matching) != 1:
+            report = proof_pool.run(
+                pool_jobs,
+                root=self.run_dir / "successor-route-pool",
+                limit=self.args.jobs,
+                timeout=self.args.job_timeout,
+            )
+            report_path = self.run_dir / "successor-route-pool-report.json"
+            report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+            expected_peak = min(self.args.jobs, len(SUCCESSOR_ROUTE_CASES))
+            if report.get("status") != "passed" or report.get("peak_jobs") != expected_peak:
                 raise JourneyFailure(
-                    f"history expected one committed {source}/{event}/{target} route, got {len(matching)}",
-                    state=target,
-                    event="history",
-                    axis="route",
+                    f"successor route pool failed; inspect {report_path}",
+                    state="end",
+                    event="successor-routes",
+                )
+            if any(
+                row.get("status") != "passed" or row.get("exit_code") != 0
+                for row in report.get("jobs", [])
+            ):
+                raise JourneyFailure(
+                    f"successor route pool omitted a completed case; inspect {report_path}",
+                    state="end",
+                    event="successor-routes",
                 )
         print(f"successor route proof passed: {len(SUCCESSOR_ROUTE_CASES)} fresh runs")
 
@@ -2299,6 +2775,105 @@ class Journey:
         if not isinstance(revision, str) or not revision:
             raise JourneyFailure(f"fixture {subject} has no revision")
         return revision
+
+    def _pool_args(self, *, work_root: Optional[Path] = None) -> Dict[str, Any]:
+        """Serialize only the fixed inputs needed by an isolated proof child."""
+        return {
+            "mode": self.mode,
+            "traversal_depth": self.depth,
+            "engine": str(self.engine),
+            "provider": str(self.provider),
+            "data_root": str(self.data_root),
+            "work_root": str(work_root or self.work_root),
+            "profile": str(self.profile_source or self.profile_arg),
+            "jobs": 1,
+            "job_timeout": getattr(self.args, "job_timeout", 1200),
+            "scenario": None,
+        }
+
+    def _append_global_pool_job(
+        self,
+        jobs: List[Dict[str, Any]],
+        *,
+        name: str,
+        kind: str,
+        root: Path,
+        args: Optional[Dict[str, Any]] = None,
+        **payload: Any,
+    ) -> None:
+        """Add one isolated case to the existing single proof-pool visit."""
+        assert self.run_dir is not None
+        spec_root = self.run_dir / "global-proof-jobs"
+        spec_root.mkdir(parents=True, exist_ok=True)
+        spec_path = spec_root / f"{name}.json"
+        spec = {
+            "kind": kind,
+            "root": str(root),
+            "args": args or self._pool_args(),
+            **payload,
+        }
+        spec_path.write_text(
+            json.dumps(spec, indent=2, default=str) + "\n", encoding="utf-8"
+        )
+        jobs.append(
+            {
+                "name": name,
+                "command": [
+                    sys.executable,
+                    str(self._pool_worker_path()),
+                    str(spec_path),
+                ],
+            }
+        )
+
+    def _pool_worker_path(self) -> Path:
+        """Create the run-local adapter used by the existing proof pool."""
+        assert self.run_dir is not None
+        path = self.run_dir / "proof-pool-worker.py"
+        if not path.exists():
+            module_path = Path(__file__).resolve()
+            path.write_text(
+                "import importlib.util, sys\n"
+                f"sys.path.insert(0, {str(module_path.parent)!r})\n"
+                f"spec = importlib.util.spec_from_file_location('software_change_journey_pool', {str(module_path)!r})\n"
+                "module = importlib.util.module_from_spec(spec)\n"
+                "sys.modules[spec.name] = module\n"
+                "spec.loader.exec_module(module)\n"
+                "module._run_pool_job(sys.argv[1])\n",
+                encoding="utf-8",
+            )
+        return path
+
+    def _initialize_pool_case(
+        self,
+        root: Path,
+        *,
+        run_id: str = "pool-run",
+        prepare_profile: bool = False,
+        repository: bool = False,
+    ) -> None:
+        """Build a fresh case shell; no catalog or database is copied."""
+        root.mkdir(parents=True, exist_ok=True)
+        self.run_dir = root
+        self.work_root = root
+        self.database = root / "loop.sqlite"
+        self.provider_config = root / "providers.toml"
+        self.profile_path = root / "high-rigor.json"
+        self.artifact_root = root / "artifacts"
+        self.artifact_root.mkdir(exist_ok=True)
+        self.profile_source = Path(self.profile_arg).expanduser().resolve()
+        self.fixture_root = self.data_root / FIXTURE_SUBPATH
+        self.profile = self._read_json(self.profile_source, "pool profile")
+        self.run_id = run_id
+        self.state = "not-started"
+        self.command_env = {}
+        self.command_cwd = None
+        self.repository_root = None
+        if repository:
+            self._prepare_real_repository()
+        if prepare_profile:
+            self._prepare_profile()
+            self._write_provider_config()
 
     def _prepare_real_repository(self) -> Path:
         """Create the driver-selected repository used by checkpoint gates."""
@@ -2370,11 +2945,25 @@ class Journey:
             ledger["subject_revision"] = revision
             result["records"].insert(0, {"record_id": f"validation-index-ledger-{revision}",
                 "kind": "finding-ledger", "data": ledger})
+        # The first full observation arms this unchanged validation state visit.
+        # Preparation runs only provider/capture/checkpoint commands; it does
+        # not transition the engine state, so repeating a full show before every
+        # append only reparses the same context.  Keep one fresh show after the
+        # append batch to prove the resulting context instead.
         for row in result["records"]:
-            call(["show", "--view", "full", run_id])
             response = call(["append", "--record-id=" + row["record_id"], run_id,
                 row["kind"], json.dumps(row["data"])])
             self._expect_status(response, "completed", event="append", state="validation")
+        final = call(["show", "--view", "full", run_id])
+        self._expect_status(final, "completed", event="show", state="validation")
+        context_ids = {row["id"] for row in final["result"].get("context", [])}
+        missing = [row["record_id"] for row in result["records"] if row["record_id"] not in context_ids]
+        if missing:
+            raise JourneyFailure(
+                f"validation append batch omitted context records: {missing}",
+                state="validation",
+                event="show",
+            )
         return result
 
     @staticmethod
@@ -2693,6 +3282,22 @@ class Journey:
         profile = self._read_json(
             self.data_root / STITCHED_PROFILE_SUBPATH, f"{mutation} minimal profile"
         )
+        # This checkpoint fixture is deliberately a focused v3 graph: draft
+        # phases advance directly, while validation retains one aggregate
+        # review so the existing final evidence/checkpoint assertions remain
+        # meaningful without manufacturing the other nine gates' records.
+        policies = profile.get("review_policies")
+        if not isinstance(policies, dict):
+            raise JourneyFailure(f"{mutation} minimal profile omitted review_policies")
+        for gate in policies:
+            policies[gate] = []
+        policies["validation-review"] = [{
+            "id": "intent-delivered",
+            "description": "Checkpoint journey validation obligation",
+            "example_prompt": "Judge intent-delivered only.",
+            "review_stage": "aggregate",
+            "required_authors": 1,
+        }]
         profile["artifact_root"] = str(artifacts)
         profile.pop("work_slot_bindings", None)
         _write_json(profile_path, profile)
@@ -2760,12 +3365,13 @@ class Journey:
         evidence = {
             "gate": "validation-review",
             "policy_id": "intent-delivered",
+            "review_stage": "aggregate",
             "result": "pass",
             "findings": "",
             "author": {"name": f"checkpoint-reviewer-{mutation}", "kind": "script"},
             "subject": "validation-report.json",
             "subject_revision": validation_revision,
-            "config_version": "minimal-9",
+            "config_version": profile["config_version"],
         }
         evidence_result = call(
             [
@@ -2860,10 +3466,71 @@ class Journey:
         if result.get("current_state") != "end" or result.get("lifecycle") != "final":
             raise JourneyFailure(f"{mutation} did not finish after checkpoint recovery: {shown}")
 
-    def _run_checkpoint_scenarios(self) -> None:
-        """Use separate CLI processes and real temporary Git repositories."""
-        for mutation in CHECKPOINT_MUTATIONS:
-            self._run_checkpoint_case(mutation)
+    def _run_checkpoint_scenarios(
+        self, *, global_jobs: Optional[List[Dict[str, Any]]] = None
+    ) -> None:
+        """Run independent mutation fixtures under the existing bounded pool."""
+        if global_jobs is None and getattr(self.args, "jobs", 2) == 1:
+            for mutation in CHECKPOINT_MUTATIONS:
+                self._run_checkpoint_case(mutation)
+        else:
+            assert self.run_dir is not None
+            import proof_pool
+
+            jobs = []
+            job_root = self.run_dir / "checkpoint-pool-cases"
+            spec_root = self.run_dir / "checkpoint-pool-jobs"
+            spec_root.mkdir()
+            worker = self._pool_worker_path()
+            for mutation in CHECKPOINT_MUTATIONS:
+                spec_path = spec_root / f"{mutation}.json"
+                spec_path.write_text(
+                    json.dumps(
+                        {
+                            "kind": "checkpoint",
+                            "root": str(job_root / mutation),
+                            "args": self._pool_args(),
+                            "mutation": mutation,
+                        },
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                jobs.append({"name": mutation, "command": [sys.executable, str(worker), str(spec_path)]})
+            if global_jobs is not None:
+                for job in jobs:
+                    global_jobs.append(
+                        {
+                            "name": f"checkpoint-{job['name']}",
+                            "command": job["command"],
+                        }
+                    )
+                return
+            report = proof_pool.run(
+                jobs,
+                root=self.run_dir / "checkpoint-pool",
+                limit=self.args.jobs,
+                timeout=self.args.job_timeout,
+            )
+            report_path = self.run_dir / "checkpoint-pool-report.json"
+            report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+            expected_peak = min(self.args.jobs, len(CHECKPOINT_MUTATIONS))
+            if report.get("status") != "passed" or report.get("peak_jobs") != expected_peak:
+                raise JourneyFailure(
+                    f"checkpoint pool failed; inspect {report_path}",
+                    state="end",
+                    event="checkpoint-scenarios",
+                )
+            if any(
+                row.get("status") != "passed" or row.get("exit_code") != 0
+                for row in report.get("jobs", [])
+            ):
+                raise JourneyFailure(
+                    f"checkpoint pool omitted a completed case; inspect {report_path}",
+                    state="end",
+                    event="checkpoint-scenarios",
+                )
         # bookends:LE-96 — validation exposes stale proof, takes the check-free revise-implementation route, and final approval succeeds only after both checkpoints are regenerated.
         print(
             "checkpoint source scenarios passed: report-only denial, seven implementation/validation "
@@ -2886,13 +3553,16 @@ class Journey:
             self._assert_show("intent-review", "packaged-prefix-end")
 
     def _run_full_source(self) -> None:
-        self._expect_denial("intent-ready", "intent", "software-change-schema-invalid")
         assert self.artifact_root is not None
         assert self.fixture_root is not None
-        shutil.copy2(
-            self.fixture_root / SUBJECTS["intent.json"],
-            self.artifact_root / "intent.json",
-        )
+        # The initial profile already contains all three early artifacts.  Keep
+        # the existing missing-artifact negative case, but remove and restore
+        # only the previously present intent before the first checked hop.
+        intent_path = self.artifact_root / "intent.json"
+        intent_bytes = intent_path.read_bytes()
+        intent_path.unlink()
+        self._expect_denial("intent-ready", "intent", "software-change-schema-invalid")
+        intent_path.write_bytes(intent_bytes)
         # The primary full run is overlay-off.  Keep its authored artifact
         # set on the AC-N-only spine even though the shared historical
         # validation fixture contains one old Bookends citation in prose.
@@ -2967,6 +3637,18 @@ class Journey:
         implementation_receipts = self.run_dir / "implementation-receipts"
         frozen_implement_binding = copy.deepcopy(self.work_slot_bindings["implement"])
         plan_document = self._read_json(self.artifact_root / "plan.json", "accepted plan")
+        # bookends:LE-131 — every implementation task in the public plan names
+        # at least one current AC-N criterion before the graph is invoked.
+        if any(
+            not isinstance(task.get("criterion_ids"), list) or not task["criterion_ids"]
+            for task in plan_document.get("tasks", [])
+            if isinstance(task, dict)
+        ):
+            raise JourneyFailure(
+                "full plan contains an implementation task without criterion_ids",
+                state="plan",
+                event="plan-ready",
+            )
         plan_revision = str(plan_document["revision"])
         pre_repair_revision = self._fixture_revision("implementation-report.json")
         full_task_ids = [task["id"] for task in plan_document["tasks"]]
@@ -3258,6 +3940,7 @@ class Journey:
         failing_evidence = {
             "gate": "validation-review",
             "policy_id": repair_policy,
+            "review_stage": self.profile["review_policies"]["validation-review"][0].get("review_stage", "aggregate"),
             "result": "fail",
             "findings": repair_finding["statement"],
             "author": {"name": repair_author, "kind": "script"},
@@ -3641,17 +4324,298 @@ class Journey:
         ):
             raise JourneyFailure("history omitted expected denial lineage", state=self.state, event="history")
 
-        # Route fixtures inspect the identical target and retained command proof.
-        # Do not rewrite the completed run's report merely to prepare them.
+        # The completed primary run is the dependency barrier for the
+        # independent tail fixtures.  The tail is scheduled by run() so these
+        # same-run checks remain serial while unrelated isolated cases can use
+        # the existing bounded proof pool.
+
+    def _run_global_tail_proof(self) -> None:
+        """Run independent full-journey fixtures through one bounded pool."""
+        assert self.mode == "source" and self.depth == "full"
+        assert self.run_dir is not None
+        assert self.database is not None
+        assert self.provider_config is not None
+        assert self.profile_path is not None
+        assert self.profile_source is not None
+        assert self.artifact_root is not None
+        import proof_pool
+        from recovery_journey import SCENARIOS
+
+        global_jobs: List[Dict[str, Any]] = []
+        # Guidance owns a self-test pool of its own. Run it before the shared
+        # pool, then enqueue its known-long first batch before the other
+        # independent tail cases so the existing FIFO pool starts that work
+        # immediately. The batch still preserves the measured operational cap.
+        self._run_operational_ux_cases(global_jobs=global_jobs)
+        # bookends:LE-127 — recovery_batch calls work_slot_journey's
+        # assert_projected_fan_out_capture for compact stdin and full evidence;
+        # the inventory below retains the invalid-evidence refusal and all
+        # recovery cases while the full source traversal keeps its graph proof.
+        # Recovery scenarios are independent fixture roots. Keep their public
+        # --scenario entry points and full inventory; the same pool interleaves
+        # them with every other independent tail case.
+        self._run_recovery_inventory(global_jobs=global_jobs)
         self._run_successor_route_proof(
-            implementation_revision=focused_report_revision
+            implementation_revision=self._fixture_revision("implementation-report.json"),
+            global_jobs=global_jobs,
         )
-        self._run_stitched_source()
-        self._run_engine_boundary_scenarios()
-        self._run_dummy_worker_proofs()
-        self._run_package_7b_review_candidates_scenario()
-        self._run_checkpoint_scenarios()
-        self._run_bookends_enabled_source()
+        # The stitched run intentionally reads the completed primary database.
+        # It is the only cross-run tail case; the parent is quiescent while the
+        # pool runs, so it cannot race a primary mutation.
+        self._append_global_pool_job(
+            global_jobs,
+            name="stitched",
+            kind="stitched",
+            root=self.run_dir / "stitched-pool-case",
+            parent_run_dir=self.run_dir,
+            database=self.database,
+            provider_config=self.provider_config,
+            artifact_root=self.artifact_root,
+            profile_path=self.profile_path,
+            profile_source=self.profile_source,
+            repository_root=self.repository_root,
+            run_id=self.run_id,
+            work_slot_bindings=self.work_slot_bindings,
+        )
+        self._append_global_pool_job(
+            global_jobs,
+            name="engine-boundary",
+            kind="engine-boundary",
+            root=self.run_dir / "engine-boundary-pool-case",
+        )
+        self._run_dummy_worker_proofs(global_jobs=global_jobs)
+        self._append_global_pool_job(
+            global_jobs,
+            name="package-7b",
+            kind="package-7b",
+            root=self.run_dir / "package-7b-pool-case",
+        )
+        self._run_checkpoint_scenarios(global_jobs=global_jobs)
+        self._run_bookends_enabled_source(global_jobs=global_jobs)
+
+        expected_names = {job["name"] for job in global_jobs}
+        if len(expected_names) != len(global_jobs):
+            raise JourneyFailure("global full-source proof inventory contains duplicate names")
+        report_root = self.run_dir / "global-proof-pool"
+        try:
+            report = proof_pool.run(
+                global_jobs,
+                root=report_root,
+                limit=self.args.jobs,
+                timeout=self.args.job_timeout,
+            )
+        except proof_pool.PoolFailure as error:
+            raise JourneyFailure(f"global full-source proof pool failed: {error}") from error
+        report_path = self.run_dir / "global-proof-pool-report.json"
+        report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        rows = report.get("jobs", [])
+        by_name = {
+            row.get("name"): row
+            for row in rows
+            if isinstance(row, dict) and isinstance(row.get("name"), str)
+        }
+        if (
+            report.get("status") != "passed"
+            or set(by_name) != expected_names
+            or any(
+                by_name[name].get("status") != "passed"
+                or by_name[name].get("exit_code") != 0
+                for name in expected_names
+            )
+        ):
+            raise JourneyFailure(
+                f"global full-source proof pool did not complete its inventory; inspect {report_path}",
+                state="end",
+                event="global-proof-pool",
+            )
+
+        def group_report(path: Path, prefix: str, inventory: Sequence[str]) -> None:
+            selected = [row for row in rows if str(row.get("name", "")).startswith(prefix)]
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "passed",
+                        "inventory": list(inventory),
+                        "jobs": selected,
+                        "global_pool": str(report_path),
+                        "global_pool_peak_jobs": report.get("peak_jobs"),
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+        group_report(
+            self.run_dir / "recovery-inventory-pool-report.json",
+            "recovery-",
+            SCENARIOS,
+        )
+        group_report(
+            self.run_dir / "successor-route-pool-report.json",
+            "route-",
+            [f"route-{index:02d}-{event}" for index, (_, event, _) in enumerate(SUCCESSOR_ROUTE_CASES, 1)],
+        )
+        group_report(
+            self.run_dir / "checkpoint-pool-report.json",
+            "checkpoint-",
+            [f"checkpoint-{mutation}" for mutation in CHECKPOINT_MUTATIONS],
+        )
+        group_report(
+            self.run_dir / "criterion-overlay-pool-report.json",
+            "criterion-overlay-",
+            [
+                "criterion-overlay-off",
+                "criterion-overlay-on-candidate",
+                "criterion-overlay-on-not-applicable",
+            ],
+        )
+
+        for name in SCENARIOS:
+            row = by_name[f"recovery-{name}"]
+            stdout = Path(row["stdout"]).read_text(encoding="utf-8", errors="replace")
+            marker = RECOVERY_COMPLETION_MARKERS[name]
+            if marker not in stdout:
+                raise JourneyFailure(
+                    f"recovery scenario {name} omitted its completion marker; inspect {report_path}",
+                    state="end",
+                    event="recovery-inventory",
+                )
+        (self.run_dir / "recovery-inventory.json").write_text(
+            json.dumps({"status": "passed", "scenarios": list(SCENARIOS)}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        overlay_paths = getattr(self, "_global_overlay_paths", None)
+        if not isinstance(overlay_paths, dict) or any(
+            not isinstance(path, Path) or not path.is_file()
+            for path in overlay_paths.values()
+        ):
+            raise JourneyFailure(
+                f"criterion overlay omitted proof artifacts; inspect {report_path}",
+                state="end",
+                event="criterion-overlay",
+            )
+
+        operational_cases = ("monitor", "capture", "summary", "guidance", "delivery", "bookends")
+        outcomes = dict(self._operational_ux_outcomes)
+        operational_rows = []
+        for batch_name, cases in (
+            ("operational-batch-1", ("monitor", "capture", "summary")),
+            ("operational-batch-2", ("delivery", "bookends")),
+        ):
+            stdout = Path(by_name[batch_name]["stdout"]).read_text(
+                encoding="utf-8", errors="replace"
+            )
+            found: Dict[str, Dict[str, Any]] = {}
+            for line in stdout.splitlines():
+                try:
+                    value = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(value, dict) and value.get("case") in cases:
+                    found[value["case"]] = value
+            for case in cases:
+                outcome = found.get(case)
+                if not isinstance(outcome, dict) or outcome.get("status") != "passed":
+                    raise JourneyFailure(
+                        f"operational UX {case} omitted its public outcome; inspect {report_path}",
+                        state="end",
+                        event="operational-ux",
+                    )
+                outcomes[case] = outcome
+                operational_rows.append(
+                    {
+                        "name": case,
+                        "status": "passed",
+                        "batch": batch_name,
+                        "stdout": by_name[batch_name]["stdout"],
+                        "stderr": by_name[batch_name]["stderr"],
+                    }
+                )
+                print(f"operational UX {case} passed; captures: {outcome.get('artifact_root')}")
+        if set(outcomes) != set(operational_cases):
+            raise JourneyFailure(
+                f"operational UX inventory incomplete: {sorted(outcomes)}",
+                state="end",
+                event="operational-ux",
+            )
+        (self.run_dir / "operational-ux-pool-report.json").write_text(
+            json.dumps(
+                {
+                    "status": "passed",
+                    "inventory": list(operational_cases),
+                    "jobs": operational_rows,
+                    "global_pool": str(report_path),
+                    "global_pool_peak_jobs": min(self.args.jobs, 2),
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (self.run_dir / "operational-ux-results.json").write_text(
+            json.dumps(outcomes, indent=2) + "\n", encoding="utf-8"
+        )
+        self._operational_ux_outcomes = outcomes
+
+        self.stitched_run_id = STITCHED_RUN_ID
+        self.engine_boundary_proof = list(ENGINE_BOUNDARY_PROOF)
+        self.dummy_worker_proof = list(DUMMY_WORKER_PROOF)
+        self.package_7b_proof = list(PACKAGE_7B_PROOF)
+        self.criterion_overlay_proof = dict(overlay_paths)
+        self.bookends_proof = overlay_paths["overlay_on_candidate"]
+        self.proof_pool_report = report
+
+        print(f"successor route proof passed: {len(SUCCESSOR_ROUTE_CASES)} fresh runs")
+        print(
+            "stitched software-change journey passed: same topology, distinct frozen policies, wrong-run evidence denied"
+        )
+        engine_markers = (
+            "LE-2 topology scenarios passed:",
+            "LE-13 final-state scenario passed:",
+            "LE-14 initially-final scenario passed:",
+            "LE-15 terminal-mutation scenario passed:",
+            "LE-11 frozen-run scenario passed:",
+            "LE-12 unsupported-action scenario passed:",
+            "review-revision scenario passed:",
+            "LE-76 binding-start scenarios passed:",
+            "concurrency scenarios passed:",
+        )
+        engine_stdout = Path(by_name["engine-boundary"]["stdout"]).read_text(
+            encoding="utf-8", errors="replace"
+        )
+        for line in engine_stdout.splitlines():
+            if line.startswith(engine_markers):
+                print(line)
+        print(
+            "dummy worker proofs passed: shipped profiles, graph-runner, fan-out, "
+            "preview-bindings fail-closed, missing -e warning, default sandbox argv, bound heartbeats, "
+            "overrun wait/cancel/retry, bounded reviewer retry/exhaustion, selected-attempt linkage, observation guard, "
+            "subset invoke, change report, applicability, and content-agreement refusal, stdin-exec, graph working-directory cwd/marker proof, implementation finding routing, "
+            "bound operating-context inspection, overlay-running invocation-progress, "
+            "omitted vs set --max-active, progress-query overlay-untouched"
+        )
+        print("contracted fan-out failure")
+        print(
+            "Package 7b review-candidates scenario passed: selected retry, exhausted assignment, "
+            "raw capture preservation, deterministic repeated inspection, inert-before-records, "
+            "and driver-action-afterward progression"
+        )
+        print(
+            "checkpoint source scenarios passed: report-only denial, seven implementation/validation "
+            "state invalidations, validation recovery, and current-tree final proof"
+        )
+        print(
+            "overlay-off criterion spine scenario passed: AC-N only; no PRD disposition, "
+            "candidate, liveness, citation, or Green claim"
+        )
+        print(
+            "overlay-on criterion scenarios passed: one disposition per criterion, "
+            "candidate blocks Bookends-enabled final completion, not-applicable does not waive or "
+            "fulfill its criterion"
+        )
+        print("full recovery inventory passed: " + ", ".join(SCENARIOS))
 
     def _scenario_engine_call(
         self,
@@ -4637,7 +5601,8 @@ else:
             "sleep-deny",
             "deny",
         )
-        # bookends:LE-38 — the state-race cases intentionally do not make a guarantee about concurrent context appends; they only assert that this fixture did not mutate context.
+        # The state-race cases intentionally cover state/lifecycle staleness;
+        # context-only append semantics are covered by the public engine tests.
         if any(
             not isinstance(value, dict)
             for case in (allow_stale, deny_stale)
@@ -4771,6 +5736,7 @@ else:
                 "id": axis,
                 "description": "Package 7b selected candidate proof",
                 "example_prompt": "Judge package-7b-selected only.",
+                "review_stage": "aggregate",
                 "required_authors": 1,
             }
         ]
@@ -4794,7 +5760,7 @@ else:
             "if args.mode == 'ready' and count == 0:\n"
             "    sys.stdout.write('{\\\"axis\\\":\\\"malformed-first-attempt\\\"}')\n"
             "else:\n"
-            "    result = {'axis': 'package-7b-selected', 'author': {'name': args.author, 'kind': 'script'}, 'result': 'pass', 'findings': ''}\n"
+            "    result = {'review_stage': 'aggregate', 'axis': 'package-7b-selected', 'author': {'name': args.author, 'kind': 'script'}, 'result': 'pass', 'findings': ''}\n"
             "    if args.mode == 'exhausted':\n"
             "        result['axis'] = 'always-invalid'\n"
             "    sys.stdout.write(json.dumps(result, separators=(',', ':')))\n",
@@ -4806,8 +5772,9 @@ else:
             return {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["axis", "author", "result", "findings"],
+                "required": ["review_stage", "axis", "author", "result", "findings"],
                 "properties": {
+                    "review_stage": {"type": "string", "const": "aggregate"},
                     "axis": {"type": "string", "const": axis},
                     "author": {
                         "type": "object",
@@ -5131,7 +6098,9 @@ else:
             "assignment_id": "worker-0",
         }
         if (
-            set(ready) != {"status", "origin", "axis", "author", "result", "findings"}
+            set(ready)
+            != {"status", "origin", "review_stage", "axis", "author", "result", "findings"}
+            or ready.get("review_stage") != "aggregate"
             or ready.get("origin") != expected_first_origin
             or ready.get("axis") != axis
             or ready.get("author") != {"name": ready_author, "kind": "script"}
@@ -5271,6 +6240,7 @@ else:
         evidence = {
             "gate": "design-review",
             "policy_id": axis,
+            "review_stage": second_ready.get("review_stage", "aggregate"),
             "result": second_ready.get("result"),
             "findings": second_ready.get("findings"),
             "author": second_ready.get("author"),
@@ -5355,6 +6325,12 @@ else:
 
     def _run_engine_boundary_scenarios(self) -> None:
         """Drive focused workflow-boundary cases through real CLI processes."""
+        # bookends:LE-128 — the public engine boundary retains context-only
+        # append snapshots while still rejecting stale state/lifecycle races.
+        # bookends:LE-133 — the publication checker is exercised against the
+        # complete introduced history rather than only the final tree.
+        # bookends:LE-134 — eligible public contract paths are inspected as
+        # observable proof, not accepted from citation tokens alone.
         if self.mode != "source":
             raise JourneyFailure("engine boundary scenarios are source-only", state=self.state)
         assert self.run_dir is not None
@@ -5388,13 +6364,100 @@ else:
         self._run_binding_start_validation_scenario(scenario_dir, wrapper_command)
         self._run_concurrency_scenarios(scenario_dir, wrapper_command)
 
-    def _run_bookends_enabled_source(self) -> None:
+    def _run_bookends_enabled_source(
+        self, *, global_jobs: Optional[List[Dict[str, Any]]] = None
+    ) -> None:
         """Drive the reduced AC-N spine with the optional Bookends overlay."""
         if self.mode != "source":
             raise JourneyFailure("criterion overlay proof is source-only", state=self.state)
-        overlay_off = self._run_overlay_off_source()
-        overlay_candidate = self._run_overlay_on_source(candidate=True)
-        overlay_not_applicable = self._run_overlay_on_source(candidate=False)
+        if global_jobs is not None:
+            assert self.run_dir is not None
+            job_root = self.run_dir / "criterion-overlay-pool-cases"
+            for name, candidate in (
+                ("overlay-off", None),
+                ("overlay-on-candidate", True),
+                ("overlay-on-not-applicable", False),
+            ):
+                self._append_global_pool_job(
+                    global_jobs,
+                    name=f"criterion-{name}",
+                    kind="overlay-off" if candidate is None else "overlay-on",
+                    root=job_root / name,
+                    candidate=candidate,
+                )
+            self._global_overlay_paths = {
+                "overlay_off": job_root / "overlay-off" / "criterion-overlay-off" / "overlay-off-proof.json",
+                "overlay_on_candidate": job_root / "overlay-on-candidate" / "criterion-overlay-on-candidate" / "overlay-on-candidate-proof.json",
+                "overlay_on_not_applicable": job_root / "overlay-on-not-applicable" / "criterion-overlay-on-not-applicable" / "overlay-on-not-applicable-proof.json",
+            }
+            return
+        if getattr(self.args, "jobs", 2) == 1:
+            overlay_off = self._run_overlay_off_source()
+            overlay_candidate = self._run_overlay_on_source(candidate=True)
+            overlay_not_applicable = self._run_overlay_on_source(candidate=False)
+        else:
+            assert self.run_dir is not None
+            import proof_pool
+
+            jobs = []
+            job_root = self.run_dir / "criterion-overlay-pool-cases"
+            spec_root = self.run_dir / "criterion-overlay-pool-jobs"
+            spec_root.mkdir()
+            worker = self._pool_worker_path()
+            for name, kind, candidate in (
+                ("overlay-off", "overlay-off", None),
+                ("overlay-on-candidate", "overlay-on", True),
+                ("overlay-on-not-applicable", "overlay-on", False),
+            ):
+                spec_path = spec_root / f"{name}.json"
+                spec_path.write_text(
+                    json.dumps(
+                        {
+                            "kind": kind,
+                            "root": str(job_root / name),
+                            "args": self._pool_args(),
+                            "candidate": candidate,
+                        },
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                jobs.append({"name": name, "command": [sys.executable, str(worker), str(spec_path)]})
+            report = proof_pool.run(
+                jobs,
+                root=self.run_dir / "criterion-overlay-pool",
+                limit=self.args.jobs,
+                timeout=self.args.job_timeout,
+            )
+            report_path = self.run_dir / "criterion-overlay-pool-report.json"
+            report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+            expected_peak = min(self.args.jobs, 3)
+            if report.get("status") != "passed" or report.get("peak_jobs") != expected_peak:
+                raise JourneyFailure(
+                    f"criterion overlay pool failed; inspect {report_path}",
+                    state="end",
+                    event="criterion-overlay",
+                )
+            if any(
+                row.get("status") != "passed" or row.get("exit_code") != 0
+                for row in report.get("jobs", [])
+            ):
+                raise JourneyFailure(
+                    f"criterion overlay pool omitted a completed case; inspect {report_path}",
+                    state="end",
+                    event="criterion-overlay",
+                )
+            overlay_off = job_root / "overlay-off" / "criterion-overlay-off" / "overlay-off-proof.json"
+            overlay_candidate = job_root / "overlay-on-candidate" / "criterion-overlay-on-candidate" / "overlay-on-candidate-proof.json"
+            overlay_not_applicable = job_root / "overlay-on-not-applicable" / "criterion-overlay-on-not-applicable" / "overlay-on-not-applicable-proof.json"
+            for path in (overlay_off, overlay_candidate, overlay_not_applicable):
+                if not path.is_file():
+                    raise JourneyFailure(
+                        f"criterion overlay omitted proof artifact {path}; inspect {report_path}",
+                        state="end",
+                        event="criterion-overlay",
+                    )
         self.criterion_overlay_proof = {
             "overlay_off": overlay_off,
             "overlay_on_candidate": overlay_candidate,
@@ -5625,11 +6688,40 @@ else:
         if not isinstance(configured, list):
             raise JourneyFailure(f"overlay scenario profile omitted policy gate {gate}")
         axes = [copy.deepcopy(entry) for entry in configured]
-        ids = {entry.get("id") for entry in axes if isinstance(entry, dict)}
-        if axes and "ids-grounded" not in ids:
-            axes.append({"id": "ids-grounded"})
-        if axes and gate in {"validation-review", "validation-adversarial-review"} and "bypass-not-green" not in ids:
-            axes.append({"id": "bypass-not-green"})
+        if not axes:
+            return axes
+
+        contract_v3 = self.profile.get("contract_version") == 3
+        stages: List[str] = []
+        for entry in axes:
+            stage = entry.get("review_stage", "aggregate") if isinstance(entry, dict) else "aggregate"
+            if stage not in stages:
+                stages.append(stage)
+        extras = ["ids-grounded"]
+        if gate in {"validation-review", "validation-adversarial-review"}:
+            extras.append("bypass-not-green")
+        for stage in stages:
+            required_authors = max(
+                int(entry.get("required_authors", 1))
+                for entry in axes
+                if isinstance(entry, dict)
+                and entry.get("review_stage", "aggregate") == stage
+            )
+            for axis_id in extras:
+                if any(
+                    isinstance(entry, dict)
+                    and entry.get("id") == axis_id
+                    and (not contract_v3 or entry.get("review_stage", "aggregate") == stage)
+                    for entry in axes
+                ):
+                    continue
+                extra: Dict[str, Any] = {
+                    "id": axis_id,
+                    "required_authors": required_authors,
+                }
+                if contract_v3:
+                    extra["review_stage"] = stage
+                axes.append(extra)
         return axes
 
     def _append_overlay_evidence(
@@ -5653,10 +6745,12 @@ else:
             for index in range(count):
                 result = "fail" if axis == failing_axis else "pass"
                 findings = failure_findings if result == "fail" else ""
-                record_id = f"{record_prefix}evidence-{gate}-{axis}-{index}"
+                stage = entry.get("review_stage", "aggregate")
+                record_id = f"{record_prefix}evidence-{gate}-{stage}-{axis}-{index}"
                 data = {
                     "gate": gate,
                     "policy_id": axis,
+                    "review_stage": stage,
                     "result": result,
                     "findings": findings,
                     "author": {
@@ -5803,10 +6897,17 @@ else:
         profile_path = scenario_dir / "high-rigor-bookends.json"
         provider_config = scenario_dir / "providers.toml"
         scenario_dir.mkdir(parents=True, exist_ok=True)
+        # The overlay only needs tracked proof inputs and a fresh Git root.
+        # Agent sessions and prior run/fan-out outputs are generated artifacts,
+        # never Bookends inputs; copying them made each overlay setup duplicate
+        # gigabytes without changing the checked tree.
         shutil.copytree(
             self.data_root,
             checkout,
-            ignore=shutil.ignore_patterns(".git", "target", "__pycache__", "*.pyc"),
+            ignore=shutil.ignore_patterns(
+                ".git", "target", "__pycache__", "*.pyc",
+                ".pi-subagents", ".loop-engine", "fan-out-adhoc",
+            ),
         )
         artifacts.mkdir()
         self._initialize_overlay_checkout(checkout)
@@ -6048,7 +7149,7 @@ else:
                 )
 
     def _run_stitched_source(self) -> None:
-        """Walk the live graph produced from shipped minimal.json on a second run."""
+        """Complete a same-topology run with a different frozen policy set."""
         assert self.run_dir is not None
         assert self.fixture_root is not None
         source = self.data_root / STITCHED_PROFILE_SUBPATH
@@ -6062,6 +7163,12 @@ else:
         saved_state = self.state
         saved_bindings = self.work_slot_bindings
         saved_source = self.profile_source
+
+        primary_show = self._show_for(saved_run_id, state="end", event="stitched-primary-show")
+        primary_input = primary_show.get("initial_input")
+        if not isinstance(primary_input, dict):
+            raise JourneyFailure("primary completed run omitted frozen initial input")
+        primary_workflow = self._describe_initial_input(primary_input, "primary")
 
         stitched_dir = self.run_dir / "stitched"
         artifact_root = stitched_dir / "artifacts"
@@ -6077,62 +7184,158 @@ else:
         try:
             self._prepare_profile()
             self._assert_stitched_profile(self.profile)
-
-            for subject, fixture in SUBJECTS.items():
-                shutil.copy2(self.fixture_root / fixture, artifact_root / subject)
             self._prepare_fixture_proof_commands(artifact_root)
 
             self._start_run(self.run_id)
             shown = self._assert_show("explore", "stitched-start")
-            # bookends:LE-43 — the same production provider mechanism starts a materially different minimal topology profile.
+            secondary_input = shown.get("initial_input")
+            if not isinstance(secondary_input, dict):
+                raise JourneyFailure("stitched run omitted frozen initial input")
+            secondary_workflow = self._describe_initial_input(secondary_input, "stitched")
+            # bookends:LE-39 — the minimal-profile public run reaches the
+            # terminal state through the same provider path.
+            # bookends:LE-43 — completed runs compare identical topology while
+            # retaining materially different frozen review obligations.
+            # AC-12: the provider and every state/transition/work-slot row are
+            # identical, while the frozen review and criterion obligations are
+            # materially different.
+            state_shape = lambda workflow: [
+                {key: state.get(key) for key in ("id", "title", "final")}
+                for state in workflow.get("states", [])
+            ]
             if (
-                shown.get("workflow_id") != "software-change"
-                or shown.get("initial_input", {}).get("config_version") != "minimal-9"
-                or shown.get("initial_input", {}).get("review_policies")
-                == saved_profile.get("review_policies")
+                state_shape(primary_workflow) != state_shape(secondary_workflow)
+                or primary_workflow.get("transitions") != secondary_workflow.get("transitions")
+                or primary_workflow.get("work_slots") != secondary_workflow.get("work_slots")
             ):
                 raise JourneyFailure(
-                    "stitched run did not use the same provider workflow with distinct review policies",
+                    "completed-run comparison changed workflow topology",
+                    state=self.state,
+                    event="stitched-start",
+                )
+            if (
+                secondary_workflow.get("id") != "software-change"
+                or secondary_input.get("config_version") != "minimal-10"
+                or secondary_input.get("review_policies") == primary_input.get("review_policies")
+                or secondary_input.get("criterion_policy") == primary_input.get("criterion_policy")
+            ):
+                raise JourneyFailure(
+                    "same-topology comparison did not freeze distinct review obligations",
                     state=self.state,
                     event="stitched-start",
                 )
             try:
                 work_slot_journey.assert_catalog(
                     shown,
-                    STITCHED_SLOT_IDS,
-                    stdin_context_kinds=_review_stdin_kinds(STITCHED_SLOT_IDS),
+                    SOFTWARE_CHANGE_SLOT_IDS,
+                    stdin_context_kinds=_review_stdin_kinds(SOFTWARE_CHANGE_SLOT_IDS),
                 )
             except work_slot_journey.WorkSlotJourneyFailure as error:
                 raise JourneyFailure(
                     str(error), state=self.state, event="stitched-start"
                 ) from error
+
             routes = [
                 (item.get("event"), item.get("target"))
                 for item in shown.get("requestable_events", [])
                 if isinstance(item, dict)
             ]
-            if ("intent-ready", "design") not in routes:
+            if ("intent-ready", "intent-review") not in routes:
                 raise JourneyFailure(
-                    f"stitched explore omitted intent-ready→design; got {routes}",
+                    f"stitched explore omitted intent-ready→intent-review; got {routes}",
                     state=self.state,
                     event="stitched-start",
                 )
             self._invoke_bound_slot(self.run_id, state="explore")
-            for expected_state, event, target in STITCHED_HOPS:
-                if self.state != expected_state:
-                    raise JourneyFailure(
-                        f"stitched hop expected {expected_state}, at {self.state}",
-                        state=self.state,
-                        event=event,
-                    )
-                if event == "implementation-ready":
-                    self._create_checkpoint("implementation")
-                if event == "validation-ready":
-                    self._create_checkpoint("validation")
-                self._expect_allow(event, target)
-            self._pass_review("validation-review", "passed", "end")
+            self._expect_allow("intent-ready", "intent-review")
+
+            # Deliberately import the completed high-rigor run's intent-review
+            # records.  Its config identity is frozen differently, so this
+            # evidence must deny until the secondary run receives its own
+            # policy evidence; merely sharing axis names is not enough.
+            foreign_context = [
+                record
+                for record in primary_show.get("context", [])
+                if isinstance(record, dict)
+                and record.get("kind") in {"review-evidence", "finding-ledger"}
+                and record.get("data", {}).get("gate") == "intent-review"
+            ]
+            if not foreign_context:
+                raise JourneyFailure("primary run had no intent-review evidence to compare")
+            for record in foreign_context:
+                self._assert_show("intent-review", "foreign-policy-record")
+                response = self._engine(
+                    [
+                        "append",
+                        "--record-id=foreign-" + str(record["id"]),
+                        self.run_id,
+                        str(record["kind"]),
+                        json.dumps(record["data"], separators=(",", ":")),
+                    ],
+                    state="intent-review",
+                    event="append",
+                    axis="foreign-policy",
+                )
+                self._expect_status(response, "completed", event="append", state="intent-review")
+            foreign_denial = self._event("approved", "foreign-policy")
+            self._expect_status(
+                foreign_denial,
+                "rejected",
+                event="approved",
+                state="intent-review",
+                axis="foreign-policy",
+            )
+            self._assert_show("intent-review", "foreign-policy-denied")
+            if foreign_denial.get("code") != "software-change-review-incomplete":
+                raise JourneyFailure(
+                    f"wrong-run policy evidence produced the wrong denial: {foreign_denial}",
+                    state="intent-review",
+                    event="approved",
+                )
+            evidence_details = foreign_denial.get("details", {})
+            diagnostics = [
+                *evidence_details.get("diagnostics", []),
+                *evidence_details.get("informational", []),
+            ]
+            if not any(
+                diagnostic.get("category") == "stale_config"
+                for axis in diagnostics
+                if isinstance(axis, dict)
+                for diagnostic in axis.get("diagnostics", [])
+                if isinstance(diagnostic, dict)
+            ):
+                raise JourneyFailure(
+                    f"wrong-run policy evidence was not exposed as stale config: {foreign_denial}",
+                    state="intent-review",
+                    event="approved",
+                )
+            self._append_evidence("intent-review", record_prefix="stitched-current-")
+            self._expect_allow("approved", "intent-adversarial-review")
+            self._pass_review(
+                "intent-adversarial-review", "approved", "design", record_prefix="stitched-current-"
+            )
+
+            self._expect_allow("design-ready", "design-review")
+            self._pass_review("design-review", "approved", "design-adversarial-review")
+            self._pass_review("design-adversarial-review", "approved", "plan")
+            self._expect_allow("plan-ready", "plan-review")
+            self._pass_review("plan-review", "approved", "plan-adversarial-review")
+            self._pass_review("plan-adversarial-review", "approved", "implement")
+            self._create_checkpoint("implementation")
+            self._expect_allow("implementation-ready", "implementation-review")
+            self._pass_review(
+                "implementation-review", "approved", "implementation-adversarial-review"
+            )
+            self._pass_review(
+                "implementation-adversarial-review", "approved", "validation"
+            )
+            self._create_checkpoint("validation")
+            self._expect_allow("validation-ready", "validation-review")
+            self._pass_review(
+                "validation-review", "approved", "validation-adversarial-review"
+            )
+            self._pass_review("validation-adversarial-review", "passed", "end")
             shown = self._assert_show("end", "stitched-terminal-show")
-            # bookends:LE-39 — the minimal software-change idea is driven to a final public run state.
             if shown.get("lifecycle") != "final":
                 raise JourneyFailure(
                     "stitched journey did not reach final lifecycle",
@@ -6146,7 +7349,7 @@ else:
                     event="show",
                 )
             print(
-                "stitched software-change journey passed: empty review lists omitted, last-hop passed"
+                "stitched software-change journey passed: same topology, distinct frozen policies, wrong-run evidence denied"
             )
         finally:
             self.run_id = saved_run_id
@@ -6157,43 +7360,60 @@ else:
             self.work_slot_bindings = saved_bindings
             self.profile_source = saved_source
 
+    def _describe_initial_input(self, initial_input: Dict[str, Any], label: str) -> Dict[str, Any]:
+        """Describe a frozen input through the public provider subprocess."""
+        completed = subprocess.run(
+            [str(self.provider)],
+            input=json.dumps({"operation": "describe", "initial_input": initial_input}),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise JourneyFailure(
+                f"{label} provider describe failed: {completed.stderr.strip() or completed.returncode}"
+            )
+        try:
+            value = json.loads(completed.stdout)
+        except json.JSONDecodeError as error:
+            raise JourneyFailure(f"{label} provider describe returned invalid JSON: {error}") from error
+        if not isinstance(value, dict):
+            raise JourneyFailure(f"{label} provider describe returned a non-object")
+        return value
+
     @staticmethod
     def _assert_stitched_profile(profile: Dict[str, Any]) -> None:
         policies = profile.get("review_policies")
-        if not isinstance(policies, dict):
-            raise JourneyFailure("stitched profile review_policies must be an object")
-        for omitted in (
-            "intent-review",
-            "design-review",
-            "plan-review",
-            "implementation-review",
-        ):
-            if policies.get(omitted) != []:
-                raise JourneyFailure(
-                    f"stitched profile must omit {omitted} with an empty list",
-                    event="stitched-start",
-                )
-        validation = policies.get("validation-review")
-        if not isinstance(validation, list) or not validation:
+        if not isinstance(policies, dict) or set(policies) != set(GATE_SUBJECT):
             raise JourneyFailure(
-                "stitched profile must keep a nonempty validation-review list",
+                "stitched profile must configure every ordinary and challenge gate",
                 event="stitched-start",
             )
         for gate, axes in policies.items():
-            if "adversarial" in str(gate) and axes:
+            if not isinstance(axes, list) or not axes:
                 raise JourneyFailure(
-                    f"stitched profile must not enable {gate}",
+                    f"stitched profile must keep a nonempty {gate} policy list",
+                    event="stitched-start",
+                )
+            if any(axis.get("review_stage", "aggregate") != "aggregate" for axis in axes):
+                raise JourneyFailure(
+                    f"stitched minimal profile unexpectedly includes staged individual review in {gate}",
                     event="stitched-start",
                 )
 
-    def _run_dummy_worker_proofs(self) -> None:
+    def _run_dummy_worker_proofs(
+        self, *, global_jobs: Optional[List[Dict[str, Any]]] = None
+    ) -> None:
         """Prove heartbeat, capture isolation, preview fail-closed, and sandbox argv."""
         assert self.run_dir is not None
         assert self.profile_source is not None
         assert self.fixture_root is not None
         import proof_pool
         setup_started = time.monotonic()
-        assert_worker_data_skill_and_root_policy()
+        assert_worker_data_skill_and_root_policy(
+            engine_binary=self.engine,
+            provider_binary=self.provider,
+        )
         self.proof_setup = [{"name": "assert_worker_data_skill_and_root_policy",
                              "status": "passed", "stage": "setup",
                              "wall_seconds": time.monotonic() - setup_started}]
@@ -6207,11 +7427,15 @@ else:
         try:
             # bookends:LE-85 — shipped profiles leave driver-performed slots unbound.
             # bookends:LE-86 — the same public binding contract is exercised for this provider.
+            # bookends:LE-132 — the explicit roster/setup path exposes the
+            # effective worker policy before any run is started.
             setup_started = time.monotonic()
             assertions = work_slot_journey.prove_shipped_software_change_profiles(self.data_root)
             self.proof_setup.append({"name": "prove_shipped_software_change_profiles",
                 "status": "passed", "stage": "setup", "returned_assertions": assertions,
                 "wall_seconds": time.monotonic() - setup_started})
+            # bookends:LE-140 — setup proves selected model-provider extensions
+            # are optional and validates only explicitly supplied paths.
             # bookends:LE-92 — proposal-only data is inert and only the driver ledger routes exact implementation tasks.
             # bookends:LE-102 — the public run-plan-graph command refuses missing prerequisites and summarizes the resulting tree.
             enqueue(work_slot_journey.prove_graph_runner,
@@ -6223,8 +7447,8 @@ else:
                 provider=self.provider,
                 work_dir=proof_root / "engine-standing-join",
             )
-            # bookends:LE-89 — review fan-out remains entered through invoke and frozen workers.
-            # bookends:LE-90 — nested worker stdin/output and Dagu graph shape are asserted.
+            # bookends:LE-140 — review fan-out remains entered through invoke and frozen workers.
+            # bookends:LE-138 — nested worker stdin/output and Dagu graph shape are asserted.
             enqueue(work_slot_journey.prove_fan_out,
                 engine=self.engine,
                 work_dir=proof_root / "fan-out",
@@ -6257,7 +7481,7 @@ else:
                 fixture_root=self.fixture_root,
                 work_dir=proof_root / "bound-fan-out-overrun",
             )
-            # bookends:LE-79 — waiter completion and captured inner worker status are inspected.
+            # bookends:LE-129 — waiter completion and captured inner worker status are inspected.
             # bookends:LE-80 — the public worker path exercises stdin-exec without shell framing.
             enqueue(work_slot_journey.prove_bound_contracted_fan_out_failure,
                 engine=self.engine,
@@ -6266,7 +7490,7 @@ else:
                 fixture_root=self.fixture_root,
                 work_dir=proof_root / "bound-contracted-fan-out-failure",
             )
-            # bookends:LE-90 — the public fan-out scenarios cover both legacy key-presence and additive full-schema worker contracts.
+            # bookends:LE-138 — the public fan-out scenarios cover the worker contract boundary.
             # bookends:LE-93 — the public fan-out scenario preserves both bounded same-worker conformance attempts.
             enqueue(work_slot_journey.prove_full_schema_retry,
                 engine=self.engine,
@@ -6347,6 +7571,17 @@ else:
                 fixture_root=self.fixture_root,
                 work_dir=proof_root / "max-active-bound-graph-runner",
             )
+            if global_jobs is not None:
+                for job in jobs:
+                    self._append_global_pool_job(
+                        global_jobs,
+                        name=f"dummy-{job['name']}",
+                        kind="dummy-worker",
+                        root=proof_root / job["name"],
+                        function=job["name"],
+                        kwargs=job["kwargs"],
+                    )
+                return
             # bookends:LE-117 — the complete isolated job inventory uses one
             # bounded pool with retained outcomes and verified cleanup; final
             # comparable performance/hosted proof remains separately driver-owned.
@@ -6390,6 +7625,164 @@ else:
                 event=event,
                 axis=axis,
             )
+
+
+def _run_operational_batch(job: Dict[str, Any]) -> Dict[str, Any]:
+    """Run a resource-capped operational batch inside one global-pool slot."""
+    root = Path(job["root"]).resolve()
+    output_root = root / "cases"
+    output_root.mkdir(parents=True, exist_ok=True)
+    binary_dir = Path(job["binary_dir"]).resolve()
+    released_root = Path(job["released_root"]).resolve()
+    script = Path(job["script"]).resolve()
+    env_binary = str(job.get("env_binary") or shutil.which("env") or "/usr/bin/env")
+    outcomes: Dict[str, Any] = {}
+    for case in job["cases"]:
+        case_output = output_root / case
+        argv = [
+            env_binary,
+            f"SOFTWARE_CHANGE_JOURNEY_ENGINE={binary_dir / 'loop-engine'}",
+            f"SOFTWARE_CHANGE_JOURNEY_PROVIDER={binary_dir / 'software-change'}",
+            "PYTHONUNBUFFERED=1",
+            sys.executable,
+            str(script),
+            "--case",
+            case,
+            "--binary-dir",
+            str(binary_dir),
+            "--released-root",
+            str(released_root),
+            "--output-root",
+            str(case_output),
+        ]
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "SOFTWARE_CHANGE_JOURNEY_ENGINE": str(binary_dir / "loop-engine"),
+                "SOFTWARE_CHANGE_JOURNEY_PROVIDER": str(binary_dir / "software-change"),
+                "PYTHONUNBUFFERED": "1",
+            }
+        )
+        completed = subprocess.run(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+            check=False,
+        )
+        (root / f"{case}.stdout").write_bytes(completed.stdout)
+        (root / f"{case}.stderr").write_bytes(completed.stderr)
+        if completed.returncode != 0:
+            raise JourneyFailure(
+                f"operational UX {case} failed ({completed.returncode}); captures: {root}"
+            )
+        text = completed.stdout.decode("utf-8", "replace")
+        for line in reversed(text.splitlines()):
+            if not line:
+                continue
+            try:
+                outcome = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(outcome, dict) and outcome.get("case") == case:
+                outcomes[case] = outcome
+                break
+        if case not in outcomes or outcomes[case].get("status") != "passed":
+            raise JourneyFailure(
+                f"operational UX {case} omitted its public outcome; captures: {root}"
+            )
+        sys.stdout.write(text)
+        sys.stdout.flush()
+    return outcomes
+
+
+def _run_pool_job(job_path: str) -> None:
+    """Execute one isolated public proof from a proof-pool worker."""
+    job = json.loads(Path(job_path).read_text(encoding="utf-8"))
+    args = argparse.Namespace(**job["args"])
+    journey = Journey(args)
+    root = Path(job["root"]).resolve()
+    kind = job["kind"]
+    if kind == "successor-route":
+        journey._initialize_pool_case(
+            root,
+            run_id=f"successor-route-parent-{job['index']:02d}",
+            prepare_profile=True,
+            repository=True,
+        )
+        revision = job.get("implementation_revision")
+        if revision is not None:
+            report_path = journey.artifact_root / "implementation-report.json"
+            report = journey._read_json(report_path, "isolated route implementation report")
+            report["revision"] = revision
+            report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        result = journey._run_successor_route_case(
+            job["index"],
+            job["source"],
+            job["event"],
+            job["target"],
+            implementation_revision=revision,
+            isolated=True,
+        )
+    elif kind == "checkpoint":
+        journey._initialize_pool_case(root)
+        result = journey._run_checkpoint_case(job["mutation"])
+    elif kind == "overlay-off":
+        journey._initialize_pool_case(root)
+        result = journey._run_overlay_off_source()
+    elif kind == "overlay-on":
+        journey._initialize_pool_case(root)
+        result = journey._run_overlay_on_source(candidate=job["candidate"])
+    elif kind == "engine-boundary":
+        journey._initialize_pool_case(root)
+        result = journey._run_engine_boundary_scenarios()
+    elif kind == "package-7b":
+        journey._initialize_pool_case(root)
+        result = journey._run_package_7b_review_candidates_scenario()
+    elif kind == "recovery":
+        import recovery_journey
+
+        recovery_journey.dispatch(job["scenario"], journey)
+        result = None
+    elif kind == "dummy-worker":
+        kwargs = {
+            key: Path(value)
+            for key, value in job.get("kwargs", {}).items()
+        }
+        result = getattr(work_slot_journey, job["function"])(**kwargs)
+    elif kind == "stitched":
+        # This is the one intentional cross-run fixture: it reads the
+        # completed primary database, while every other global job owns a
+        # separate database/root.  The parent is quiescent during the pool.
+        journey.run_dir = Path(job["parent_run_dir"]).resolve()
+        journey.database = Path(job["database"]).resolve()
+        journey.provider_config = Path(job["provider_config"]).resolve()
+        journey.artifact_root = Path(job["artifact_root"]).resolve()
+        journey.profile_path = Path(job["profile_path"]).resolve()
+        journey.profile_source = Path(job["profile_source"]).resolve()
+        journey.profile = journey._read_json(journey.profile_source, "primary stitched profile")
+        journey.fixture_root = journey.data_root / FIXTURE_SUBPATH
+        journey.repository_root = (
+            Path(job["repository_root"]).resolve()
+            if job.get("repository_root")
+            else None
+        )
+        journey.command_cwd = journey.repository_root
+        journey.state = "end"
+        journey.run_id = job["run_id"]
+        journey.work_slot_bindings = copy.deepcopy(job.get("work_slot_bindings", {}))
+        result = journey._run_stitched_source()
+    elif kind == "operational-batch":
+        result = _run_operational_batch(job)
+    else:
+        raise JourneyFailure(f"unknown isolated proof-pool job kind: {kind}")
+    output = job.get("output")
+    if output:
+        Path(output).write_text(
+            json.dumps({"status": "passed", "result": str(result)}) + "\n",
+            encoding="utf-8",
+        )
+    print(f"isolated proof-pool job passed: {kind}", flush=True)
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -6471,6 +7864,15 @@ def _fan_out_workers(binding: Dict[str, Any], *, engine: str) -> List[Dict[str, 
     workers: List[Dict[str, Any]] = []
     index = 1
     while index < len(args):
+        if args[index] == "--then":
+            index += 1
+            continue
+        if args[index] == "--max-active":
+            index += 2
+            continue
+        if args[index].startswith("--max-active="):
+            index += 1
+            continue
         if args[index] != "--worker" or index + 1 >= len(args):
             raise JourneyFailure(f"constructor fan-out args were not worker pairs: {args}")
         worker = json.loads(args[index + 1])
@@ -6499,14 +7901,42 @@ def _policy_author_pairs(
 
 
 def _policy_author_batches(policies, roster):
-    pairs = _policy_author_pairs(policies, roster)
-    return [(assigned, entry) for entry in roster
-            if (assigned := [policy for policy, author in pairs if author == entry])]
+    stages = []
+    for policy in policies:
+        stage = policy.get("review_stage", "aggregate")
+        if stage not in stages:
+            stages.append(stage)
+    batches = []
+    for stage in stages:
+        stage_policies = [
+            policy
+            for policy in policies
+            if policy.get("review_stage", "aggregate") == stage
+        ]
+        if stage == "individual":
+            # High-rigor individual assignments are deliberately singleton
+            # axis reviews. Aggregate assignments remain one all-axis batch per
+            # author so a correction can select only affected individuals.
+            pairs = _policy_author_pairs(stage_policies, roster)
+            for entry in roster:
+                for policy, author in pairs:
+                    if author == entry:
+                        batches.append(([policy], entry))
+        else:
+            pairs = _policy_author_pairs(stage_policies, roster)
+            batches.extend(
+                (assigned, entry)
+                for entry in roster
+                if (assigned := [policy for policy, author in pairs if author == entry])
+            )
+    return batches
 
 
 def _batch_schema(schema, policies, author):
     result = copy.deepcopy(schema)
     result["properties"]["author"]["const"] = author
+    if policies:
+        result["properties"]["review_stage"]["const"] = policies[0].get("review_stage", "aggregate")
     rows = result["properties"]["judgments"]
     rows["minItems"] = rows["maxItems"] = len(policies)
     for branch in rows["items"]["oneOf"]:
@@ -6588,6 +8018,7 @@ def _assert_preview_visibility(
     workers: Sequence[Dict[str, Any]],
     *,
     schema_field: str = "output_schema",
+    engine_binary: Optional[Path] = None,
 ) -> None:
     if len(workers) == 0:
         raise JourneyFailure("constructor preview input had no workers")
@@ -6596,13 +8027,13 @@ def _assert_preview_visibility(
         if "preamble" not in worker or schema_field not in worker:
             raise JourneyFailure(f"preview input omitted preamble/schema: {worker}")
         required = (worker.get(schema_field) or {}).get("required")
-        expected_required = ["author", "judgments"] if schema_field == "full_output_schema" else ["axis", "author", "result", "findings"]
+        expected_required = ["review_stage", "author", "judgments"] if schema_field == "full_output_schema" else ["axis", "author", "result", "findings"]
         if required != expected_required:
             raise JourneyFailure(f"preview input omitted required keys: {worker}")
         preamble = worker.get("preamble")
         if isinstance(preamble, str) and preamble:
             full_preambles.append(preamble)
-    engine = repository / "target/debug/loop-engine"
+    engine = engine_binary or (repository / "target/debug/loop-engine")
     if not engine.is_file():
         raise JourneyFailure(
             "preview-bindings visibility requires target/debug/loop-engine; build loop-cli first"
@@ -6698,13 +8129,17 @@ def _expect_constructor_closed(run, *, needle: str, context: str) -> None:
         raise JourneyFailure(f"{context} unexpectedly succeeded")
 
 
-def assert_worker_data_skill_and_root_policy() -> None:
+def assert_worker_data_skill_and_root_policy(
+    *,
+    engine_binary: Optional[Path] = None,
+    provider_binary: Optional[Path] = None,
+) -> None:
     """Execute provider constructors and assert root policy against revision-18 contracts."""
     repository = Path(__file__).resolve().parent.parent
     dummy_engine = "/tmp/loop-engine-constructor-proof"
     dummy_pi = "/tmp/pi-constructor-proof"
-    dummy_cursor = "/tmp/cursor-provider-extension"
-    dummy_bridge = "/tmp/claude-bridge-extension"
+    dummy_cursor = str(repository / "crates/policy-document-provider/data/semantic-review-worker-preamble.md")
+    dummy_bridge = str(repository / "crates/policy-document-provider/data/semantic-review-worker-output-schema.json")
     roster = [
         {"author": "reviewer-a", "model": "model-a"},
         {"author": "reviewer-b", "model": "model-b"},
@@ -6755,12 +8190,13 @@ def assert_worker_data_skill_and_root_policy() -> None:
         (pd_skill, "policy-document"),
         (research_skill, "research"),
     ):
-        if "--rawfile base_preamble" not in skill:
-            raise JourneyFailure(f"{name} constructor omitted --rawfile base_preamble")
-        if "preview-bindings" not in skill:
-            raise JourneyFailure(f"{name} constructor omitted preview-bindings")
-        if "SHA-256" not in skill and "SHA256" not in skill:
-            raise JourneyFailure(f"{name} constructor omitted SHA-256 confirmation")
+        if name == "software-change":
+            required = ("software-change setup", "--roster", "output_sha256", "preview-bindings")
+        else:
+            required = ("--rawfile base_preamble", "preview-bindings", "SHA-256", "validate_extension_path")
+        for clause in required:
+            if clause.lower() not in skill.lower():
+                raise JourneyFailure(f"{name} constructor/setup omitted {clause!r}")
 
     sc_preamble_path = (
         repository / "crates/software-change-provider/data/review-worker-preamble.txt"
@@ -6845,7 +8281,8 @@ def assert_worker_data_skill_and_root_policy() -> None:
     del fresh_row["properties"]["author"]
     # The batch retains the same pass/fail relation, with a separate closed carry row.
     expected_batch = {"type": "object", "additionalProperties": False,
-        "required": ["author", "judgments"], "properties": {
+        "required": ["review_stage", "author", "judgments"], "properties": {
+        "review_stage": {"type": "string", "enum": ["individual", "aggregate"]},
         "author": full_review_schema["properties"]["author"],
         "judgments": {"type": "array", "minItems": 1, "items": {"oneOf": [fresh_row,
             {"type": "object", "additionalProperties": False, "required": ["axis", "reuse"],
@@ -6859,7 +8296,105 @@ def assert_worker_data_skill_and_root_policy() -> None:
     if pd_schema != schema_required or research_schema != schema_required:
         raise JourneyFailure("provider output_schema bytes do not require axis/author/result/findings")
 
-    sc_jq = _extract_jq_after(sc_skill, '--slurpfile roster "$ROSTER" ')
+    software_change_binary = provider_binary or (repository / "target/debug/software-change")
+    loop_engine_binary = engine_binary or (repository / "target/debug/loop-engine")
+    if not software_change_binary.is_file() or not loop_engine_binary.is_file():
+        raise JourneyFailure(
+            "software-change setup self-test requires target/debug/loop-engine and target/debug/software-change"
+        )
+
+    def run_sc(output: Path, roster_path: Path, rigor: str = "high") -> Dict[str, Any]:
+        command = [
+            str(software_change_binary),
+            "setup",
+            "--rigor",
+            rigor,
+            "--roster",
+            str(roster_path),
+            "--engine",
+            str(loop_engine_binary),
+            "--provider",
+            str(software_change_binary),
+            "--output",
+            str(output),
+        ]
+        result = subprocess.run(
+            command,
+            cwd=str(output.parent),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            raise ConstructorClosed(detail or f"software-change setup exited {result.returncode}")
+        try:
+            report = json.loads(result.stdout)
+        except json.JSONDecodeError as error:
+            raise JourneyFailure(
+                f"software-change setup stdout was not JSON: {result.stdout}"
+            ) from error
+        if not output.is_file():
+            raise JourneyFailure("software-change setup did not write its output profile")
+        return report
+
+    def assert_sc_binding(
+        profile: Dict[str, Any],
+        source: Dict[str, Any],
+        gate: str,
+        roster_entries: Sequence[Dict[str, Any]],
+    ) -> None:
+        bindings = profile.get("work_slot_bindings")
+        if not isinstance(bindings, dict) or gate not in bindings:
+            raise JourneyFailure(f"software-change setup omitted {gate} binding")
+        binding = bindings[gate]
+        workers = _fan_out_workers(binding, engine=str(loop_engine_binary))
+        expected = _policy_author_batches(source["review_policies"][gate], roster_entries)
+        if len(workers) != len(expected):
+            raise JourneyFailure(
+                f"software-change setup {gate} worker count {len(workers)} != {len(expected)}"
+            )
+        if binding.get("context_filter") != {
+            "command": str(software_change_binary),
+            "args": ["commission"],
+        }:
+            raise JourneyFailure(f"software-change setup {gate} lost its commission filter")
+        args = binding.get("args") or []
+        if args[:3] != ["fan-out", "--max-active", "2"]:
+            raise JourneyFailure(f"software-change setup {gate} lost review concurrency: {args}")
+        for worker, (policies, entry) in zip(workers, expected):
+            if worker.get("command") != entry["command"] or worker.get("args") != entry["args"]:
+                raise JourneyFailure(
+                    f"software-change setup changed worker command/args: {worker} != {entry}"
+                )
+            expected_schema = _batch_schema(
+                sc_schema, policies, {"name": entry["author"], "kind": "agent"}
+            )
+            if (
+                gate == "validation-review"
+                and expected_schema["properties"]["review_stage"].get("const") == "aggregate"
+            ):
+                expected_schema["properties"]["validation_verdicts"] = {
+                    "type": "array", "items": {"type": "object", "additionalProperties": False,
+                    "required": ["record_id", "kind", "data"], "properties": {
+                        "record_id": {"type": "string", "minLength": 1},
+                        "kind": {"type": "string", "enum": ["criterion-verdict", "goal-verdict"]},
+                        "data": {"type": "object"}}}}
+            if worker.get("full_output_schema") != expected_schema:
+                raise JourneyFailure(f"software-change setup changed worker schema: {worker}")
+            assigned = next(
+                line.removeprefix("assigned_policies: ")
+                for line in worker.get("preamble", "").splitlines()
+                if line.startswith("assigned_policies: ")
+            )
+            if json.loads(assigned) != policies:
+                raise JourneyFailure("software-change setup changed assigned policy order or prompts")
+            if not worker.get("preamble", "").startswith(sc_preamble):
+                raise JourneyFailure("software-change setup did not retain shipped preamble bytes")
+        _assert_preview_visibility(
+            repository, {gate: binding}, workers, schema_field="full_output_schema",
+            engine_binary=loop_engine_binary,
+        )
+
     pd_jq = _extract_heredoc_jq(pd_skill)
     research_validate_jq = _extract_jq_after(research_skill, '--argjson roster "$ROSTER_JSON" ')
     research_jq = _extract_jq_after(
@@ -6872,41 +8407,7 @@ def assert_worker_data_skill_and_root_policy() -> None:
         if _load_json(shipped).get("work_slot_bindings"):
             raise JourneyFailure(f"shipped profile unexpectedly binds slots: {shipped}")
 
-    def sc_args(slot_id: str, roster_path: Path) -> List[str]:
-        return [
-            "--arg",
-            "slot",
-            slot_id,
-            "--arg",
-            "engine",
-            dummy_engine,
-            "--arg",
-            "provider",
-            "/tmp/software-change-constructor-proof",
-            "--arg",
-            "pi",
-            dummy_pi,
-            "--arg",
-            "cursor",
-            dummy_cursor,
-            "--arg",
-            "bridge",
-            dummy_bridge,
-            "--arg",
-            "separate_axes_reason",
-            "",
-            "--rawfile",
-            "base_preamble",
-            str(sc_preamble_path),
-            "--slurpfile",
-            "output_schema",
-            str(sc_schema_path),
-            "--slurpfile",
-            "roster",
-            str(roster_path),
-        ]
-
-    def pd_args(roster_path: Path) -> List[str]:
+    def pd_args(roster_path: Path, *, extensions: bool = True) -> List[str]:
         return [
             "--arg",
             "slot",
@@ -6919,10 +8420,10 @@ def assert_worker_data_skill_and_root_policy() -> None:
             dummy_pi,
             "--arg",
             "cursor_extension",
-            dummy_cursor,
+            dummy_cursor if extensions else "",
             "--arg",
             "claude_bridge_extension",
-            dummy_bridge,
+            dummy_bridge if extensions else "",
             "--rawfile",
             "base_preamble",
             str(pd_preamble_path),
@@ -6934,7 +8435,9 @@ def assert_worker_data_skill_and_root_policy() -> None:
             str(roster_path),
         ]
 
-    def research_args(slot_id: str, roster_json: str) -> List[str]:
+    def research_args(
+        slot_id: str, roster_json: str, *, extensions: bool = True
+    ) -> List[str]:
         return [
             "--arg",
             "slot",
@@ -6950,10 +8453,10 @@ def assert_worker_data_skill_and_root_policy() -> None:
             dummy_pi,
             "--arg",
             "cursor_extension",
-            dummy_cursor,
+            dummy_cursor if extensions else "",
             "--arg",
             "claude_bridge_extension",
-            dummy_bridge,
+            dummy_bridge if extensions else "",
             "--rawfile",
             "base_preamble",
             str(research_preamble_path),
@@ -6962,20 +8465,27 @@ def assert_worker_data_skill_and_root_policy() -> None:
             str(research_schema_path),
         ]
 
-    def run_sc(profile: Path, slot_id: str, roster_path: Path) -> Dict[str, Any]:
-        stdout = _run_jq(sc_jq, profile, sc_args(slot_id, roster_path))
-        profile.write_text(stdout, encoding="utf-8")
-        return _load_json(profile)
-
-    def run_pd(profile: Path, roster_path: Path, *, slot_id: str = "semantic-review") -> Dict[str, Any]:
-        extra = pd_args(roster_path)
+    def run_pd(
+        profile: Path,
+        roster_path: Path,
+        *,
+        slot_id: str = "semantic-review",
+        extensions: bool = True,
+    ) -> Dict[str, Any]:
+        extra = pd_args(roster_path, extensions=extensions)
         extra[2] = slot_id
         stdout = _run_jq(pd_jq, profile, extra)
         profile.write_text(stdout, encoding="utf-8")
         return _load_json(profile)
 
-    def run_research(profile: Path, slot_id: str, roster_json: str) -> Dict[str, Any]:
-        extra = research_args(slot_id, roster_json)
+    def run_research(
+        profile: Path,
+        slot_id: str,
+        roster_json: str,
+        *,
+        extensions: bool = True,
+    ) -> Dict[str, Any]:
+        extra = research_args(slot_id, roster_json, extensions=extensions)
         try:
             _run_jq(research_validate_jq, profile, ["-e", *extra[:6]])
         except ConstructorClosed as error:
@@ -6992,246 +8502,54 @@ def assert_worker_data_skill_and_root_policy() -> None:
         _write_json(roster_path, roster)
         roster_json = json.dumps(roster, separators=(",", ":"))
 
-        design_profile = root / "high-rigor-design-review.json"
-        shutil.copy2(high_rigor, design_profile)
-        source = _load_json(design_profile)
-        result = run_sc(design_profile, "design-review", roster_path)
-        if result.get("review_policies") != source.get("review_policies"):
-            raise JourneyFailure("constructor mutated software-change review_policies")
-        bindings = result.get("work_slot_bindings")
-        if not isinstance(bindings, dict) or "design-review" not in bindings:
-            raise JourneyFailure("design-review constructor omitted work_slot_bindings")
-        if bindings != result["work_slot_bindings"]:
-            raise JourneyFailure("preview input diverged from resulting profile bindings")
-        workers = _fan_out_workers(bindings["design-review"], engine=dummy_engine)
-        expected = _policy_author_batches(source["review_policies"]["design-review"], roster)
-        if len(workers) != len(expected):
-            raise JourneyFailure(
-                f"design-review worker count {len(workers)} != {len(expected)}"
-            )
-        for worker, (policy, entry) in zip(workers, expected):
-            _assert_worker_assignment(
-                worker,
-                policy=policy,
-                roster_entry=entry,
-                base_preamble=sc_preamble,
-                schema=sc_schema,
-                pi_command=dummy_pi,
-                fragments=(
-                    "software-change",
-                    "design-review",
-                    "artifact_root",
-                    f"required_author_claim: {entry['author']}",
-                ),
-                schema_field="full_output_schema",
-            )
-        _assert_preview_visibility(
-            repository, bindings, workers, schema_field="full_output_schema"
+        setup_roster = [
+            {"author": "reviewer-a", "command": "/tmp/software-change-worker-a", "args": ["--worker", "a"]},
+            {"author": "reviewer-b", "command": "/tmp/software-change-worker-b", "args": ["--worker", "b"]},
+        ]
+        setup_roster_path = root / "software-change-roster.json"
+        _write_json(setup_roster_path, setup_roster)
+        setup_source = _load_json(high_rigor)
+        setup_profile = root / "software-change-setup.json"
+        setup_report = run_sc(setup_profile, setup_roster_path)
+        if setup_report.get("status") != "ready" or setup_report.get("started") is not False:
+            raise JourneyFailure(f"software-change setup report was not an inert ready report: {setup_report}")
+        if setup_report.get("output_bytes") != setup_profile.read_text(encoding="utf-8"):
+            raise JourneyFailure("software-change setup report lost exact output bytes")
+        if setup_report.get("output_sha256") != _sha256_file(setup_profile):
+            raise JourneyFailure("software-change setup report lost output hash")
+        setup_result = _load_json(setup_profile)
+        if setup_result.get("review_policies") != setup_source.get("review_policies"):
+            raise JourneyFailure("software-change setup changed shipped review policy bytes")
+        for gate in setup_source["review_policies"]:
+            assert_sc_binding(setup_result, setup_source, gate, setup_roster)
+        high_workers = _fan_out_workers(
+            setup_result["work_slot_bindings"]["intent-review"], engine=str(loop_engine_binary)
         )
-        _assert_hash_guard(design_profile)
-
-        plan_profile = root / "high-rigor-plan-review.json"
-        shutil.copy2(high_rigor, plan_profile)
-        plan_source = _load_json(plan_profile)
-        plan_policies = plan_source["review_policies"]["plan-review"]
-        if any("required_authors" in entry for entry in plan_policies):
-            raise JourneyFailure("high-rigor plan-review unexpectedly sets required_authors")
-        plan_result = run_sc(plan_profile, "plan-review", roster_path)
-        plan_workers = _fan_out_workers(
-            plan_result["work_slot_bindings"]["plan-review"], engine=dummy_engine
-        )
-        plan_expected = _policy_author_batches(plan_policies, roster)
-        if len(plan_expected) != 1 or len(plan_workers) != 1:
-            raise JourneyFailure("absent required_authors must batch all axes under the first author")
-        for worker, (policy, entry) in zip(plan_workers, plan_expected):
-            if entry["author"] != roster[0]["author"]:
-                raise JourneyFailure("plan-review used more than the default one roster author")
-            _assert_worker_assignment(
-                worker,
-                policy=policy,
-                roster_entry=entry,
-                base_preamble=sc_preamble,
-                schema=sc_schema,
-                pi_command=dummy_pi,
-                fragments=("software-change", "plan-review", "artifact_root"),
-                schema_field="full_output_schema",
-            )
-        _assert_preview_visibility(
-            repository,
-            plan_result["work_slot_bindings"],
-            plan_workers,
-            schema_field="full_output_schema",
-        )
-        _assert_hash_guard(plan_profile)
-
-        intent_profile = root / "high-rigor-intent-review.json"
-        shutil.copy2(high_rigor, intent_profile)
-        intent_source = _load_json(intent_profile)
-        intent_result = run_sc(intent_profile, "intent-review", roster_path)
-        intent_bindings = intent_result.get("work_slot_bindings")
-        if not isinstance(intent_bindings, dict) or "intent-review" not in intent_bindings:
-            raise JourneyFailure("intent-review constructor omitted work_slot_bindings")
-        for draft in (
-            "intent-draft",
-            "design-draft",
-            "plan-draft",
-            "implement",
-            "validation-draft",
+        if not any(
+            "fresh independent reviewer session" in worker.get("preamble", "")
+            and "individual-stage captures" in worker.get("preamble", "")
+            for worker in high_workers
+            if worker.get("full_output_schema", {}).get("properties", {}).get("review_stage", {}).get("const") == "aggregate"
         ):
-            if draft in intent_bindings:
-                raise JourneyFailure(f"constructor emitted draft binding {draft}")
-        if "intent-adversarial-review" in intent_bindings:
-            raise JourneyFailure(
-                "intent-review constructor mixed adversarial fan-out into the parent slot"
-            )
-        intent_workers = _fan_out_workers(
-            intent_bindings["intent-review"], engine=dummy_engine
-        )
-        intent_expected = _policy_author_batches(
-            intent_source["review_policies"]["intent-review"], roster
-        )
-        if len(intent_workers) != len(intent_expected):
-            raise JourneyFailure(
-                f"intent-review worker count {len(intent_workers)} != {len(intent_expected)}"
-            )
-        for worker, (policy, entry) in zip(intent_workers, intent_expected):
-            _assert_worker_assignment(
-                worker,
-                policy=policy,
-                roster_entry=entry,
-                base_preamble=sc_preamble,
-                schema=sc_schema,
-                pi_command=dummy_pi,
-                fragments=(
-                    "software-change",
-                    "intent-review",
-                    "artifact_root",
-                    f"required_author_claim: {entry['author']}",
-                ),
-                schema_field="full_output_schema",
-            )
+            raise JourneyFailure("high-rigor setup omitted fresh aggregate exclusion framing")
+        _assert_hash_guard(setup_profile)
 
-        adv_profile = root / "high-rigor-design-adversarial.json"
-        shutil.copy2(high_rigor, adv_profile)
-        adv_source = _load_json(adv_profile)
-        adv_result = run_sc(adv_profile, "design-adversarial-review", roster_path)
-        adv_bindings = adv_result.get("work_slot_bindings")
-        if not isinstance(adv_bindings, dict) or "design-adversarial-review" not in adv_bindings:
-            raise JourneyFailure(
-                "design-adversarial-review constructor omitted work_slot_bindings"
-            )
-        if "design-review" in adv_bindings:
-            raise JourneyFailure(
-                "adversarial constructor mixed parent fan-out into the adversarial slot"
-            )
-        adv_workers = _fan_out_workers(
-            adv_bindings["design-adversarial-review"], engine=dummy_engine
-        )
-        adv_expected = _policy_author_batches(
-            adv_source["review_policies"]["design-adversarial-review"], roster
-        )
-        if len(adv_workers) != len(adv_expected):
-            raise JourneyFailure(
-                f"design-adversarial-review worker count {len(adv_workers)} != {len(adv_expected)}"
-            )
-        for worker, (policy, entry) in zip(adv_workers, adv_expected):
-            if entry["author"] != roster[0]["author"]:
-                raise JourneyFailure(
-                    "adversarial constructor required a second roster or disjoint author"
-                )
-            _assert_worker_assignment(
-                worker,
-                policy=policy,
-                roster_entry=entry,
-                base_preamble=sc_preamble,
-                schema=sc_schema,
-                pi_command=dummy_pi,
-                fragments=(
-                    "software-change",
-                    "design-adversarial-review",
-                    "artifact_root",
-                ),
-                schema_field="full_output_schema",
-            )
-
-        for draft in (
-            "intent-draft",
-            "design-draft",
-            "plan-draft",
-            "implement",
-            "validation-draft",
-        ):
-            draft_profile = root / f"sc-draft-{draft}.json"
-            shutil.copy2(high_rigor, draft_profile)
-            _expect_constructor_closed(
-                lambda draft=draft, draft_profile=draft_profile: run_sc(
-                    draft_profile, draft, roster_path
-                ),
-                needle="constructor does not emit draft bindings",
-                context=f"software-change draft slot {draft}",
-            )
-
-        empty_policies = root / "sc-empty-policies.json"
-        shutil.copy2(high_rigor, empty_policies)
-        empty_doc = _load_json(empty_policies)
-        empty_doc["review_policies"]["design-review"] = []
-        _write_json(empty_policies, empty_doc)
-        _expect_constructor_closed(
-            lambda: run_sc(empty_policies, "design-review", roster_path),
-            needle="unsupported or empty policy list",
-            context="software-change empty policies",
-        )
-
-        missing_prompt = root / "sc-missing-prompt.json"
-        shutil.copy2(high_rigor, missing_prompt)
-        missing_doc = _load_json(missing_prompt)
-        missing_doc["review_policies"]["design-review"][0]["example_prompt"] = ""
-        _write_json(missing_prompt, missing_doc)
-        _expect_constructor_closed(
-            lambda: run_sc(missing_prompt, "design-review", roster_path),
-            needle="example_prompt",
-            context="software-change missing example_prompt",
-        )
-
-        short_roster = root / "short-roster.json"
-        _write_json(short_roster, [roster[0]])
-        short_profile = root / "sc-short-roster.json"
-        shutil.copy2(high_rigor, short_profile)
-        _expect_constructor_closed(
-            lambda: run_sc(short_profile, "design-review", short_roster),
-            needle="too few entries",
-            context="software-change insufficient roster",
-        )
-
-        duplicate_roster = root / "duplicate-roster.json"
+        duplicate_roster_path = root / "software-change-duplicate-roster.json"
         _write_json(
-            duplicate_roster,
-            [roster[0], {"author": roster[0]["author"], "model": "model-c"}],
+            duplicate_roster_path,
+            [setup_roster[0], {"author": setup_roster[0]["author"], "command": "/tmp/other", "args": []}],
         )
-        duplicate_profile = root / "sc-duplicate-roster.json"
-        shutil.copy2(high_rigor, duplicate_profile)
         _expect_constructor_closed(
-            lambda: run_sc(duplicate_profile, "design-review", duplicate_roster),
-            needle="pairwise distinct",
-            context="software-change duplicate author",
+            lambda: run_sc(root / "software-change-duplicate.json", duplicate_roster_path),
+            needle="duplicate author",
+            context="software-change setup duplicate author",
         )
-
-        empty_author = root / "empty-author-roster.json"
-        _write_json(empty_author, [{"author": "", "model": "model-a"}, roster[1]])
-        empty_author_profile = root / "sc-empty-author.json"
-        shutil.copy2(high_rigor, empty_author_profile)
+        short_roster_path = root / "software-change-short-roster.json"
+        _write_json(short_roster_path, [setup_roster[0]])
         _expect_constructor_closed(
-            lambda: run_sc(empty_author_profile, "design-review", empty_author),
-            needle="non-empty strings",
-            context="software-change empty author",
-        )
-
-        unsupported_profile = root / "sc-unsupported-slot.json"
-        shutil.copy2(high_rigor, unsupported_profile)
-        _expect_constructor_closed(
-            lambda: run_sc(unsupported_profile, "semantic-review", roster_path),
-            needle="unsupported review slot",
-            context="software-change unsupported slot",
+            lambda: run_sc(root / "software-change-short.json", short_roster_path),
+            needle="requires 2",
+            context="software-change setup insufficient roster",
         )
 
         for source_profile, label in ((readme_profile, "readme"), (agents_profile, "agents")):
@@ -7273,8 +8591,32 @@ def assert_worker_data_skill_and_root_policy() -> None:
                     raise JourneyFailure(
                         f"{label} worker omitted complete target object {target_json}"
                     )
-            _assert_preview_visibility(repository, pd_bindings, pd_workers)
+            _assert_preview_visibility(
+                repository, pd_bindings, pd_workers, engine_binary=loop_engine_binary
+            )
             _assert_hash_guard(dest)
+            for worker in pd_workers:
+                args = worker.get("args")
+                if not isinstance(args, list) or args[args.index("-e") : args.index("-e") + 2] != ["-e", dummy_cursor]:
+                    raise JourneyFailure(f"{label} constructor lost the supplied cursor extension")
+                second_extension = args.index("-e", args.index("-e") + 1)
+                if args[second_extension : second_extension + 2] != ["-e", dummy_bridge]:
+                    raise JourneyFailure(f"{label} constructor lost the supplied bridge extension")
+
+        pd_no_extensions = root / "pd-no-extensions.json"
+        no_extension_profile = _load_json(readme_profile)
+        no_extension_profile["target"]["path"] = str((root / "pd-no-extension-target.md").resolve())
+        _write_json(pd_no_extensions, no_extension_profile)
+        no_extension_result = run_pd(pd_no_extensions, roster_path, extensions=False)
+        no_extension_workers = _fan_out_workers(
+            no_extension_result["work_slot_bindings"]["semantic-review"], engine=dummy_engine
+        )
+        if not no_extension_workers or any(
+            "-e" in (worker.get("args") or []) for worker in no_extension_workers
+        ):
+            raise JourneyFailure(
+                "policy-document constructor emitted an extension pair for an omitted path"
+            )
 
         pd_unsupported = root / "pd-unsupported.json"
         shutil.copy2(root / "readme-semantic.json", pd_unsupported)
@@ -7352,8 +8694,33 @@ def assert_worker_data_skill_and_root_policy() -> None:
                     pi_command=dummy_pi,
                     fragments=("research", slot_id, "artifact_root"),
                 )
-            _assert_preview_visibility(repository, research_bindings, research_workers)
+            _assert_preview_visibility(
+                repository, research_bindings, research_workers, engine_binary=loop_engine_binary
+            )
             _assert_hash_guard(research_dest)
+            for worker in research_workers:
+                args = worker.get("args")
+                if not isinstance(args, list) or args[args.index("-e") : args.index("-e") + 2] != ["-e", dummy_cursor]:
+                    raise JourneyFailure(f"research {slot_id} constructor lost the supplied cursor extension")
+                second_extension = args.index("-e", args.index("-e") + 1)
+                if args[second_extension : second_extension + 2] != ["-e", dummy_bridge]:
+                    raise JourneyFailure(f"research {slot_id} constructor lost the supplied bridge extension")
+
+        for slot_id in ("verify", "synthesize"):
+            no_extension_dest = root / f"research-{slot_id}-no-extensions.json"
+            shutil.copy2(research_profile, no_extension_dest)
+            no_extension_result = run_research(
+                no_extension_dest, slot_id, roster_json, extensions=False
+            )
+            no_extension_workers = _fan_out_workers(
+                no_extension_result["work_slot_bindings"][slot_id], engine=dummy_engine
+            )
+            if not no_extension_workers or any(
+                "-e" in (worker.get("args") or []) for worker in no_extension_workers
+            ):
+                raise JourneyFailure(
+                    f"research {slot_id} emitted an extension pair for an omitted path"
+                )
 
         research_bad_slot = root / "research-bad-slot.json"
         shutil.copy2(research_profile, research_bad_slot)
@@ -7427,11 +8794,11 @@ def assert_worker_data_skill_and_root_policy() -> None:
         "Accepted-unresolved findings block across revisions",
         "retired-author needs recorded roster departure and replacement coverage",
         "Historical missing ownership is unsupported",
-        "criterion_policy: {required_authors:1,goal_required_authors:1}",
-        "deterministic per-author-per-gate batch constructor",
+        "independent criterion/goal author floors of 1/2/2",
+        "The separate deterministic `setup` helper assembles per-run bindings from shipped review data and explicit caller commands",
         "delivered stable references use context-record or invocation/assignment identities",
         "Frozen requirements this crate's acceptance suite traces to (R1–R29",
-        "`software-change --help`/`-h` names `describe`, `evaluate`, `data-dump`, `checkpoint`, `review-candidates`, `commission`, `run-validation`, and `run-plan-graph`",
+        "`software-change --help`/`-h` names `describe`, `evaluate`, `setup`",
         "`review-candidates` reads one completed `show --view full` envelope from stdin",
     )
     # LE-107 — the self-test checks referential root/provider operational summaries against the PRD authority boundary.
@@ -7513,12 +8880,12 @@ def assert_operator_contract_surfaces() -> None:
         (root_readme, root_policy, engine_skill, provider_skill, protocol, agent_usage)
     )
     for clause in (
-        "Exact profile and external-fleet preflight",
+        "software-change setup",
         "config_version",
         "live review states",
         "normalized `required_authors`",
         "Bookends enabled/disabled state",
-        "PROFILE_SHA256",
+        "output_sha256",
         "rehash that same file immediately",
         "two separate authorities",
         "role-to-model manifest",
@@ -7580,9 +8947,9 @@ def assert_operator_contract_surfaces() -> None:
     # worktree to HEAD: a source journey must run against the same bytes it
     # proves.
     expected_versions = {
-        "minimal.json": "minimal-9",
-        "standard.json": "standard-9",
-        "high-rigor.json": "high-rigor-9",
+        "minimal.json": "minimal-10",
+        "standard.json": "standard-10",
+        "high-rigor.json": "high-rigor-10",
     }
     for name, expected_version in expected_versions.items():
         profile = _load_json(repository / "crates/software-change-provider/data/configs" / name)
@@ -7702,10 +9069,19 @@ def assert_focused_boundary_scenarios() -> None:
     full_start = source.index("    def _run_full_source")
     full_end = source.find("    def ", full_start + len("    def _run_full_source"))
     full_source = source[full_start:full_end if full_end >= 0 else len(source)]
-    if "self._run_engine_boundary_scenarios()" not in full_source:
-        raise JourneyFailure("focused engine boundary scenarios are not in the full source journey")
-    if "self._run_dummy_worker_proofs()" not in full_source or "prove_selected_attempt_ledger_linkage" not in source or "prove_subset_applicability_checked" not in source:
-        raise JourneyFailure("stable-reference applicability proof is not in the full source journey")
+    if "self._run_global_tail_proof()" not in source:
+        raise JourneyFailure("global tail proof is not in the full source journey")
+    global_start = source.index("    def _run_global_tail_proof")
+    global_end = source.find("    def ", global_start + len("    def _run_global_tail_proof"))
+    global_source = source[global_start:global_end if global_end >= 0 else len(source)]
+    if (
+        'name="engine-boundary"' not in global_source
+        or 'name="package-7b"' not in global_source
+        or "self._run_dummy_worker_proofs(global_jobs=global_jobs)" not in global_source
+        or "prove_selected_attempt_ledger_linkage" not in source
+        or "prove_subset_applicability_checked" not in source
+    ):
+        raise JourneyFailure("global tail or stable-reference applicability proof is not in the full source journey")
 
     focused_functions = {
         2: "_run_le2_topology_scenario",
@@ -7737,7 +9113,7 @@ def assert_focused_boundary_scenarios() -> None:
             raise JourneyFailure(f"focused public scenario marker missing: {marker}")
 
     requirement_scenarios = {
-        90: (
+        138: (
             "_run_dummy_worker_proofs",
             ("prove_fan_out", "prove_full_schema_retry"),
         ),
@@ -7905,7 +9281,14 @@ def self_test() -> int:
         work_slot_journey.self_test_helpers()
     except work_slot_journey.WorkSlotJourneyFailure as error:
         raise JourneyFailure(f"work-slot helper self-test failed: {error}") from error
-    assert_worker_data_skill_and_root_policy()
+    constructor_engine = os.environ.get("SOFTWARE_CHANGE_JOURNEY_ENGINE")
+    constructor_provider = os.environ.get("SOFTWARE_CHANGE_JOURNEY_PROVIDER")
+    assert_worker_data_skill_and_root_policy(
+        engine_binary=Path(constructor_engine).expanduser().resolve()
+        if constructor_engine else None,
+        provider_binary=Path(constructor_provider).expanduser().resolve()
+        if constructor_provider else None,
+    )
     print(
         "software-change journey interface self-test passed: invalid adapter/depth pairs rejected pre-mutation; dummy-worker helpers checked"
     )
@@ -7947,8 +9330,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     # raw failures and rejects unresolved/missing author coverage.
                     recovery_journey.dispatch(args.scenario, journey)
                 elif args.scenario == "batched-review":
-                    # bookends:LE-118 — shipped per-author construction drives
-                    # capture/candidates/triage, exact axes and failed-axis denial.
+                    # bookends:LE-130 — shipped stage-aware construction drives
+                    # per-axis individual and aggregate capture/candidates/triage.
                     recovery_journey.dispatch(args.scenario, journey)
                 else:
                     recovery_journey.dispatch(args.scenario, journey)

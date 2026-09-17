@@ -39,6 +39,7 @@ CONSTRUCTOR_PROOF = [
     "preamble/schema bytes and preview-bindings output",
     "unsupported slot, empty policies, missing prompt/target/mode, and invalid roster fail closed",
     "resulting-profile preview equality and pre-start hash guard",
+    "omitted extension paths emit no -e pairs and supplied paths are validated",
     "shipped policy-document profiles omit frozen work_slot_bindings",
 ]
 
@@ -134,20 +135,27 @@ def assert_semantic_review_constructor(engine: Path) -> None:
     readme_profile = repository / "crates/policy-document-provider/data/readme.json"
     agents_profile = repository / "crates/policy-document-provider/data/agents.json"
     skill = skill_path.read_text(encoding="utf-8")
+    if "validate_extension_path" not in skill:
+        raise AssertionError("policy-document constructor omitted extension-path validation")
     jq_filter = extract_skill_jq(skill)
     preamble = preamble_path.read_text(encoding="utf-8")
     schema = load_json(schema_path)
     assert schema == {"required": ["axis", "author", "result", "findings"]}, schema
     dummy_engine = "/tmp/loop-engine-constructor-proof"
     dummy_pi = "/tmp/pi-constructor-proof"
-    dummy_cursor = "/tmp/cursor-provider-extension"
-    dummy_bridge = "/tmp/claude-bridge-extension"
+    dummy_cursor = str(preamble_path)
+    dummy_bridge = str(schema_path)
     roster = [
         {"author": "reviewer-a", "model": "model-a"},
         {"author": "reviewer-b", "model": "model-b"},
     ]
 
-    def jq_args(roster_path: Path, *, slot_id: str = "semantic-review") -> list[str]:
+    def jq_args(
+        roster_path: Path,
+        *,
+        slot_id: str = "semantic-review",
+        extensions: bool = True,
+    ) -> list[str]:
         return [
             "--arg",
             "slot",
@@ -160,10 +168,10 @@ def assert_semantic_review_constructor(engine: Path) -> None:
             dummy_pi,
             "--arg",
             "cursor_extension",
-            dummy_cursor,
+            dummy_cursor if extensions else "",
             "--arg",
             "claude_bridge_extension",
-            dummy_bridge,
+            dummy_bridge if extensions else "",
             "--rawfile",
             "base_preamble",
             str(preamble_path),
@@ -175,8 +183,16 @@ def assert_semantic_review_constructor(engine: Path) -> None:
             str(roster_path),
         ]
 
-    def run_pd(profile: Path, roster_path: Path, *, slot_id: str = "semantic-review") -> dict[str, Any]:
-        stdout = run_constructor_jq(jq_filter, profile, jq_args(roster_path, slot_id=slot_id))
+    def run_pd(
+        profile: Path,
+        roster_path: Path,
+        *,
+        slot_id: str = "semantic-review",
+        extensions: bool = True,
+    ) -> dict[str, Any]:
+        stdout = run_constructor_jq(
+            jq_filter, profile, jq_args(roster_path, slot_id=slot_id, extensions=extensions)
+        )
         profile.write_text(stdout, encoding="utf-8")
         return load_json(profile)
 
@@ -238,6 +254,11 @@ def assert_semantic_review_constructor(engine: Path) -> None:
                 args = worker.get("args")
                 if not isinstance(args, list) or "--model" not in args:
                     raise AssertionError(f"{label} omitted --model: {worker}")
+                if ["-e", dummy_cursor] != args[args.index("-e") : args.index("-e") + 2]:
+                    raise AssertionError(f"{label} did not preserve the supplied cursor extension")
+                second_extension = args.index("-e", args.index("-e") + 1)
+                if args[second_extension : second_extension + 2] != ["-e", dummy_bridge]:
+                    raise AssertionError(f"{label} did not preserve the supplied bridge extension")
                 model_index = args.index("--model")
                 if args[model_index + 1] != roster[0]["model"]:
                     raise AssertionError(f"{label} froze the wrong model")
@@ -282,6 +303,23 @@ def assert_semantic_review_constructor(engine: Path) -> None:
             dest.write_bytes(original)
             if sha256_file(dest) != confirmed:
                 raise AssertionError(f"{label} hash-guard restore mutated the resulting profile")
+
+        no_extensions = root / "readme-no-extensions.json"
+        no_extension_profile = load_json(readme_profile)
+        no_extension_profile["target"]["path"] = str((root / "no-extension-target.md").resolve())
+        write_json(no_extensions, no_extension_profile)
+        no_extension_result = run_pd(no_extensions, roster_path, extensions=False)
+        no_extension_workers = fan_out_workers(
+            no_extension_result["work_slot_bindings"]["semantic-review"], engine=dummy_engine
+        )
+        if not no_extension_workers:
+            raise AssertionError("policy-document omitted-extension constructor produced no workers")
+        for worker in no_extension_workers:
+            args = worker.get("args")
+            if not isinstance(args, list) or "-e" in args:
+                raise AssertionError(
+                    f"policy-document emitted an extension pair for an omitted path: {worker}"
+                )
 
         two_author = root / "readme-two-authors.json"
         two_doc = load_json(root / "readme-2.json")
@@ -428,12 +466,15 @@ def evidence(
     author: str,
     profile_version: str,
     target_id: str,
+    *,
+    result: str = "pass",
+    findings: str = "",
 ) -> dict[str, Any]:
     return {
         "gate": "semantic-review",
         "policy_id": axis,
-        "result": "pass",
-        "findings": "",
+        "result": result,
+        "findings": findings,
         "author": {"name": author, "kind": "script"},
         "target_id": target_id,
         "target_sha256": digest,
@@ -452,29 +493,58 @@ def append_evidence(
     target_id: str,
 ) -> None:
     for index, axis in enumerate(axes):
-        response = call(
+        append_one_evidence(
             engine,
             database,
-            [
-                "append",
-                "--record-id",
-                f"{prefix}-{index}",
-                run_id,
-                "review-evidence",
-                json.dumps(
-                    evidence(
-                        axis,
-                        digest,
-                        prefix,
-                        profile_version,
-                        target_id,
-                    ),
-                    separators=(",", ":"),
-                ),
-            ],
+            run_id,
+            axis,
+            digest,
+            f"{prefix}-{index}",
+            prefix,
+            profile_version,
+            target_id,
         )
-        assert response["status"] == "completed", response
-        assert response["result"]["context"]["id"] == f"{prefix}-{index}", response
+
+
+def append_one_evidence(
+    engine: Path,
+    database: Path,
+    run_id: str,
+    axis: str,
+    digest: str,
+    record_id: str,
+    author: str,
+    profile_version: str,
+    target_id: str,
+    *,
+    result: str = "pass",
+    findings: str = "",
+) -> None:
+    response = call(
+        engine,
+        database,
+        [
+            "append",
+            "--record-id",
+            record_id,
+            run_id,
+            "review-evidence",
+            json.dumps(
+                evidence(
+                    axis,
+                    digest,
+                    author,
+                    profile_version,
+                    target_id,
+                    result=result,
+                    findings=findings,
+                ),
+                separators=(",", ":"),
+            ),
+        ],
+    )
+    assert response["status"] == "completed", response
+    assert response["result"]["context"]["id"] == record_id, response
 
 
 def self_test() -> int:
@@ -637,6 +707,42 @@ def main() -> int:
             target_id,
         )
 
+        # AC-13: a current semantic failure is not a missing-evidence placeholder.
+        # The provider must expose the exact reviewer finding and keep the run in
+        # semantic-review until the supported correction supplies a fresh pass.
+        failing_axis = axes[0]
+        exact_finding = (
+            f"{args.mode} semantic correction required for {failing_axis}: "
+            "the target's onboarding example omits the operator's documented recovery step."
+        )
+        append_one_evidence(
+            engine,
+            database,
+            run_id,
+            failing_axis,
+            initial_digest,
+            "current-semantic-failure",
+            "semantic-reviewer-current",
+            profile_version,
+            target_id,
+            result="fail",
+            findings=exact_finding,
+        )
+        current_failure = expect_denial(
+            call(engine, database, ["event", run_id, "passed"]),
+            "policy-document-review-incomplete",
+            "semantic",
+        )
+        failure_diagnostics = current_failure["details"]["diagnostics"]
+        assert any(
+            item["policy_id"] == failing_axis
+            and item["kind"] == "standing-fail"
+            and item["findings"] == exact_finding
+            and item["record_id"] == "current-semantic-failure"
+            for item in failure_diagnostics
+        ), current_failure
+        show_state(engine, database, run_id, "semantic-review")
+
         # Finalization must rerun deterministic policy before consulting evidence.
         # bookends:LE-61 — finalization rechecks the externally changed document, not stale engine state.
         # bookends:LE-62 — the target file and Loop Engine state are deliberately separate commits.
@@ -660,14 +766,28 @@ def main() -> int:
             "semantic",
         )
         stale_diagnostics = stale["details"]["diagnostics"]
-        assert [item["kind"] for item in stale_diagnostics].count("stale") == len(axes)
+        assert [item["kind"] for item in stale_diagnostics].count("stale") == len(axes) + 1
         assert [item["kind"] for item in stale_diagnostics].count("missing") == len(axes)
         stale_record_ids = {
             item["record_id"]
             for item in stale_diagnostics
             if item.get("kind") == "stale"
         }
-        assert stale_record_ids == {f"initial-review-{index}" for index in range(len(axes))}
+        assert stale_record_ids == {
+            *{f"initial-review-{index}" for index in range(len(axes))},
+            "current-semantic-failure",
+        }
+        append_one_evidence(
+            engine,
+            database,
+            run_id,
+            failing_axis,
+            hashlib.sha256(target.read_bytes()).hexdigest(),
+            "current-semantic-correction",
+            "semantic-reviewer-current",
+            profile_version,
+            target_id,
+        )
         # bookends:LE-58 — the next semantic request inspects every prior review record before reporting stale/missing findings.
         # bookends:LE-59 — the external fresh-review cycle carries those prior record identities into provider diagnostics.
         fresh_digest = hashlib.sha256(target.read_bytes()).hexdigest()
@@ -690,7 +810,7 @@ def main() -> int:
         assert final["status"] == "completed", final
         terminal = show_state(engine, database, run_id, "end")
         assert terminal["lifecycle"] == "final", terminal
-        assert len(terminal["context"]) == len(axes) * 2, terminal
+        assert len(terminal["context"]) == len(axes) * 2 + 2, terminal
         print(
             json.dumps(
                 {
@@ -704,6 +824,8 @@ def main() -> int:
                         "checked deterministic progression",
                         "final deterministic recheck denial",
                         "stale-evidence denial",
+                        "current semantic finding denial with exact findings",
+                        "same-author corrected semantic pass",
                         "fresh-evidence success",
                         "fresh-process show persistence",
                         "terminal completion",

@@ -66,7 +66,7 @@
   "non_goals": [
     "Provider-side semantic judging or model invocation.",
     "New workflow states, transitions, or mid-run waiver support.",
-    "Cryptographic provenance, content hashing, or locking of authored artifacts.",
+    "Cryptographic provenance, multi-actor artifact coordination, or enterprise audit infrastructure.",
     "Standalone installed packaging beyond the repository-local reference distribution."
   ]
 }

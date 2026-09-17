@@ -7,7 +7,7 @@ use loop_integrations::{
     ownership::{self, Admission},
     SqlitePersistence,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -96,10 +96,20 @@ fn target(
             "unsupported historical or not-yet-published target; wait for ownership publication",
         ));
     };
-    #[cfg(unix)]
-    let waiter_alive = unsafe { crate::unix_signal::kill(row.waiter_pid as i32, 0) == 0 };
-    #[cfg(not(unix))]
-    let waiter_alive = false;
+    if !ownership::identity_available(&row.capture_dir).map_err(|error| {
+        CliError::new(
+            "ownership-unavailable",
+            format!("could not read native ownership identity: {error}"),
+        )
+    })? {
+        return Err(CliError::new(
+            "ownership-unavailable",
+            "recorded ownership has no usable native process incarnation",
+        ));
+    }
+    let waiter_alive =
+        ownership::process_identity_matches(row.waiter_pid, row.waiter_identity.as_ref())
+            .unwrap_or(false);
     if !owned.live_owned_work && !owned.cleanup_pending && !waiter_alive {
         return Err(CliError::new(
             "invocation-not-running",
@@ -229,58 +239,60 @@ fn write_json(path: &Path, value: &impl Serialize) -> io::Result<()> {
     fs::rename(temporary, path)
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 struct Process {
-    pid: i32,
-    parent: i32,
-    group: i32,
+    pid: u32,
+    parent: u32,
+    group: u32,
     state: String,
+    identity: loop_core::ProcessIdentity,
 }
 
-/// ps is available on both supported local platforms. A zombie remains in the
-/// inventory until its actual parent/adopter reaps it: kill(0) alone is not a
-/// cleanup receipt. The command itself is bounded by the same attempt clock.
+impl From<loop_integrations::ownership::ProcessRecord> for Process {
+    fn from(process: loop_integrations::ownership::ProcessRecord) -> Self {
+        Self {
+            pid: process.identity.pid,
+            parent: process.parent_pid,
+            group: process.process_group_id,
+            state: process.state,
+            identity: process.identity,
+        }
+    }
+}
+
+/// Keep the old diagnostic snapshot and its test-owned interruption point, but
+/// never parse its shell-formatted text. Native process records below are the
+/// sole authority for identity, ancestry, and group membership.
 fn processes(directory: &Path, deadline: Instant, attempt: u64) -> io::Result<Vec<Process>> {
     let path = directory.join(format!("control-{attempt}-process-snapshot.txt"));
-    let mut child = Command::new("ps")
+    let diagnostic = File::create(&path)?;
+    match Command::new("ps")
         .args(["-axo", "pid=,ppid=,pgid=,stat="])
         .stdin(Stdio::null())
-        .stdout(File::create(&path)?)
+        .stdout(Stdio::from(diagnostic))
         .stderr(Stdio::null())
-        .spawn()?;
-    loop {
-        if let Some(status) = child.try_wait()? {
-            if !status.success() {
-                return Err(io::Error::other("process inventory failed"));
+        .spawn()
+    {
+        Ok(mut child) => loop {
+            if let Some(status) = child.try_wait()? {
+                if !status.success() {
+                    return Err(io::Error::other("process inventory diagnostic failed"));
+                }
+                break;
             }
-            break;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(io::Error::other("process inventory deadline"));
-        }
-        thread::sleep(Duration::from_millis(5));
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(io::Error::other("process inventory deadline"));
+            }
+            thread::sleep(Duration::from_millis(5));
+        },
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
     }
-    fs::read_to_string(path)?
-        .lines()
-        .map(|line| {
-            let fields = line.split_whitespace().collect::<Vec<_>>();
-            let parse = |n: usize| {
-                fields
-                    .get(n)
-                    .ok_or_else(|| io::Error::other("malformed ps row"))?
-                    .parse()
-                    .map_err(io::Error::other)
-            };
-            Ok(Process {
-                pid: parse(0)?,
-                parent: parse(1)?,
-                group: parse(2)?,
-                state: fields.get(3).unwrap_or(&"").to_string(),
-            })
-        })
-        .collect()
+
+    loop_integrations::ownership::read_processes()
+        .map(|processes| processes.into_iter().map(Process::from).collect())
 }
 
 fn cleanup(
@@ -290,8 +302,6 @@ fn cleanup(
     attempt: u64,
 ) -> io::Result<Value> {
     let directory = ownership::directory(&row.capture_dir);
-    let mut known = BTreeSet::new();
-    let mut groups = BTreeSet::new();
     let mut observed = BTreeMap::new();
     let mut signals = Vec::new();
     let mut stop: Option<Child> = None;
@@ -309,49 +319,50 @@ fn cleanup(
                 "ten-second cancellation deadline; process disappearance/reaping unverified",
             ));
         }
-        // Discover helper roots admitted before the marker, and recover roots
-        // discovered by an interrupted prior controller after they reparented.
-        for entry in fs::read_dir(&directory)? {
-            let entry = entry?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name == "ownership.json"
-                || name.starts_with("helper-")
-                || name.starts_with("child-")
-                || name.starts_with("observed-")
-            {
-                let value: Value = serde_json::from_slice(&fs::read(entry.path())?)?;
-                if let Some(pid) = value["root_pid"].as_i64() {
-                    known.insert(pid as i32);
-                }
-                if let Some(group) = value["process_group_id"].as_i64() {
-                    groups.insert(group as i32);
-                }
-            }
-        }
+
         let snapshot = processes(&directory, deadline, attempt)?;
-        loop {
-            let before = known.len();
-            for process in &snapshot {
-                if known.contains(&process.parent) || groups.contains(&process.group) {
-                    known.insert(process.pid);
-                }
-            }
-            if before == known.len() {
-                break;
-            }
-        }
-        let live = snapshot
+        let native = snapshot
             .iter()
-            .filter(|process| known.contains(&process.pid))
+            .map(|process| loop_integrations::ownership::ProcessRecord {
+                identity: process.identity.clone(),
+                parent_pid: process.parent,
+                process_group_id: process.group,
+                state: process.state.clone(),
+            })
+            .collect::<Vec<_>>();
+        let owned = ownership::discover_owned_processes(&directory, &native)?;
+        if !owned.identity_usable {
+            return Err(io::Error::other(
+                "recorded ownership has no usable native process identity",
+            ));
+        }
+        let live = owned
+            .live
+            .iter()
+            .filter_map(|native| {
+                snapshot
+                    .iter()
+                    .find(|process| process.identity == native.identity)
+                    .cloned()
+            })
             .collect::<Vec<_>>();
         for process in &live {
-            if !observed.contains_key(&process.pid) {
+            if !observed.contains_key(&process.identity) {
                 write_json(
-                    &directory.join(format!("observed-{}.json", process.pid)),
-                    &json!({"root_pid":process.pid,"observation":process}),
+                    &directory.join(format!(
+                        "observed-{}-{}.json",
+                        process.pid, process.identity.start_time
+                    )),
+                    &json!({
+                        "root_pid": process.pid,
+                        "parent_pid": process.parent,
+                        "process_group_id": process.group,
+                        "identity": process.identity,
+                        "observation": process,
+                    }),
                 )?;
             }
-            observed.insert(process.pid, (*process).clone());
+            observed.insert(process.identity.clone(), process.clone());
         }
         write_json(
             &directory.join(format!("control-{attempt}-progress.json")),
@@ -370,31 +381,28 @@ fn cleanup(
                     serde_json::from_slice(&fs::read(locator)?)?;
                 // The launch already version-checked Dagu. Do not run an
                 // unbounded second version probe inside this shutdown clock.
-                stop = Some(
-                    Command::new("dagu")
-                        .args([
-                            "stop",
-                            "--dagu-home",
-                            &locator.dagu_home,
-                            "--run-id",
-                            &locator.run_name,
-                            &locator.dag_name,
-                        ])
-                        .stdin(Stdio::null())
-                        .stdout(File::create(
-                            directory.join(format!("control-{attempt}-dagu-stop.stdout")),
-                        )?)
-                        .stderr(File::create(
-                            directory.join(format!("control-{attempt}-dagu-stop.stderr")),
-                        )?)
-                        .spawn()?,
-                );
-                if let Some(child) = stop.as_ref() {
-                    write_json(
-                        &directory.join(format!("observed-stop-{attempt}.json")),
-                        &json!({"root_pid":child.id()}),
-                    )?;
-                }
+                let child = Command::new("dagu")
+                    .args([
+                        "stop",
+                        "--dagu-home",
+                        &locator.dagu_home,
+                        "--run-id",
+                        &locator.run_name,
+                        &locator.dag_name,
+                    ])
+                    .stdin(Stdio::null())
+                    .stdout(File::create(
+                        directory.join(format!("control-{attempt}-dagu-stop.stdout")),
+                    )?)
+                    .stderr(File::create(
+                        directory.join(format!("control-{attempt}-dagu-stop.stderr")),
+                    )?)
+                    .spawn()?;
+                // The scheduler stop process is a controller helper, not
+                // invocation-owned work. Keep its Child handle for bounded
+                // wait/kill, but never make its caller process group an
+                // ownership anchor.
+                stop = Some(child);
             }
         }
         if let Some(child) = stop.as_mut() {
@@ -408,9 +416,29 @@ fn cleanup(
             }
         }
         if live.is_empty() && stop.is_none() {
+            let mut known_identities = owned
+                .records
+                .iter()
+                .map(|record| record.identity.clone())
+                .collect::<BTreeSet<_>>();
+            known_identities.extend(observed.keys().cloned());
+            let verified_absent_pids = known_identities
+                .iter()
+                .filter(|identity| !snapshot.iter().any(|process| process.pid == identity.pid))
+                .map(|identity| identity.pid)
+                .collect::<BTreeSet<_>>();
+            let verified_absent_identities = known_identities
+                .iter()
+                .filter(|identity| {
+                    !snapshot
+                        .iter()
+                        .any(|process| process.identity == **identity)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
             return Ok(
-                json!({"verified_no_survivors":true,"reaping":"all observed owned PIDs absent from OS process inventory (including zombies)",
-                "observed":observed.values().collect::<Vec<_>>(),"verified_absent_pids":known,"verified_empty_groups":groups,"signals":signals,"dagu_stop_exit":stop_exit}),
+                json!({"verified_no_survivors":true,"reaping":"all observed owned PIDs absent from native process inventory (including zombies)",
+                "observed":observed.values().collect::<Vec<_>>(),"verified_absent_pids":verified_absent_pids,"verified_absent_identities":verified_absent_identities,"verified_empty_groups":owned.anchored_groups,"signals":signals,"dagu_stop_exit":stop_exit}),
             );
         }
         // Signal leaves first, leaving their parents alive to waitpid. As
@@ -419,17 +447,14 @@ fn cleanup(
         // because the durable admission marker is already present.
         let escalation = started.elapsed() >= GRACE;
         for process in &live {
-            if stop
-                .as_ref()
-                .is_some_and(|child| child.id() == process.pid as u32)
-            {
+            if stop.as_ref().is_some_and(|child| child.id() == process.pid) {
                 continue;
             }
             if process.state.contains('T') {
                 #[cfg(target_os = "macos")]
-                signal_pid(process.pid, 19)?;
+                let _ = ownership::signal_process(&process.identity, 19)?;
                 #[cfg(not(target_os = "macos"))]
-                signal_pid(process.pid, 18)?;
+                let _ = ownership::signal_process(&process.identity, 18)?;
             }
             if live
                 .iter()
@@ -438,38 +463,18 @@ fn cleanup(
                 continue;
             }
             let sent = if escalation { &mut kill } else { &mut term };
-            if sent.insert(process.pid) {
+            if sent.insert(process.identity.clone()) {
                 let signal = if escalation { 9 } else { 15 };
-                signal_pid(process.pid, signal)?;
-                signals.push(json!({"pid":process.pid,"signal":signal,"elapsed_ms":started.elapsed().as_millis()}));
+                if ownership::signal_process(&process.identity, signal)? {
+                    signals.push(json!({
+                        "pid": process.pid,
+                        "identity": process.identity,
+                        "signal": signal,
+                        "elapsed_ms": started.elapsed().as_millis()
+                    }));
+                }
             }
         }
         thread::sleep(Duration::from_millis(25));
-    }
-}
-
-fn signal_pid(pid: i32, signal: i32) -> io::Result<()> {
-    if pid <= 1 || pid == std::process::id() as i32 {
-        return Err(io::Error::other("invalid owned process identity"));
-    }
-    #[cfg(unix)]
-    {
-        unsafe extern "C" {
-            fn kill(pid: i32, signal: i32) -> i32;
-        }
-        if unsafe { kill(pid, signal) } != 0 {
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() != Some(3) {
-                return Err(error);
-            }
-        }
-        Ok(())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = signal;
-        Err(io::Error::other(
-            "local cancellation unsupported on this platform",
-        ))
     }
 }

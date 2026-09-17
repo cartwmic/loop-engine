@@ -105,7 +105,7 @@ fn metadata_schema() -> Value {
 }
 
 fn config_with_schema(subject: &str, root: Option<&TestDir>) -> Value {
-    let mut config = json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+    let mut config = json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
         "config_version": "test-1",
         "review_policies": {},
         "artifact_schemas": {subject: metadata_schema()}
@@ -117,11 +117,11 @@ fn config_with_schema(subject: &str, root: Option<&TestDir>) -> Value {
 }
 
 fn config_with_axis(root: &TestDir) -> Value {
-    json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+    json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
         "config_version": "test-1",
         "artifact_root": root.root_value(),
         "review_policies": {
-            "intent-review": [{"id": "axis", "description": "test axis"}]
+            "intent-review": [{"id": "axis", "description": "test axis", "review_stage": "aggregate"}]
         },
         "artifact_schemas": {"intent.json": metadata_schema()}
     })
@@ -185,7 +185,7 @@ fn criterion_design_schema() -> Value {
 }
 
 fn criterion_config(root: &TestDir) -> Value {
-    json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+    json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
         "config_version": "criteria-test-1",
         "artifact_root": root.root_value(),
         "review_policies": {},
@@ -214,7 +214,7 @@ fn criterion_design(revision: &str, intent_revision: &str, coverage: Value) -> V
 }
 
 fn pre_8_criterion_config(root: &TestDir) -> Value {
-    json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+    json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
         "config_version": "criteria-pre-8",
         "artifact_root": root.root_value(),
         "review_policies": {},
@@ -293,6 +293,7 @@ fn passing_evidence() -> Value {
     context_record(json!({
         "gate": "intent-review",
         "policy_id": "axis",
+        "review_stage": "aggregate",
         "result": "pass",
         "findings": "",
         "author": {"name": "reviewer", "kind": "agent"},
@@ -310,6 +311,7 @@ fn evaluate_accepts_concise_selected_origin_and_engine_metadata_only() {
     let selected = capture.join("worker-0/attempts/1/stdout");
     fs::create_dir_all(selected.parent().unwrap()).unwrap();
     let raw = serde_json::to_vec(&json!({
+        "review_stage": "aggregate",
         "axis": "axis",
         "author": {"name": "reviewer", "kind": "agent"},
         "result": "pass",
@@ -320,6 +322,7 @@ fn evaluate_accepts_concise_selected_origin_and_engine_metadata_only() {
     let evidence = json!({
         "gate": "intent-review",
         "policy_id": "axis",
+        "review_stage": "aggregate",
         "result": "pass",
         "findings": "",
         "author": {"name": "reviewer", "kind": "agent"},
@@ -408,7 +411,7 @@ fn criterion_violation_rules(output: &Output) -> Vec<String> {
 #[test]
 fn zero_obligation_allows_without_artifact_root() {
     let output = run_provider(base_request(
-        json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "none", "review_policies": {}}),
+        json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "none", "review_policies": {}}),
         checked("explore", "intent-ready", "design"),
     ));
     assert_exit(&output, 0);
@@ -485,7 +488,7 @@ fn approval_transition_rechecks_current_subject_after_ready_pass() {
     root.write_json("design.json", &valid_metadata("1"));
     let mut config = config_with_schema("design.json", Some(&root));
     config["review_policies"]["design-review"] =
-        json!([{"id": "axis", "description": "test axis"}]);
+        json!([{"id": "axis", "description": "test axis", "review_stage": "aggregate"}]);
 
     let ready = run_provider(base_request(
         config.clone(),
@@ -546,7 +549,7 @@ fn prior_denials_are_flat_and_accumulate_across_requests() {
 #[test]
 fn unsupported_tuple_returns_exact_unsupported_result() {
     let output = run_provider(base_request(
-        json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "none", "review_policies": {}}),
+        json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "none", "review_policies": {}}),
         checked("explore", "wrong-event", "design"),
     ));
     assert_exit(&output, 0);
@@ -555,36 +558,50 @@ fn unsupported_tuple_returns_exact_unsupported_result() {
 
 #[test]
 fn unsupported_historical_semantics_refuse_without_reinterpreting_profile_bytes() {
-    let described = run_provider(json!({"operation":"describe"}));
-    assert_exit(&described, 0);
-    let workflow = response(&described);
-    for version in ["minimal-8", "standard-8", "high-rigor-8"] {
-        for declaration in [None, Some(json!(1)), Some(json!(3)), Some(json!("2"))] {
-            let mut input = json!({"config_version":version, "review_policies":{}});
-            if let Some(declaration) = declaration {
-                input["contract_version"] = declaration;
-            }
-            let output = run_provider(json!({"operation":"evaluate", "workflow":workflow,
-                "initial_input":input, "context":[], "prior_evaluations":[],
-                "transition":checked("explore","intent-ready","intent-review")}));
-            assert_exit(&output, 1);
-            assert!(output.stdout.is_empty());
-            let diagnostic = String::from_utf8_lossy(&output.stderr);
-            assert!(diagnostic.contains("unsupported software-change semantic contract"));
-            assert!(diagnostic.contains("fixed original provider"));
-            let describe = run_provider(json!({"operation":"describe","initial_input":input}));
-            assert_exit(&describe, 2);
-            assert!(describe.stdout.is_empty());
-        }
-    }
+    let input = json!({
+        "contract_version": 2,
+        "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+        "config_version": "minimal-9",
+        "review_policies": {}
+    });
+    let workflow = described_workflow(&input);
+    let output = run_provider(json!({
+        "operation": "evaluate",
+        "workflow": workflow,
+        "initial_input": input,
+        "context": [],
+        "prior_evaluations": [],
+        "transition": checked("explore", "intent-ready", "design")
+    }));
+    assert_exit(&output, 0);
+    assert_eq!(response(&output), json!({"result": "unsupported"}));
+
+    let valid_v3_input = json!({
+        "contract_version": 3,
+        "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+        "config_version": "custom-v3",
+        "review_policies": {}
+    });
+    let valid_v3_workflow = described_workflow(&valid_v3_input);
     for policy in [
         json!({}),
         json!({"required_authors":0,"goal_required_authors":1}),
         json!({"required_authors":1,"goal_required_authors":1,"batch":true}),
     ] {
-        let output = run_provider(json!({"operation":"evaluate", "workflow":workflow,
-            "initial_input":{"contract_version":2,"criterion_policy":policy,"config_version":"custom-v2","review_policies":{}},
-            "context":[],"prior_evaluations":[],"transition":checked("explore","intent-ready","intent-review")}));
+        let input = json!({
+            "contract_version": 3,
+            "criterion_policy": policy,
+            "config_version": "custom-v3",
+            "review_policies": {}
+        });
+        let output = run_provider(json!({
+            "operation": "evaluate",
+            "workflow": valid_v3_workflow.clone(),
+            "initial_input": input,
+            "context": [],
+            "prior_evaluations": [],
+            "transition": checked("explore", "intent-ready", "design")
+        }));
         assert_exit(&output, 1);
         assert!(String::from_utf8_lossy(&output.stderr).contains("invalid criterion_policy"));
     }
@@ -593,7 +610,7 @@ fn unsupported_historical_semantics_refuse_without_reinterpreting_profile_bytes(
 #[test]
 fn missing_review_policies_is_evaluation_error_naming_shipped_configs() {
     let output = run_provider(base_request(
-        json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "test-1"}),
+        json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "test-1"}),
         checked("explore", "intent-ready", "intent-review"),
     ));
     assert_exit(&output, 1);
@@ -648,6 +665,7 @@ fn recovery_disposition_undispositioned_source_and_stale_context_separate_feedba
         context_record(json!({
             "gate": "intent-review",
             "policy_id": "axis",
+            "review_stage": "aggregate",
             "result": "fail",
             "findings": "current blocker",
             "author": {"name": "current-reviewer", "kind": "agent"},
@@ -658,6 +676,7 @@ fn recovery_disposition_undispositioned_source_and_stale_context_separate_feedba
         context_record(json!({
             "gate": "intent-review",
             "policy_id": "axis",
+            "review_stage": "aggregate",
             "result": "pass",
             "findings": "",
             "author": {"name": "stale-reviewer", "kind": "agent"},
@@ -729,7 +748,7 @@ fn empty_axis_policy_allows_drafts_but_cannot_waive_v2_final_criteria() {
             .expect("run checkpoint");
         assert!(output.status.success(), "checkpoint {phase} failed");
     }
-    let input = json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+    let input = json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
         "config_version": "none",
         "review_policies": {},
         "artifact_root": artifacts.root_value()
@@ -767,7 +786,7 @@ fn empty_axis_policy_allows_drafts_but_cannot_waive_v2_final_criteria() {
 
 #[test]
 fn each_single_field_tuple_mismatch_is_unsupported() {
-    let initial_input = json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "none", "review_policies": {}});
+    let initial_input = json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "none", "review_policies": {}});
     let workflow = described_workflow(&initial_input);
     let routes = [
         ("explore", "intent-ready", "design"),
@@ -834,7 +853,7 @@ fn unparseable_artifact_is_schema_deny() {
 #[test]
 fn revision_link_mismatch_is_schema_deny_naming_both_artifacts() {
     let root = TestDir::new();
-    let mut config = json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+    let mut config = json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
         "config_version": "test-1",
         "artifact_root": root.root_value(),
         "review_policies": {},
@@ -894,43 +913,43 @@ fn malformed_config_classes_exit_one_without_stdout_result() {
     let cases = vec![
         (
             "unknown top-level",
-            json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "x", "review_policies": {}, "typo": true}),
+            json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "x", "review_policies": {}, "typo": true}),
         ),
         ("missing config version", json!({"review_policies": {}})),
         (
             "empty config version",
-            json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "", "review_policies": {}}),
+            json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "", "review_policies": {}}),
         ),
         (
             "unknown gate",
-            json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "x", "review_policies": {"nope": []}}),
+            json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "x", "review_policies": {"nope": []}}),
         ),
         (
             "bad required authors",
-            json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+            json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
                 "config_version": "x",
                 "review_policies": {"intent-review": [{"id": "axis", "description": "x", "required_authors": 0}]}
             }),
         ),
         (
             "unknown artifact",
-            json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "x", "review_policies": {}, "artifact_schemas": {"nope.json": {"type": "object"}}}),
+            json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "x", "review_policies": {}, "artifact_schemas": {"nope.json": {"type": "object"}}}),
         ),
         (
             "bad schema keyword",
-            json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "x", "review_policies": {}, "artifact_schemas": {"intent.json": {"type": "object", "nope": true}}}),
+            json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "x", "review_policies": {}, "artifact_schemas": {"intent.json": {"type": "object", "nope": true}}}),
         ),
         (
             "axes without schema",
-            json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "x", "review_policies": {"intent-review": [{"id": "axis", "description": "x"}]}}),
+            json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "x", "review_policies": {"intent-review": [{"id": "axis", "description": "x"}]}}),
         ),
         (
             "links without schemas",
-            json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "x", "review_policies": {}, "revision_links": [{"from": "design.json", "field": "intent_revision", "to": "intent.json"}]}),
+            json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "x", "review_policies": {}, "revision_links": [{"from": "design.json", "field": "intent_revision", "to": "intent.json"}]}),
         ),
         (
             "malformed link shape",
-            json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "x", "review_policies": {}, "revision_links": [{"from": "design.json", "to": "intent.json"}]}),
+            json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "x", "review_policies": {}, "revision_links": [{"from": "design.json", "to": "intent.json"}]}),
         ),
     ];
     for (name, config) in cases {
@@ -1060,18 +1079,19 @@ fn finding_ledger_for_prior_revision_does_not_satisfy_after_bump() {
 fn same_policy_id_on_parent_and_adversarial_gates_aggregates_independently() {
     let root = TestDir::new();
     root.write_json("intent.json", &valid_metadata("1"));
-    let config = json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+    let config = json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
         "config_version": "test-1",
         "artifact_root": root.root_value(),
         "review_policies": {
-            "intent-review": [{"id": "axis", "description": "parent axis"}],
-            "intent-adversarial-review": [{"id": "axis", "description": "adversarial axis"}]
+            "intent-review": [{"id": "axis", "description": "parent axis", "review_stage": "aggregate"}],
+            "intent-adversarial-review": [{"id": "axis", "description": "adversarial axis", "review_stage": "aggregate"}]
         },
         "artifact_schemas": {"intent.json": metadata_schema()}
     });
     let parent_pass = context_record(json!({
         "gate": "intent-review",
         "policy_id": "axis",
+        "review_stage": "aggregate",
         "result": "pass",
         "findings": "",
         "author": {"name": "reviewer", "kind": "agent"},

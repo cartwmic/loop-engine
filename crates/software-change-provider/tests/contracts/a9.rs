@@ -64,7 +64,7 @@ fn engine_distinguishes_inaccessible_root_provider_failure_from_review_deny_and_
     let unavailable = Engine::with_command(state.path().join("missing.sqlite"), missing_binary);
     let unavailable_outcome = unavailable.start(
         "missing-binary",
-        json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+        json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
             "config_version": "none",
             "review_policies": {}
         }),

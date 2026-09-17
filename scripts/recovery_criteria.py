@@ -49,17 +49,19 @@ def prove(journey):
     proof = {"status":"running", "runs":[], "cases":[]}
     def start(name, axes=True, floor=1, command=None):
         f = Fixture(journey.engine, journey.provider, repo, root, name)
-        profile = {"contract_version":2,"criterion_policy":{"required_authors":floor,"goal_required_authors":1},
-            "config_version":"recovery-criterion-2", "artifact_root":str(f.artifacts),
-            "review_policies": {"validation-review":[{"id":"delivery","description":"consume criterion collection","required_authors":1}]} if axes else {},
+        profile = {"contract_version":3,"criterion_policy":{"required_authors":floor,"goal_required_authors":1},
+            "config_version":"recovery-criterion-3", "artifact_root":str(f.artifacts),
+            "review_policies": {"validation-review":[{"id":"delivery","description":"consume criterion collection","review_stage":"aggregate","required_authors":1}]} if axes else {},
+            "revision_links": [{"from":"design.json","field":"intent_revision","to":"intent.json"},
+                               {"from":"plan.json","field":"design_revision","to":"design.json"}],
             "artifact_schemas": {**{n:copy.deepcopy(schema) for n in ("intent.json","design.json","plan.json","implementation-report.json")},
                                  "validation-report.json":report_schema}}
         if name=="repair-carry":
-            profile["review_policies"]["validation-adversarial-review"]=[{"id":"delivery","description":"challenge consumes existing criterion collection","required_authors":1}]
+            profile["review_policies"]["validation-adversarial-review"]=[{"id":"delivery","description":"challenge consumes existing criterion collection","review_stage":"aggregate","required_authors":1}]
         f.start(profile)
         docs = {"intent.json":{"revision":"1","author":author,"acceptance":[{"id":"AC-1","statement":"product corrected"},{"id":"AC-2","statement":"proof output is retained"}]},
-            "design.json":{"revision":"1","author":author},
-            "plan.json":{"revision":"1","author":author,"tasks":[],"proof_commands":[{"id":"product","command":command or sys.executable,
+            "design.json":{"revision":"1","author":author,"intent_revision":"1"},
+            "plan.json":{"revision":"1","author":author,"design_revision":"1","tasks":[],"proof_commands":[{"id":"product","command":command or sys.executable,
                 "args":["-c","from pathlib import Path; print(Path('product.txt').read_text())"],"owner":"driver","obligation":"inspect product"}]},
             "implementation-report.json":{"revision":"1","author":author}}
         for name, value in docs.items(): (f.artifacts/name).write_text(json.dumps(value))
@@ -72,10 +74,14 @@ def prove(journey):
     def checkpoint(f, phase):
         external([journey.provider,"checkpoint","--phase",phase,"--artifact-root",f.artifacts,"--working-directory",repo])
     def run(f, revision, failed=False, timeout=None):
-        before = f.show()["context"]
+        # The full show arms this unchanged validation visit and is also the
+        # exact packet supplied to run-validation.  Reuse that observation
+        # instead of reparsing the same durable projection immediately.
+        observed = f.show()
+        before = observed["context"]
         result = external([journey.provider,"run-validation","--engine",journey.engine,"--working-directory",repo,"--revision",revision,
                            *([] if timeout is None else ["--timeout-ms",str(timeout)])],
-                          {"status":"completed","operation":"show","result":f.show()}, expected=1 if failed else 0)
+                          {"status":"completed","operation":"show","result":observed}, expected=1 if failed else 0)
         assert result["commands_passed"] == (not failed), result
         assert f.show()["context"] == before, "helper appended catalog records"
         for row in result["command_candidates"]: f.append(row["kind"], row["record_id"], row["data"])
@@ -169,7 +175,7 @@ for row in report["criteria"]:
     rows.append({"record_id":id,"kind":"criterion-verdict","data":v})
 v={"subject":"validation-report.json","subject_revision":report["revision"],"checkpoint":"validation-checkpoint.json","author":author,"result":"pass","findings":[],"evidence_context_ids":report["command_evidence_ids"]}
 rows.append({"record_id":report["goal_verdict_ids"][0],"kind":"goal-verdict","data":v})
-print(json.dumps({"author":author,"judgments":[{"axis":"delivery","result":"pass","findings":""}],"validation_verdicts":rows}))
+print(json.dumps({"review_stage":"aggregate","author":author,"judgments":[{"axis":"delivery","result":"pass","findings":""}],"validation_verdicts":rows}))
 ''')
     output_schema=json.loads((journey.data_root/"crates/software-change-provider/data/review-worker-output-schema.json").read_text())
     output_schema["properties"]["author"]["const"]=reviewer
@@ -199,8 +205,8 @@ print(json.dumps({"author":author,"judgments":[{"axis":"delivery","result":"pass
             f.append(row["kind"],row["record_id"],{**row["data"],"origin":row["origin"]})
         else:
             assert row["status"]=="ready",row
-            f.append("review-evidence","axis",{"gate":"validation-review","policy_id":row["axis"],"subject":"validation-report.json","subject_revision":"v2",
-                "config_version":"recovery-criterion-2","author":row["author"],"result":row["result"],"findings":row["findings"],"origin":row["origin"]})
+            f.append("review-evidence","axis",{"gate":"validation-review","policy_id":row["axis"],"review_stage":"aggregate","subject":"validation-report.json","subject_revision":"v2",
+                "config_version":"recovery-criterion-3","author":row["author"],"result":row["result"],"findings":row["findings"],"origin":row["origin"]})
     projection=external([journey.provider,"commission","--slot","validation-review"],{"status":"completed","result":f.show()})
     assert [r["mode"] for r in projection["validation_collection"]]==["fresh","carried","fresh"],projection
     assert projection["validation_collection"][1]["source"]["data"]==verdict(report,"AC-2")
@@ -209,8 +215,8 @@ print(json.dumps({"author":author,"judgments":[{"axis":"delivery","result":"pass
     challenge=external([journey.provider,"commission","--slot","validation-adversarial-review"],{"status":"completed","operation":"show","result":f.show()})
     assert challenge["validation_collection"]==projection["validation_collection"]
     challenge_output=external([sys.executable,"-c","import json,sys; c=json.load(sys.stdin); assert len(c['validation_collection'])==3; print(json.dumps({'result':'pass','findings':''}))"],challenge)
-    f.append("review-evidence","challenge-axis",{"gate":"validation-adversarial-review","policy_id":"delivery","subject":"validation-report.json","subject_revision":"v2",
-        "config_version":"recovery-criterion-2","author":{"name":"challenge","kind":"agent"},**challenge_output})
+    f.append("review-evidence","challenge-axis",{"gate":"validation-adversarial-review","policy_id":"delivery","review_stage":"aggregate","subject":"validation-report.json","subject_revision":"v2",
+        "config_version":"recovery-criterion-3","author":{"name":"challenge","kind":"agent"},**challenge_output})
     f.append("finding-ledger","challenge-ledger",{"schema_version":"1","gate":"validation-adversarial-review","subject":"validation-report.json","subject_revision":"v2",
         "author":{"name":"driver","kind":"agent"},"findings":[]})
     event(f,"passed")

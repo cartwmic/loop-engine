@@ -186,3 +186,57 @@ Amended for Package 8a (reduced criterion-spine boundary): shipped profile versi
 - **Historical and release boundary:** Old input, context, topology, invocation/capture and denial history remain readable through provider-free show/history with their original meaning. Absent new metadata is absent capability, not proof of controls/cancellation. No active-run migration or bootstrap rewrite is included. The bootstrap's BE-1/BE-2/BE-3 ledger-projection departures remain exceptions, never public-path acceptance evidence. Requirement acceptance/commit, policy-document audits, current calibration semantic attestations, final stable-tree matrix/benchmark comparison, authorized exact-commit hosted proof and later live dogfood remain separate pending acts until actually observed.
 
 The focused public recovery scenarios are `dispositions`, `steering`, `execution-controls`, `cancellation`, `backtracking`, `override`, `batched-review`, `criteria` and `composed-recovery` through `scripts/software-change-journey.py --mode source --scenario NAME`. Each must fail on missing completion/assertions; composed proof must reach normal terminal completion and a separate visibly overridden branch without catalog edits. Public proof establishes mechanics, not owner acceptance or reviewer quality.
+
+## 11. Backlog amendment: new-run review and setup contract
+
+This amendment applies to new supporting profiles. It replaces only the named clauses below and preserves the dated amendment history. Section 10 remains a separate pending proposal; this amendment does not accept its unrelated clauses or reinterpret existing runs. The new semantic contract is version 3. Existing runs continue with their fixed original runtime and frozen policy.
+
+### Review coverage: R2, R9, R12, A3, A6, A13 and A15
+
+Minimal, standard and high-rigor all include ordinary and challenge review at all five phases. The axis sets are:
+
+| Phase | Axes at both ordinary and challenge review |
+|---|---|
+| Intent | solution-agnostic, outside-verifiable, scope-fenced, constraints-are-limits, problem-grounded |
+| Design | intent-faithful, acceptance-covered, structural-not-procedural, decisions-justified, risk-honest, mechanism-forced |
+| Plan | task-sized, context-sufficient, done-observable, decision-free, design-faithful, dependencies-honest |
+| Implementation | tasks-actually-done, no-scope-creep, design-faithful-final |
+| Validation | intent-delivered, docs-integrated, requirement-proof-mapping |
+
+Minimal requires one independent author covering all axes together. Standard requires two independent authors, each covering all axes together. High requires the same two independent identities to review every axis individually and then each review all axes together on unchanged work before fixes.
+
+The first high-rigor aggregate reviews use fresh sessions and receive neither author's individual-stage findings or judgments. Inputs and captured outputs make the two stages inspectable. After corrections, affected individual axes receive fresh review, unaffected axes require explicit applicability, and both aggregate authors freshly review all axes.
+
+Ordinary and challenge remain separate states. Both stages of a high-rigor state are required. Stage-aware evidence cannot be counted toward a different stage. Every assigned axis appears once in its commission; mixed pass/fail results remain valid output. The existing bounded same-worker conformance correction and retained attempts remain in force.
+
+Bookends is optional in every shipped profile and is disabled by default. Its existing additional axes apply only when enabled. Shipped profiles remain unbound and contain no prescribed model or machine-local command. Configuration versions change with the shipped contract; old profiles do not silently gain new obligations.
+
+### Evidence and final validation: R8, R13, R15–R17, R19 and R21
+
+Evidence names the configured stage as well as its gate, axis, subject, revision, author and configuration. Within each stage, the latest conforming judgment for an axis, revision and author stands. The existing independent-author checks and LE-115 exact-source disposition rules apply separately to required stage coverage. Accepted unresolved findings block across revisions; a discharged failure remains visibly a failure satisfied by disposition. Mechanical capture or identity mismatches cannot be dispositioned into verified evidence.
+
+The final criterion and whole-goal author floors are one for minimal and two for standard/high, independent of axis batching. They share one current report/checkpoint and one retained command collection. The extra high-rigor stage creates no additional author floor or proof-suite execution.
+
+On first high-rigor ordinary validation, the command evidence already exists while prechosen criterion/goal verdict IDs may be unused. Individual-axis workers judge the retained command evidence and fixed index, and return only axis judgments. They do not treat pending IDs as evidence. The aggregate validation commissions alone produce the independent criterion/goal rows under their prechosen IDs. Each aggregate author may return those rows and its own all-axis assessment together. Neither author depends on unpublished peer judgments. Driver triage and append make the real collection available; approval requires complete current criterion/goal and stage coverage. Challenge consumes the completed ordinary collection without recommissioning it. Minimal and standard keep the ordinary combined-output pattern.
+
+Other final-index, checkpoint, command-freshness, exact-source finding and supplemental-proof obligations remain unchanged. Required evidence cannot be replaced by activity or a report claim.
+
+### Task coverage: R6, R26 and A13
+
+Each task in a new supporting plan names a nonempty set of current acceptance criteria. The provider checks presence, syntax, uniqueness and current membership. Reviewers judge whether those links meaningfully describe the work. Other intermediate criterion references remain optional, and final validation still covers every current criterion and the whole goal. No additional requirement-ID system is introduced.
+
+### Setup boundary: R9, R11, R21, R25 and the setup-related non-goals
+
+A deterministic setup utility reads shipped data and a small explicit roster of worker commands and arguments. It assembles the corresponding per-run policies, author assignments, static review framing, output contracts and optional implementation binding, and exposes the result for owner confirmation before start. Arbitrary commands are supported when they meet the worker contract. Invalid or insufficient input fails without reducing review.
+
+The utility selects no model, starts no run or reviewer, performs no semantic judgment, adapts no incompatible CLI and manages no worktree. It supplies no saved-preference policy. The describe/evaluate semantic interface remains unchanged. The prior prohibition on provider prompt generation applies to semantic evaluation; deterministic assembly of static shipped framing belongs to this separate setup utility.
+
+### Requirements versus specifications
+
+This PRD owns observable outcomes, phase/axis coverage, independent-author floors, intentional boundaries and compatibility promises. Exact command grammar, JSON fields, schema encodings, packet layout and helper arrangement are maintained in the shipped schemas/protocols, provider README and CLI specification. Moving an incidental detail does not remove a behavioral obligation or erase historical evidence. Existing literal compatibility promises remain until explicitly amended.
+
+### Acceptance additions
+
+Public tests must drive source and packaged setup from explicit distinct worker commands to inspected configuration and successful scripted execution. Invalid rosters cannot silently reduce coverage. Completed new-profile workflows prove all required phases, author floors and high-rigor stages. A first-validation case begins with unused criterion/goal IDs and reaches approval using actual aggregate-produced rows without leaking individual-stage judgments or duplicating the command suite. A one-axis correction proves selected individual re-review and full fresh aggregate review, with explicit unaffected carry and unresolved-finding refusal.
+
+The A11 calibration procedure remains mandatory for affected shipped reviewer inputs. Current applicable evidence or the required fresh owner-attested assessment must accompany changed guidance. Synthetic worker output proves deterministic mechanics and supplies no semantic calibration attestation.

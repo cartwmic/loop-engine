@@ -63,6 +63,16 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
     } else {
         request.initial_input.clone()
     };
+    // Contract v2 remains inspectable by the engine and by historical helper
+    // code, but this candidate provider must not reinterpret its semantic
+    // obligations as v3. Return the protocol-level unsupported result for a
+    // checked v2 evaluation before reading artifacts or context.
+    if request.transition.kind == TransitionKind::Checked
+        && initial_input["contract_version"].as_u64() == Some(2)
+    {
+        return EvaluationOutcome::Response(unsupported_response());
+    }
+
     let config = match parse_initial_input(&initial_input) {
         Ok(config) => config,
         Err(error) => return EvaluationOutcome::EvaluationError(error.to_string()),
@@ -86,8 +96,8 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
 
     let schema = config.schema(subject);
     let links = config.links_from(subject);
-    let axes = gate
-        .and_then(|gate| config.axes_for_gate(gate))
+    let staged_axes = gate
+        .and_then(|gate| config.staged_axes_for_gate(gate))
         .filter(|axes| !axes.is_empty());
     let checkpoint_phase = checkpoint::phase_for_subject(subject);
     let checkpoint_required = checkpoint_phase.is_some();
@@ -96,7 +106,7 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
     // requiring artifact_root and without consulting context, except that
     // implementation and validation phases still require their independent
     // repository checkpoint.
-    if schema.is_none() && links.is_empty() && axes.is_none() && !checkpoint_required {
+    if schema.is_none() && links.is_empty() && staged_axes.is_none() && !checkpoint_required {
         if overlay_on && is_passed(request) && !bookends_is_green(bookends_report.as_ref()) {
             return EvaluationOutcome::Response(bookends_red_deny(
                 request,
@@ -146,12 +156,13 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
         // semantic evidence or a finding ledger is configured. Schema-only
         // draft hops need no metadata extraction.
         if gate.is_some() {
-            let extracted =
-                if subject == "validation-report.json" && initial_input["contract_version"] == 2 {
-                    crate::artifacts::extract_index_metadata(document.value())
-                } else {
-                    extract_metadata(subject, document.value())
-                };
+            let extracted = if subject == "validation-report.json"
+                && matches!(initial_input["contract_version"].as_u64(), Some(2 | 3))
+            {
+                crate::artifacts::extract_index_metadata(document.value())
+            } else {
+                extract_metadata(subject, document.value())
+            };
             match extracted {
                 Ok(value) => metadata = Some(value),
                 Err(error) => return EvaluationOutcome::EvaluationError(error.to_string()),
@@ -181,7 +192,7 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
     }
 
     if let Some(document) = document.as_ref() {
-        match check_criterion_rules(&config, subject, document) {
+        match check_criterion_rules(&config, subject, document, config.contract_version() == 3) {
             Ok(violations) if !violations.is_empty() => {
                 return EvaluationOutcome::Response(schema_deny_for_criteria(request, violations))
             }
@@ -260,8 +271,11 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
         }
     }
 
-    // Explicit v2 policy only: historical profile bytes never acquire criteria.
-    if subject == "validation-report.json" && initial_input.get("contract_version").is_some() {
+    // The fixed criterion/goal index applies to both supported semantic
+    // contract generations when evaluating an already-readable artifact.
+    if subject == "validation-report.json"
+        && matches!(initial_input["contract_version"].as_u64(), Some(2 | 3))
+    {
         let result = (|| {
             let root = std::path::Path::new(
                 config
@@ -329,8 +343,8 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
                 Some(Value::Object(details)),
             ));
         }
-        let evidence = axes.map(|axes| {
-            crate::evidence::evaluate_evidence_with_dispositions(
+        let evidence = staged_axes.map(|axes| {
+            crate::evidence::evaluate_staged_evidence_with_dispositions(
                 &request.context,
                 gate,
                 subject,
@@ -341,6 +355,7 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
                 config.axis_namespace(),
                 config.artifact_root(),
                 ledger.current_snapshot(),
+                config.contract_version() == 3,
             )
         });
         if let Some(evidence) = evidence {
@@ -391,9 +406,17 @@ fn check_criterion_rules(
     config: &crate::config::ValidatedConfig,
     subject: &str,
     document: &ArtifactDocument,
+    require_plan_task_criteria: bool,
 ) -> Result<Vec<CriterionViolation>, CriterionResolutionError> {
     let has_references =
-        criterion::has_references(config.schema(subject), subject, document.value());
+        criterion::has_references(config.schema(subject), subject, document.value())
+            || (require_plan_task_criteria
+                && subject == "plan.json"
+                && document
+                    .value()
+                    .get("tasks")
+                    .and_then(Value::as_array)
+                    .is_some_and(|tasks| !tasks.is_empty()));
     if subject == "intent.json" {
         return Ok(criterion::validate_intent(
             config.schema(subject),
@@ -423,10 +446,11 @@ fn check_criterion_rules(
         return Ok(identity_violations);
     }
     let known_ids = criterion::intent_ids(current_intent.value());
-    Ok(criterion::validate_references(
+    Ok(criterion::validate_references_with_task_requirement(
         subject,
         document.value(),
         &known_ids,
+        require_plan_task_criteria,
     ))
 }
 

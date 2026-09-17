@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS work_slot_invocations (
     instruction_digest           TEXT NOT NULL,
     subject                      TEXT NOT NULL,
     waiter_pid                   INTEGER NOT NULL CHECK (waiter_pid >= 0),
+    waiter_identity_json         TEXT,
     started_at                   INTEGER NOT NULL,
     allowed_time_ms              INTEGER NOT NULL CHECK (allowed_time_ms >= 0),
     status                       TEXT CHECK (status IS NULL OR status IN ('succeeded', 'failed')),
@@ -609,11 +610,10 @@ impl Persistence for SqlitePersistence {
             // Check the same ownership barrier as state departure while holding
             // the mutation transaction, so termination cannot strand cancellation.
             for invocation in read_work_slot_invocations(&transaction, &request.run_id)? {
-                #[cfg(unix)]
-                let waiter_alive = unsafe { libc::kill(invocation.waiter_pid as i32, 0) == 0 };
-                #[cfg(not(unix))]
-                let waiter_alive = false;
-                if loop_core::invocation_owns_work(&invocation, waiter_alive) {
+                if loop_core::invocation_owns_work(
+                    &invocation,
+                    self.invocation_waiter_alive(&invocation),
+                ) {
                     return Err(PersistenceError::rejected(
                         PersistenceRejection::LiveOwnedWork {
                             run_id: request.run_id.clone(),
@@ -849,7 +849,8 @@ impl Persistence for SqlitePersistence {
                 Vec::new(),
             )
             .with_routed_inputs(request.routed_inputs.clone())
-            .with_assignment_selection(request.assignment_selection.clone());
+            .with_assignment_selection(request.assignment_selection.clone())
+            .with_waiter_identity_opt(request.waiter_identity.clone());
             let mut invocation = invocation;
             invocation.controls = request.controls.clone();
             let invocation = match request.frozen_run_identity.clone() {
@@ -860,12 +861,12 @@ impl Persistence for SqlitePersistence {
                 .execute(
                     "INSERT INTO work_slot_invocations (
                         run_id, invocation_id, slot_id, binding_json,
-                        instruction_digest, subject, waiter_pid, started_at,
+                        instruction_digest, subject, waiter_pid, waiter_identity_json, started_at,
                         allowed_time_ms, status, exit_code, completed_at,
                         capture_dir, inner_workers_json, assignment_selection_json,
                         invocation_input_json, routed_inputs_json, frozen_run_identity_json,
                         completion_snapshot_json, controls_json
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL, NULL, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, NULL, NULL, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
                     params![
                         request.run_id.as_str(),
                         request.invocation_id.as_str(),
@@ -874,6 +875,11 @@ impl Persistence for SqlitePersistence {
                         request.instruction_digest,
                         request.subject,
                         to_sqlite_i64(u64::from(request.waiter_pid), "waiter pid")?,
+                        request
+                            .waiter_identity
+                            .as_ref()
+                            .map(|identity| encode_json(identity, "waiter identity"))
+                            .transpose()?,
                         request.started_at.as_unix_millis(),
                         to_sqlite_i64(request.allowed_time_ms, "allowed time ms")?,
                         request.capture_dir,
@@ -1099,6 +1105,14 @@ impl Persistence for SqlitePersistence {
         let _ = load_required_run(&connection, run_id)?;
         read_work_slot_invocations(&connection, run_id)
     }
+
+    fn invocation_waiter_alive(&self, invocation: &WorkSlotInvocation) -> bool {
+        crate::ownership::process_identity_matches(
+            invocation.waiter_pid,
+            invocation.waiter_identity.as_ref(),
+        )
+        .unwrap_or(false)
+    }
 }
 
 fn upsert_slot_subjects(
@@ -1171,6 +1185,14 @@ fn ensure_run_catalog_columns(connection: &Connection) -> Result<(), Persistence
 
 fn ensure_work_slot_invocation_columns(connection: &Connection) -> Result<(), PersistenceError> {
     let columns = work_slot_invocation_table_columns(connection)?;
+    if !columns.iter().any(|name| name == "waiter_identity_json") {
+        connection
+            .execute(
+                "ALTER TABLE work_slot_invocations ADD COLUMN waiter_identity_json TEXT",
+                [],
+            )
+            .map_err(sqlite_failure)?;
+    }
     if !columns.iter().any(|name| name == "capture_dir") {
         connection
             .execute(
@@ -1703,6 +1725,7 @@ fn decode_work_slot_invocation(
     instruction_digest: String,
     subject: String,
     waiter_pid: i64,
+    waiter_identity_json: Option<String>,
     started_at: i64,
     allowed_time_ms: i64,
     status: Option<String>,
@@ -1751,6 +1774,11 @@ fn decode_work_slot_invocation(
         decode_json(&inner_workers_json, "inner workers")?,
     )
     .with_routed_inputs(decode_json(&routed_inputs_json, "routed inputs")?)
+    .with_waiter_identity_opt(
+        waiter_identity_json
+            .map(|json| decode_json(&json, "waiter identity"))
+            .transpose()?,
+    )
     .with_recorded_inner_workers(decode_json(
         &completion_snapshot_json,
         "completion snapshot",
@@ -1806,6 +1834,7 @@ type InvocationRow = (
     String,
     String,
     i64,
+    Option<String>,
     i64,
     i64,
     Option<String>,
@@ -1842,6 +1871,7 @@ fn invocation_row_from_query(row: &rusqlite::Row<'_>) -> rusqlite::Result<Invoca
         row.get(16)?,
         row.get(17)?,
         row.get(18)?,
+        row.get(19)?,
     ))
 }
 
@@ -1853,10 +1883,10 @@ fn load_one_work_slot_invocation(
     connection
         .query_row(
             "SELECT invocation_id, slot_id, binding_json, instruction_digest, subject,
-                    waiter_pid, started_at, allowed_time_ms, status, exit_code, completed_at,
-                    capture_dir, inner_workers_json, assignment_selection_json,
-                    invocation_input_json, routed_inputs_json, frozen_run_identity_json,
-                    completion_snapshot_json, controls_json
+                    waiter_pid, waiter_identity_json, started_at, allowed_time_ms, status,
+                    exit_code, completed_at, capture_dir, inner_workers_json,
+                    assignment_selection_json, invocation_input_json, routed_inputs_json,
+                    frozen_run_identity_json, completion_snapshot_json, controls_json
              FROM work_slot_invocations
              WHERE run_id = ?1 AND invocation_id = ?2",
             params![run_id.as_str(), invocation_id.as_str()],
@@ -1872,6 +1902,7 @@ fn load_one_work_slot_invocation(
                 instruction_digest,
                 subject,
                 waiter_pid,
+                waiter_identity_json,
                 started_at,
                 allowed_time_ms,
                 status,
@@ -1893,6 +1924,7 @@ fn load_one_work_slot_invocation(
                     instruction_digest,
                     subject,
                     waiter_pid,
+                    waiter_identity_json,
                     started_at,
                     allowed_time_ms,
                     status,
@@ -1919,10 +1951,10 @@ fn read_work_slot_invocations(
     let mut statement = connection
         .prepare(
             "SELECT invocation_id, slot_id, binding_json, instruction_digest, subject,
-                    waiter_pid, started_at, allowed_time_ms, status, exit_code, completed_at,
-                    capture_dir, inner_workers_json, assignment_selection_json,
-                    invocation_input_json, routed_inputs_json, frozen_run_identity_json,
-                    completion_snapshot_json, controls_json
+                    waiter_pid, waiter_identity_json, started_at, allowed_time_ms, status,
+                    exit_code, completed_at, capture_dir, inner_workers_json,
+                    assignment_selection_json, invocation_input_json, routed_inputs_json,
+                    frozen_run_identity_json, completion_snapshot_json, controls_json
              FROM work_slot_invocations
              WHERE run_id = ?1
              ORDER BY started_at ASC, invocation_id ASC",
@@ -1940,6 +1972,7 @@ fn read_work_slot_invocations(
             instruction_digest,
             subject,
             waiter_pid,
+            waiter_identity_json,
             started_at,
             allowed_time_ms,
             status,
@@ -1961,6 +1994,7 @@ fn read_work_slot_invocations(
             instruction_digest,
             subject,
             waiter_pid,
+            waiter_identity_json,
             started_at,
             allowed_time_ms,
             status,

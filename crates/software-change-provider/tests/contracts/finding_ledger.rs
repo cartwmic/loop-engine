@@ -53,6 +53,7 @@ fn pass_evidence() -> Value {
     json!({
         "gate": "intent-review",
         "policy_id": "axis",
+        "review_stage": "aggregate",
         "result": "pass",
         "findings": "",
         "author": {"name": "reviewer", "kind": "agent"},
@@ -91,6 +92,7 @@ fn evaluate(root: &TestDir, mut records: Vec<Value>) -> Value {
                 "data": {
                     "gate": gate,
                     "policy_id": finding["policy_id"],
+                    "review_stage": "aggregate",
                     "result": if accepted_unresolved { "fail" } else { "pass" },
                     "findings": if accepted_unresolved { statement } else { "" },
                     "author": {"name": "reviewer", "kind": "agent"},
@@ -568,7 +570,7 @@ fn report_ledger_derives_current_checkpoint_instead_of_copying_state() {
         "checkpoint stderr: {:?}",
         checkpoint.stderr
     );
-    let config = config_artifact_root(load_profile("high-rigor"), &root);
+    let config = config_artifact_root(load_profile("minimal"), &root);
     let mut request = base_request(
         config,
         checked(
@@ -597,7 +599,7 @@ fn report_ledger_derives_current_checkpoint_instead_of_copying_state() {
                 "agent",
                 "implementation-report.json",
                 "r15",
-                "high-rigor-9",
+                "minimal-10",
             ),
             (sequence + 1) as u64,
         ));

@@ -11,7 +11,7 @@ use support::{provider_binary, Engine, TestDir};
 fn missing_policies_errors_on_first_check_and_leaves_engine_state_unchanged() {
     let state = TestDir::new("a2-missing-state");
     let engine = Engine::new(state.path().join("missing.sqlite"));
-    let run = engine.start_ok("missing-policies", json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "custom-v2"}));
+    let run = engine.start_ok("missing-policies", json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "custom-v2"}));
     assert_eq!(run.workflow.states.len(), 16);
     let slot_ids: Vec<_> = run
         .workflow
@@ -101,7 +101,7 @@ fn empty_review_policy_preserves_allocation_but_no_longer_waives_final_criterion
     fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755))
         .expect("chmod provider wrapper");
     let engine = Engine::with_command(state.path().join("empty.sqlite"), &wrapper);
-    let input = json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "none", "review_policies": {}});
+    let input = json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "none", "review_policies": {}});
     engine.start_ok("empty-policies", input);
 
     let artifact_root = state.path().join("runs").join("empty-policies");

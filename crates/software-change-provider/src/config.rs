@@ -54,12 +54,38 @@ const REVISION_LINK_KEYS: &[&str] = &["from", "field", "to"];
 const SHIPPED_CONFIG_NAMES: &str = "minimal, standard, high-rigor";
 const AUTHOR_KINDS: &[&str] = &["human", "agent", "script"];
 
+/// The two review passes used by contract v3.  The value is part of the
+/// frozen policy entry and is also repeated by review evidence.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum ReviewStage {
+    Individual,
+    Aggregate,
+}
+
+impl ReviewStage {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Individual => "individual",
+            Self::Aggregate => "aggregate",
+        }
+    }
+
+    fn parse(value: &Value) -> Option<Self> {
+        match value.as_str() {
+            Some("individual") => Some(Self::Individual),
+            Some("aggregate") => Some(Self::Aggregate),
+            _ => None,
+        }
+    }
+}
+
 /// One configured policy axis.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PolicyAxis {
     id: String,
     description: String,
     required_authors: u64,
+    review_stage: ReviewStage,
 }
 
 impl PolicyAxis {
@@ -73,6 +99,10 @@ impl PolicyAxis {
 
     pub(crate) fn required_authors(&self) -> u64 {
         self.required_authors
+    }
+
+    pub(crate) fn review_stage(&self) -> ReviewStage {
+        self.review_stage
     }
 }
 
@@ -106,17 +136,26 @@ impl RevisionLink {
 /// raw JSON and intentionally remain unexamined here.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ValidatedConfig {
+    contract_version: u64,
     config_version: String,
     artifact_root: Option<Value>,
     work_slot_bindings: Option<Value>,
     extra: Option<Value>,
     schemas_by_subject: BTreeMap<String, ValidatedSchema>,
     links_by_from: BTreeMap<String, Vec<RevisionLink>>,
+    /// One representative axis per gate, retained for stage-independent
+    /// checks such as finding routing and legacy callers.
     axes_by_gate: BTreeMap<String, BTreeMap<String, PolicyAxis>>,
+    /// The authoritative v3 projection, keyed by gate, stage, then axis.
+    staged_axes_by_gate: BTreeMap<String, BTreeMap<String, BTreeMap<String, PolicyAxis>>>,
     axis_namespace: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl ValidatedConfig {
+    pub(crate) fn contract_version(&self) -> u64 {
+        self.contract_version
+    }
+
     pub(crate) fn config_version(&self) -> &str {
         &self.config_version
     }
@@ -165,6 +204,22 @@ impl ValidatedConfig {
 
     pub(crate) fn axes_for_gate(&self, gate: &str) -> Option<&BTreeMap<String, PolicyAxis>> {
         self.axes_by_gate.get(gate)
+    }
+
+    /// Return the configured axes grouped by their frozen review stage.
+    pub(crate) fn staged_axes_for_gate(
+        &self,
+        gate: &str,
+    ) -> Option<&BTreeMap<String, BTreeMap<String, PolicyAxis>>> {
+        self.staged_axes_by_gate.get(gate)
+    }
+
+    pub(crate) fn axes_for_stage(
+        &self,
+        gate: &str,
+        stage: ReviewStage,
+    ) -> Option<&BTreeMap<String, PolicyAxis>> {
+        self.staged_axes_by_gate.get(gate)?.get(stage.as_str())
     }
 
     pub(crate) fn axis(&self, gate: &str, axis_id: &str) -> Option<&PolicyAxis> {
@@ -224,6 +279,14 @@ pub(crate) enum ConfigViolation {
         index: usize,
     },
     PolicyDescriptionNotString {
+        gate: String,
+        index: usize,
+    },
+    ReviewStageMissing {
+        gate: String,
+        index: usize,
+    },
+    ReviewStageInvalid {
         gate: String,
         index: usize,
     },
@@ -344,6 +407,8 @@ impl ConfigViolation {
             Self::PolicyIdEmpty { .. } => "policy-id-empty",
             Self::PolicyDescriptionMissing { .. } => "policy-description-missing",
             Self::PolicyDescriptionNotString { .. } => "policy-description-not-string",
+            Self::ReviewStageMissing { .. } => "review-stage-missing",
+            Self::ReviewStageInvalid { .. } => "review-stage-invalid",
             Self::RequiredAuthorsInvalid { .. } => "bad-required-authors",
             Self::DuplicateAxisId { .. } => "duplicate-axis-id",
             Self::ArtifactSchemasNotObject => "artifact-schemas-shape",
@@ -431,6 +496,16 @@ impl fmt::Display for ConfigViolation {
             Self::PolicyDescriptionNotString { gate, index } => write!(
                 formatter,
                 "{}: policy `{gate}[{index}]` `description` must be a string",
+                self.class()
+            ),
+            Self::ReviewStageMissing { gate, index } => write!(
+                formatter,
+                "{}: policy `{gate}[{index}]` missing `review_stage`",
+                self.class()
+            ),
+            Self::ReviewStageInvalid { gate, index } => write!(
+                formatter,
+                "{}: policy `{gate}[{index}]` `review_stage` must be `individual` or `aggregate`",
                 self.class()
             ),
             Self::RequiredAuthorsInvalid { gate, index } => write!(
@@ -547,6 +622,10 @@ pub(crate) fn parse_initial_input(
     };
 
     let mut violations = Vec::new();
+    let contract_version = initial_input
+        .get("contract_version")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
     if let Err(message) = crate::recovery_contract::RecoveryContract::from_input(initial_input) {
         violations.push(ConfigViolation::SemanticContract { message });
     }
@@ -573,10 +652,17 @@ pub(crate) fn parse_initial_input(
     };
 
     let mut axes_by_gate = BTreeMap::new();
+    let mut staged_axes_by_gate = BTreeMap::new();
     if !root.contains_key("review_policies") {
         violations.push(ConfigViolation::MissingReviewPolicies);
     } else if let Some(value) = root.get("review_policies") {
-        parse_review_policies(value, &mut axes_by_gate, &mut violations);
+        parse_review_policies(
+            value,
+            contract_version,
+            &mut axes_by_gate,
+            &mut staged_axes_by_gate,
+            &mut violations,
+        );
     }
 
     let mut raw_schemas = BTreeMap::new();
@@ -615,6 +701,7 @@ pub(crate) fn parse_initial_input(
         .collect();
 
     Ok(ValidatedConfig {
+        contract_version,
         config_version,
         artifact_root: root.get("artifact_root").cloned(),
         work_slot_bindings: root.get("work_slot_bindings").cloned(),
@@ -622,6 +709,7 @@ pub(crate) fn parse_initial_input(
         schemas_by_subject,
         links_by_from,
         axes_by_gate,
+        staged_axes_by_gate,
         axis_namespace,
     })
 }
@@ -635,7 +723,9 @@ pub(crate) fn validate_config(
 
 fn parse_review_policies(
     value: &Value,
+    contract_version: u64,
     axes_by_gate: &mut BTreeMap<String, BTreeMap<String, PolicyAxis>>,
+    staged_axes_by_gate: &mut BTreeMap<String, BTreeMap<String, BTreeMap<String, PolicyAxis>>>,
     violations: &mut Vec<ConfigViolation>,
 ) {
     let Some(gates) = value.as_object() else {
@@ -721,13 +811,47 @@ fn parse_review_policies(
                 },
             };
 
-            let (Some(id), Some(description), Some(required_authors)) =
-                (id, description, required_authors)
+            let review_stage = if contract_version >= 3 {
+                let value = entry.get("review_stage").or_else(|| entry.get("stage"));
+                match value {
+                    None => {
+                        violations.push(ConfigViolation::ReviewStageMissing {
+                            gate: gate.clone(),
+                            index,
+                        });
+                        None
+                    }
+                    Some(value) => match ReviewStage::parse(value) {
+                        Some(stage) => Some(stage),
+                        None => {
+                            violations.push(ConfigViolation::ReviewStageInvalid {
+                                gate: gate.clone(),
+                                index,
+                            });
+                            None
+                        }
+                    },
+                }
+            } else {
+                // Contract-v2 records predate stage-aware evidence. Keep their
+                // old aggregate interpretation available to historical reads;
+                // gates reject v2 semantic evaluation before using it.
+                Some(ReviewStage::Aggregate)
+            };
+
+            let (Some(id), Some(description), Some(required_authors), Some(review_stage)) =
+                (id, description, required_authors, review_stage)
             else {
                 continue;
             };
 
-            if axes.contains_key(&id) {
+            let stage_key = review_stage.as_str().to_owned();
+            let staged = staged_axes_by_gate
+                .entry(gate.clone())
+                .or_default()
+                .entry(stage_key)
+                .or_default();
+            if staged.contains_key(&id) {
                 violations.push(ConfigViolation::DuplicateAxisId {
                     gate: gate.clone(),
                     id,
@@ -735,14 +859,20 @@ fn parse_review_policies(
                 continue;
             }
 
-            axes.insert(
-                id.clone(),
-                PolicyAxis {
-                    id,
-                    description,
-                    required_authors,
-                },
-            );
+            let axis = PolicyAxis {
+                id: id.clone(),
+                description,
+                required_authors,
+                review_stage,
+            };
+            staged.insert(id.clone(), axis.clone());
+
+            // Keep one stage-independent representative for callers that only
+            // need membership (finding routing, for example). Prefer the
+            // aggregate definition when both stages declare the same axis.
+            if review_stage == ReviewStage::Aggregate || !axes.contains_key(&id) {
+                axes.insert(id, axis);
+            }
         }
 
         axes_by_gate.insert(gate.clone(), axes);
@@ -1171,6 +1301,42 @@ mod tests {
                 .expect("configured gate"),
             &BTreeSet::from(["axis".to_owned()])
         );
+    }
+
+    #[test]
+    fn v3_keeps_same_axis_independent_per_stage() {
+        let mut config = axis_config("intent-review", "intent.json", author_schema());
+        config["contract_version"] = json!(3);
+        config["review_policies"]["intent-review"] = json!([
+            {"id": "axis", "description": "individual", "review_stage": "individual"},
+            {"id": "axis", "description": "aggregate", "review_stage": "aggregate"}
+        ]);
+        let parsed = parse_initial_input(&config).expect("v3 staged config");
+        assert_eq!(
+            parsed
+                .staged_axes_for_gate("intent-review")
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["aggregate".to_owned(), "individual".to_owned()])
+        );
+        assert!(parsed
+            .axes_for_stage("intent-review", ReviewStage::Individual)
+            .unwrap()
+            .contains_key("axis"));
+        assert!(parsed
+            .axes_for_stage("intent-review", ReviewStage::Aggregate)
+            .unwrap()
+            .contains_key("axis"));
+    }
+
+    #[test]
+    fn v3_requires_a_frozen_review_stage_on_each_policy_entry() {
+        let mut config = axis_config("intent-review", "intent.json", author_schema());
+        config["contract_version"] = json!(3);
+        let error = parse_initial_input(&config).expect_err("v3 stage is required");
+        assert!(classes(error).contains(&"review-stage-missing"));
     }
 
     #[test]

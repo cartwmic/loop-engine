@@ -21,21 +21,53 @@ def save(path, value):
 
 
 def processes():
-    rows = subprocess.check_output(["ps", "-axo", "pid=,ppid=,pgid=,stat="], text=True)
-    return {int(p): (int(parent), int(group), state) for p, parent, group, state in
-            (line.split() for line in rows.splitlines())}
+    rows = subprocess.check_output(
+        ["ps", "-axo", "pid=,ppid=,pgid=,stat=,lstart="], text=True
+    )
+    table = {}
+    for line in rows.splitlines():
+        fields = line.split(None, 4)
+        if len(fields) != 5:
+            continue
+        pid, parent, group, state, started = fields
+        table[int(pid)] = (int(parent), int(group), state, started)
+    return table
 
 
 def discover(job, table):
     owned = job["owned"]
+    identities = job.setdefault("identities", {})
     owned.add(job["process"].pid)
-    # Retain observed descendants even if a facade exits or they create groups.
+    if job["process"].pid in table:
+        identities.setdefault(job["process"].pid, table[job["process"].pid][3])
+    def current(pid):
+        row = table.get(pid)
+        return row is not None and identities.get(pid, row[3]) == row[3]
+
+    # Retain observed descendants even if a facade exits or they create groups,
+    # but do not follow a reused parent PID into an unrelated process tree.
     while True:
-        new = {pid for pid, (parent, group, _) in table.items()
-               if parent in owned or group == job["process"].pid}
+        new = {
+            pid
+            for pid, (parent, group, _, _) in table.items()
+            if (parent in owned and current(parent))
+            or (group == job["process"].pid and current(job["process"].pid))
+        }
         if new <= owned:
             break
+        for pid in new - owned:
+            identities[pid] = table[pid][3]
         owned.update(new)
+
+
+def live_owned(job, table):
+    """Ignore a PID reused after its recorded process start time."""
+    identities = job.get("identities", {})
+    return {
+        pid
+        for pid in job["owned"]
+        if pid in table and identities.get(pid, table[pid][3]) == table[pid][3]
+    }
 
 
 def reap(job):
@@ -57,7 +89,7 @@ def cleanup(active):
         for job in active:
             discover(job, table)
             reap(job)
-        live = set().union(*(j["owned"] for j in active)) & set(table) if active else set()
+        live = set().union(*(live_owned(j, table) for j in active)) if active else set()
         if not live:
             return {"verified": True, "remaining_pids": [], "signals": sent,
                     "wall_seconds": time.monotonic() - start}
@@ -76,7 +108,9 @@ def cleanup(active):
                 pass
         time.sleep(0.05)
     table = processes()
-    remaining = sorted(set().union(*(j["owned"] for j in active)) & set(table))
+    remaining = sorted(
+        set().union(*(live_owned(j, table) for j in active)) if active else set()
+    )
     return {"verified": not remaining, "remaining_pids": remaining, "signals": sent,
             "wall_seconds": time.monotonic() - start}
 
@@ -143,7 +177,8 @@ def _run(jobs, *, root, limit, timeout):
                     row["status"] = "timed-out"
                     raise PoolFailure(f"{row['name']}: timed out after {timeout}s")
                 reap(job)
-                remaining = (job["owned"] - {job["process"].pid}) & set(processes())
+                current_table = processes()
+                remaining = live_owned(job, current_table) - {job["process"].pid}
                 result_path = Path(row["result_path"])
                 result = json.loads(result_path.read_text()) if result_path.exists() else {}
                 row["result"] = result
@@ -173,8 +208,9 @@ def _run(jobs, *, root, limit, timeout):
                 process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()),
                     "--worker", str(packet)], stdout=stdout, stderr=stderr, env=env, start_new_session=True)
                 row["pid"] = process.pid
-                active.append({"process": process, "owned": {process.pid}, "row": row,
-                               "started": row["started_monotonic"], "stdout": stdout, "stderr": stderr})
+                active.append({"process": process, "owned": {process.pid}, "identities": {},
+                               "row": row, "started": row["started_monotonic"],
+                               "stdout": stdout, "stderr": stderr})
                 cursor += 1
                 activity(row["name"], "start")
             save(root / "summary.json", report)

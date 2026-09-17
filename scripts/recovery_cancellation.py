@@ -96,14 +96,22 @@ class Fixture:
         binding = worker if mode == "direct" else {"command": provider, "args": ["run-plan-graph", "--working-directory", str(checkout), "--max-active", "1", "--task-worker", json.dumps(worker)]}
         schema = {"type": "object", "required": ["revision", "author"], "properties": {
             "revision": {"type": "string"}, "author": {"type": "object", "required": ["name", "kind"],
-                "properties": {"name": {"type": "string"}, "kind": {"type": "string", "enum": ["human", "agent", "script"]}}}}}
-        self.profile = {"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "recovery-cancellation-2", "artifact_root": str(self.artifacts),
+                "properties": {"name": {"type": "string"}, "kind": {"type": "string", "enum": ["human", "agent", "script"]}}},
+            "acceptance": {"type": "array", "items": {"type": "object", "required": ["id", "statement"],
+                "properties": {"id": {"type": "string"}, "statement": {"type": "string"}}}}}}
+        self.profile = {"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "recovery-cancellation-3", "artifact_root": str(self.artifacts),
             "review_policies": {}, "artifact_schemas": {n + ".json": schema for n in ("intent", "design", "plan")},
+            "revision_links": [{"from": "design.json", "field": "intent_revision", "to": "intent.json"},
+                               {"from": "plan.json", "field": "design_revision", "to": "design.json"}],
             "work_slot_bindings": {self.slot: binding}}
         for name in ("intent", "design", "plan"):
             value = {"revision": "1", "author": {"name": "fixture", "kind": "script"}}
+            if name == "intent":
+                value["acceptance"] = [{"id": "AC-1", "statement": "cancellation preserves owned-work cleanup"}]
+            if name == "design":
+                value["intent_revision"] = "1"
             if name == "plan":
-                value.update(tasks=[{"id": "A"}] if mode == "gap-outer" else [{"id": "A"}, {"id": "B"}],
+                value.update(design_revision="1", tasks=[{"id": "A", "criterion_ids": ["AC-1"]}] if mode == "gap-outer" else [{"id": "A", "criterion_ids": ["AC-1"]}, {"id": "B", "criterion_ids": ["AC-1"]}],
                     dependency_graph=[] if mode == "gap-outer" else [{"from": "A", "to": "B"}])
             (self.artifacts / (name + ".json")).write_text(json.dumps(value))
         self.call(["--config", str(self.config), "start", "--id", self.name, "software-change", json.dumps(self.profile)])

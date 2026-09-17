@@ -31,6 +31,7 @@ fn linked_evidence(root: &TestDir, result: &str, findings: &str) -> Value {
     let selected = selected_path(root);
     std::fs::create_dir_all(selected.parent().unwrap()).unwrap();
     let bytes = serde_json::to_vec(&json!({
+        "review_stage": "aggregate",
         "axis": "axis",
         "author": {"name": "reviewer", "kind": "agent"},
         "result": result,
@@ -41,6 +42,7 @@ fn linked_evidence(root: &TestDir, result: &str, findings: &str) -> Value {
     json!({
         "gate": "intent-review",
         "policy_id": "axis",
+        "review_stage": "aggregate",
         "result": result,
         "findings": findings,
         "author": {"name": "reviewer", "kind": "agent"},
@@ -180,6 +182,7 @@ fn applicability_resolves_original_evidence_and_keeps_attestation_separate() {
             json!({
                 "gate": "intent-review",
                 "policy_id": "axis",
+                "review_stage": "aggregate",
                 "result": "pass",
                 "findings": "",
                 "author": {"name": "original-reviewer", "kind": "agent"},
@@ -222,6 +225,7 @@ fn applicability_resolves_original_evidence_and_keeps_attestation_separate() {
             json!({
                 "gate": "intent-review",
                 "policy_id": "axis",
+                "review_stage": "aggregate",
                 "result": "pass",
                 "findings": "",
                 "author": {"name": "original-reviewer", "kind": "agent"},

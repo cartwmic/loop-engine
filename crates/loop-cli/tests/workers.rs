@@ -1,6 +1,10 @@
 #[path = "../../../tests/bounded_process.rs"]
 mod bounded_process;
 
+#[path = "workers/backlog_t04.rs"]
+mod backlog_t04;
+#[path = "workers/backlog_t10.rs"]
+mod backlog_t10;
 #[path = "workers/fan_out.rs"]
 mod fan_out;
 #[path = "workers/recovery_backtracking.rs"]

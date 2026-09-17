@@ -2602,3 +2602,177 @@ fn path_escaping_task_id_exits_nonzero_without_writing_outside_artifact_root() {
         "{stderr}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn backlog_t02_selection_guards_refuse_missing_evidence_wrong_revision_and_force_fresh() {
+    let cases = [
+        (
+            "missing-evidence",
+            json!({"plan_revision": "plan-r1", "task_roots": ["b"]}),
+            false,
+            "missing standing prerequisites",
+        ),
+        (
+            "wrong-revision",
+            json!({"plan_revision": "old-plan", "task_roots": ["b"]}),
+            false,
+            "does not match plan.json revision",
+        ),
+        (
+            "force-fresh",
+            json!({"plan_revision": "plan-r1", "task_roots": ["b"]}),
+            true,
+            "force-fresh selected execution cannot reuse unselected prerequisites",
+        ),
+    ];
+    for (label, invocation_input, force_fresh, expected_error) in cases {
+        let (_dir, artifact_root, receipt_dir) = fixture(&format!("backlog-t02-{label}"));
+        write_plan(
+            &artifact_root,
+            &json!({
+                "revision": "plan-r1",
+                "tasks": [{"id": "a"}, {"id": "b"}, {"id": "c"}],
+                "dependency_graph": [
+                    {"from": "a", "to": "b"},
+                    {"from": "b", "to": "c"}
+                ]
+            }),
+        );
+        let fake_dagu = artifact_root.parent().unwrap().join("fake-dagu-bin");
+        let probe_marker = dagu_sentinel(&fake_dagu);
+        let mut invoke_packet = packet(
+            "backlog-t02-selection-guards",
+            "implement",
+            &artifact_root.to_string_lossy(),
+            "Implement",
+        );
+        invoke_packet["invocation_input"] = invocation_input;
+        if force_fresh {
+            invoke_packet["controls"] = json!({"force_fresh": true});
+            // The provider must ignore a stale-looking packet claim when the
+            // explicit control says that no standing result may be reused.
+            invoke_packet["standing_assignment_ids"] = json!(["a"]);
+        }
+        let output = invoke_graph_with_env(
+            &task_worker(&receipt_dir, &["--write-report"]),
+            &invoke_packet,
+            None,
+            &[],
+            Some(&fake_dagu),
+        );
+        assert_eq!(output.status.code(), Some(2), "{label}: {output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(expected_error), "{label}: {stderr}");
+        assert!(!probe_marker.exists(), "{label} probed Dagu: {stderr}");
+        assert!(
+            receipt_dir
+                .read_dir()
+                .expect("receipt directory")
+                .next()
+                .is_none(),
+            "{label} started a worker"
+        );
+        assert!(!capture_dir_for_root(&artifact_root).exists());
+        assert!(!artifact_root.join("implementation-report.json").exists());
+        assert!(!artifact_root
+            .join("implementation-checkpoint.json")
+            .exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn backlog_t02_replaced_failed_prerequisite_never_resurrects_old_success() {
+    let (_dir, artifact_root, initial_receipts) = fixture("backlog-t02-replaced");
+    write_plan(
+        &artifact_root,
+        &json!({
+            "revision": "plan-r1",
+            "tasks": [{"id": "a"}, {"id": "b"}, {"id": "c"}],
+            "dependency_graph": [
+                {"from": "a", "to": "b"},
+                {"from": "b", "to": "c"}
+            ]
+        }),
+    );
+    let initial = invoke_graph(
+        &task_worker(&initial_receipts, &["--write-report"]),
+        &packet(
+            "backlog-t02-replaced-initial",
+            "implement",
+            &artifact_root.to_string_lossy(),
+            "Implement",
+        ),
+        None,
+    );
+    assert_eq!(initial.status.code(), Some(0), "{initial:?}");
+    for task in ["a", "b", "c", "summarizer"] {
+        assert!(initial_receipts.join(format!("{task}.stdin")).is_file());
+    }
+
+    let parent = artifact_root.parent().unwrap();
+    let failed_receipts = parent.join("failed-receipts");
+    fs::create_dir_all(&failed_receipts).expect("failed receipts");
+    let failed_capture = parent.join("captures/inv-failed-b");
+    let failed = invoke_graph_with(
+        &task_worker(&failed_receipts, &["--fail-task", "b"]),
+        &packet_with_capture(
+            "backlog-t02-replaced-b",
+            "implement",
+            &artifact_root.to_string_lossy(),
+            "Implement",
+            &failed_capture,
+        ),
+        None,
+        &["--task", "b"],
+    );
+    assert_ne!(
+        failed.status.code(),
+        Some(0),
+        "failed replacement unexpectedly passed"
+    );
+    assert!(failed_receipts.join("b.stdin").is_file());
+    assert!(!failed_receipts.join("c.stdin").exists());
+
+    let retry_receipts = parent.join("retry-receipts");
+    fs::create_dir_all(&retry_receipts).expect("retry receipts");
+    let retry_capture = parent.join("captures/inv-retry-c");
+    let fake_dagu = parent.join("fake-dagu-bin");
+    let probe_marker = dagu_sentinel(&fake_dagu);
+    let retry = invoke_graph_with_env(
+        &task_worker(&retry_receipts, &[]),
+        &packet_with_capture(
+            "backlog-t02-replaced-c",
+            "implement",
+            &artifact_root.to_string_lossy(),
+            "Implement",
+            &retry_capture,
+        ),
+        None,
+        &["--task", "c"],
+        Some(&fake_dagu),
+    );
+    assert_eq!(retry.status.code(), Some(2), "{retry:?}");
+    assert!(String::from_utf8_lossy(&retry.stderr).contains("missing standing prerequisites"));
+    assert!(
+        !probe_marker.exists(),
+        "rejected replacement retry probed Dagu"
+    );
+    assert!(!retry_receipts.join("c.stdin").exists());
+
+    let results: Value = serde_json::from_slice(
+        &fs::read(artifact_root.join("plan-task-results.json")).expect("replaced results"),
+    )
+    .expect("replaced results JSON");
+    let rows = results["results"].as_array().expect("result rows");
+    let b = rows
+        .iter()
+        .find(|row| row["assignment_id"] == "b")
+        .expect("replaced b result");
+    assert_eq!(b["exit_code"], 1);
+    assert!(
+        rows.iter().all(|row| row["assignment_id"] != "c"),
+        "a dependant invalidated by a failed replacement must not retain its old success"
+    );
+}

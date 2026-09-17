@@ -68,33 +68,7 @@ fn string<'a>(value: &'a Value, path: &str) -> &'a str {
 }
 
 fn expected_axes() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
-    with_counterparts(BTreeMap::from([
-        (
-            "intent-review",
-            BTreeSet::from([
-                "solution-agnostic",
-                "outside-verifiable",
-                "scope-fenced",
-                "constraints-are-limits",
-                "problem-grounded",
-            ]),
-        ),
-        (
-            "design-review",
-            BTreeSet::from([
-                "intent-faithful",
-                "acceptance-covered",
-                "structural-not-procedural",
-                "mechanism-forced",
-            ]),
-        ),
-        ("plan-review", BTreeSet::new()),
-        ("implementation-review", BTreeSet::new()),
-        (
-            "validation-review",
-            BTreeSet::from(["intent-delivered", "docs-integrated"]),
-        ),
-    ]))
+    high_rigor_axes()
 }
 
 fn high_rigor_axes() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
@@ -305,9 +279,9 @@ fn all_profiles_pass_production_config_validation_and_have_exact_subjects() {
     for profile in PROFILES {
         let config = load_profile(profile);
         let expected_version = match *profile {
-            "minimal" => "minimal-9",
-            "standard" => "standard-9",
-            "high-rigor" => "high-rigor-9",
+            "minimal" => "minimal-10",
+            "standard" => "standard-10",
+            "high-rigor" => "high-rigor-10",
             _ => unreachable!("unknown profile {profile}"),
         };
         assert_eq!(config["config_version"], expected_version);
@@ -602,36 +576,7 @@ fn shipped_work_slot_bindings_are_unbound() {
 
 #[test]
 fn profiles_carry_exact_shipped_profile_mapping_and_author_counts() {
-    let minimal = axis_map(&load_profile("minimal"));
-    assert_eq!(
-        minimal,
-        BTreeMap::from([
-            ("design-review".into(), BTreeMap::new()),
-            ("implementation-review".into(), BTreeMap::new()),
-            ("intent-review".into(), BTreeMap::new()),
-            ("plan-review".into(), BTreeMap::new()),
-            (
-                "validation-review".into(),
-                BTreeMap::from([("intent-delivered".into(), 1)])
-            ),
-        ])
-    );
-    for gate in ADVERSARIAL_GATES {
-        assert!(
-            !minimal.contains_key(*gate),
-            "minimal must omit adversarial list {gate}"
-        );
-    }
-    for gate in RETIRED_GATES {
-        assert!(
-            !minimal.contains_key(*gate),
-            "minimal still has retired gate {gate}"
-        );
-    }
-
-    let standard_config = load_profile("standard");
-    let standard = axis_map(&standard_config);
-    let expected = expected_axes()
+    let expected_minimal = expected_axes()
         .into_iter()
         .map(|(gate, axes)| {
             (
@@ -640,7 +585,20 @@ fn profiles_carry_exact_shipped_profile_mapping_and_author_counts() {
             )
         })
         .collect();
-    assert_eq!(standard, expected);
+    assert_eq!(axis_map(&load_profile("minimal")), expected_minimal);
+
+    let standard_config = load_profile("standard");
+    let standard = axis_map(&standard_config);
+    let expected_standard = expected_axes()
+        .into_iter()
+        .map(|(gate, axes)| {
+            (
+                gate.to_owned(),
+                axes.into_iter().map(|axis| (axis.to_owned(), 2)).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(standard, expected_standard);
     for gate in RETIRED_GATES {
         assert!(
             !standard.contains_key(*gate),
@@ -648,26 +606,34 @@ fn profiles_carry_exact_shipped_profile_mapping_and_author_counts() {
         );
     }
 
-    let high = axis_map(&load_profile("high-rigor"));
+    let high_config = load_profile("high-rigor");
+    let high = axis_map(&high_config);
     let expected_high = high_rigor_axes()
         .into_iter()
         .map(|(gate, axes)| {
             (
                 gate.to_owned(),
-                axes.into_iter()
-                    .map(|axis| {
-                        let n = if gate == "design-review" || gate == "validation-review" {
-                            2
-                        } else {
-                            1
-                        };
-                        (axis.to_owned(), n)
-                    })
-                    .collect(),
+                axes.into_iter().map(|axis| (axis.to_owned(), 2)).collect(),
             )
         })
         .collect();
     assert_eq!(high, expected_high);
+    for (gate, entries) in object(&high_config["review_policies"], "review_policies") {
+        let mut stages = BTreeMap::<String, BTreeSet<String>>::new();
+        for entry in array(entries, gate) {
+            let entry = object(entry, "high policy entry");
+            stages
+                .entry(string(&entry["review_stage"], "review_stage").to_owned())
+                .or_default()
+                .insert(string(&entry["id"], "policy id").to_owned());
+            assert_eq!(entry["required_authors"], 2, "{gate} author floor");
+        }
+        assert_eq!(stages.len(), 2, "{gate} must have two review stages");
+        assert_eq!(
+            stages["individual"], stages["aggregate"],
+            "{gate} stage axes"
+        );
+    }
     for gate in RETIRED_GATES {
         assert!(
             !high.contains_key(*gate),
@@ -690,8 +656,8 @@ fn profiles_carry_exact_shipped_profile_mapping_and_author_counts() {
         );
         assert_eq!(
             high[adversarial_gate(parent_gate)][axis],
-            1,
-            "adversarial required_authors on high-rigor {parent_gate} counterpart {axis} must be 1"
+            2,
+            "adversarial required_authors on high-rigor {parent_gate} counterpart {axis} must be 2"
         );
     }
 }
@@ -756,12 +722,13 @@ fn every_axis_prompt_references_subject_template_schema_and_all_antipedantry_gua
                         prompt.contains("pass claim against that named obligation"),
                         "{profile}/{gate}/{id} adversarial prompt must attack the named parent obligation"
                     );
+                    let expected_floor = if *profile == "minimal" { 1 } else { 2 };
                     assert_eq!(
                         object(entry, "policy entry")
                             .get("required_authors")
                             .and_then(Value::as_u64),
-                        Some(1),
-                        "{profile}/{gate}/{id} must set required_authors 1"
+                        Some(expected_floor),
+                        "{profile}/{gate}/{id} must set required_authors {expected_floor}"
                     );
                 }
             }
@@ -814,18 +781,6 @@ fn shipped_profiles_describe_live_graph_and_keep_one_to_one_counterparts() {
                 .map(|entries| axis_ids(entries, adversarial))
                 .unwrap_or_default();
 
-            if *profile == "minimal" {
-                assert!(
-                    !policies.contains_key(adversarial),
-                    "minimal must omit adversarial list {adversarial}"
-                );
-                assert!(
-                    !states.contains(adversarial),
-                    "minimal describe must omit adversarial state {adversarial}"
-                );
-                continue;
-            }
-
             assert!(
                 policies.contains_key(adversarial),
                 "{profile} missing adversarial key {adversarial} for parent {parent}"
@@ -843,10 +798,11 @@ fn shipped_profiles_describe_live_graph_and_keep_one_to_one_counterparts() {
             if let Some(entries) = policies.get(adversarial) {
                 for entry in array(entries, adversarial) {
                     let entry = object(entry, "policy entry");
+                    let expected_floor = if *profile == "minimal" { 1 } else { 2 };
                     assert_eq!(
                         entry.get("required_authors").and_then(Value::as_u64),
-                        Some(1),
-                        "{profile}/{adversarial}/{} required_authors must be 1",
+                        Some(expected_floor),
+                        "{profile}/{adversarial}/{} required_authors must be {expected_floor}",
                         string(&entry["id"], "policy id")
                     );
                 }
@@ -866,10 +822,7 @@ fn shipped_profiles_describe_live_graph_and_keep_one_to_one_counterparts() {
                     "{profile} shipped subset of counterparts on {adversarial}"
                 );
             } else {
-                assert_eq!(
-                    *profile, "minimal",
-                    "{profile} omitted adversarial key {adversarial}"
-                );
+                panic!("{profile} omitted adversarial key {adversarial}");
             }
         }
     }
@@ -884,10 +837,11 @@ fn implementation_keeps_coverage_and_validation_is_a_checkpoint_bound_index() {
         let shipped_index: Value =
             serde_json::from_str(include_str!("../../data/validation-report-schema.json")).unwrap();
         assert_eq!(validation, &shipped_index);
-        assert_eq!(config["contract_version"], 2);
+        assert_eq!(config["contract_version"], 3);
+        let expected_floor = if *profile == "minimal" { 1 } else { 2 };
         assert_eq!(
             config["criterion_policy"],
-            serde_json::json!({"required_authors": 1, "goal_required_authors": 1})
+            serde_json::json!({"required_authors": expected_floor, "goal_required_authors": expected_floor})
         );
         assert!(config.get("work_slot_bindings").is_none());
         {
@@ -1056,15 +1010,27 @@ fn authoritative_docs_integrate_convergence_contract_and_routes() {
     );
     let agents_lower = agents.to_ascii_lowercase();
     for clause in [
-        "sixteen-state",
-        "intent-review",
-        "validation-review",
-        "intent-draft",
-        "validation-draft",
+        "fifteen slots",
+        "sixteen states",
+        "preserve each older run's original runtime",
+        "candidate source does not grant migration",
+        "reviewers return judgments and consume retained proof",
+        "complete calibration when its procedure applies",
     ] {
         assert!(
             agents_lower.contains(clause),
-            "AGENTS.md missing live-graph clause: {clause}"
+            "AGENTS.md missing required graph or scope clause: {clause}"
+        );
+    }
+    for slot in [
+        "`intent-draft`",
+        "`intent-review`",
+        "`validation-draft`",
+        "`validation-review`",
+    ] {
+        assert!(
+            agents_lower.contains(slot),
+            "AGENTS.md missing required slot literal: {slot}"
         );
     }
     // AGENTS routes drivers to the owning procedure instead of duplicating it.
@@ -1175,190 +1141,12 @@ fn review_worker_preamble_carries_yagni_bar_and_confirmation_stdin_rule() {
     }
 }
 
-fn skill_constructor_jq() -> String {
-    let skill = shipped_text("skills/using-software-change-provider/SKILL.md");
-    let anchor = "--slurpfile roster \"$ROSTER\" '";
-    let start = skill.find(anchor).expect("constructor must slurp ROSTER") + anchor.len();
-    let rest = skill[start..].strip_prefix('\n').unwrap_or(&skill[start..]);
-    let end = rest
-        .find("' \"$PROFILE\"")
-        .expect("constructor jq must end before PROFILE");
-    rest[..end].to_string()
-}
-
-fn run_review_constructor(
-    profile: &std::path::Path,
-    slot: &str,
-    roster: &std::path::Path,
-) -> Result<Value, String> {
-    let crate_dir = workspace_integration::package_root("software-change-provider");
-    let output = Command::new("jq")
-        .args([
-            "--arg",
-            "slot",
-            slot,
-            "--arg",
-            "engine",
-            "/tmp/loop-engine-constructor-proof",
-            "--arg",
-            "provider",
-            "/tmp/software-change-constructor-proof",
-            "--arg",
-            "pi",
-            "/tmp/pi-constructor-proof",
-            "--arg",
-            "cursor",
-            "/tmp/cursor-provider-extension",
-            "--arg",
-            "bridge",
-            "/tmp/claude-bridge-extension",
-            "--arg",
-            "separate_axes_reason",
-            "",
-            "--rawfile",
-            "base_preamble",
-            crate_dir
-                .join("data/review-worker-preamble.txt")
-                .to_str()
-                .expect("preamble path utf-8"),
-            "--slurpfile",
-            "output_schema",
-            crate_dir
-                .join("data/review-worker-output-schema.json")
-                .to_str()
-                .expect("schema path utf-8"),
-            "--slurpfile",
-            "roster",
-            roster.to_str().expect("roster path utf-8"),
-        ])
-        .arg(skill_constructor_jq())
-        .arg(profile)
-        .output()
-        .expect("jq should spawn");
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).into_owned());
-    }
-    serde_json::from_slice(&output.stdout).map_err(|error| error.to_string())
-}
-
 #[test]
-fn constructor_rejects_draft_slots_and_accepts_intent_and_adversarial_review() {
-    let crate_dir = workspace_integration::package_root("software-change-provider");
-    let profile = crate_dir.join("data/configs/high-rigor.json");
-    let temp = std::env::temp_dir().join(format!(
-        "software-change-constructor-{}",
-        std::process::id()
-    ));
-    fs::create_dir_all(&temp).expect("constructor temp dir");
-    let roster = temp.join("roster.json");
-    fs::write(
-        &roster,
-        r#"[{"author":"reviewer-a","model":"model-a"},{"author":"reviewer-b","model":"model-b"}]"#,
-    )
-    .expect("write roster");
-
-    let intent = run_review_constructor(&profile, "intent-review", &roster)
-        .expect("intent-review must be a live constructor slot");
-    let intent_bindings = object(
-        &intent["work_slot_bindings"],
-        "intent-review work_slot_bindings",
-    );
-    assert!(
-        intent_bindings.contains_key("intent-review"),
-        "intent-review constructor omitted the review binding"
-    );
-    for draft in [
-        "intent-draft",
-        "design-draft",
-        "plan-draft",
-        "implement",
-        "validation-draft",
-    ] {
-        assert!(
-            !intent_bindings.contains_key(draft),
-            "constructor emitted draft binding {draft}"
-        );
-    }
-    assert!(
-        !intent_bindings.contains_key("intent-adversarial-review"),
-        "same-slot mixed parent and adversarial fan-out is not the enabled path"
-    );
-    let binding_args = array(
-        &intent_bindings["intent-review"]["args"],
-        "intent-review constructor args",
-    );
-    assert_eq!(binding_args[0], "fan-out");
-    let expected_schema: Value =
-        serde_json::from_str(&shipped_text("data/review-worker-output-schema.json")).unwrap();
-    assert_eq!(expected_schema["required"], json!(["author", "judgments"]));
-    assert_eq!(
-        binding_args.len(),
-        3,
-        "all intent axes belong to one author batch"
-    );
-    let high_rigor = load_profile("high-rigor");
-    let intent_policies = array(
-        &object(&high_rigor["review_policies"], "review_policies")["intent-review"],
-        "intent-review policies",
-    );
-    for worker_pair in binding_args[1..].as_chunks::<2>().0.iter() {
-        assert_eq!(worker_pair[0], "--worker");
-        let worker: Value = serde_json::from_str(string(&worker_pair[1], "constructor worker"))
-            .expect("constructor worker must be JSON");
-        assert!(
-            worker.get("output_schema").is_none(),
-            "constructor must not emit legacy output_schema: {worker}"
-        );
-        let mut expected_worker_schema = expected_schema.clone();
-        let axes: Vec<_> = intent_policies.iter().map(|p| p["id"].clone()).collect();
-        let rows = &mut expected_worker_schema["properties"]["judgments"];
-        rows["minItems"] = json!(axes.len());
-        rows["maxItems"] = json!(axes.len());
-        for branch in rows["items"]["oneOf"].as_array_mut().unwrap() {
-            branch["properties"]["axis"]["enum"] = json!(axes);
-        }
-        rows["allOf"] = json!(axes
-            .iter()
-            .map(|axis| json!({"contains": {
-                "type": "object", "required": ["axis"], "properties": {"axis": {"const": axis}}
-            }}))
-            .collect::<Vec<_>>());
-        expected_worker_schema["properties"]["author"]["const"] =
-            json!({"name": "reviewer-a", "kind": "agent"});
-        assert_eq!(
-            worker["full_output_schema"], expected_worker_schema,
-            "constructor must emit exact assigned axis coverage and author constants"
-        );
-    }
-
-    let adversarial = run_review_constructor(&profile, "design-adversarial-review", &roster)
-        .expect("design-adversarial-review must be a live constructor slot");
-    let adversarial_bindings = object(
-        &adversarial["work_slot_bindings"],
-        "adversarial work_slot_bindings",
-    );
-    assert!(
-        adversarial_bindings.contains_key("design-adversarial-review"),
-        "adversarial constructor omitted the review binding"
-    );
-    assert!(
-        !adversarial_bindings.contains_key("design-review"),
-        "adversarial constructor mixed parent fan-out into the adversarial slot"
-    );
-
-    for draft in [
-        "intent-draft",
-        "design-draft",
-        "plan-draft",
-        "implement",
-        "validation-draft",
-    ] {
-        let error = run_review_constructor(&profile, draft, &roster)
-            .expect_err(&format!("{draft} must be rejected"));
-        assert!(
-            error.contains("constructor does not emit draft bindings"),
-            "{draft} failed for the wrong reason: {error}"
-        );
-    }
-    let _ = fs::remove_dir_all(&temp);
+fn setup_replaces_the_inline_skill_constructor() {
+    let skill = shipped_text("skills/using-software-change-provider/SKILL.md");
+    assert!(skill.contains("software-change setup"));
+    assert!(skill.contains("--max-active 2"));
+    assert!(skill.contains("--max-active 1"));
+    assert!(!skill.contains("--slurpfile roster \"$ROSTER\""));
+    assert!(!skill.contains("SEPARATE_AXES_REASON"));
 }

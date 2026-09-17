@@ -1,5 +1,5 @@
 //! Explicit execution boundary. Historical profiles remain readable by core,
-//! but only declared v2 profiles execute with this provider.
+//! but only declared v3 profiles execute with this provider.
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroUsize;
 
@@ -26,8 +26,11 @@ impl RecoveryContract {
     }
 
     pub(crate) fn parse(value: serde_json::Value) -> Result<Self, String> {
-        if value["contract_version"].as_u64() != Some(2) {
-            return Err("unsupported software-change semantic contract; use the fixed original provider for old-profile runs".into());
+        match value["contract_version"].as_u64() {
+            Some(2 | 3) => {}
+            _ => {
+                return Err("unsupported software-change semantic contract; use the fixed original provider for old-profile runs".into())
+            }
         }
         serde_json::from_value(value).map_err(|e| format!("invalid criterion_policy: {e}"))
     }
@@ -57,13 +60,15 @@ mod tests {
     }
 
     #[test]
-    fn recovery_contract_requires_explicit_v2_and_independent_positive_policy() {
-        let value = json!({"contract_version":2,"criterion_policy":{
-            "required_authors":1,"goal_required_authors":1}});
-        assert_eq!(
-            serde_json::to_value(RecoveryContract::parse(value.clone()).unwrap()).unwrap(),
-            value
-        );
+    fn recovery_contract_requires_explicit_supported_version_and_independent_positive_policy() {
+        for version in [2, 3] {
+            let value = json!({"contract_version":version,"criterion_policy":{
+                "required_authors":1,"goal_required_authors":1}});
+            assert_eq!(
+                serde_json::to_value(RecoveryContract::parse(value.clone()).unwrap()).unwrap(),
+                value
+            );
+        }
         for invalid in [
             json!({}),
             json!({"contract_version":1,"criterion_policy":{

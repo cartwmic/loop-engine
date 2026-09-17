@@ -71,7 +71,7 @@ value={'subject':'validation-report.json','subject_revision':report['revision'],
        'author':author,'result':'pass' if correct else 'fail','findings':[] if correct else ['product is not fixed'],
        'evidence_context_ids':report['command_evidence_ids']}
 rows.append({'kind':'goal-verdict','record_id':report['goal_verdict_ids'][0],'data':value})
-print(json.dumps({'author':author,'judgments':[{'axis':'delivery','result':'pass' if correct else 'fail',
+print(json.dumps({'review_stage':'aggregate','author':author,'judgments':[{'axis':'delivery','result':'pass' if correct else 'fail',
     'findings':'' if correct else 'product is not fixed'}],'validation_verdicts':rows}))
 '''
 
@@ -89,7 +89,7 @@ files={n:json.loads((root/n).read_text()) for n in ['intent.json','plan.json','i
 for n in ['validation-report.json','validation-checkpoint.json']:
     if (root/n).exists():files[n]=json.loads((root/n).read_text())
 assert s['effective_bindings'] and s['binding_amendments']
-assert s['initial_input']['contract_version']==2
+assert s['initial_input']['contract_version']==3
 assert s['current_state_instructions']
 assert any(r['kind']=='finding-ledger' for r in s['context'])
 assert any(i['status']=='failed' and i['ownership']['cancellation'] for i in s['work_slot_invocations'])
@@ -155,7 +155,7 @@ def prove(journey):
     captures = {}
     snapshots = []
     author = {'name':'implementer','kind':'script'}
-    config_version = 'composed-recovery-2'
+    config_version = 'composed-recovery-3'
     schema = {'type':'object','required':['revision','author'],'properties':{
         'revision':{'type':'string','minLength':1},'author':{'type':'object','required':['name','kind'],
         'properties':{'name':{'type':'string'},'kind':{'type':'string','enum':['script','agent','human']}}}}}
@@ -167,22 +167,24 @@ def prove(journey):
     graph_binding = {'command':str(journey.provider),'args':['run-plan-graph','--working-directory',str(repo),
         '--max-active','1','--task-worker',json.dumps({'command':sys.executable,'args':[str(graph_worker)]})],
         'context_filter':filter_binding}
-    profile = {'contract_version':2,'criterion_policy':{'required_authors':1,'goal_required_authors':1},
+    profile = {'contract_version':3,'criterion_policy':{'required_authors':1,'goal_required_authors':1},
         'config_version':config_version,'artifact_root':str(f.artifacts),
         'artifact_schemas':{**{name:copy.deepcopy(schema) for name in ['intent.json','design.json','plan.json','implementation-report.json']},
             'validation-report.json':json.loads((journey.data_root/'crates/software-change-provider/data/validation-report-schema.json').read_text())},
-        'review_policies':{gate:[{'id':'delivery','description':'scripted independent product judgment','required_authors':1}]
+        'review_policies':{gate:[{'id':'delivery','description':'scripted independent product judgment','review_stage':'aggregate','required_authors':1}]
                            for gate in ['implementation-review','validation-review']},
+        'revision_links': [{'from':'design.json','field':'intent_revision','to':'intent.json'},
+                           {'from':'plan.json','field':'design_revision','to':'design.json'}],
         'work_slot_bindings':{'implement':initial_binding}}
     f.start(profile)
     initial = f.show()['initial_input']
-    plan = {'revision':'1','author':author,'tasks':[{'id':'A'},{'id':'B'}],'dependency_graph':[],
+    plan = {'revision':'1','author':author,'design_revision':'1','tasks':[{'id':'A','criterion_ids':['AC-1']},{'id':'B','criterion_ids':['AC-1']}],'dependency_graph':[],
             'proof_commands':[{'id':'product','owner':'driver','command':sys.executable,
                 'args':['-c',"from pathlib import Path; print(Path('product.txt').read_text()); assert Path('stable.txt').read_text()=='retained\\n'"],
                 'obligation':'retain product output and verify unaffected product'}]}
     for name, value in {'intent.json':{'revision':'1','author':author,'acceptance':[
             {'id':'AC-1','statement':'product is fixed'},{'id':'AC-2','statement':'stable product and command evidence remain intact'}]},
-            'design.json':{'revision':'1','author':author},'plan.json':plan}.items():write(f.artifacts/name,value)
+            'design.json':{'revision':'1','author':author,'intent_revision':'1'},'plan.json':{**plan,'design_revision':'1','tasks':[{'id':'A','criterion_ids':['AC-1']},{'id':'B','criterion_ids':['AC-1']}]}}.items():write(f.artifacts/name,value)
 
     def event(name, status='completed', needle=None):
         f.show(); value=f.result(['event',f.name,name],status)
@@ -221,7 +223,7 @@ def prove(journey):
             "import json,pathlib,sys; value=pathlib.Path('product.txt').read_text(); "
             "ok=value!='broken\\n' if sys.argv[1]=='product' else not value.endswith('\\n'); "
             "print(json.dumps({'result':'pass' if ok else 'fail','findings':'' if ok else ('product is broken' if sys.argv[1]=='product' else 'trailing newline')}))",mode],cwd=repo)
-        f.append('review-evidence',id,{'gate':'implementation-review','policy_id':'delivery','subject':'implementation-report.json',
+        f.append('review-evidence',id,{'gate':'implementation-review','policy_id':'delivery','review_stage':'aggregate','subject':'implementation-report.json',
             'subject_revision':revision,'config_version':config_version,'author':{'name':reviewer,'kind':'script'},**output})
         return output
 
@@ -357,7 +359,7 @@ def prove(journey):
                     f.append(candidate['kind'],candidate['record_id'],{**candidate['data'],'origin':candidate['origin']})
                 else:
                     assert candidate['status']=='ready',candidate
-                    f.append('review-evidence','validation-axis-'+revision,{'gate':'validation-review','policy_id':'delivery','subject':'validation-report.json',
+                    f.append('review-evidence','validation-axis-'+revision,{'gate':'validation-review','policy_id':'delivery','review_stage':'aggregate','subject':'validation-report.json',
                         'subject_revision':revision,'config_version':config_version,'author':candidate['author'],
                         'result':candidate['result'],'findings':candidate['findings'],'origin':candidate['origin']})
             for name in ['validation-report.json','validation-checkpoint.json']:

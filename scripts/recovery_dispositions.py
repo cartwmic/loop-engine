@@ -52,9 +52,9 @@ def prove(journey):
         db = directory / "loop.sqlite"
         config = directory / "providers.toml"
         config.write_text('[providers.software-change]\ncommand = ' + json.dumps(str(journey.provider)) + '\n')
-        profile = {"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "recovery-dispositions-2",
+        profile = {"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "recovery-dispositions-3",
                    "artifact_root": str(artifacts),
-                   "review_policies": {"intent-review": [{"id": "axis", "description": "disposition proof", "required_authors": required}]},
+                   "review_policies": {"intent-review": [{"id": "axis", "description": "disposition proof", "review_stage": "aggregate", "required_authors": required}]},
                    "artifact_schemas": {"intent.json": schema}}
         if binding is not None:
             profile["work_slot_bindings"] = {"intent-review": binding}
@@ -73,10 +73,10 @@ def prove(journey):
 
     def review(run, record_id, reviewer, result="fail", revision="1"):
         # Scripted external reviewer: its actual stdout is retained verbatim.
-        verdict = {"gate": "intent-review", "policy_id": "axis", "result": result,
+        verdict = {"gate": "intent-review", "policy_id": "axis", "review_stage": "aggregate", "result": result,
                    "findings": "same finding text" if result == "fail" else "",
                    "author": author(reviewer), "subject": "intent.json",
-                   "subject_revision": revision, "config_version": "recovery-dispositions-2"}
+                   "subject_revision": revision, "config_version": "recovery-dispositions-3"}
         raw = subprocess.run([sys.executable, "-c", "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())"],
                              input=json.dumps(verdict).encode(), capture_output=True, check=True).stdout
         path = root / f"{run[1]}-{record_id}-raw-verdict.json"
@@ -161,6 +161,9 @@ def prove(journey):
     event(run, contains="current absence")
     roster(["bob", "carol"])
     ledger(run, [retired])
+    # Reconfirm replacement coverage after the final roster/ledger snapshot;
+    # v3 stage-aware aggregation must see two current non-retired authors.
+    review(run, "replacement-final", "carol", "pass")
     event(run, allowed=True)
     call(run[0], ["history", run[1]])
 
@@ -195,15 +198,16 @@ def prove(journey):
     # Bound raw capture uses the real selected-assignment origin, not copied
     # coordinates or a manufactured pass. Disposition must leave every byte intact.
     import work_slot_journey
-    judgment = {"axis": "axis", "author": author("bound-reviewer"), "result": "fail", "findings": "same finding text"}
+    judgment = {"review_stage": "aggregate", "axis": "axis", "author": author("bound-reviewer"), "result": "fail", "findings": "same finding text"}
     binding = work_slot_journey.fan_out_binding(engine=journey.engine, workers=[{
         "command": sys.executable,
         "args": ["-c", "import sys; sys.stdin.read(); print(" + repr(json.dumps(judgment)) + ")"],
         "preamble": "Return the deterministic failing judgment.",
         "full_output_schema": {"type": "object", "properties": {
+            "review_stage": {"const": "aggregate"},
             "axis": {"const": "axis"}, "author": {"const": author("bound-reviewer")},
             "result": {"const": "fail"}, "findings": {"const": "same finding text"}},
-            "required": ["axis", "author", "result", "findings"], "additionalProperties": False}}])
+            "required": ["review_stage", "axis", "author", "result", "findings"], "additionalProperties": False}}])
     run = start("bound-disposition", required=1, binding=binding)
     invoked = call(run[0], ["invoke", run[1], "intent-review"])
     invocation_id = invoked["result"]["invocation_id"]
@@ -220,9 +224,9 @@ def prove(journey):
     raw_before = {str(p.relative_to(capture)): p.read_bytes() for p in capture.rglob("*") if p.is_file()}
     selected_raw = capture / "0" / "attempts" / "1" / "stdout"
     assert json.loads(selected_raw.read_bytes()) == judgment
-    evidence = {"gate": "intent-review", "policy_id": "axis", "author": author("bound-reviewer"),
+    evidence = {"gate": "intent-review", "policy_id": "axis", "review_stage": "aggregate", "author": author("bound-reviewer"),
                 "result": "fail", "findings": "same finding text", "subject": "intent.json",
-                "subject_revision": "1", "config_version": "recovery-dispositions-2",
+                "subject_revision": "1", "config_version": "recovery-dispositions-3",
                 "origin": {"kind": "selected-assignment-output", "id": invocation_id, "assignment_id": "worker-0"}}
     append(run, "review-evidence", "bound-fail", evidence)
     ledger(run, [])

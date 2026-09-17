@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,45 @@ from typing import Any
 
 class JourneyFailure(RuntimeError):
     pass
+
+
+# Each deficit fixture is an otherwise-valid current evidence set with exactly
+# the named qualifying contribution absent. The deficient fixture attempts that
+# contribution with one configured defect; the repair supplies only that
+# contribution. The driver-owned setup supplies these files as fictional data.
+EVIDENCE_CASES = (
+    (
+        "stale revision",
+        "intent-evidence-deficit-stale-revision.json",
+        "evidence-stale-revision.json",
+        "intent-evidence-repair-stale-revision.json",
+    ),
+    (
+        "subject author",
+        "intent-evidence-deficit-self-authored.json",
+        "evidence-self-authored.json",
+        "intent-evidence-repair-self-authored.json",
+    ),
+    (
+        "duplicate author",
+        "intent-evidence-deficit-duplicate-author.json",
+        "evidence-duplicate-author.json",
+        "intent-evidence-repair-duplicate-author.json",
+    ),
+    (
+        "incomplete axis",
+        "intent-evidence-deficit-incomplete-axis.json",
+        "evidence-incomplete-axis.json",
+        "intent-evidence-repair-incomplete-axis.json",
+    ),
+)
+
+STATIC_FIXTURES = (
+    "intent-malformed.json",
+    "intent-good.json",
+    "intent-three-violations.json",
+    "validation-report-good.json",
+)
 
 
 def invoke(engine: Path, config: Path, *args: str) -> dict[str, Any]:
@@ -32,8 +72,61 @@ def invoke(engine: Path, config: Path, *args: str) -> dict[str, Any]:
         "error",
     }:
         raise JourneyFailure(f"invalid command envelope for {args!r}: {envelope!r}")
+    expected_exit = {"completed": 0, "rejected": 10, "error": 20}[envelope["status"]]
+    if completed.returncode != expected_exit:
+        raise JourneyFailure(
+            f"command {args!r} returned status={envelope['status']!r} "
+            f"with exit {completed.returncode}, expected {expected_exit}"
+        )
     envelope["_exit_code"] = completed.returncode
     return envelope
+
+
+def validate_setup(
+    engine: Path, config: Path, profile: Path, fixtures: Path
+) -> None:
+    """Validate the driver-supplied fictional CLI and fixture handoff."""
+    for label, path in (
+        ("engine binary", engine),
+        ("provider TOML", config),
+        ("profile", profile),
+    ):
+        if not path.is_file():
+            raise JourneyFailure(f"{label} does not exist: {path}")
+    if not os.access(engine, os.X_OK):
+        raise JourneyFailure(f"engine binary is not executable: {engine}")
+    if not fixtures.is_dir():
+        raise JourneyFailure(f"fixture directory does not exist: {fixtures}")
+    try:
+        profile_data = json.loads(profile.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise JourneyFailure(f"profile is not readable JSON: {profile}: {error}") from error
+    if profile_data.get("config_version") != "standard-7":
+        raise JourneyFailure("fictional journey requires the unchanged standard-7 profile")
+
+    required = list(STATIC_FIXTURES)
+    for _reason, deficit, invalid, repair in EVIDENCE_CASES:
+        required.extend((deficit, invalid, repair))
+    missing = [name for name in required if not (fixtures / name).is_file()]
+    validation_records = sorted(fixtures.glob("validation-evidence-good-*.json"))
+    if not validation_records:
+        missing.append("validation-evidence-good-*.json")
+    if missing:
+        raise JourneyFailure(
+            "fictional journey setup is missing required fixture inputs: "
+            + ", ".join(missing)
+        )
+    for name in required:
+        path = fixtures / name
+        try:
+            json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            raise JourneyFailure(f"fixture is not readable JSON: {path}: {error}") from error
+    for path in validation_records:
+        try:
+            json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            raise JourneyFailure(f"fixture is not readable JSON: {path}: {error}") from error
 
 
 def data(envelope: dict[str, Any]) -> dict[str, Any]:
@@ -116,12 +209,11 @@ def frozen_profile_is_inspectable_before_transition(
     assert data(shown_after_denial)["initial_input"] == frozen
 
     append_record(engine, config, run_id, fixtures, "intent-good.json")
-    append_record(engine, config, run_id, fixtures, "intent-evidence-good.json")
-    accepted = invoke(engine, config, "event", run_id, "intent-ready")
-    assert accepted["status"] == "completed"
-    assert data(accepted)["current_state"] == "design"
-    shown_after_acceptance = invoke(engine, config, "show", run_id)
-    assert data(shown_after_acceptance)["initial_input"] == frozen
+    ready = invoke(engine, config, "event", run_id, "intent-ready")
+    assert ready["status"] == "completed"
+    assert data(ready)["current_state"] == "intent-review"
+    shown_after_ready = invoke(engine, config, "show", run_id)
+    assert data(shown_after_ready)["initial_input"] == frozen
     return run_id
 
 
@@ -155,27 +247,39 @@ def malformed_artifact_denial_names_all_rules(
 def evidence_denial_reports_each_configured_reason(
     engine: Path, config: Path, profile: Path, fixtures: Path
 ) -> None:
-    started = invoke(engine, config, "start", "software-change", f"@{profile}", "public evidence proof")
-    run_id = data(started)["run_id"]
-    append_record(engine, config, run_id, fixtures, "intent-good.json")
-    for name in (
-        "evidence-stale-revision.json",
-        "evidence-self-authored.json",
-        "evidence-duplicate-author.json",
-        "evidence-incomplete-axis.json",
+    for index, (reason, deficit_fixture, invalid_fixture, repair_fixture) in enumerate(
+        EVIDENCE_CASES, start=1
     ):
-        append_record(engine, config, run_id, fixtures, name)
-    denied = invoke(engine, config, "event", run_id, "intent-ready")
-    assert denied["status"] == "rejected"
-    assert data(denied)["current_state"] == "explore"
-    details = "\n".join(feedback_details(denied)).lower()
-    for reason in ("stale revision", "subject author", "duplicate author", "incomplete axis"):
+        started = invoke(
+            engine,
+            config,
+            "start",
+            "software-change",
+            f"@{profile}",
+            f"public evidence proof {index}",
+        )
+        run_id = data(started)["run_id"]
+        append_record(engine, config, run_id, fixtures, "intent-good.json")
+        ready = invoke(engine, config, "event", run_id, "intent-ready")
+        assert ready["status"] == "completed"
+        assert data(ready)["current_state"] == "intent-review"
+
+        # The deficit is deliberate: no complete qualifying evidence is loaded
+        # before the invalid contribution. A broken acceptance that counts the
+        # deficient record must fail the following unchanged-state assertion.
+        append_record(engine, config, run_id, fixtures, deficit_fixture)
+        append_record(engine, config, run_id, fixtures, invalid_fixture)
+        denied = invoke(engine, config, "event", run_id, "approved")
+        assert denied["status"] == "rejected"
+        assert data(denied)["current_state"] == "intent-review"
+        assert data(denied).get("transition") is None
+        details = "\n".join(feedback_details(denied)).lower()
         assert reason in details
 
-    append_record(engine, config, run_id, fixtures, "intent-evidence-good.json")
-    accepted = invoke(engine, config, "event", run_id, "intent-ready")
-    assert accepted["status"] == "completed"
-    assert data(accepted)["current_state"] == "design"
+        append_record(engine, config, run_id, fixtures, repair_fixture)
+        accepted = invoke(engine, config, "event", run_id, "approved")
+        assert accepted["status"] == "completed"
+        assert data(accepted)["current_state"] == "intent-adversarial-review"
 
 
 def terminal_validation_gate(
@@ -204,9 +308,10 @@ def terminal_validation_gate(
     denial_id = data(denied)["evaluation_id"]
 
     evidence_paths = sorted(fixtures.glob("validation-evidence-good-*.json"))
-    assert evidence_paths
+    assert len(evidence_paths) > 1
     authors: dict[str, set[tuple[str, str]]] = {policy_id: set() for policy_id in required}
-    for record_path in evidence_paths:
+
+    def append_validation_record(record_path: Path) -> dict[str, Any]:
         record = json.loads(record_path.read_text())
         review = record["data"]
         assert record["kind"] == "review-evidence"
@@ -221,6 +326,18 @@ def terminal_validation_gate(
         authors[review["policy_id"]].add(author)
         appended = append_path(engine, config, terminal_run_id, record_path)
         assert appended["status"] == "completed"
+        return review
+
+    for record_path in evidence_paths[:-1]:
+        append_validation_record(record_path)
+    partial = invoke(engine, config, "event", terminal_run_id, "passed")
+    assert partial["status"] == "rejected"
+    assert data(partial)["current_state"] == "validation-adversarial-review"
+    assert data(partial).get("transition") is None
+    missing_policy = json.loads(evidence_paths[-1].read_text())["data"]["policy_id"]
+    assert missing_policy in "\n".join(feedback_details(partial))
+
+    append_validation_record(evidence_paths[-1])
     for policy_id, count in required.items():
         assert len(authors[policy_id]) >= count
 
@@ -242,6 +359,7 @@ def main() -> int:
     parser.add_argument("--fixtures", type=Path, required=True)
     parser.add_argument("--terminal-run-id", required=True)
     args = parser.parse_args()
+    validate_setup(args.engine, args.config, args.profile, args.fixtures)
     frozen_profile_is_inspectable_before_transition(args.engine, args.config, args.profile, args.fixtures)
     malformed_artifact_denial_names_all_rules(args.engine, args.config, args.profile, args.fixtures)
     evidence_denial_reports_each_configured_reason(args.engine, args.config, args.profile, args.fixtures)

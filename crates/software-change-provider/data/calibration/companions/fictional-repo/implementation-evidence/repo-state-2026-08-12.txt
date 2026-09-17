@@ -106,7 +106,7 @@ schema-and-artifact-validation excerpt: fictional-repo/provider/src/schema.rs ch
 evidence-evaluator excerpt: fictional-repo/provider/src/evidence.rs groups current evidence by gate, policy, subject revision, config version, and exact author name-kind pair; fictional-repo/provider/tests/a5.rs asserts stale and independence behavior. Handoff supplies ordered evidence diagnostics and satisfaction state.
 versioned-reference-data excerpt: three profile files expose policies and artifact schemas; five templates and fictional-repo/provider/data/reviewer-protocol.md remain inspectable; fictional-repo/provider/src/embedded_data.rs embeds the same bytes; embedded_data and shipped_data tests assert parity and profile shape. Handoff supplies the validated profile projection.
 checked-transition-evaluator excerpt: fictional-repo/provider/src/gates.rs projects allow/deny/unsupported outcomes and named denial details; fictional-repo/provider/src/workflow.rs handles terminal validation obligations; a1, a9, and a15 assert checked transition precedence, lineage, and profile exposure. Handoff supplies terminal behavior to acceptance proof.
-acceptance-proof excerpt: a2, a7, a8, a11, a12, a13, a14, and r25 provide named acceptance mechanics; fictional-repo/provider/tests/evaluate.rs::schema_deny_reports_every_simultaneous_structural_violation proves checker-to-denial projection preserves every simultaneous path/rule pair; scripts/production-journey.py drives the public start, show, append, event, and final-show caller path for all four acceptance boundaries; fictional-repo/implementation-evidence/requirement-to-proof.md maps four requirements to exact executable proof identifiers; fictional-repo/scripts/assert-requirement-proof.py validates that mapping against this supplied proof inventory and keeps supplied evidence separate from semantic review quality. Handoff supplies proof matrix and checker to documentation integration.
+acceptance-proof excerpt: a2, a7, a8, a11, a12, a13, a14, and r25 provide named acceptance mechanics; fictional-repo/provider/tests/evaluate.rs::schema_deny_reports_every_simultaneous_structural_violation proves checker-to-denial projection preserves every simultaneous path/rule pair; scripts/production-journey.py consumes the driver-owned engine/provider/profile/fixture setup through separate public start, show, append, event, and final-show processes for all four acceptance boundaries; its evidence cases begin with explicit otherwise-valid coverage deficits, reject deficient contributions without a transition, and repair only the missing contribution; fictional-repo/implementation-evidence/requirement-to-proof.md maps four requirements to exact executable proof identifiers; fictional-repo/scripts/assert-requirement-proof.py validates that mapping and the public-journey contract against this supplied proof inventory and keeps supplied evidence separate from semantic review quality. Handoff supplies proof matrix and checker to documentation integration.
 
 plan linkage: implementation report uses plan revision r15; calibration subject, predecessor, link, and example-evidence revisions use neutral r15.
 authoritative-doc-integration excerpt: fictional-repo/README.md links fictional-repo/docs/PRD.md, fictional-repo/provider/README.md, and fictional-repo/implementation-evidence/requirement-to-proof.md; fictional-repo/provider/README.md describes provider contracts; fictional-repo/docs/PRD.md is authoritative; fictional-repo/scripts/assert-doc-authority.py checks authority, exact acceptance coverage, and relative Markdown links; fictional-repo/scripts/assert-requirement-proof.py checks executable proof mapping; the supplemental PRD, technical design, and task packets explain change scope without parallel authority.
@@ -145,7 +145,7 @@ result: authority, exact acceptance coverage, and relative Markdown links passed
 
 ## Public operator journey scenarios (bookends:LE-39)
 
-fictional setup: fictional-repo/target/debug/loop-engine is built; fictional-repo/implementation-evidence/providers.toml registers the fictional provider; fictional-repo/provider/data/configs/standard.json is unchanged standard-7; fictional-repo/implementation-evidence/journey-fixtures contains the script's named artifact/evidence JSON files. terminal-validation-proof is prepared at validation-adversarial-review with the current validation report but without final satisfying evidence. This static fictional setup is not an actual current-run capture.
+fictional setup: the driver supplies and owns an executable fictional-repo/target/debug/loop-engine, the provider executable registered by fictional-repo/implementation-evidence/providers.toml, the unchanged fictional-repo/provider/data/configs/standard.json standard-7 profile, and fictional-repo/implementation-evidence/journey-fixtures with the named artifact, deficit, deficient-evidence, repair, and validation-evidence JSON records. terminal-validation-proof is prepared at validation-adversarial-review with the current validation report but without final satisfying evidence. The acceptance-proof journey consumes this setup through separate outer CLI processes; this static fictional setup is not an actual current-run capture.
 command: python3 scripts/production-journey.py --engine fictional-repo/target/debug/loop-engine --config fictional-repo/implementation-evidence/providers.toml --profile fictional-repo/provider/data/configs/standard.json --fixtures fictional-repo/implementation-evidence/journey-fixtures --terminal-run-id terminal-validation-proof
 command exit status: 0
 caller boundary: separate loop-engine start, show, append, event, and final-show processes against one durable run
@@ -154,8 +154,8 @@ caller boundary: separate loop-engine start, show, append, event, and final-show
 initial observation: start selected the standard-7 profile and returned current_state=explore
 show observation before event: initial_input exposed the selected policy IDs, required author counts, artifact schemas, prompts, templates, and reviewer protocol with config_version=standard-7
 assertion: show exposes the selected frozen policies and artifact schemas before event
-later observation: a second show after denied and accepted events returned byte-identical initial_input
-assertion: transition evaluation does not mutate the caller-inspected frozen profile
+later observation: a second show after denied and schema-only intent-ready events returned byte-identical initial_input
+assertion: readiness and later transition evaluation do not mutate the caller-inspected frozen profile
 
 ### malformed_artifact_denial_names_all_rules
 operator action: start a fresh run in explore, append one intent artifact simultaneously missing revision, containing an empty outcome, and containing an undeclared extra field, then request intent-ready
@@ -164,19 +164,21 @@ assertion: structural denial names every simultaneous path and rule
 assertion: malformed-artifact denial leaves current_state=explore and does not report evidence satisfaction
 
 ### evidence_denial_reports_each_configured_reason
-operator action: on a fresh run append a structurally valid current intent artifact plus stale-revision, self-authored, duplicate-author, and configured-axis-incomplete review evidence; then request intent-ready
-transition observation: intent-ready returned status=rejected with separate configured diagnostics naming stale subject revision, subject-author identity, repeated declared name-kind pair, and each missing required axis/author count
-assertion: evidence denial names stale, self-authored, duplicate-author, and incomplete-obligation reasons
-assertion: evidence denial leaves current_state=explore
-operator action: append distinct non-subject current-revision evidence satisfying every configured axis and author count
-transition observation: intent-ready returned status=completed with transition explore-to-design
+operator action: on each fresh run append a structurally valid current intent artifact, enter intent-review through schema-only intent-ready, append the otherwise-valid intent-evidence-deficit fixture that omits only the targeted qualifying contribution, append its matching stale-revision, self-authored, duplicate-author, or configured-axis-incomplete evidence fixture, and request approved
+transition observation: each approved request returned status=rejected with the category-specific diagnostic for stale subject revision, subject-author identity, repeated declared name-kind pair, or incomplete required axis/author count; current_state remained intent-review and no transition was recorded
+assertion: each evidence deficiency is independently decisive and leaves current_state=intent-review; the explicit coverage deficit makes a broken acceptance that counts the deficient record fail the unchanged-state assertion
+operator action: append only the matching conforming current-revision repair fixture for each case
+transition observation: each approved request returned status=completed with transition intent-review-to-intent-adversarial-review
 
 ### terminal_validation_gate
 initial observation: show returned current_state=validation-adversarial-review with passed requestable and exposed the frozen standard-7 validation-adversarial-review policy IDs and required author counts
 first transition observation: passed returned status=rejected before required validation evidence and named every missing configured policy ID
 assertion: denied transition leaves current_state=validation-adversarial-review
 assertion: denied transition creates no successful validation-adversarial-review-to-end history action
-operator action: load each evidence record, verify gate, policy ID, subject revision, config version, pass result, non-subject author identity, and distinct-author count against every frozen required policy before appending it
+operator action: load all but one evidence record, verify gate, policy ID, subject revision, config version, pass result, non-subject author identity, and distinct-author count against every frozen required policy before appending it
+partial transition observation: passed returned status=rejected, kept current_state=validation-adversarial-review, and named the one still-missing configured policy
+assertion: otherwise valid but configured-obligation-incomplete evidence cannot reach end
+operator action: append the final evidence record after the partial denial
 second transition observation: passed returned status=completed with transition validation-adversarial-review-to-end only after every configured count was satisfied
 assertion: accepted transition reaches current_state=end
 assertion: final show returns no requestable events

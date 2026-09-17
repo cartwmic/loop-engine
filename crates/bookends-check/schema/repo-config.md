@@ -22,14 +22,35 @@ required_ci_jobs = ["baseline-and-source-journey"]
 - `pathspecs` is a git pathspec array. Each entry is a nonempty string. The
   array is nonempty. Surface-liveness is evaluated against these pathspecs:
   each declared class's discovery surface must resolve to at least one
-  tracked file, or the check is red. For `e2e/journey`, tracked files under
-  `crates/**/src/**` are discovery inputs only: citations in them, including
-  comments inside internal Rust unit-test modules, are never eligible public
-  journey coverage.
+  tracked file, or the check is red. Pathspecs are the approved proof locations; they do not
+  make every file under a directory a collected test. Documentation/data files
+  and paths containing `doc`, `docs`, `documentation`, `example`,
+  `examples`, `fixture`, `fixtures`, `generated`, or `vendor` are ignored as
+  proof surfaces. For `e2e/journey`,
+  tracked files under `crates/**/src/**` are discovery inputs only: citations
+  in them, including comments inside internal Rust unit-test modules, are
+  never eligible public journey coverage.
 - `required_ci_jobs` is a workflow job-id array. Each entry is a nonempty
   string naming a GitHub Actions job `id` that exists in the tree. The array
   is nonempty. Eligibility uses those named jobs' `run:` commands against
   the runner grammar; job existence alone is not eligibility.
+
+## Publication checking
+
+The ordinary checker reads the current working tree. The pre-push/CI
+publication mode instead receives Git's four-field ref-update stream and reads
+all config, PRD, workflow, and proof bytes from immutable commit trees. For each
+update it checks commits reachable from the new object but not the old object;
+a zero old object means all reachable history, and every commit is compared with
+each recorded parent. A pre-adoption commit without the enabling config is not
+an enabled snapshot; once a PRD has been adopted, removing its config or PRD is
+a failure.
+
+Missing history is fetched from the supplied source remote with ordinary
+non-pruning fetches that do not update local branches. A failed fetch,
+interrupted or bounded walk, or changed local HEAD/index/worktree is incomplete
+and cannot produce `GREEN`. Publication invocations retain a write-once range
+and completeness receipt outside the repository.
 
 ## Optional contract class
 

@@ -11,7 +11,7 @@ const PROFILES: &[&str] = &["minimal", "standard", "high-rigor"];
 const CURRENT_INVOCATION: &str = "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.";
 const PENDING_INVOCATION: &str = "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.";
 const NEUTRAL_REVISION: &str = "r15";
-const EXPECTED_AXIS_KEYS: usize = 69;
+const EXPECTED_AXIS_KEYS: usize = 184;
 const IMPLEMENTATION_COMPANION_LABEL: &str =
     "companion:fictional-repo/implementation-evidence/repository-state.txt";
 const REQUIREMENT_PROOF_SCRIPT_DATA_PATH: &str =
@@ -35,9 +35,9 @@ fn read_data(relative: &str) -> Vec<u8> {
 
 fn profile_name(config_version: &str) -> &'static str {
     match config_version {
-        "minimal-9" => "minimal",
-        "standard-9" => "standard",
-        "high-rigor-9" => "high-rigor",
+        "minimal-10" => "minimal",
+        "standard-10" => "standard",
+        "high-rigor-10" => "high-rigor",
         other => panic!("unknown shipped config version {other}"),
     }
 }
@@ -164,6 +164,7 @@ fn quote_json_string(value: &str) -> String {
 fn canonical_request_json(
     gate: &str,
     axis: &str,
+    review_stage: &str,
     subject: &str,
     subject_revision: &str,
     config_version: &str,
@@ -171,6 +172,7 @@ fn canonical_request_json(
     let fields = [
         ("gate", gate),
         ("policy_id", axis),
+        ("review_stage", review_stage),
         ("subject", subject),
         ("subject_revision", subject_revision),
         ("config_version", config_version),
@@ -536,6 +538,7 @@ fn source_records_for_entry(entry: &Map<String, Value>) -> CalibrationInput {
     let fixture_id = string_field(entry, "fixture_id");
     let gate = string_field(entry, "gate");
     let axis = string_field(entry, "axis");
+    let review_stage = string_field(entry, "review_stage");
     let config_version = string_field(entry, "config_version");
     let profile_name = profile_name(config_version);
     let profile = support::load_profile(profile_name);
@@ -555,7 +558,10 @@ fn source_records_for_entry(entry: &Map<String, Value>) -> CalibrationInput {
         .as_array()
         .expect("gate policy array")
         .iter()
-        .find(|policy| policy["id"].as_str() == Some(axis))
+        .find(|policy| {
+            policy["id"].as_str() == Some(axis)
+                && policy["review_stage"].as_str() == Some(review_stage)
+        })
         .unwrap_or_else(|| panic!("missing {gate}/{axis} policy"))["example_prompt"]
         .as_str()
         .expect("example_prompt");
@@ -593,7 +599,14 @@ fn source_records_for_entry(entry: &Map<String, Value>) -> CalibrationInput {
         });
     }
     source_records.extend(companion_records(&subject_value, gate, axis));
-    let request = canonical_request_json(gate, axis, subject, subject_revision, config_version);
+    let request = canonical_request_json(
+        gate,
+        axis,
+        review_stage,
+        subject,
+        subject_revision,
+        config_version,
+    );
     source_records.push(Record {
         label: "request-json".into(),
         content: request.clone(),
@@ -638,18 +651,21 @@ fn calibration_manifest_binds_exact_source_record_stream_and_covers_profile_axes
                     version.clone(),
                     gate.clone(),
                     axis["id"].as_str().unwrap().to_owned(),
+                    axis["review_stage"].as_str().unwrap().to_owned(),
                 ));
             }
         }
     }
 
-    let mut coverage: BTreeMap<(String, String, String), BTreeSet<String>> = BTreeMap::new();
+    let mut coverage: BTreeMap<(String, String, String, String), BTreeSet<String>> =
+        BTreeMap::new();
     for entry in entries {
         let entry = entry.as_object().expect("manifest row object");
         for field in [
             "fixture_id",
             "gate",
             "axis",
+            "review_stage",
             "expected",
             "observed",
             "config_version",
@@ -707,6 +723,7 @@ fn calibration_manifest_binds_exact_source_record_stream_and_covers_profile_axes
             string_field(entry, "config_version").to_owned(),
             string_field(entry, "gate").to_owned(),
             string_field(entry, "axis").to_owned(),
+            string_field(entry, "review_stage").to_owned(),
         );
         assert!(expected_keys.contains(&key));
         coverage.entry(key).or_default().insert(expected.to_owned());
@@ -724,13 +741,15 @@ fn calibration_manifest_binds_exact_source_record_stream_and_covers_profile_axes
 #[test]
 fn counterpart_keys_have_good_fail_pairs_and_good_fixtures_pass_adversarial() {
     let entries = manifest();
-    let mut by_key: BTreeMap<(String, String, String), BTreeMap<String, String>> = BTreeMap::new();
+    let mut by_key: BTreeMap<(String, String, String, String), BTreeMap<String, String>> =
+        BTreeMap::new();
     for entry in &entries {
         let entry = entry.as_object().expect("manifest row object");
         let key = (
             string_field(entry, "config_version").to_owned(),
             string_field(entry, "gate").to_owned(),
             string_field(entry, "axis").to_owned(),
+            string_field(entry, "review_stage").to_owned(),
         );
         by_key.entry(key).or_default().insert(
             string_field(entry, "expected").to_owned(),
@@ -739,7 +758,7 @@ fn counterpart_keys_have_good_fail_pairs_and_good_fixtures_pass_adversarial() {
     }
 
     let mut counterpart_keys = 0usize;
-    for ((config_version, gate, axis), classes) in &by_key {
+    for ((config_version, gate, axis, review_stage), classes) in &by_key {
         if !is_adversarial_gate(gate) {
             continue;
         }
@@ -752,6 +771,7 @@ fn counterpart_keys_have_good_fail_pairs_and_good_fixtures_pass_adversarial() {
             config_version.clone(),
             parent_gate(gate).to_owned(),
             axis.clone(),
+            review_stage.clone(),
         );
         let parent_classes = by_key.get(&parent).unwrap_or_else(|| {
             panic!("counterpart {config_version}/{gate}/{axis} lacks parent key {parent:?}")
@@ -780,6 +800,7 @@ fn counterpart_keys_have_good_fail_pairs_and_good_fixtures_pass_adversarial() {
                 entry["config_version"] == *config_version
                     && entry["gate"] == parent.1
                     && entry["axis"] == *axis
+                    && entry["review_stage"] == *review_stage
                     && entry["fixture_id"] == parent_pass_fixture
             })
             .collect();
@@ -789,6 +810,7 @@ fn counterpart_keys_have_good_fail_pairs_and_good_fixtures_pass_adversarial() {
                 entry["config_version"] == *config_version
                     && entry["gate"] == *gate
                     && entry["axis"] == *axis
+                    && entry["review_stage"] == *review_stage
                     && entry["fixture_id"] == parent_pass_fixture
             })
             .collect();
@@ -806,8 +828,8 @@ fn counterpart_keys_have_good_fail_pairs_and_good_fixtures_pass_adversarial() {
         );
     }
     assert_eq!(
-        counterpart_keys, 34,
-        "standard and high-rigor counterpart keys only; minimal has none"
+        counterpart_keys, 92,
+        "all three v3 profiles carry ordinary/challenge counterpart keys"
     );
 }
 
@@ -875,12 +897,12 @@ fn implementation_rows_have_total_commit_mapped_companion_coverage() {
             );
         }
     }
-    assert_eq!(implementation_rows, 12);
+    assert_eq!(implementation_rows, 48);
     assert_eq!(
         commits,
         BTreeMap::from([
-            ("repo-state-2026-08-12".to_owned(), 6usize),
-            ("repo-state-2026-08-13".to_owned(), 6usize),
+            ("repo-state-2026-08-12".to_owned(), 24usize),
+            ("repo-state-2026-08-13".to_owned(), 24usize),
         ])
     );
 }
@@ -1028,6 +1050,18 @@ fn design_decisions_and_plan_references_preserve_profile_and_evidence_choices() 
         ])
     );
     assert_eq!(decisions[5]["choice"], EVIDENCE_CHOICE);
+    let profile_element = design["elements"]
+        .as_array()
+        .expect("design-good elements array")
+        .iter()
+        .find(|element| element["name"] == "versioned data profiles")
+        .expect("versioned data profiles element");
+    let profile_responsibility = profile_element["responsibility"]
+        .as_str()
+        .expect("profile responsibility");
+    assert!(profile_responsibility.contains("host design-artifact review schema"));
+    assert!(profile_responsibility.contains("fictional runtime profiles"));
+    assert!(profile_responsibility.contains("bounded language"));
 
     let plan = fixture_value("plan-good");
     for task in plan["tasks"].as_array().expect("plan-good tasks array") {
@@ -1172,6 +1206,19 @@ fn good_plan_supplies_context_interfaces_public_proof_and_current_routes() {
             "missing public scenario {scenario}"
         );
     }
+    for setup_marker in [
+        "plan.json#/proof_commands/1",
+        "Driver-owned fictional setup",
+        "standard-7",
+        "terminal-validation-proof",
+        "intent-evidence-deficit-",
+        "intent-evidence-repair-",
+    ] {
+        assert!(
+            acceptance.contains(setup_marker),
+            "acceptance-proof missing setup marker {setup_marker}"
+        );
+    }
 }
 
 #[test]
@@ -1217,7 +1264,7 @@ fn validation_docs_coverage_has_exact_mapped_companion_bytes() {
         }
     }
     assert_eq!(
-        docs_rows, 8,
+        docs_rows, 16,
         "expected good/defective docs rows on parent and adversarial validation gates"
     );
 }
@@ -1263,14 +1310,19 @@ fn validation_intent_delivered_has_inspectable_repository_state_companion() {
             assert!(text
                 .contains("assertion: structural denial names every simultaneous path and rule"));
             assert!(text.contains("### evidence_denial_reports_each_configured_reason"));
-            assert!(text.contains("assertion: evidence denial names stale, self-authored, duplicate-author, and incomplete-obligation reasons"));
+            assert!(text.contains(
+                "assertion: each evidence deficiency is independently decisive and leaves current_state=intent-review"
+            ));
+            assert!(
+                text.contains("partial transition observation: passed returned status=rejected")
+            );
             assert!(text.contains("### terminal_validation_gate"));
             assert!(text.contains("assertion: denied transition leaves current_state=validation"));
             assert!(text.contains("assertion: accepted transition reaches current_state=end"));
         }
     }
     assert_eq!(
-        intent_delivered_rows, 10,
+        intent_delivered_rows, 16,
         "expected good/defective intent-delivered rows across shipped validation gates"
     );
 }
@@ -1332,7 +1384,7 @@ fn validation_requirement_proof_mapping_has_inspectable_public_proof_companions(
         }
     }
     assert_eq!(
-        rows, 4,
+        rows, 16,
         "expected parent/adversarial good/defective proof rows"
     );
 }
@@ -1386,6 +1438,63 @@ fn requirement_proof_checker_rejects_missing_mapping() {
 }
 
 #[test]
+fn requirement_proof_checker_rejects_preloaded_complete_evidence() {
+    let root = std::env::temp_dir().join(format!(
+        "software-change-provider-preloaded-evidence-tamper-{}",
+        std::process::id()
+    ));
+    if root.exists() {
+        fs::remove_dir_all(&root).expect("remove stale tamper root");
+    }
+    fs::create_dir_all(root.join("implementation-evidence"))
+        .expect("create tamper evidence directory");
+    fs::create_dir_all(root.join("scripts")).expect("create tamper scripts directory");
+    fs::write(
+        root.join("implementation-evidence/requirement-to-proof.md"),
+        read_data(REQUIREMENT_PROOF_MATRIX_DATA_PATH),
+    )
+    .expect("write proof matrix");
+    fs::write(
+        root.join("implementation-evidence/repo-state-2026-08-12.txt"),
+        read_data(GOOD_STATE_DATA_PATH),
+    )
+    .expect("write proof inventory");
+    fs::write(
+        root.join("scripts/assert-requirement-proof.py"),
+        read_data(REQUIREMENT_PROOF_SCRIPT_DATA_PATH),
+    )
+    .expect("write proof checker");
+    let journey = String::from_utf8(read_data(
+        "calibration/companions/fictional-repo/scripts/production-journey.py",
+    ))
+    .expect("public journey is UTF-8");
+    let tampered = journey.replacen(
+        "EVIDENCE_CASES = (",
+        "EVIDENCE_CASES = (\n    \"intent-evidence-good.json\",",
+        1,
+    );
+    assert_ne!(tampered, journey, "tamper target must exist");
+    fs::write(root.join("scripts/production-journey.py"), tampered)
+        .expect("write tampered public journey");
+
+    let output = Command::new("python3")
+        .arg(root.join("scripts/assert-requirement-proof.py"))
+        .arg(&root)
+        .output()
+        .expect("python3 proof checker should spawn");
+    assert!(
+        !output.status.success(),
+        "preloaded evidence journey unexpectedly passed"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("preloads complete intent evidence"),
+        "unexpected preloaded-evidence error: {:?}",
+        output.stderr
+    );
+    fs::remove_dir_all(root).expect("remove tamper root");
+}
+
+#[test]
 fn reviewer_visible_companion_content_rejects_oracle_and_class_markers() {
     let mut checked_labels = BTreeSet::new();
     for entry in manifest() {
@@ -1421,13 +1530,15 @@ fn reviewer_visible_companion_content_rejects_oracle_and_class_markers() {
 
 #[test]
 fn source_record_identity_preserves_pairing_and_neutral_request() {
-    let mut pairs: BTreeMap<(String, String, String), Vec<(String, CalibrationInput)>> =
+    #[allow(clippy::type_complexity)]
+    let mut pairs: BTreeMap<(String, String, String, String), Vec<(String, CalibrationInput)>> =
         BTreeMap::new();
 
     for entry in manifest() {
         let entry = entry.as_object().expect("manifest row object");
         let fixture_id = string_field(entry, "fixture_id");
         let gate = string_field(entry, "gate");
+        let review_stage = string_field(entry, "review_stage");
         let input = source_records_for_entry(entry);
         assert_eq!(request_value(&input)["subject_revision"], NEUTRAL_REVISION);
 
@@ -1451,6 +1562,7 @@ fn source_record_identity_preserves_pairing_and_neutral_request() {
                 for field in [
                     "gate",
                     "policy_id",
+                    "review_stage",
                     "subject",
                     "subject_revision",
                     "config_version",
@@ -1490,6 +1602,7 @@ fn source_record_identity_preserves_pairing_and_neutral_request() {
             string_field(entry, "config_version").to_owned(),
             gate.to_owned(),
             string_field(entry, "axis").to_owned(),
+            review_stage.to_owned(),
         );
         pairs
             .entry(key)
@@ -1529,6 +1642,7 @@ fn source_record_identity_preserves_pairing_and_neutral_request() {
         for field in [
             "gate",
             "policy_id",
+            "review_stage",
             "subject",
             "subject_revision",
             "config_version",
@@ -1670,7 +1784,7 @@ fn canonical_source_records_have_exact_order_and_labels() {
             entry["gate"] == "validation-review"
                 && entry["axis"] == "docs-integrated"
                 && entry["expected"] == "pass"
-                && entry["config_version"] == "standard-9"
+                && entry["config_version"] == "standard-10"
         })
         .expect("docs-integrated row");
     let entry = entry.as_object().expect("manifest row object");
@@ -1714,13 +1828,14 @@ fn canonical_request_json_has_exact_fields_and_no_trailing_newline() {
     let request = canonical_request_json(
         "validation-review",
         "docs-integrated",
+        "aggregate",
         "validation-report.json",
         "r15",
-        "standard-9",
+        "standard-10",
     );
     assert_eq!(
         request,
-        br#"{"gate":"validation-review","policy_id":"docs-integrated","subject":"validation-report.json","subject_revision":"r15","config_version":"standard-9"}"#
+        br#"{"gate":"validation-review","policy_id":"docs-integrated","review_stage":"aggregate","subject":"validation-report.json","subject_revision":"r15","config_version":"standard-10"}"#
     );
     assert_ne!(request.last(), Some(&b'\n'));
 }
@@ -1733,7 +1848,7 @@ fn every_supplied_source_record_mutation_changes_digest() {
             entry["gate"] == "validation-review"
                 && entry["axis"] == "docs-integrated"
                 && entry["expected"] == "pass"
-                && entry["config_version"] == "standard-9"
+                && entry["config_version"] == "standard-10"
         })
         .expect("docs-integrated row");
     let entry = entry.as_object().expect("manifest row object");

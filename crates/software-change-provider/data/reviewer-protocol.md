@@ -4,7 +4,7 @@ Provider checks evidence shape and aggregation. Reviewer decides truth externall
 
 ## Criterion spine
 
-Current intent acceptance is a closed `{id, statement}` record with a stable run-local `AC-N` ID. Design/plan/implementation `criterion_id`/`criterion_ids` references remain optional and name only current intent criteria. Contract v2 final validation instead requires the complete fixed criterion/goal index, independent criterion_policy and retained named command evidence described in `data/templates/validation-report.md`. Ordinary validation commissions can return genuine criterion/goal candidates alongside axes; challenge consumes that collection without recommissioning it. Reviewers do not rerun proof commands. Missing/stale/duplicate/unknown/self-authored/unsupported coverage blocks; prechosen IDs are not evidence. Reviewers judge whether the supplied evidence semantically fulfills the named criteria.
+Current intent acceptance is a closed `{id, statement}` record with a stable run-local `AC-N` ID. Design/plan/implementation `criterion_id`/`criterion_ids` references remain optional except that every contract-v3 plan task names a nonempty unique set of current criteria. Contract v3 final validation requires the complete fixed criterion/goal index, independent criterion_policy and retained named command evidence described in `data/templates/validation-report.md`. Ordinary aggregate validation commissions can return genuine criterion/goal candidates alongside axes; individual validation commissions return axes only, and challenge consumes the completed collection without recommissioning it. Reviewers do not rerun proof commands. Missing/stale/duplicate/unknown/self-authored/unsupported coverage blocks; prechosen IDs are not evidence. Reviewers judge whether the supplied evidence semantically fulfills the named criteria.
 
 When the optional Bookends overlay is disabled, AC-N is the only criterion identity and review records need no PRD disposition, candidate, liveness, citation, or Green claim. When it is enabled, each current intent criterion has exactly one `prd_traceability` disposition: `linked-live`, `candidate`, or `not-applicable`. The last is PRD traceability only and never waives or fulfills the criterion; a candidate remains blocking until owner acceptance and committed PRD integration or honest reclassification.
 
@@ -16,12 +16,13 @@ When the optional Bookends overlay is disabled, AC-N is the only criterion ident
   "data": {
     "gate": "design-review",
     "policy_id": "intent-faithful",
+    "review_stage": "aggregate",
     "result": "pass",
     "findings": "",
     "author": {"name": "reviewer-sol", "kind": "agent"},
     "subject": "design.json",
     "subject_revision": "3",
-    "config_version": "standard-9",
+    "config_version": "standard-10",
     "origin": {
       "kind": "selected-assignment-output",
       "id": "invocation-123",
@@ -31,15 +32,15 @@ When the optional Bookends overlay is disabled, AC-N is the only criterion ident
 }
 ```
 
-The eight judgment fields remain required. `result` is exactly `pass` or `fail`; `findings` is a string and is non-empty for `fail`. Author identity is exact `(name, kind)`. `subject` must match the gate subject. `subject_revision` and `config_version` name what was reviewed and which frozen config judged it.
+The nine judgment fields remain required for contract v3. `review_stage` is exactly `individual` or `aggregate` and must match the frozen commission. `result` is exactly `pass` or `fail`; `findings` is a string and is non-empty for `fail`. Author identity is exact `(name, kind)`. `subject` must match the gate subject. `subject_revision` and `config_version` name what was reviewed and which frozen config judged it.
 
 A bound worker judgment uses only the concise `origin` reference shown above. Core resolves that same-run invocation and assignment, then appends the engine-resolved, engine-owned `loop_engine_origin` projection containing the selected attempt, raw-output digest, selected path, capture directory, command, and binding. The driver does not copy any of those fields. The provider reads the selected bytes through that engine-owned projection and compares the raw digest and the judgment fields (`axis`, `author`, `result`, and `findings`) with the evidence record. Missing, changed, unavailable, non-JSON, or disagreeing bytes are **unverified** and cannot satisfy the axis. This is mechanical field agreement, not semantic disposition; the driver remains responsible for triage. An invocation's worker record alone is inert and never satisfies an axis. Genuinely external hand-authored evidence omits `origin`.
 
 ## Per-author review batches
 
-Opt-in construction defaults to one worker per used author per gate, not one worker per axis. Each policy still belongs to the first N confirmed roster authors (`required_authors`, default one), with exact policy order and prompts retained within each author's batch. Ordinary and challenge gates stay separate, and shipped profiles remain unbound. A justified singleton uses the same batch contract; the skill constructor accepts `SEPARATE_AXES_REASON` for evidence-size, specialization or observed-failure reasons without a profile policy knob.
+Opt-in construction defaults to one worker per used author per frozen stage, not one worker per axis. Each policy still belongs to the first N confirmed roster authors (`required_authors`), with exact policy order and prompts retained within each author's batch. High-rigor individual workers run before aggregate workers behind the generic fan-out barrier; the aggregate group receives no first-stage output. Ordinary and challenge gates stay separate, and shipped profiles remain unbound. A justified singleton uses the same batch contract; the skill constructor accepts `SEPARATE_AXES_REASON` for evidence-size, specialization or observed-failure reasons without a profile policy knob.
 
-The closed output is `{author:{name,kind},judgments:[...]}`. Every frozen assigned axis appears exactly once. Fresh rows are `{axis,result,findings}`, with pass/empty findings or fail/nonempty findings; a mixed pass/fail batch is valid output, never approval. Missing, duplicate, unknown axes or wrong authors fail the frozen full schema. The engine permits only one same-worker schema correction and retains both attempts plus the exact selected raw output.
+The closed output is `{review_stage,author:{name,kind},judgments:[...]}` for v3. Every frozen assigned axis appears exactly once. Fresh rows are `{axis,result,findings}`, with pass/empty findings or fail/nonempty findings; a mixed pass/fail batch is valid output, never approval. Missing, duplicate, unknown axes, wrong stage or wrong authors fail the frozen full schema. The engine permits only one same-worker schema correction and retains both attempts plus the exact selected raw output. High's individual and aggregate batches are separate commissions; aggregate inputs do not include first-stage judgment output.
 
 For confirmation only, an unaffected row may be `{axis,reuse:APPLICABILITY_RECORD_ID}`. The record must already exist in the delivered commission context, resolve to the same original author/axis/gate, and name this target revision/checkpoint. A later append cannot authorize an earlier attempt retroactively. `force_fresh` disallows carried rows through the provider-declared `x-loop-engine-force-fresh` schema constraint, applied opaquely by fan-out before launch. Exhaustion leaves no selected source, even for a fresh sibling row. Process/schema conformance remains separate from other provider reference checks: an invalid reference makes the whole batch unusable for candidate/evidence admission, including any fresh siblings. Historical batch verification uses its original target identity; later applicability separately checks the new live checkpoint.
 
@@ -93,7 +94,7 @@ A current failure is discharged only by a reasoned rejection, accepted/resolved 
 
 ## Historical boundary
 
-New profiles declare contract_version 2 (`minimal-9`, `standard-9`, `high-rigor-9`) and independent criterion_policy. Earlier semantic profiles require their fixed original providers; old show/history retains original meaning without new ownership/control capability or topology migration. Owner-attested engine event override is separate exceptional progression after observation and quiescence, permanently labeled completed-with-overrides. It never creates provider allow, reviewer pass, missing proof or Bookends GREEN; later edges retain their obligations. No-waiver statements in this protocol describe normal evidence gates, not a denial that this separate exception exists.
+New profiles declare contract_version 3 (`minimal-10`, `standard-10`, `high-rigor-10`) and independent criterion_policy. Earlier v2 semantic profiles require their fixed original providers; this candidate provider returns `unsupported` for v2 checked evaluation, while old show/history retains original meaning without new ownership/control capability or topology migration. Owner-attested engine event override is separate exceptional progression after observation and quiescence, permanently labeled completed-with-overrides. It never creates provider allow, reviewer pass, missing proof or Bookends GREEN; later edges retain their obligations. No-waiver statements in this protocol describe normal evidence gates, not a denial that this separate exception exists.
 
 Completed runs may contain records from the former verbose linkage and two-act carry contract. They remain immutable and readable through engine `show` and `history`; they are not accepted as a parallel new provider path and are not rewritten or migrated.
 

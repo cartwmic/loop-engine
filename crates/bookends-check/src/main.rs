@@ -4,7 +4,11 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use bookends_check::{check_repo, validate_candidate, CheckStatus};
+use bookends_check::{
+    check_publication, check_repo, parse_ref_updates, validate_candidate, CheckStatus,
+    PublicationOptions, PublicationReport,
+};
+use serde::Serialize;
 
 fn main() -> ExitCode {
     match run(env::args().collect()) {
@@ -42,6 +46,48 @@ fn run(args: Vec<String>) -> Result<ExitCode, io::Error> {
         None => env::current_dir()?,
     };
     let bypass = opts.bypass.as_ref().map(|(c, r)| (c.as_str(), r.as_str()));
+
+    if opts.updates_stdin {
+        let mut input = String::new();
+        if let Err(error) = io::stdin().read_to_string(&mut input) {
+            let mut stdout = io::stdout();
+            writeln!(stdout, "RED")?;
+            writeln!(stdout, "cannot read pre-push updates: {error}")?;
+            return Ok(ExitCode::from(1));
+        }
+        let updates = match parse_ref_updates(&input) {
+            Ok(updates) => updates,
+            Err(error) => {
+                let mut stdout = io::stdout();
+                writeln!(stdout, "RED")?;
+                writeln!(stdout, "invalid pre-push updates: {error}")?;
+                return Ok(ExitCode::from(1));
+            }
+        };
+        if !updates.is_empty() {
+            let options = PublicationOptions {
+                remote: opts.remote.unwrap_or_else(|| "origin".to_owned()),
+                max_commits: opts.max_commits,
+            };
+            let report = match check_publication(&repo, &updates, &options, bypass) {
+                Ok(report) => report,
+                Err(error) => {
+                    let mut stdout = io::stdout();
+                    writeln!(stdout, "RED")?;
+                    writeln!(stdout, "{error}")?;
+                    return Ok(ExitCode::from(1));
+                }
+            };
+            return run_publication(
+                &repo,
+                &report,
+                &options,
+                opts.receipt_root.as_deref(),
+                invoked_at,
+            );
+        }
+    }
+
     let mut stdout = io::stdout();
     let report = match check_repo(&repo, bypass) {
         Ok(report) => report,
@@ -93,6 +139,9 @@ struct Opts {
     repo: Option<PathBuf>,
     bypass: Option<(String, String)>,
     receipt_root: Option<PathBuf>,
+    updates_stdin: bool,
+    remote: Option<String>,
+    max_commits: usize,
 }
 
 #[derive(Debug)]
@@ -125,6 +174,9 @@ fn parse_args(args: &[String]) -> Result<Invocation, ParseOutcome> {
     let mut repo = None;
     let mut bypass = None;
     let mut receipt_root = None;
+    let mut updates_stdin = false;
+    let mut remote = None;
+    let mut max_commits = bookends_check::DEFAULT_MAX_COMMITS;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -152,6 +204,38 @@ fn parse_args(args: &[String]) -> Result<Invocation, ParseOutcome> {
                 }
                 receipt_root = Some(path);
             }
+            "--updates-stdin" => {
+                if updates_stdin {
+                    return Err(ParseOutcome::Usage(
+                        "--updates-stdin may be supplied only once".into(),
+                    ));
+                }
+                updates_stdin = true;
+            }
+            "--remote" => {
+                i += 1;
+                let value = args
+                    .get(i)
+                    .ok_or_else(|| ParseOutcome::Usage("missing value for --remote".into()))?;
+                if value.is_empty() || value.starts_with('-') {
+                    return Err(ParseOutcome::Usage("invalid value for --remote".into()));
+                }
+                remote = Some(value.to_owned());
+            }
+            "--max-commits" => {
+                i += 1;
+                let value = args
+                    .get(i)
+                    .ok_or_else(|| ParseOutcome::Usage("missing value for --max-commits".into()))?;
+                max_commits = value.parse().map_err(|_| {
+                    ParseOutcome::Usage("--max-commits requires a positive integer".into())
+                })?;
+                if max_commits == 0 {
+                    return Err(ParseOutcome::Usage(
+                        "--max-commits requires a positive integer".into(),
+                    ));
+                }
+            }
             "--bypass" => {
                 if bypass.is_some() {
                     return Err(ParseOutcome::Usage(
@@ -174,6 +258,9 @@ fn parse_args(args: &[String]) -> Result<Invocation, ParseOutcome> {
         repo,
         bypass,
         receipt_root,
+        updates_stdin,
+        remote,
+        max_commits,
     }))
 }
 
@@ -221,6 +308,147 @@ fn parse_bypass(value: &str) -> Result<(String, String), ParseOutcome> {
         ));
     }
     Ok((class.to_string(), reason.to_string()))
+}
+
+#[derive(Serialize)]
+struct PublicationReceipt {
+    schema: u32,
+    invoked_at_utc_unix_seconds: String,
+    repository: String,
+    remote: String,
+    max_commits: usize,
+    outcome: String,
+    complete: bool,
+    updates: Vec<bookends_check::RefUpdate>,
+    ranges: Vec<bookends_check::PublicationRange>,
+    enumerated_commits: Vec<String>,
+    diagnostics: Vec<String>,
+}
+
+fn run_publication(
+    repo: &std::path::Path,
+    report: &PublicationReport,
+    options: &PublicationOptions,
+    receipt_root: Option<&std::path::Path>,
+    invoked_at: std::time::SystemTime,
+) -> Result<ExitCode, io::Error> {
+    if let Err(error) = retain_publication_receipt(repo, report, options, receipt_root, invoked_at)
+    {
+        let mut stdout = io::stdout();
+        writeln!(stdout, "RED")?;
+        writeln!(
+            stdout,
+            "publication receipt unavailable; permission refused: {error}"
+        )?;
+        return Ok(ExitCode::from(1));
+    }
+
+    let mut stdout = io::stdout();
+    match &report.status {
+        CheckStatus::Green => {
+            writeln!(stdout, "GREEN")?;
+            Ok(ExitCode::from(0))
+        }
+        CheckStatus::Red => {
+            writeln!(stdout, "RED")?;
+            for finding in &report.findings {
+                writeln!(stdout, "{finding}")?;
+            }
+            Ok(ExitCode::from(1))
+        }
+        CheckStatus::Bypass { class, reason } => {
+            if let Err(error) = retain_bypass(repo, receipt_root, class, reason, invoked_at) {
+                writeln!(stdout, "RED")?;
+                writeln!(
+                    stdout,
+                    "bypass receipt unavailable; permission refused: {error}"
+                )?;
+                return Ok(ExitCode::from(1));
+            }
+            writeln!(stdout, "BYPASS")?;
+            writeln!(stdout, "{class}")?;
+            writeln!(stdout, "{reason}")?;
+            Ok(ExitCode::from(0))
+        }
+    }
+}
+
+fn retain_publication_receipt(
+    repo: &std::path::Path,
+    report: &PublicationReport,
+    options: &PublicationOptions,
+    root: Option<&std::path::Path>,
+    invoked_at: std::time::SystemTime,
+) -> io::Result<()> {
+    use std::process::Command;
+    use std::time::UNIX_EPOCH;
+
+    let repository = fs::canonicalize(repo)?;
+    let root = match root {
+        Some(root) => root.to_path_buf(),
+        None => env::var_os("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
+            .ok_or_else(|| io::Error::other("no local state directory"))?
+            .join("bookends-check/gates"),
+    };
+    fs::create_dir_all(&root)?;
+    let root = fs::canonicalize(root)?;
+    let git_root = Command::new("git")
+        .current_dir(&repository)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()?;
+    if git_root.status.success()
+        && root.starts_with(fs::canonicalize(
+            String::from_utf8_lossy(&git_root.stdout).trim(),
+        )?)
+    {
+        return Err(io::Error::other(
+            "receipt root must be outside the repository",
+        ));
+    }
+
+    let now = invoked_at
+        .duration_since(UNIX_EPOCH)
+        .map_err(io::Error::other)?;
+    let outcome = match &report.status {
+        CheckStatus::Green => "GREEN",
+        CheckStatus::Red => "RED",
+        CheckStatus::Bypass { .. } => "BYPASS",
+    };
+    let receipt = PublicationReceipt {
+        schema: 1,
+        invoked_at_utc_unix_seconds: format!("{}.{:09}", now.as_secs(), now.subsec_nanos()),
+        repository: repository.display().to_string(),
+        remote: options.remote.clone(),
+        max_commits: options.max_commits,
+        outcome: outcome.to_owned(),
+        complete: report.complete,
+        updates: report.updates.clone(),
+        ranges: report.ranges.clone(),
+        enumerated_commits: report.checked_commits.clone(),
+        diagnostics: report.diagnostics.clone(),
+    };
+    let bytes = serde_yaml::to_string(&receipt).map_err(io::Error::other)?;
+    let path = root.join(format!(
+        "{}-{}-gate.yaml",
+        now.as_nanos(),
+        std::process::id()
+    ));
+    let pending = path.with_extension("pending");
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&pending)?;
+    file.write_all(bytes.as_bytes())?;
+    let mut permissions = file.metadata()?.permissions();
+    permissions.set_readonly(true);
+    file.set_permissions(permissions)?;
+    file.sync_all()?;
+    fs::hard_link(&pending, &path)?;
+    fs::remove_file(pending)?;
+    fs::File::open(root)?.sync_all()?;
+    Ok(())
 }
 
 // A receipt is write-once, synced before permission, and outside the checkout.
@@ -304,19 +532,22 @@ fn retain_bypass(
 
 fn print_help() {
     println!(
-        "Usage: bookends-check [--repo <path>] [--bypass <class>:<reason>]\n\
+        "Usage: bookends-check [--repo <path>] [--updates-stdin] [--remote <name>] [--max-commits <n>] [--bypass <class>:<reason>]\n\
          Usage: bookends-check candidate <markdown-path>\n\n\
-         Evaluate the enabled bookends graph, or parse-only validate a PRD\
-         candidate. First stdout line is GREEN, RED, or BYPASS.\n\
-         --receipt-root <absolute-path> overrides local bypass receipt storage.\n\
-         Bypass permission requires a synced write-once receipt (default: $XDG_STATE_HOME/bookends-check/bypasses or $HOME/.local/state/bookends-check/bypasses)."
+         Evaluate the enabled bookends graph, or parse-only validate a PRD\n\
+         candidate. With --updates-stdin, read Git pre-push updates and check\n\
+         every introduced historical commit. First stdout line is GREEN, RED,\n\
+         or BYPASS.\n\
+         --receipt-root <absolute-path> overrides local receipt storage.\n\
+         Publication checks retain a synced range/completeness receipt; bypass\n\
+         permission also requires a synced write-once receipt."
     );
 }
 
 fn print_help_stderr() {
     let _ = writeln!(
         io::stderr(),
-        "Usage: bookends-check [--repo <path>] [--bypass <class>:<reason>]\n\
+        "Usage: bookends-check [--repo <path>] [--updates-stdin] [--remote <name>] [--max-commits <n>] [--bypass <class>:<reason>]\n\
          bookends-check candidate <markdown-path>"
     );
 }

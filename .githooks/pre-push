@@ -6,9 +6,16 @@
 #   git config core.hooksPath .githooks
 #
 # Any bypass is supplied through BOOKENDS_BYPASS=<class>:<reason>; the wrapper
-# handles that environment channel. This hook passes no bypass argument.
+# handles that environment channel. This hook passes no bypass argument. The
+# first hook argument is the source remote name; update lines stay on stdin.
 # README wording is owned by authoritative-doc-integration.
 set -eu
 root=$(git rev-parse --show-toplevel)
 cd "$root"
+BOOKENDS_UPDATE_STREAM=1
+export BOOKENDS_UPDATE_STREAM
+if [ "$#" -ge 1 ]; then
+  BOOKENDS_REMOTE=$1
+  export BOOKENDS_REMOTE
+fi
 exec "$root/scripts/bookends-check-gate.sh"

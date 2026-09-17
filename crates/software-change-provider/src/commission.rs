@@ -59,6 +59,8 @@ pub struct Commission {
     pub steering_ids: Vec<String>,
     pub diagnostics: Vec<String>,
     pub proof_commands: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_stage: Option<String>,
 }
 
 fn ids_valid(ids: &[String]) -> bool {
@@ -244,7 +246,47 @@ pub fn select(
             .collect(),
         diagnostics,
         proof_commands,
+        review_stage: None,
     })
+}
+
+fn record_belongs_to_stage(record: &ContextRecord, records: &[ContextRecord], stage: &str) -> bool {
+    fn visit(
+        record: &ContextRecord,
+        records: &[ContextRecord],
+        stage: &str,
+        visited: &mut BTreeSet<String>,
+    ) -> bool {
+        // Applicability references are durable input, not trusted topology.
+        // Reject a cycle rather than recursing forever on malformed context.
+        if !visited.insert(record.id.as_str().to_owned()) {
+            return false;
+        }
+        if record.kind == "review-evidence" {
+            return record
+                .data
+                .get("review_stage")
+                .or_else(|| record.data.get("stage"))
+                .and_then(Value::as_str)
+                .unwrap_or("aggregate")
+                == stage;
+        }
+        if record.kind == "evidence-applicability" {
+            let Some(origin) = record.data.get("origin").and_then(Value::as_object) else {
+                return false;
+            };
+            let Some(source_id) = origin.get("id").and_then(Value::as_str) else {
+                return false;
+            };
+            return records
+                .iter()
+                .find(|candidate| candidate.id.as_str() == source_id)
+                .is_some_and(|source| visit(source, records, stage, visited));
+        }
+        true
+    }
+
+    visit(record, records, stage, &mut BTreeSet::new())
 }
 
 fn validate_update(update: &ProofUpdate, plan: Option<&Value>) -> Result<(), String> {
@@ -328,6 +370,17 @@ pub fn inspect(
     requested_slot: Option<&str>,
     task: Option<&str>,
 ) -> Result<Value, String> {
+    inspect_with_stage(input, requested_slot, task, None)
+}
+
+/// Inspect a commission for one frozen review stage. Stage filtering is only
+/// a delivery projection; it does not alter the run's context or policy.
+pub fn inspect_with_stage(
+    input: &Value,
+    requested_slot: Option<&str>,
+    task: Option<&str>,
+    requested_stage: Option<&str>,
+) -> Result<Value, String> {
     let show = input.get("result");
     if show.is_some() && input.get("status").and_then(Value::as_str) != Some("completed") {
         return Err("commission requires a completed show envelope".into());
@@ -346,6 +399,13 @@ pub fn inspect(
     let mut records: Vec<ContextRecord> =
         serde_json::from_value(packet.get("context").cloned().ok_or("missing context")?)
             .map_err(|e| e.to_string())?;
+    if let Some(stage) = requested_stage {
+        if !matches!(stage, "individual" | "aggregate") {
+            return Err("commission review stage must be `individual` or `aggregate`".to_owned());
+        }
+        let all_records = records.clone();
+        records.retain(|record| record_belongs_to_stage(record, &all_records, stage));
+    }
     let slot = slots
         .iter()
         .find(|s| s.id.as_str() == slot_id)
@@ -363,7 +423,8 @@ pub fn inspect(
         .and_then(Value::as_str)
         .ok_or("missing artifact_root")?;
     let plan = load_plan(Path::new(root))?;
-    let selected = select(&records, &slots, slot_id, plan.as_ref(), task)?;
+    let mut selected = select(&records, &slots, slot_id, plan.as_ref(), task)?;
+    selected.review_stage = requested_stage.map(str::to_owned);
     for diagnostic in &selected.diagnostics {
         eprintln!("{diagnostic}");
     }
@@ -401,11 +462,13 @@ pub fn inspect(
 pub fn run_from_stdin(args: &[String]) -> i32 {
     let mut slot = None;
     let mut task = None;
+    let mut stage = None;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         let target = match arg.as_str() {
             "--slot" => &mut slot,
             "--task" => &mut task,
+            "--stage" => &mut stage,
             _ => {
                 eprintln!("unknown commission argument `{arg}`");
                 return 2;
@@ -423,7 +486,7 @@ pub fn run_from_stdin(args: &[String]) -> i32 {
     }
     let result = serde_json::from_reader(std::io::stdin())
         .map_err(|e| e.to_string())
-        .and_then(|input| inspect(&input, slot, task));
+        .and_then(|input| inspect_with_stage(&input, slot, task, stage));
     match result {
         Ok(value) => {
             println!("{value}");

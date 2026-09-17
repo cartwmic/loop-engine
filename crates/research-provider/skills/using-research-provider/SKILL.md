@@ -47,7 +47,7 @@ args = []
 
 Copy `crates/research-provider/data/configs/standard.json` to a run-specific file. Shipped profiles omit `work_slot_bindings` (or `{}`). Cataloged slots are `scope`, `gather`, `verify`, and `synthesize`; all stay driver-performed until the caller adds a map. Bound workers are opt-in.
 
-Review bindings must be constructed from the same **per-run** `PROFILE` that will be previewed and started. Set `DATA_ROOT` to the checkout root or to an empty directory previously populated by `research data-dump`. The constructor reads the provider-owned preamble and output schema from that tree and freezes their values inline; fan-out never resolves those files at invocation time. Keep `--no-skills --no-extensions`, load only the explicit cursor-provider and claude-bridge extensions, restrict review tools to `read,grep,find,ls`, and do not pass `--no-context-files`.
+Review bindings must be constructed from the same **per-run** `PROFILE` that will be previewed and started. Set `DATA_ROOT` to the checkout root or to an empty directory previously populated by `research data-dump`. The constructor reads the provider-owned preamble and output schema from that tree and freezes their values inline; fan-out never resolves those files at invocation time. Keep `--no-skills --no-extensions`. Set an extension path only when the selected model provider requires that extension; each supplied path must be absolute and exist, and an omitted path contributes no `-e` pair. Restrict review tools to `read,grep,find,ls`, and do not pass `--no-context-files`.
 
 Do not add bindings, and do not start, until the user confirms: (1) driver-performed or selected bound slot; (2) the exact frozen command and args; and (3) every author label and model in the ordered roster. Initial bindings freeze; only explicit amend-binding corrects future execution without rewriting them. A review slot with no configured axes must not be bound.
 
@@ -57,7 +57,7 @@ These bindings launch read-only reviewers, but `verify` and `synthesize` also ne
 
 The constructor accepts only `SLOT_ID=verify` or `SLOT_ID=synthesize`. `ROSTER_JSON` is an ordered JSON array of pairwise-distinct, non-empty `author` labels and non-empty `model` ids. For every policy, the first `required_authors` roster entries are used in roster order; absent `required_authors` means one. Worker order is profile policy order, then roster order. The stable assignment block at the end of each preamble freezes provider `research`, selected slot id, exact axis id, exact profile `example_prompt` bytes, and required author claim.
 
-Set every placeholder before running this complete snippet. It rejects unsupported or empty slots, malformed policies, missing prompts, invalid or insufficient rosters, invalid provider data, and missing machine-local inputs before start. It atomically rewrites `PROFILE`, computes its SHA-256, previews bindings extracted from that resulting file, displays the exact resulting bytes and hash, requires confirmation by retyping that hash, checks it again immediately before `start`, and starts that same file without a post-preview merge.
+Set every required placeholder before running this complete snippet. Set extension variables when the selected model provider requires them. It rejects unsupported or empty slots, malformed policies, missing prompts, invalid or insufficient rosters, invalid provider data, and missing machine-local inputs before start. It atomically rewrites `PROFILE`, computes its SHA-256, previews bindings extracted from that resulting file, displays the exact resulting bytes and hash, requires confirmation by retyping that hash, checks it again immediately before `start`, and starts that same file without a post-preview merge.
 
 ```sh
 set -eu
@@ -68,8 +68,8 @@ ROSTER_JSON="${ROSTER_JSON:?set ROSTER_JSON to an ordered author/model array}"
 DATA_ROOT="${DATA_ROOT:?set DATA_ROOT to the checkout or data-dump root}"
 LOOP_ENGINE="${LOOP_ENGINE:?set LOOP_ENGINE to the absolute loop-engine path}"
 PI="${PI:?set PI to the absolute pi path}"
-CURSOR_EXTENSION_PATH="${CURSOR_EXTENSION_PATH:?set CURSOR_EXTENSION_PATH}"
-CLAUDE_BRIDGE_EXTENSION_PATH="${CLAUDE_BRIDGE_EXTENSION_PATH:?set CLAUDE_BRIDGE_EXTENSION_PATH}"
+CURSOR_EXTENSION_PATH="${CURSOR_EXTENSION_PATH-}"
+CLAUDE_BRIDGE_EXTENSION_PATH="${CLAUDE_BRIDGE_EXTENSION_PATH-}"
 PROVIDER_CONFIG="${PROVIDER_CONFIG:?set PROVIDER_CONFIG to uncommitted providers.toml}"
 RUN_LABEL="${RUN_LABEL:?set RUN_LABEL}"
 
@@ -90,8 +90,18 @@ require_nonblank PROFILE "$PROFILE"
 require_nonblank DATA_ROOT "$DATA_ROOT"
 require_nonblank LOOP_ENGINE "$LOOP_ENGINE"
 require_nonblank PI "$PI"
-require_nonblank CURSOR_EXTENSION_PATH "$CURSOR_EXTENSION_PATH"
-require_nonblank CLAUDE_BRIDGE_EXTENSION_PATH "$CLAUDE_BRIDGE_EXTENSION_PATH"
+validate_extension_path() {
+  name=$1
+  value=$2
+  [ -z "$value" ] && return 0
+  case "$value" in
+    /*) ;;
+    *) printf '%s must be an absolute path when supplied\n' "$name" >&2; exit 1;;
+  esac
+  [ -e "$value" ] || { printf '%s does not exist: %s\n' "$name" "$value" >&2; exit 1; }
+}
+validate_extension_path CURSOR_EXTENSION_PATH "$CURSOR_EXTENSION_PATH"
+validate_extension_path CLAUDE_BRIDGE_EXTENSION_PATH "$CLAUDE_BRIDGE_EXTENSION_PATH"
 require_nonblank PROVIDER_CONFIG "$PROVIDER_CONFIG"
 require_nonblank RUN_LABEL "$RUN_LABEL"
 [ -f "$PROFILE" ] || { printf 'PROFILE is not a file: %s\n' "$PROFILE" >&2; exit 1; }
@@ -160,13 +170,12 @@ jq \
         | $roster[$author_index] as $member
         | {
             command: $pi,
-            args: [
-              "--print", "--no-skills", "--no-extensions",
-              "-e", $cursor_extension,
-              "-e", $claude_bridge_extension,
-              "--tools", "read,grep,find,ls",
-              "--model", $member.model
-            ],
+            args: (
+              ["--print", "--no-skills", "--no-extensions"]
+              + (if ($cursor_extension | length) > 0 then ["-e", $cursor_extension] else [] end)
+              + (if ($claude_bridge_extension | length) > 0 then ["-e", $claude_bridge_extension] else [] end)
+              + ["--tools", "read,grep,find,ls", "--model", $member.model]
+            ),
             preamble: (
               $base_preamble
               + "FROZEN REVIEW ASSIGNMENT\n"
@@ -228,12 +237,12 @@ exec "$LOOP_ENGINE" --json --config "$PROVIDER_CONFIG" \
 
 The provider preamble makes the frozen assignment authoritative, treats the later state instruction body as driver context, and directs the worker to artifacts beneath the mechanically forwarded `artifact_root`. The worker returns a judgment only. The driver still owns deterministic checks, `show`, captured-output validation and candidate triage, evidence `append`, the requested `event`, and progression. Exit 0 or mechanical key presence does not establish a valid judgment.
 
-Opt-in authoring worker (must not pass `--no-context-files`; do not add `--tools` unless you intend to restrict tools; same pattern for `scope`):
+Opt-in authoring worker (must not pass `--no-context-files`; do not add `--tools` unless you intend to restrict tools; add `-e` only for extensions required by the selected model provider; same pattern for `scope`):
 
 ```json
 "gather": {
   "command": "pi",
-  "args": ["--print", "--no-skills", "--no-extensions", "-e", "CURSOR_EXTENSION_PATH", "-e", "CLAUDE_BRIDGE_EXTENSION_PATH", "--model", "MODEL"]
+  "args": ["--print", "--no-skills", "--no-extensions", "--model", "MODEL"]
 }
 ```
 

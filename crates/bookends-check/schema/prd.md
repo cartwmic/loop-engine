@@ -15,7 +15,7 @@ README.md and AGENTS.md are not coverage classes.
 | Kind             | Form                                                                 |
 | ---------------- | -------------------------------------------------------------------- |
 | ID token         | `LE-<n>` with `<n>` = `[1-9][0-9]*`                                  |
-| Citation token   | exact substring `bookends:LE-<n>`                                    |
+| Citation directive | exact token `bookends:LE-<n>` in an ordinary code comment          |
 | Live status      | `- Status: live`                                                     |
 | Tombstone status | `- Status: tombstone`                                                |
 | Live coverage    | `- Coverage: e2e/journey` or `- Coverage: e2e/journey, contract`     |
@@ -56,9 +56,11 @@ configuration, proof coverage, CI eligibility, or continuity.
 
 ## Citation token
 
-The citation token is the exact substring `bookends:LE-<n>` where `<n>` is
-`[1-9][0-9]*` and the following character is not a digit. That last clause
-keeps `bookends:LE-1` from matching inside `bookends:LE-10`.
+The citation directive is the exact token `bookends:LE-<n>` in an ordinary
+code comment, where `<n>` is `[1-9][0-9]*` and the following character is not
+a digit. That last clause keeps `bookends:LE-1` from matching inside
+`bookends:LE-10`. Quoted strings and Rust documentation comments are not
+citation directives.
 
 Not a citation token:
 
@@ -72,9 +74,10 @@ A citation that is not that exact token is malformed.
 
 ## Skip marker
 
-A tracked file that contains the exact substring `bookends:skip` is
-ineligible. That marker is not a citation token and does not name a
-requirement.
+A tracked proof file with the exact `bookends:skip` directive in an ordinary
+code comment is ineligible. A quoted string or Rust documentation comment
+containing that text is incidental and does not skip a real citation. The
+marker is not a citation token and does not name a requirement.
 
 ## Heading classification
 

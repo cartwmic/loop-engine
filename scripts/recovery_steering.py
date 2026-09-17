@@ -53,17 +53,25 @@ print(output)
     config = root / "providers.toml"
     config.write_text('[providers.software-change]\ncommand = ' + json.dumps(str(journey.provider)) + '\n')
     schema = {"type": "object", "required": ["revision", "author"], "properties": {
-        "revision": {"type": "string"}, "author": {"type": "object", "required": ["name", "kind"],
-        "properties": {"name": {"type": "string"}, "kind": {"type": "string", "enum": ["human", "agent", "script"]}}}}}
-    profile = {"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "recovery-steering-2", "artifact_root": str(artifacts),
-               "review_policies": {"intent-review": [{"id": "axis", "description": "steering", "required_authors": 1}]},
+        "revision": {"type": "string"},
+        "author": {"type": "object", "required": ["name", "kind"],
+        "properties": {"name": {"type": "string"}, "kind": {"type": "string", "enum": ["human", "agent", "script"]}}},
+        "acceptance": {"type": "array", "items": {"type": "object", "required": ["id", "statement"],
+            "properties": {"id": {"type": "string"}, "statement": {"type": "string"}}}}
+    }}
+    profile = {"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "recovery-steering-3", "artifact_root": str(artifacts),
+               "review_policies": {"intent-review": [{"id": "axis", "description": "steering", "review_stage": "aggregate", "required_authors": 1}]},
                "artifact_schemas": {name: schema for name in ["intent.json", "design.json", "plan.json"]},
+               "revision_links": [{"from": "design.json", "field": "intent_revision", "to": "intent.json"},
+                                 {"from": "plan.json", "field": "design_revision", "to": "design.json"}],
                "work_slot_bindings": {slot: binding for slot in ["intent-draft", "intent-review", "implement"]}}
     write(root / "profile.json", profile)
     for name in ["intent", "design"]:
-        write(artifacts / (name + ".json"), {"revision": "1", "author": {"name": "subject", "kind": "script"}})
-    plan = {"revision": "1", "author": {"name": "subject", "kind": "script"},
-            "tasks": [{"id": "A"}, {"id": "B"}], "dependency_graph": [],
+        write(artifacts / (name + ".json"), {"revision": "1", "author": {"name": "subject", "kind": "script"},
+            **({"acceptance": [{"id": "AC-1", "statement": "Steering changes preserve the declared proof obligation."}]} if name == "intent" else {}),
+            **({"intent_revision": "1"} if name == "design" else {})})
+    plan = {"revision": "1", "author": {"name": "subject", "kind": "script"}, "design_revision": "1",
+            "tasks": [{"id": "A", "criterion_ids": ["AC-1"]}, {"id": "B", "criterion_ids": ["AC-1"]}], "dependency_graph": [],
             "proof_commands": [{"id": "final", "owner": "driver", "command": "old", "args": [], "obligation": "complete proof"}]}
     write(artifacts / "plan.json", plan)
     original_plan = (artifacts / "plan.json").read_bytes()
@@ -122,8 +130,8 @@ print(output)
     call(["event", "steering", "intent-ready"])
     review, expected = invoke("intent-review")
     assert completed(review, expected)["outcome"] == ["blue"]
-    append("pass", {"gate": "intent-review", "policy_id": "axis", "result": "pass", "findings": "",
-                    "author": {"name": "reviewer", "kind": "script"}, "subject": "intent.json", "subject_revision": "1", "config_version": "recovery-steering-2"}, "review-evidence")
+    append("pass", {"gate": "intent-review", "policy_id": "axis", "review_stage": "aggregate", "result": "pass", "findings": "",
+                    "author": {"name": "reviewer", "kind": "script"}, "subject": "intent.json", "subject_revision": "1", "config_version": "recovery-steering-3"}, "review-evidence")
     append("ledger", {"schema_version": "1", "gate": "intent-review", "subject": "intent.json", "subject_revision": "1",
                       "author": {"name": "driver", "kind": "agent"}, "findings": []}, "finding-ledger")
     show()

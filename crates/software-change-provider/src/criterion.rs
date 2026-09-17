@@ -186,6 +186,19 @@ pub(crate) fn validate_references(
     value: &Value,
     known_ids: &BTreeSet<String>,
 ) -> Vec<CriterionViolation> {
+    validate_references_with_task_requirement(subject, value, known_ids, false)
+}
+
+/// Validate references for a contract. Contract v3 additionally requires
+/// every plan task to name at least one unique current criterion. The schema
+/// normally enforces presence; keeping the rule here also protects callers
+/// using a custom but otherwise valid schema.
+pub(crate) fn validate_references_with_task_requirement(
+    subject: &str,
+    value: &Value,
+    known_ids: &BTreeSet<String>,
+    require_plan_task_criteria: bool,
+) -> Vec<CriterionViolation> {
     let mut violations = Vec::new();
     match subject {
         DESIGN_SUBJECT => {
@@ -198,7 +211,12 @@ pub(crate) fn validate_references(
             );
         }
         PLAN_SUBJECT => {
-            validate_plan_task_collections(value, known_ids, &mut violations);
+            validate_plan_task_collections(
+                value,
+                known_ids,
+                require_plan_task_criteria,
+                &mut violations,
+            );
         }
         IMPLEMENTATION_SUBJECT => {
             validate_scalar_collection(
@@ -278,6 +296,7 @@ fn validate_scalar_collection(
 fn validate_plan_task_collections(
     value: &Value,
     known_ids: &BTreeSet<String>,
+    require_criteria: bool,
     violations: &mut Vec<CriterionViolation>,
 ) {
     let Some(tasks) = value.get("tasks").and_then(Value::as_array) else {
@@ -288,6 +307,13 @@ fn validate_plan_task_collections(
             continue;
         };
         let Some(references) = object.get("criterion_ids") else {
+            if require_criteria {
+                violations.push(CriterionViolation::new(
+                    format!("/tasks/{task_index}/criterion_ids"),
+                    "criterion-reference",
+                    "every plan task must name at least one current criterion",
+                ));
+            }
             continue;
         };
         let path = format!("/tasks/{task_index}/criterion_ids");

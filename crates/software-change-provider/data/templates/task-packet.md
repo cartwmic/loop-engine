@@ -12,15 +12,15 @@ Every task includes:
 - out-of-scope boundaries;
 - validation;
 - handoff contract;
-- optional `criterion_ids`, a non-empty list of current intent `AC-N` IDs when this task usefully names its criterion scope.
+- `criterion_ids`, a non-empty unique list of current intent `AC-N` IDs naming the criteria this task serves. This is required for every task in a contract-v3 plan; other artifact links remain optional.
 
-Do not require every task to carry a criterion reference, and do not reproduce a complete criterion matrix or create a parallel PRD-ID spine.
+For contract-v3 plans, every task carries its required criterion reference; other intermediate artifacts remain optional. Do not reproduce a complete criterion matrix or create a parallel PRD-ID spine.
 
 Validation must use realistic black-box proof of the observable outcome when practical. If black-box proof is genuinely impractical, state the concrete reason and the nearest realistic substitute; a list of completed work, internal tests, or passing commands is not outcome proof by itself. Keep task packets specific enough to preserve acceptance without prescribing replaceable mechanisms. Implementation agents have freedom inside frozen intent, operating context, outside obligations, and design decisions; do not leave product or architectural decisions for them, and do not turn a preferred implementation into a requirement.
 
 Keep contract-establishing tasks before parallel fan-out. Name ownership and interfaces where agents could collide. Make completion observable. Record dependencies honestly; do not hide work in a giant task or leave unresolved decisions for implementation. Include **doc integration** as explicit deliverable: authoritative repository documents must remain coherent with delivered behavior, and no change-scoped PRD may remain a parallel source of truth.
 
-Required metadata: non-empty `revision`, `author`, and `design_revision` matching current `design.json`. Contract v2 also requires `proof_commands: [{id,command,args,owner,obligation}]`: unique named runnable deterministic obligations, not shell prose or invented pass claims. Each task may reference names with `proof_command_ids`; task-local validation is focused proof, not another mandatory full-suite rerun list. Name every required final command in proof_commands regardless of who executes it.
+Required metadata: non-empty `revision`, `author`, and `design_revision` matching current `design.json`. Contract v3 also requires `proof_commands: [{id,command,args,owner,obligation}]`: unique named runnable deterministic obligations, not shell prose or invented pass claims. Every task must carry a non-empty unique `criterion_ids` set of current intent IDs; the provider checks membership and reviewers judge relevance. Each task may reference names with `proof_command_ids`; task-local validation is focused proof, not another mandatory full-suite rerun list. Name every required final command in proof_commands regardless of who executes it.
 
 Workers run only assigned focused validation. One designated driver/proof owner performs the complete final matrix on the stable tree and repeats only checks invalidated by later changes. Reviewers consume retained command/outcome evidence rather than independently rerunning suites. Applicable structured steering may change a named proof's owner or command/args with a reason while retaining its accepted obligation; changed outcomes/decomposition require revision. Use the simplest adequate mechanism, not speculative hardening or preservation of incidental implementation choices.
 

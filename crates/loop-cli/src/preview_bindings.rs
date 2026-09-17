@@ -11,7 +11,7 @@
 //! and version, or a warning naming the path or that PATH lookup found nothing.
 
 use crate::dagu::{self, MINIMUM_DAGU_VERSION};
-use crate::fan_out::{parse_worker_cli_json, WorkerCli};
+use crate::fan_out::{parse_fan_out_args, parse_worker_cli_json, WorkerCli};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
@@ -163,10 +163,19 @@ pub(crate) fn preview(
             push_unique(&mut models, model.clone());
         }
         collect_slot_warnings(&slot, &mut warnings);
-        if is_fan_out_binding(&slot.args) && worker_flag_count(&slot.args) == 0 {
-            errors.push(format!(
-                "fan-out binding `{slot_id}` has zero --worker entries"
-            ));
+        if is_fan_out_binding(&slot.args)
+            && slot.args.first().is_some_and(|token| token == "fan-out")
+        {
+            let parsed = parse_fan_out_args(slot.args.iter().skip(1).map(String::as_str)).map_err(
+                |error| {
+                    PreviewError::new(format!("fan-out binding `{slot_id}` is malformed: {error}"))
+                },
+            )?;
+            if parsed.workers.is_empty() {
+                errors.push(format!(
+                    "fan-out binding `{slot_id}` has zero --worker entries"
+                ));
+            }
         }
         bindings.push(slot);
     }
@@ -415,24 +424,6 @@ fn is_pi(command: &str) -> bool {
 
 fn is_fan_out_binding(args: &[String]) -> bool {
     args.iter().any(|token| token == "fan-out")
-}
-
-fn worker_flag_count(args: &[String]) -> usize {
-    let mut count = 0;
-    let mut index = 0;
-    while index < args.len() {
-        let token = &args[index];
-        if token == "--worker" {
-            count += 1;
-            index += 2;
-            continue;
-        }
-        if token.starts_with("--worker=") {
-            count += 1;
-        }
-        index += 1;
-    }
-    count
 }
 
 fn models_in_argv(args: &[String]) -> Vec<String> {

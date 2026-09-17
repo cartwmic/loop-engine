@@ -57,9 +57,9 @@ Shipped profiles omit `work_slot_bindings` (or `{}`). Cataloged slots are `deter
 
 Review workers return judgments only. The driver owns deterministic checks, `show`, `append`, `event`, and progression. A worker process exiting 0 is not enough: contracted output must conform mechanically, and the driver must still verify its values and semantic fitness before appending evidence.
 
-For a driver-performed run, omit `work_slot_bindings` or set `"work_slot_bindings": {}`. To bind review, use the constructor below instead of hand-writing one generic worker. It accepts only `SLOT_ID=semantic-review`, reads `.semantic_policies` from the same per-run `PROFILE` that will be started, and emits workers in policy order and then required-author roster order. Leave `semantic_policies[].required_authors` absent: this provider rejects the field even though the generic constructor can normalize it. Shipped policies require one current pass per axis. The ordered `ROSTER` file is a JSON array of exact `{author,model}` objects; author labels must be pairwise distinct. Every generated worker freezes the exact provider preamble and output schema from `data-dump`, exact profile `mode` and complete `target`, policy `id` and `example_prompt`, claimed author, model argv, provider, and slot.
+For a driver-performed run, omit `work_slot_bindings` or set `"work_slot_bindings": {}`. To bind review, use the constructor below instead of hand-writing one generic worker. It accepts only `SLOT_ID=semantic-review`, reads `.semantic_policies` from the same per-run `PROFILE` that will be started, and emits workers in policy order and then required-author roster order. Leave `semantic_policies[].required_authors` absent: this provider rejects the field even though the generic constructor can normalize it. Shipped policies require one current pass per axis. The ordered `ROSTER` file is a JSON array of exact `{author,model}` objects; author labels must be pairwise distinct. Every generated worker freezes the exact provider preamble and output schema from `data-dump`, exact profile `mode` and complete `target`, policy `id` and `example_prompt`, claimed author, model argv, provider, and slot. Set an extension path only when the selected model provider requires that extension. Each supplied extension path must be absolute and exist; an omitted path contributes no `-e` pair.
 
-The constructor fails before preview or start on unsupported/empty/malformed input, atomically rewrites the same `PROFILE`, hashes and displays its exact resulting bytes and extracted bindings, previews those bindings, and asks the caller to confirm by typing that hash. It rechecks the hash immediately before starting that unchanged file. There is no post-preview merge. Set every path variable to an absolute caller-local value; do not put machine-local paths in this skill.
+The constructor fails before preview or start on unsupported/empty/malformed input, atomically rewrites the same `PROFILE`, hashes and displays its exact resulting bytes and extracted bindings, previews those bindings, and asks the caller to confirm by typing that hash. It rechecks the hash immediately before starting that unchanged file. There is no post-preview merge. Set every required path variable and every supplied extension path to an absolute caller-local value; do not put machine-local paths in this skill.
 
 ```bash
 set -eu
@@ -70,14 +70,27 @@ set -eu
 : "${LOOP_ENGINE:?absolute loop-engine command path}"
 : "${POLICY_DOCUMENT:?absolute policy-document command path}"
 : "${PI:?absolute pi command path}"
-: "${CURSOR_EXTENSION_PATH:?absolute cursor-provider extension path}"
-: "${CLAUDE_BRIDGE_EXTENSION_PATH:?absolute claude-bridge extension path}"
+CURSOR_EXTENSION_PATH="${CURSOR_EXTENSION_PATH-}"
+CLAUDE_BRIDGE_EXTENSION_PATH="${CLAUDE_BRIDGE_EXTENSION_PATH-}"
 : "${PROVIDER_CONFIG:?absolute provider TOML path}"
 : "${RUN_LABEL:?run label}"
 
 case "$PROFILE" in /*) ;; *) echo "PROFILE must be absolute" >&2; exit 1;; esac
 case "$ROSTER" in /*) ;; *) echo "ROSTER must be absolute" >&2; exit 1;; esac
 [ "$SLOT_ID" = semantic-review ] || { echo "unsupported slot: $SLOT_ID" >&2; exit 1; }
+
+validate_extension_path() {
+  name=$1
+  value=$2
+  [ -z "$value" ] && return 0
+  case "$value" in
+    /*) ;;
+    *) echo "$name must be an absolute path when supplied" >&2; exit 1;;
+  esac
+  [ -e "$value" ] || { echo "$name does not exist: $value" >&2; exit 1; }
+}
+validate_extension_path CURSOR_EXTENSION_PATH "$CURSOR_EXTENSION_PATH"
+validate_extension_path CLAUDE_BRIDGE_EXTENSION_PATH "$CLAUDE_BRIDGE_EXTENSION_PATH"
 
 DATA_ROOT=$(mktemp -d)
 PROFILE_DIR=$(dirname "$PROFILE")
@@ -99,13 +112,12 @@ def require($condition; $message): if $condition then . else error($message) end
 def worker($profile; $policy; $reviewer; $schema):
   {
     command: $pi,
-    args: [
-      "--print", "--no-skills", "--no-extensions",
-      "-e", $cursor_extension,
-      "-e", $claude_bridge_extension,
-      "--tools", "read,grep,find,ls",
-      "--model", $reviewer.model
-    ],
+    args: (
+      ["--print", "--no-skills", "--no-extensions"]
+      + (if ($cursor_extension | length) > 0 then ["-e", $cursor_extension] else [] end)
+      + (if ($claude_bridge_extension | length) > 0 then ["-e", $claude_bridge_extension] else [] end)
+      + ["--tools", "read,grep,find,ls", "--model", $reviewer.model]
+    ),
     preamble: (
       $base_preamble
       + (if ($base_preamble | endswith("\n")) then "" else "\n" end)

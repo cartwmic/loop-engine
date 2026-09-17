@@ -362,7 +362,7 @@ fn overlay_on_tombstoned_linked_id_deny() {
 
 fn overlay_validation_config(root: &TestDir) -> Value {
     json!({
-        "contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+        "contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
         "config_version": "test-1",
         "artifact_root": root.path().to_string_lossy().to_string(),
         "extra": {"bookends": {"enabled": true}},
@@ -414,7 +414,7 @@ fn write_checkpoints(repo: &Repo, artifacts: &TestDir) {
     // Validation proof is admitted only after implementation proof has been
     // accepted by the provider transition that records its immutable history.
     let config = json!({
-        "contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+        "contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
         "config_version": "test-1",
         "artifact_root": artifacts.path().to_string_lossy().to_string(),
         "review_policies": {}
@@ -571,7 +571,7 @@ fn refresh_implementation_checkpoint(repo: &Repo, artifacts: &TestDir) {
     );
 
     let config = json!({
-        "contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+        "contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
         "config_version": "test-1",
         "artifact_root": artifacts.path().to_string_lossy().to_string(),
         "review_policies": {}
@@ -634,6 +634,7 @@ fn evidence(gate: &str, axis: &str, result: &str, findings: &str, sequence: u64)
         "data": {
             "gate": gate,
             "policy_id": axis,
+            "review_stage": "aggregate",
             "result": result,
             "findings": findings,
             "author": {"name": "reviewer", "kind": "agent"},
@@ -714,7 +715,7 @@ fn overlay_on_not_applicable_does_not_waive_review_evidence() {
 
     let mut config = with_root(enable_overlay(load_profile("high-rigor")), &artifacts);
     config["review_policies"] = json!({
-        "validation-review": [{"id": "delivery", "description": "delivery"}]
+        "validation-review": [{"id": "delivery", "description": "delivery", "review_stage": "aggregate"}]
     });
     let value = evaluate_in(
         repo.path(),
@@ -742,13 +743,13 @@ fn overlay_on_greenwash_fails_bypass_not_green() {
 
     let schema = load_profile("high-rigor")["artifact_schemas"]["validation-report.json"].clone();
     let config = json!({
-        "contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+        "contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
         "config_version": "test-1",
         "artifact_root": artifacts.path().to_string_lossy().to_string(),
         "extra": {"bookends": {"enabled": true}},
         "review_policies": {
-            "validation-review": [{"id": "delivery", "description": "d"}],
-            "validation-adversarial-review": [{"id": "delivery", "description": "d"}]
+            "validation-review": [{"id": "delivery", "description": "d", "review_stage": "aggregate"}],
+            "validation-adversarial-review": [{"id": "delivery", "description": "d", "review_stage": "aggregate"}]
         },
         "artifact_schemas": {
             "validation-report.json": schema

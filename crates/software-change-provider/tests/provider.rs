@@ -1,6 +1,16 @@
 #[path = "../../../tests/bounded_process.rs"]
 mod bounded_process;
 
+#[path = "provider/backlog_t05.rs"]
+mod backlog_t05;
+#[path = "provider/backlog_t05_validation.rs"]
+mod backlog_t05_validation;
+#[path = "provider/backlog_t06.rs"]
+mod backlog_t06;
+#[path = "provider/backlog_t07.rs"]
+mod backlog_t07;
+#[path = "provider/backlog_t10.rs"]
+mod backlog_t10;
 #[path = "provider/bookends_shipped_json.rs"]
 mod bookends_shipped_json;
 #[path = "provider/describe_protocol.rs"]

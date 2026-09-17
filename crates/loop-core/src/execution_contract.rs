@@ -56,12 +56,42 @@ pub fn effective_binding(
     )))
 }
 
+/// The kernel identity of one process incarnation.
+///
+/// A PID is only a recyclable number. The engine records the boot identity
+/// and kernel start identity alongside it so readers can distinguish the
+/// recorded process from a later occupant of the same PID. The values are
+/// native observations supplied by the integration layer; core does not
+/// interpret their platform-specific clocks.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProcessIdentity {
+    pub pid: u32,
+    pub boot_id: String,
+    pub start_time: u64,
+}
+
+impl ProcessIdentity {
+    pub fn new(pid: u32, boot_id: impl Into<String>, start_time: u64) -> Self {
+        Self {
+            pid,
+            boot_id: boot_id.into(),
+            start_time,
+        }
+    }
+}
+
 /// Engine-published local ownership, never caller-selected cancellation PIDs.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct OwnedExecution {
     pub root_pid: u32,
     pub process_group_id: u32,
+    /// Native incarnation identity for `root_pid`. It is optional only so
+    /// pre-identity ownership files remain readable; new publication refuses
+    /// to use a numeric-only root as control authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_identity: Option<ProcessIdentity>,
     pub admission_directory: std::path::PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graph_locator: Option<std::path::PathBuf>,
@@ -78,7 +108,9 @@ pub struct ExecutionOwnershipState {
 }
 
 /// Elapsed allowance and waiter loss are never permission to overlap owned work.
-/// A live waiter also covers the short pre-publication startup window.
+/// A live waiter covers the short pre-publication startup window. Historical
+/// numeric-only rows retain their legacy read behavior; they are not
+/// cancellation authority.
 pub fn invocation_owns_work(row: &crate::WorkSlotInvocation, waiter_alive: bool) -> bool {
     row.ownership
         .as_ref()

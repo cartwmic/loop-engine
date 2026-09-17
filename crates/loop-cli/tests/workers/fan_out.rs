@@ -502,18 +502,7 @@ fn full_schema_retry_preserves_attempt_bytes_and_selects_same_worker_success() {
     fs::write(&counter, b"0").expect("counter");
     let input_root = directory.path().join("inputs");
     fs::create_dir_all(&input_root).expect("input root");
-    let script = r#"
-number=$(cat "$1")
-number=$((number + 1))
-printf '%s' "$number" > "$1"
-cat > "$2/input-$number"
-printf 'stderr-%s' "$number" >&2
-if [ "$number" = 1 ]; then
-  printf '%s' '{"axis":"wrong","author":{"name":"wrong","kind":"agent"},"result":"pass","findings":"not empty"}'
-else
-  printf '%s' '{"axis":"axis-a","author":{"name":"reviewer-a","kind":"agent"},"result":"pass","findings":""}'
-fi
-"#;
+    let script = r#"number=$(cat "$1"); number=$((number + 1)); printf '%s' "$number" > "$1"; cat > "$2/input-$number"; printf 'stderr-%s' "$number" >&2; if [ "$number" = 1 ]; then printf '%s' '{"axis":"wrong","author":{"name":"wrong","kind":"agent"},"result":"pass","findings":"not empty"}'; else printf '%s' '{"axis":"axis-a","author":{"name":"reviewer-a","kind":"agent"},"result":"pass","findings":""}'; fi"#;
     let worker = full_worker_json(
         "sh",
         &[

@@ -43,4 +43,7 @@ jobs:
     uses: ./.github/workflows/preflight.yml
     with:
       plan: ${{ needs.plan.outputs.manifest }}
+      bookends_before: ${{ github.event.before }}
+      bookends_after: ${{ github.sha }}
+      bookends_ref: ${{ github.ref }}
     secrets: inherit

@@ -246,7 +246,7 @@ pub(crate) fn describe_workflow(initial_input: Option<&Value>) -> Result<Workflo
         .and_then(Value::as_object)
         .and_then(|object| object.get("review_policies"));
     let mut workflow = stitch(review_policies, initial_input.is_some_and(overlay::enabled))?;
-    if initial_input.is_some_and(|v| v["contract_version"] == 2) {
+    if initial_input.is_some_and(|v| matches!(v["contract_version"].as_u64(), Some(2 | 3))) {
         for slot in &mut workflow.work_slots {
             if slot.id.as_str().starts_with("validation") || slot.id.as_str() == "implement" {
                 slot.stdin_context_kinds.extend(
@@ -268,10 +268,29 @@ pub(crate) fn describe_workflow(initial_input: Option<&Value>) -> Result<Workflo
         }
         let policies = review_policies.and_then(|p| p.get(state.id.as_str()));
         let axes = policies.and_then(Value::as_array).map(|rows| {
-            rows.iter().map(|row| serde_json::json!({
-                "id": row["id"],
-                "required_authors": row.get("required_authors").cloned().unwrap_or(Value::from(1))
-            })).collect::<Vec<_>>()
+            rows.iter()
+                .map(|row| {
+                    let mut axis = serde_json::json!({
+                        "id": row["id"],
+                        "required_authors": row
+                            .get("required_authors")
+                            .cloned()
+                            .unwrap_or(Value::from(1))
+                    });
+                    if initial_input
+                        .and_then(|input| input.get("contract_version"))
+                        .and_then(Value::as_u64)
+                        == Some(3)
+                    {
+                        axis["review_stage"] = row
+                            .get("review_stage")
+                            .or_else(|| row.get("stage"))
+                            .cloned()
+                            .unwrap_or_else(|| Value::String("aggregate".to_owned()));
+                    }
+                    axis
+                })
+                .collect::<Vec<_>>()
         });
         state.action_guidance = Some(serde_json::json!({
             "review_axes": axes,

@@ -96,11 +96,12 @@ fn data_dump_matches_tree_and_refuses_existing_targets_without_writing() {
         let mut profile: serde_json::Value =
             serde_json::from_slice(&fs::read(data.join(format!("configs/{name}.json"))).unwrap())
                 .unwrap();
-        assert_eq!(profile["config_version"], format!("{name}-9"));
-        assert_eq!(profile["contract_version"], 2);
+        assert_eq!(profile["config_version"], format!("{name}-10"));
+        assert_eq!(profile["contract_version"], 3);
+        let expected_authors = if name == "minimal" { 1 } else { 2 };
         assert_eq!(
             profile["criterion_policy"],
-            serde_json::json!({"required_authors":1,"goal_required_authors":1})
+            serde_json::json!({"required_authors":expected_authors,"goal_required_authors":expected_authors})
         );
         assert!(profile.get("work_slot_bindings").is_none());
         profile["artifact_root"] = serde_json::json!(root);

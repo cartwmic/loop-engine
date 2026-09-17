@@ -173,11 +173,21 @@ publishes. Other source journeys and the final matrix remain separate proof.
 
 ## Bookends history and bypass
 
-Bookends still compares only the immediate baseline: HEAD for a dirty PRD,
-otherwise the first parent of HEAD. A verified root or a resolved tree without
-the PRD permits first adoption. Missing required commit/tree/blob objects return
-RED, including a depth-one shallow boundary. CI checks out depth two; standalone
-callers must fetch needed history or accept RED, not silently adopt.
+Ordinary working-tree checks retain the immediate-baseline behavior: HEAD for a
+dirty PRD, otherwise the first parent of HEAD. A verified root or a resolved
+tree without the PRD permits first adoption. Missing required commit/tree/blob
+objects return RED, including a depth-one shallow boundary. This is the
+working-tree and single-snapshot contract.
+
+Publication checks use the range contract. For each ref update, the checker
+enumerates every commit reachable from the new tip and absent from the old tip,
+including merged branches, and validates each introduced commit against every
+parent. A new ref with a zero old tip traverses its reachable history. The
+checker acquires missing ancestry from the configured source remote without
+moving HEAD, local branches, the index, or the worktree. Missing ancestry,
+failed acquisition, or incomplete enumeration remains incomplete and returns
+RED. CI and standalone callers use this acquisition path; a manual history
+fetch is unnecessary before invoking the publication check.
 
 The gate wrapper delegates bypass permission to `bookends-check --bypass
 <class>:<reason>`. On a red check, the CLI first publishes and syncs a write-once

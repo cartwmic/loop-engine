@@ -55,6 +55,12 @@ def validate_dispatcher(dispatcher: str) -> None:
     require('jq -c .' in dispatcher and '"$GITHUB_OUTPUT"' in dispatcher, "dispatcher must pass compact plan output")
     require("uses: ./.github/workflows/preflight.yml" in dispatcher, "dispatcher must call reusable preflight")
     require("plan: ${{ needs.plan.outputs.manifest }}" in dispatcher, "dispatcher must pass generated plan to preflight")
+    require(
+        "bookends_before: ${{ github.event.before }}" in dispatcher
+        and "bookends_after: ${{ github.sha }}" in dispatcher
+        and "bookends_ref: ${{ github.ref }}" in dispatcher,
+        "dispatcher must pass the actual push before/after/ref identities to Bookends",
+    )
     for token in ("dist host", "gh release", "contents: write", "release:"):
         require(token not in dispatcher, f"dispatcher contains publication token {token!r}")
 
@@ -132,14 +138,29 @@ def validate_preflight(preflight: str) -> None:
         'python3 scripts/assert-test-inventory.py \\\n            --repo "$GITHUB_WORKSPACE"',
         "--current-only",
         'test -s "$RUNNER_TEMP/stock-cargo-handoff.json"',
-        'LOOP_ENGINE_TEST_BINARY_HANDOFF="$RUNNER_TEMP/stock-cargo-handoff.json" \\\n            cargo test --workspace',
+        "LOOP_ENGINE_TEST_BINARY_HANDOFF: ${{ runner.temp }}/stock-cargo-handoff.json",
+        "run: cargo test --workspace",
+        # Bookends receives actual publishing identities and owns the
+        # fail-closed historical acquisition/walk.
+        "ref: ${{ github.sha }}",
+        "bookends_before:",
+        "bookends_after:",
+        "bookends_ref:",
+        "BOOKENDS_BEFORE: ${{ inputs.bookends_before }}",
+        "BOOKENDS_AFTER: ${{ inputs.bookends_after }}",
+        "BOOKENDS_REF: ${{ inputs.bookends_ref }}",
+        "printf '%s %s %s %s\\n'",
+        '"$BOOKENDS_REF" "$BOOKENDS_AFTER" "$BOOKENDS_REF" "$BOOKENDS_BEFORE"',
+        "scripts/bookends-check-gate.sh </dev/null",
         # Existing required gates.
         "cargo clippy --workspace --all-targets -- -D warnings",
         "cargo fmt --all -- --check",
         "cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider -p bookends-check",
-        "run: scripts/bookends-check-gate.sh",
         "scripts/bookends-check-gate.sh",
+        "| scripts/bookends-check-gate.sh",
         "BOOKENDS_BYPASS: \"\"",
+        "BOOKENDS_UPDATE_STREAM: \"1\"",
+        "BOOKENDS_REMOTE: origin",
         "dist generate --check",
         "python3 scripts/assert-dist-plan.py --self-test",
         'python3 scripts/assert-dist-plan.py "$RUNNER_TEMP/dist-plan.json"',
@@ -252,7 +273,7 @@ def validate_preflight(preflight: str) -> None:
     central_build = position(preflight, "--no-run")
     central_topology = position(preflight, 'python3 scripts/assert-test-topology.py \\\n            --repo "$GITHUB_WORKSPACE"')
     central_inventory = position(preflight, 'python3 scripts/assert-test-inventory.py \\\n            --repo "$GITHUB_WORKSPACE"')
-    stock = position(preflight, 'LOOP_ENGINE_TEST_BINARY_HANDOFF="$RUNNER_TEMP/stock-cargo-handoff.json"')
+    stock = position(preflight, "LOOP_ENGINE_TEST_BINARY_HANDOFF: ${{ runner.temp }}/stock-cargo-handoff.json")
     clippy = position(preflight, "cargo clippy --workspace")
     fmt = position(preflight, "cargo fmt --all -- --check")
     build = position(preflight, "cargo build --locked -p")
@@ -334,13 +355,14 @@ def self_test(dispatcher: str, preflight: str) -> int:
         ("central build", "python3 scripts/run-central-tests.py \\\n            --no-run", "fresh central integration build"),
         ("topology gate", 'python3 scripts/assert-test-topology.py \\\n            --repo "$GITHUB_WORKSPACE"', "one-target topology gate"),
         ("inventory gate", 'python3 scripts/assert-test-inventory.py \\\n            --repo "$GITHUB_WORKSPACE"', "current source inventory gate"),
-        ("stock compatibility", 'LOOP_ENGINE_TEST_BINARY_HANDOFF="$RUNNER_TEMP/stock-cargo-handoff.json" \\\n            cargo test --workspace', "stock Cargo gate"),
+        ("stock compatibility", "LOOP_ENGINE_TEST_BINARY_HANDOFF: ${{ runner.temp }}/stock-cargo-handoff.json", "stock Cargo gate"),
+        ("stock compatibility command", "run: cargo test --workspace", "stock Cargo command"),
         # Existing release, Bookends, lint, build, and journey gates.
         ("generated workflow", "dist generate --check", "generated release workflow check"),
         ("dist plan assertion", 'python3 scripts/assert-dist-plan.py "$RUNNER_TEMP/dist-plan.json"', "release plan assertion"),
         ("release gates", "python3 scripts/assert-release-gates.py", "release gate assertion"),
         ("push assertion gate", "python3 scripts/assert-push-main-preflight.py\n", "required preflight assertion gate"),
-        ("Bookends gate", "run: scripts/bookends-check-gate.sh", "Bookends gate"),
+        ("Bookends gate", "| scripts/bookends-check-gate.sh", "Bookends gate"),
         ("ordinary nextest", "python3 scripts/run-nextest.py", "ordinary nextest runner"),
         ("clippy", "cargo clippy --workspace --all-targets -- -D warnings", "workspace clippy gate"),
         ("format", "cargo fmt --all -- --check", "workspace format gate"),
@@ -371,7 +393,7 @@ def self_test(dispatcher: str, preflight: str) -> int:
     # locations of the ordinary and stock commands in a fixture and ensure the
     # order assertion rejects it.
     ordinary_token = "python3 scripts/run-nextest.py"
-    stock_token = 'LOOP_ENGINE_TEST_BINARY_HANDOFF="$RUNNER_TEMP/stock-cargo-handoff.json"'
+    stock_token = "LOOP_ENGINE_TEST_BINARY_HANDOFF: ${{ runner.temp }}/stock-cargo-handoff.json"
     ordinary_at = preflight.find(ordinary_token)
     stock_at = preflight.find(stock_token)
     require(ordinary_at >= 0 and stock_at >= 0, "self-test fixture tokens are missing")

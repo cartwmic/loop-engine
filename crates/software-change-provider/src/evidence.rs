@@ -99,6 +99,11 @@ pub(crate) enum EvidenceDiagnostic {
         required: u64,
         distinct_present: usize,
     },
+    MixedAuthors {
+        expected_stage: String,
+        expected: Vec<AuthorIdentity>,
+        actual: Vec<AuthorIdentity>,
+    },
 }
 
 impl EvidenceDiagnostic {
@@ -111,6 +116,7 @@ impl EvidenceDiagnostic {
             Self::StaleConfig { .. } => "stale_config",
             Self::Unverified { .. } => "unverified",
             Self::Independence { .. } => "independence",
+            Self::MixedAuthors { .. } => "mixed_authors",
         }
     }
 }
@@ -119,6 +125,9 @@ impl EvidenceDiagnostic {
 /// because callers supply the semantically keyed BTreeMap from config.rs.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct AxisDiagnostic {
+    /// `aggregate` is retained for historical/v2 diagnostics that have no
+    /// stage field. New v3 diagnostics always name their stage explicitly.
+    pub(crate) review_stage: String,
     pub(crate) axis: String,
     pub(crate) diagnostics: Vec<EvidenceDiagnostic>,
 }
@@ -182,6 +191,7 @@ pub(crate) struct ConformingEvidence {
     pub(crate) source_id: String,
     pub(crate) gate: String,
     pub(crate) policy_id: String,
+    pub(crate) review_stage: String,
     pub(crate) result: EvidenceResult,
     pub(crate) findings: String,
     pub(crate) author: AuthorIdentity,
@@ -498,6 +508,7 @@ pub(crate) fn evaluate_evidence_with_dispositions(
                 });
             }
             diagnostics.push(AxisDiagnostic {
+                review_stage: "aggregate".to_owned(),
                 axis: axis.clone(),
                 diagnostics: axis_diagnostics,
             });
@@ -517,6 +528,7 @@ pub(crate) fn evaluate_evidence_with_dispositions(
             ));
             if !informational_diagnostics.is_empty() {
                 informational.push(AxisDiagnostic {
+                    review_stage: "aggregate".to_owned(),
                     axis: axis.clone(),
                     diagnostics: informational_diagnostics,
                 });
@@ -536,6 +548,401 @@ pub(crate) fn evaluate_evidence_with_dispositions(
         inert_records,
         satisfied_by_disposition,
     }
+}
+
+/// Stage-aware v3 aggregation. Each configured `(review_stage, axis)` is an
+/// independent obligation. A stage mismatch is attributable to the same axis
+/// but cannot satisfy either stage, and multi-stage gates additionally require
+/// the same non-subject author identities in every stage.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn evaluate_staged_evidence_with_dispositions(
+    context: &[ContextRecord],
+    gate: &str,
+    subject: &str,
+    current_revision: &str,
+    subject_author: &AuthorIdentity,
+    config_version: &str,
+    stages: &BTreeMap<String, BTreeMap<String, PolicyAxis>>,
+    axis_namespace: &BTreeMap<String, BTreeSet<String>>,
+    artifact_root: Option<&Value>,
+    ledger: Option<&crate::finding_ledger::FindingLedgerSnapshot>,
+    require_stage: bool,
+) -> EvidenceEvaluation {
+    type StageAxis = (String, String);
+
+    let mut malformed: BTreeMap<StageAxis, Vec<String>> = stages
+        .iter()
+        .flat_map(|(stage, axes)| {
+            axes.keys()
+                .map(move |axis| ((stage.clone(), axis.clone()), Vec::new()))
+        })
+        .collect();
+    let mut unverified: BTreeMap<StageAxis, Vec<String>> = malformed
+        .keys()
+        .cloned()
+        .map(|key| (key, Vec::new()))
+        .collect();
+    let mut latest: BTreeMap<(String, String, String, AuthorIdentity), ConformingEvidence> =
+        BTreeMap::new();
+    let mut inert_records = Vec::new();
+    let mut global_malformed = Vec::new();
+    let mut global_unverified = Vec::new();
+
+    let add_for_axis =
+        |axis: &str, reasons: &[String], target: &mut BTreeMap<StageAxis, Vec<String>>| {
+            for stage in stages.keys() {
+                if let Some(values) = target.get_mut(&(stage.clone(), axis.to_owned())) {
+                    values.extend(reasons.iter().cloned());
+                }
+            }
+        };
+
+    for (context_index, record) in context.iter().enumerate() {
+        if record.kind == REVIEW_EVIDENCE_KIND {
+            let Some(data) = record.data.as_object() else {
+                continue;
+            };
+            match classify_attribution(data, context_index, gate, axis_namespace) {
+                Attribution::Current { axis } => {
+                    match parse_conforming_with_stage(data, subject, artifact_root, require_stage) {
+                        Ok(mut conforming) => {
+                            conforming.source_id = record.id.as_str().to_owned();
+                            if stages
+                                .get(&conforming.review_stage)
+                                .and_then(|axes| axes.get(&axis))
+                                .is_some()
+                            {
+                                record_stage_conforming(
+                                    &mut malformed,
+                                    &mut unverified,
+                                    &mut latest,
+                                    axis,
+                                    conforming,
+                                );
+                            } else {
+                                add_for_axis(
+                                    &axis,
+                                    &[format!(
+                                        "review_stage `{}` is not configured for this axis",
+                                        conforming.review_stage
+                                    )],
+                                    &mut malformed,
+                                );
+                            }
+                        }
+                        Err(EvidenceParseError::Malformed(reasons)) => {
+                            add_for_axis(&axis, &reasons, &mut malformed)
+                        }
+                        Err(EvidenceParseError::Unverified(reasons)) => {
+                            add_for_axis(&axis, &reasons, &mut unverified)
+                        }
+                    }
+                }
+                Attribution::OtherConfigured => {}
+                Attribution::Inert(inert) => inert_records.push(inert),
+            }
+        } else if record.kind == EVIDENCE_APPLICABILITY_KIND {
+            let attribution =
+                applicability_attribution(context, record, context_index, gate, axis_namespace);
+            match (
+                attribution,
+                parse_applicable_evidence_for_stage(
+                    context,
+                    record,
+                    subject,
+                    current_revision,
+                    artifact_root,
+                    require_stage,
+                ),
+            ) {
+                (Some(Attribution::Current { axis }), Ok(conforming)) => {
+                    if stages
+                        .get(&conforming.review_stage)
+                        .and_then(|axes| axes.get(&axis))
+                        .is_some()
+                    {
+                        record_stage_conforming(
+                            &mut malformed,
+                            &mut unverified,
+                            &mut latest,
+                            axis,
+                            conforming,
+                        );
+                    } else {
+                        add_for_axis(
+                            &axis,
+                            &[format!(
+                                "review_stage `{}` is not configured for this axis",
+                                conforming.review_stage
+                            )],
+                            &mut malformed,
+                        );
+                    }
+                }
+                (
+                    Some(Attribution::Current { axis }),
+                    Err(EvidenceParseError::Malformed(reasons)),
+                ) => add_for_axis(&axis, &reasons, &mut malformed),
+                (
+                    Some(Attribution::Current { axis }),
+                    Err(EvidenceParseError::Unverified(reasons)),
+                ) => add_for_axis(&axis, &reasons, &mut unverified),
+                (Some(Attribution::OtherConfigured), _) => {}
+                (Some(Attribution::Inert(inert)), _) => inert_records.push(inert),
+                (None, Err(EvidenceParseError::Malformed(reasons))) => {
+                    global_malformed.extend(reasons)
+                }
+                (None, Err(EvidenceParseError::Unverified(reasons))) => {
+                    global_unverified.extend(reasons)
+                }
+                (None, Ok(_)) => global_malformed.push(
+                    "evidence applicability could not be attributed to a configured gate and axis"
+                        .to_owned(),
+                ),
+            }
+        }
+    }
+
+    for key in malformed.keys().cloned().collect::<Vec<_>>() {
+        malformed
+            .get_mut(&key)
+            .expect("key was just collected")
+            .extend(global_malformed.iter().cloned());
+        unverified
+            .get_mut(&key)
+            .expect("matching stage/axis key")
+            .extend(global_unverified.iter().cloned());
+    }
+
+    let mut diagnostics = Vec::new();
+    let mut informational = Vec::new();
+    let mut all_axes_satisfied = true;
+    let mut satisfied_by_disposition = Vec::new();
+    let mut current_authors: BTreeMap<StageAxis, BTreeSet<AuthorIdentity>> = BTreeMap::new();
+
+    for (stage, axes) in stages {
+        for (axis, policy) in axes {
+            let key = (stage.clone(), axis.clone());
+            let mut failed_findings = Vec::new();
+            let mut stale = Vec::new();
+            let mut stale_config = Vec::new();
+            let mut distinct_present = BTreeSet::new();
+            let mut satisfied_authors = BTreeSet::new();
+            let mut present_authors = BTreeSet::new();
+
+            for ((record_stage, record_axis, _revision, _author), record) in &latest {
+                if record_stage != stage || record_axis != axis {
+                    continue;
+                }
+                if record.subject_revision != current_revision {
+                    stale.push((record.subject_revision.clone(), current_revision.to_owned()));
+                }
+                if record.config_version != config_version {
+                    stale_config.push((record.config_version.clone(), config_version.to_owned()));
+                }
+                if record.subject_revision != current_revision
+                    || record.config_version != config_version
+                {
+                    continue;
+                }
+                if record.author == *subject_author
+                    || ledger.is_some_and(|ledger| {
+                        ledger.findings.iter().any(|finding| {
+                            finding.disposition
+                                == crate::finding_ledger::FindingDisposition::RetiredAuthor
+                                && context.iter().any(|source| {
+                                    source.id.as_str() == finding.source.record_id()
+                                        && source.data.get("author")
+                                            == Some(&serde_json::json!(record.author))
+                                })
+                        })
+                    })
+                {
+                    continue;
+                }
+                if ledger.and_then(|ledger| ledger.disposition_for(&record.source_id))
+                    == Some(crate::finding_ledger::FindingDisposition::RetiredAuthor)
+                {
+                    continue;
+                }
+                present_authors.insert(record.author.clone());
+                distinct_present.insert(record.author.clone());
+                match record.result {
+                    EvidenceResult::Pass => {
+                        satisfied_authors.insert(record.author.clone());
+                    }
+                    EvidenceResult::Fail => {
+                        if ledger
+                            .and_then(|ledger| ledger.disposition_for(&record.source_id))
+                            .is_some()
+                        {
+                            satisfied_authors.insert(record.author.clone());
+                            satisfied_by_disposition.push(record.source_id.clone());
+                        } else {
+                            failed_findings.push(EvidenceDiagnostic::Failed {
+                                findings: record.findings.clone(),
+                                source: record.source_id.clone(),
+                                author: record.author.clone(),
+                                remedy: "append a reasoned rejection/resolution of this exact source, or record reviewer retirement with a roster change and replacement coverage".to_owned(),
+                            });
+                        }
+                    }
+                }
+            }
+            current_authors.insert(key.clone(), present_authors);
+
+            let malformed_reasons = malformed.get(&key).expect("configured stage/axis");
+            let unverified_reasons = unverified.get(&key).expect("configured stage/axis");
+            let enough_judgments = satisfied_authors.len() as u64 >= policy.required_authors();
+            let satisfied = malformed_reasons.is_empty()
+                && unverified_reasons.is_empty()
+                && failed_findings.is_empty()
+                && enough_judgments;
+            if !satisfied {
+                all_axes_satisfied = false;
+                let mut axis_diagnostics = Vec::new();
+                if distinct_present.is_empty() {
+                    axis_diagnostics.push(EvidenceDiagnostic::Missing {
+                        required: policy.required_authors(),
+                    });
+                }
+                axis_diagnostics.extend(failed_findings);
+                if !malformed_reasons.is_empty() {
+                    axis_diagnostics.push(EvidenceDiagnostic::Malformed {
+                        reasons: malformed_reasons.clone(),
+                    });
+                }
+                axis_diagnostics.extend(
+                    unverified_reasons
+                        .iter()
+                        .cloned()
+                        .map(|reason| EvidenceDiagnostic::Unverified { reason }),
+                );
+                if (distinct_present.len() as u64) < policy.required_authors() {
+                    axis_diagnostics.push(EvidenceDiagnostic::Independence {
+                        required: policy.required_authors(),
+                        distinct_present: distinct_present.len(),
+                    });
+                }
+                diagnostics.push(AxisDiagnostic {
+                    review_stage: stage.clone(),
+                    axis: axis.clone(),
+                    diagnostics: axis_diagnostics,
+                });
+                let mut informational_diagnostics = Vec::new();
+                informational_diagnostics.extend(stale.into_iter().map(
+                    |(evidence_revision, current_revision)| EvidenceDiagnostic::Stale {
+                        evidence_revision,
+                        current_revision,
+                    },
+                ));
+                informational_diagnostics.extend(stale_config.into_iter().map(
+                    |(evidence_version, run_version)| EvidenceDiagnostic::StaleConfig {
+                        evidence_version,
+                        run_version,
+                    },
+                ));
+                if !informational_diagnostics.is_empty() {
+                    informational.push(AxisDiagnostic {
+                        review_stage: stage.clone(),
+                        axis: axis.clone(),
+                        diagnostics: informational_diagnostics,
+                    });
+                }
+            }
+        }
+    }
+
+    // High-rigor's individual and aggregate stages must use the same two
+    // reviewer identities for each axis. A stage with no current evidence is
+    // already diagnosed as missing; compare only the present sets here.
+    for axis in stages
+        .values()
+        .flat_map(|axes| axes.keys())
+        .collect::<BTreeSet<_>>()
+    {
+        let stage_sets = stages
+            .keys()
+            .filter_map(|stage| {
+                current_authors
+                    .get(&(stage.clone(), axis.clone()))
+                    .filter(|authors| !authors.is_empty())
+                    .map(|authors| (stage.clone(), authors.clone()))
+            })
+            .collect::<Vec<_>>();
+        let Some((expected_stage, expected_authors)) = stage_sets.first() else {
+            continue;
+        };
+        for (stage, actual_authors) in stage_sets.iter().skip(1) {
+            if actual_authors == expected_authors {
+                continue;
+            }
+            all_axes_satisfied = false;
+            let add = |items: &mut Vec<AxisDiagnostic>,
+                       stage: &str,
+                       actual: &BTreeSet<AuthorIdentity>| {
+                let diagnostic = EvidenceDiagnostic::MixedAuthors {
+                    expected_stage: expected_stage.clone(),
+                    expected: expected_authors.iter().cloned().collect(),
+                    actual: actual.iter().cloned().collect(),
+                };
+                if let Some(existing) = items
+                    .iter_mut()
+                    .find(|item| item.review_stage == stage && item.axis == *axis)
+                {
+                    existing.diagnostics.push(diagnostic);
+                } else {
+                    items.push(AxisDiagnostic {
+                        review_stage: stage.to_owned(),
+                        axis: axis.clone(),
+                        diagnostics: vec![diagnostic],
+                    });
+                }
+            };
+            add(&mut diagnostics, stage, actual_authors);
+            add(&mut diagnostics, expected_stage, expected_authors);
+        }
+    }
+
+    if all_axes_satisfied {
+        inert_records.clear();
+    }
+    satisfied_by_disposition.sort();
+    satisfied_by_disposition.dedup();
+    EvidenceEvaluation {
+        satisfied: all_axes_satisfied,
+        diagnostics,
+        informational,
+        inert_records,
+        satisfied_by_disposition,
+    }
+}
+
+fn record_stage_conforming(
+    malformed: &mut BTreeMap<(String, String), Vec<String>>,
+    unverified: &mut BTreeMap<(String, String), Vec<String>>,
+    latest: &mut BTreeMap<(String, String, String, AuthorIdentity), ConformingEvidence>,
+    axis: String,
+    conforming: ConformingEvidence,
+) {
+    let key = (conforming.review_stage.clone(), axis);
+    malformed
+        .get_mut(&key)
+        .expect("configured stage/axis")
+        .clear();
+    unverified
+        .get_mut(&key)
+        .expect("configured stage/axis")
+        .clear();
+    latest.insert(
+        (
+            key.0,
+            key.1,
+            conforming.subject_revision.clone(),
+            conforming.author.clone(),
+        ),
+        conforming,
+    );
 }
 
 fn classify_attribution(
@@ -633,17 +1040,35 @@ pub(crate) fn parse_evidence_record(
     expected_subject: &str,
     artifact_root: Option<&Value>,
 ) -> Result<ConformingEvidence, String> {
+    parse_evidence_record_for_stage(value, expected_subject, artifact_root, false)
+}
+
+pub(crate) fn parse_evidence_record_for_stage(
+    value: &Value,
+    expected_subject: &str,
+    artifact_root: Option<&Value>,
+    require_stage: bool,
+) -> Result<ConformingEvidence, String> {
     let object = value
         .as_object()
         .ok_or_else(|| "review-evidence source data must be an object".to_owned())?;
-    parse_conforming(object, expected_subject, artifact_root)
+    parse_conforming_with_stage(object, expected_subject, artifact_root, require_stage)
         .map_err(EvidenceParseError::into_message)
 }
 
 fn parse_conforming(
     data: &Map<String, Value>,
     expected_subject: &str,
+    artifact_root: Option<&Value>,
+) -> Result<ConformingEvidence, EvidenceParseError> {
+    parse_conforming_with_stage(data, expected_subject, artifact_root, false)
+}
+
+fn parse_conforming_with_stage(
+    data: &Map<String, Value>,
+    expected_subject: &str,
     _artifact_root: Option<&Value>,
+    require_stage: bool,
 ) -> Result<ConformingEvidence, EvidenceParseError> {
     let mut reasons = Vec::new();
     let gate = non_empty_string(data, "gate", &mut reasons);
@@ -671,6 +1096,20 @@ fn parse_conforming(
     let subject = non_empty_string(data, "subject", &mut reasons);
     let subject_revision = non_empty_string(data, "subject_revision", &mut reasons);
     let config_version = non_empty_string(data, "config_version", &mut reasons);
+    let review_stage = match data.get("review_stage").or_else(|| data.get("stage")) {
+        Some(Value::String(value)) if value == "individual" || value == "aggregate" => {
+            Some(value.clone())
+        }
+        Some(_) => {
+            reasons.push("`review_stage` must be `individual` or `aggregate`".to_owned());
+            None
+        }
+        None if require_stage => {
+            reasons.push("missing or non-string `review_stage`".to_owned());
+            None
+        }
+        None => Some("aggregate".to_owned()),
+    };
 
     if subject.as_deref() != Some(expected_subject) {
         reasons.push(format!(
@@ -694,8 +1133,17 @@ fn parse_conforming(
     let policy_id = policy_id.expect("policy id checked by empty-reasons branch");
     let subject_revision = subject_revision.expect("revision checked by empty-reasons branch");
     let config_version = config_version.expect("config version checked by empty-reasons branch");
+    let review_stage = review_stage.expect("review stage checked by empty-reasons branch");
 
-    if let Err(reason) = validate_stable_origin(data, &policy_id, &author, result, &findings) {
+    if let Err(reason) = validate_stable_origin_for_stage(
+        data,
+        &policy_id,
+        &author,
+        result,
+        &findings,
+        &review_stage,
+        require_stage,
+    ) {
         return Err(EvidenceParseError::Unverified(vec![reason]));
     }
 
@@ -703,6 +1151,7 @@ fn parse_conforming(
         source_id: String::new(),
         gate,
         policy_id,
+        review_stage,
         result,
         findings,
         author,
@@ -732,6 +1181,25 @@ fn parse_applicable_evidence(
     )
 }
 
+fn parse_applicable_evidence_for_stage(
+    context: &[ContextRecord],
+    applicability_record: &ContextRecord,
+    expected_subject: &str,
+    current_revision: &str,
+    artifact_root: Option<&Value>,
+    require_stage: bool,
+) -> Result<ConformingEvidence, EvidenceParseError> {
+    parse_applicable_evidence_at_with_stage(
+        context,
+        applicability_record,
+        expected_subject,
+        current_revision,
+        artifact_root,
+        false,
+        require_stage,
+    )
+}
+
 fn parse_applicable_evidence_at(
     context: &[ContextRecord],
     applicability_record: &ContextRecord,
@@ -739,6 +1207,26 @@ fn parse_applicable_evidence_at(
     current_revision: &str,
     artifact_root: Option<&Value>,
     captured_batch: bool,
+) -> Result<ConformingEvidence, EvidenceParseError> {
+    parse_applicable_evidence_at_with_stage(
+        context,
+        applicability_record,
+        expected_subject,
+        current_revision,
+        artifact_root,
+        captured_batch,
+        false,
+    )
+}
+
+fn parse_applicable_evidence_at_with_stage(
+    context: &[ContextRecord],
+    applicability_record: &ContextRecord,
+    expected_subject: &str,
+    current_revision: &str,
+    artifact_root: Option<&Value>,
+    captured_batch: bool,
+    require_stage: bool,
 ) -> Result<ConformingEvidence, EvidenceParseError> {
     let applicability = serde_json::from_value::<EvidenceApplicability>(
         applicability_record.data.clone(),
@@ -809,7 +1297,7 @@ fn parse_applicable_evidence_at(
         )]));
     }
 
-    let mut evidence = parse_conforming(
+    let mut evidence = parse_conforming_with_stage(
         source.data.as_object().ok_or_else(|| {
             EvidenceParseError::Malformed(vec![format!(
                 "evidence source context record `{}` is not an object",
@@ -818,6 +1306,7 @@ fn parse_applicable_evidence_at(
         })?,
         expected_subject,
         artifact_root,
+        require_stage,
     )?;
     // The driver explicitly attests that the immutable judgment applies to
     // this current target. It is not a semantic inference by the provider.
@@ -838,6 +1327,33 @@ pub(crate) fn validate_batch_reuse(
     revision: &str,
     artifact_root: Option<&Value>,
 ) -> Result<(), String> {
+    validate_batch_reuse_for_stage(
+        context,
+        id,
+        gate,
+        axis,
+        author,
+        subject,
+        revision,
+        artifact_root,
+        "aggregate",
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn validate_batch_reuse_for_stage(
+    context: &[ContextRecord],
+    id: &str,
+    gate: &str,
+    axis: &str,
+    author: &Value,
+    subject: &str,
+    revision: &str,
+    artifact_root: Option<&Value>,
+    review_stage: &str,
+    require_stage: bool,
+) -> Result<(), String> {
     let records: Vec<_> = context.iter().filter(|r| r.id.as_str() == id).collect();
     if records.len() != 1 || records[0].kind != EVIDENCE_APPLICABILITY_KIND {
         return Err(format!(
@@ -846,11 +1362,19 @@ pub(crate) fn validate_batch_reuse(
     }
     // Verify the original commission's target identity, not today's checkpoint.
     // Later promotion of this source separately verifies the new live target.
-    let evidence =
-        parse_applicable_evidence_at(context, records[0], subject, revision, artifact_root, true)
-            .map_err(|e| format!("reuse `{id}` is invalid: {e:?}"))?;
+    let evidence = parse_applicable_evidence_at_with_stage(
+        context,
+        records[0],
+        subject,
+        revision,
+        artifact_root,
+        true,
+        require_stage,
+    )
+    .map_err(|e| format!("reuse `{id}` is invalid: {e:?}"))?;
     if evidence.gate != gate
         || evidence.policy_id != axis
+        || evidence.review_stage != review_stage
         || author.get("name").and_then(Value::as_str) != Some(evidence.author.name())
         || author.get("kind").and_then(Value::as_str) != Some(evidence.author.kind())
     {
@@ -989,12 +1513,14 @@ fn validate_applicability_target(
     Ok(())
 }
 
-fn validate_stable_origin(
+fn validate_stable_origin_for_stage(
     data: &Map<String, Value>,
     policy_id: &str,
     author: &AuthorIdentity,
     result: EvidenceResult,
     findings: &str,
+    review_stage: &str,
+    require_stage: bool,
 ) -> Result<(), String> {
     let legacy = LEGACY_LINKAGE_FIELDS
         .iter()
@@ -1052,15 +1578,27 @@ fn validate_stable_origin(
             "engine-resolved assignment does not match concise origin assignment_id".to_owned(),
         );
     }
-    verify_engine_selected_output(&engine, policy_id, author, result, findings, data)
+    verify_engine_selected_output(
+        &engine,
+        policy_id,
+        author,
+        result,
+        findings,
+        review_stage,
+        require_stage,
+        data,
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn verify_engine_selected_output(
     origin: &EngineOrigin,
     policy_id: &str,
     author: &AuthorIdentity,
     result: EvidenceResult,
     findings: &str,
+    review_stage: &str,
+    require_stage: bool,
     data: &Map<String, Value>,
 ) -> Result<(), String> {
     if origin.selected_attempt == 0 {
@@ -1119,7 +1657,7 @@ fn verify_engine_selected_output(
     let object = if object.contains_key("judgments") {
         let (schema, location) =
             crate::review_batch::captured_commission(&capture, &origin.assignment_id)?;
-        let rows = crate::review_batch::rows(
+        let rows = crate::review_batch::rows_for_stage(
             &schema,
             &value,
             &location,
@@ -1130,6 +1668,8 @@ fn verify_engine_selected_output(
             data.get("subject_revision")
                 .and_then(Value::as_str)
                 .unwrap_or_default(),
+            review_stage,
+            require_stage,
         )?;
         let row = rows
             .into_iter()
@@ -1142,6 +1682,15 @@ fn verify_engine_selected_output(
     } else {
         if object.get("axis").and_then(Value::as_str) != Some(policy_id) {
             return Err("judgment axis disagrees with review-evidence policy_id".to_owned());
+        }
+        if let Some(raw_stage) = object.get("review_stage").and_then(Value::as_str) {
+            if raw_stage != review_stage {
+                return Err(
+                    "judgment review_stage disagrees with review-evidence review_stage".to_owned(),
+                );
+            }
+        } else if require_stage {
+            return Err("selected review output is missing review_stage".to_owned());
         }
         object
     };

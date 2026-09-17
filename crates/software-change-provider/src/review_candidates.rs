@@ -40,6 +40,7 @@ pub enum ReviewCandidate {
     #[serde(rename = "ready")]
     Ready {
         origin: CandidateOrigin,
+        review_stage: String,
         axis: String,
         author: CandidateAuthor,
         result: String,
@@ -48,6 +49,7 @@ pub enum ReviewCandidate {
     #[serde(rename = "carried")]
     Carried {
         origin: CandidateOrigin,
+        review_stage: String,
         axis: String,
         author: CandidateAuthor,
         applicability_id: String,
@@ -352,6 +354,7 @@ fn project_assignment(
     vec![match normalize_review_output(contract, &value) {
         Ok(judgment) => ReviewCandidate::Ready {
             origin,
+            review_stage: judgment.review_stage,
             axis: judgment.axis,
             author: judgment.author,
             result: judgment.result,
@@ -395,7 +398,17 @@ fn project_batch(
         let revision = target["revision"]
             .as_str()
             .ok_or("subject has no revision")?;
-        let rows = crate::review_batch::rows(contract, value, &location, gate, subject, revision)?;
+        let review_stage = declared_review_stage(contract, value)?;
+        let rows = crate::review_batch::rows_for_stage(
+            contract,
+            value,
+            &location,
+            gate,
+            subject,
+            revision,
+            &review_stage,
+            review_stage == "individual",
+        )?;
         let author = CandidateAuthor {
             name: value["author"]["name"]
                 .as_str()
@@ -413,6 +426,7 @@ fn project_batch(
                 Ok(if let Some(reuse) = row.get("reuse") {
                     ReviewCandidate::Carried {
                         origin: origin.clone(),
+                        review_stage: review_stage.clone(),
                         axis,
                         author: author.clone(),
                         applicability_id: reuse.as_str().ok_or("missing applicability ID")?.into(),
@@ -420,6 +434,7 @@ fn project_batch(
                 } else {
                     ReviewCandidate::Ready {
                         origin: origin.clone(),
+                        review_stage: review_stage.clone(),
                         axis,
                         author: author.clone(),
                         result: row["result"].as_str().ok_or("missing result")?.into(),
@@ -429,12 +444,19 @@ fn project_batch(
             })
             .collect::<Result<_, String>>()?;
         if let Some(verdicts) = value.get("validation_verdicts") {
-            if gate != "validation-review" {
+            if gate != "validation-review" || review_stage != "aggregate" {
                 return Err(
                     "only ordinary validation commissions produce criterion/goal verdicts".into(),
                 );
             }
             let mut seen = std::collections::BTreeSet::new();
+            let context: Vec<loop_core::ContextRecord> = serde_json::from_value(
+                location
+                    .get("context")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!([])),
+            )
+            .map_err(|e| format!("invalid captured validation context: {e}"))?;
             for row in verdicts.as_array().ok_or("invalid validation_verdicts")? {
                 let id = row["record_id"]
                     .as_str()
@@ -466,6 +488,8 @@ fn project_batch(
                         "unassigned, duplicate, wrong-author or stale criterion verdict".into(),
                     );
                 }
+                crate::validation::source(data, kind, &context, Path::new(root))
+                    .map_err(|error| format!("invalid retained validation verdict: {error}"))?;
                 candidates.push(ReviewCandidate::VerdictReady {
                     origin: origin.clone(),
                     record_id: id.into(),
@@ -572,6 +596,26 @@ fn parse_selected_value(bytes: &[u8]) -> Result<Value, String> {
     }
 }
 
+fn declared_review_stage(contract: &Value, value: &Value) -> Result<String, String> {
+    let schema_stage = contract
+        .pointer("/properties/review_stage/const")
+        .and_then(Value::as_str);
+    let value_stage = value.get("review_stage").and_then(Value::as_str);
+    if schema_stage.is_some() && value_stage.is_none() {
+        return Err("review output is missing frozen review_stage".to_owned());
+    }
+    if let (Some(schema_stage), Some(value_stage)) = (schema_stage, value_stage) {
+        if schema_stage != value_stage {
+            return Err("review output review_stage disagrees with its frozen contract".to_owned());
+        }
+    }
+    let stage = schema_stage.or(value_stage).unwrap_or("aggregate");
+    if !matches!(stage, "individual" | "aggregate") {
+        return Err("review output review_stage must be `individual` or `aggregate`".to_owned());
+    }
+    Ok(stage.to_owned())
+}
+
 fn looks_like_review_contract(contract: &Value) -> bool {
     let Some(object) = contract.as_object() else {
         return false;
@@ -588,6 +632,7 @@ fn looks_like_review_contract(contract: &Value) -> bool {
 }
 
 struct NormalizedJudgment {
+    review_stage: String,
     axis: String,
     author: CandidateAuthor,
     result: String,
@@ -601,6 +646,19 @@ fn normalize_review_output(contract: &Value, value: &Value) -> Result<Normalized
     let Some(object) = value.as_object() else {
         violations.push("review output must be a JSON object".to_owned());
         return Err(malformed_diagnostic(&violations));
+    };
+    let review_stage = match contract
+        .pointer("/properties/review_stage/const")
+        .and_then(Value::as_str)
+        .or_else(|| object.get("review_stage").and_then(Value::as_str))
+    {
+        Some(stage) if matches!(stage, "individual" | "aggregate") => Some(stage.to_owned()),
+        Some(_) => {
+            violations
+                .push("review output review_stage must be `individual` or `aggregate`".to_owned());
+            None
+        }
+        None => Some("aggregate".to_owned()),
     };
     let axis = match object.get("axis").and_then(Value::as_str) {
         Some(axis) if !axis.is_empty() => Some(axis.to_owned()),
@@ -664,6 +722,7 @@ fn normalize_review_output(contract: &Value, value: &Value) -> Result<Normalized
 
     if violations.is_empty() {
         Ok(NormalizedJudgment {
+            review_stage: review_stage.expect("validated review stage"),
             axis: axis.expect("validated axis"),
             author: author.expect("validated author"),
             result: result.expect("validated result"),
@@ -990,6 +1049,7 @@ mod tests {
                     id: "invocation-1".to_owned(),
                     assignment_id: "assignment-1".to_owned(),
                 },
+                review_stage: "aggregate".to_owned(),
                 axis: "axis".to_owned(),
                 author: CandidateAuthor {
                     name: "reviewer".to_owned(),

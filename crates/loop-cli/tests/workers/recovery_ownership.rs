@@ -52,10 +52,14 @@ sys.exit(7)
         bounded_process::prepare_process_group(&mut command);
         let admission = Admission::acquire(&ownership).unwrap();
         let child = command.spawn().unwrap();
+        let root_identity = loop_integrations::ownership::read_process_identity(child.id())
+            .unwrap()
+            .expect("owned child identity");
         admission
             .publish(&loop_core::OwnedExecution {
                 root_pid: child.id(),
                 process_group_id: child.id(),
+                root_identity: Some(root_identity),
                 admission_directory: ownership.clone(),
                 graph_locator: None,
             })

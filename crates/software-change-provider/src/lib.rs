@@ -14,6 +14,7 @@ mod schema;
 
 pub mod commission;
 pub mod embedded_data;
+pub mod setup;
 
 pub use dagu::{names_for_capture_root, resolve_dagu, write_locator, DaguError, DaguLocator};
 

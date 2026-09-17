@@ -5,6 +5,10 @@
 // against the T01 byte inventory; `autotests = false` in those manifests keeps
 // Cargo from emitting their former targets.
 
+#[path = "../../../crates/bookends-check/tests/backlog_t08_history.rs"]
+mod bookends_check_backlog_t08_history;
+#[path = "../../../crates/bookends-check/tests/backlog_t09_public.rs"]
+mod bookends_check_backlog_t09_public;
 #[path = "../../../crates/bookends-check/tests/cli.rs"]
 mod bookends_check_cli;
 #[path = "../../../crates/bookends-check/tests/graph.rs"]

@@ -166,6 +166,7 @@ pub fn evidence(
     json!({
         "gate": gate,
         "policy_id": policy_id,
+        "review_stage": "aggregate",
         "result": result,
         "findings": findings,
         "author": {"name": author_name, "kind": author_kind},
@@ -354,11 +355,11 @@ pub fn valid_metadata(revision: &str) -> Value {
 }
 
 pub fn axis_config(root: &TestDir, axis: &str) -> Value {
-    json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+    json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
         "config_version": "test-1",
         "artifact_root": root.value(),
         "review_policies": {
-            "intent-review": [{"id": axis, "description": "test axis"}]
+            "intent-review": [{"id": axis, "description": "test axis", "review_stage": "aggregate"}]
         },
         "artifact_schemas": {"intent.json": metadata_schema()}
     })
@@ -536,21 +537,52 @@ impl Engine {
         subject_revision: &str,
         config_version: &str,
     ) {
-        self.append(
+        self.append_evidence_stage(
             run_id,
-            evidence_context(
-                id,
-                gate,
-                policy_id,
-                result,
-                findings,
-                author_name,
-                author_kind,
-                subject,
-                subject_revision,
-                config_version,
-            ),
+            id,
+            gate,
+            policy_id,
+            "aggregate",
+            result,
+            findings,
+            author_name,
+            author_kind,
+            subject,
+            subject_revision,
+            config_version,
         );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_evidence_stage(
+        &self,
+        run_id: &str,
+        id: &str,
+        gate: &str,
+        policy_id: &str,
+        review_stage: &str,
+        result: &str,
+        findings: &str,
+        author_name: &str,
+        author_kind: &str,
+        subject: &str,
+        subject_revision: &str,
+        config_version: &str,
+    ) {
+        let mut record = evidence_context(
+            id,
+            gate,
+            policy_id,
+            result,
+            findings,
+            author_name,
+            author_kind,
+            subject,
+            subject_revision,
+            config_version,
+        );
+        record.data["review_stage"] = json!(review_stage);
+        self.append(run_id, record);
     }
 
     pub fn append_finding_ledger(

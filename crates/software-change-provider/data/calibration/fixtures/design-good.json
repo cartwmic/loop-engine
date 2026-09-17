@@ -21,7 +21,7 @@
     },
     {
       "name": "versioned data profiles",
-      "responsibility": "Supply selected run's frozen policies, schemas, prompts, templates, and reviewer protocol as inspectable reference data outside provider judging code; no profile catalog is hard-coded in design."
+      "responsibility": "Supply selected run's frozen policies, schemas, prompts, templates, and reviewer protocol as inspectable reference data outside provider judging code; no profile catalog is hard-coded in design. The host design-artifact review schema is a separate contract from the fictional runtime profiles governed by this bounded language."
     },
     {
       "name": "checked transition evaluator",

@@ -11,6 +11,7 @@ use loop_core::{
 use loop_integrations::SqlitePersistence;
 use rusqlite::Connection;
 use serde_json::json;
+use std::cell::Cell;
 use tempfile::tempdir;
 
 fn workflow() -> Workflow {
@@ -82,20 +83,22 @@ fn invocation_create_request(run_id: &str, invocation_id: &str) -> CreateWorkSlo
 #[test]
 fn show_refreshes_terminal_commit_between_snapshot_and_waiter_liveness(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    struct CompletingWaiter<'a>(&'a SqlitePersistence);
+    struct CompletingWaiter<'a>(&'a SqlitePersistence, Cell<bool>);
     impl loop_core::WorkSlotProcess for CompletingWaiter<'_> {
         type Handle = ();
         fn waiter_alive(&self, _pid: u32) -> bool {
-            self.0
-                .complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
-                    "race",
-                    "race-invocation",
-                    WaiterWrittenStatus::Succeeded,
-                    0,
-                    Timestamp::from_unix_millis(600),
-                    vec![],
-                ))
-                .unwrap();
+            if !self.1.replace(true) {
+                self.0
+                    .complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
+                        "race",
+                        "race-invocation",
+                        WaiterWrittenStatus::Succeeded,
+                        0,
+                        Timestamp::from_unix_millis(600),
+                        vec![],
+                    ))
+                    .unwrap();
+            }
             false // exit observed after the commit, but after show's initial read
         }
         fn spawn_wait_invocation(
@@ -119,7 +122,7 @@ fn show_refreshes_terminal_commit_between_snapshot_and_waiter_liveness(
     let result = loop_core::operations::show::execute(
         loop_core::operations::show::Request::new("race"),
         &adapter,
-        &CompletingWaiter(&adapter),
+        &CompletingWaiter(&adapter, Cell::new(false)),
         Timestamp::from_unix_millis(700),
     );
     let shown = result.value().expect("completed provider-free show");

@@ -106,7 +106,7 @@ pub(crate) fn execute_invocation_progress(
         invocation_id.as_ref(),
         timeout,
         now_timestamp(),
-        waiter_alive,
+        waiter_alive_identity,
     ) {
         Ok(snapshot) => render_operation(OPERATION, output, &OperationOutcome::completed(snapshot)),
         Err(error) => render_operation_error(OPERATION, output, error),
@@ -129,7 +129,7 @@ where
         Some(invocation_id),
         timeout,
         now,
-        waiter_alive,
+        waiter_alive_identity,
     )
 }
 
@@ -143,12 +143,12 @@ fn collect_snapshot<P, F>(
 ) -> Result<InvocationProgressSnapshot, CliError>
 where
     P: Persistence + ?Sized,
-    F: Fn(u32) -> bool,
+    F: Fn(&WorkSlotInvocation) -> bool,
 {
     let invocations = persistence
         .load_work_slot_invocations(run_id)
         .map_err(|error| CliError::new(error.code(), error.to_string()))?;
-    let selected = select_invocation(&invocations, invocation_id, now, waiter_alive)?;
+    let selected = select_invocation_by_identity(&invocations, invocation_id, now, waiter_alive)?;
     let capture_dir = selected.capture_dir.clone();
     if capture_dir.is_empty() || !Path::new(&capture_dir).is_dir() {
         return Err(CliError::new(
@@ -170,6 +170,7 @@ where
     })
 }
 
+#[cfg(test)]
 fn select_invocation<'a, F>(
     invocations: &'a [WorkSlotInvocation],
     explicit: Option<&InvocationId>,
@@ -200,6 +201,48 @@ where
         .iter()
         .filter(|invocation| {
             project_invocation_status(invocation, now, waiter_alive(invocation.waiter_pid))
+                == ProjectedInvocationStatus::Running
+        })
+        .collect();
+    if running.len() == 1 {
+        return Ok(running[0]);
+    }
+    invocations
+        .iter()
+        .max_by_key(|invocation| invocation.started_at)
+        .ok_or_else(|| CliError::new("no-invocations", "run has no work-slot invocations"))
+}
+
+fn select_invocation_by_identity<'a, F>(
+    invocations: &'a [WorkSlotInvocation],
+    explicit: Option<&InvocationId>,
+    now: Timestamp,
+    waiter_alive: F,
+) -> Result<&'a WorkSlotInvocation, CliError>
+where
+    F: Fn(&WorkSlotInvocation) -> bool,
+{
+    if invocations.is_empty() {
+        return Err(CliError::new(
+            "no-invocations",
+            "run has no work-slot invocations",
+        ));
+    }
+    if let Some(invocation_id) = explicit {
+        return invocations
+            .iter()
+            .find(|invocation| invocation.invocation_id == *invocation_id)
+            .ok_or_else(|| {
+                CliError::new(
+                    "invocation-not-found",
+                    format!("invocation `{invocation_id}` was not found on the run"),
+                )
+            });
+    }
+    let running: Vec<&WorkSlotInvocation> = invocations
+        .iter()
+        .filter(|invocation| {
+            project_invocation_status(invocation, now, waiter_alive(invocation))
                 == ProjectedInvocationStatus::Running
         })
         .collect();
@@ -636,22 +679,21 @@ fn unix_mtime_ms(path: &Path) -> Result<u64, CliError> {
         .as_millis() as u64)
 }
 
-fn waiter_alive(pid: u32) -> bool {
-    #[cfg(unix)]
-    {
-        unsafe { unix_signal::kill(pid as i32, 0) == 0 }
+fn waiter_alive_identity(invocation: &WorkSlotInvocation) -> bool {
+    if invocation.ownership.is_some() && invocation.waiter_identity.is_none() {
+        return false;
     }
-    #[cfg(not(unix))]
-    {
-        let _ = pid;
-        false
-    }
-}
-
-#[cfg(unix)]
-mod unix_signal {
-    extern "C" {
-        pub fn kill(pid: i32, sig: i32) -> i32;
+    match invocation.waiter_identity.as_ref() {
+        Some(identity) => loop_integrations::ownership::process_identity_matches(
+            invocation.waiter_pid,
+            Some(identity),
+        )
+        .unwrap_or(false),
+        // Old numeric-only rows retain passive progress reads; they do not
+        // establish cancellation or ownership authority.
+        None => loop_integrations::ownership::read_process(invocation.waiter_pid)
+            .map(|process| process.is_some())
+            .unwrap_or(false),
     }
 }
 

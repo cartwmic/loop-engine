@@ -21,9 +21,14 @@ collection.
 `cargo test --workspace` collects the default Rust test targets of every
 workspace package visible in the current tracked tree. The checker reads only
 the small amount of Cargo target metadata needed to exclude targets declared
-with `test = false`; it does not run Cargo or implement a general manifest
-interpreter. Unit tests, binary tests, and default integration tests count.
-A skipped-only target does not count.
+with `test = false`, then follows the target root's ordinary external
+`mod name;` and explicit `#[path = "..."] mod name;` edges. It does not run
+Cargo or implement a general manifest interpreter. Unit tests, binary tests,
+and default integration tests count when their source file is actually
+reachable. A skipped-only target does not count. A central integration root
+that imports former test roots with `#[path]` therefore collects those
+imported files and their linked modules; an unrelated `.rs` file in the same
+directory does not.
 
 `python3 <repo-relative-script>` collects exactly that one tracked script.
 The path must be relative to the repository root, must not contain `..`, and
@@ -38,4 +43,10 @@ root-script collection.
 A required job must exist and contain at least one parsed command. A declared
 class's pathspec surface must also resolve to at least one tracked file. Job
 existence, pathspec matching, and a citation alone are not enough: the same
-required job must establish a collection that includes the cited file.
+required job must establish a collection that includes the cited file. Citation
+and skip directives are read from ordinary code comments; quoted strings and
+Rust documentation comments are not directives. The checker does not infer
+whether an assertion is semantically adequate. Documentation/data files and
+paths containing `doc`, `docs`, `documentation`, `example`, `examples`,
+`fixture`, `fixtures`, `generated`, or `vendor` stay outside the proof surface
+even when a broad class pathspec names them.

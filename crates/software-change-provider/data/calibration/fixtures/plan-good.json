@@ -41,7 +41,10 @@
         "Assert malformed JSON and unknown operations return protocol errors without stdout, unknown evaluate envelope fields are rejected, and flat describe output matches fictional-repo/provider/tests/snapshots/describe.json byte-for-byte as only the exact static workflow topology snapshot; selected profile policies and artifact schemas are not in describe; caller-selected full canonical profile survives start initial_input freeze, show projects frozen initial_input unchanged, and flat evaluate carries that exact frozen initial_input. The separate public scenario also asserts a user-visible outcome rather than only process exit status.",
         "Drive the affected operator path through a practical black-box scenario and assert the observable result. Where an unavailable platform makes a second black-box path impractical, state that concrete reason and use the nearest scripted provider-boundary substitute; do not treat command exit activity alone as proof."
       ],
-      "handoff": "Produce the observable request/response behavior in the existing provider protocol boundary; profile selection takes one full canonical profile through start initial_input rather than describe, while Loop Engine owns exact freeze and show/evaluate projection. Schema-and-artifact-validation, evidence-evaluator, and versioned-reference-data consume that behavior without reshaping it; private helper and type organization remains replaceable."
+      "handoff": "Produce the observable request/response behavior in the existing provider protocol boundary; profile selection takes one full canonical profile through start initial_input rather than describe, while Loop Engine owns exact freeze and show/evaluate projection. Schema-and-artifact-validation, evidence-evaluator, and versioned-reference-data consume that behavior without reshaping it; private helper and type organization remains replaceable.",
+      "criterion_ids": [
+        "AC-1"
+      ]
     },
     {
       "id": "schema-and-artifact-validation",
@@ -76,7 +79,10 @@
         "cargo test -p software-change-provider --test a3",
         "Assert absent and unparseable subjects deny, schema_deny_reports_every_simultaneous_structural_violation returns every exact path/rule pair in deterministic order, schema_deny_is_byte_identical_when_only_context_varies keeps evidence out of structural denial, revision_link_mismatch_is_schema_deny_naming_both_artifacts names both documents, and traversal escapes remain provider errors."
       ],
-      "handoff": "Produce the structural-result contract, deterministic violation ordering, and revision-link diagnostics through the existing artifact/schema task boundary; checked-transition-evaluator consumes those observable outcomes before evidence evaluation, without depending on a prescribed private type name."
+      "handoff": "Produce the structural-result contract, deterministic violation ordering, and revision-link diagnostics through the existing artifact/schema task boundary; checked-transition-evaluator consumes those observable outcomes before evidence evaluation, without depending on a prescribed private type name.",
+      "criterion_ids": [
+        "AC-2"
+      ]
     },
     {
       "id": "evidence-evaluator",
@@ -111,7 +117,10 @@
         "cargo test -p software-change-provider --test a5",
         "Assert stale_revision_does_not_satisfy_and_names_both_revisions, stale_config_does_not_satisfy_and_names_both_versions, subject-author exclusion, n_two_requires_distinct_non_subject_authors_and_rejects_standing_fail, and latest same-author verdict supersession."
       ],
-      "handoff": "Produce ordered diagnostics, satisfaction state, and exact author-identity behavior through the evidence task boundary; checked-transition-evaluator consumes those outcomes without reimplementing attribution, while private type names remain replaceable."
+      "handoff": "Produce ordered diagnostics, satisfaction state, and exact author-identity behavior through the evidence task boundary; checked-transition-evaluator consumes those outcomes without reimplementing attribution, while private type names remain replaceable.",
+      "criterion_ids": [
+        "AC-3"
+      ]
     },
     {
       "id": "versioned-reference-data",
@@ -153,7 +162,10 @@
         "cargo test -p software-change-provider --lib schema::tests::allowlist_pin_matches_normative_subset -- --exact",
         "cargo test -p software-change-provider --test shipped_data every_axis_prompt_references_subject_template_schema_and_all_antipedantry_guards -- --exact"
       ],
-      "handoff": "After protocol-and-config-contract and schema-and-artifact-validation, expose stable lookup keys and exact unchanged bytes for canonical configs, templates, and reviewer protocol through the existing provider data boundary; checked-transition-evaluator and acceptance-proof consume the validated profile projection without depending on private lookup-module organization."
+      "handoff": "After protocol-and-config-contract and schema-and-artifact-validation, expose stable lookup keys and exact unchanged bytes for canonical configs, templates, and reviewer protocol through the existing provider data boundary; checked-transition-evaluator and acceptance-proof consume the validated profile projection without depending on private lookup-module organization.",
+      "criterion_ids": [
+        "AC-4"
+      ]
     },
     {
       "id": "checked-transition-evaluator",
@@ -198,7 +210,10 @@
         "cargo test -p software-change-provider --test a15",
         "Assert schema denial precedes evidence denial, schema_deny_reports_every_simultaneous_structural_violation proves malformed subjects report every named path/rule pair, stale/self-authored/duplicate-author and incomplete configured obligations refuse checked transitions, supported snapshot tuples return allow/deny/unsupported taxonomy, subject/evidence routing matches each frozen phase artifact and configured gate, nearest revise and revise-intent/revise-design/revise-plan/revise-implementation routes match the parent/adversarial owning-phase table, and emitted topology remains byte-identical to the exact static describe snapshot."
       ],
-      "handoff": "Produce exact allow/deny/unsupported response behavior, deterministic denial details, exact checked/revise topology and subject/evidence routing through the existing gate/workflow task boundary, and terminal obligation behavior; acceptance-proof consumes these frozen observable outputs plus the versioned profile projection without depending on private type names or changing engine routing."
+      "handoff": "Produce exact allow/deny/unsupported response behavior, deterministic denial details, exact checked/revise topology and subject/evidence routing through the existing gate/workflow task boundary, and terminal obligation behavior; acceptance-proof consumes these frozen observable outputs plus the versioned profile projection without depending on private type names or changing engine routing.",
+      "criterion_ids": [
+        "AC-1"
+      ]
     },
     {
       "id": "acceptance-proof",
@@ -219,13 +234,15 @@
         "design.json#/elements/1",
         "design.json#/elements/2",
         "design.json#/elements/3",
-        "design.json#/elements/4"
+        "design.json#/elements/4",
+        "plan.json#/proof_commands/1"
       ],
       "deliverables": [
         "Acceptance tests in fictional-repo/provider/tests/a2.rs, fictional-repo/provider/tests/a7.rs, fictional-repo/provider/tests/a8.rs, fictional-repo/provider/tests/a11.rs, fictional-repo/provider/tests/a12.rs, fictional-repo/provider/tests/a13.rs, fictional-repo/provider/tests/a14.rs, and fictional-repo/provider/tests/r25.rs",
         "Requirement-to-proof matrix at fictional-repo/implementation-evidence/requirement-to-proof.md",
-        "Executable proof-map checker at fictional-repo/scripts/assert-requirement-proof.py; it maps all four exact intent acceptance requirements to named proofs and checks the supplied repository-state proof inventory",
-        "Public operator outcome journey at scripts/production-journey.py with named scenarios frozen_profile_is_inspectable_before_transition, malformed_artifact_denial_names_all_rules, evidence_denial_reports_each_configured_reason, and terminal_validation_gate; it drives separate start, show, append, event, and final-show processes and asserts the caller-visible outcomes",
+        "Executable proof-map checker at fictional-repo/scripts/assert-requirement-proof.py; it maps all four exact intent acceptance requirements to named proofs, checks the supplied repository-state proof inventory, and rejects a public journey that preloads complete intent evidence instead of exercising explicit deficit and repair cases",
+        "Driver-owned fictional setup for the public journey: an executable fictional-repo/target/debug/loop-engine, the provider executable registered by fictional-repo/implementation-evidence/providers.toml, the unchanged fictional-repo/provider/data/configs/standard.json profile with config_version=standard-7, fictional-repo/implementation-evidence/journey-fixtures containing intent-malformed.json, intent-good.json, intent-three-violations.json, the four intent-evidence-deficit-*.json fixtures, the four evidence-*.json fixtures, the four intent-evidence-repair-*.json fixtures, validation-report-good.json, and validation-evidence-good-*.json, and terminal-validation-proof already at validation-adversarial-review with a current validation report but no final satisfying evidence. The acceptance-proof task consumes this setup and owns the outer CLI assertions; these fictional paths are not current-run proof.",
+        "Public operator outcome journey at scripts/production-journey.py with named scenarios frozen_profile_is_inspectable_before_transition, malformed_artifact_denial_names_all_rules, evidence_denial_reports_each_configured_reason, and terminal_validation_gate; it drives separate start, show, append, event, and final-show processes through the supplied scripted backend, establishes a real qualifying-coverage deficit before each stale-revision, self-authored, duplicate-author, or incomplete-axis record, asserts denial and unchanged state, and repairs only that missing contribution before asserting progression",
         "A mechanical audit showing every acceptance line maps to an existing named test and public scenario and no supplied review record is presented as semantic review quality"
       ],
       "out_of_scope": [
@@ -237,7 +254,10 @@
         "python3 scripts/production-journey.py --engine fictional-repo/target/debug/loop-engine --config fictional-repo/implementation-evidence/providers.toml --profile fictional-repo/provider/data/configs/standard.json --fixtures fictional-repo/implementation-evidence/journey-fixtures --terminal-run-id terminal-validation-proof",
         "python3 fictional-repo/scripts/assert-requirement-proof.py"
       ],
-      "handoff": "Produce the acceptance tests, scripts/production-journey.py public outcome captures, fictional-repo/implementation-evidence/requirement-to-proof.md, and fictional-repo/scripts/assert-requirement-proof.py; authoritative-doc-integration consumes this proof matrix, checker, public scenarios, and successful workspace output."
+      "handoff": "Produce the acceptance tests, scripts/production-journey.py public outcome captures, fictional-repo/implementation-evidence/requirement-to-proof.md, and fictional-repo/scripts/assert-requirement-proof.py; consume the driver-owned engine/provider/profile/fixture setup and terminal-validation-proof named in plan.json#/proof_commands/1; make deficient-evidence denial fail a broken acceptance and repair only the missing qualifying contribution; authoritative-doc-integration consumes this proof matrix, checker, public scenarios, and successful workspace output.",
+      "criterion_ids": [
+        "AC-2"
+      ]
     },
     {
       "id": "authoritative-doc-integration",
@@ -272,7 +292,10 @@
         "python3 fictional-repo/scripts/assert-requirement-proof.py",
         "python3 fictional-repo/scripts/assert-doc-authority.py"
       ],
-      "handoff": "Produce fictional-repo/README.md, fictional-repo/provider/README.md, fictional-repo/docs/PRD.md, fictional-repo/implementation-evidence/requirement-to-proof.md, fictional-repo/scripts/assert-doc-authority.py, and the supplemental change PRD, technical design, and task packets; validation report and docs-integrated review consume these exact document, checker, and proof paths."
+      "handoff": "Produce fictional-repo/README.md, fictional-repo/provider/README.md, fictional-repo/docs/PRD.md, fictional-repo/implementation-evidence/requirement-to-proof.md, fictional-repo/scripts/assert-doc-authority.py, and the supplemental change PRD, technical design, and task packets; validation report and docs-integrated review consume these exact document, checker, and proof paths.",
+      "criterion_ids": [
+        "AC-3"
+      ]
     }
   ],
   "dependency_graph": [
@@ -321,28 +344,47 @@
     {
       "id": "workspace-tests",
       "command": "cargo",
-      "args": ["test", "--workspace"],
+      "args": [
+        "test",
+        "--workspace"
+      ],
       "owner": "driver",
       "obligation": "Run the plan's protocol, schema, evidence, reference-data, transition and acceptance tests; assert the named observable contracts, not only process exit."
     },
     {
       "id": "public-outcome-journey",
       "command": "python3",
-      "args": ["scripts/production-journey.py", "--engine", "fictional-repo/target/debug/loop-engine", "--config", "fictional-repo/implementation-evidence/providers.toml", "--profile", "fictional-repo/provider/data/configs/standard.json", "--fixtures", "fictional-repo/implementation-evidence/journey-fixtures", "--terminal-run-id", "terminal-validation-proof"],
+      "args": [
+        "scripts/production-journey.py",
+        "--engine",
+        "fictional-repo/target/debug/loop-engine",
+        "--config",
+        "fictional-repo/implementation-evidence/providers.toml",
+        "--profile",
+        "fictional-repo/provider/data/configs/standard.json",
+        "--fixtures",
+        "fictional-repo/implementation-evidence/journey-fixtures",
+        "--terminal-run-id",
+        "terminal-validation-proof"
+      ],
       "owner": "driver",
-      "obligation": "Assert frozen-profile inspection, exhaustive structural denial, configured evidence denial and terminal validation with retained denial lineage. Fictional setup supplies the built engine, provider TOML, unchanged standard-7 profile and named JSON fixtures; terminal-validation-proof is prepared at validation-adversarial-review without satisfying final evidence. These are fictional paths and setup, not current-run execution claims."
+      "obligation": "Assert frozen-profile inspection, exhaustive structural denial, configured evidence denial and terminal validation with retained denial lineage. The driver-owned fictional setup supplies the executable engine, provider executable registered by the provider TOML, unchanged standard-7 profile, named artifact/evidence/repair fixtures, and terminal-validation-proof at validation-adversarial-review without satisfying final evidence; each deficient-evidence case starts with an explicit qualifying-coverage deficit. These are fictional paths and setup, not current-run execution claims."
     },
     {
       "id": "requirement-proof-map",
       "command": "python3",
-      "args": ["fictional-repo/scripts/assert-requirement-proof.py"],
+      "args": [
+        "fictional-repo/scripts/assert-requirement-proof.py"
+      ],
       "owner": "driver",
       "obligation": "Check all four exact acceptance requirements against the named executable proofs and supplied repository-state inventory."
     },
     {
       "id": "document-authority",
       "command": "python3",
-      "args": ["fictional-repo/scripts/assert-doc-authority.py"],
+      "args": [
+        "fictional-repo/scripts/assert-doc-authority.py"
+      ],
       "owner": "driver",
       "obligation": "Check authoritative document presence, singular PRD authority, exact acceptance coverage and relative Markdown links."
     }

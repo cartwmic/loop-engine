@@ -642,6 +642,10 @@ pub struct CreateWorkSlotInvocationRequest {
     pub instruction_digest: String,
     pub subject: String,
     pub waiter_pid: u32,
+    /// Native incarnation identity captured when the waiter was spawned.
+    /// Historical requests may omit it; new local adapters provide it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiter_identity: Option<crate::ProcessIdentity>,
     pub started_at: Timestamp,
     pub allowed_time_ms: u64,
     pub capture_dir: String,
@@ -684,6 +688,7 @@ impl CreateWorkSlotInvocationRequest {
             instruction_digest: instruction_digest.into(),
             subject: subject.into(),
             waiter_pid,
+            waiter_identity: None,
             started_at,
             allowed_time_ms,
             capture_dir: capture_dir.into(),
@@ -693,6 +698,16 @@ impl CreateWorkSlotInvocationRequest {
             assignment_selection: None,
             invocation_input: None,
         }
+    }
+
+    pub fn with_waiter_identity(mut self, identity: crate::ProcessIdentity) -> Self {
+        self.waiter_identity = Some(identity);
+        self
+    }
+
+    pub fn with_waiter_identity_opt(mut self, identity: Option<crate::ProcessIdentity>) -> Self {
+        self.waiter_identity = identity;
+        self
     }
 
     pub fn with_controls(mut self, controls: crate::InvocationControls) -> Self {
@@ -1004,6 +1019,13 @@ pub trait Persistence {
         &self,
         run_id: &RunId,
     ) -> Result<Vec<WorkSlotInvocation>, PersistenceError>;
+
+    /// Compare a running invocation's recorded waiter incarnation with the
+    /// current native process table. Adapters without a native process reader
+    /// fail closed; numeric waiter PIDs are never treated as ownership.
+    fn invocation_waiter_alive(&self, _invocation: &WorkSlotInvocation) -> bool {
+        false
+    }
 }
 
 /// A semantic rejection produced while enforcing a persistence precondition.
@@ -1246,12 +1268,23 @@ impl WaiterSpawnArgs {
 /// A spawned waiter that has not yet received its envelope and has not been waited on.
 pub struct StartedWaiter<H> {
     pub pid: u32,
+    /// Native identity captured before the waiter is handed to the caller.
+    pub identity: Option<crate::ProcessIdentity>,
     pub handle: H,
 }
 
 impl<H> StartedWaiter<H> {
     pub fn new(pid: u32, handle: H) -> Self {
-        Self { pid, handle }
+        Self {
+            pid,
+            identity: None,
+            handle,
+        }
+    }
+
+    pub fn with_identity(mut self, identity: crate::ProcessIdentity) -> Self {
+        self.identity = Some(identity);
+        self
     }
 }
 
@@ -1288,6 +1321,17 @@ pub trait WorkSlotProcess {
     type Handle;
 
     fn waiter_alive(&self, pid: u32) -> bool;
+
+    /// Identity-aware waiter liveness used by new execution paths. The legacy
+    /// method remains available for lightweight adapters and old tests; a
+    /// native adapter overrides this method and refuses numeric-only probes.
+    fn waiter_alive_for_identity(
+        &self,
+        pid: u32,
+        _identity: Option<&crate::ProcessIdentity>,
+    ) -> bool {
+        self.waiter_alive(pid)
+    }
 
     /// Enumerate assignment identities for a bound worker when the adapter
     /// knows how to do so. `None` means the binding is opaque and cannot be

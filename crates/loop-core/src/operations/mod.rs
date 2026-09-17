@@ -43,7 +43,6 @@ use crate::{
 pub fn require_quiescent_work<P, T>(
     run: &crate::Run,
     persistence: &P,
-    waiter_alive: impl Fn(u32) -> bool,
 ) -> Result<(), OperationOutcome<T>>
 where
     P: Persistence + ?Sized,
@@ -55,7 +54,7 @@ where
         .load_work_slot_invocations(&run.id)
         .map_err(persistence_error)?;
     for row in rows {
-        if crate::invocation_owns_work(&row, waiter_alive(row.waiter_pid)) {
+        if crate::invocation_owns_work(&row, persistence.invocation_waiter_alive(&row)) {
             return Err(OperationOutcome::rejected("live-owned-work", format!(
                 "invocation `{}` owns live work or pending cleanup (including overrun); wait or cancel-invocation {} {} before leaving this visit",
                 row.invocation_id, run.id, row.invocation_id)));

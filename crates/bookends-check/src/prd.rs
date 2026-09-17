@@ -228,46 +228,55 @@ fn parse_coverage(line: &str) -> Result<Vec<CoverageClass>, String> {
 }
 
 /// Citation token `bookends` + `:LE-<n>` with `<n>` = `[1-9][0-9]*`.
+///
+/// A citation is a directive comment, not an arbitrary substring.  Keeping
+/// this lexical boundary prevents a fixture string or a documentation example
+/// from becoming proof while retaining the existing comment directive syntax
+/// used by Python and Rust proof files.
 pub(crate) fn scan_citation_tokens(text: &str) -> Result<Vec<String>, Vec<String>> {
     const NEEDLE: &str = concat!("bookends", ":LE-");
     const NON_CANONICAL_NEEDLE: &str = concat!("@", "spec", ":");
+    let comments = directive_comments(text);
     let mut ids = Vec::new();
     let mut errors = Vec::new();
-    let mut search_from = 0;
-    while let Some(rel) = text[search_from..].find(NEEDLE) {
-        let after = search_from + rel + NEEDLE.len();
-        let rest = &text[after..];
-        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if digits.is_empty() || digits.starts_with('0') {
-            errors.push(format!(
-                "malformed citation token {NEEDLE}{}",
-                rest.chars().take(8).collect::<String>()
-            ));
-            let advance = rest.chars().next().map(char::len_utf8).unwrap_or(0);
-            search_from = after + advance;
-            continue;
-        }
-        ids.push(format!("LE-{digits}"));
-        search_from = after + digits.len();
-    }
 
-    // Compass's alternate citation spelling is explicitly not part of v1. Treat any
-    // use as malformed rather than silently ignoring it when another
-    // canonical citation happens to make the file eligible.
-    let mut search_from = 0;
-    while let Some(rel) = text[search_from..].find(NON_CANONICAL_NEEDLE) {
-        let start = search_from + rel;
-        let after = start + NON_CANONICAL_NEEDLE.len();
-        let suffix: String = text[after..].chars().take(24).collect();
-        errors.push(format!(
-            "malformed non-canonical citation token {NON_CANONICAL_NEEDLE}{suffix}"
-        ));
-        let advance = text[start..]
-            .chars()
-            .next()
-            .map(char::len_utf8)
-            .unwrap_or(0);
-        search_from = start + advance;
+    for comment in comments {
+        let mut search_from = 0;
+        while let Some(rel) = comment[search_from..].find(NEEDLE) {
+            let after = search_from + rel + NEEDLE.len();
+            let rest = &comment[after..];
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if digits.is_empty() || digits.starts_with('0') {
+                errors.push(format!(
+                    "malformed citation token {NEEDLE}{}",
+                    rest.chars().take(8).collect::<String>()
+                ));
+                let advance = rest.chars().next().map(char::len_utf8).unwrap_or(0);
+                search_from = after + advance;
+                continue;
+            }
+            ids.push(format!("LE-{digits}"));
+            search_from = after + digits.len();
+        }
+
+        // Compass's alternate citation spelling is explicitly not part of v1.
+        // Treat it as malformed in a real directive comment rather than
+        // silently ignoring it when another canonical citation is present.
+        let mut search_from = 0;
+        while let Some(rel) = comment[search_from..].find(NON_CANONICAL_NEEDLE) {
+            let start = search_from + rel;
+            let after = start + NON_CANONICAL_NEEDLE.len();
+            let suffix: String = comment[after..].chars().take(24).collect();
+            errors.push(format!(
+                "malformed non-canonical citation token {NON_CANONICAL_NEEDLE}{suffix}"
+            ));
+            let advance = comment[start..]
+                .chars()
+                .next()
+                .map(char::len_utf8)
+                .unwrap_or(0);
+            search_from = start + advance;
+        }
     }
 
     if errors.is_empty() {
@@ -278,7 +287,155 @@ pub(crate) fn scan_citation_tokens(text: &str) -> Result<Vec<String>, Vec<String
 }
 
 pub(crate) fn has_skip_marker(text: &str) -> bool {
-    text.contains("bookends:skip")
+    directive_comments(text)
+        .into_iter()
+        .any(|comment| comment.contains("bookends:skip"))
+}
+
+/// Return ordinary line/block comment bodies while ignoring quoted strings
+/// and Rust documentation comments.  This is intentionally a small lexical
+/// scanner, not a language parser or a test classifier.
+fn directive_comments(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut comments = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'/' && bytes.get(index + 1) == Some(&b'/') {
+            let doc = matches!(bytes.get(index + 2), Some(b'/') | Some(b'!'));
+            let start = index + 2;
+            let end = skip_line(bytes, start);
+            if !doc {
+                comments.push(&text[start..end]);
+            }
+            index = end;
+            continue;
+        }
+        if bytes[index] == b'/' && bytes.get(index + 1) == Some(&b'*') {
+            let doc = matches!(bytes.get(index + 2), Some(b'*') | Some(b'!'));
+            let content_start = index + 2;
+            let end = skip_block(bytes, content_start);
+            let content_end = end.saturating_sub(2).max(content_start).min(bytes.len());
+            if !doc {
+                comments.push(&text[content_start..content_end]);
+            }
+            index = end;
+            continue;
+        }
+        if bytes[index] == b'#'
+            && bytes.get(index + 1) != Some(&b'[')
+            && !(bytes.get(index + 1) == Some(&b'!') && bytes.get(index + 2) == Some(&b'['))
+        {
+            let start = index + 1;
+            let end = skip_line(bytes, start);
+            comments.push(&text[start..end]);
+            index = end;
+            continue;
+        }
+        if let Some(end) = raw_string_end(bytes, index) {
+            index = end;
+            continue;
+        }
+        if bytes[index] == b'"' {
+            index = quoted_end(bytes, index, b'"');
+            continue;
+        }
+        if bytes[index] == b'\'' {
+            index = single_quoted_end(bytes, index);
+            continue;
+        }
+        index += 1;
+    }
+    comments
+}
+
+fn skip_line(bytes: &[u8], mut index: usize) -> usize {
+    while index < bytes.len() && bytes[index] != b'\n' {
+        index += 1;
+    }
+    index
+}
+
+fn skip_block(bytes: &[u8], mut index: usize) -> usize {
+    let mut depth = 1;
+    while index < bytes.len() && depth > 0 {
+        if bytes[index] == b'/' && bytes.get(index + 1) == Some(&b'*') {
+            depth += 1;
+            index += 2;
+        } else if bytes[index] == b'*' && bytes.get(index + 1) == Some(&b'/') {
+            depth -= 1;
+            index += 2;
+        } else {
+            index += 1;
+        }
+    }
+    index
+}
+
+fn raw_string_end(bytes: &[u8], index: usize) -> Option<usize> {
+    let mut marker = index;
+    if bytes.get(marker) == Some(&b'b') {
+        marker += 1;
+    }
+    if bytes.get(marker) != Some(&b'r') {
+        return None;
+    }
+    marker += 1;
+    let mut hashes = 0;
+    while bytes.get(marker) == Some(&b'#') {
+        hashes += 1;
+        marker += 1;
+    }
+    if bytes.get(marker) != Some(&b'"') {
+        return None;
+    }
+    let mut cursor = marker + 1;
+    while cursor < bytes.len() {
+        if bytes[cursor] == b'"'
+            && bytes
+                .get(cursor + 1..cursor + 1 + hashes)
+                .is_some_and(|suffix| suffix.iter().all(|byte| *byte == b'#'))
+        {
+            return Some(cursor + 1 + hashes);
+        }
+        cursor += 1;
+    }
+    Some(bytes.len())
+}
+
+fn quoted_end(bytes: &[u8], index: usize, quote: u8) -> usize {
+    let mut cursor = index + 1;
+    while cursor < bytes.len() {
+        if bytes[cursor] == b'\\' {
+            cursor = cursor.saturating_add(2);
+        } else if bytes[cursor] == quote {
+            return cursor + 1;
+        } else {
+            cursor += 1;
+        }
+    }
+    bytes.len()
+}
+
+fn single_quoted_end(bytes: &[u8], index: usize) -> usize {
+    if bytes.get(index..index + 3) == Some(b"'''") {
+        let mut cursor = index + 3;
+        while cursor + 2 < bytes.len() {
+            if bytes.get(cursor..cursor + 3) == Some(b"'''") {
+                return cursor + 3;
+            }
+            cursor += 1;
+        }
+        return bytes.len();
+    }
+    let end = quoted_end(bytes, index, b'\'');
+    let line_end = skip_line(bytes, index);
+    if end <= line_end && bytes.get(end.saturating_sub(1)) == Some(&b'\'') {
+        end
+    } else {
+        // An apostrophe followed by an identifier is normally a Rust
+        // lifetime (`'a`/`'static`), not an unterminated string.
+        index + 1
+    }
 }
 
 #[cfg(test)]
@@ -388,25 +545,25 @@ mod tests {
 
     #[test]
     fn citation_le10_is_not_le1() {
-        let ids = scan_citation_tokens(concat!("bookends", ":LE-10")).unwrap();
+        let ids = scan_citation_tokens("// bookends:LE-10").unwrap();
         assert_eq!(ids, vec!["LE-10".to_string()]);
     }
 
     #[test]
     fn malformed_citation_le0() {
-        let err = scan_citation_tokens(&format!("{}{}{}", "bookends", ":LE-", "0")).unwrap_err();
+        let err = scan_citation_tokens("// bookends:LE-0").unwrap_err();
         assert!(!err.is_empty());
     }
 
     #[test]
     fn malformed_unicode_citation_does_not_panic() {
-        let text = format!("{}{}{}", "bookends", ":LE-", "😀");
-        assert!(scan_citation_tokens(&text).is_err());
+        let text = "// bookends:LE-😀";
+        assert!(scan_citation_tokens(text).is_err());
     }
 
     #[test]
     fn noncanonical_at_spec_citation_is_malformed() {
-        let noncanonical = format!("{}{}", concat!("@", "spec:"), "LE-1\nbookends:LE-1");
+        let noncanonical = format!("// {}LE-1\n// bookends:LE-1", ["@", "spec:"].concat());
         let err = scan_citation_tokens(&noncanonical).unwrap_err();
         assert!(
             err.iter().any(|error| error.contains("non-canonical")),
@@ -422,6 +579,48 @@ mod tests {
             !source.contains(&marker),
             "checker source must construct the rejected marker from fragments"
         );
+    }
+
+    #[test]
+    fn citations_ignore_strings_and_documentation_comments() {
+        let text = r#"
+            const EXAMPLE: &str = "bookends:LE-1";
+            /// bookends:LE-2
+            /** bookends:LE-3 */
+            let single = 'bookends:LE-4';
+            // bookends:LE-5
+            /* bookends:LE-6 */
+        "#;
+        assert_eq!(
+            scan_citation_tokens(text).unwrap(),
+            vec!["LE-5".to_owned(), "LE-6".to_owned()]
+        );
+    }
+
+    #[test]
+    fn skip_marker_is_only_a_comment_directive() {
+        let text = r#"
+            let value = "bookends:skip";
+            // bookends:LE-1
+        "#;
+        assert!(!has_skip_marker(text));
+        assert_eq!(scan_citation_tokens(text).unwrap(), vec!["LE-1"]);
+        assert!(has_skip_marker("// bookends:skip\n// bookends:LE-1"));
+    }
+
+    #[test]
+    fn a_rust_lifetime_does_not_hide_a_following_comment() {
+        let text = "let value: &'static str = \"value\"; // bookends:LE-1";
+        assert_eq!(scan_citation_tokens(text).unwrap(), vec!["LE-1"]);
+    }
+
+    #[test]
+    fn raw_strings_do_not_hide_or_create_directives() {
+        let text = r##"
+            let value = r#"// bookends:LE-1"#;
+            // bookends:LE-2
+        "##;
+        assert_eq!(scan_citation_tokens(text).unwrap(), vec!["LE-2"]);
     }
 
     #[test]

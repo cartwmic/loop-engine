@@ -85,7 +85,8 @@ fn evaluate(repo_root: &Path) -> CheckReport {
         return CheckReport::red(live_ids, findings);
     }
 
-    let mut findings = tree_graph_findings(repo_root, &cfg, &prd);
+    let tree = git::Worktree::new(repo_root);
+    let mut findings = tree_graph_findings(&tree, &cfg, &prd);
 
     match preceding_committed_prd(repo_root, &cfg, &prd_text) {
         Ok(previous) => findings.extend(continuity_findings(&prd, previous.as_ref())),
@@ -111,10 +112,14 @@ fn prefix_findings(prd: &Prd, cfg: &RepoConfig) -> Vec<String> {
     findings
 }
 
-fn tree_graph_findings(repo_root: &Path, cfg: &RepoConfig, prd: &Prd) -> Vec<String> {
+pub(crate) fn tree_graph_findings<T: git::TreeReader>(
+    tree: &T,
+    cfg: &RepoConfig,
+    prd: &Prd,
+) -> Vec<String> {
     let mut findings = prefix_findings(prd, cfg);
 
-    let tracked = match git::tracked_files(repo_root) {
+    let tracked = match tree.tracked_files() {
         Ok(files) => files.into_iter().collect::<BTreeSet<_>>(),
         Err(err) => {
             findings.push(err);
@@ -122,14 +127,14 @@ fn tree_graph_findings(repo_root: &Path, cfg: &RepoConfig, prd: &Prd) -> Vec<Str
         }
     };
 
-    let jobs = match load_workflow_jobs(repo_root) {
+    let jobs = match load_workflow_jobs(tree) {
         Ok(jobs) => jobs,
         Err(err) => {
             findings.push(err);
             return findings;
         }
     };
-    let packages = match workspace_packages(repo_root) {
+    let packages = match workspace_packages(tree) {
         Ok(packages) => packages,
         Err(err) => {
             findings.push(err);
@@ -138,7 +143,7 @@ fn tree_graph_findings(repo_root: &Path, cfg: &RepoConfig, prd: &Prd) -> Vec<Str
     };
 
     findings.extend(class_surface_findings(
-        repo_root,
+        tree,
         &cfg.e2e_journey,
         "e2e/journey",
         &jobs,
@@ -146,11 +151,11 @@ fn tree_graph_findings(repo_root: &Path, cfg: &RepoConfig, prd: &Prd) -> Vec<Str
     ));
     if let Some(contract) = &cfg.contract {
         findings.extend(class_surface_findings(
-            repo_root, contract, "contract", &jobs, &tracked,
+            tree, contract, "contract", &jobs, &tracked,
         ));
     }
 
-    let e2e_files = match git::pathspec_files(repo_root, &cfg.e2e_journey.pathspecs) {
+    let e2e_files = match tree.pathspec_files(&cfg.e2e_journey.pathspecs) {
         Ok(files) => files,
         Err(err) => {
             findings.push(err);
@@ -158,7 +163,7 @@ fn tree_graph_findings(repo_root: &Path, cfg: &RepoConfig, prd: &Prd) -> Vec<Str
         }
     };
     let contract_files = match &cfg.contract {
-        Some(contract) => match git::pathspec_files(repo_root, &contract.pathspecs) {
+        Some(contract) => match tree.pathspec_files(&contract.pathspecs) {
             Ok(files) => files,
             Err(err) => {
                 findings.push(err);
@@ -168,14 +173,14 @@ fn tree_graph_findings(repo_root: &Path, cfg: &RepoConfig, prd: &Prd) -> Vec<Str
         None => Vec::new(),
     };
 
-    let e2e_citations = match index_class_files(repo_root, &e2e_files) {
+    let e2e_citations = match index_class_files(tree, &e2e_files) {
         Ok((citations, _)) => citations,
         Err(errors) => {
             findings.extend(errors);
             Vec::new()
         }
     };
-    let contract_citations = match index_class_files(repo_root, &contract_files) {
+    let contract_citations = match index_class_files(tree, &contract_files) {
         Ok((citations, _)) => citations,
         Err(errors) => {
             findings.extend(errors);
@@ -260,15 +265,15 @@ fn contract_declaration_findings(prd: &Prd, cfg: &RepoConfig) -> Vec<String> {
     findings
 }
 
-fn class_surface_findings(
-    repo: &Path,
+fn class_surface_findings<T: git::TreeReader>(
+    tree: &T,
     class: &ClassConfig,
     class_name: &str,
     jobs: &std::collections::BTreeMap<String, JobCommands>,
     tracked: &BTreeSet<String>,
 ) -> Vec<String> {
     let mut findings = Vec::new();
-    match git::pathspec_files(repo, &class.pathspecs) {
+    match tree.pathspec_files(&class.pathspecs) {
         Ok(files) => {
             let tracked_hits: Vec<_> = files.into_iter().filter(|f| tracked.contains(f)).collect();
             if tracked_hits.is_empty() {

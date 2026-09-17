@@ -60,7 +60,7 @@ Other commands include `invocation-progress`, `fan-out`, `preview-bindings`, `mo
 
 ```text
 loop-engine [--database DB] [--json] [--timeout-ms MS] invocation-progress RUN_ID [INVOCATION_ID]
-loop-engine fan-out [--worker JSON]... [--instructions FILE] [--max-active N]
+loop-engine fan-out [--worker JSON]... [--then --worker JSON ...] [--instructions FILE] [--max-active N]
 loop-engine preview-bindings [JSON|@FILE]
 ```
 
@@ -116,7 +116,7 @@ Initial bindings freeze with `initial_input`; explicit owner-attested `amend-bin
 Ask, show the exact JSON you will freeze, and wait for explicit confirmation of all three:
 
 1. **Whether to bind any slots**, and if so which catalog slot IDs. Sparse map: a present key is a mandatory worker for that room; an absent key stays driver-performed. `{}` or omitting the key means no bindings.
-2. **Command and args per bound slot** — copy a skill template (fill `CURSOR_EXTENSION_PATH`, `CLAUDE_BRIDGE_EXTENSION_PATH`, and `MODEL` in the per-run JSON, not in the skill file), or write custom argv. Quote the exact `{command, args}` for every bound slot.
+2. **Command and args per bound slot** — copy a skill template (fill `MODEL` and only the extension paths required by the chosen model provider in the per-run JSON, not in the skill file), or write custom argv. Quote the exact `{command, args}` for every bound slot.
 3. **Model identity per bound slot that will invoke a model-bearing CLI.** The engine freezes argv only. Encode the model in those frozen args (inner `--task-worker` JSON, repeated `--worker` JSON, or the worker CLI's own model flags). Nested inner workers count, not only the outer binding command. Do not choose a model after `start`.
 
 Do not call `start` while any bound slot will invoke a model-bearing CLI (`pi --print`, `claude -p`, `run-plan-graph`'s inner worker, or similar) unless each model identifier is present in those frozen args, or the user has explicitly accepted that CLI's unpinned default as the model policy. An outer argv that does not name a model is not model lock-in. Do not bind a review slot when its configured policy-axis list is empty.
@@ -162,7 +162,7 @@ Read the full execution correction/cancellation and override sections in reposit
 - `cancel-invocation RUN INVOCATION` acts on current recorded local ownership, never arbitrary PIDs. It stops and verifies disappearance/reaping before terminal invocation failure; the workflow stays active and captures survive. A durable admission marker blocks later tasks/summarizer. Each acquisition/resumption has **ten seconds**, at most **three seconds** graceful; escalation and verification share the remaining clock. Waiter loss does not prevent recorded-ownership cleanup. Interrupted controllers remain incomplete: already-running work may persist during unbounded operator delay while later admission stays blocked. Repeating the same command resumes with a new recorded ten-second attempt; it never relabels the earlier incomplete/timeout attempt as successful. Cleanup failure keeps the barrier. Wrong-run/nonrunning targets refuse unless resuming an outstanding cancellation; historical missing ownership is unsupported.
 - `event RUN EVENT --override JSON` accepts exactly `{state_visit,owner,reason}` for one shown available edge after observation and quiescence. History records `overridden`, not provider allow; known bound checks are skipped and provider evaluation is not performed. No missing artifact, review pass or Bookends GREEN is invented. Later edges still need proof or another exception. A downstream checkpoint may require accepted implementation-proof-history that the skipped edge never created: missing history remains missing, so normal downstream proof can still refuse. Restore the real missing proof through supported owning-phase work, or seek a separately owner-attested exception; never synthesize historical success. Show/list/history retain has_overrides/count; final completion_mode is permanently `completed-with-overrides`. Ordinary final mode is `completed`.
 
-These common controls do not add software-change finding/criterion/batching features to policy-document or research. New software-change contract v2 profiles (`minimal-9`, `standard-9`, `high-rigor-9`) explicitly declare independent criterion_policy. Old semantic profiles require their fixed original provider; provider-free historical reads preserve old evidence, not new capability. No active bootstrap migration is included.
+These common controls do not add software-change finding/criterion/batching features to policy-document or research. New software-change contract-v3 profiles (`minimal-10`, `standard-10`, `high-rigor-10`) explicitly declare independent criterion/goal floors of 1/2/2, stage-aware review, and required task criterion links. Old semantic profiles require their fixed original provider; provider-free historical reads preserve their original evidence meaning. No active bootstrap migration is included.
 
 ## Software-change commission and durable steering
 
@@ -176,10 +176,10 @@ Execution-only changes may add `proof_updates:[{"proof_id":"final","owner":"driv
 
 ## Non-run-state command: fan-out
 
-`fan-out` does not start, advance, or record a run and does not open the run database. Each invocation emits a local Dagu `type:graph` under isolated `capture_dir/dagu-home/` (bound: packet `capture_dir`; ad-hoc: `cwd/fan-out-adhoc/<unique>`). Callers never supply Dagu YAML. The facade waitpids `dagu start --quiet --dagu-home` and does not daemonize. Use the passive monitor for waiting and `invocation-progress` for targeted graph/trace inspection. Overlay remains the facade process exit. Dagu is GPLv3: invoke the operator-provided binary as a subprocess only; do not embed its Go API. Packages do not ship `dagu` (minimum 2.14.0 on PATH).
+`fan-out` does not start, advance, or record a run and does not open the run database. Each invocation emits a local Dagu `type:graph` under isolated `capture_dir/dagu-home/` (bound: packet `capture_dir`; ad-hoc: `cwd/fan-out-adhoc/<unique>`). Callers never supply Dagu YAML. The facade waitpids `dagu start --quiet --dagu-home` and does not daemonize. Use the passive monitor for waiting and `invocation-progress` for targeted graph/trace inspection. Overlay remains the facade process exit. Dagu is GPLv3: invoke the operator-provided binary as a subprocess only; do not embed its Go API. Packages do not ship `dagu` (minimum 2.14.0 on PATH). A single optional `--then` divider separates two nonempty flat worker groups. Each selected worker in the second group waits for completion and mechanical conformance of the selected first group; semantic output remains opaque and is not forwarded.
 
 ```text
-loop-engine fan-out [--worker JSON]... [--instructions FILE] [--max-active N]
+loop-engine fan-out [--worker JSON]... [--then --worker JSON ...] [--instructions FILE] [--max-active N]
 ```
 
 Supply one or more strict `--worker` JSON objects with `command` and string-array `args`. Optional `preamble`, legacy required-key `output_schema`, and complete JSON Schema `full_output_schema` belong only to fan-out workers; nested `--task-worker` remains `{command,args}`. Use provider constructors for reviews. Before building a custom worker contract, read repository `docs/agent-usage.md`, **Non-run-state command: fan-out**, for accepted shapes, force-fresh constraints, stdin framing and output extraction. Unknown/malformed fields and zero workers refuse.
@@ -194,7 +194,7 @@ Bound captures contain per-worker `0/`, `1/`, … stdout/stderr and ordered `sum
 
 Shipped profiles omit `work_slot_bindings` (or `{}`), so slots stay driver-performed until opt-in. Use the relevant provider skill's deterministic review-binding constructor; do not hand-author one generic reviewer for a multi-axis gate, and do not bind a review slot whose configured policy-axis list is empty. Provider constructors freeze each worker's `preamble` and declared output contract inline before profile preview and lock-in; software-change review workers use assignment-specific `full_output_schema` constants. Only explicit `amend-binding` corrects future execution; it does not rewrite initial input or earlier attempts.
 
-Pi templates keep `--no-skills --no-extensions` and add explicit `-e` paths so cursor-provider and claude-bridge load. Review workers include `--tools read,grep,find,ls` and must not pass `--no-context-files`. Implement workers do not add `--tools`. `preview-bindings` warns when a pi worker has `--no-extensions` and no `-e`; missing `--no-extensions` is not a required warning.
+Pi templates keep `--no-skills --no-extensions`. Add an existing extension path only when the selected model provider requires it; an omitted extension contributes no `-e` pair. Review workers include `--tools read,grep,find,ls` and must not pass `--no-context-files`. Implement workers do not add `--tools`. `preview-bindings` warns when a pi worker has `--no-extensions` and no `-e`; missing `--no-extensions` is not a required warning.
 
 Before rolling back to a pre-change binary, either keep a compatible binary available until every contracted run finishes, or terminate and restart each affected run without preamble or output_schema. This is operational guidance only and must not weaken immutable bindings or old-profile compatibility.
 
@@ -208,7 +208,7 @@ Opt-in implement example:
     "--working-directory",
     "ABSOLUTE_EXISTING_DIRECTORY",
     "--task-worker",
-    "{\"command\":\"pi\",\"args\":[\"--print\",\"--no-skills\",\"--no-extensions\",\"-e\",\"CURSOR_EXTENSION_PATH\",\"-e\",\"CLAUDE_BRIDGE_EXTENSION_PATH\",\"--model\",\"MODEL\"]}"
+    "{\"command\":\"pi\",\"args\":[\"--print\",\"--no-skills\",\"--no-extensions\",\"--model\",\"MODEL\"]}"
   ]
 }
 ```

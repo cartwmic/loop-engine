@@ -15,7 +15,8 @@ mod workflow;
 pub use execution_contract::{
     effective_binding, invocation_owns_work, resolve_context_filter, BindingAmendment,
     CancellationAcknowledgment, ContextFilter, ContextFilterSelection, EffectiveBinding,
-    ExecutionOwnershipState, InvocationControls, OwnedExecution, StateVisitAttestation,
+    ExecutionOwnershipState, InvocationControls, OwnedExecution, ProcessIdentity,
+    StateVisitAttestation,
 };
 pub use invocation::{instruction_digest, project_invocation_status};
 pub use model::{

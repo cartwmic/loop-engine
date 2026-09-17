@@ -4,7 +4,7 @@ use super::support;
 use loop_core::{OperationOutcome, TransitionKind};
 use serde_json::{json, Value};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use support::{metadata_schema, provider_binary, valid_metadata, Engine, TestDir};
 
@@ -362,7 +362,7 @@ fn assert_owning_phase_route(index: usize) {
     let mut policies = serde_json::Map::new();
     policies.insert(
         source.to_owned(),
-        json!([{"id": "axis", "description": "test axis"}]),
+        json!([{"id": "axis", "description": "test axis", "review_stage": "aggregate"}]),
     );
     let subject = subject_for_review(source);
     let mut schemas = serde_json::Map::new();
@@ -376,7 +376,7 @@ fn assert_owning_phase_route(index: usize) {
     );
     engine.start_ok(
             &run_id,
-            json!({"contract_version": 2, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+            json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
                 "config_version": "a14-route-test",
                 "review_policies": policies,
                 "artifact_schemas": schemas
@@ -673,4 +673,345 @@ fn review_states_expose_convergence_guidance() {
         !validation_lower.contains("revise for validation-report-local"),
         "validation draft guidance routes report-local corrections through revise"
     );
+}
+
+fn init_validation_repository(path: &Path) {
+    fs::create_dir_all(path).expect("create validation repository");
+    fs::write(path.join("marker.txt"), b"baseline\n").expect("write validation marker");
+    for args in [
+        vec!["init", "-q"],
+        vec!["config", "user.name", "software-change validation"],
+        vec!["config", "user.email", "validation@example.invalid"],
+        vec!["config", "commit.gpgsign", "false"],
+        vec!["add", "-A"],
+        vec!["commit", "-qm", "baseline"],
+    ] {
+        assert!(
+            Command::new("git")
+                .args(args)
+                .current_dir(path)
+                .status()
+                .expect("run git")
+                .success(),
+            "git command failed"
+        );
+    }
+}
+
+fn mutate_first_validation_verdict(request: &Value, mutation: impl FnOnce(&mut Value)) -> Value {
+    let mut request = request.clone();
+    let verdict = request["context"]
+        .as_array_mut()
+        .expect("validation context")
+        .iter_mut()
+        .find(|record| record["kind"] == "criterion-verdict")
+        .expect("criterion verdict");
+    mutation(&mut verdict["data"]);
+    request
+}
+
+fn validation_response(request: &Value, repository: &Path) -> Value {
+    let output = support::invoke_in_dir(request.clone(), repository);
+    support::assert_exit(&output, 0);
+    support::response(&output)
+}
+
+fn assert_validation_denied(request: &Value, repository: &Path, code: &str) {
+    let response = validation_response(request, repository);
+    assert_eq!(response["result"], "deny");
+    assert_eq!(response["feedback"]["code"], code, "{response}");
+}
+
+fn append_review_records(
+    context: &mut Vec<Value>,
+    gate: &str,
+    subject: &str,
+    revision: &str,
+    config_version: &str,
+    axes: &[&str],
+) {
+    let start = context.len() + 1;
+    for (index, axis) in axes.iter().enumerate() {
+        let sequence = start + index;
+        context.push(json!({
+            "id": format!("validation-cache-{gate}-{axis}"),
+            "kind": "review-evidence",
+            "data": support::evidence(
+                gate,
+                axis,
+                "pass",
+                "",
+                &format!("validation-cache-reviewer-{gate}-{axis}"),
+                "agent",
+                subject,
+                revision,
+                config_version,
+            ),
+            "sequence": sequence,
+            "created_at": sequence
+        }));
+    }
+    let sequence = start + axes.len();
+    context.push(json!({
+        "id": format!("validation-cache-{gate}-ledger"),
+        "kind": "finding-ledger",
+        "data": support::finding_ledger(gate, subject, revision, json!([])),
+        "sequence": sequence,
+        "created_at": sequence
+    }));
+}
+
+fn selected_validation_paths(context: &Value) -> (PathBuf, PathBuf) {
+    let evidence = context["context"]
+        .as_array()
+        .expect("validation context")
+        .iter()
+        .find(|record| record["kind"] == "command-evidence")
+        .expect("command evidence");
+    let index_path = PathBuf::from(
+        evidence["data"]["capture"]["index"]
+            .as_str()
+            .expect("capture index"),
+    );
+    let index: Value =
+        serde_json::from_slice(&fs::read(&index_path).expect("read validation capture index"))
+            .expect("validation capture index JSON");
+    let receipt = index["receipts"]
+        .as_array()
+        .and_then(|receipts| receipts.first())
+        .and_then(|row| row["receipt"].as_str())
+        .expect("selected receipt");
+    let receipt_path = PathBuf::from(receipt);
+    let receipt_path = if receipt_path.is_absolute() {
+        receipt_path
+    } else {
+        index_path
+            .parent()
+            .expect("capture index parent")
+            .join(receipt_path)
+    };
+    let receipt_value: Value =
+        serde_json::from_slice(&fs::read(&receipt_path).expect("read validation receipt"))
+            .expect("validation receipt JSON");
+    let stdout = receipt_value["stdout"].as_str().expect("receipt stdout");
+    let stdout_path = receipt_path.parent().expect("receipt parent").join(stdout);
+    (receipt_path, stdout_path)
+}
+
+#[test]
+fn validation_rechecks_changed_capture_and_reference_inputs_on_each_public_call() {
+    let artifacts = TestDir::new("validation-cache-artifacts");
+    let repository = TestDir::new("validation-cache-repository");
+    init_validation_repository(repository.path());
+    let repository_path = repository
+        .path()
+        .canonicalize()
+        .expect("canonical repository");
+
+    for (name, fixture) in [
+        ("intent.json", "intent-good.json"),
+        ("design.json", "design-good.json"),
+        (
+            "implementation-report.json",
+            "implementation-report-good.json",
+        ),
+    ] {
+        artifacts.write_json(name, &support::load_fixture(fixture));
+    }
+    let mut plan = support::executable_fixture_plan();
+    let original_commands = plan["proof_commands"]
+        .as_array()
+        .expect("fixture proof commands")
+        .clone();
+    // The current run-local prepare helper requires four named commands. Keep
+    // this test's workload real while giving it four distinct obligations.
+    plan["proof_commands"] = json!((0..4)
+        .map(|index| {
+            let mut command = original_commands[index % original_commands.len()].clone();
+            command["id"] = json!(format!("validation-cache-proof-{index}"));
+            command
+        })
+        .collect::<Vec<_>>());
+    artifacts.write_json("plan.json", &plan);
+
+    let implementation_checkpoint = Command::new(provider_binary())
+        .args([
+            "checkpoint",
+            "--phase",
+            "implementation",
+            "--artifact-root",
+            artifacts.path().to_str().expect("artifact root"),
+            "--working-directory",
+            repository_path.to_str().expect("repository"),
+        ])
+        .current_dir(&repository_path)
+        .output()
+        .expect("implementation checkpoint");
+    assert!(
+        implementation_checkpoint.status.success(),
+        "implementation checkpoint failed: {}",
+        String::from_utf8_lossy(&implementation_checkpoint.stderr)
+    );
+
+    let input = support::config_artifact_root(support::load_profile("minimal"), &artifacts);
+    let config_version = input["config_version"].as_str().expect("config version");
+    let mut implementation_context = Vec::new();
+    append_review_records(
+        &mut implementation_context,
+        "implementation-adversarial-review",
+        "implementation-report.json",
+        "r15",
+        config_version,
+        &[
+            "tasks-actually-done",
+            "no-scope-creep",
+            "design-faithful-final",
+        ],
+    );
+    let implementation_request = support::base_request(
+        input.clone(),
+        support::checked(
+            "implementation-adversarial-review",
+            "approved",
+            "validation",
+        ),
+    );
+    let mut implementation_request = implementation_request;
+    implementation_request["context"] = Value::Array(implementation_context);
+    assert_eq!(
+        validation_response(&implementation_request, &repository_path),
+        json!({"result": "allow"})
+    );
+
+    let records = support::validation_fixture(&input, &repository_path);
+    let mut context: Vec<Value> = records
+        .iter()
+        .enumerate()
+        .map(|(index, record)| {
+            json!({
+                "id": record["record_id"],
+                "kind": record["kind"],
+                "data": record["data"],
+                "sequence": index + 1,
+                "created_at": index + 1
+            })
+        })
+        .collect();
+    append_review_records(
+        &mut context,
+        "validation-review",
+        "validation-report.json",
+        "r15",
+        config_version,
+        &[
+            "intent-delivered",
+            "docs-integrated",
+            "requirement-proof-mapping",
+        ],
+    );
+    let context = Value::Array(context);
+    let mut request = support::base_request(
+        input,
+        support::checked(
+            "validation-review",
+            "approved",
+            "validation-adversarial-review",
+        ),
+    );
+    request["context"] = context;
+
+    assert_eq!(
+        validation_response(&request, repository.path()),
+        json!({"result": "allow"})
+    );
+
+    let (receipt_path, stdout_path) = selected_validation_paths(&request);
+    let stdout = fs::read(&stdout_path).expect("selected stdout");
+    let mut altered_stdout = stdout.clone();
+    altered_stdout.extend_from_slice(b"tampered");
+    fs::write(&stdout_path, altered_stdout).expect("alter selected stdout");
+    assert_validation_denied(
+        &request,
+        repository.path(),
+        "software-change-criterion-incomplete",
+    );
+    fs::write(&stdout_path, stdout).expect("restore selected stdout");
+
+    let receipt = fs::read(&receipt_path).expect("selected receipt");
+    let mut altered_receipt: Value = serde_json::from_slice(&receipt).expect("receipt JSON");
+    altered_receipt["id"] = json!("tampered-receipt");
+    fs::write(
+        &receipt_path,
+        serde_json::to_vec(&altered_receipt).expect("altered receipt JSON"),
+    )
+    .expect("alter selected receipt");
+    assert_validation_denied(
+        &request,
+        repository.path(),
+        "software-change-criterion-incomplete",
+    );
+    fs::write(&receipt_path, receipt).expect("restore selected receipt");
+
+    let marker = repository.path().join("marker.txt");
+    let marker_bytes = fs::read(&marker).expect("read marker");
+    fs::write(&marker, b"changed between public evaluations\n").expect("alter repository");
+    assert_validation_denied(
+        &request,
+        repository.path(),
+        "software-change-checkpoint-invalid",
+    );
+    fs::write(&marker, marker_bytes).expect("restore repository");
+    assert_eq!(
+        validation_response(&request, repository.path()),
+        json!({"result": "allow"})
+    );
+
+    let command_id = request["context"]
+        .as_array()
+        .expect("validation context")
+        .iter()
+        .find(|record| record["kind"] == "command-evidence")
+        .and_then(|record| record["id"].as_str())
+        .expect("command ID")
+        .to_owned();
+    let malformed = mutate_first_validation_verdict(&request, |data| {
+        data["evidence_context_ids"] = json!("not-an-array");
+    });
+    assert_validation_denied(
+        &malformed,
+        repository.path(),
+        "software-change-criterion-incomplete",
+    );
+    let duplicate = mutate_first_validation_verdict(&request, |data| {
+        data["evidence_context_ids"] = json!([command_id.clone(), command_id.clone()]);
+    });
+    assert_validation_denied(
+        &duplicate,
+        repository.path(),
+        "software-change-criterion-incomplete",
+    );
+    let unknown = mutate_first_validation_verdict(&request, |data| {
+        data["evidence_context_ids"] = json!(["missing-command-evidence"]);
+    });
+    assert_validation_denied(
+        &unknown,
+        repository.path(),
+        "software-change-criterion-incomplete",
+    );
+
+    let report: Value = serde_json::from_slice(
+        &fs::read(artifacts.path().join("validation-report.json")).expect("read validation report"),
+    )
+    .expect("validation report JSON");
+    let implementation = support::load_fixture("implementation-report-good.json");
+    for author in [report["author"].clone(), implementation["author"].clone()] {
+        let wrong_author = mutate_first_validation_verdict(&request, |data| {
+            data["author"] = author.clone();
+        });
+        assert_validation_denied(
+            &wrong_author,
+            repository.path(),
+            "software-change-criterion-incomplete",
+        );
+    }
 }

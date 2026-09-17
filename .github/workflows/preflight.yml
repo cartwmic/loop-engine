@@ -7,6 +7,21 @@ on:
         description: cargo-dist plan manifest supplied by generated release workflow
         required: true
         type: string
+      bookends_before:
+        description: actual before object from the publishing event, when available
+        required: false
+        default: ""
+        type: string
+      bookends_after:
+        description: actual after object from the publishing event, when available
+        required: false
+        default: ""
+        type: string
+      bookends_ref:
+        description: actual updated ref from the publishing event, when available
+        required: false
+        default: ""
+        type: string
 
 jobs:
   baseline-and-source-journey:
@@ -17,8 +32,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
-          # Bookends compares only the immediate baseline; depth 1 hides it.
+          # The checker receives the actual event range and completes any
+          # remaining ancestry fetch itself without changing this checkout.
           fetch-depth: 2
           submodules: recursive
       - name: Record preflight start
@@ -121,7 +138,24 @@ jobs:
       - name: Run Bookends check
         env:
           BOOKENDS_BYPASS: ""
-        run: scripts/bookends-check-gate.sh
+          BOOKENDS_UPDATE_STREAM: "1"
+          BOOKENDS_REMOTE: origin
+          BOOKENDS_BEFORE: ${{ inputs.bookends_before }}
+          BOOKENDS_AFTER: ${{ inputs.bookends_after }}
+          BOOKENDS_REF: ${{ inputs.bookends_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "$BOOKENDS_BEFORE" ] || [ -n "$BOOKENDS_AFTER" ] || [ -n "$BOOKENDS_REF" ]; then
+            test -n "$BOOKENDS_BEFORE"
+            test -n "$BOOKENDS_AFTER"
+            test -n "$BOOKENDS_REF"
+            printf '%s %s %s %s\n' \
+              "$BOOKENDS_REF" "$BOOKENDS_AFTER" "$BOOKENDS_REF" "$BOOKENDS_BEFORE" \
+              | scripts/bookends-check-gate.sh
+          else
+            scripts/bookends-check-gate.sh </dev/null
+          fi
       - name: Run ordinary nextest and doctest path
         shell: bash
         run: |
@@ -154,13 +188,12 @@ jobs:
             --repo "$GITHUB_WORKSPACE" \
             --compiler-artifacts "$RUNNER_TEMP/central-test-artifacts.jsonl" \
             --current-only
+      - name: Validate stock Cargo binary handoff
+        run: test -s "$RUNNER_TEMP/stock-cargo-handoff.json"
       - name: Run stock Cargo compatibility gate
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -s "$RUNNER_TEMP/stock-cargo-handoff.json"
-          LOOP_ENGINE_TEST_BINARY_HANDOFF="$RUNNER_TEMP/stock-cargo-handoff.json" \
-            cargo test --workspace
+        env:
+          LOOP_ENGINE_TEST_BINARY_HANDOFF: ${{ runner.temp }}/stock-cargo-handoff.json
+        run: cargo test --workspace
       - name: Clippy workspace
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Check formatting

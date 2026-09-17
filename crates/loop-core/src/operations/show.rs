@@ -524,6 +524,55 @@ fn unknown_dimensions() -> Value {
     })
 }
 
+fn invocation_is_after(candidate: &WorkSlotInvocation, record: &WorkSlotInvocation) -> bool {
+    candidate.started_at > record.started_at
+        || (candidate.started_at == record.started_at
+            && candidate.invocation_id > record.invocation_id)
+}
+
+/// Whether a later invocation attempted this assignment. Engine-level
+/// selection names assignments explicitly. A provider-owned invocation input
+/// is opaque to core, so its durable worker records are the only assignment
+/// membership core may use. Omitted input is the historical full invocation.
+fn later_invocation_covers_assignment(candidate: &WorkSlotInvocation, assignment_id: &str) -> bool {
+    if let Some(selection) = candidate.assignment_selection.as_ref() {
+        return selection.iter().any(|id| id == assignment_id);
+    }
+    if candidate.invocation_input.is_some() {
+        let workers = if candidate.recorded_inner_workers.is_empty() {
+            &candidate.inner_workers
+        } else {
+            &candidate.recorded_inner_workers
+        };
+        // An admitted opaque attempt without complete durable membership has
+        // unknown scope. Fail closed rather than carrying any older
+        // assignment: core cannot inspect the provider input to preserve a
+        // narrower subset.
+        let complete_membership = !workers.is_empty()
+            && workers
+                .iter()
+                .all(|worker| !worker.assignment_id.is_empty());
+        return !complete_membership
+            || workers
+                .iter()
+                .any(|worker| worker.assignment_id == assignment_id);
+    }
+    true
+}
+
+fn assignment_superseded_by_later_invocation(
+    record: &WorkSlotInvocation,
+    assignment_id: &str,
+    invocations: &[WorkSlotInvocation],
+) -> bool {
+    invocations.iter().any(|candidate| {
+        candidate.slot_id == record.slot_id
+            && candidate.subject == record.subject
+            && invocation_is_after(candidate, record)
+            && later_invocation_covers_assignment(candidate, assignment_id)
+    })
+}
+
 pub(crate) fn invocation_change_report(
     run: &Run,
     context: &[crate::ContextRecord],
@@ -531,12 +580,6 @@ pub(crate) fn invocation_change_report(
     invocations: &[WorkSlotInvocation],
     current_subjects: &BTreeMap<WorkSlotId, String>,
 ) -> InvocationChangeReport {
-    let latest_for_subject = invocations
-        .iter()
-        .filter(|item| item.slot_id == record.slot_id && item.subject == record.subject)
-        .max_by_key(|item| (item.started_at, item.invocation_id.clone()));
-    let invocation_is_latest =
-        latest_for_subject.is_some_and(|item| item.invocation_id == record.invocation_id);
     // Never infer a current subject from an older invocation. A missing
     // durable visit subject is unknown, and therefore changed.
     let current_subject = current_subjects.get(&record.slot_id).cloned();
@@ -697,9 +740,12 @@ pub(crate) fn invocation_change_report(
                     current.map(worker_assignment).unwrap_or(Value::Null),
                 ),
                 "repository_effect": changed_dimension(
+                    // `repository_effect` is optional on an otherwise present
+                    // task record. Two omitted effects therefore mean the
+                    // same known absence; a missing task record remains
+                    // unknown and must invalidate standing carry.
                     baseline.is_none()
-                        || !known_json(baseline.and_then(|worker| worker.repository_effect.as_ref()))
-                        || !known_json(current.and_then(|worker| worker.repository_effect.as_ref()))
+                        || current.is_none()
                         || current.and_then(|worker| worker.repository_effect.as_ref())
                             != baseline.and_then(|worker| worker.repository_effect.as_ref()),
                     baseline.and_then(|worker| worker.repository_effect.clone()).unwrap_or(Value::Null),
@@ -712,11 +758,12 @@ pub(crate) fn invocation_change_report(
                 attested_dimensions.as_ref(),
                 &task_dimensions,
             );
+            let superseded =
+                assignment_superseded_by_later_invocation(record, &assignment_id, invocations);
             plan_task_results.push(PlanTaskVisibility {
                 assignment_id,
-                standing: carried
-                    || (invocation_is_latest
-                        && changed_dimension_names(&task_dimensions).is_empty()),
+                standing: !superseded
+                    && (carried || changed_dimension_names(&task_dimensions).is_empty()),
                 dimensions: task_dimensions,
                 carry_act,
                 overridden_inputs,
@@ -724,13 +771,15 @@ pub(crate) fn invocation_change_report(
                 originating_output_sha256,
             });
         } else if let Some(worker) = current.or(baseline) {
-            let standing = carry_still_covers(
-                carry_act.as_deref(),
-                &overridden_inputs,
-                attested_dimensions.as_ref(),
-                &dimensions,
-            ) || (invocation_is_latest
-                && changed_dimension_names(&dimensions).is_empty());
+            let superseded =
+                assignment_superseded_by_later_invocation(record, &assignment_id, invocations);
+            let standing = !superseded
+                && (carry_still_covers(
+                    carry_act.as_deref(),
+                    &overridden_inputs,
+                    attested_dimensions.as_ref(),
+                    &dimensions,
+                ) || changed_dimension_names(&dimensions).is_empty());
             assignments.push(AssignmentVisibility {
                 assignment_id: worker.assignment_id.clone(),
                 subject_revision: record.subject.clone(),
@@ -822,6 +871,25 @@ pub fn project_with_invocations_and_subjects(
     waiter_alive: impl Fn(u32) -> bool,
     current_subjects: &BTreeMap<WorkSlotId, String>,
 ) -> std::result::Result<ShowProjection, ProjectionError> {
+    project_with_invocations_and_subjects_by_identity(
+        data,
+        invocations,
+        now,
+        |invocation| waiter_alive(invocation.waiter_pid),
+        current_subjects,
+    )
+}
+
+/// Identity-aware variant used by the composition root. The legacy public
+/// wrapper above remains available to lightweight adapters, while the real
+/// process path never reduces a waiter to a recyclable numeric PID.
+pub fn project_with_invocations_and_subjects_by_identity(
+    data: ShowData,
+    invocations: &[WorkSlotInvocation],
+    now: Timestamp,
+    waiter_alive: impl Fn(&WorkSlotInvocation) -> bool,
+    current_subjects: &BTreeMap<WorkSlotId, String>,
+) -> std::result::Result<ShowProjection, ProjectionError> {
     let current_state = data
         .run
         .workflow
@@ -853,8 +921,7 @@ pub fn project_with_invocations_and_subjects(
     let work_slot_invocations: Vec<_> = invocations
         .iter()
         .map(|record| {
-            let mut view =
-                WorkSlotInvocationView::from_record(record, now, waiter_alive(record.waiter_pid));
+            let mut view = WorkSlotInvocationView::from_record(record, now, waiter_alive(record));
             view.change_report = invocation_change_report(
                 &data.run,
                 &context,
@@ -914,6 +981,25 @@ pub fn project_with_invocations_and_subjects(
     })
 }
 
+fn invocation_liveness<Proc: WorkSlotProcess + ?Sized>(
+    invocations: &[WorkSlotInvocation],
+    process: &Proc,
+) -> BTreeMap<InvocationId, bool> {
+    invocations
+        .iter()
+        .map(|row| {
+            (
+                row.invocation_id.clone(),
+                if row.ownership.is_some() && row.waiter_identity.is_none() {
+                    false
+                } else {
+                    process.waiter_alive_for_identity(row.waiter_pid, row.waiter_identity.as_ref())
+                },
+            )
+        })
+        .collect()
+}
+
 /// Execute a provider-free `show` read, overlaying work-slot invocations.
 pub fn execute<P, Proc>(
     request: Request,
@@ -954,20 +1040,18 @@ where
         Err(error) => return persistence_error(error),
     };
     // A waiter may commit completion and exit after the first database read.
-    // Sample liveness once, then refresh dead-waiter rows before calling them
-    // failed. Otherwise a successful completion can flicker through failure.
-    let liveness: BTreeMap<_, _> = invocations
-        .iter()
-        .map(|row| (row.waiter_pid, process.waiter_alive(row.waiter_pid)))
-        .collect();
-    if invocations
-        .iter()
-        .any(|row| row.status.is_none() && !liveness[&row.waiter_pid])
-    {
+    // Sample identity-aware liveness once, then refresh dead-waiter rows before
+    // calling them failed. Otherwise a successful completion can flicker
+    // through failure. Key by invocation identity, not a recyclable PID.
+    let mut liveness = invocation_liveness(&invocations, process);
+    if invocations.iter().any(|row| {
+        row.status.is_none() && !liveness.get(&row.invocation_id).copied().unwrap_or(false)
+    }) {
         invocations = match persistence.load_work_slot_invocations(&request.run_id) {
             Ok(invocations) => invocations,
             Err(error) => return persistence_error(error),
         };
+        liveness = invocation_liveness(&invocations, process);
     }
     let mut current_subjects = BTreeMap::new();
     for slot_id in invocations
@@ -983,11 +1067,11 @@ where
             Err(error) => return persistence_error(error),
         }
     }
-    match project_with_invocations_and_subjects(
+    match project_with_invocations_and_subjects_by_identity(
         data,
         &invocations,
         now,
-        |pid| liveness.get(&pid).copied().unwrap_or(true),
+        |row| liveness.get(&row.invocation_id).copied().unwrap_or(false),
         &current_subjects,
     ) {
         Ok(projection) => OperationOutcome::completed(projection),

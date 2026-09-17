@@ -47,6 +47,16 @@ INVENTORY_HEADING = "## Executable proof inventory"
 INVENTORY_PREFIX = "proof: "
 BACKTICK = re.compile(r"`([^`]+)`")
 NON_PROOF_INLINE_CODE = frozenset({"validation→end"})
+PUBLIC_JOURNEY_PATH = Path("scripts/production-journey.py")
+PUBLIC_JOURNEY_REQUIRED = (
+    "subprocess.run(",
+    "expected_exit =",
+    "EVIDENCE_CASES = (",
+    "intent-evidence-deficit-",
+    "assert data(denied).get(\"transition\") is None",
+    "append_record(engine, config, run_id, fixtures, repair_fixture)",
+    "validate_setup(args.engine, args.config, args.profile, args.fixtures)",
+)
 
 
 def read_text(path: Path) -> str:
@@ -119,6 +129,21 @@ def check(root: Path) -> None:
         raise ValueError(
             "executable proof inventory mismatch: "
             f"expected {expected_inventory!r}, found {actual_inventory!r}"
+        )
+
+    journey = read_text(root / PUBLIC_JOURNEY_PATH)
+    missing_journey_contract = [
+        marker for marker in PUBLIC_JOURNEY_REQUIRED if marker not in journey
+    ]
+    if missing_journey_contract:
+        raise ValueError(
+            "public journey contract is incomplete: "
+            f"missing {missing_journey_contract!r}"
+        )
+    if "intent-evidence-good.json" in journey:
+        raise ValueError(
+            "public evidence journey preloads complete intent evidence; "
+            "use an explicit deficit and repair fixture"
         )
 
 

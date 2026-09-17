@@ -3,6 +3,7 @@
   "data": {
     "gate": "intent-review",
     "policy_id": "solution-agnostic",
+    "review_stage": "aggregate",
     "result": "pass",
     "findings": "",
     "author": {
@@ -11,6 +12,6 @@
     },
     "subject": "intent.json",
     "subject_revision": "r15",
-    "config_version": "standard-8"
+    "config_version": "standard-10"
   }
 }

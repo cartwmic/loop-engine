@@ -14,7 +14,11 @@ fn standard_profile_and_task_packet_template_carry_doc_integration_contract() {
         .collect();
     assert_eq!(
         validation_axes,
-        BTreeSet::from(["docs-integrated", "intent-delivered"])
+        BTreeSet::from([
+            "docs-integrated",
+            "intent-delivered",
+            "requirement-proof-mapping"
+        ])
     );
 
     for subject in ["implementation-report.json", "validation-report.json"] {

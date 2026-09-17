@@ -296,6 +296,8 @@ def main() -> int:
                 "final_target": "workspace-integration/workspace",
             }
             for module, source in (
+                ("bookends_check_backlog_t08_history", "crates/bookends-check/tests/backlog_t08_history.rs"),
+                ("bookends_check_backlog_t09_public", "crates/bookends-check/tests/backlog_t09_public.rs"),
                 ("bookends_check_cli", "crates/bookends-check/tests/cli.rs"),
                 ("bookends_check_graph", "crates/bookends-check/tests/graph.rs"),
                 ("loop_cli_dagu", "crates/loop-cli/tests/dagu.rs"),

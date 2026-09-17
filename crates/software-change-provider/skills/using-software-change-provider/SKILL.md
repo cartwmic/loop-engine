@@ -19,7 +19,7 @@ After implementation capture triage, before independent review, obtain the owner
 
 The provider is deterministic only: it validates artifact schemas and revision links, then aggregates externally supplied review evidence. `describe` and `evaluate` never generate prompts, invoke a model, or judge findings. Bound workers, when frozen, are started by `loop-engine invoke`; you still triage outputs and append verdicts. Per-run obligations are frozen in immutable `initial_input`, and every later actor must inspect the run's frozen `intent.json` operating context rather than relying on chat memory or a profile default.
 
-The criterion spine is run-local and intentionally small. Write each current intent acceptance entry as the closed `{id, statement}` record with an `AC-N` ID matching `^AC-[1-9][0-9]*$`; preserve an ID when its meaning is materially unchanged and use a new ID for replacement. Design coverage, plan tasks, implementation validation rows, and validation proof rows may carry optional `criterion_id` or `criterion_ids` references. Design/plan/implementation references remain optional and are checked for syntax, local duplicates and current membership. Contract v2 final validation instead requires complete criterion/goal coverage through the fixed index described below; the provider checks relationships, never semantic sufficiency.
+The criterion spine is run-local and intentionally small. Write each current intent acceptance entry as the closed `{id, statement}` record with an `AC-N` ID matching `^AC-[1-9][0-9]*$`; preserve an ID when its meaning is materially unchanged and use a new ID for replacement. Design coverage, implementation validation rows, and validation proof rows may carry optional `criterion_id` or `criterion_ids` references. Every contract-v3 plan task requires a nonempty unique `criterion_ids` set of current AC-N IDs; the provider checks membership while reviewers judge relevance. Other intermediate references remain optional. Contract v3 final validation requires complete criterion/goal coverage through the fixed index described below; the provider checks relationships, never semantic sufficiency.
 
 ## Required companion and engine driving minimum
 
@@ -57,9 +57,9 @@ Run checked implementation/validation evaluation from the intended repository ch
 
 For implementation and validation, the report is not proof by itself. Run `software-change checkpoint --phase implementation|validation --artifact-root ABS --working-directory ABS` after the report is complete. Both directories must already exist and be absolute. The command only reads repository state and writes the phase checkpoint; it never stages, commits, branches, pushes, creates, selects, merges, cleans, manages, or suggests worktrees. The checked transition that admits implementation to validation records the exact checkpoint under content-addressed `implementation-proof-history/`, with or without implementation review. Validation requires the sole history entry for the current report revision to match the current report, document revisions, and repository state. Later context, regenerated mutable checkpoints, or overwritten history bytes cannot admit different bytes. If a checked event reports a stale checkpoint, use `revise-implementation` where shown, regenerate implementation report/checkpoint and validation report/checkpoint for the same current tree, then append fresh review evidence and ledger state before retrying. Validation cannot replace implementation proof.
 
-## Contract v2, simplicity and final criterion proof
+## Contract v3, simplicity and final criterion proof
 
-Shipped versions are `minimal-9`, `standard-9`, `high-rigor-9` with `contract_version: 2` and `criterion_policy: {required_authors:1,goal_required_authors:1}` independent of review-axis floors. Profiles remain unbound. Unsupported older semantic profiles refuse explicitly; keep their fixed original providers for execution. Bare describe is discovery; provider-free show/history preserves original records with no implied ownership/control capability. Do not migrate active bootstrap input, topology or bindings by catalog edits.
+Shipped versions are `minimal-10`, `standard-10`, `high-rigor-10` with `contract_version: 3`. Independent criterion/goal floors are 1/2/2 for minimal/standard/high and remain separate from review-axis floors. Profiles remain unbound and Bookends-off by default. High review evidence has `individual` and `aggregate` stages; the same two author identities must cover both stages, while standard and minimal use aggregate coverage only. Unsupported v2 semantic evaluation refuses explicitly; keep fixed original providers for historical runs. Bare describe is discovery; provider-free show/history preserves original records with no implied ownership/control capability. Do not migrate active bootstrap input, topology or bindings by catalog edits.
 
 Simple-first/YAGNI/KISS apply product-wide. Complexity needs a meaningful current requirement/failure and inadequate simpler alternative in the ordinary design. Existing implementation/protocol/schema/dependency choices have no presumption of preservation; do not add speculative hardening or a justification bureaucracy.
 
@@ -91,266 +91,68 @@ Workers run assigned focused checks; one driver/proof owner runs the full stable
 
 ## Setup
 
-Before start, load repository `skills/using-loop-engine/SKILL.md`, **Deterministic setup**, and follow its catalog/override inspection procedure. Use the normal user catalog; only an explicit human isolation request in this session authorizes database or artifact overrides. Other runs and old preferences do not authorize isolation.
+Before starting a run, load `skills/using-loop-engine/SKILL.md`, its **Deterministic setup** procedure, and the catalog/override rules. Use the normal user catalog. A database or artifact override needs an explicit isolation decision for this session.
+
+Build the paired binaries with:
 
 ```sh
 cargo build -p loop-cli -p software-change-provider
 ```
 
-Register `target/debug/software-change` under alias `software-change` (absolute `command` path) in an uncommitted machine-local `providers.toml`.
-
-Pick a profile from `crates/software-change-provider/data/configs/` — `minimal.json` (validation-review only, no challenge lists), `standard.json` (intent-review, design-review, validation-review plus 1:1 challenge counterparts), or `high-rigor.json` (all parent review gates plus 1:1 challenge counterparts; two distinct reviewers on design-review and validation-review parent axes). Copy it to a run-specific file. Shipped profiles omit `work_slot_bindings`. Do not `start` that copy until the user has approved the work-slot policy below. Follow the required canonical setup above for normal-catalog start and owner-only isolation. The engine allocates the durable directory and records that absolute path in object `initial_input` (`show` reveals it). `start` may insert reserved `artifact_root` into object `initial_input` when the caller did not supply a nonempty path; object schemas that deny unknown keys must accept that field to remain evaluable; the engine does not skip injection, strip unknown keys, or classify providers.
-
-## Exact profile and external-fleet preflight
-
-Treat the selected profile and an external role-to-model manifest as two separate authorities. The profile is authoritative for profile-derived obligations; the manifest is authoritative only for unbound external launches and is never merged into `work_slot_bindings`.
-
-Before `start`, set a per-run `PROFILE_NAME` label and display facts derived from the exact profile file that will be passed with `@PROFILE`, not from a shipped default:
+Use the provider binary's public setup command:
 
 ```sh
-set -eu
-: "${PROFILE:?absolute per-run profile path}"
-: "${PROFILE_NAME:?owner-facing profile label}"
-PROFILE_SHA256=$(shasum -a 256 "$PROFILE" | awk '{print $1}')
-printf 'PROFILE_NAME=%s\n' "$PROFILE_NAME"
-jq --arg name "$PROFILE_NAME" '{profile_name:$name, config_version, contract_version, criterion_policy, live_review_states: [(.review_policies // {} | to_entries[] | select((.value | type) == "array" and (.value | length) > 0) | {id:.key, axes:[.value[] | {id, required_authors:(.required_authors // 1)}]})], bookends_enabled:(.extra.bookends.enabled // false), work_slot_bindings:(.work_slot_bindings // {})}' "$PROFILE"
-printf 'PROFILE_SHA256=%s\nExact resulting PROFILE bytes:\n' "$PROFILE_SHA256"
-cat "$PROFILE"
+software-change setup \
+  --rigor minimal|standard|high \
+  --roster /absolute/path/roster.json \
+  --engine /absolute/path/loop-engine \
+  --provider /absolute/path/software-change \
+  --output /absolute/path/run-profile.json \
+  [--bookends] [--implementation /absolute/path/implementation.json]
 ```
 
-The summary must show every live review state, axis ID, normalized `required_authors` (missing means one), Bookends enabled/disabled state, exact sparse binding map, and any model values frozen in nested binding arguments. Run `preview-bindings` on that same binding map. After any constructor rewrite, repeat the summary, exact-byte display, preview, and hash; obtain explicit owner confirmation of the profile label, derived facts, bytes, hash, and bindings. Rehash this same file immediately before `start` and abort on any mismatch. A profile hash does not cover assignments absent from its bindings.
+The roster is an ordered, closed JSON array of `{ "author": "...", "command": "...", "args": [...] }` records. Author labels are distinct and nonempty. `command` and every argument are caller-owned bytes; setup preserves them and does not add model, effort, extension, or shell flags. The optional implementation file is one closed `{ "command": "...", "args": [...], "working_directory": "..." }` object. Its directory must already exist and be absolute.
 
-For unbound work, create a separate owner-confirmed manifest containing only roles and exact model IDs, for example:
+Setup reads the selected profile, review preamble, and complete output schema from embedded provider data. It assembles every live review gate, exact policy order and stage, first-N author allocation, assignment-specific schema, and `{ "command": PROVIDER, "args": ["commission"] }` context filter. High-rigor workers run individual assignments before fresh aggregate assignments through the generic `fan-out --then` barrier. Aggregate preambles explicitly exclude individual captures and judgments. Review fan-out is frozen with `--max-active 2`. An implementation binding uses `run-plan-graph --max-active 1` and the supplied worker and directory.
 
-```json
-{"analyst":"MODEL_ID","writer":"MODEL_ID","ordinary-reviewer":"MODEL_ID","challenge-reviewer":"MODEL_ID"}
-```
+The command invokes `ENGINE preview-bindings` and writes the generated profile only after input and preview validation succeed. The replacement is atomic. It starts no run, invokes no worker, selects no model, adapts no CLI, creates no worktree, and saves no preference. Its JSON stdout shows `effective_policy`, the exact roster, the output bytes, `output_byte_length`, `output_sha256`, `output_sha256_digest`, the generated profile path, and the binding preview. Warnings in the preview remain warnings; preview errors fail setup.
 
-Keep the manifest outside the profile, print its exact bytes and SHA-256, and obtain a separate owner confirmation. For every role actually launched, run `pi --list-models`, require the exact manifest ID to be present, pass that exact ID in the launch's model argument, and preserve launch evidence containing the role, manifest hash, requested model, and actual model argument. If the requested model is unavailable or the actual launch differs, stop and obtain a new confirmation; never fall back, substitute, or silently use a CLI default. With an all-unbound profile, the driver performs every slot and this external manifest—not profile-derived bindings—governs those launches.
+Setup refuses malformed or duplicate roster records, an insufficient author count for any configured stage, malformed implementation input, invalid shipped policy/schema data, non-absolute engine/provider paths, and incompatible output contracts. It never drops an axis or reduces an author floor to make input fit.
+
+Before `start`, inspect the setup report and the exact output file. Confirm:
+
+1. the rigor label, config version, contract version, criterion/goal author policy, every live gate and every normalized stage/axis author count;
+2. Bookends state and any overlay axes;
+3. every roster command and argument, every nested review worker, review concurrency, implementation concurrency, and commission filter;
+4. the exact output bytes and SHA-256.
+
+Hash that same output file immediately before `start` and abort on any mismatch. Start that unchanged file with the canonical engine procedure. A setup report or preview is not a run and does not authorize progression.
+
+Shipped data remains unbound. The generated file is the per-run authority; later edits to shipped profiles, the skill, or a roster do not change a started run. Do not replace a confirmed file with a pristine profile after confirmation. Active runs keep their frozen policy, bindings, stages, and evidence. Use `show --view full` before a correction. In high rigor, select only affected individual assignments, create explicit applicability records for unaffected axes, and run both aggregate authors freshly across every axis. Aggregate authors remain the same identities as the individual stage. Accepted-unresolved findings still block. A binding amendment changes future execution only; it does not rewrite initial input or a launched attempt.
 
 ## Criterion spine and Bookends overlay
 
-Shipped profiles leave Bookends off. With the overlay disabled, `AC-N` is the only criterion spine: do not add PRD disposition, candidate/liveness metadata, Bookends citations, or Green claims to authored artifacts. To opt in, copy one profile and set `extra.bookends.enabled` to JSON `true`; do not edit the shipped bytes. Overlay-on requires exactly one `prd_traceability` object on every current intent criterion, with one of:
-
-- `linked-live`: nonempty `live_ids` containing only live repository `LE-N` IDs;
-- `candidate`: one parser-valid `proposed_id` plus its `record_markdown`; or
-- `not-applicable`: a nonempty reason about PRD traceability only.
-
-Before requesting final approval with the Bookends overlay enabled, inspect `BOOKENDS_BYPASS` and unset an unintended value in the evaluation environment. A malformed nonempty value errors; a deliberate bypass is visible but cannot satisfy required final GREEN. Run evaluation from the intended repository checkout, not the artifact directory.
-
-`not-applicable` never waives or fulfills the associated criterion. Downstream artifacts continue to use only optional current-intent `AC-N` references; they do not carry a parallel PRD-ID projection. Missing, malformed, duplicate, or tombstoned live IDs are denied mechanically. A current candidate can proceed through authoring but blocks final completion for that Bookends-enabled run until the owner accepts it into a committed PRD or honestly reclassifies it. At each durable `e2e/journey` or declared `contract` test boundary, the driver or bound worker cites the applicable live ID as `bookends:LE-<n>`; the driver triages the capture and appends the resulting evidence. The overlay adds only `ids-grounded` and validation `bypass-not-green`, calls the checker in-process without inventing a bypass (an externally supplied `BOOKENDS_BYPASS` is surfaced as `BYPASS`), and refuses validation `passed` on checker `RED` or `BYPASS`.
+Shipped profiles leave Bookends off. With the overlay disabled, `AC-N` is the only criterion spine. To opt in, pass `--bookends` to setup; the generated profile freezes `extra.bookends.enabled: true`. Overlay-on requires exactly one `prd_traceability` object on every current intent criterion: `linked-live`, `candidate`, or `not-applicable`. A current candidate blocks final completion until the owner accepts it into a committed PRD or reclassifies it. `not-applicable` never waives or fulfills the criterion. Inspect `BOOKENDS_BYPASS` before final approval; a bypass remains visible and cannot satisfy final GREEN.
 
 ## Work-slot policy (confirm before start)
 
-Cataloged slots: `intent-draft`, `intent-review`, `intent-adversarial-review`, `design-draft`, `design-review`, `design-adversarial-review`, `plan-draft`, `plan-review`, `plan-adversarial-review`, `implement`, `implementation-review`, `implementation-adversarial-review`, `validation-draft`, `validation-review`, `validation-adversarial-review`. End has no slot. Bindings are sparse and freeze at `start`. A binding whose slot is not in the snapshotted catalog fails at `start`.
+Cataloged slots are `intent-draft`, `intent-review`, `intent-adversarial-review`, `design-draft`, `design-review`, `design-adversarial-review`, `plan-draft`, `plan-review`, `plan-adversarial-review`, `implement`, `implementation-review`, `implementation-adversarial-review`, `validation-draft`, `validation-review`, and `validation-adversarial-review`. Bindings are sparse and freeze at `start`; a binding must name a slot in the snapshotted catalog. Setup emits live review bindings and an optional `implement` binding. It emits no draft binding. A slot with no configured policy axes must remain unbound.
 
-Shipped profiles omit `work_slot_bindings` (or `{}`). Every slot stays driver-performed until the caller opts in. A review slot with no configured policy axes must not be bound. Copying a profile is not model lock-in. Skill and constructor do not emit draft bindings. `start` still accepts a hand-written draft binding.
+Before `start`, run `loop-engine preview-bindings` on the exact `work_slot_bindings` map and confirm the report. Confirm the exact outer commands, every nested worker/task worker, author/stage assignment, concurrency, commission filter, and any model/effort arguments supplied by the caller. An unbound slot remains driver-performed. Owner-attested binding amendments affect future execution only; they do not rewrite initial input or an already launched attempt.
 
-Before `start`, show the exact selected-profile summary/bytes/hash and the expanded `preview-bindings` report, plus the separate external role-to-model manifest when any work is unbound. Recheck the profile hash immediately before using that same file. Wait for the owner to confirm all of these authorities:
+## Exact profile confirmation
 
-1. **Profile:** label, `config_version`, every live review state/axis and normalized author count, Bookends state, sparse bindings, exact bytes, and SHA-256.
-2. **Bound slots:** which sparse slot IDs, if any, and exact command/args including every nested worker.
-3. **External fleet:** separate manifest bytes/hash and every exact role-to-model assignment for unbound launches.
-4. **Models:** every model-bearing CLI receives the confirmed exact model, or an explicitly accepted unpinned default only where the owner chose that policy; no fallback or substitution.
+Treat the generated profile as immutable after confirmation. Recompute and record its SHA-256, inspect the full `work_slot_bindings` map, and run `loop-engine preview-bindings` on that same map. A profile hash covers the generated file and its embedded assignment bytes. It does not cover work performed by unbound actors or a later replacement roster. If any byte, command, argument, stage, author, or model/effort argument changes, repeat the report, preview, and owner confirmation before starting.
 
-### Deterministic review-binding constructor
+Unbound launches use a separate owner-confirmed role-to-model manifest. Keep its exact bytes and hash outside the profile, verify each requested model with `pi --list-models`, and pass that exact model when the role launches. Stop on an unavailable or substituted model. A generated setup roster remains the authority for bound worker command and argument bytes; it does not supply an implicit external-fleet choice.
 
-Do not hand-author one generic worker. The executable constructor below accepts the same per-run `PROFILE` that will be frozen, one live review `SLOT_ID`, and an ordered caller-confirmed `ROSTER` JSON file. `ROSTER` must be a non-empty array of exact `{ "author": "...", "model": "..." }` objects with pairwise-distinct, non-empty author labels and non-empty models. Supported slots are every live review slot: `intent-review`, `validation-review`, the other parent review slots, and all challenge slots (the unchanged `*-adversarial-review` IDs). Skill and constructor do not emit draft bindings (`intent-draft`, `design-draft`, `plan-draft`, `implement`, `validation-draft`). `start` still accepts a hand-written draft binding. Use the same roster file for parent and challenge slots; challenge identity has no disjoint-author floor and there is no second roster file. Bind parent and challenge as separate slots; same-slot mixed parent and challenge fan-out is not the enabled path.
-
-Set every path explicitly. `DATA_ROOT` is either the checkout root or a root populated by `software-change data-dump`. `ENGINE`, `SOFTWARE_CHANGE_COMMAND` and `PI_COMMAND` become frozen command bytes. The binding uses the provider's shared `commission` context filter to select applicable steering while retaining the review/applicability source records. Review workers keep `--no-skills --no-extensions`, load only the two explicit extensions, include `--tools read,grep,find,ls`, and do not pass `--no-context-files`.
-
-```sh
-set -eu
-: "${PROFILE:?path to the per-run profile being frozen}"
-: "${SLOT_ID:?live review slot id}"
-: "${ROSTER:?path to ordered caller-confirmed roster JSON}"
-: "${DATA_ROOT:?checkout root or data-dump root}"
-: "${ENGINE:?absolute loop-engine command}"
-: "${SOFTWARE_CHANGE_COMMAND:?absolute software-change command for commission selection}"
-: "${PI_COMMAND:?absolute pi command}"
-: "${CURSOR_EXTENSION_PATH:?absolute cursor-provider extension path}"
-: "${CLAUDE_BRIDGE_EXTENSION_PATH:?absolute claude-bridge extension path}"
-
-case "$SLOT_ID" in
-  intent-review|intent-adversarial-review|design-review|design-adversarial-review|plan-review|plan-adversarial-review|implementation-review|implementation-adversarial-review|validation-review|validation-adversarial-review) ;;
-  intent-draft|design-draft|plan-draft|implement|validation-draft)
-    printf 'constructor does not emit draft bindings: %s\n' "$SLOT_ID" >&2; exit 1 ;;
-  *) printf 'unsupported review SLOT_ID: %s\n' "$SLOT_ID" >&2; exit 1 ;;
-esac
-
-PREAMBLE_FILE="$DATA_ROOT/crates/software-change-provider/data/review-worker-preamble.txt"
-SCHEMA_FILE="$DATA_ROOT/crates/software-change-provider/data/review-worker-output-schema.json"
-for required_file in "$PROFILE" "$ROSTER" "$PREAMBLE_FILE" "$SCHEMA_FILE"; do
-  test -f "$required_file" || { printf 'missing required file: %s\n' "$required_file" >&2; exit 1; }
-done
-
-TMP_PROFILE=$(mktemp "$(dirname "$PROFILE")/.software-change-profile.XXXXXX")
-trap 'rm -f "$TMP_PROFILE"' EXIT HUP INT TERM
-jq \
-  --arg slot "$SLOT_ID" \
-  --arg engine "$ENGINE" \
-  --arg provider "$SOFTWARE_CHANGE_COMMAND" \
-  --arg pi "$PI_COMMAND" \
-  --arg cursor "$CURSOR_EXTENSION_PATH" \
-  --arg bridge "$CLAUDE_BRIDGE_EXTENSION_PATH" \
-  --arg separate_axes_reason "${SEPARATE_AXES_REASON:-}" \
-  --rawfile base_preamble "$PREAMBLE_FILE" \
-  --slurpfile output_schema "$SCHEMA_FILE" \
-  --slurpfile roster "$ROSTER" '
-  def required_author_count:
-    if has("required_authors") then .required_authors else 1 end;
-  . as $profile
-  | ($roster[0]) as $entries
-  | if ($separate_axes_reason != "" and ($separate_axes_reason | test("\\S") | not)) then
-      error("SEPARATE_AXES_REASON must explain the one-axis commission")
-    elif (($entries | type) != "array" or ($entries | length) == 0) then
-      error("ROSTER must be a non-empty array")
-    elif (all($entries[]; type == "object") | not) then
-      error("every ROSTER entry must be an object")
-    elif (all($entries[]; ((keys | sort) == ["author", "model"])) | not) then
-      error("every ROSTER entry must contain exactly author and model")
-    elif (all($entries[]; ((.author | type) == "string" and (.author | length) > 0 and (.model | type) == "string" and (.model | length) > 0)) | not) then
-      error("ROSTER author and model values must be non-empty strings")
-    elif (($entries | map(.author) | unique | length) != ($entries | length)) then
-      error("ROSTER author labels must be pairwise distinct")
-    elif (($output_schema | length) != 1 or $output_schema[0].required != ["author", "judgments"] or ($output_schema[0].properties.judgments.items.oneOf | length) != 2) then
-      error("provider review-worker complete output schema is missing or unsupported")
-    elif (($profile.work_slot_bindings // {} | type) != "object") then
-      error("PROFILE work_slot_bindings must be absent or an object")
-    elif (
-      $slot == "intent-draft" or $slot == "design-draft" or $slot == "plan-draft"
-      or $slot == "implement" or $slot == "validation-draft"
-    ) then
-      error("constructor does not emit draft bindings")
-    elif (([
-        "intent-review","intent-adversarial-review",
-        "design-review","design-adversarial-review",
-        "plan-review","plan-adversarial-review",
-        "implementation-review","implementation-adversarial-review",
-        "validation-review","validation-adversarial-review"
-      ] | index($slot)) == null) then
-      error("unsupported review slot")
-    else . end
-  | ($profile.review_policies[$slot]) as $policies
-  | if (($policies | type) != "array" or ($policies | length) == 0) then
-      error("selected review slot has an unsupported or empty policy list")
-    elif (all($policies[]; (type == "object" and (.id | type) == "string" and (.id | length) > 0)) | not) then
-      error("every selected policy must have a non-empty id")
-    elif (($policies | map(.id) | unique | length) != ($policies | length)) then
-      error("selected policy IDs must be unique")
-    elif (all($policies[]; ((.example_prompt | type) == "string" and (.example_prompt | length) > 0)) | not) then
-      error("every selected policy must have a non-empty example_prompt")
-    elif (all($policies[]; ((required_author_count | type) == "number" and (required_author_count | floor) == required_author_count and required_author_count > 0)) | not) then
-      error("required_authors must normalize to a positive integer")
-    elif (([$policies[] | required_author_count] | max) > ($entries | length)) then
-      error("ROSTER has too few entries for selected required_authors")
-    else . end
-  | [
-      range(0; ($entries | length)) as $roster_index
-      | $entries[$roster_index] as $entry
-      | [$policies[] | select(required_author_count > $roster_index)] as $author_policies
-      | (if $separate_axes_reason == "" then [$author_policies] else [$author_policies[] | [.]] end)[] as $assigned
-      | select(($assigned | length) > 0)
-      | {
-          command: $pi,
-          args: [
-            "--print", "--no-skills", "--no-extensions",
-            "-e", $cursor, "-e", $bridge,
-            "--tools", "read,grep,find,ls",
-            "--model", $entry.model
-          ],
-          preamble: (
-            $base_preamble
-            + "FROZEN REVIEW ASSIGNMENT\n"
-            + "provider: software-change\n"
-            + "slot_id: " + $slot + "\n"
-            + "assigned_policies: " + ($assigned | tojson) + "\n"
-            + "required_author_claim: " + $entry.author + "\n"
-            + "separate_axes_reason: " + $separate_axes_reason + "\n"
-            + (if $profile.contract_version == 2 and $slot == "validation-review" then
-                "criterion_author_number: " + (($roster_index + 1) | tostring) + "\nRead the frozen validation-report index and checkpoint. Return assigned criterion/goal judgments in validation_verdicts: [{record_id,kind,data}], using the prechosen IDs for your author number under criterion_policy. Do not create placeholders, edit the index, or run commands. Consume retained command evidence. For focused repair, leave unaffected applicability rows alone; judge affected rows freshly. Axis judgments consume this collection.\n"
-              elif $slot == "validation-adversarial-review" then "Consume the existing criterion/goal collection; do not commission it again or run proof commands.\n" else "" end)
-          ),
-          full_output_schema: (
-            $output_schema[0]
-            | (if $profile.contract_version == 2 and $slot == "validation-review" then
-                .properties.validation_verdicts = {type:"array", items:{type:"object", additionalProperties:false, required:["record_id","kind","data"], properties:{record_id:{type:"string",minLength:1},kind:{type:"string",enum:["criterion-verdict","goal-verdict"]},data:{type:"object"}}}}
-              else . end)
-            | .properties.author.const = {name: $entry.author, kind: "agent"}
-            | .properties.judgments.minItems = ($assigned | length)
-            | .properties.judgments.maxItems = ($assigned | length)
-            | .properties.judgments.items.oneOf[].properties.axis.enum = [$assigned[].id]
-            | .properties.judgments.allOf = [$assigned[] | {contains: {type: "object", required: ["axis"], properties: {axis: {const: .id}}}}]
-          )
-        }
-    ] as $workers
-  | (reduce $workers[] as $worker
-      (["fan-out"]; . + ["--worker", ($worker | tojson)])) as $fan_out_args
-  | .work_slot_bindings = (.work_slot_bindings // {})
-  | .work_slot_bindings[$slot] = {command: $engine, args: $fan_out_args, context_filter: {command: $provider, args: ["commission"]}}
-' "$PROFILE" >"$TMP_PROFILE"
-jq -e . "$TMP_PROFILE" >/dev/null
-mv "$TMP_PROFILE" "$PROFILE"
-trap - EXIT HUP INT TERM
-
-profile_sha256() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
-  else
-    shasum -a 256 "$1" | awk '{print $1}'
-  fi
-}
-PROFILE_SHA256=$(profile_sha256 "$PROFILE")
-printf '%s\n' 'Exact resulting PROFILE bytes:'
-cat "$PROFILE"
-printf '\n'
-printf '%s\n' 'Resulting work_slot_bindings:'
-jq .work_slot_bindings "$PROFILE"
-printf 'PROFILE_SHA256=%s\n' "$PROFILE_SHA256"
-
-BINDINGS_PREVIEW=$(mktemp "${TMPDIR:-/tmp}/software-change-bindings.XXXXXX")
-trap 'rm -f "$BINDINGS_PREVIEW"' EXIT HUP INT TERM
-jq -e .work_slot_bindings "$PROFILE" >"$BINDINGS_PREVIEW"
-"$ENGINE" preview-bindings "@$BINDINGS_PREVIEW"
-rm -f "$BINDINGS_PREVIEW"
-trap - EXIT HUP INT TERM
-printf 'Confirm this resulting profile, bindings, models, and SHA-256 before start.\n'
-```
-
-The constructor preserves other sparse bindings. It allocates each policy to its first normalized `required_authors // 1` roster entries, emitting one batch per used author in roster order with exact profile axis order/prompts, author/model and complete output schema. There is no batching policy knob; parent and challenge gates remain separate.
-
-A nonconforming first output gets one identical-command/model schema correction with exact errors; both raw attempts remain under `attempts/` and `attempts.json`. Exhaustion fails closed. Mixed pass/fail output is valid, not approval. The engine inserts `{artifact_root, context}` (and requested force-fresh controls) into the frozen preamble. The schema's `x-loop-engine-force-fresh` constraint makes reuse rows fail conformance on force-fresh invocations, with the same single correction and preserved attempts. Process/schema conformance does not verify semantic applicability: provider candidate/evidence checks additionally reject unauthorized or stale reuse against the captured commission.
-
-For confirmation, append reasoned `evidence-applicability` records for unaffected original per-axis evidence before invocation. Retain the frozen full axis set: affected rows are fresh, unaffected rows name those exact applicability IDs. No binding amendment is needed. `review-candidates` emits inert fresh per-axis candidates sharing one invocation/assignment origin and separately labeled carried references. Triage before append; copy a fresh candidate into per-axis review-evidence with its policy_id and current target, never fabricate per-axis invocation IDs or append a reuse row as a new verdict. A failed required axis still needs its exact-source driver disposition.
-
-When evidence size, specialization or observed review failure justifies separate one-axis commissions, set `SEPARATE_AXES_REASON` to that nonempty reason before running this same constructor. It splits each used author's assigned policy list into singleton workers, freezing singleton min/maxItems, axis enums and contains list while retaining first-N allocation, author/model and exact prompt. Record the reason before owner confirmation; do not change the selected profile's policies or required author counts. This is an explicit binding construction choice, not a new profile setting.
-
-After the caller confirms, copy the displayed hash into `CONFIRMED_PROFILE_SHA256`. Immediately before `start`, fail if the same profile's bytes changed, then start that unchanged file:
-
-```sh
-set -eu
-: "${CONFIRMED_PROFILE_SHA256:?exact SHA-256 confirmed by the caller}"
-: "${PROVIDER_CONFIG:?absolute provider TOML path}"
-: "${LABEL:?run label}"
-if command -v sha256sum >/dev/null 2>&1; then
-  CURRENT_PROFILE_SHA256=$(sha256sum "$PROFILE" | awk '{print $1}')
-else
-  CURRENT_PROFILE_SHA256=$(shasum -a 256 "$PROFILE" | awk '{print $1}')
-fi
-test "$CURRENT_PROFILE_SHA256" = "$CONFIRMED_PROFILE_SHA256" || {
-  printf 'PROFILE changed after confirmation: expected %s, got %s\n' \
-    "$CONFIRMED_PROFILE_SHA256" "$CURRENT_PROFILE_SHA256" >&2
-  exit 1
-}
-"$ENGINE" --json --config "$PROVIDER_CONFIG" \
-  start software-change "@$PROFILE" "$LABEL"
-```
+For an active run, never retrofit new profile obligations into the frozen input. Read the current show, use the stored graph and bindings, and choose the owning correction route. Preserve valid evidence explicitly; obtain fresh evidence for affected stages and subjects. A failed or overrun attempt does not authorize an overlapping retry. The driver triages captures and appends evidence; setup never appends, retries, dispositions, or progresses a gate.
 
 The implement binding remains a separate opt-in `run-plan-graph --working-directory ABS --task-worker` pattern. Leave task selection out of frozen argv. Omit invoke input for the full plan. When an existing frozen task owns a correction, use `loop-engine invoke RUN_ID implement --input '{"plan_revision":"REVISION","task_roots":["TASK_ID"]}'`; the provider requires that closed shape, current revision, unique known roots, and same-revision standing results for every prerequisite outside the roots-plus-dependants selection. Only when a current accepted unresolved implementation finding has no honest frozen task owner, leave its `task_ids` empty and invoke the same binding with exact `--input '{"repair_finding_ids":["FINDING_ID"]}'`. Repair requires unique current forwarded ledger entries that are accepted, unresolved, implementation-owned, current for the verified implementation checkpoint, and no-task-routed. Malformed, empty, unknown, stale, wrong-owner/status/disposition, task-routed, or absent-context requests refuse before Dagu resolution or mutation. Packet input combined with frozen `--task`/`--tasks` also refuses.
 
 A valid repair runs one `ad-hoc-repair` assignment under the frozen task worker and checkout. Its compact packet contains the exact finding objects, frozen plan revision, provider-derived pre-report and repository-state identity, and the narrow report-writing obligation. It runs no plan task or summarizer and does not alter `plan-task-results.json`. The provider accepts the result only when `implementation-report.json` is schema-valid, links the frozen plan, and uses a revision absent from the pre-proof and all accepted implementation-proof history; only then does it create a new checkpoint. Inspect `summary.json` generic worker/output/routed-input data and `repair` pre/post metadata. A failed worker or report creates no post checkpoint but may leave partial checkout edits; restore or deliberately incorporate them before another mutation. After success, append a later ledger snapshot resolving the finding and reconfirm affected independent implementation review and validation. There is no direct unbound repair form.
 
-Direct callers may still select roots with repeated `--task ID` or one `--tasks ID,ID,...`; omitted selection remains full execution. The binding is not produced by the review constructor, must freeze one existing absolute directory selected and maintained by the driver, must not pass `--no-context-files`, and must freeze its model before start. Task mode projects only current accepted unresolved findings with `owner_phase: implementation` and an exact matching `task_ids` entry under that task's `finding_context`; stale, resolved, rejected, advisory, and unrelated entries are absent. Omitted, relative, nonexistent, and non-directory working directories are rejected before workers; the same graph-level cwd reaches every plan task and summarizer or the repair worker. Successful execution requires that directory to be a Git working tree for checkpoint generation, and the provider does not create, discover, select, reuse, merge, clean, manage, or suggest worktrees. Optional `--max-active N` may live in that frozen argv (omitted stays 4 ordinary plan tasks; set N is at most N ordinary plan tasks). Hidden `software-change stdin-exec` uses the same argv as `loop-engine stdin-exec` and is omitted from `--help`/`--version`; plan-graph uses `--exit-mode propagate` only.
+Direct callers may still select roots with repeated `--task ID` or one `--tasks ID,ID,...`; omitted selection remains full execution. The binding is not produced by the review setup path, must freeze one existing absolute directory selected and maintained by the driver, must not pass `--no-context-files`, and must freeze its model before start. Task mode projects only current accepted unresolved findings with `owner_phase: implementation` and an exact matching `task_ids` entry under that task's `finding_context`; stale, resolved, rejected, advisory, and unrelated entries are absent. Omitted, relative, nonexistent, and non-directory working directories are rejected before workers; the same graph-level cwd reaches every plan task and summarizer or the repair worker. Successful execution requires that directory to be a Git working tree for checkpoint generation, and the provider does not create, discover, select, reuse, merge, clean, manage, or suggest worktrees. Optional `--max-active N` may live in that frozen argv (omitted stays 4 ordinary plan tasks; set N is at most N ordinary plan tasks). Hidden `software-change stdin-exec` uses the same argv as `loop-engine stdin-exec` and is omitted from `--help`/`--version`; plan-graph uses `--exit-mode propagate` only.
 
 On the bound implement path, invoke persists the exact optional `invocation_input` on the invocation view and also supplies generic `standing_assignment_ids` from the same provider-free `show` projection. The graph treats a recorded prerequisite as standing only when its sidecar revision/success agrees and its assignment ID is in that engine list; graph-local exit 0 alone cannot admit stale work. A driver who wants to reuse a non-standing task must use the appropriate check-free correction route and then provide fresh proof. Direct ad-hoc `run-plan-graph` without an engine packet retains its sidecar-only contract.
 
@@ -362,10 +164,12 @@ On the bound implement path, invoke persists the exact optional `invocation_inpu
     "--working-directory",
     "/absolute/path/to/driver-selected-checkout",
     "--task-worker",
-    "{\"command\":\"pi\",\"args\":[\"--print\",\"--no-skills\",\"--no-extensions\",\"-e\",\"CURSOR_EXTENSION_PATH\",\"-e\",\"CLAUDE_BRIDGE_EXTENSION_PATH\",\"--model\",\"MODEL\"]}"
+    "{\"command\":\"pi\",\"args\":[\"--print\",\"--no-skills\",\"--no-extensions\",\"--model\",\"MODEL\"]}"
   ]
 }
 ```
+
+Add an existing extension path only when the selected model provider requires it. Keep the chosen model and its effort argument in the frozen worker args; setup does not infer extensions or models.
 
 ## Proportional late-finding guide
 
@@ -413,20 +217,21 @@ Draft ready/passed events check schema and revision links; implementation and va
 
 1. Read action `show` for instructions, obligations, events and work locators; read full for frozen input, complete context and invocation/change reports. Action/full arms the visit: repeat after every transition before mutation. Read `artifact_root/intent.json` operating context before phase work; never infer missing legacy author counts as zero.
 2. If **bound**, do not author the room yourself. `invoke` it (`loop-engine --json --timeout-ms N invoke RUN_ID SLOT_ID`; choose an allowance above the 30s default), then monitor until completion or attention. On overrun, wait or cancel owned work and verify cleanup, then observe before retry. Inspect `capture_dir/summary.json`, selected attempts and stdout before stderr; overlay succeeded is only bound CLI exit 0. For implement, follow the selection/repair procedure above: tasks and summarizer share the frozen checkout; full/selected mode's summarizer owns the report, while no-task repair's single worker owns it. Use `invocation-progress` only for targeted diagnosis.
-3. If this state is **unbound**, author or revise the subject artifact in `artifact_root` using its template from `crates/software-change-provider/data/templates/`. Material content changes require a revision bump — a bump makes prior raw verdicts stale for coverage, but does not resolve accepted-unresolved ledger findings; keeping the revision asserts the edit was immaterial. Preserve the frozen operating context, stated outcomes, and outside obligations; do not turn accepted risks into waivers or add excluded hostile/multi-tenant requirements. Keep design/plan/implementation criterion references optional and use only current `AC-N` IDs. Final validation requires the fixed complete criterion/goal index, not a parallel PRD-ID spine. For unbound implementation or validation work, create the matching checkpoint only after the report is complete: `software-change checkpoint --phase implementation|validation --artifact-root ABS --working-directory ABS`. Both directories must already exist and be absolute; the command is read-only with respect to Git.
-4. For evidence gates, obtain the axis's configured `required_authors` count of distinct external judgments (default 1; high-rigor design-review and validation-review parent axes require 2; adversarial axes require 1): fresh context, not the artifact's author, each judging every assigned axis separately using its exact `example_prompt`. Default to one commission per used author per gate; focused confirmation carries only explicitly unaffected judgments. Follow `crates/software-change-provider/data/reviewer-protocol.md`. Reviewers must judge within frozen `operating_context`; do not append speculative hostile or multi-tenant demands outside `threat_boundary`, and do not treat `accepted_risks` as permission to waive outcomes or `outside_obligations`. For plan review, require affected user/operator paths, observable outcomes, pragmatic black-box proof or a concrete impracticality reason, sufficient context, and implementation freedom. For validation review, reject activity-only evidence and inspect every new or changed Bookends citation semantically rather than accepting its requirement token. Unbound: you commission those reviewers. Bound review: read the captures, then you still triage and append; `fan-out` does not write records. Preserve each axis's first-N author allocation when grouping frozen review `--worker` args; a multi-axis batch does not collapse distinct-author obligations. Adversarial output is candidate data; extra mechanism, unlisted requirements, and hypothetical-future fails are not appended.
-5. Append one record per accepted axis judgment — after triaging against the frozen intent and operating context, `kind` is `review-evidence`, `data` is the eight-field object. All eight judgment fields are required; `result` is exactly `pass` or `fail`; `author.kind` is exactly `human`, `agent`, or `script`; `findings` is non-empty on `fail`; and `config_version` must match the run's frozen config. For a bound worker, add only the concise origin reference:
+3. If this state is **unbound**, author or revise the subject artifact in `artifact_root` using its template from `crates/software-change-provider/data/templates/`. Material content changes require a revision bump — a bump makes prior raw verdicts stale for coverage, but does not resolve accepted-unresolved ledger findings; keeping the revision asserts the edit was immaterial. Preserve the frozen operating context, stated outcomes, and outside obligations; do not turn accepted risks into waivers or add excluded hostile/multi-tenant requirements. Every contract-v3 plan task must carry a nonempty unique current `criterion_ids` set; design and intermediate implementation references remain optional and use only current `AC-N` IDs. Final validation requires the fixed complete criterion/goal index, not a parallel PRD-ID spine. For unbound implementation or validation work, create the matching checkpoint only after the report is complete: `software-change checkpoint --phase implementation|validation --artifact-root ABS --working-directory ABS`. Both directories must already exist and be absolute; the command is read-only with respect to Git.
+4. For evidence gates, obtain each configured stage/axis's `required_authors` count of distinct external judgments (minimal aggregate 1; standard aggregate 2; high individual and aggregate 2): fresh context, not the artifact's author, each judging every assigned axis separately using its exact `example_prompt`. High aggregate authors must be the same identities as the individual stage. Default to one aggregate commission per used author per gate and one individual commission per axis and used author; focused confirmation carries only explicitly unaffected judgments. Follow `crates/software-change-provider/data/reviewer-protocol.md`. Reviewers must judge within frozen `operating_context`; do not append speculative hostile or multi-tenant demands outside `threat_boundary`, and do not treat `accepted_risks` as permission to waive outcomes or `outside_obligations`. For plan review, require affected user/operator paths, observable outcomes, pragmatic black-box proof or a concrete impracticality reason, sufficient context, and implementation freedom. For validation review, reject activity-only evidence and inspect every new or changed Bookends citation semantically rather than accepting its requirement token. Unbound: you commission those reviewers. Bound review: read the captures, then you still triage and append; `fan-out` does not write records. Preserve each axis's first-N author allocation in frozen review `--worker` args; individual-stage assignments are singleton axes, while aggregate-stage assignments group all axes for each author. Adversarial output is candidate data; extra mechanism, unlisted requirements, and hypothetical-future fails are not appended.
+5. Append one record per accepted axis judgment — after triaging against the frozen intent and operating context, `kind` is `review-evidence`, `data` is the stage-aware object. Contract-v3 requires `review_stage` plus the eight original judgment fields; `result` is exactly `pass` or `fail`; `author.kind` is exactly `human`, `agent`, or `script`; `findings` is non-empty on `fail`; and `config_version` must match the run's frozen config. For a bound worker, add only the concise origin reference:
 
 ```json
 {
   "gate": "design-review",
   "policy_id": "intent-faithful",
+  "review_stage": "aggregate",
   "result": "pass",
   "findings": "",
   "author": {"name": "reviewer-sol", "kind": "agent"},
   "subject": "design.json",
   "subject_revision": "3",
-  "config_version": "standard-9",
+  "config_version": "standard-10",
   "origin": {"kind": "selected-assignment-output", "id": "INVOCATION_ID", "assignment_id": "ASSIGNMENT_ID"}
 }
 ```

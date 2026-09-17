@@ -79,10 +79,13 @@ pub(crate) struct InvokePacket {
 
 /// Collected `fan-out` flags after the command name.  Zero `--worker` entries
 /// are allowed at parse time; empty-worker execute fails closed.  Optional
+/// `--then` records the worker index at which the second group starts.  An
+/// omitted `--then` preserves the ordinary single-group graph.  Optional
 /// `--max-active N` is omitted (uncapped) or a positive `u32`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FanOutArgs {
     pub(crate) workers: Vec<WorkerCli>,
+    pub(crate) second_group_start: Option<usize>,
     pub(crate) instructions_path: Option<PathBuf>,
     pub(crate) max_active: Option<u32>,
 }
@@ -93,10 +96,12 @@ pub(crate) enum FanOutMode {
     Bound {
         packet: Box<InvokePacket>,
         workers: Vec<WorkerCli>,
+        second_group_start: Option<usize>,
     },
     AdHoc {
         instructions_path: PathBuf,
         workers: Vec<WorkerCli>,
+        second_group_start: Option<usize>,
     },
 }
 
@@ -188,6 +193,10 @@ pub(crate) enum ContractStatus {
 struct FanOutSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     capture_format: Option<String>,
+    /// Index of the first worker in the second group.  The field is absent
+    /// for the legacy single-group graph, preserving its scheduling shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    second_group_start: Option<usize>,
     workers: Vec<FanOutSpecWorker>,
 }
 
@@ -386,7 +395,8 @@ pub(crate) fn parse_invoke_packet(raw: &str) -> Result<InvokePacket, ParseError>
 
 /// Parse argv tokens after the `fan-out` command name.
 ///
-/// Repeated `--worker JSON` (zero entries allowed).  Optional once:
+/// Repeated `--worker JSON` (zero entries allowed), with one optional `--then`
+/// divider between two non-empty worker groups.  Optional once:
 /// `--instructions FILE`.  Optional once: `--max-active N` with decimal integer
 /// N >= 1 that fits `u32`.  Unknown flags (including `--max-concurrency`) and
 /// leftover positionals are errors.
@@ -400,11 +410,25 @@ where
         .map(|token| token.as_ref().to_owned())
         .collect::<Vec<String>>();
     let mut workers = Vec::new();
+    let mut second_group_start = None;
     let mut instructions_path = None;
     let mut max_active = None;
     let mut index = 0;
     while index < args.len() {
         let token = &args[index];
+        if token == "--then" {
+            if second_group_start.is_some() {
+                return Err(ParseError::new("`--then` may be supplied at most once"));
+            }
+            if workers.is_empty() {
+                return Err(ParseError::new(
+                    "`--then` must follow at least one `--worker`",
+                ));
+            }
+            second_group_start = Some(workers.len());
+            index += 1;
+            continue;
+        }
         if let Some(raw) = strip_option(token, "--worker") {
             let raw = match raw {
                 Some(raw) => {
@@ -458,8 +482,14 @@ where
             "unexpected argument `{token}` for fan-out"
         )));
     }
+    if second_group_start == Some(workers.len()) {
+        return Err(ParseError::new(
+            "`--then` must be followed by at least one `--worker`",
+        ));
+    }
     Ok(FanOutArgs {
         workers,
+        second_group_start,
         instructions_path,
         max_active,
     })
@@ -488,10 +518,12 @@ pub(crate) fn detect_mode(
         (Some(packet), None) => Ok(FanOutMode::Bound {
             packet: Box::new(packet),
             workers: parsed_args.workers,
+            second_group_start: parsed_args.second_group_start,
         }),
         (None, Some(instructions_path)) => Ok(FanOutMode::AdHoc {
             instructions_path,
             workers: parsed_args.workers,
+            second_group_start: parsed_args.second_group_start,
         }),
         (None, None) => Err(ParseError::new(
             "ad-hoc fan-out requires `--instructions FILE`; bound fan-out requires an invoke packet on stdin",
@@ -515,7 +547,11 @@ pub(crate) fn run_collector(
     let max_active = parsed_args.max_active;
     let mode = detect_mode(parsed_args, stdin_bytes)?;
     match mode {
-        FanOutMode::Bound { packet, workers } => {
+        FanOutMode::Bound {
+            packet,
+            workers,
+            second_group_start,
+        } => {
             let max_active = packet
                 .controls
                 .max_active
@@ -523,8 +559,11 @@ pub(crate) fn run_collector(
                 .transpose()
                 .map_err(|_| CollectorError::Invalid("max_active exceeds supported limit".into()))?
                 .or(max_active);
-            let (mut workers, assignment_ids) =
-                select_bound_workers(&workers, packet.assignment_selection.as_deref())?;
+            let (mut workers, assignment_ids, second_group_start) = select_bound_workers(
+                &workers,
+                packet.assignment_selection.as_deref(),
+                second_group_start,
+            )?;
             if packet.controls.force_fresh {
                 for worker in &mut workers {
                     if let Some(schema) = &mut worker.full_output_schema {
@@ -561,11 +600,13 @@ pub(crate) fn run_collector(
                 Some(packet.context.as_deref().unwrap_or_default()),
                 &output_dir,
                 max_active,
+                second_group_start,
             )
         }
         FanOutMode::AdHoc {
             instructions_path,
             workers,
+            second_group_start,
         } => {
             ensure_workers(&workers)?;
             let dagu = resolve_dagu().map_err(|error| CollectorError::Failed(error.to_string()))?;
@@ -591,6 +632,7 @@ pub(crate) fn run_collector(
                 None,
                 &output_dir,
                 max_active,
+                second_group_start,
             )
         }
     }
@@ -630,6 +672,41 @@ pub(crate) fn run_fan_out_join(capture_dir: &Path) -> Result<(), CollectorError>
             capture_dir.join(JOIN_COMPLETE_FILE).display()
         ))
     })
+}
+
+/// Check the first group before Dagu admits the second group. This is only a
+/// mechanical completion/conformance gate: semantic worker output remains
+/// opaque, so a conforming semantic failure still lets the second group run.
+pub(crate) fn run_fan_out_barrier(capture_dir: &Path) -> Result<(), CollectorError> {
+    let spec = read_spec(capture_dir)?;
+    let Some(boundary) = spec.second_group_start else {
+        return Err(CollectorError::Invalid(
+            "fan-out barrier requires a two-group fan-out spec".to_owned(),
+        ));
+    };
+    if boundary > spec.workers.len() {
+        return Err(CollectorError::Failed(format!(
+            "fan-out barrier group boundary {boundary} exceeds {} workers",
+            spec.workers.len()
+        )));
+    }
+    let workers = summary_from_spec(&spec, false)?;
+    for (index, (spec_worker, worker)) in
+        spec.workers.iter().zip(&workers).enumerate().take(boundary)
+    {
+        if !worker_started(spec_worker) {
+            return Err(CollectorError::Failed(format!(
+                "first fan-out group worker {index} did not complete"
+            )));
+        }
+        if matches!(worker.status, Some(ContractStatus::Failed)) {
+            return Err(CollectorError::Failed(format!(
+                "first fan-out group worker {} failed output conformance",
+                worker.assignment_id
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Execute one complete-schema worker.  Dagu still owns graph scheduling;
@@ -954,16 +1031,36 @@ fn ensure_workers(workers: &[WorkerCli]) -> Result<(), CollectorError> {
             "fan-out requires at least one `--worker`".to_owned(),
         ));
     }
+    for (index, worker) in workers.iter().enumerate() {
+        if worker.command.contains(['\n', '\r']) {
+            return Err(CollectorError::Invalid(format!(
+                "worker {index} command cannot contain a line break"
+            )));
+        }
+        if let Some((argument_index, _)) = worker
+            .args
+            .iter()
+            .enumerate()
+            .find(|(_, argument)| argument.contains(['\n', '\r']))
+        {
+            return Err(CollectorError::Invalid(format!(
+                "worker {index} argument {argument_index} cannot contain a line break"
+            )));
+        }
+    }
     Ok(())
 }
+
+type SelectedWorkers = (Vec<WorkerCli>, Vec<String>, Option<usize>);
 
 fn select_bound_workers(
     workers: &[WorkerCli],
     selection: Option<&[String]>,
-) -> Result<(Vec<WorkerCli>, Vec<String>), CollectorError> {
+    second_group_start: Option<usize>,
+) -> Result<SelectedWorkers, CollectorError> {
     let all_ids = (0..workers.len()).map(assignment_id).collect::<Vec<_>>();
     let Some(selection) = selection else {
-        return Ok((workers.to_vec(), all_ids));
+        return Ok((workers.to_vec(), all_ids, second_group_start));
     };
     if selection.is_empty() {
         return Err(CollectorError::Invalid(
@@ -990,12 +1087,24 @@ fn select_bound_workers(
         };
         selected.push((index, identity.clone()));
     }
+    let (first_group, second_group): (Vec<_>, Vec<_>) = match second_group_start {
+        Some(boundary) => selected
+            .into_iter()
+            .partition(|(index, _)| *index < boundary),
+        None => (selected, Vec::new()),
+    };
+    let selected_second_group_start = second_group_start.map(|_| first_group.len());
+    let selected = first_group
+        .into_iter()
+        .chain(second_group)
+        .collect::<Vec<_>>();
     Ok((
         selected
             .iter()
             .map(|(index, _)| workers[*index].clone())
             .collect(),
-        selected.into_iter().map(|(_, id)| id).collect(),
+        selected.iter().map(|(_, id)| id.clone()).collect(),
+        selected_second_group_start,
     ))
 }
 
@@ -1101,6 +1210,7 @@ fn loop_engine_exe() -> Result<PathBuf, CollectorError> {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_dagu_graph(
     dagu: &Path,
     workers: &[WorkerCli],
@@ -1109,6 +1219,7 @@ fn run_dagu_graph(
     full_bound_context: Option<&[Value]>,
     output_dir: &Path,
     max_active: Option<u32>,
+    second_group_start: Option<usize>,
 ) -> Result<FanOutSummary, CollectorError> {
     debug_assert_eq!(workers.len(), payloads.len());
     debug_assert_eq!(workers.len(), assignment_ids.len());
@@ -1168,6 +1279,7 @@ fn run_dagu_graph(
     }
     let spec = FanOutSpec {
         capture_format: full_bound_context.map(|_| "bound-context-projection-v1".to_owned()),
+        second_group_start,
         workers: spec_workers,
     };
     write_spec(&output_dir, &spec)?;
@@ -1315,6 +1427,13 @@ fn emit_graph_yaml(
         yaml.push_str(&yaml_double_quoted(&name));
         yaml.push('\n');
         yaml.push_str("    action: exec\n");
+        if spec
+            .second_group_start
+            .is_some_and(|boundary| index >= boundary)
+        {
+            yaml.push_str("    depends:\n");
+            yaml.push_str("      - \"barrier\"\n");
+        }
         yaml.push_str("    with:\n");
         yaml.push_str("      command: ");
         yaml.push_str(&yaml_double_quoted(engine));
@@ -1356,6 +1475,32 @@ fn emit_graph_yaml(
         yaml.push_str(&yaml_double_quoted(&worker.stderr_path));
         yaml.push('\n');
     }
+    if let Some(boundary) = spec.second_group_start {
+        yaml.push_str("  - name: \"barrier\"\n");
+        yaml.push_str("    action: exec\n");
+        if boundary > 0 {
+            yaml.push_str("    depends:\n");
+            for index in 0..boundary {
+                yaml.push_str("      - ");
+                yaml.push_str(&yaml_double_quoted(&format!("w{index}")));
+                yaml.push('\n');
+            }
+        }
+        yaml.push_str("    with:\n");
+        yaml.push_str("      command: ");
+        yaml.push_str(&yaml_double_quoted(engine));
+        yaml.push('\n');
+        yaml.push_str("      args:\n");
+        yaml.push_str("        - ");
+        yaml.push_str(&yaml_double_quoted("fan-out-barrier"));
+        yaml.push('\n');
+        yaml.push_str("        - ");
+        yaml.push_str(&yaml_double_quoted("--capture-dir"));
+        yaml.push('\n');
+        yaml.push_str("        - ");
+        yaml.push_str(&yaml_double_quoted(&capture_dir));
+        yaml.push('\n');
+    }
     yaml.push_str("  - name: ");
     yaml.push_str(&yaml_double_quoted("join"));
     yaml.push('\n');
@@ -1365,6 +1510,9 @@ fn emit_graph_yaml(
         yaml.push_str("      - ");
         yaml.push_str(&yaml_double_quoted(name));
         yaml.push('\n');
+    }
+    if spec.second_group_start.is_some() {
+        yaml.push_str("      - \"barrier\"\n");
     }
     yaml.push_str("    with:\n");
     yaml.push_str("      command: ");
@@ -2253,10 +2401,15 @@ mod tests {
         let parsed = parse_fan_out_args(["--worker", valid_worker_json()]).expect("args");
         let mode = detect_mode(parsed, valid_packet_json().as_bytes()).expect("bound mode");
         match mode {
-            FanOutMode::Bound { packet, workers } => {
+            FanOutMode::Bound {
+                packet,
+                workers,
+                second_group_start,
+            } => {
                 assert_eq!(packet.run_id, "run-1");
                 assert_eq!(workers.len(), 1);
                 assert_eq!(workers[0].command, "echo");
+                assert_eq!(second_group_start, None);
             }
             FanOutMode::AdHoc { .. } => panic!("expected Bound mode"),
         }
@@ -2270,9 +2423,11 @@ mod tests {
             FanOutMode::AdHoc {
                 instructions_path,
                 workers,
+                second_group_start,
             } => {
                 assert_eq!(instructions_path, PathBuf::from("/tmp/instructions.md"));
                 assert!(workers.is_empty());
+                assert_eq!(second_group_start, None);
             }
             FanOutMode::Bound { .. } => panic!("expected AdHoc mode"),
         }
@@ -2462,6 +2617,7 @@ mod tests {
         let bound = run_collector(
             FanOutArgs {
                 workers: Vec::new(),
+                second_group_start: None,
                 instructions_path: None,
                 max_active: None,
             },
@@ -2473,6 +2629,7 @@ mod tests {
         let ad_hoc = run_collector(
             FanOutArgs {
                 workers: Vec::new(),
+                second_group_start: None,
                 instructions_path: Some(instructions),
                 max_active: None,
             },
@@ -2486,6 +2643,7 @@ mod tests {
     fn emitted_yaml_is_type_graph_without_continue_on_or_retry() {
         let spec = FanOutSpec {
             capture_format: None,
+            second_group_start: None,
             workers: vec![FanOutSpecWorker {
                 assignment_id: "worker-0".to_owned(),
                 command: "echo".to_owned(),
@@ -2523,6 +2681,7 @@ mod tests {
     fn max_active_two_emits_max_active_steps_two_and_join_depends_on_every_worker() {
         let spec = FanOutSpec {
             capture_format: None,
+            second_group_start: None,
             workers: vec![
                 FanOutSpecWorker {
                     assignment_id: "worker-0".to_owned(),
@@ -2589,6 +2748,7 @@ mod tests {
         let unstarted_dir = directory.path().join("1");
         let spec = FanOutSpec {
             capture_format: None,
+            second_group_start: None,
             workers: vec![
                 FanOutSpecWorker {
                     assignment_id: "worker-0".to_owned(),

@@ -68,21 +68,22 @@ fn standard_run_progresses_schema_deny_then_evidence_deny_then_allow() {
         "constraints-are-limits",
         "problem-grounded",
     ];
-    for (sequence, axis) in axes.into_iter().enumerate() {
-        engine.append_evidence(
-            "a1",
-            &format!("a1-{axis}"),
-            "intent-review",
-            axis,
-            "pass",
-            "",
-            "reviewer-a1",
-            "agent",
-            "intent.json",
-            "r15",
-            &config_version,
-        );
-        let _ = sequence;
+    for author in ["reviewer-a1", "reviewer-a1-second"] {
+        for axis in axes {
+            engine.append_evidence(
+                "a1",
+                &format!("a1-{author}-{axis}"),
+                "intent-review",
+                axis,
+                "pass",
+                "",
+                author,
+                "agent",
+                "intent.json",
+                "r15",
+                &config_version,
+            );
+        }
     }
 
     let findings_denial = engine.event("a1", "approved");

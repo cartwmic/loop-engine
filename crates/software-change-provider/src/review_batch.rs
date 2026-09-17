@@ -80,6 +80,7 @@ pub(crate) fn captured_commission(
 
 /// Complete batches only. Return rows in frozen assignment order, independent
 /// of the order in the worker's JSON. Reuse is a reference, never a fresh verdict.
+#[allow(dead_code)]
 pub(crate) fn rows<'a>(
     schema: &Value,
     value: &'a Value,
@@ -88,7 +89,48 @@ pub(crate) fn rows<'a>(
     subject: &str,
     revision: &str,
 ) -> Result<Vec<&'a Value>, String> {
+    rows_for_stage(
+        schema,
+        value,
+        location,
+        gate,
+        subject,
+        revision,
+        "aggregate",
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rows_for_stage<'a>(
+    schema: &Value,
+    value: &'a Value,
+    location: &Value,
+    gate: &str,
+    subject: &str,
+    revision: &str,
+    review_stage: &str,
+    require_stage: bool,
+) -> Result<Vec<&'a Value>, String> {
     validate_schema(schema, value)?;
+    let schema_stage = schema
+        .pointer("/properties/review_stage/const")
+        .and_then(Value::as_str);
+    let value_stage = value.get("review_stage").and_then(Value::as_str);
+    if schema_stage.is_some() && value_stage.is_none() {
+        return Err("review output is missing frozen review_stage".to_owned());
+    }
+    let declared_stage = schema_stage.or(value_stage);
+    if require_stage && declared_stage.is_none() {
+        return Err("individual review batch is missing frozen review_stage".to_owned());
+    }
+    if let Some(declared_stage) = declared_stage {
+        if declared_stage != review_stage {
+            return Err(format!(
+                "review batch stage `{declared_stage}` does not match expected `{review_stage}`"
+            ));
+        }
+    }
     let axes = schema
         .pointer("/properties/judgments/allOf")
         .and_then(Value::as_array)
@@ -130,7 +172,7 @@ pub(crate) fn rows<'a>(
             {
                 return Err("force-fresh commission cannot use carried rows".into());
             }
-            crate::evidence::validate_batch_reuse(
+            crate::evidence::validate_batch_reuse_for_stage(
                 &context,
                 reuse.as_str().ok_or("invalid reuse ID")?,
                 gate,
@@ -139,6 +181,8 @@ pub(crate) fn rows<'a>(
                 subject,
                 revision,
                 location.get("artifact_root"),
+                review_stage,
+                require_stage,
             )?;
         }
         ordered.push(row);
@@ -170,7 +214,7 @@ mod tests {
     #[test]
     fn recovery_batch_full_schema_preserves_distinct_verdicts_and_exact_coverage() {
         let schema = schema();
-        let output = json!({"author":{"name":"reviewer","kind":"agent"},"judgments":[
+        let output = json!({"review_stage":"aggregate","author":{"name":"reviewer","kind":"agent"},"judgments":[
             {"axis":"beta","result":"fail","findings":"material"},
             {"axis":"alpha","result":"pass","findings":""}
         ]});
@@ -236,7 +280,7 @@ mod tests {
                 "attesting_driver":{"name":"driver","kind":"agent"},"reason":"unaffected source"}),
             ),
         ];
-        let output = json!({"author":{"name":"reviewer","kind":"agent"},"judgments":[
+        let output = json!({"review_stage":"aggregate","author":{"name":"reviewer","kind":"agent"},"judgments":[
             {"axis":"alpha","result":"pass","findings":""},{"axis":"beta","reuse":"carry"}]});
         let mut location =
             json!({"artifact_root":"/no-longer-current-checkpoint", "context":context});

@@ -8,11 +8,11 @@ Calibration is supplied-material-only. Reviewers receive only bytes selected by 
 
 ## Coverage universe and pairing
 
-`manifest.json` contains two rows for every `(config_version, gate, axis)` key from shipped `minimal`, `standard`, and `high-rigor` profiles: one pass fixture expected to pass and one materially defective fixture expected to fail. Existing `(config_version, gate, axis, fixture_id)` fields remain row identity. Fixture selection is owner metadata; selected fixture bytes and canonical source labels identify exact supplied material. The paired corpus specifically calibrates accepted risk versus invalid waiver, practical versus concretely impractical black-box proof, vague and over-prescribed packets, activity-only validation, token-only Bookends citations, and semantic outcome proof.
+`manifest.json` contains two rows for every `(config_version, gate, axis, review_stage)` key from shipped `minimal`, `standard`, and `high-rigor` profiles: one pass fixture expected to pass and one materially defective fixture expected to fail. Existing `(config_version, gate, axis, review_stage, fixture_id)` fields remain row identity. Fixture selection is owner metadata; selected fixture bytes and canonical source labels identify exact supplied material. The paired corpus specifically calibrates accepted risk versus invalid waiver, practical versus concretely impractical black-box proof, vague and over-prescribed packets, activity-only validation, token-only Bookends citations, and semantic outcome proof.
 
 Evidence and policy gate ids match review state names. Parent review gates are `intent-review`, `design-review`, `plan-review`, `implementation-review`, and `validation-review`. When a shipped profile lists counterpart axes, those keys live on the matching `*-adversarial-review` gate with the same `policy_id` as the parent axis. Each counterpart key has one good and one fail fixture. A good fixture that passes the parent axis must also pass the corresponding adversarial axis.
 
-Every subject fixture and every `intent_revision`, `design_revision`, and `plan_revision` link uses neutral revision `r15`. For each pair, defective subjects receive the same pass predecessor bytes so review isolates subject material. The current shipped versions are `minimal-9`, `standard-9`, and `high-rigor-9` (contract v2); keep expected 69 PASS and 69 FAIL outcomes. The AC-N criterion spine is part of the shipped artifact schema; overlay-off calibration uses no `prd_traceability` disposition, while overlay-on journey proof supplies the optional Bookends `linked-live`, `candidate`, and `not-applicable` annotations separately; `not-applicable` does not waive or fulfill its criterion. After any supplied prompt, protocol, template, schema, or fixture change, rehash affected rows and reset them to pending until a fresh owner review is completed; do not change row keys or expected values to force agreement.
+Every subject fixture and every `intent_revision`, `design_revision`, and `plan_revision` link uses neutral revision `r15`. For each pair, defective subjects receive the same pass predecessor bytes so review isolates subject material. The current shipped versions are `minimal-10`, `standard-10`, and `high-rigor-10` (contract v3). Stage-aware rows are keyed by profile, gate, axis, and review stage; keep each supplied PASS/FAIL expectation unchanged while re-assessing changed inputs. The AC-N criterion spine is part of the shipped artifact schema; overlay-off calibration uses no `prd_traceability` disposition, while overlay-on journey proof supplies the optional Bookends `linked-live`, `candidate`, and `not-applicable` annotations separately; `not-applicable` does not waive or fulfill its criterion. After any supplied prompt, protocol, template, schema, or fixture change, rehash affected rows and reset them to pending until a fresh owner review is completed; do not change row keys or expected values to force agreement.
 
 | Gate | Subject fixture IDs | Required predecessor fixture IDs, in order | Gate subject | Template |
 |---|---|---|---|---|
@@ -22,13 +22,13 @@ Every subject fixture and every `intent_revision`, `design_revision`, and `plan_
 | `implementation-review`, `implementation-adversarial-review` | `implementation-report-good`, `implementation-report-defective` | `intent-good`, `design-good`, `plan-good` | `implementation-report.json` | `implementation-report.md` |
 | `validation-review`, `validation-adversarial-review` | `validation-report-good`, `validation-report-defective` | `intent-good`, `design-good`, `plan-good`, `implementation-report-good` | `validation-report.json` | `validation-report.md` |
 
-Use exact profile selected by row `config_version` and exact policy `example_prompt` selected by row `gate` and `axis`. `subject_revision` is selected subject fixture `revision` and remains `r15`. `subject` is gate subject, never fixture ID.
+Use exact profile selected by row `config_version` and exact policy `example_prompt` selected by row `gate`, `axis`, and `review_stage`. The profile basename is `minimal`, `standard`, or `high-rigor`; the config version is the frozen row identity. `subject_revision` is selected subject fixture `revision` and remains `r15`. `subject` is gate subject, never fixture ID.
 
 ### Fictional companions
 
 Path-bearing fixture values use reserved `fictional-repo/` labels. Reviewers do not inspect live checkout paths. Supply stable companion bytes from `data/calibration/companions/fictional-repo/`.
 
-Validation report subjects are now fixed indexes. Resolve their selected command evidence to the preserved external narrative companion `data/calibration/fixtures/validation-evidence-2026-08-12.json` or `validation-evidence-2026-08-13.json`, supplied as `companion:validation-evidence.json`. The original narratives retain their meaning; index migration and mechanical rehash are not fresh semantic review. For validation rows, coverage.commit/documents below are read from that companion, not invented as index fields. All 138 current rows remain pending until actual owner-attested review.
+Validation report subjects are now fixed indexes. Resolve their selected command evidence to the preserved external narrative companion `data/calibration/fixtures/validation-evidence-2026-08-12.json` or `validation-evidence-2026-08-13.json`, supplied as `companion:validation-evidence.json`. The original narratives retain their meaning; index migration and mechanical rehash are not fresh semantic review. For validation rows, coverage.commit/documents below are read from that companion, not invented as index fields. All 368 current rows remain pending until actual owner-attested review.
 
 For each `implementation-review` or `implementation-adversarial-review` row, and each `validation-review` or `validation-adversarial-review` row whose axis is `intent-delivered` or `requirement-proof-mapping`, read selected subject `coverage.commit` and use exactly one mapping:
 
@@ -65,7 +65,7 @@ Use one fresh external reviewer context per manifest row. Do not carry prior-row
 2. `example_prompt` — exact selected policy string bytes.
 3. `reviewer-protocol:data/reviewer-protocol.md` — exact `data/reviewer-protocol.md` bytes.
 4. `template:data/templates/{template}` — exact matching template bytes.
-5. `schema:data/configs/{profile}.json#/artifact_schemas/{subject}` — selected artifact schema bytes.
+5. `schema:data/configs/{profile}.json#/artifact_schemas/{subject}` — selected artifact schema bytes, where `{profile}` is the shipped basename (`minimal`, `standard`, or `high-rigor`).
 6. `subject:data/calibration/fixtures/{fixture_id}.json` — exact selected subject fixture bytes.
 7. One `required predecessor:data/calibration/fixtures/{fixture_id}.json` record for each required predecessor, in intent, design, plan, implementation-report, validation order — exact predecessor fixture bytes.
 8. For validation, first `companion:validation-evidence.json` with the selected preserved narrative bytes. Then exact companion records, when supplied, with labels `companion:{fictional-repo-label}`. Implementation and `intent-delivered` validation rows use the common repository-state label above. Docs companions use their coverage labels sorted by canonical label bytes. `requirement-proof-mapping` rows use the repository-state record followed by the four exact proof-source records in the order defined above.
@@ -91,13 +91,13 @@ Any supplied-byte change invalidates every row whose source stream contains that
 
 ## Canonical request JSON
 
-`request-json` is one UTF-8 JSON object with exactly five string fields in this order:
+`request-json` is one UTF-8 JSON object with exactly six string fields in this order:
 
 ```json
-{"gate":"...","policy_id":"...","subject":"...","subject_revision":"...","config_version":"..."}
+{"gate":"...","policy_id":"...","review_stage":"...","subject":"...","subject_revision":"...","config_version":"..."}
 ```
 
-Values are row `gate`, row `axis`, gate subject, selected subject fixture `revision`, and selected profile `config_version`. Use RFC 8259 string quoting: escape quote, backslash, and controls; use `\b`, `\t`, `\n`, `\f`, and `\r` for backspace, tab, newline, form feed, and carriage return; use lowercase `\u00xx` for every other U+0000–U+001F. Do not escape slash or non-ASCII characters. Use only comma and colon separators. Emit no insignificant whitespace, duplicate keys, or trailing LF. Supply exact request bytes; parsing then reserializing is not equivalent.
+Values are row `gate`, row `axis`, row `review_stage`, gate subject, selected subject fixture `revision`, and selected profile `config_version`. Use RFC 8259 string quoting: escape quote, backslash, and controls; use `\b`, `\t`, `\n`, `\f`, and `\r` for backspace, tab, newline, form feed, and carriage return; use lowercase `\u00xx` for every other U+0000–U+001F. Do not escape slash or non-ASCII characters. Use only comma and colon separators. Emit no insignificant whitespace, duplicate keys, or trailing LF. Supply exact request bytes; parsing then reserializing is not equivalent.
 
 ## Recording attestation
 
@@ -114,7 +114,7 @@ Mechanical identity updates never mint semantic attestations. After fresh extern
 - `invocation`: `Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.`
 - `input_sha256`: exact stream identity updated with that review.
 
-Never change `expected`, row key, config, fixture, or coverage to force agreement. Keep returned evidence outside manifest when needed; `example-evidence.json` is illustrative R25 data, not attestation. Existing expected 69 PASS/69 FAIL and current fixture material remain unchanged while rows are pending.
+Never change `expected`, row key, config, fixture, or coverage to force agreement. Keep returned evidence outside manifest when needed; `example-evidence.json` is illustrative R25 data, not attestation. Existing expected 184 PASS/184 FAIL and current fixture material remain unchanged while rows are pending.
 
 Final validation retains explicit ignored A11 no-pending gate `calibration_manifest_has_no_pending_rows_for_final_validation`. It must remain failing while any row is pending and may pass only after every row has fresh external owner review, inspected evidence, and honest attestation. No automatic re-attestation or manifest rewriting exists or is shipped.
 
