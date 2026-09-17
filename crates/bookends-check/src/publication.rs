@@ -39,7 +39,7 @@ pub fn parse_ref_updates(input: &str) -> Result<Vec<RefUpdate>, String> {
                 line_number + 1
             ));
         }
-        validate_ref(fields[0], line_number + 1, "local")?;
+        validate_local_token(fields[0], line_number + 1)?;
         validate_ref(fields[2], line_number + 1, "remote")?;
         validate_oid(fields[1], line_number + 1, "new")?;
         validate_oid(fields[3], line_number + 1, "old")?;
@@ -61,6 +61,18 @@ fn validate_ref(value: &str, line: usize, side: &str) -> Result<(), String> {
     {
         return Err(format!(
             "pre-push update line {line} has invalid {side} ref {value:?}"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_local_token(value: &str, line: usize) -> Result<(), String> {
+    // Git's local-ref field is descriptive protocol data: it may be a ref,
+    // HEAD, an object expression, or `(delete)`.  It is never resolved or
+    // passed back to Git as a refspec.
+    if value.is_empty() || value.starts_with('-') || value.chars().any(char::is_control) {
+        return Err(format!(
+            "pre-push update line {line} has invalid local ref token {value:?}"
         ));
     }
     Ok(())

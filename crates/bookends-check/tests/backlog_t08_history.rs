@@ -4,6 +4,7 @@
 //! pre-push hook.  They intentionally use temporary repositories and a local
 //! bare remote so no external service is part of the proof.
 
+use std::env;
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
@@ -116,6 +117,165 @@ fn one_receipt(root: &Path) -> String {
     let path = files.next().expect("one receipt");
     assert!(files.next().is_none(), "unexpected extra receipt");
     fs::read_to_string(path).expect("receipt text")
+}
+
+struct HookFixture {
+    root: tempfile::TempDir,
+    checkout: PathBuf,
+    bare: PathBuf,
+    base: String,
+    bin_dir: PathBuf,
+}
+
+fn hook_fixture(with_obsolete_ref: bool) -> HookFixture {
+    let root = tempfile::tempdir().expect("tempdir");
+    let source = init_repo(root.path());
+    enable_graph(&source, &live("LE-1", "One"), "# bookends:LE-1\n");
+    let base = commit(&source, "base");
+
+    let bare = root.path().join("remote.git");
+    let bare_output = Command::new("git")
+        .args([
+            "init",
+            "-q",
+            "--bare",
+            "--initial-branch=main",
+            bare.to_str().expect("bare path"),
+        ])
+        .output()
+        .expect("init bare");
+    assert!(
+        bare_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&bare_output.stderr)
+    );
+    git(
+        &source,
+        &["remote", "add", "origin", bare.to_str().expect("bare path")],
+    );
+    git(
+        &source,
+        &["push", "-q", "origin", &format!("{base}:refs/heads/main")],
+    );
+    if with_obsolete_ref {
+        git(
+            &source,
+            &[
+                "push",
+                "-q",
+                "origin",
+                &format!("{base}:refs/heads/obsolete"),
+            ],
+        );
+    }
+
+    let checkout = root.path().join("checkout");
+    let clone = Command::new("git")
+        .args([
+            "clone",
+            "-q",
+            &format!("file://{}", bare.display()),
+            checkout.to_str().expect("checkout path"),
+        ])
+        .output()
+        .expect("clone checkout");
+    assert!(
+        clone.status.success(),
+        "{}",
+        String::from_utf8_lossy(&clone.stderr)
+    );
+    git(&checkout, &["config", "user.name", "Bookends T08 hook"]);
+    git(
+        &checkout,
+        &["config", "user.email", "t08-hook@example.invalid"],
+    );
+    git(&checkout, &["config", "commit.gpgsign", "false"]);
+
+    let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let hooks = checkout.join(".githooks");
+    let scripts = checkout.join("scripts");
+    fs::create_dir_all(&hooks).expect("hooks directory");
+    fs::create_dir_all(&scripts).expect("scripts directory");
+    fs::copy(
+        source_root.join(".githooks/pre-push"),
+        hooks.join("pre-push"),
+    )
+    .expect("copy hook");
+    fs::copy(
+        source_root.join("scripts/bookends-check-gate.sh"),
+        scripts.join("bookends-check-gate.sh"),
+    )
+    .expect("copy gate");
+    for path in [
+        hooks.join("pre-push"),
+        scripts.join("bookends-check-gate.sh"),
+    ] {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("executable hook");
+    }
+    git(&checkout, &["config", "core.hooksPath", ".githooks"]);
+
+    let bin_dir = root.path().join("bin");
+    fs::create_dir_all(&bin_dir).expect("bin directory");
+    let checker_path = bin_dir.join("bookends-check");
+    fs::copy(checker(), &checker_path).expect("copy checker");
+    fs::set_permissions(&checker_path, fs::Permissions::from_mode(0o755))
+        .expect("checker executable");
+
+    HookFixture {
+        root,
+        checkout,
+        bare,
+        base,
+        bin_dir,
+    }
+}
+
+fn hook_push(fixture: &HookFixture, args: &[String]) -> Output {
+    let path = format!(
+        "{}:{}",
+        fixture.bin_dir.display(),
+        env::var("PATH").expect("PATH")
+    );
+    Command::new("git")
+        .current_dir(&fixture.checkout)
+        .args(["push", "origin"])
+        .args(args)
+        .env("PATH", path)
+        .env("XDG_STATE_HOME", fixture.root.path().join("state"))
+        .env(
+            "BOOKENDS_RECEIPT_ROOT",
+            fixture.root.path().join("receipts"),
+        )
+        .output()
+        .expect("hook push")
+}
+
+fn hook_output(output: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+fn assert_hook_marker(output: &Output, marker: &str) {
+    let text = hook_output(output);
+    assert!(
+        text.lines().any(|line| line == marker),
+        "missing {marker} hook result: {text}"
+    );
+}
+
+fn ref_oid(repo: &Path, reference: &str) -> Option<String> {
+    let output = Command::new("git")
+        .current_dir(repo)
+        .args(["rev-parse", "--verify", reference])
+        .output()
+        .expect("read remote ref");
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 #[test]
@@ -634,4 +794,104 @@ fn backlog_t08_pre_push_hook_passes_actual_updates_and_rejects_bad_range() {
         String::from_utf8_lossy(&accepted.stderr)
     );
     assert_eq!(git(&bare, &["rev-parse", "refs/heads/main"]), pushed);
+}
+
+#[test]
+fn backlog_t08_hook_accepts_direct_sha_and_head_updates() {
+    // bookends:LE-133 — real pre-push updates using a direct SHA and HEAD are
+    // accepted after the hook checks each published range and its tip content.
+    let fixture = hook_fixture(false);
+
+    write_file(
+        &fixture.checkout,
+        "tests/direct-sha.py",
+        "direct SHA publication\n",
+    );
+    let direct_sha = commit(&fixture.checkout, "direct SHA publication");
+    let direct_ref = format!("{direct_sha}:refs/heads/main");
+    let direct = hook_push(&fixture, &[direct_ref]);
+    assert!(direct.status.success(), "{}", hook_output(&direct));
+    assert_hook_marker(&direct, "GREEN");
+    assert_eq!(
+        ref_oid(&fixture.bare, "refs/heads/main"),
+        Some(direct_sha.clone())
+    );
+
+    write_file(&fixture.checkout, "tests/head.py", "HEAD publication\n");
+    let head = commit(&fixture.checkout, "HEAD publication");
+    let head_push = hook_push(&fixture, &["HEAD:refs/heads/main".to_owned()]);
+    assert!(head_push.status.success(), "{}", hook_output(&head_push));
+    assert_hook_marker(&head_push, "GREEN");
+    assert_eq!(ref_oid(&fixture.bare, "refs/heads/main"), Some(head));
+}
+
+#[test]
+fn backlog_t08_hook_accepts_deletion_only_and_mixed_valid_updates() {
+    // bookends:LE-133 — real hook acceptance of deletion-only and mixed
+    // publication/deletion updates preserves deletion semantics while checking
+    // the published range and tip in the same update stream.
+    let deletion_fixture = hook_fixture(true);
+    let deletion = hook_push(
+        &deletion_fixture,
+        &["--delete".to_owned(), "obsolete".to_owned()],
+    );
+    assert!(deletion.status.success(), "{}", hook_output(&deletion));
+    assert_hook_marker(&deletion, "GREEN");
+    assert_eq!(ref_oid(&deletion_fixture.bare, "refs/heads/obsolete"), None);
+
+    let mixed_fixture = hook_fixture(true);
+    write_file(
+        &mixed_fixture.checkout,
+        "tests/mixed.py",
+        "mixed publication\n",
+    );
+    let published = commit(&mixed_fixture.checkout, "mixed publication");
+    let mixed = hook_push(
+        &mixed_fixture,
+        &[
+            format!("{published}:refs/heads/main"),
+            ":refs/heads/obsolete".to_owned(),
+        ],
+    );
+    assert!(mixed.status.success(), "{}", hook_output(&mixed));
+    assert_hook_marker(&mixed, "GREEN");
+    assert_eq!(
+        ref_oid(&mixed_fixture.bare, "refs/heads/main"),
+        Some(published)
+    );
+    assert_eq!(ref_oid(&mixed_fixture.bare, "refs/heads/obsolete"), None);
+}
+
+#[test]
+fn backlog_t08_hook_rejects_mixed_invalid_update_without_remote_mutation() {
+    // bookends:LE-133 — a mixed stream with an invalid published transition is
+    // rejected before deletion is applied, preserving range continuity and
+    // leaving every remote ref unchanged.
+    let fixture = hook_fixture(true);
+    write_file(
+        &fixture.checkout,
+        "docs/PRD.md",
+        &(live("LE-1", "One") + &live("LE-2", "Uncovered")),
+    );
+    let invalid = commit(&fixture.checkout, "invalid mixed publication");
+    let rejected = hook_push(
+        &fixture,
+        &[
+            format!("{invalid}:refs/heads/main"),
+            ":refs/heads/obsolete".to_owned(),
+        ],
+    );
+    let output = hook_output(&rejected);
+    assert!(!rejected.status.success(), "{output}");
+    assert_hook_marker(&rejected, "RED");
+    assert!(output.contains("RED"), "{output}");
+    assert!(output.contains(&invalid), "{output}");
+    assert_eq!(
+        ref_oid(&fixture.bare, "refs/heads/main"),
+        Some(fixture.base.clone())
+    );
+    assert_eq!(
+        ref_oid(&fixture.bare, "refs/heads/obsolete"),
+        Some(fixture.base)
+    );
 }
