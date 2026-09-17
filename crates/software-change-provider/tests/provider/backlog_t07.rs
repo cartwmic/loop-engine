@@ -16,14 +16,6 @@ fn temp_root(label: &str) -> PathBuf {
     path
 }
 
-fn engine() -> PathBuf {
-    workspace_integration::binary("loop-engine")
-}
-
-fn provider() -> PathBuf {
-    workspace_integration::binary("software-change")
-}
-
 fn run_json(command: &mut Command, label: &str) -> Value {
     let output = command
         .output()
@@ -48,6 +40,8 @@ struct RunFixture {
     repository: PathBuf,
     database: PathBuf,
     providers: PathBuf,
+    engine_path: PathBuf,
+    provider_path: PathBuf,
     profile: PathBuf,
     run_id: String,
     axis: String,
@@ -73,6 +67,8 @@ fn git(repository: &Path, args: &[&str], label: &str) {
 }
 
 fn create_run(label: &str, axis: &str, required_authors: u64) -> RunFixture {
+    let engine_path = workspace_integration::binary("loop-engine");
+    let provider_path = workspace_integration::binary("software-change");
     let root = temp_root(label);
     let artifacts = root.join("artifacts");
     let repository = root.join("repository");
@@ -175,7 +171,7 @@ fn create_run(label: &str, axis: &str, required_authors: u64) -> RunFixture {
         &providers,
         format!(
             "[providers.software-change]\ncommand = {:?}\nargs = []\n",
-            provider().to_string_lossy()
+            provider_path.to_string_lossy()
         ),
     )
     .expect("provider catalog");
@@ -185,6 +181,8 @@ fn create_run(label: &str, axis: &str, required_authors: u64) -> RunFixture {
         repository,
         database: root.join("loop.sqlite"),
         providers,
+        engine_path,
+        provider_path,
         profile: profile_path,
         run_id: format!("backlog-t07-{label}"),
         axis: axis.to_owned(),
@@ -194,7 +192,7 @@ fn create_run(label: &str, axis: &str, required_authors: u64) -> RunFixture {
 }
 
 fn engine_call(run: &RunFixture, args: &[String], label: &str) -> Value {
-    let mut command = Command::new(engine());
+    let mut command = Command::new(&run.engine_path);
     command
         .current_dir(&run.repository)
         .arg("--database")
@@ -321,7 +319,7 @@ fn pass_review(
 }
 
 fn checkpoint(run: &RunFixture, phase: &str) {
-    let output = Command::new(provider())
+    let output = Command::new(&run.provider_path)
         .current_dir(&run.repository)
         .args([
             "checkpoint",
@@ -351,9 +349,9 @@ fn prepare_validation(run: &RunFixture) -> String {
         .args([
             helper.to_str().expect("prepare helper"),
             "--provider",
-            provider().to_str().expect("provider path"),
+            run.provider_path.to_str().expect("provider path"),
             "--engine",
-            engine().to_str().expect("engine path"),
+            run.engine_path.to_str().expect("engine path"),
             "--working-directory",
             run.repository.to_str().expect("repository path"),
             "--revision",
@@ -614,8 +612,8 @@ fn state_topology(workflow: &Value) -> Value {
     )
 }
 
-fn describe(initial_input: &Value) -> Value {
-    let mut command = Command::new(provider());
+fn describe(initial_input: &Value, provider_path: &Path) -> Value {
+    let mut command = Command::new(provider_path);
     command
         .current_dir(workspace_integration::repository_root())
         .stdin(std::process::Stdio::piped())
@@ -670,8 +668,8 @@ fn backlog_t07_same_topology_different_frozen_policies_reject_foreign_evidence()
     let second = create_run("policy-b", "shared-axis", 2);
     let second_final = drive_run(&second, &first_context);
     let second_input = &second_final["result"]["initial_input"];
-    let first_workflow = describe(first_input);
-    let second_workflow = describe(second_input);
+    let first_workflow = describe(first_input, &first.provider_path);
+    let second_workflow = describe(second_input, &second.provider_path);
     assert_eq!(first_workflow["id"], "software-change");
     assert_eq!(
         state_topology(&first_workflow),
