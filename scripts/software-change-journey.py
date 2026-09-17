@@ -4329,6 +4329,97 @@ class Journey:
         # same-run checks remain serial while unrelated isolated cases can use
         # the existing bounded proof pool.
 
+    @staticmethod
+    def _emit_global_pool_failure_diagnostics(
+        report: Any, report_path: Path, expected_names: Sequence[str]
+    ) -> None:
+        """Keep the original pool failure while exposing its retained evidence."""
+        def render(value: Any) -> str:
+            try:
+                return json.dumps(value, sort_keys=True, default=str)
+            except Exception as error:  # pragma: no cover - defensive diagnostics only
+                return f"<unrenderable: {error}>"
+
+        def capture_tail(path: Any) -> str:
+            if not path:
+                return "<missing capture: no capture path recorded>"
+            try:
+                capture = Path(path)
+                with capture.open("rb") as stream:
+                    stream.seek(0, os.SEEK_END)
+                    size = stream.tell()
+                    start = max(0, size - 4096)
+                    stream.seek(start)
+                    value = stream.read(4096)
+                text = value.decode("utf-8", "replace")
+                if start:
+                    text = "<capture tail truncated to 4096 bytes>\n" + text
+                return text or "<empty capture>"
+            except (OSError, TypeError, ValueError) as error:
+                return f"<missing/unreadable capture {path!r}: {error}>"
+
+        rows = report.get("jobs", []) if isinstance(report, dict) else []
+        rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+        actual_names = {
+            row.get("name") for row in rows if isinstance(row.get("name"), str)
+        }
+        missing_names = [name for name in expected_names if name not in actual_names]
+        failed_rows = [
+            row
+            for row in rows
+            if row.get("status") != "passed" or row.get("exit_code") != 0
+        ]
+        failed_names = [row.get("name") for row in failed_rows]
+        print(f"global full-source proof pool report: {report_path}", file=sys.stderr)
+        print(f"global full-source proof pool failed jobs: {render(failed_names)}", file=sys.stderr)
+        print(f"global full-source proof pool missing jobs: {render(missing_names)}", file=sys.stderr)
+        if isinstance(report, dict):
+            print(
+                "global full-source proof pool status/cleanup/error: "
+                + render({
+                    "status": report.get("status"),
+                    "cleanup": report.get("cleanup"),
+                    "error": report.get("error"),
+                }),
+                file=sys.stderr,
+            )
+
+        for row in failed_rows:
+            result = row.get("result")
+            error = row.get("error")
+            if error is None and isinstance(result, dict):
+                error = result.get("error")
+            name = row.get("name")
+            print(
+                "global full-source proof pool row: "
+                + render({
+                    "name": name,
+                    "status": row.get("status"),
+                    "exit_code": row.get("exit_code"),
+                    "cleanup": row.get("cleanup"),
+                    "error": error,
+                }),
+                file=sys.stderr,
+            )
+            for stream_name in ("stdout", "stderr"):
+                path = row.get(stream_name)
+                print(
+                    f"global full-source proof pool {name!r} {stream_name} tail "
+                    f"(capture={path!r}):",
+                    file=sys.stderr,
+                )
+                tail = capture_tail(path)
+                print(tail, file=sys.stderr, end="")
+                if not tail.endswith("\n"):
+                    print(file=sys.stderr)
+
+        for name in missing_names:
+            print(
+                f"global full-source proof pool missing row: {name!r}; "
+                "stdout/stderr capture unavailable because the job was not recorded",
+                file=sys.stderr,
+            )
+
     def _run_global_tail_proof(self) -> None:
         """Run independent full-journey fixtures through one bounded pool."""
         assert self.mode == "source" and self.depth == "full"
@@ -4397,6 +4488,7 @@ class Journey:
         if len(expected_names) != len(global_jobs):
             raise JourneyFailure("global full-source proof inventory contains duplicate names")
         report_root = self.run_dir / "global-proof-pool"
+        report_path = self.run_dir / "global-proof-pool-report.json"
         try:
             report = proof_pool.run(
                 global_jobs,
@@ -4405,8 +4497,12 @@ class Journey:
                 timeout=self.args.job_timeout,
             )
         except proof_pool.PoolFailure as error:
+            self._emit_global_pool_failure_diagnostics(
+                {"status": "failed", "jobs": [], "error": str(error)},
+                report_path,
+                sorted(expected_names),
+            )
             raise JourneyFailure(f"global full-source proof pool failed: {error}") from error
-        report_path = self.run_dir / "global-proof-pool-report.json"
         report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         rows = report.get("jobs", [])
         by_name = {
@@ -4423,6 +4519,7 @@ class Journey:
                 for name in expected_names
             )
         ):
+            self._emit_global_pool_failure_diagnostics(report, report_path, sorted(expected_names))
             raise JourneyFailure(
                 f"global full-source proof pool did not complete its inventory; inspect {report_path}",
                 state="end",
