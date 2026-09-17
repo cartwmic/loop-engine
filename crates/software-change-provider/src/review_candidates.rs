@@ -211,6 +211,22 @@ pub fn project(input: &Value) -> Result<ReviewCandidatesDocument, ProjectionErro
                 id: invocation_id.to_owned(),
                 assignment_id: assignment_id.to_owned(),
             };
+            let require_fresh_aggregate = initial_input
+                .get("contract_version")
+                .and_then(Value::as_u64)
+                == Some(3)
+                && policies
+                    .get(slot_id)
+                    .and_then(Value::as_array)
+                    .is_some_and(|entries| {
+                        entries.iter().any(|entry| {
+                            entry
+                                .get("review_stage")
+                                .or_else(|| entry.get("stage"))
+                                .and_then(Value::as_str)
+                                == Some("individual")
+                        })
+                    });
             candidates.extend(project_assignment(
                 origin,
                 worker,
@@ -218,6 +234,7 @@ pub fn project(input: &Value) -> Result<ReviewCandidatesDocument, ProjectionErro
                 capture_dir,
                 worker_index,
                 slot_id,
+                require_fresh_aggregate,
             ));
         }
     }
@@ -303,6 +320,7 @@ fn project_assignment(
     capture_dir: Option<&str>,
     worker_index: usize,
     gate: &str,
+    require_fresh_aggregate: bool,
 ) -> Vec<ReviewCandidate> {
     if worker.get("selected_attempt").is_none_or(Value::is_null) {
         return vec![if reports_exhausted(capture_dir, worker_index) {
@@ -349,7 +367,14 @@ fn project_assignment(
         Err(diagnostic) => return vec![ReviewCandidate::Malformed { origin, diagnostic }],
     };
     if contract.pointer("/properties/judgments").is_some() {
-        return project_batch(origin, contract, &value, capture_dir, gate);
+        return project_batch(
+            origin,
+            contract,
+            &value,
+            capture_dir,
+            gate,
+            require_fresh_aggregate,
+        );
     }
     vec![match normalize_review_output(contract, &value) {
         Ok(judgment) => ReviewCandidate::Ready {
@@ -370,6 +395,7 @@ fn project_batch(
     value: &Value,
     capture_dir: Option<&str>,
     gate: &str,
+    require_fresh_aggregate: bool,
 ) -> Vec<ReviewCandidate> {
     let result = (|| -> Result<Vec<ReviewCandidate>, String> {
         let capture = capture_dir.ok_or("missing capture directory")?;
@@ -399,7 +425,7 @@ fn project_batch(
             .as_str()
             .ok_or("subject has no revision")?;
         let review_stage = declared_review_stage(contract, value)?;
-        let rows = crate::review_batch::rows_for_stage(
+        let rows = crate::review_batch::rows_for_stage_with_options(
             contract,
             value,
             &location,
@@ -408,6 +434,7 @@ fn project_batch(
             revision,
             &review_stage,
             review_stage == "individual",
+            require_fresh_aggregate,
         )?;
         let author = CandidateAuthor {
             name: value["author"]["name"]

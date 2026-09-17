@@ -587,6 +587,8 @@ pub(crate) fn evaluate_staged_evidence_with_dispositions(
     let mut inert_records = Vec::new();
     let mut global_malformed = Vec::new();
     let mut global_unverified = Vec::new();
+    let require_fresh_aggregate =
+        stages.contains_key("individual") && stages.contains_key("aggregate");
 
     let add_for_axis =
         |axis: &str, reasons: &[String], target: &mut BTreeMap<StageAxis, Vec<String>>| {
@@ -656,19 +658,11 @@ pub(crate) fn evaluate_staged_evidence_with_dispositions(
                 ),
             ) {
                 (Some(Attribution::Current { axis }), Ok(conforming)) => {
-                    if stages
+                    let configured = stages
                         .get(&conforming.review_stage)
                         .and_then(|axes| axes.get(&axis))
-                        .is_some()
-                    {
-                        record_stage_conforming(
-                            &mut malformed,
-                            &mut unverified,
-                            &mut latest,
-                            axis,
-                            conforming,
-                        );
-                    } else {
+                        .is_some();
+                    if !configured {
                         add_for_axis(
                             &axis,
                             &[format!(
@@ -676,6 +670,23 @@ pub(crate) fn evaluate_staged_evidence_with_dispositions(
                                 conforming.review_stage
                             )],
                             &mut malformed,
+                        );
+                    } else if require_fresh_aggregate && conforming.review_stage == "aggregate" {
+                        if let Some(reasons) =
+                            unverified.get_mut(&(conforming.review_stage.clone(), axis))
+                        {
+                            reasons.push(
+                                "high-rigor aggregate review requires fresh judgments; aggregate applicability cannot be carried"
+                                    .to_owned(),
+                            );
+                        }
+                    } else {
+                        record_stage_conforming(
+                            &mut malformed,
+                            &mut unverified,
+                            &mut latest,
+                            axis,
+                            conforming,
                         );
                     }
                 }

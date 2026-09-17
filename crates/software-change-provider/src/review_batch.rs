@@ -112,6 +112,35 @@ pub(crate) fn rows_for_stage<'a>(
     review_stage: &str,
     require_stage: bool,
 ) -> Result<Vec<&'a Value>, String> {
+    rows_for_stage_with_options(
+        schema,
+        value,
+        location,
+        gate,
+        subject,
+        revision,
+        review_stage,
+        require_stage,
+        false,
+    )
+}
+
+/// Validate a batch while optionally requiring a fresh aggregate row. The
+/// latter is the high-rigor multi-stage rule: individual applicability may
+/// carry unaffected axes, but an aggregate judgment must be produced again
+/// after a correction.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rows_for_stage_with_options<'a>(
+    schema: &Value,
+    value: &'a Value,
+    location: &Value,
+    gate: &str,
+    subject: &str,
+    revision: &str,
+    review_stage: &str,
+    require_stage: bool,
+    require_fresh_aggregate: bool,
+) -> Result<Vec<&'a Value>, String> {
     validate_schema(schema, value)?;
     let schema_stage = schema
         .pointer("/properties/review_stage/const")
@@ -165,6 +194,12 @@ pub(crate) fn rows_for_stage<'a>(
         }
         let row = matches[0];
         if let Some(reuse) = row.get("reuse") {
+            if require_fresh_aggregate && review_stage == "aggregate" {
+                return Err(
+                    "high-rigor aggregate review requires fresh judgments; carried rows are not allowed"
+                        .into(),
+                );
+            }
             if location
                 .pointer("/controls/force_fresh")
                 .and_then(Value::as_bool)
@@ -293,6 +328,19 @@ mod tests {
             "2"
         )
         .is_ok());
+        assert!(rows_for_stage_with_options(
+            &schema(),
+            &output,
+            &location,
+            "implementation-review",
+            "implementation-report.json",
+            "2",
+            "aggregate",
+            false,
+            true,
+        )
+        .unwrap_err()
+        .contains("aggregate review requires fresh"));
         assert!(rows(
             &schema(),
             &output,
