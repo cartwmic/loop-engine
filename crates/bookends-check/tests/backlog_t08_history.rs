@@ -296,7 +296,13 @@ fn backlog_t08_shallow_and_full_clones_agree_after_fetch_without_local_mutation(
 
     let bare = root.path().join("remote.git");
     let bare_output = Command::new("git")
-        .args(["init", "-q", "--bare", bare.to_str().expect("bare path")])
+        .args([
+            "init",
+            "-q",
+            "--bare",
+            "--initial-branch=main",
+            bare.to_str().expect("bare path"),
+        ])
         .output()
         .expect("init bare");
     assert!(bare_output.status.success());
@@ -509,7 +515,13 @@ fn backlog_t08_pre_push_hook_passes_actual_updates_and_rejects_bad_range() {
 
     let bare = root.path().join("remote.git");
     let bare_output = Command::new("git")
-        .args(["init", "-q", "--bare", bare.to_str().expect("bare path")])
+        .args([
+            "init",
+            "-q",
+            "--bare",
+            "--initial-branch=main",
+            bare.to_str().expect("bare path"),
+        ])
         .output()
         .expect("init bare");
     assert!(bare_output.status.success());
