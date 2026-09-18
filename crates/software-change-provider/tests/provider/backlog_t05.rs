@@ -425,6 +425,8 @@ fn backlog_t05_v2_checked_evaluation_is_explicitly_unsupported() {
     assert_eq!(output.stdout, br#"{"result":"unsupported"}"#);
 }
 
+// bookends:LE-131 — this public provider evaluation rejects a current plan
+// task without criterion_ids with a structured criterion-reference diagnostic.
 #[test]
 fn backlog_t05_v3_requires_current_nonempty_plan_task_criteria() {
     let root = temp_root("task-criteria");

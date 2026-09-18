@@ -1294,9 +1294,6 @@ class Journey:
         self._start_run(self.run_id)
 
     def _start_run(self, run_id: str) -> None:
-        # bookends:LE-135 — this public start/inspect path retains the
-        # discoverable run database and artifact_root locations across fresh
-        # working-directory boundaries.
         assert self.profile_path is not None
         assert self.provider_config is not None
         start_profile = self.profile_path
@@ -3637,8 +3634,6 @@ class Journey:
         implementation_receipts = self.run_dir / "implementation-receipts"
         frozen_implement_binding = copy.deepcopy(self.work_slot_bindings["implement"])
         plan_document = self._read_json(self.artifact_root / "plan.json", "accepted plan")
-        # bookends:LE-131 — every implementation task in the public plan names
-        # at least one current AC-N criterion before the graph is invoked.
         if any(
             not isinstance(task.get("criterion_ids"), list) or not task["criterion_ids"]
             for task in plan_document.get("tasks", [])
@@ -6422,12 +6417,6 @@ else:
 
     def _run_engine_boundary_scenarios(self) -> None:
         """Drive focused workflow-boundary cases through real CLI processes."""
-        # bookends:LE-128 — the public engine boundary retains context-only
-        # append snapshots while still rejecting stale state/lifecycle races.
-        # bookends:LE-133 — the publication checker is exercised against the
-        # complete introduced history rather than only the final tree.
-        # bookends:LE-134 — eligible public contract paths are inspected as
-        # observable proof, not accepted from citation tokens alone.
         if self.mode != "source":
             raise JourneyFailure("engine boundary scenarios are source-only", state=self.state)
         assert self.run_dir is not None

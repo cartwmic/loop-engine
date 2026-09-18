@@ -1027,6 +1027,9 @@ fn backlog_t01_frozen_topology_and_work_slot_catalog_survive_provider_change() {
         .any(|event| event["event"] == "approve"));
 }
 
+// bookends:LE-135 — fresh public CLI processes started from different working
+// directories share the default catalog, allocate distinct artifact roots, and
+// expose those runs through later list/show inspection.
 #[test]
 fn backlog_t01_default_catalog_and_caller_ids_survive_fresh_processes() {
     let fixture = ProviderFixture::with_changed(
