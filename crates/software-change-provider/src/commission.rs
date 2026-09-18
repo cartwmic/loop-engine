@@ -16,6 +16,26 @@ pub struct ProofCommand {
     pub obligation: String,
 }
 
+/// Provider-owned validation-command data is namespaced so the command
+/// specification cannot collide with engine-owned append fields. Keep
+/// accepting the historical flat shape for records written before the
+/// namespace was introduced.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ValidationCommandEnvelope {
+    spec: ProofCommand,
+}
+
+fn validation_command(data: &Value) -> Result<ProofCommand, String> {
+    if data.get("spec").is_some() {
+        serde_json::from_value::<ValidationCommandEnvelope>(data.clone())
+            .map(|envelope| envelope.spec)
+            .map_err(|error| error.to_string())
+    } else {
+        serde_json::from_value::<ProofCommand>(data.clone()).map_err(|error| error.to_string())
+    }
+}
+
 pub const STEERING_KIND: &str = "user-steering";
 pub const INCORPORATION_KIND: &str = "steering-incorporation";
 
@@ -210,7 +230,7 @@ pub fn select(
         .filter_map(|p| p["id"].as_str().map(str::to_owned))
         .collect();
     for record in records.iter().filter(|r| r.kind == "validation-command") {
-        let command: ProofCommand = serde_json::from_value(record.data.clone())
+        let command = validation_command(&record.data)
             .map_err(|e| format!("invalid validation-command `{}`: {e}", record.id))?;
         if [
             &command.id,

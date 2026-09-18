@@ -251,7 +251,7 @@ pub(crate) fn prepare(input: &Value) -> Result<Value, String> {
         if !seen.insert(spec.id.clone()) {
             return Err("addition duplicates/replaces a proof ID".into());
         }
-        additions.push(json!({"kind":"validation-command","record_id":format!("validation-{revision}-addition-{}",spec.id),"data":spec}));
+        additions.push(json!({"kind":"validation-command","record_id":format!("validation-{revision}-addition-{}",spec.id),"data":{"spec":spec}}));
         specs.push(spec);
     }
     let indexes: Vec<String> =
