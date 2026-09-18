@@ -14,6 +14,7 @@ use loop_core::{
 use loop_integrations::SqlitePersistence;
 use rusqlite::Connection;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -48,6 +49,7 @@ impl PlanFixture {
         fs::write(artifact_root.join("design.json"), br#"{"revision":"1"}"#)
             .expect("design document");
         write_plan(&artifact_root, "plan-r1");
+        write_shipped_report_schema(&artifact_root);
         write_recovery_worker(&worker);
         Self {
             database: root_path.join(format!("{label}.sqlite")),
@@ -281,11 +283,33 @@ fn write_plan(artifact_root: &Path, revision: &str) {
     .expect("write plan");
 }
 
+fn write_shipped_report_schema(artifact_root: &Path) {
+    let profile: Value = serde_json::from_str(include_str!(
+        "../../../software-change-provider/data/configs/high-rigor.json"
+    ))
+    .expect("shipped high-rigor profile JSON");
+    let schema = profile["artifact_schemas"]["implementation-report.json"].clone();
+    let input = json!({
+        "artifact_schemas": {"implementation-report.json": schema},
+        "revision_links": [{
+            "from": "implementation-report.json",
+            "field": "plan_revision",
+            "to": "plan.json"
+        }]
+    });
+    fs::write(
+        artifact_root.join("initial_input.json"),
+        serde_json::to_vec_pretty(&input).expect("report schema JSON"),
+    )
+    .expect("write report schema");
+}
+
 fn write_recovery_worker(path: &Path) {
     fs::write(
         path,
         r#"#!/usr/bin/env python3
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -294,6 +318,7 @@ receipt_dir = Path(sys.argv[1])
 raw = sys.stdin.read()
 location_raw, rest = raw.split(separator, 1)
 location = json.loads(location_raw)
+artifact_root = Path(location["artifact_root"])
 if rest.startswith("Write artifact_root/implementation-report.json"):
     task_id = "summarizer"
 else:
@@ -306,24 +331,64 @@ receipt_dir.mkdir(parents=True, exist_ok=True)
 count_path.write_text(str(count))
 sys.stdout.write(raw)
 sys.stdout.flush()
-if task_id == "c" and count == 1:
+if (
+    task_id == "c"
+    and count == 1
+    and not (artifact_root / "emit-malformed-report").exists()
+):
     raise SystemExit(1)
 if task_id == "summarizer":
-    artifact_root = Path(location["artifact_root"])
     plan_path = Path(location["plan_path"])
     plan = json.loads(plan_path.read_text())
-    report = {
-        "revision": "report-r1",
-        "author": {"name": "backlog-t02-worker", "kind": "script"},
-        "plan_revision": plan["revision"],
-        "coverage": {
-            "commit": "backlog-t02",
-            "documents": [{"path": "plan.json", "revision": plan["revision"]}]
-        },
-        "summary": "selected recovery report",
-        "changed_surface": [".baseline"],
-        "validation": ["backlog_t02_plan_graph_recovery_public_cli"]
-    }
+    # Give the report one real, observable repository effect so its coverage
+    # and changed_surface describe the current fixture rather than invented
+    # labels.
+    (Path.cwd() / ".backlog-t02-result").write_text("selected recovery\n")
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    status = subprocess.check_output(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        text=True,
+    )
+    changed_surface = []
+    for line in status.splitlines():
+        if len(line) >= 4:
+            path = line[3:]
+            changed_surface.append(path.split(" -> ", 1)[-1])
+    documents = []
+    for name in ["intent.json", "design.json", "plan.json"]:
+        document = json.loads((artifact_root / name).read_text())
+        documents.append({"path": name, "revision": document["revision"]})
+    if (artifact_root / "emit-malformed-report").exists():
+        # This is the old fixture shape. The public provider must reject it
+        # before it can create an implementation checkpoint.
+        report = {
+            "revision": "report-r1",
+            "author": {"name": "backlog-t02-worker", "kind": "script"},
+            "plan_revision": plan["revision"],
+            "coverage": {
+                "commit": "backlog-t02",
+                "documents": [{"path": "plan.json", "revision": plan["revision"]}]
+            },
+            "summary": "malformed selected recovery report",
+            "changed_surface": [".baseline"],
+            "validation": ["backlog_t02_plan_graph_recovery_public_cli"]
+        }
+    else:
+        report = {
+            "revision": "report-r1",
+            "author": {"name": "backlog-t02-worker", "kind": "script"},
+            "plan_revision": plan["revision"],
+            "coverage": {
+                "commit": head + "+uncommitted-worktree",
+                "documents": documents,
+            },
+            "summary": "selected recovery report",
+            "changed_surface": changed_surface,
+            "validation": [{
+                "criterion_id": "AC-1",
+                "proof": "backlog_t02_plan_graph_recovery_public_cli",
+            }]
+        }
     (artifact_root / "implementation-report.json").write_text(
         json.dumps(report) + "\n"
     )
@@ -823,6 +888,43 @@ fn backlog_t02_plan_graph_recovery_reuses_b_before_retry_and_reaches_current_che
     .expect("implementation report JSON");
     assert_eq!(report["revision"], "report-r1");
     assert_eq!(report["plan_revision"], "plan-r1");
+    let head = String::from_utf8(
+        Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&fixture.repository)
+            .output()
+            .expect("read fixture HEAD")
+            .stdout,
+    )
+    .expect("fixture HEAD UTF-8")
+    .trim()
+    .to_owned();
+    assert_eq!(
+        report["coverage"]["commit"],
+        format!("{head}+uncommitted-worktree")
+    );
+    assert_eq!(
+        report["coverage"]["documents"],
+        json!([
+            {"path": "intent.json", "revision": "1"},
+            {"path": "design.json", "revision": "1"},
+            {"path": "plan.json", "revision": "plan-r1"}
+        ])
+    );
+    assert_eq!(report["changed_surface"], json!([".backlog-t02-result"]));
+    assert_eq!(
+        report["validation"],
+        json!([{
+            "criterion_id": "AC-1",
+            "proof": "backlog_t02_plan_graph_recovery_public_cli"
+        }])
+    );
+
+    let report_path = fixture.artifact_root.join("implementation-report.json");
+    let report_sha = format!(
+        "sha256:{:x}",
+        Sha256::digest(fs::read(&report_path).unwrap())
+    );
     let checkpoint: Value = serde_json::from_slice(
         &fs::read(fixture.artifact_root.join("implementation-checkpoint.json"))
             .expect("current implementation checkpoint"),
@@ -830,7 +932,50 @@ fn backlog_t02_plan_graph_recovery_reuses_b_before_retry_and_reaches_current_che
     .expect("implementation checkpoint JSON");
     assert_eq!(checkpoint["phase"], "implementation");
     assert_eq!(checkpoint["documents"]["plan_revision"], "plan-r1");
-    assert!(!checkpoint["report"]["sha256"].as_str().unwrap().is_empty());
+    assert_eq!(checkpoint["report"]["file"], "implementation-report.json");
+    assert_eq!(checkpoint["report"]["revision"], report["revision"]);
+    assert_eq!(checkpoint["report"]["sha256"], report_sha);
+}
+
+#[test]
+fn backlog_t02_malformed_report_is_rejected_before_checkpoint_admission() {
+    let fixture = PlanFixture::new("malformed-report");
+    let run_id = "backlog-t02-malformed-report";
+    fixture.seed(run_id);
+    fs::write(
+        fixture.artifact_root.join("emit-malformed-report"),
+        b"test old report shape\n",
+    )
+    .expect("enable malformed report");
+
+    let (output, value) = run_invoke(&fixture, run_id, None);
+    assert_eq!(output.status.code(), Some(0), "invoke process: {value}");
+    assert_eq!(value["status"], "completed");
+    let invocations = wait_for_invocation(&fixture, run_id, 1);
+    assert_eq!(invocations[0].status, Some(WaiterWrittenStatus::Failed));
+    assert_eq!(invocations[0].exit_code, Some(1));
+    assert_eq!(read_count(&fixture.receipt_dir, "a"), 1);
+    assert_eq!(read_count(&fixture.receipt_dir, "b"), 1);
+    assert_eq!(read_count(&fixture.receipt_dir, "c"), 1);
+    assert_eq!(read_count(&fixture.receipt_dir, "summarizer"), 1);
+
+    let report: Value = serde_json::from_slice(
+        &fs::read(fixture.artifact_root.join("implementation-report.json"))
+            .expect("malformed report retained for triage"),
+    )
+    .expect("malformed report JSON");
+    assert_eq!(report["coverage"]["commit"], "backlog-t02");
+    assert_eq!(
+        report["validation"],
+        json!(["backlog_t02_plan_graph_recovery_public_cli"])
+    );
+    assert!(
+        !fixture
+            .artifact_root
+            .join("implementation-checkpoint.json")
+            .exists(),
+        "public report admission accepted the old malformed report"
+    );
 }
 
 #[cfg(unix)]
