@@ -580,6 +580,14 @@ mod native {
                 "short Linux process stat",
             ));
         }
+        // Linux do_task_stat leaves ppid=0, pgrp=-1 and session=-1 when
+        // lock_task_sighand cannot acquire an already-detached task. Treat
+        // this final-exit snapshot like a vanished /proc entry. Its state
+        // was sampled earlier and can still look live. Other malformed
+        // numeric fields must keep failing closed.
+        if fields[1] == "0" && fields[2] == "-1" && fields[3] == "-1" {
+            return Ok(None);
+        }
         let parse = |index: usize, name: &str| {
             fields[index].parse::<u64>().map_err(|error| {
                 io::Error::new(

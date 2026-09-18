@@ -6,6 +6,7 @@ is merely waiting on a still-running prerequisite. A PATH-local ps gate permits
 precise controller interruption after durable stop admission, before signaling;
 it does not simulate worker exits, Dagu, cleanup, or the resumed controller.
 """
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -138,7 +139,8 @@ class Fixture:
         return [self.engine, "--database", str(self.db), "--json", *args]
 
     def call(self, args, status="completed"):
-        p = subprocess.run(self.argv(args), cwd=self.checkout, capture_output=True, timeout=40)
+        p = subprocess.run(self.argv(args), cwd=self.checkout, capture_output=True, timeout=40,
+                           env=getattr(self, "process_environment", None))
         value = json.loads(p.stdout)
         self.transcript.append({"argv": self.argv(args), "at": time.monotonic(), "exit": p.returncode,
             "envelope": value, "stderr": p.stderr.decode()})
@@ -434,6 +436,51 @@ def natural_races(engine, provider, checkout, work_root):
     return roots
 
 
+@contextmanager
+def exiting_process_stat(f):
+    """Script Linux's final-exit stat sentinel; keep ownership and signals real."""
+    if platform.system() != "Linux":
+        yield 1
+        return
+    library = f.root / "exiting-proc-stat.so"
+    source = Path(__file__).resolve().parents[1] / "tests/fixtures/exiting-proc-stat.c"
+    subprocess.run(["cc", "-shared", "-fPIC", "-Wall", "-Wextra", "-Werror",
+                    str(source), "-ldl", "-o", str(library)], check=True, timeout=30)
+    canary = subprocess.Popen(["sleep", "120"], start_new_session=True)
+    try:
+        stat = Path(f"/proc/{canary.pid}/stat")
+        prefix, tail = stat.read_text().rsplit(")", 1)
+        fields = tail.split()
+        # do_task_stat starts ppid=0, pgid=-1, sid=-1. These remain when
+        # lock_task_sighand fails during final exit. State was sampled earlier
+        # and can still look live; retain it and the actual start-time field.
+        fields[1], fields[3] = "0", "-1"
+        replacement = f.root / "exiting-stat"
+        marker = f.root / "stat-intercepted"
+        f.process_environment = dict(os.environ, LD_PRELOAD=str(library),
+            LOOP_TEST_PROC_STAT=str(stat), LOOP_TEST_PROC_REPLACEMENT=str(replacement),
+            LOOP_TEST_PROC_MARKER=str(marker))
+        fields[2] = "-2"
+        replacement.write_text(prefix + ") " + " ".join(fields) + "\n")
+        invalid = f.call(f.cancel_args(), "error")
+        assert invalid["code"] == "cancellation-cleanup-pending", invalid
+        assert marker.is_file(), "procfs interception was not exercised"
+        assert canary.poll() is None, "unrelated canary was signalled"
+        fields[2] = "-1"
+        replacement.write_text(prefix + ") " + " ".join(fields) + "\n")
+        yield 2  # The malformed-record attempt must remain an honest failure.
+        assert canary.poll() is None, "unrelated canary was signalled"
+        (f.root / "exiting-stat-proof.json").write_text(json.dumps({
+            "backend": "scripted Linux final-exit procfs record",
+            "malformed_record_refused": invalid, "unrelated_canary_alive": True,
+            "stat": replacement.read_text(), "actual_os_exit_race_observed": False}, indent=2))
+    finally:
+        f.process_environment = None
+        if canary.poll() is None:
+            canary.terminate()
+        canary.wait(timeout=10)
+
+
 def termination(engine, provider, checkout, work_root):
     """Public refusal -> verified cancellation -> termination, without stranded work."""
     f = Fixture(engine, provider, checkout, work_root, "termination", "direct")
@@ -447,15 +494,16 @@ def termination(engine, provider, checkout, work_root):
         after = f.show()
         for key in ("lifecycle", "current_state", "state_visit", "initial_input"):
             assert after[key] == before[key], key
-        result = f.cancel()
-        f.assert_clean(result)
-        f.show()
-        terminated = f.call(["terminate", f.name])
-        assert terminated["run"]["lifecycle"] == "terminated", terminated
-        history = f.call(["history", f.name])
-        assert f.call(f.cancel_args(), "rejected")["code"] == "run-not-active"
-        assert f.call(["terminate", f.name], "rejected")["code"] == "run-not-active"
-        assert f.call(["history", f.name]) == history
+        with exiting_process_stat(f) as expected_attempt:
+            result = f.cancel()
+            f.assert_clean(result, expected_attempt=expected_attempt)
+            f.show()
+            terminated = f.call(["terminate", f.name])
+            assert terminated["run"]["lifecycle"] == "terminated", terminated
+            history = f.call(["history", f.name])
+            assert f.call(f.cancel_args(), "rejected")["code"] == "run-not-active"
+            assert f.call(["terminate", f.name], "rejected")["code"] == "run-not-active"
+            assert f.call(["history", f.name]) == history
         proof = json.loads((f.root / "proof.json").read_text())
         proof.update(termination_refusal=refusal, terminal=terminated,
                      inactive_run_unchanged=True)
