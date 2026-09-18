@@ -1,47 +1,88 @@
 # Backlog
 
-Open work and conditional candidates. Completed work belongs in Git history. Inclusion does not commit to delivery or establish requirements; [docs/PRD.md](docs/PRD.md) owns the engine contract.
+Wanted work and concrete leads. Completed work belongs in Git history. Items are grouped by topic, not implementation priority. Inclusion does not authorize implementation or establish requirements; [docs/PRD.md](docs/PRD.md) owns the engine contract.
 
-## Correctness and evidence follow-ups
+## PRD work
 
-- **Research bound authoring:** Reviewer-only `verify`/`synthesize` bindings do not produce their subject artifacts. Define a supported authoring handoff and prove it reaches a completed outcome. Leave these slots unbound until that path exists.
-- **Hosted stock-negative failure:** Investigate the unexplained failure in the first `f1901ce` hosted attempt. Its unchanged failed-job rerun passed, leaving the cause unresolved.
+### Audit implementation coupling in the current PRDs
 
-## Conditional performance measurement
+Audit all live requirements and normative prose in the engine and software-change PRDs—not just recently changed sections—for unnecessary coupling to implementation specifications.
 
-AC-6's five comparable before samples, five after samples and median-versus-spread comparison remain unperformed. AC-27's complete-proof obligation and whole-goal fulfillment retain that evidence gap. The owner stopped the additional subminute pursuit; any renewed measurement campaign needs separate authorization.
+Retain technical details when they are genuinely part of the intended product requirement, with an explicit rationale; existing wording or implementation alone is not justification. Otherwise propose rewriting, relocating to specifications, tombstoning or replacing the requirement as appropriate. Preserve required outcomes, intentional architectural constraints, genuine compatibility promises and requirement-ID history.
 
-If resumed, use a comparable workload and preserve failure, recovery, cancellation and cleanup coverage. Correctness journeys and historical pilots cannot supply the missing statistical result.
+Account for the whole audited scope with concise dispositions and flag uncertain product decisions for the owner. Completion requires owner acceptance and application of the agreed changes, not merely an inventory or a few examples. This audit is independently actionable; it does not need to wait for the broader workflow below.
 
-## External reports needing evidence
+### Build a comprehensive PRD-centered workflow
 
-Collect actual inputs and captures for these reports before ranking further changes. [Investigation dispositions](investigations.md) records the available evidence and its limits.
+Bring PRD creation, refinement, prototype-informed discovery, current-product backfill and faithful conversion/reconciliation into a coherent workflow. Consider the PRD-generation provider the owner is building at work alongside this repository's existing Generate-PRD research profile and PRD drafting/reconciliation procedures before deciding what to combine or replace. Do not assume that the answer is one new provider, a separate prototype provider or another parallel workflow.
 
-- **Remote OS PID reuse:** Obtain raw ownership, process-identity and rejection evidence for the reported occurrence. The remote investigation is run `run-1788879946091314000-1-89510`, plan `plan-6`; its catalog is `/Users/mcartwright/.local/share/loop-engine/loop.db`. Controlled stale identities cannot establish observed OS reuse. Historical-run repair or migration needs its own authorization.
-- **Exit-0 incomplete work and hard-kill capture:** Obtain the remote Pi transcript and actual Dagu-worker hard-kill captures. Establish an external harness root cause before proposing a fix or a post-SIGKILL supervisor guarantee.
-- **Pi/session and process visibility:** Reproduce session-mtime, hidden bridge-argument and other-machine Dagu visibility reports using raw process/session evidence.
-- **Reviewer behavior:** Measure model strictness, unchanged-input reroll quality and author-count effects if those questions justify a live-model experiment.
-- **Historical-run upgrades:** Establish any compatibility or migration promise beyond supported historical reads and frozen-runtime execution before implementing it.
+Keep these outcomes explicit:
 
-## External-project follow-ups
+- **Define and refine PRDs:** Support product discovery and owner iteration, using suitable requirements-writing practices and templates. Produce a PRD that captures intended product outcomes and constraints rather than accidentally freezing implementation choices.
+- **Use prototypes to inform requirements:** Allow a prototype step, subworkflow or accompanying provider where experimentation helps resolve product uncertainty. Iterate with the owner and carry the resulting learning into PRDs and specifications. Prototype code and incidental design choices do not automatically become production code or accepted requirements.
+- **Codify current-product backfill:** Incorporate the current-product backfill process into the PRD workflow: inspect current intended product behavior for requirements missing from the PRD, distinguish enduring obligations from incidental implementation choices, and propose evidence-backed additions or amendments for explicit owner acceptance. This item codifies a reusable current-product process; it does not commission a new backfill audit or a search of historical runs. History may help explain a specific current behavior, but is not the audit target.
+- **Preserve meaning during conversion and reconciliation:** Make conversion of an already accepted PRD into the living Bookends format preserve its accepted meaning. Prevent omitted obligations, invented requirements and automatic promotion of goals, examples or future-work ideas into binding requirements. Preserve genuine normative constraints, flag ambiguities or contradictions for the owner rather than silently resolving them, and require explicit acceptance of any intended change in meaning. Review the actual candidate against the accepted source, not merely a reassuring synthesis report. Demonstrate that representative defective conversions are caught even when grammar and identifier checks pass. Choose the smallest adequate procedure; do not assume a new ledger system or a fixed set of additional review stages.
+- **Connect PRDs to delivery:** Provide a coherent handoff from owner-accepted requirements to Bookends-enabled software change. The five-artifact coverage obligation below remains separately actionable, not deferred until the entire PRD workflow is built.
 
-- **pi-subagents:** Fix `launchContractDigest` recovery compatibility; expose reliable selected-attempt results separating execution, output validity, harness acceptance and judgment; independently review lifecycle fixes. Validate through the public tool, including compaction, revival and partial parallel completion, without descriptor edits or disabled compaction.
-- **Chezmoi:** Keep immutable-tag skill synchronization in dotfiles tooling, with exact-byte checks, orphan refusal, targeted apply and link verification. Source changes do not deploy those skills.
+Demonstrate representative paths through the workflow to an owner-accepted PRD usable for software change. A mechanically completed workflow or a schema-valid document alone does not establish a satisfactory PRD.
 
-## Conditional delivery
+### Complete Bookends coverage across the five phase artifacts
 
-Release, installation, deployed-skill synchronization and live-model dogfood need separate owner authorization. If a delivery pointer is wanted, verify that committed content matches the reviewed checkpoint before publishing it.
+When Bookends is enabled, intent, design, plan, implementation report and validation report must each cite and completely cover the Bookends requirements in scope, appropriately for their phase. Citation presence alone does not establish meaningful coverage.
 
-## Policy and exploratory candidates
+Assess current enforcement and close demonstrated gaps; this is a mandatory outcome, not a question of whether to add optional traceability. Keep this obligation distinct from implementation-task links to run-local acceptance criteria. This item does not extend the citation requirement to task packets, review commissions, review results or finding ledgers.
 
-Revisit these only when an observed need justifies the work.
+## Other wanted improvements
 
-- **Broader requirements/specification audit:** Identify which further implementation details belong in specifications while preserving required outcomes, intentional architecture and compatibility promises. Changed obligations still need owner acceptance.
-- **PRD migration:** Agree preservation rules, authority and structure for future extractions. Review candidate/source bytes for omitted clauses, invented meaning, duplicates, non-requirements, contradictions and wrong-target reviews. Grammar validity and traceability alone do not establish semantic acceptance.
-- **Traceability breadth:** Decide whether references beyond implementation-task AC links should become mandatory and which further intent obligations need PRD mapping. Unmatched requirements remain proposals for owner acceptance.
-- **Historical requirement backfill:** Review selected past runs only when there is a concrete missing enduring obligation. Preserve historical records; implementation choices alone do not establish requirements.
-- **Public contract coverage:** Consider enabling the optional `contract` class for genuine collected public boundaries with ID-linked assertions. Avoid duplicate journeys and internal-seam substitutes.
-- **Reusable benchmark helper:** Extract reusable collection/comparison tooling only for a maintained comparable workload.
-- **Delta-only revised plans and generalized replay:** Revisit if actual work exposes cases that selected/ad-hoc repair, explicit applicability and owning-phase revision cannot handle. Do not clone runtime state or assume a generalized replay mechanism is needed.
-- **Cross-provider calibration:** Establish shared needs and gold-judgment ownership before extracting a neutral framework.
-- **Prototype-to-spec workflow:** Explore a low-ceremony path only if existing research/orchestration cannot serve an observed need. Prototype output does not become production code or accepted requirements automatically.
+### Rethink the research workflow
+
+Rethink the research workflow so the owner will actually use and trust it: investigate a query as thoroughly as reasonably practical, then synthesize findings that satisfy the research question and intent.
+
+Establish what reasonable coverage and a satisfactory synthesis mean with the owner, and demonstrate them on representative real queries. Make material gaps and uncertainty visible; workflow completion alone does not establish research quality. The current bound-authoring gap is a limitation to consider, not the definition of this work. Detailed workflow design remains future work.
+
+### Evaluate calibration and attestation needs across providers
+
+Investigate whether and how providers beyond software-change merit calibration and attestation processes, or whether a more general evaluation workflow would serve them better. The purpose is to establish and maintain useful review judgments, not merely prove that commands run and verdicts are stored correctly.
+
+Use software-change's experience to assess how representative acceptable and defective examples can reveal missed problems and false alarms. Establish who can justify the expected judgments, what is provider-specific, what could be shared, and the maintenance cost. Deliver an evidence-backed recommendation. Do not assume every provider needs the full software-change calibration process or that a shared framework must be built.
+
+### Make work visibility useful for the driver and owner
+
+The driver should be able to determine whether to wait, inspect a failure or seek help without repeatedly digging through process listings and scattered files. The owner should be able to understand what work is happening, what meaningful progress has been made and what is blocking it without interrogating the driver.
+
+Provide both useful on-demand status and concise proactive chat updates for meaningful developments, blockers or owner decisions—not repetitive heartbeats. These views must agree and distinguish work in progress, execution completion and accepted results, with uncertainty explicit.
+
+Assess the existing monitor, advisory summaries and driver guidance on real work first; change what fails these outcomes rather than assuming a new monitoring system or dedicated display is needed.
+
+### Avoid unnecessary repeated work after plan changes
+
+Identify ordinary plan-revision cases not adequately served by existing selected-task repair, ad-hoc repair and evidence applicability. Preserve completed work that remains valid under the revised plan, and repeat only work or review invalidated by the change.
+
+Demonstrate a representative revised-plan execution reaching a valid completed outcome without rerunning unaffected work; do not assume that old success remains applicable merely because a task name is unchanged. Choose the smallest adequate change rather than prescribing delta-plan formats, generalized replay or cloned runtime state.
+
+## Cross-project work
+
+### pi-subagents: verify recovery, result retrieval and lifecycle fixes
+
+First check current public-tool behavior for three reported gaps:
+
+- Recovery handles rejected because of `launchContractDigest` compatibility.
+- Retrieving the correct completed result without private-directory parsers.
+- Independent acceptance of the shipped compaction/shutdown fixes.
+
+Close cases already resolved and fix only demonstrated remaining problems in pi-subagents. Result retrieval must distinguish execution state, output validity, harness acceptance and domain judgment, preserving usable completed results even when a later harness failure occurs.
+
+Exercise interrupted/revived attempts, compaction, missing or malformed results and partial parallel completion with a scripted backend. Do not edit recovery descriptors or disable compaction to make tests pass.
+
+### Chezmoi: reusable release-tag skill import
+
+Turn the repeated import of Loop Engine skill bundles from an immutable release tag into a small reusable dotfiles utility. Reuse the established canonical layout and existing deployment tooling rather than introducing another skill tree or deployment system.
+
+Verify the tag and exact imported bytes, detect unexpected orphans, and support reviewable changes followed by targeted apply and deployed-byte/harness-link verification. Demonstrate a real release import through the deployed result; preserve older installed tool versions needed by frozen runs.
+
+## Investigate only if it recurs
+
+These are concrete recurrence triggers, not active investigations. [Investigation dispositions](investigations.md) retains supporting context separately from this backlog.
+
+- **Recovery-test failure:** If `recovery_composed_public_terminal_and_outer_failure` fails again without reaching its intended missing-evidence rejection, retain the actual stdout, stderr and work captures, then investigate the cause. Do not assume that a passing rerun explains or fixes the failure.
+- **Premature worker exit:** If a worker again stops before finishing its task but returns a successful exit code, retain its transcript, stdout/stderr, task result and the decision about whether the work was complete. Establish the cause and responsible component before proposing a fix.
