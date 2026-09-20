@@ -10,6 +10,7 @@ mod dagu;
 mod fan_out;
 mod invocation_progress;
 mod preview_bindings;
+mod visibility;
 
 pub use dagu::{names_for_capture_root, resolve_dagu, write_locator, DaguError, DaguLocator};
 #[cfg(unix)]
@@ -3232,6 +3233,7 @@ fn show_packet(
     database: &Path,
 ) -> Value {
     let mut value = serde_json::to_value(&projection).expect("show projection serializes");
+    let lanes = visibility::show_lanes(&value, view, database);
     let object = value.as_object_mut().expect("show projection is an object");
     object.insert("view".into(), json!(view));
     object.insert("observed_at".into(), json!(now));
@@ -3247,6 +3249,7 @@ fn show_packet(
         }),
     );
     if view == "full" {
+        insert_visibility_lanes(object, lanes.clone());
         return value;
     }
     for key in [
@@ -3353,7 +3356,32 @@ fn show_packet(
         }).collect::<Vec<_>>()));
         object.insert("guidance_status".into(), json!(if projection.action_guidance.is_some() { "persisted-provider-guidance" } else { "legacy-normalized-obligations-unknown; follow persisted current_state_instructions and frozen work_slots; inspect full for input/context" }));
     }
+    insert_visibility_lanes(object, lanes);
     value
+}
+
+fn insert_visibility_lanes(object: &mut serde_json::Map<String, Value>, lanes: Value) {
+    object.insert("visibility".into(), lanes.clone());
+    if let Some(lanes) = lanes.as_object() {
+        for key in [
+            "workflow",
+            "execution",
+            "worker",
+            "conformance",
+            "acceptance",
+            "evidence",
+            "freshness",
+            "uncertainty",
+            "owner_update_guidance",
+        ] {
+            if let Some(value) = lanes.get(key) {
+                object.insert(key.to_owned(), value.clone());
+            }
+        }
+        if let Some(next_action) = lanes.get("next_action") {
+            object.insert("next_action_lane".to_owned(), next_action.clone());
+        }
+    }
 }
 
 /// Inner progress is deliberately subordinate to the normal show projection.
@@ -3361,7 +3389,7 @@ fn show_packet(
 /// durable show outcome or guessing a task state.
 enum CompactInnerProgress {
     Unavailable { code: String, message: String },
-    Snapshot(invocation_progress::InvocationProgressSnapshot),
+    Snapshot(Box<invocation_progress::InvocationProgressSnapshot>),
 }
 
 fn select_compact_invocation(
@@ -3399,7 +3427,7 @@ fn render_show_compact(
                     timeout,
                     now,
                 ) {
-                    Ok(snapshot) => CompactInnerProgress::Snapshot(snapshot),
+                    Ok(snapshot) => CompactInnerProgress::Snapshot(Box::new(snapshot)),
                     Err(error) => CompactInnerProgress::Unavailable {
                         code: error.code,
                         message: error.message,
@@ -4745,8 +4773,8 @@ mod tests {
             },
             work_slot_invocations: vec![invocation],
         };
-        let progress =
-            CompactInnerProgress::Snapshot(invocation_progress::InvocationProgressSnapshot {
+        let progress = CompactInnerProgress::Snapshot(Box::new(
+            invocation_progress::InvocationProgressSnapshot {
                 run_id: "run-1".into(),
                 invocation_id: "inv-1".into(),
                 slot_id: "slot-1".into(),
@@ -4774,7 +4802,9 @@ mod tests {
                     ],
                 }),
                 traces: Vec::new(),
-            });
+                visibility: json!({}),
+            },
+        ));
         let output = render_compact_show(
             &projection,
             Some(&projection.work_slot_invocations[0]),

@@ -2520,6 +2520,47 @@ mod tests {
     }
 
     #[test]
+    fn compact_projection_removes_only_top_level_engine_origin() {
+        let worker = WorkerCli {
+            command: "echo".to_owned(),
+            args: Vec::new(),
+            preamble: None,
+            output_schema: None,
+            full_output_schema: None,
+        };
+        let records = vec![json!({
+            "id": "review-1",
+            "kind": "review-evidence",
+            "data": {
+                "loop_engine_origin": {"invocation_id": "inv-1", "assignment_id": "worker-0"},
+                "judgment": "pass",
+                "nested": {"loop_engine_origin": "user-data"}
+            },
+            "sequence": 4,
+            "created_at": 5
+        })];
+        let payload = bound_worker_payload(&worker, "/tmp/artifacts", Some(&records), None);
+        let parsed: Value = serde_json::from_slice(&payload[..payload.len() - 1]).expect("json");
+        assert_eq!(
+            parsed["context"][0],
+            json!({
+                "id": "review-1",
+                "kind": "review-evidence",
+                "data": {
+                    "judgment": "pass",
+                    "nested": {"loop_engine_origin": "user-data"}
+                },
+                "sequence": 4,
+                "created_at": 5
+            })
+        );
+        assert_eq!(
+            records[0]["data"]["loop_engine_origin"]["invocation_id"],
+            "inv-1"
+        );
+    }
+
+    #[test]
     fn opted_in_payloads_have_exact_bound_and_ad_hoc_framing() {
         let worker = WorkerCli {
             command: "echo".to_owned(),

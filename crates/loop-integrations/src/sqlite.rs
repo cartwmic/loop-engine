@@ -148,6 +148,18 @@ impl SqlitePersistence {
         })
     }
 
+    /// Read one cancellation target without decoding unrelated invocation
+    /// captures. Callers still perform current-visit and ownership checks.
+    pub fn load_work_slot_invocation(
+        &self,
+        run_id: &RunId,
+        invocation_id: &InvocationId,
+    ) -> Result<Option<WorkSlotInvocation>, PersistenceError> {
+        let connection = self.lock()?;
+        let _ = load_required_run(&connection, run_id)?;
+        load_one_work_slot_invocation(&connection, run_id, invocation_id)
+    }
+
     /// Called only after the active controller verified disappearance, including
     /// zombies. The stop marker remains blocking across a crash between the
     /// catalog commit and the acknowledgment file; retry can finish that write.
@@ -166,9 +178,7 @@ impl SqlitePersistence {
             ))
         };
         let row = self
-            .load_work_slot_invocations(run_id)?
-            .into_iter()
-            .find(|row| row.invocation_id == *invocation_id)
+            .load_work_slot_invocation(run_id, invocation_id)?
             .ok_or_else(|| {
                 PersistenceError::failure(PersistenceFailure::new(
                     "invocation-not-found",

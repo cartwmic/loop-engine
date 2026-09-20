@@ -32,7 +32,10 @@ a second run from shipped minimal.json and walks the stitched hops (empty
 review lists omitted, last-hop ``passed`` on the live validation review).
 Finally it runs the reduced criterion-spine scenarios: overlay-off proves AC-N
 without PRD metadata, while overlay-on proves one disposition per criterion,
-candidate blocking, and the non-waiver of not-applicable.
+candidate blocking, and the non-waiver of not-applicable. The source tail also
+runs isolated v11 reconciliation cases through the real provider/engine path,
+inspecting document bytes, state ordering, Bookends mode, pending owner status,
+and requirement-coverage contrast fixtures.
 """
 
 from __future__ import annotations
@@ -73,6 +76,9 @@ SUBJECTS = {
     "implementation-report.json": "implementation-report-good.json",
     "validation-report.json": "validation-report-good.json",
 }
+RECONCILIATION_SUBJECT = "reconciliation.json"
+# Durable integrated citation spelling is exactly `bookends:LE-142`.
+RECONCILIATION_REQUIREMENT_ID = "LE-142"
 GATE_SUBJECT = {
     "intent-review": "intent.json",
     "intent-adversarial-review": "intent.json",
@@ -111,6 +117,7 @@ SOFTWARE_CHANGE_SLOT_IDS = (
     "plan-review",
     "plan-adversarial-review",
     "implement",
+    "reconciliation-draft",
     "implementation-review",
     "implementation-adversarial-review",
     "validation-draft",
@@ -122,6 +129,7 @@ STITCHED_SLOT_IDS = (
     "design-draft",
     "plan-draft",
     "implement",
+    "reconciliation-draft",
     "validation-draft",
     "validation-review",
 )
@@ -129,7 +137,8 @@ STITCHED_HOPS = (
     ("explore", "intent-ready", "design"),
     ("design", "design-ready", "plan"),
     ("plan", "plan-ready", "implement"),
-    ("implement", "implementation-ready", "validation"),
+    ("implement", "implementation-ready", "reconciliation"),
+    ("reconciliation", "reconciliation-ready", "validation"),
     ("validation", "validation-ready", "validation-review"),
 )
 CHECKPOINT_MUTATIONS = ("head", "add", "delete", "rename", "status", "type", "bytes")
@@ -354,6 +363,7 @@ class Journey:
         self.engine_boundary_proof: List[str] = []
         self.bookends_proof: Optional[Path] = None
         self.criterion_overlay_proof: Dict[str, Path] = {}
+        self.reconciliation_proof: Optional[Path] = None
         self._operational_ux_outcomes: Dict[str, Any] = {}
         self.command_cwd: Optional[Path] = None
         self.command_env: Dict[str, str] = {}
@@ -684,6 +694,11 @@ class Journey:
                         name: str(path)
                         for name, path in self.criterion_overlay_proof.items()
                     },
+                    "reconciliation_proof": (
+                        str(self.reconciliation_proof)
+                        if self.reconciliation_proof is not None
+                        else None
+                    ),
                     "successor_route_cases": successor_route_cases,
                     "work_slot_proof": WORK_SLOT_PROOF,
                     "dummy_worker_proof": self.dummy_worker_proof,
@@ -702,6 +717,1232 @@ class Journey:
         print(f"journey artifacts: {self.run_dir}")
         print("synthetic evidence scope: deterministic mechanics only; no semantic verdict claim")
         return result
+
+    def run_compact_worker_fixture(self) -> Path:
+        """Drive one fresh setup/start/invoke compact-delivery fixture.
+
+        This is intentionally a small public-path fixture, separate from the
+        synthetic full journey.  Setup owns the profile and the engine owns
+        the invocation/capture records; this method only prepares the caller
+        inputs, drives the public commands, and retains read-only evidence.
+        """
+        if self.mode != "source" or self.args.compact_worker_fixture not in {
+            "draft",
+            "review",
+            "negative-empty",
+        }:
+            raise JourneyFailure("compact worker fixtures require source mode and a supported fixture")
+        # The compact fixture owns its supplied proof directory.  Unlike the
+        # ordinary journey parent, its canonical producer command is expected
+        # to work from a fresh absent leaf below the run proof root.
+        if not self.work_root.exists():
+            self.work_root.parent.mkdir(parents=True, exist_ok=True)
+        self.preflight()
+        if self.work_root.exists() and any(self.work_root.iterdir()):
+            raise JourneyFailure(f"compact worker work-root is not fresh: {self.work_root}")
+        self.work_root.mkdir(parents=True, exist_ok=True)
+        fixture = self.args.compact_worker_fixture
+        if fixture != "negative-empty" and not (
+            self.args.worker_model and self.args.worker_thinking and self.args.worker_tools
+        ):
+            raise JourneyFailure(
+                "positive compact worker fixtures require --worker-model, --worker-thinking, and --worker-tools"
+            )
+        assert self.profile_source is not None
+        assert self.fixture_root is not None
+        self.run_dir = self.work_root
+        self.database = self.work_root / "loop.sqlite"
+        self.provider_config = self.work_root / "providers.toml"
+        self.profile_path = self.work_root / "setup-profile.json"
+        self.artifact_root = self.work_root / "artifacts"
+        self.artifact_root.mkdir()
+        self.profile = self._read_json(self.profile_source, "compact source profile")
+        self._validate_scenario_fixtures()
+        for subject, fixture_name in SUBJECTS.items():
+            shutil.copy2(self.fixture_root / fixture_name, self.artifact_root / subject)
+
+        pi_command = shutil.which("pi")
+        if fixture != "negative-empty" and not pi_command:
+            raise JourneyFailure("compact positive fixture requires the pi executable on PATH")
+        tools = self.args.worker_tools or "read,grep,find,ls"
+        worker_args = [
+            "--print",
+            "--no-skills",
+            "--no-extensions",
+            "--tools",
+            tools,
+            "--model",
+            self.args.worker_model or "",
+            "--thinking",
+            self.args.worker_thinking or "",
+        ]
+
+        seed_worker = self.work_root / "seed-intent-worker.py"
+        seed_worker.write_text(
+            "import json, pathlib, shutil, sys\n"
+            "raw = sys.stdin.read()\n"
+            "location = raw.split('---\\n\\n', 1)[0].splitlines()[-1]\n"
+            "root = pathlib.Path(json.loads(location)['artifact_root'])\n"
+            "shutil.copyfile(sys.argv[1], root / 'intent.json')\n"
+            "print(json.dumps({'status':'completed','summary':'seed intent prepared'}), flush=True)\n",
+            encoding="utf-8",
+        )
+        reject_worker = self.work_root / "reject-context-window-worker.py"
+        reject_worker.write_text(
+            "import sys\n"
+            "sys.stdin.buffer.read()\n"
+            "sys.stderr.write('context window rejected: intentionally empty worker delivery\\n')\n"
+            "sys.stderr.flush()\n",
+            encoding="utf-8",
+        )
+        draft_schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["status", "summary"],
+            "properties": {
+                "status": {"const": "completed"},
+                "summary": {"type": "string", "minLength": 1},
+            },
+        }
+        if fixture == "draft":
+            draft_inner = {
+                "command": pi_command,
+                "args": worker_args,
+                "preamble": (
+                    "You are the intent-drafting worker. Read the compact location JSON and work only beneath "
+                    "artifact_root. Read the existing intent.json and frozen operating context. Preserve the "
+                    "closed intent schema and its meaningful outcomes; make a small valid improvement if needed. "
+                    "Do not run workflow commands. End with exactly one JSON object containing status=completed "
+                    "and a nonempty summary."
+                ),
+                "full_output_schema": draft_schema,
+            }
+        elif fixture == "review":
+            draft_inner = {
+                "command": pi_command,
+                "args": worker_args,
+                "preamble": (
+                    "You are the intent-drafting worker. Read the compact location JSON and work only beneath "
+                    "artifact_root. Preserve the existing valid intent schema and operating context. End with "
+                    "exactly one JSON object containing status=completed and a nonempty summary."
+                ),
+                "full_output_schema": draft_schema,
+            }
+        else:
+            draft_inner = {
+                "command": sys.executable,
+                "args": [str(reject_worker)],
+                "full_output_schema": draft_schema,
+            }
+        draft_binding = {
+            "command": str(self.engine),
+            "args": [
+                "fan-out",
+                "--max-active",
+                "1",
+                "--worker",
+                json.dumps(draft_inner, separators=(",", ":")),
+            ],
+        }
+        draft_worker_path = self.work_root / "draft-worker.json"
+        _write_json(draft_worker_path, draft_binding)
+
+        if fixture == "negative-empty":
+            review_command = sys.executable
+            review_args = [str(seed_worker), str(self.fixture_root / SUBJECTS["intent.json"])]
+        else:
+            review_command = pi_command
+            review_args = worker_args
+        roster = [
+            {"author": "sol-reviewer-a", "command": review_command, "args": review_args},
+            {"author": "sol-reviewer-b", "command": review_command, "args": review_args},
+        ]
+        roster_path = self.work_root / "roster.json"
+        _write_json(roster_path, roster)
+        setup_command = [
+            str(self.provider),
+            "setup",
+            "--rigor",
+            "high",
+            "--roster",
+            str(roster_path),
+            "--draft-worker",
+            str(draft_worker_path),
+            "--engine",
+            str(self.engine),
+            "--provider",
+            str(self.provider),
+            "--output",
+            str(self.profile_path),
+        ]
+        setup = subprocess.run(
+            setup_command,
+            cwd=str(self.data_root),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if setup.returncode != 0:
+            raise JourneyFailure(
+                f"compact setup failed: {setup.stderr.strip() or setup.stdout.strip()}"
+            )
+        try:
+            setup_report = json.loads(setup.stdout)
+        except json.JSONDecodeError as error:
+            raise JourneyFailure(f"compact setup did not return JSON: {setup.stdout}") from error
+        _write_json(self.work_root / "setup-report.json", setup_report)
+        setup_profile = self._read_json(self.profile_path, "generated compact setup profile")
+        if setup_profile.get("config_version") != "high-rigor-11":
+            raise JourneyFailure("compact setup did not preserve the high-rigor-11 profile version")
+        if setup_profile.get("criterion_policy") != {"required_authors": 2, "goal_required_authors": 2}:
+            raise JourneyFailure("compact setup changed the high-rigor criterion/goal floors")
+        for gate in ("intent-review", "intent-adversarial-review"):
+            axes = setup_profile.get("review_policies", {}).get(gate, [])
+            ids = {entry.get("id") for entry in axes if isinstance(entry, dict)}
+            if not {"acceptance-granularity", "owner-comprehensible"}.issubset(ids):
+                raise JourneyFailure(f"compact setup omitted shipped {gate} intent questions")
+            for entry in axes:
+                if entry.get("id") in {"acceptance-granularity", "owner-comprehensible"} and entry.get("review_stage", "aggregate") != "aggregate":
+                    raise JourneyFailure(f"compact setup changed {gate} question stage")
+        if setup_report.get("output_bytes") != self.profile_path.read_text(encoding="utf-8"):
+            raise JourneyFailure("compact setup report did not retain exact profile bytes")
+        if setup_report.get("output_sha256") != _sha256_file(self.profile_path):
+            raise JourneyFailure("compact setup report hash does not match the generated profile")
+        if setup_profile.get("work_slot_bindings", {}).get("intent-draft") != draft_binding:
+            raise JourneyFailure("compact setup did not preserve the --draft-worker binding")
+        review_binding = setup_profile.get("work_slot_bindings", {}).get("intent-review")
+        if not isinstance(review_binding, dict):
+            raise JourneyFailure("compact setup omitted the existing intent-review roster binding")
+        if "--instructions" in review_binding.get("args", []) or "--instructions=" in " ".join(review_binding.get("args", [])):
+            raise JourneyFailure("compact setup unexpectedly used an ad-hoc instructions packet")
+
+        start_input = dict(setup_profile)
+        start_input["artifact_root"] = str(self.artifact_root)
+        start_input_path = self.work_root / "start-input.json"
+        _write_json(start_input_path, start_input)
+        self.provider_config.write_text(
+            "[providers.software-change]\n"
+            f"command = {json.dumps(str(self.provider))}\n"
+            "args = []\n",
+            encoding="utf-8",
+        )
+        _write_json(self.work_root / "accepted-artifacts-before.json", {
+            subject: _sha256_file(self.artifact_root / subject) for subject in SUBJECTS
+        })
+        run_id = f"compact-worker-{fixture}"
+        self.run_id = run_id
+
+        def engine_call(operation: Sequence[str], *, start: bool = False) -> Dict[str, Any]:
+            command = [
+                str(self.engine),
+                "--json",
+                "--database",
+                str(self.database),
+                "--timeout-ms",
+                "900000",
+            ]
+            if start:
+                command.extend(["--config", str(self.provider_config)])
+            command.extend(operation)
+            completed = subprocess.run(
+                command,
+                cwd=str(self.data_root),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if not completed.stdout.strip():
+                raise JourneyFailure(
+                    f"compact engine operation {operation[0]} returned no JSON: "
+                    f"{completed.stderr.strip()}"
+                )
+            try:
+                response = json.loads(completed.stdout)
+            except json.JSONDecodeError as error:
+                raise JourneyFailure(
+                    f"compact engine operation {operation[0]} returned invalid JSON: {completed.stdout}"
+                ) from error
+            if not isinstance(response, dict):
+                raise JourneyFailure(f"compact engine response was not an object: {response}")
+            if response.get("status") not in {"completed", "rejected"}:
+                raise JourneyFailure(f"compact engine operation failed: {response}")
+            return response
+
+        start_response = engine_call(
+            [
+                "start",
+                "--id",
+                run_id,
+                "software-change",
+                "@" + str(start_input_path),
+                "compact worker fixture",
+            ],
+            start=True,
+        )
+        if start_response.get("status") != "completed":
+            raise JourneyFailure(f"compact fixture start was rejected: {start_response}")
+        _write_json(self.work_root / "start.json", start_response)
+        start_full = engine_call(["show", run_id, "--view", "full"])
+        _write_json(self.work_root / "show-full-start.json", start_full)
+        if start_full.get("status") != "completed":
+            raise JourneyFailure(f"compact fixture start show failed: {start_full}")
+
+        steering = {
+            "target": {"kind": "all"},
+            "instruction": (
+                "Compact fixture routed context: preserve the frozen intent and inspect the retained "
+                "evidence before judging. " + ("x" * 1024)
+            ),
+        }
+        engine_call(["show", run_id, "--view", "action"])
+        steering_response = engine_call([
+            "append",
+            "--record-id=compact-worker-steering",
+            run_id,
+            "user-steering",
+            json.dumps(steering, separators=(",", ":")),
+        ])
+        if steering_response.get("status") != "completed":
+            raise JourneyFailure(f"compact fixture steering append failed: {steering_response}")
+        _write_json(self.work_root / "steering-append.json", steering_response)
+
+        def invoke_and_wait(slot_id: str, assignment_ids: Sequence[str], prefix: str) -> tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+            before = engine_call(["show", run_id, "--view", "action"])
+            if before.get("status") != "completed":
+                raise JourneyFailure(f"compact action show before {slot_id} failed: {before}")
+            invoke_args = ["invoke", run_id, slot_id]
+            if assignment_ids:
+                invoke_args.extend(["--assignments", ",".join(assignment_ids)])
+            invoke_response = engine_call(invoke_args)
+            _write_json(self.work_root / f"{prefix}-invoke.json", invoke_response)
+            if invoke_response.get("status") != "completed":
+                raise JourneyFailure(f"compact {slot_id} invocation admission failed: {invoke_response}")
+            invocation_id = invoke_response.get("result", {}).get("invocation_id")
+            if not isinstance(invocation_id, str) or not invocation_id:
+                raise JourneyFailure(f"compact {slot_id} invoke omitted invocation_id")
+            deadline = time.monotonic() + max(120.0, float(getattr(self.args, "job_timeout", 1200)))
+            last_status: Optional[Dict[str, Any]] = None
+            while time.monotonic() < deadline:
+                last_status = engine_call(["show", run_id, "--view", "status"])
+                status_result = last_status.get("result", {})
+                execution = status_result.get("execution", {})
+                rows = status_result.get("work_slot_invocations", [])
+                row = next((item for item in rows if item.get("invocation_id") == invocation_id), None)
+                if (
+                    isinstance(row, dict)
+                    and row.get("status") != "running"
+                ) or (
+                    isinstance(execution, dict)
+                    and execution.get("invocation_id") == invocation_id
+                    and execution.get("state") != "running"
+                ):
+                    break
+                time.sleep(0.5)
+            else:
+                raise JourneyFailure(f"compact {slot_id} invocation did not finish: {last_status}")
+            complete = engine_call(["show", run_id, "--view", "full"])
+            _write_json(self.work_root / f"{prefix}-show-full-complete.json", complete)
+            rows = complete.get("result", {}).get("work_slot_invocations", [])
+            row = next((item for item in rows if item.get("invocation_id") == invocation_id), None)
+            if not isinstance(row, dict):
+                raise JourneyFailure(f"compact {slot_id} full show omitted invocation {invocation_id}")
+            return invoke_response, complete, row
+
+        slot_id = "intent-draft"
+        draft_binding_args = setup_profile["work_slot_bindings"][slot_id]["args"]
+        draft_assignment_ids = [
+            f"worker-{index}"
+            for index, token in enumerate(
+                token for token in draft_binding_args if token == "--worker"
+            )
+        ]
+        if not draft_assignment_ids:
+            raise JourneyFailure("compact draft binding did not expose a worker assignment")
+        draft_invoke, draft_complete, draft_invocation = invoke_and_wait(
+            slot_id, draft_assignment_ids, "draft"
+        )
+        draft_capture = Path(draft_invocation["capture_dir"])
+        if fixture == "negative-empty":
+            if draft_invocation.get("status") != "failed":
+                raise JourneyFailure(
+                    f"negative compact fixture unexpectedly succeeded: {draft_invocation}"
+                )
+            final_state = draft_complete.get("result", {}).get("current_state")
+        else:
+            if draft_invocation.get("status") != "succeeded":
+                raise JourneyFailure(f"positive compact draft invocation failed: {draft_invocation}")
+            if fixture != "review":
+                engine_call(["show", run_id, "--view", "action"])
+                intent_ready = engine_call(["event", run_id, "intent-ready"])
+                if intent_ready.get("status") != "completed":
+                    raise JourneyFailure(f"compact intent-ready was rejected: {intent_ready}")
+                _write_json(self.work_root / "intent-ready.json", intent_ready)
+                final_state = intent_ready.get("result", {}).get("run", {}).get("current_state")
+            else:
+                final_state = draft_complete.get("result", {}).get("current_state")
+
+        review_invoke = None
+        review_complete = draft_complete
+        review_invocation = None
+        if fixture == "review":
+            draft_output = next(
+                (worker for worker in draft_complete["result"]["work_slot_invocations"] if worker.get("invocation_id") == draft_invocation["invocation_id"]),
+                None,
+            )
+            if not isinstance(draft_output, dict):
+                raise JourneyFailure("review compact fixture omitted its draft invocation")
+            origin = {
+                "kind": "selected-assignment-output",
+                "id": draft_invocation["invocation_id"],
+                "assignment_id": "worker-0",
+            }
+            intent_revision = self._fixture_revision("intent.json")
+            review_context = {
+                "gate": "intent-review",
+                "policy_id": "outside-verifiable",
+                "review_stage": "aggregate",
+                "result": "pass",
+                "findings": "",
+                "author": {"name": "fixture-driver", "kind": "script"},
+                "subject": "intent.json",
+                "subject_revision": intent_revision,
+                "config_version": setup_profile["config_version"],
+                "origin": origin,
+            }
+            engine_call(["show", run_id, "--view", "action"])
+            routed_append = engine_call([
+                "append",
+                "--record-id=compact-worker-routed-evidence",
+                run_id,
+                "review-evidence",
+                json.dumps(review_context, separators=(",", ":")),
+            ])
+            if routed_append.get("status") != "completed":
+                raise JourneyFailure(f"compact routed evidence append failed: {routed_append}")
+            _write_json(self.work_root / "routed-evidence-append.json", routed_append)
+            engine_call(["show", run_id, "--view", "action"])
+            ready = engine_call(["event", run_id, "intent-ready"])
+            if ready.get("status") != "completed":
+                raise JourneyFailure(f"review compact intent-ready was rejected: {ready}")
+            review_binding_args = setup_profile["work_slot_bindings"]["intent-review"]["args"]
+            review_assignment_ids = [
+                f"worker-{index}"
+                for index, _token in enumerate(
+                    token for token in review_binding_args if token == "--worker"
+                )
+            ]
+            if not review_assignment_ids:
+                raise JourneyFailure("compact review binding did not expose assignments")
+            review_invoke, review_complete, review_invocation = invoke_and_wait(
+                "intent-review", review_assignment_ids, "review"
+            )
+            if review_invocation.get("status") != "succeeded":
+                raise JourneyFailure(f"compact review invocation failed: {review_invocation}")
+            final_state = review_complete.get("result", {}).get("current_state")
+
+        accepted_before = self._read_json(
+            self.work_root / "accepted-artifacts-before.json", "compact accepted artifact hashes"
+        )
+        accepted_after = {
+            subject: _sha256_file(self.artifact_root / subject) for subject in SUBJECTS
+        }
+        _write_json(self.work_root / "accepted-artifacts-after.json", accepted_after)
+        if fixture == "negative-empty" and accepted_after != accepted_before:
+            raise JourneyFailure(
+                f"negative compact fixture changed accepted artifacts: before={accepted_before} after={accepted_after}"
+            )
+        final_invocation = review_invocation or draft_invocation
+        final_complete = review_complete
+        capture_dir = Path(final_invocation["capture_dir"])
+        spec_path = capture_dir / "fan-out-spec.json"
+        summary_path = capture_dir / "summary.json"
+        if not spec_path.is_file() or not summary_path.is_file():
+            raise JourneyFailure(f"compact capture omitted fan-out receipts: {capture_dir}")
+        spec = _load_json(spec_path)
+        summary = _load_json(summary_path)
+        try:
+            projection_metrics = work_slot_journey.assert_projected_fan_out_capture(final_invocation)
+        except (AssertionError, KeyError, TypeError, OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise JourneyFailure(
+                f"compact fixture did not retain a valid projected/full capture: {error}"
+            ) from error
+        routed_inputs = final_invocation.get("routed_inputs", [])
+        routing = {
+            "invocation_routed_inputs": routed_inputs,
+            "capture_format": spec.get("capture_format"),
+            "spec_workers": spec.get("workers", []),
+            "summary_workers": summary.get("workers", []),
+            "projection_metrics": projection_metrics,
+        }
+        _write_json(self.work_root / "routing.json", routing)
+        verification = {
+            "run_id": run_id,
+            "slot_id": final_invocation.get("slot_id"),
+            "invocation_id": final_invocation.get("invocation_id"),
+            "overlay_status": final_invocation.get("status"),
+            "overlay_exit_code": final_invocation.get("exit_code"),
+            "inner_workers": final_invocation.get("inner_workers", []),
+            "show_full": final_complete,
+            "selected_outputs": [
+                {
+                    "assignment_id": worker.get("assignment_id"),
+                    "selected_attempt": worker.get("selected_attempt"),
+                    "selected_output_sha256": worker.get("selected_output_sha256"),
+                    "selected_output_path": worker.get("selected_output_path"),
+                    "attempts_path": worker.get("attempts_path"),
+                }
+                for worker in summary.get("workers", [])
+            ],
+            "projection_metrics": projection_metrics,
+        }
+        nonempty_stdout_count = sum(
+            bool(Path(capture_dir / str(index) / "stdout").is_file() and (capture_dir / str(index) / "stdout").read_bytes())
+            for index in range(len(summary.get("workers", [])))
+        )
+        if fixture != "negative-empty" and nonempty_stdout_count == 0:
+            raise JourneyFailure("compact positive fixture retained no nonempty worker output")
+        if fixture == "negative-empty" and nonempty_stdout_count != 0:
+            raise JourneyFailure("compact empty-delivery fixture unexpectedly retained worker stdout")
+        _write_json(self.work_root / "verification.json", verification)
+        metadata = {
+            "schema_version": 1,
+            "fixture": fixture,
+            "run_id": run_id,
+            "state_after_fixture": final_state,
+            "slot_id": final_invocation.get("slot_id"),
+            "invocation_id": final_invocation.get("invocation_id"),
+            "setup_report": str(self.work_root / "setup-report.json"),
+            "setup_profile": str(self.profile_path),
+            "setup_profile_sha256": _sha256_file(self.profile_path),
+            "profile_contract": {
+                "config_version": setup_profile["config_version"],
+                "criterion_policy": setup_profile["criterion_policy"],
+                "intent_review_stages": {
+                    gate: sorted({entry.get("review_stage", "aggregate") for entry in setup_profile["review_policies"][gate]})
+                    for gate in ("intent-review", "intent-adversarial-review")
+                },
+                "intent_questions": ["acceptance-granularity", "owner-comprehensible"],
+            },
+            "start_input": str(start_input_path),
+            "start": str(self.work_root / "start.json"),
+            "show_full_start": str(self.work_root / "show-full-start.json"),
+            "invoke": str(self.work_root / ("review-invoke.json" if review_invoke else "draft-invoke.json")),
+            "show_full_complete": str(self.work_root / ("review-show-full-complete.json" if review_invoke else "draft-show-full-complete.json")),
+            "capture_dir": str(capture_dir),
+            "fan_out_spec": str(spec_path),
+            "summary": str(summary_path),
+            "routing": str(self.work_root / "routing.json"),
+            "verification": str(self.work_root / "verification.json"),
+            "draft_worker": str(draft_worker_path),
+            "roster": str(roster_path),
+            "binding": setup_profile["work_slot_bindings"][final_invocation["slot_id"]],
+            "routed_inputs": routed_inputs,
+            "accepted_artifacts_before": accepted_before,
+            "accepted_artifacts_after": accepted_after,
+            "outcome": {
+                "overlay_status": final_invocation.get("status"),
+                "overlay_exit_code": final_invocation.get("exit_code"),
+                "inner_workers": final_invocation.get("inner_workers", []),
+                "worker_count": len(summary.get("workers", [])),
+                "nonempty_stdout_count": nonempty_stdout_count,
+            },
+        }
+        metadata_path = self.work_root / "compact-capture.json"
+        _write_json(metadata_path, metadata)
+        print(f"compact worker fixture passed: {fixture}; captures: {self.work_root}")
+        return metadata_path
+
+    def _write_reconciliation_result(
+        self,
+        *,
+        revision: str,
+        mode: str,
+        branch: str,
+        document_observations: List[Dict[str, str]],
+        behavior_observations: List[Dict[str, str]],
+        action: str,
+        action_reason: str,
+        authorization: str,
+        application: str,
+        commit: str,
+        traceability: Dict[str, Any],
+        proof_references: List[str],
+        blockers: List[str],
+        decision: str,
+    ) -> Path:
+        """Write the provider-owned reconciliation artifact for the current visit.
+
+        The journey is a driver fixture, not a semantic reviewer.  Its result
+        deliberately records the synthetic actor and leaves the owner/calibration
+        limitation in the surrounding proof record.  The provider still validates
+        the closed artifact and the mode/branch status through the public event.
+        """
+        assert self.artifact_root is not None
+        value = {
+            "revision": revision,
+            "author": {"name": "reconciliation-journey", "kind": "script"},
+            "mode": mode,
+            "branch": branch,
+            "document_observations": document_observations,
+            "behavior_observations": behavior_observations,
+            "action": action,
+            "action_reason": action_reason,
+            "authorization": authorization,
+            "application": application,
+            "commit": commit,
+            "traceability": traceability,
+            "proof_references": proof_references,
+            "blockers": blockers,
+            "decision": decision,
+        }
+        path = self.artifact_root / RECONCILIATION_SUBJECT
+        _write_json(path, value)
+        return path
+
+    def _write_no_change_reconciliation(self, revision: str) -> Path:
+        """Write the primary run's Bookends-off, justified no-change result."""
+        return self._write_reconciliation_result(
+            revision=revision,
+            mode="bookends-disabled",
+            branch="change-specific-proof",
+            document_observations=[
+                {"path": "tracked.txt", "status": "unrelated", "observation": "the change-specific fixture does not require a repository-document edit"},
+            ],
+            behavior_observations=[
+                {"status": "change-specific", "observation": "the delivered fixture behavior is proved by this run and creates no permanent document obligation"},
+            ],
+            action="no-document-change",
+            action_reason="The public behavior is change-specific and the relevant authoritative document set requires no edit.",
+            authorization="not-required",
+            application="not-required",
+            commit="not-required",
+            traceability={"status": "not-applicable", "references": []},
+            proof_references=["journey:primary-reconciliation"],
+            blockers=[],
+            decision="complete",
+        )
+
+    def _committed_reconciliation_reference(self, repository: Optional[Path] = None) -> Dict[str, str]:
+        """Return the live citation only after the exact PRD text is committed.
+
+        The working tree may contain the owner-accepted wording before the
+        separate Git action.  Looking at HEAD prevents a fixture from presenting
+        a candidate as live.  Before integration, LE-1 is a real mechanical live
+        ID and LE-142 remains explicitly pending in the journey receipt.
+        """
+        source = repository or self.data_root
+        completed = subprocess.run(
+            ["git", "show", "HEAD:docs/PRD.md"],
+            cwd=source,
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            return {
+                "reference": "bookends:LE-1",
+                "requested": f"bookends:{RECONCILIATION_REQUIREMENT_ID}",
+                "status": "pending-owner-integration",
+            }
+        text = completed.stdout.decode("utf-8", "replace")
+        lines = text.splitlines()
+        for index, line in enumerate(lines):
+            if not line.startswith(f"### {RECONCILIATION_REQUIREMENT_ID}: "):
+                continue
+            end = next(
+                (candidate for candidate in range(index + 1, len(lines)) if lines[candidate].startswith("### ")),
+                len(lines),
+            )
+            body = lines[index + 1 : end]
+            # The accepted integration may retain the exact owner-approved
+            # `Proposed ...` title; committed HEAD plus a live record is the
+            # authoritative integration signal, not title wording.
+            if "- Status: live" in body:
+                return {
+                    "reference": f"bookends:{RECONCILIATION_REQUIREMENT_ID}",
+                    "requested": f"bookends:{RECONCILIATION_REQUIREMENT_ID}",
+                    "status": "committed-owner-integrated",
+                }
+            break
+        return {
+            "reference": "bookends:LE-1",
+            "requested": f"bookends:{RECONCILIATION_REQUIREMENT_ID}",
+            "status": "pending-owner-integration",
+        }
+
+    def _committed_requirement_status(self, requirement_id: str) -> Dict[str, Any]:
+        """Report whether one owner-accepted requirement is live in committed HEAD.
+
+        The journey may run before the driver's separately authorized PRD commit.
+        Keep that state explicit instead of turning a working-tree candidate into
+        a durable live citation.
+        """
+        completed = subprocess.run(
+            ["git", "show", "HEAD:docs/PRD.md"],
+            cwd=self.data_root,
+            capture_output=True,
+            check=False,
+        )
+        requested = f"bookends:{requirement_id}"
+        if completed.returncode != 0:
+            return {
+                "requested": requested,
+                "reference": None,
+                "status": "pending-owner-integration",
+            }
+        lines = completed.stdout.decode("utf-8", "replace").splitlines()
+        heading = f"### {requirement_id}: "
+        for index, line in enumerate(lines):
+            if not line.startswith(heading):
+                continue
+            end = next(
+                (candidate for candidate in range(index + 1, len(lines)) if lines[candidate].startswith("### ")),
+                len(lines),
+            )
+            live = "- Status: live" in lines[index + 1 : end]
+            return {
+                "requested": requested,
+                "reference": requested if live else None,
+                "status": "committed-owner-integrated" if live else "pending-owner-integration",
+            }
+        return {
+            "requested": requested,
+            "reference": None,
+            "status": "pending-owner-integration",
+        }
+
+    def _commit_fixture_document(self, target: Path) -> str:
+        """Commit an isolated fixture edit before downstream proof.
+
+        This only mutates the temporary fixture repository, never the source
+        checkout.  The result's ``commit: committed`` status therefore names an
+        observed Git commit rather than a synthetic claim.
+        """
+        assert self.repository_root is not None
+        relative = target.relative_to(self.repository_root).as_posix()
+        for command in (
+            ["git", "add", "--", relative],
+            ["git", "commit", "-qm", f"reconciliation fixture: {relative}"],
+        ):
+            completed = subprocess.run(
+                command,
+                cwd=self.repository_root,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if completed.returncode != 0:
+                raise JourneyFailure(
+                    f"fixture Git command {' '.join(command[1:])} failed: "
+                    f"{completed.stderr.strip() or completed.stdout.strip()}"
+                )
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--", relative],
+            cwd=self.repository_root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if status.returncode != 0 or status.stdout.strip():
+            raise JourneyFailure(
+                f"fixture document remained dirty after reconciliation commit: {relative}"
+            )
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=self.repository_root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if head.returncode != 0 or not head.stdout.strip():
+            raise JourneyFailure("fixture reconciliation commit omitted an observable HEAD")
+        return head.stdout.strip()
+
+    def _provider_document_observations(self) -> List[Dict[str, Any]]:
+        """Capture authored provider guidance without claiming target-run completion."""
+        observations: List[Dict[str, Any]] = []
+        required = {
+            "crates/software-change-provider/README.md": (
+                "Reconciliation and document integration",
+                "Bookends-disabled runs",
+                "no-document-change",
+            ),
+            "crates/software-change-provider/AGENTS.md": (
+                "reconciliation",
+                "reconciliation-ready",
+                "Bookends-on",
+            ),
+        }
+        for relative, clauses in required.items():
+            path = self.data_root / relative
+            try:
+                data = path.read_bytes()
+                text = data.decode("utf-8")
+            except (OSError, UnicodeDecodeError) as error:
+                raise JourneyFailure(f"provider document observation failed for {path}: {error}") from error
+            missing = [clause for clause in clauses if clause.lower() not in text.lower()]
+            if missing:
+                raise JourneyFailure(f"provider document {path} omitted required reconciliation guidance: {missing}")
+            observations.append(
+                {
+                    "path": relative,
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "status": "authored-input",
+                    "checked_run_status": "pending-driver-owned-target-run",
+                    "missing_guidance": [],
+                }
+            )
+        return observations
+
+    def _prepare_reconciliation_profile(
+        self, case_dir: Path, artifacts: Path, *, bookends_enabled: bool
+    ) -> Dict[str, Any]:
+        """Construct a small v11 profile from shipped data for the public fixture."""
+        profile = self._read_json(
+            self.data_root / PROFILE_SUBPATH, "reconciliation source profile"
+        )
+        policies = profile.get("review_policies")
+        if not isinstance(policies, dict):
+            raise JourneyFailure("reconciliation source profile omitted review_policies")
+        profile["config_version"] = "journey-reconciliation-11"
+        profile["review_policies"] = {gate: [] for gate in policies}
+        profile["review_policies"]["implementation-review"] = [{
+            "id": "tasks-actually-done",
+            "description": "Reconciliation journey implementation proof boundary.",
+            "example_prompt": "Judge tasks-actually-done only.",
+            "review_stage": "aggregate",
+            "required_authors": 1,
+        }]
+        profile["artifact_root"] = str(artifacts)
+        profile["work_slot_bindings"] = {}
+        if bookends_enabled:
+            profile["extra"] = {"bookends": {"enabled": True}}
+        else:
+            profile.pop("extra", None)
+        profile_path = case_dir / "reconciliation-profile.json"
+        _write_json(profile_path, profile)
+        self.profile_path = profile_path
+        self.profile = profile
+        self.provider_config = case_dir / "providers.toml"
+        self._write_provider_config_at(self.provider_config)
+        return profile
+
+    def _initialize_reconciliation_case(
+        self, case_dir: Path, case_name: str, *, bookends_enabled: bool
+    ) -> None:
+        """Create one isolated fixture repository and fresh public run shell."""
+        assert self.fixture_root is not None
+        case_dir.mkdir(parents=True, exist_ok=True)
+        self.run_dir = case_dir
+        self.database = case_dir / "loop.sqlite"
+        self.artifact_root = case_dir / "artifacts"
+        self.artifact_root.mkdir(exist_ok=True)
+        checkout = case_dir / "checkout"
+        if bookends_enabled:
+            shutil.copytree(
+                self.data_root,
+                checkout,
+                ignore=shutil.ignore_patterns(
+                    ".git", "target", "__pycache__", "*.pyc", ".pi-subagents", ".loop-engine", "fan-out-adhoc",
+                ),
+            )
+        else:
+            checkout.mkdir()
+            (checkout / "docs").mkdir()
+            (checkout / "docs" / "PRD.md").write_bytes(
+                (self.data_root / "docs" / "PRD.md").read_bytes()
+            )
+            (checkout / "docs" / "reconciliation-target.md").write_text(
+                "# Reconciliation target\n\nThe fixture documents the delivered behavior.\n",
+                encoding="utf-8",
+            )
+            (checkout / "README.md").write_text("# Reconciliation fixture\n", encoding="utf-8")
+        self._initialize_overlay_checkout(checkout)
+        self.repository_root = checkout
+        self.command_cwd = checkout
+        self.command_env = {"BOOKENDS_BYPASS": ""}
+        self.profile_source = self.data_root / PROFILE_SUBPATH
+        profile = self._prepare_reconciliation_profile(case_dir, self.artifact_root, bookends_enabled=bookends_enabled)
+        if bookends_enabled:
+            self._write_overlay_artifacts(self.artifact_root, candidate=False, unfulfilled=False)
+        else:
+            for subject, fixture in SUBJECTS.items():
+                shutil.copy2(self.fixture_root / fixture, self.artifact_root / subject)
+            self._prepare_fixture_proof_commands(self.artifact_root)
+        self.run_id = f"reconciliation-{case_name}"
+        self.state = "not-started"
+        self._start()
+        shown = self._assert_show("explore", f"{case_name}-start")
+        if shown.get("initial_input") != profile:
+            raise JourneyFailure(f"{case_name} start changed the frozen reconciliation profile")
+        for event, target in (
+            ("intent-ready", "design"),
+            ("design-ready", "plan"),
+            ("plan-ready", "implement"),
+        ):
+            self._expect_allow(event, target)
+
+    def _write_requirement_coverage_contrasts(self, root: Path) -> Dict[str, Any]:
+        """Retain the three semantic-coverage contrasts without making judgments."""
+        assert self.fixture_root is not None
+        companion = self.data_root / "crates/software-change-provider/data/calibration/companions/fictional-repo/docs/requirement-coverage.md"
+        companion_text = companion.read_text(encoding="utf-8")
+        cases: List[Dict[str, Any]] = []
+        expected = {
+            "sufficient": "sufficient-existing-wording",
+            "related-insufficient": "missing-or-changed-enduring-meaning",
+            "implementation-defect": "implementation-defect",
+        }
+        for name, branch in expected.items():
+            fixture = self._read_json(
+                self.fixture_root / f"requirement-coverage-{name}.json",
+                f"requirement coverage fixture {name}",
+            )
+            references = fixture.get("requirement_references")
+            if not isinstance(references, list) or len(references) != 1:
+                raise JourneyFailure(f"requirement coverage fixture {name} omitted one reference")
+            reference = references[0]
+            authoritative = str(reference.get("authoritative_text", ""))
+            normalized_authoritative = " ".join(authoritative.split()).lower()
+            if not normalized_authoritative or "process exit" not in normalized_authoritative:
+                raise JourneyFailure(f"requirement coverage fixture {name} omitted meaningful authoritative wording")
+            cross_references = reference.get("explicit_cross_references")
+            if not isinstance(cross_references, list) or not cross_references:
+                raise JourneyFailure(f"requirement coverage fixture {name} omitted its explicit cross-reference")
+            inspected_cross_references: List[Dict[str, Any]] = []
+            for label in cross_references:
+                if not isinstance(label, str) or not label.startswith("fictional-repo/"):
+                    raise JourneyFailure(f"requirement coverage fixture {name} used a non-fictional cross-reference: {label!r}")
+                relative = label.removeprefix("fictional-repo/")
+                cross_path = self.data_root / "crates/software-change-provider/data/calibration/companions/fictional-repo" / relative
+                try:
+                    cross_bytes = cross_path.read_bytes()
+                except OSError as error:
+                    raise JourneyFailure(f"requirement coverage fixture {name} cross-reference is unreadable: {cross_path}: {error}") from error
+                cross_text = cross_bytes.decode("utf-8")
+                normalized_cross = " ".join(cross_text.split()).lower()
+                if "req-coverage-1" not in normalized_cross or "process exit by itself is not acceptance" not in normalized_cross:
+                    raise JourneyFailure(f"requirement coverage fixture {name} cross-reference omitted the accepted status wording: {cross_path}")
+                inspected_cross_references.append({
+                    "label": label,
+                    "sha256": hashlib.sha256(cross_bytes).hexdigest(),
+                    "bytes": len(cross_bytes),
+                    "authoritative_text_present": all(
+                        phrase in normalized_cross
+                        for phrase in ("running", "succeeded", "failed", "unknown", "process exit")
+                    ),
+                })
+            normalized_companion = " ".join(companion_text.split()).lower()
+            for phrase in ("running", "succeeded", "failed", "unknown", "process exit by itself is not acceptance"):
+                if phrase not in normalized_companion:
+                    raise JourneyFailure(f"coverage fixture did not match its named document bytes: {phrase}")
+            if name == "sufficient":
+                if "operator-visible job status" not in normalized_companion:
+                    raise JourneyFailure("sufficient coverage fixture did not identify the named status requirement")
+            if name == "related-insufficient":
+                if "owner-facing" not in str(fixture.get("promised_outcome", "")):
+                    raise JourneyFailure("related-insufficient fixture lost its distinct owner-facing outcome")
+                if "proactive owner chat" not in normalized_companion or "new notification channel" not in normalized_companion:
+                    raise JourneyFailure("related-insufficient fixture did not inspect the cross-reference's owner-chat boundary")
+                proposal = fixture.get("proposed_requirement", {})
+                if proposal.get("owner_acceptance") != "pending" or proposal.get("commit") != "not-committed":
+                    raise JourneyFailure("related-insufficient fixture lost pending owner status")
+            if name == "implementation-defect":
+                if fixture.get("delivered_behavior", {}).get("status_view") != "unknown":
+                    raise JourneyFailure("implementation-defect fixture lost its observed stale status")
+                if fixture.get("reclassification", {}).get("new_requirement_needed") is not False:
+                    raise JourneyFailure("implementation-defect fixture incorrectly proposes a new requirement")
+                if fixture.get("reclassification", {}).get("correction") != "implementation correction is required before proof can complete":
+                    raise JourneyFailure("implementation-defect fixture lost its correction classification")
+            cases.append({
+                "fixture": f"data/calibration/fixtures/requirement-coverage-{name}.json",
+                "named_requirement": reference.get("id"),
+                "branch": branch,
+                "citation_contrast": (
+                    "sufficient-wording"
+                    if name == "sufficient"
+                    else "related-topic-but-authoritative-text-is-insufficient"
+                    if name == "related-insufficient"
+                    else "sufficient-wording-with-implementation-defect"
+                ),
+                "unrelated_or_insufficient_citation_cannot_close_gap": name == "related-insufficient",
+                "semantic_judgment": "pending-owner-review",
+                "owner_acceptance": "pending",
+                "cross_references": inspected_cross_references,
+                "cross_reference_bytes_inspected": bool(inspected_cross_references),
+                "token_or_related_id_alone_rejected": name != "sufficient",
+            })
+        result = {
+            "status": "mechanics-captured; semantic-calibration-pending",
+            "companion": str(companion),
+            "companion_sha256": hashlib.sha256(companion.read_bytes()).hexdigest(),
+            "cases": cases,
+            "synthetic_limit": "Fixture classifications do not establish owner approval or semantic truth.",
+        }
+        path = root / "requirement-coverage-contrasts.json"
+        _write_json(path, result)
+        return result
+
+    def _run_reconciliation_case(self, case_name: str, *, bookends_enabled: bool) -> Dict[str, Any]:
+        """Drive one reconciliation branch through real engine/provider processes."""
+        self._initialize_reconciliation_case(self.run_dir / case_name, case_name, bookends_enabled=bookends_enabled)
+        assert self.artifact_root is not None
+        assert self.repository_root is not None
+        mode = "bookends-enabled" if bookends_enabled else "bookends-disabled"
+        # Use the source checkout's committed HEAD for liveness. The isolated
+        # fixture commits copied working-tree bytes and must not turn a
+        # provisional candidate into an accepted live citation.
+        citation = self._committed_reconciliation_reference()
+        target = self.repository_root / "docs" / ("PRD.md" if bookends_enabled else "reconciliation-target.md")
+        before = target.read_bytes() if target.exists() else b""
+        edit = case_name in {"bookends-enabled-edit", "bookends-disabled-edit", "bookends-enabled-missing-authorization"}
+        if edit:
+            marker = f"\n<!-- reconciliation journey {case_name}: authorized fixture edit -->\n"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(before + marker.encode("utf-8"))
+        after = target.read_bytes() if target.exists() else b""
+        fixture_commit: Optional[str] = None
+        if case_name in {"bookends-enabled-edit", "bookends-disabled-edit"}:
+            fixture_commit = self._commit_fixture_document(target)
+        # The provider-owned state is entered through the checked implementation
+        # handoff before its result can be authored or evaluated.  Keep this
+        # transition in every branch, including the blocked outcomes, so the
+        # denial proves the real reconciliation boundary rather than an
+        # unavailable event from `implement`.
+        self._expect_allow("implementation-ready", "reconciliation")
+        if case_name == "bookends-enabled-unresolved":
+            missing_document = self.repository_root / "docs" / "missing-authoritative-document.md"
+            if missing_document.exists():
+                raise JourneyFailure(
+                    "unresolved reconciliation fixture unexpectedly supplied its required cross-reference"
+                )
+            result_path = self._write_reconciliation_result(
+                revision="reconciliation-unresolved-r1",
+                mode=mode,
+                branch="sufficient-existing-wording",
+                document_observations=[
+                    {"path": "docs/PRD.md", "status": "unchanged", "observation": "accepted text was inspected"},
+                    {"path": "docs/missing-authoritative-document.md", "status": "missing", "observation": "required cross-reference is absent"},
+                ],
+                behavior_observations=[{"status": "unknown", "observation": "the discrepancy cannot be resolved from the supplied document"}],
+                action="blocked",
+                action_reason="The authoritative cross-reference is missing and the durable discrepancy remains unresolved.",
+                authorization="pending",
+                application="pending",
+                commit="pending",
+                traceability={"status": "blocked", "references": [citation["reference"]]},
+                proof_references=[citation["reference"]],
+                blockers=["missing authoritative cross-reference", "unresolved document discrepancy"],
+                decision="blocked",
+            )
+            denial = self._expect_denial("reconciliation-ready", "reconciliation", "software-change-reconciliation-blocked")
+            shown = self._assert_show("reconciliation", "unresolved-blocked-show")
+            if shown.get("current_state") != "reconciliation" or target.read_bytes() != before:
+                raise JourneyFailure("unresolved reconciliation changed state or document bytes")
+            return {"case": case_name, "mode": mode, "decision": "blocked", "denial": denial.get("code"), "artifact": str(result_path), "state": shown.get("current_state"), "citation": citation}
+        if case_name == "bookends-enabled-missing-authorization":
+            result_path = self._write_reconciliation_result(
+                revision="reconciliation-authorization-r1",
+                mode=mode,
+                branch="missing-or-changed-enduring-meaning",
+                document_observations=[{"path": "docs/PRD.md", "status": "updated", "observation": "fixture amendment bytes are present but not authorized"}],
+                behavior_observations=[{"status": "matches-intent", "observation": "delivered behavior requires the documented amendment"}],
+                action="amendment-application",
+                action_reason="The fixture demonstrates that a required amendment cannot proceed without owner authorization.",
+                authorization="pending",
+                application="pending",
+                commit="pending",
+                traceability={"status": "pending", "references": [citation["reference"]]},
+                proof_references=[citation["reference"]],
+                blockers=["exact owner acceptance is pending", "separate Git authorization and commit are pending"],
+                decision="blocked",
+            )
+            denial = self._expect_denial("reconciliation-ready", "reconciliation", "software-change-reconciliation-blocked")
+            shown = self._assert_show("reconciliation", "authorization-blocked-show")
+            status = subprocess.run(
+                ["git", "status", "--porcelain", "--", target.relative_to(self.repository_root).as_posix()],
+                cwd=self.repository_root,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if shown.get("current_state") != "reconciliation" or target.read_bytes() == before:
+                raise JourneyFailure("missing authorization did not retain the edited bytes and blocked state")
+            if status.returncode != 0 or not status.stdout.strip():
+                raise JourneyFailure("missing authorization fixture unexpectedly committed its document edit")
+            return {"case": case_name, "mode": mode, "decision": "blocked", "denial": denial.get("code"), "artifact": str(result_path), "state": shown.get("current_state"), "document_status": "updated-but-uncommitted", "citation": citation}
+
+        if case_name == "bookends-disabled-no-change":
+            branch = "sufficient-existing-wording"
+            action = "no-document-change"
+            action_reason = "The relevant repository document already matches the approved fixture behavior."
+            document_status = "unchanged"
+            behavior_status = "matches-intent"
+            traceability = {"status": "not-applicable", "references": []}
+            proof = ["journey:reconciliation-bookends-disabled-no-change"]
+            authorization = application = commit = "not-required"
+        elif case_name == "bookends-disabled-edit":
+            branch = "missing-or-changed-enduring-meaning"
+            action = "document-edit"
+            action_reason = "The fixture applies the authorized repository-document correction without Bookends machinery."
+            document_status = "updated"
+            behavior_status = "matches-intent"
+            traceability = {"status": "not-applicable", "references": []}
+            proof = ["journey:reconciliation-bookends-disabled-edit"]
+            authorization = "accepted"
+            application = "applied"
+            commit = "committed"
+        else:
+            branch = "missing-or-changed-enduring-meaning"
+            action = "amendment-application"
+            action_reason = "The fixture applies the exact accepted amendment before downstream proof."
+            document_status = "updated"
+            behavior_status = "matches-intent"
+            traceability = {"status": "updated", "references": [citation["reference"]]}
+            proof = [citation["reference"]]
+            authorization = "accepted"
+            application = "applied"
+            commit = "committed"
+        if fixture_commit is not None:
+            proof.append(f"git:{fixture_commit}")
+        result_path = self._write_reconciliation_result(
+            revision=f"reconciliation-{case_name}-r1",
+            mode=mode,
+            branch=branch,
+            document_observations=[{"path": target.relative_to(self.repository_root).as_posix(), "status": document_status, "observation": "actual fixture bytes were inspected before and after reconciliation" + (f"; fixture commit {fixture_commit}" if fixture_commit else "")}],
+            behavior_observations=[{"status": behavior_status, "observation": "the public fixture behavior matches the approved branch"}],
+            action=action,
+            action_reason=action_reason,
+            authorization=authorization,
+            application=application,
+            commit=commit,
+            traceability=traceability,
+            proof_references=proof,
+            blockers=[],
+            decision="complete",
+        )
+        self._expect_allow("reconciliation-ready", "implementation-review")
+        checkpoint_path = self.artifact_root / "implementation-checkpoint.json"
+        if checkpoint_path.exists():
+            raise JourneyFailure("implementation checkpoint existed before reconciliation downstream proof")
+        checkpoint = self._create_checkpoint("implementation")
+        if not checkpoint_path.is_file():
+            raise JourneyFailure("post-reconciliation implementation checkpoint was not retained")
+        if edit and after == before:
+            raise JourneyFailure(f"{case_name} claimed an edit but document bytes did not change")
+        if edit and fixture_commit is None:
+            raise JourneyFailure(f"{case_name} claimed a successful edit without an observed fixture commit")
+        if not edit and after != before:
+            raise JourneyFailure(f"{case_name} claimed no change but document bytes changed")
+        if bookends_enabled:
+            self._pass_overlay_review("implementation-review", "approved", "validation")
+        else:
+            self._pass_review("implementation-review", "approved", "validation")
+        shown = self._assert_show("validation", f"{case_name}-after-review")
+        history = self._engine(["history", self.run_id], state="validation", event="history")
+        self._expect_status(history, "completed", event="history", state="validation")
+        transitions = [
+            entry.get("action", {}).get("transition", {})
+            for entry in history.get("result", [])
+            if entry.get("action", {}).get("kind") == "transition"
+            and entry.get("action", {}).get("outcome", {}).get("outcome") == "committed"
+        ]
+        required_edges = [
+            ("implement", "implementation-ready", "reconciliation"),
+            ("reconciliation", "reconciliation-ready", "implementation-review"),
+        ]
+        if any(edge not in [(item.get("source"), item.get("event"), item.get("target")) for item in transitions] for edge in required_edges):
+            raise JourneyFailure(f"{case_name} did not retain reconciliation ordering: {transitions}")
+        return {
+            "case": case_name,
+            "mode": mode,
+            "decision": "complete",
+            "artifact": str(result_path),
+            "checkpoint": str(checkpoint_path),
+            "checkpoint_state_sha256": checkpoint.get("repository", {}).get("state_sha256"),
+            "document": str(target),
+            "before_sha256": hashlib.sha256(before).hexdigest(),
+            "after_sha256": hashlib.sha256(after).hexdigest(),
+            "document_commit": fixture_commit,
+            "state_after_review": shown.get("current_state"),
+            "state_order": ["implement", "reconciliation", "implementation-review", "validation"],
+            "citation": citation,
+        }
+
+    def _run_reconciliation_scenarios(self) -> Path:
+        """Exercise all supported reconciliation outcomes in isolated public runs."""
+        assert self.run_dir is not None
+        parent_run_dir = self.run_dir
+        root = parent_run_dir / "reconciliation-journey"
+        root.mkdir(parents=True, exist_ok=True)
+        outcomes = []
+        for case_name, bookends_enabled in (
+            ("bookends-disabled-no-change", False),
+            ("bookends-disabled-edit", False),
+            ("bookends-enabled-edit", True),
+            ("bookends-enabled-unresolved", True),
+            ("bookends-enabled-missing-authorization", True),
+        ):
+            # Each case owns a sibling database, artifact root and checkout;
+            # the previous case mutates this Journey shell while it runs.
+            self.run_dir = parent_run_dir
+            outcomes.append(
+                self._run_reconciliation_case(case_name, bookends_enabled=bookends_enabled)
+            )
+        contrasts = self._write_requirement_coverage_contrasts(root)
+        documents = self._provider_document_observations()
+        requirement_citations = {
+            requirement_id: self._committed_requirement_status(requirement_id)
+            for requirement_id in ("LE-141", "LE-142", "LE-143", "LE-144")
+        }
+        reconciliation_citation = outcomes[2]["citation"]
+        if requirement_citations[RECONCILIATION_REQUIREMENT_ID]["status"] == "committed-owner-integrated":
+            expected_reference = f"bookends:{RECONCILIATION_REQUIREMENT_ID}"
+            if reconciliation_citation.get("reference") != expected_reference:
+                raise JourneyFailure(
+                    "integrated reconciliation proof did not use its exact live Bookends citation"
+                )
+        elif reconciliation_citation.get("status") != "pending-owner-integration":
+            raise JourneyFailure(
+                "pre-integration reconciliation proof did not retain pending owner status"
+            )
+        proof = {
+            "schema_version": 1,
+            "status": "passed-mechanics; semantic-owner-review-pending",
+            "cases": outcomes,
+            "requirement_coverage_contrasts": contrasts,
+            "provider_document_observations": documents,
+            "accepted_requirement_citation": {
+                "requested": f"bookends:{RECONCILIATION_REQUIREMENT_ID}",
+                "status": outcomes[2]["citation"]["status"],
+                "public_results_use_exact_requested_citation_after_committed_integration": outcomes[2]["citation"]["status"] == "committed-owner-integrated",
+            },
+            "required_owner_citations": requirement_citations,
+            "calibration": {
+                "status": "pending-owner-attestation",
+                "manifest": "crates/software-change-provider/data/calibration/manifest.json",
+                "capture_root": None,
+                "note": "The driver-owned supplied-material captures and owner judgments are not manufactured by this synthetic journey.",
+            },
+            "provider_target_runs": [
+                {
+                    "key": "provider-readme",
+                    "status": "pending-driver-owned-target-run",
+                    "target": "crates/software-change-provider/README.md",
+                },
+                {
+                    "key": "provider-agents",
+                    "status": "pending-driver-owned-target-run",
+                    "target": "crates/software-change-provider/AGENTS.md",
+                },
+            ],
+            "synthetic_limit": "Fixture actors and deterministic provider checks prove mechanics only; they do not establish owner approval, semantic calibration, or checked completion of the separate README/AGENTS target runs.",
+        }
+        path = root / "reconciliation-journey-proof.json"
+        _write_json(path, proof)
+        self.reconciliation_proof = path
+        print("reconciliation journey passed: successful edit, justified no-change, unresolved discrepancy, missing authorization, and Bookends on/off")
+        print("reconciliation synthetic limit: owner approval, semantic calibration, and provider-document target-run completion remain pending")
+        return path
 
     def _run_recovery_inventory(
         self, *, global_jobs: Optional[List[Dict[str, Any]]] = None
@@ -869,9 +2110,9 @@ class Journey:
             raise JourneyFailure(
                 f"journey requires contract_version 3, got {profile.get('contract_version')!r}"
             )
-        if profile.get("config_version") != "high-rigor-10":
+        if profile.get("config_version") != "high-rigor-11":
             raise JourneyFailure(
-                f"journey requires high-rigor-10, got {profile.get('config_version')!r}"
+                f"journey requires high-rigor-11, got {profile.get('config_version')!r}"
             )
         criterion_policy = profile.get("criterion_policy")
         if criterion_policy != {"required_authors": 2, "goal_required_authors": 2}:
@@ -2340,9 +3581,12 @@ class Journey:
             state="implement",
             axis=policy_id,
         )
-        # Re-enter the review state after the repair and require independent
-        # fresh evidence before allowing its normal challenge successor.
-        self._expect_allow("implementation-ready", "implementation-review")
+        # Re-enter the reconciliation state after the repair and require a
+        # fresh document decision before independent implementation review.
+        self._write_no_change_reconciliation("primary-reconciliation-ad-hoc-repair")
+        self._expect_allow("implementation-ready", "reconciliation")
+        self._assert_show("reconciliation", "ad-hoc-reconciliation")
+        self._expect_allow("reconciliation-ready", "implementation-review")
         self._append_evidence(
             "implementation-review",
             record_prefix="ad-hoc-",
@@ -2541,10 +3785,14 @@ class Journey:
             "implement",
             record_prefix=prefix,
         )
+        self._write_no_change_reconciliation(f"route-{run_id}-reconciliation")
+        self._expect_allow_for(
+            run_id, "implement", "implementation-ready", "reconciliation"
+        )
         if isolated:
             self._create_checkpoint("implementation")
         self._expect_allow_for(
-            run_id, "implement", "implementation-ready", "implementation-review"
+            run_id, "reconciliation", "reconciliation-ready", "implementation-review"
         )
         if target == "implementation-review":
             return
@@ -3279,6 +4527,10 @@ class Journey:
         profile = self._read_json(
             self.data_root / STITCHED_PROFILE_SUBPATH, f"{mutation} minimal profile"
         )
+        # This focused checkpoint fixture retains the pre-reconciliation v3
+        # graph so its report/checkpoint invalidation assertions remain about
+        # that boundary rather than adding an unrelated document decision.
+        profile["config_version"] = "minimal-10"
         # This checkpoint fixture is deliberately a focused v3 graph: draft
         # phases advance directly, while validation retains one aggregate
         # review so the existing final evidence/checkpoint assertions remain
@@ -3700,9 +4952,13 @@ class Journey:
             json.dumps(implementation_report, indent=2) + "\n", encoding="utf-8"
         )
 
+        # Reconciliation is a checked provider boundary before the report/checkpoint/review proof.
+        self._write_no_change_reconciliation("primary-reconciliation-r1")
+        self._expect_allow("implementation-ready", "reconciliation")
+        self._assert_show("reconciliation", "primary-reconciliation")
+        self._expect_allow("reconciliation-ready", "implementation-review")
         # bookends:LE-94 — implementation-ready refuses report-only completion until the public checkpoint command binds the report to the selected Git tree.
         self._create_checkpoint("implementation")
-        self._expect_allow("implementation-ready", "implementation-review")
         # First complete the ordinary implementation route so the accepted
         # pre-repair checkpoint is present in immutable proof history. Re-enter
         # implementation through the public check-free owning-phase route, then
@@ -3759,8 +5015,11 @@ class Journey:
         implementation_report_path.write_text(
             json.dumps(implementation_report, indent=2) + "\n", encoding="utf-8"
         )
+        self._write_no_change_reconciliation("primary-reconciliation-r2")
+        self._expect_allow("implementation-ready", "reconciliation")
+        self._assert_show("reconciliation", "primary-reconciliation-reentry")
+        self._expect_allow("reconciliation-ready", "implementation-review")
         self._create_checkpoint("implementation")
-        self._expect_allow("implementation-ready", "implementation-review")
         # bookends:LE-108 — the public bound run refuses invalid no-task selections, captures one ad-hoc repair with no plan-task replay, refreshes proof, and continues through independent review and validation to terminal end.
         repair_revision = self._run_ad_hoc_repair_proof(
             plan_revision, frozen_implement_binding
@@ -4183,8 +5442,11 @@ class Journey:
         implementation_report_path.write_text(
             json.dumps(focused_report, indent=2) + "\n", encoding="utf-8"
         )
+        self._write_no_change_reconciliation("primary-reconciliation-focused")
+        self._expect_allow("implementation-ready", "reconciliation")
+        self._assert_show("reconciliation", "primary-reconciliation-focused")
+        self._expect_allow("reconciliation-ready", "implementation-review")
         self._create_checkpoint("implementation")
-        self._expect_allow("implementation-ready", "implementation-review")
         self._pass_review(
             "implementation-review",
             "approved",
@@ -4469,6 +5731,12 @@ class Journey:
             kind="engine-boundary",
             root=self.run_dir / "engine-boundary-pool-case",
         )
+        self._append_global_pool_job(
+            global_jobs,
+            name="reconciliation",
+            kind="reconciliation",
+            root=self.run_dir / "reconciliation-pool-case",
+        )
         self._run_dummy_worker_proofs(global_jobs=global_jobs)
         self._append_global_pool_job(
             global_jobs,
@@ -4577,6 +5845,30 @@ class Journey:
             json.dumps({"status": "passed", "scenarios": list(SCENARIOS)}, indent=2) + "\n",
             encoding="utf-8",
         )
+
+        reconciliation_row = by_name["reconciliation"]
+        reconciliation_stdout = Path(reconciliation_row["stdout"]).read_text(
+            encoding="utf-8", errors="replace"
+        )
+        if "reconciliation journey passed:" not in reconciliation_stdout:
+            raise JourneyFailure(
+                f"reconciliation public scenarios omitted their completion marker; inspect {report_path}",
+                state="end",
+                event="reconciliation",
+            )
+        reconciliation_path = (
+            self.run_dir
+            / "reconciliation-pool-case"
+            / "reconciliation-journey"
+            / "reconciliation-journey-proof.json"
+        )
+        if not reconciliation_path.is_file():
+            raise JourneyFailure(
+                f"reconciliation public scenarios omitted proof artifact {reconciliation_path}",
+                state="end",
+                event="reconciliation",
+            )
+        self.reconciliation_proof = reconciliation_path
 
         overlay_paths = getattr(self, "_global_overlay_paths", None)
         if not isinstance(overlay_paths, dict) or any(
@@ -4707,6 +5999,7 @@ class Journey:
             "candidate blocks Bookends-enabled final completion, not-applicable does not waive or "
             "fulfill its criterion"
         )
+        print("reconciliation journey passed: successful edit, justified no-change, unresolved discrepancy, missing authorization, and Bookends on/off")
         print("full recovery inventory passed: " + ", ".join(SCENARIOS))
 
     def _scenario_engine_call(
@@ -6589,6 +7882,9 @@ else:
         profile = self._read_json(
             self.data_root / PROFILE_SUBPATH, "overlay-off high-rigor profile"
         )
+        # This focused overlay fixture predates the dedicated reconciliation
+        # phase; the v11 public cases below own that boundary explicitly.
+        profile["config_version"] = "high-rigor-10"
         profile["artifact_root"] = str(artifacts)
         _write_json(profile_path, profile)
         self._write_provider_config_at(provider_config)
@@ -7001,6 +8297,9 @@ else:
             self.data_root / BOOKENDS_SCENARIO_PROFILE,
             "overlay-on high-rigor profile",
         )
+        # Keep this criterion-spine fixture on the frozen pre-reconciliation
+        # graph; dedicated v11 scenarios prove the new state and ordering.
+        profile["config_version"] = "high-rigor-10"
         profile["artifact_root"] = str(artifacts)
         extra = copy.deepcopy(profile.get("extra", {}))
         extra["bookends"] = {"enabled": True}
@@ -7301,7 +8600,7 @@ else:
                 )
             if (
                 secondary_workflow.get("id") != "software-change"
-                or secondary_input.get("config_version") != "minimal-10"
+                or secondary_input.get("config_version") != "minimal-11"
                 or secondary_input.get("review_policies") == primary_input.get("review_policies")
                 or secondary_input.get("criterion_policy") == primary_input.get("criterion_policy")
             ):
@@ -7407,8 +8706,10 @@ else:
             self._expect_allow("plan-ready", "plan-review")
             self._pass_review("plan-review", "approved", "plan-adversarial-review")
             self._pass_review("plan-adversarial-review", "approved", "implement")
+            self._write_no_change_reconciliation("stitched-reconciliation-r1")
+            self._expect_allow("implementation-ready", "reconciliation")
+            self._expect_allow("reconciliation-ready", "implementation-review")
             self._create_checkpoint("implementation")
-            self._expect_allow("implementation-ready", "implementation-review")
             self._pass_review(
                 "implementation-review", "approved", "implementation-adversarial-review"
             )
@@ -7822,6 +9123,9 @@ def _run_pool_job(job_path: str) -> None:
     elif kind == "engine-boundary":
         journey._initialize_pool_case(root)
         result = journey._run_engine_boundary_scenarios()
+    elif kind == "reconciliation":
+        journey._initialize_pool_case(root)
+        result = journey._run_reconciliation_scenarios()
     elif kind == "package-7b":
         journey._initialize_pool_case(root)
         result = journey._run_package_7b_review_candidates_scenario()
@@ -7886,9 +9190,17 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--traversal-depth",
         choices=("full", "checked-prefix"),
-        required=True,
+        default="full",
         help="full source graph or checked software-change prefix",
     )
+    parser.add_argument(
+        "--compact-worker-fixture",
+        choices=("draft", "review", "negative-empty"),
+        help="run the fresh supported compact-worker setup/start/invoke fixture",
+    )
+    parser.add_argument("--worker-model", help="model ID for a positive compact-worker fixture")
+    parser.add_argument("--worker-thinking", help="thinking level for a positive compact-worker fixture")
+    parser.add_argument("--worker-tools", help="comma-separated tools for a positive compact-worker fixture")
     parser.add_argument("--jobs", type=int, default=2, help="independent proof processes (default 2; serial 1)")
     parser.add_argument("--job-timeout", type=float, default=1200, help="per-proof deadline in seconds")
     parser.add_argument("--scenario", help="focused implemented recovery scenario (source only)")
@@ -8277,7 +9589,7 @@ def assert_worker_data_skill_and_root_policy(
         (research_skill, "research"),
     ):
         if name == "software-change":
-            required = ("software-change setup", "--roster", "output_sha256", "preview-bindings")
+            required = ("software-change setup", "--roster", "--draft-worker", "output_sha256", "preview-bindings")
         else:
             required = ("--rawfile base_preamble", "preview-bindings", "SHA-256", "validate_extension_path")
         for clause in required:
@@ -8389,7 +9701,12 @@ def assert_worker_data_skill_and_root_policy(
             "software-change setup self-test requires target/debug/loop-engine and target/debug/software-change"
         )
 
-    def run_sc(output: Path, roster_path: Path, rigor: str = "high") -> Dict[str, Any]:
+    def run_sc(
+        output: Path,
+        roster_path: Path,
+        rigor: str = "high",
+        draft_worker_path: Optional[Path] = None,
+    ) -> Dict[str, Any]:
         command = [
             str(software_change_binary),
             "setup",
@@ -8401,9 +9718,10 @@ def assert_worker_data_skill_and_root_policy(
             str(loop_engine_binary),
             "--provider",
             str(software_change_binary),
-            "--output",
-            str(output),
         ]
+        if draft_worker_path is not None:
+            command.extend(["--draft-worker", str(draft_worker_path)])
+        command.extend(["--output", str(output)])
         result = subprocess.run(
             command,
             cwd=str(output.parent),
@@ -8594,9 +9912,16 @@ def assert_worker_data_skill_and_root_policy(
         ]
         setup_roster_path = root / "software-change-roster.json"
         _write_json(setup_roster_path, setup_roster)
+        draft_worker_path = root / "software-change-draft-worker.json"
+        draft_worker = {"command": dummy_pi, "args": ["--draft"]}
+        _write_json(draft_worker_path, draft_worker)
         setup_source = _load_json(high_rigor)
         setup_profile = root / "software-change-setup.json"
-        setup_report = run_sc(setup_profile, setup_roster_path)
+        setup_report = run_sc(
+            setup_profile,
+            setup_roster_path,
+            draft_worker_path=draft_worker_path,
+        )
         if setup_report.get("status") != "ready" or setup_report.get("started") is not False:
             raise JourneyFailure(f"software-change setup report was not an inert ready report: {setup_report}")
         if setup_report.get("output_bytes") != setup_profile.read_text(encoding="utf-8"):
@@ -8606,6 +9931,10 @@ def assert_worker_data_skill_and_root_policy(
         setup_result = _load_json(setup_profile)
         if setup_result.get("review_policies") != setup_source.get("review_policies"):
             raise JourneyFailure("software-change setup changed shipped review policy bytes")
+        if setup_result.get("work_slot_bindings", {}).get("intent-draft") != draft_worker:
+            raise JourneyFailure(
+                "software-change setup did not preserve the closed --draft-worker binding"
+            )
         for gate in setup_source["review_policies"]:
             assert_sc_binding(setup_result, setup_source, gate, setup_roster)
         high_workers = _fan_out_workers(
@@ -8906,8 +10235,58 @@ def assert_worker_data_skill_and_root_policy(
                 raise JourneyFailure(f"{label} AGENTS.md reverses PRD authority with {reversal!r}")
     assert_operator_contract_surfaces()
     assert_criterion_spine_docs()
+    assert_reconciliation_documents_and_profiles()
     assert_focused_boundary_scenarios()
     print("worker-data skill/root policy assertions passed")
+
+
+def assert_reconciliation_documents_and_profiles() -> None:
+    """Check shipped profile floors and the authored reconciliation contract."""
+    repository = Path(__file__).resolve().parent.parent
+    readme = (repository / "crates/software-change-provider/README.md").read_text(encoding="utf-8")
+    agents = (repository / "crates/software-change-provider/AGENTS.md").read_text(encoding="utf-8")
+    for label, text, clauses in (
+        ("provider README", readme, ("Reconciliation and document integration", "no-document-change", "Bookends-disabled runs", "reconciliation-ready")),
+        ("provider AGENTS", agents, ("reconciliation", "reconciliation-ready", "Bookends-on", "older v10 runs retain")),
+    ):
+        for clause in clauses:
+            if clause.lower() not in text.lower():
+                raise JourneyFailure(f"{label} omitted reconciliation contract clause {clause!r}")
+    expected = {
+        "minimal.json": ("minimal-11", 1, 1),
+        "standard.json": ("standard-11", 2, 2),
+        "high-rigor.json": ("high-rigor-11", 2, 2),
+    }
+    for name, (version, criterion_floor, goal_floor) in expected.items():
+        profile = _load_json(repository / "crates/software-change-provider/data/configs" / name)
+        if profile.get("config_version") != version:
+            raise JourneyFailure(f"{name} profile version changed unexpectedly: {profile.get('config_version')!r}")
+        if profile.get("criterion_policy") != {"required_authors": criterion_floor, "goal_required_authors": goal_floor}:
+            raise JourneyFailure(f"{name} profile criterion/goal floors changed unexpectedly")
+        policies = profile.get("review_policies", {})
+        for gate in ("intent-review", "intent-adversarial-review"):
+            axes = policies.get(gate, [])
+            ids = {entry.get("id") for entry in axes if isinstance(entry, dict)}
+            if not {"acceptance-granularity", "owner-comprehensible"}.issubset(ids):
+                raise JourneyFailure(f"{name} {gate} omitted the shipped intent questions")
+            for entry in axes:
+                if entry.get("id") in {"acceptance-granularity", "owner-comprehensible"} and entry.get("review_stage", "aggregate") != "aggregate":
+                    raise JourneyFailure(f"{name} changed the new intent-question stage")
+    schema = _load_json(repository / "crates/software-change-provider/data/reconciliation-schema.json")
+    if schema.get("additionalProperties") is not False or set(schema.get("required", [])) != {
+        "revision", "author", "mode", "branch", "document_observations", "behavior_observations",
+        "action", "action_reason", "authorization", "application", "commit", "traceability",
+        "proof_references", "blockers", "decision",
+    }:
+        raise JourneyFailure("reconciliation schema is not the closed provider contract")
+    fixture_root = repository / FIXTURE_SUBPATH
+    for name in ("sufficient", "related-insufficient", "implementation-defect"):
+        fixture = _load_json(fixture_root / f"requirement-coverage-{name}.json")
+        if fixture.get("handoff", {}).get("proof_references") is None:
+            raise JourneyFailure(f"requirement coverage fixture {name} omitted its proof handoff")
+    notes = repository / "crates/software-change-provider/data/calibration/companions/fictional-repo/docs/requirement-coverage.md"
+    if "proactive owner chat" not in notes.read_text(encoding="utf-8"):
+        raise JourneyFailure("requirement coverage companion lost its unrelated-owner-chat contrast")
 
 
 def assert_criterion_spine_docs() -> None:
@@ -9033,9 +10412,9 @@ def assert_operator_contract_surfaces() -> None:
     # worktree to HEAD: a source journey must run against the same bytes it
     # proves.
     expected_versions = {
-        "minimal.json": "minimal-10",
-        "standard.json": "standard-10",
-        "high-rigor.json": "high-rigor-10",
+        "minimal.json": "minimal-11",
+        "standard.json": "standard-11",
+        "high-rigor.json": "high-rigor-11",
     }
     for name, expected_version in expected_versions.items():
         profile = _load_json(repository / "crates/software-change-provider/data/configs" / name)
@@ -9157,11 +10536,34 @@ def assert_focused_boundary_scenarios() -> None:
     full_source = source[full_start:full_end if full_end >= 0 else len(source)]
     if "self._run_global_tail_proof()" not in source:
         raise JourneyFailure("global tail proof is not in the full source journey")
+    if "reconciliation journey passed:" not in source or "_run_reconciliation_scenarios" not in source:
+        raise JourneyFailure("reconciliation public journey is not wired into the source boundary")
+    for case_name in (
+        "bookends-disabled-no-change",
+        "bookends-disabled-edit",
+        "bookends-enabled-edit",
+        "bookends-enabled-unresolved",
+        "bookends-enabled-missing-authorization",
+    ):
+        if case_name not in source:
+            raise JourneyFailure(f"reconciliation journey omitted case {case_name}")
+    if "bookends:LE-142" not in source or "pending-owner-integration" not in source:
+        raise JourneyFailure("reconciliation journey omitted exact live-citation/pending-owner handling")
+    reconciliation_start = source.index("    def _run_reconciliation_case")
+    reconciliation_end = source.find("\n    def ", reconciliation_start + len("    def _run_reconciliation_case"))
+    reconciliation_source = source[reconciliation_start:reconciliation_end if reconciliation_end >= 0 else len(source)]
+    if (
+        'self._expect_allow("implementation-ready", "reconciliation")' not in reconciliation_source
+        or 'self._expect_allow("reconciliation-ready", "implementation-review")' not in reconciliation_source
+        or 'self._commit_fixture_document(target)' not in reconciliation_source
+    ):
+        raise JourneyFailure("reconciliation journey omitted checked entry, exit, or committed document assertions")
     global_start = source.index("    def _run_global_tail_proof")
     global_end = source.find("    def ", global_start + len("    def _run_global_tail_proof"))
     global_source = source[global_start:global_end if global_end >= 0 else len(source)]
     if (
         'name="engine-boundary"' not in global_source
+        or 'name="reconciliation"' not in global_source
         or 'name="package-7b"' not in global_source
         or "self._run_dummy_worker_proofs(global_jobs=global_jobs)" not in global_source
         or "prove_selected_attempt_ledger_linkage" not in source
@@ -9424,7 +10826,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             except ValueError as error:
                 raise JourneyFailure(str(error)) from error
         else:
-            Journey(args).run()
+            journey = Journey(args)
+            if args.compact_worker_fixture:
+                journey.run_compact_worker_fixture()
+            else:
+                journey.run()
         return 0
     except JourneyFailure as error:
         print(

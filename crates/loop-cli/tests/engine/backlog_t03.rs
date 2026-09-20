@@ -136,6 +136,68 @@ fn cancel_args(database: &Path, run_id: &str, invocation_id: &str) -> Vec<String
 }
 
 #[test]
+fn backlog_t03_cancel_does_not_decode_unrelated_invocation_history() {
+    // bookends:LE-129 -- cancellation inspects its owned invocation, not prior
+    // worker evidence. An undecodable sentinel makes an accidental broad read
+    // deterministic without allocating gigabytes of historical capture data.
+    let root = tempfile::tempdir().expect("scoped cancellation fixture");
+    let run_id = "scoped-cancel";
+    let (database, capture, invocation_id) = launch_blocked_invocation(root.path(), run_id);
+    let connection = Connection::open(&database).expect("fixture catalog");
+    connection
+        .execute(
+            "INSERT INTO work_slot_invocations
+         (run_id, invocation_id, slot_id, binding_json, instruction_digest,
+          subject, waiter_pid, started_at, allowed_time_ms, status, exit_code,
+          completed_at, capture_dir, inner_workers_json)
+         SELECT run_id, 'unrelated-history', slot_id, binding_json,
+                instruction_digest, 'historical-subject', 0, 0, 1,
+                'succeeded', 0, 1, '', 'unrelated-decode-sentinel'
+         FROM work_slot_invocations WHERE run_id = ?1 AND invocation_id = ?2",
+            [run_id, invocation_id.as_str()],
+        )
+        .expect("seed unrelated historical evidence");
+    let output = run_cli_output(
+        root.path(),
+        &cancel_args(&database, run_id, &invocation_id),
+        "backlog_t03 scoped cancellation",
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).expect("cancel envelope");
+    let retained: String = connection
+        .query_row(
+            "SELECT inner_workers_json FROM work_slot_invocations
+         WHERE run_id = ?1 AND invocation_id = 'unrelated-history'",
+            [run_id],
+            |row| row.get(0),
+        )
+        .expect("retain unrelated evidence");
+    assert_eq!(retained, "unrelated-decode-sentinel");
+    if !output.status.success() {
+        // Clean up the real fixture worker even when testing the old bug.
+        connection
+            .execute(
+                "DELETE FROM work_slot_invocations
+             WHERE run_id = ?1 AND invocation_id = 'unrelated-history'",
+                [run_id],
+            )
+            .expect("remove test sentinel for cleanup");
+        run_cli(
+            root.path(),
+            &cancel_args(&database, run_id, &invocation_id),
+            "backlog_t03 cleanup after scoped cancellation failure",
+        );
+    }
+    assert!(
+        output.status.success(),
+        "scoped cancellation failed: {value}"
+    );
+    assert_eq!(value["result"]["cancelled"], true);
+    assert_eq!(value["result"]["workflow_advanced"], false);
+    assert!(!ownership::live_owned_work(capture.to_str().unwrap()).unwrap());
+    assert!(!ownership::cleanup_pending(capture.to_str().unwrap()));
+}
+
+#[test]
 fn backlog_t03_unpublished_marker_is_ignored_by_public_cancellation() {
     let root = tempfile::tempdir().expect("unpublished-marker fixture tempdir");
     let run_id = "unpublished-marker-cancel";

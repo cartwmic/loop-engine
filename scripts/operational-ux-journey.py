@@ -138,7 +138,10 @@ else:
             assert not after["work_slot_invocations"]
             assert len(after["latest_current_slot_execution"]) == 1
             assert "triage" in after["next_action"]
-            assert {k:v for k,v in action.items() if k not in ("observed_at", "next_action", "latest_current_slot_execution")} == {k:v for k,v in after.items() if k not in ("observed_at", "next_action", "latest_current_slot_execution")}
+            dynamic = {"observed_at", "next_action", "latest_current_slot_execution", "visibility",
+                       "workflow", "execution", "worker", "conformance", "acceptance", "evidence",
+                       "freshness", "uncertainty", "owner_update_guidance"}
+            assert {k:v for k,v in action.items() if k not in dynamic} == {k:v for k,v in after.items() if k not in dynamic}
             assert len(call(database, ["show",name,"--view","full"])["result"]["work_slot_invocations"]) == 3
         # Provider disappears: persisted instructions/guidance and full remain usable.
         unavailable = root / "provider-unavailable.py"

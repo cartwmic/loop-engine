@@ -1,0 +1,64 @@
+{
+  "revision": "r15",
+  "author": {
+    "name": "change-owner",
+    "kind": "human"
+  },
+  "operating_context": {
+    "operators": [
+      "trusted sole operator",
+      "repository maintainer"
+    ],
+    "environment": [
+      "local repository checkout",
+      "Loop Engine and software-change provider CLIs",
+      "configured local worker CLIs"
+    ],
+    "threat_boundary": {
+      "in_scope": [
+        "operator-visible software-change runs",
+        "local repository artifacts and configured workers"
+      ],
+      "excluded": [
+        "hostile users",
+        "mutually distrusting tenants",
+        "enterprise authorization or audit infrastructure"
+      ]
+    },
+    "accepted_risks": [],
+    "outside_obligations": [
+      {
+        "source": "Loop Engine provider boundary",
+        "obligation": "The provider remains deterministic and external reviewers retain semantic authority."
+      }
+    ]
+  },
+  "problem": "A trusted operator needs one status decision for a started local job, but the draft treats every possible status label as a separate deliverable.",
+  "outcome": "The public status view reports the result of the started local job.",
+  "acceptance": [
+    {
+      "id": "AC-1",
+      "statement": "The public status view reports that a started job is running."
+    },
+    {
+      "id": "AC-2",
+      "statement": "The public status view reports that a started job succeeded."
+    },
+    {
+      "id": "AC-3",
+      "statement": "The public status view reports that a started job failed."
+    },
+    {
+      "id": "AC-4",
+      "statement": "The public status view reports that a started job is unknown when evidence is missing."
+    }
+  ],
+  "constraints": [
+    "All status labels are observations of the same started-job status decision.",
+    "The view uses the existing local CLI and captured worker evidence."
+  ],
+  "non_goals": [
+    "A new notification channel or distributed monitoring service.",
+    "Hostile-user or multi-tenant authorization."
+  ]
+}

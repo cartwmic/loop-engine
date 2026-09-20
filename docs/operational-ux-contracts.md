@@ -222,13 +222,23 @@ not stalled work control. Polling defaults to one second (`--poll-seconds N`).
 rendering goes to stderr. Both follow until interrupted; neither cancels observed
 work. A pipe consumer should read until the selected source's `event` is
 `completion` or `attention`, then inspect `boundary.reason` and the separate
-`workflow`, `helper`, `worker`, `conformance`, and `judgment` lanes. `source` names
+`workflow_lane`, `execution`, `worker`/`worker_lane`, `conformance`, `acceptance`,
+`evidence`, `freshness`, and `uncertainty` lanes. The existing `workflow` and
+`helper` fields remain raw source detail for compatibility. `source` names
 `run:ID` or `capture:ABS`; packets include sample time and available invocation,
 attempt, receipt, history sequence/time and engine/catalog locators. Completion is
-selected execution/workflow termination, **not semantic approval**. One peer's
-completion is never promoted to another source. Unchanged boundary identities are
-not repeatedly notified. Restart rereads retained evidence and can notify again;
-there is no exact-once/replay contract or new event journal.
+selected execution/workflow termination, **not semantic approval**; acceptance
+stays `unknown` until the provider/driver evidence process says otherwise. One
+peer's completion is never promoted to another source. Unchanged source packets
+produce no repetitive snapshot/owner heartbeat. Restart rereads retained evidence
+and can notify again; there is no exact-once/replay contract or new event journal.
+
+The `owner_update` field is assistant-owned conversation guidance, not an engine
+chat channel. After a meaningful packet change, the coordinating assistant reads
+it and posts `observed_change` plus `needed_action_or_decision` in the active Pi
+conversation before its first later wait, inspect, or help decision. Machine
+completion/attention is not that owner update. `next_action` is descriptive and
+never authorizes workflow mutation.
 
 Capture matrix completion requires completed state, matching nonzero selected and
 expected row counts, identified successful receipts and intact streams. Running
@@ -244,6 +254,12 @@ gets attention rather than inferred worker success. Failures and unverified clea
 produce attention. `--attention-seconds N` also emits a source-identified elapsed
 observer deadline; it is not ETA and never authorizes retry or cancellation.
 Sampling and read timeouts can delay a deadline notification.
+
+`invocation-progress` is a linked detail read, not workflow authority. Its
+`visibility` object exposes the same execution, worker, conformance, acceptance,
+evidence, freshness, uncertainty and next-action residuals; worker output and
+semantic acceptance remain unknown until the driver reads the retained capture
+and provider evidence. The graph's `reaped` state is helper liveness only.
 
 Optional repeatable `--observation ABS` attaches driver-supplied JSON containing
 `run_id`, `sampled_at_ms`, and nonempty `attesting_driver`, plus opaque supplied
@@ -289,9 +305,10 @@ timeouts and malformed output fail conformance. This shape check does not verify
 truth, grounding, or the validity of a correction.
 
 The flushed `summary` JSONL lane is advisory and separate from snapshot,
-completion and attention. It displays attempts, budget, input digest and the last
-usable summary; changed evidence or failures label that output older. Usage/cost
-are only the command's supplied values, otherwise unknown. No summary approves,
+completion and attention. It displays attempts, budget, input digest, selected
+source locators, retained attempt directory, freshness and the last usable
+summary; changed evidence or failures label that output older. Usage/cost are
+only the command's supplied values, otherwise unknown. No summary approves,
 advances, retries or cancels work. Each `attempt-NNNN` retains `command.json`,
 `stdin.json`, raw `stdout`/`stderr` and `exit.json`. Earlier attempts are not replaced.
 
@@ -303,6 +320,43 @@ summaries, not observation. A restart with an interrupted attempt lacking exit
 evidence disables further automatic summaries rather than risking overlapping
 calls or pretending an unknown exit succeeded. Its raw files and reserved call
 remain; stopping an observer is not cancellation of observed workflow work.
+
+## Software-change reconciliation and proof ordering
+
+For new `contract_version: 3` software-change profiles, the provider-owned
+`reconciliation` state follows implementation editing and precedes final
+implementation proof and review. Its unbound `reconciliation-draft` slot
+writes `reconciliation.json`; `reconciliation-ready` checks that decision. The
+state does not write implementation or validation reports, checkpoints, or Git
+commits. It records one conditional result: sufficient existing wording and
+change-specific proof need no requirement amendment, an implementation defect
+requires an observed code correction, and only missing or changed enduring
+meaning requires exact owner acceptance plus separately authorized application
+and commit. A justified no-document-change result is valid; a blocked result
+names concrete blockers.
+
+Bookends-enabled reconciliation reads the actual accepted requirement wording
+and every authoritative document it names, retains live traceability, and does
+not accept a related ID, topic, token, parser result, or command exit as
+semantic coverage. Bookends-disabled reconciliation checks relevant repository
+documents against approved intent and delivered behavior without PRD IDs,
+Bookends citations, candidate machinery, or overlay obligations. After the
+state, report finalization, repository checkpoint, any configured implementation
+review, validation, and final proof use the resulting document tree. Older stored runs
+retain their original graph and evidence.
+
+The coordinating assistant owns the owner-facing conversation update. After it
+reads existing status or monitor output and observes a meaningful development,
+it posts the concise observed change and needed action or decision in the active
+conversation before its next wait, inspect, or help decision. Machine
+completion/attention is not that update. Bound model-facing delivery uses the
+normal compact projection: meaningful IDs, ordering, assignments, instructions,
+declared output requirements, full routed history, and verification evidence
+remain available; only redundant engine-owned envelope material is omitted from
+the model-facing clone. The observed oversized setup path remains classified
+against LE-127 unless distinct semantics are demonstrated. Workers run focused
+checks, while the coordinating driver owns the complete final stable-tree
+matrix and repeats only checks invalidated by later changes.
 
 ## Fixture entry point
 

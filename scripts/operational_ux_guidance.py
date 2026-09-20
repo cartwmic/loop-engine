@@ -61,6 +61,11 @@ def guidance_case(args):
                    'return destination', 'resume references', 'Keep successful peers independent']:
         assert clause in coordinator, clause
     engine_skill = ROOT / 'skills/using-loop-engine/SKILL.md'
+    engine_guidance = engine_skill.read_text()
+    for clause in ['workflow_lane', 'worker_lane', 'acceptance: unknown',
+                   'active Pi conversation', 'observed change',
+                   'needed action or owner decision', 'machine attention/completion']:
+        assert clause in engine_guidance, clause
     assert '../using-loop-engine/SKILL.md' in coordinator
     for name in ['software-change', 'policy-document', 'research']:
         assert f'crates/{name}-provider/skills/using-{name}-provider/SKILL.md' in coordinator

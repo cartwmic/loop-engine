@@ -1,0 +1,56 @@
+{
+  "revision": "r15",
+  "author": {
+    "name": "change-owner",
+    "kind": "human"
+  },
+  "operating_context": {
+    "operators": [
+      "trusted sole operator",
+      "repository maintainer"
+    ],
+    "environment": [
+      "local repository checkout",
+      "Loop Engine and software-change provider CLIs",
+      "configured local worker CLIs"
+    ],
+    "threat_boundary": {
+      "in_scope": [
+        "operator-visible software-change runs",
+        "local repository artifacts and configured workers"
+      ],
+      "excluded": [
+        "hostile users",
+        "mutually distrusting tenants",
+        "enterprise authorization or audit infrastructure"
+      ]
+    },
+    "accepted_risks": [],
+    "outside_obligations": [
+      {
+        "source": "Loop Engine provider boundary",
+        "obligation": "The provider remains deterministic and external reviewers retain semantic authority."
+      }
+    ]
+  },
+  "problem": "The observer loses the selected invocation when the capture projection is stale, and the owner must understand the reconciliation state before deciding whether to advance.",
+  "outcome": "The coordinator performs the normal fan-out, Bookends, PRD, and evidence-applicability flow and exposes the accepted result.",
+  "acceptance": [
+    {
+      "id": "AC-1",
+      "statement": "The intent is accepted only when the current checkpoint is green, the PRD traceability is linked-live, the review axis has a conforming evidence record, and the evidence-applicability source remains current."
+    },
+    {
+      "id": "AC-2",
+      "statement": "The driver may use the selected assignment output and reconciliation result to progress after the fan-out capture is verified."
+    }
+  ],
+  "constraints": [
+    "The owner is expected to know the provider's Bookends, PRD, fan-out, checkpoint, axis, and evidence-applicability terminology.",
+    "The existing workflow names and overlay machinery must be preserved."
+  ],
+  "non_goals": [
+    "Explaining repository-internal terms to a new owner.",
+    "A separate plain-English intent or owner-facing summary."
+  ]
+}

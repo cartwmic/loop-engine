@@ -61,10 +61,8 @@ fn target(
         .load_authoritative_run(run_id)
         .map_err(catalog_error)?;
     let row = persistence
-        .load_work_slot_invocations(run_id)
+        .load_work_slot_invocation(run_id, id)
         .map_err(catalog_error)?
-        .into_iter()
-        .find(|row| row.invocation_id == *id)
         .ok_or_else(|| CliError::new("invocation-not-found", "invocation is not on this run"))?;
     if !run.lifecycle.is_active() {
         return Err(CliError::new("run-not-active", "run is not active"));

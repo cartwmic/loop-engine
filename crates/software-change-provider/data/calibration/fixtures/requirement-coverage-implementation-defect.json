@@ -1,0 +1,50 @@
+{
+  "revision": "r1",
+  "author": {
+    "name": "fixture-owner",
+    "kind": "human"
+  },
+  "operating_context": {
+    "operators": ["trusted local repository operator", "external requirement reviewer"],
+    "environment": ["fictional local job runner", "public operator status view"],
+    "threat_boundary": {
+      "in_scope": ["one local operator", "the named status view", "the accepted requirement text"],
+      "excluded": ["hostile operators", "multi-tenant authorization", "distributed monitoring"]
+    },
+    "accepted_risks": [],
+    "outside_obligations": [
+      {
+        "source": "fictional-repo/docs/requirement-coverage.md#REQ-COVERAGE-1",
+        "obligation": "Do not create a new requirement when the accepted wording already demands the promised status behavior."
+      }
+    ]
+  },
+  "promised_outcome": "After the operator starts a job, the public status view distinguishes running, succeeded, failed, and unknown, and does not treat process exit alone as acceptance.",
+  "requirement_references": [
+    {
+      "id": "REQ-COVERAGE-1",
+      "authoritative_text": "After an operator starts a job, the public status view must show running, succeeded, failed, or unknown. Process exit by itself is not acceptance.",
+      "explicit_cross_references": ["fictional-repo/docs/requirement-coverage.md"]
+    }
+  ],
+  "delivered_behavior": {
+    "operator_started_job": true,
+    "worker_process_exit": 0,
+    "status_view": "unknown",
+    "captured_output": "present",
+    "acceptance": "not-accepted",
+    "observed_gap": "The completed worker remains unknown instead of exposing a completed status and checking output conformance."
+  },
+  "reclassification": {
+    "requirement_sufficiency": "the accepted requirement already demands the promised behavior",
+    "new_requirement_needed": false,
+    "owner_acceptance": "not-required",
+    "application": "not-required",
+    "commit": "not-required",
+    "correction": "implementation correction is required before proof can complete"
+  },
+  "handoff": {
+    "traceability": "retain the existing requirement reference",
+    "proof_references": ["fixture:completed-worker-status-journey"]
+  }
+}

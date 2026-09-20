@@ -1,0 +1,52 @@
+{
+  "revision": "r15",
+  "author": {
+    "name": "change-owner",
+    "kind": "human"
+  },
+  "operating_context": {
+    "operators": [
+      "trusted sole operator",
+      "repository maintainer"
+    ],
+    "environment": [
+      "local repository checkout",
+      "Loop Engine and software-change provider CLIs",
+      "configured local worker CLIs"
+    ],
+    "threat_boundary": {
+      "in_scope": [
+        "operator-visible software-change runs",
+        "local repository artifacts and configured workers"
+      ],
+      "excluded": [
+        "hostile users",
+        "mutually distrusting tenants",
+        "enterprise authorization or audit infrastructure"
+      ]
+    },
+    "accepted_risks": [],
+    "outside_obligations": [
+      {
+        "source": "Loop Engine provider boundary",
+        "obligation": "The provider remains deterministic and external reviewers retain semantic authority."
+      }
+    ]
+  },
+  "problem": "A trusted operator cannot tell whether a local job is still running or whether its result is acceptable from the public status view.",
+  "outcome": "The operator can use one public status view to decide what happened to the started job and whether more inspection is needed.",
+  "acceptance": [
+    {
+      "id": "AC-1",
+      "statement": "After the operator starts one local job, the public status view shows running, succeeded, failed, or unknown, and process exit alone is not acceptance. The same status decision can be checked from the retained job evidence."
+    }
+  ],
+  "constraints": [
+    "The status view observes the existing local job path and does not approve or control work.",
+    "Evidence must be available through the existing local CLI and captured worker path."
+  ],
+  "non_goals": [
+    "A new notification channel or distributed monitoring service.",
+    "Hostile-user or multi-tenant authorization."
+  ]
+}

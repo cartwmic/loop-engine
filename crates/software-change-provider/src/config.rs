@@ -11,6 +11,7 @@ use crate::schema::{validate_schema, MetaValidationReport, ValidatedSchema};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::OnceLock;
 
 /// Gate identifiers accepted in `review_policies`.
 ///
@@ -34,9 +35,11 @@ pub(crate) const SUBJECT_NAMES: &[&str] = &[
     "intent.json",
     "design.json",
     "plan.json",
+    "reconciliation.json",
     "implementation-report.json",
     "validation-report.json",
 ];
+const RECONCILIATION_SUBJECT: &str = "reconciliation.json";
 
 const TOP_LEVEL_KEYS: &[&str] = &[
     "contract_version",
@@ -53,6 +56,18 @@ const TOP_LEVEL_KEYS: &[&str] = &[
 const REVISION_LINK_KEYS: &[&str] = &["from", "field", "to"];
 const SHIPPED_CONFIG_NAMES: &str = "minimal, standard, high-rigor";
 const AUTHOR_KINDS: &[&str] = &["human", "agent", "script"];
+
+/// The reconciliation artifact is a provider-owned contract rather than a
+/// review-policy subject. Keep one canonical compiled schema so a caller
+/// cannot silently replace the phase contract through `artifact_schemas`.
+fn reconciliation_schema() -> &'static ValidatedSchema {
+    static SCHEMA: OnceLock<ValidatedSchema> = OnceLock::new();
+    SCHEMA.get_or_init(|| {
+        let value: Value = serde_json::from_str(include_str!("../data/reconciliation-schema.json"))
+            .expect("reconciliation schema is valid JSON");
+        validate_schema(&value).expect("reconciliation schema is valid provider schema")
+    })
+}
 
 /// The two review passes used by contract v3.  The value is part of the
 /// frozen policy entry and is also repeated by review evidence.
@@ -182,6 +197,9 @@ impl ValidatedConfig {
     }
 
     pub(crate) fn schema(&self, subject: &str) -> Option<&ValidatedSchema> {
+        if subject == RECONCILIATION_SUBJECT {
+            return Some(reconciliation_schema());
+        }
         self.schemas_by_subject.get(subject)
     }
 
@@ -1268,6 +1286,35 @@ mod tests {
             .iter()
             .map(ConfigViolation::class)
             .collect()
+    }
+
+    #[test]
+    fn reconciliation_schema_is_provider_owned_and_closed() {
+        let config = parse_initial_input(&empty_config()).expect("base config");
+        let schema = config
+            .schema(RECONCILIATION_SUBJECT)
+            .expect("canonical reconciliation schema");
+        let valid = json!({
+            "revision": "r1",
+            "author": {"name": "driver", "kind": "agent"},
+            "mode": "bookends-disabled",
+            "branch": "change-specific-proof",
+            "document_observations": [{"path": "README.md", "status": "unchanged", "observation": "already sufficient"}],
+            "behavior_observations": [{"status": "matches-intent", "observation": "public path matches"}],
+            "action": "no-document-change",
+            "action_reason": "The current document already states the delivered behavior.",
+            "authorization": "not-required",
+            "application": "not-required",
+            "commit": "not-required",
+            "traceability": {"status": "not-applicable", "references": []},
+            "proof_references": ["journey:reconciliation"],
+            "blockers": [],
+            "decision": "complete"
+        });
+        assert!(schema.evaluate(&valid).is_valid());
+        let mut extra = valid;
+        extra["unexpected"] = json!(true);
+        assert!(!schema.evaluate(&extra).is_valid());
     }
 
     #[test]

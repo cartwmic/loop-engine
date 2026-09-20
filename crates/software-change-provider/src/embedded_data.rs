@@ -34,6 +34,10 @@ pub static FILES: &[EmbeddedFile] = &[
         bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/validation-report-schema.json")),
     },
     EmbeddedFile {
+        path: "crates/software-change-provider/data/reconciliation-schema.json",
+        bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/reconciliation-schema.json")),
+    },
+    EmbeddedFile {
         path: "crates/software-change-provider/data/recovery-contract-v2.json",
         bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/recovery-contract-v2.json")),
     },
@@ -143,6 +147,13 @@ pub static FILES: &[EmbeddedFile] = &[
         )),
     },
     EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/companions/fictional-repo/docs/requirement-coverage.md",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/companions/fictional-repo/docs/requirement-coverage.md"
+        )),
+    },
+    EmbeddedFile {
         path: "crates/software-change-provider/data/calibration/fixtures/design-defective.json",
         bytes: include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -198,6 +209,69 @@ pub static FILES: &[EmbeddedFile] = &[
         bytes: include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/data/calibration/fixtures/intent-good.json"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/fixtures/intent-granularity-bundled.json",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/fixtures/intent-granularity-bundled.json"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/fixtures/intent-granularity-fragmented.json",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/fixtures/intent-granularity-fragmented.json"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/fixtures/intent-granularity-good.json",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/fixtures/intent-granularity-good.json"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/fixtures/intent-granularity-impractical.json",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/fixtures/intent-granularity-impractical.json"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/fixtures/intent-owner-good.json",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/fixtures/intent-owner-good.json"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/fixtures/intent-owner-unstated-background.json",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/fixtures/intent-owner-unstated-background.json"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/fixtures/requirement-coverage-implementation-defect.json",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/fixtures/requirement-coverage-implementation-defect.json"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/fixtures/requirement-coverage-related-insufficient.json",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/fixtures/requirement-coverage-related-insufficient.json"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/fixtures/requirement-coverage-sufficient.json",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/fixtures/requirement-coverage-sufficient.json"
         )),
     },
     EmbeddedFile {

@@ -191,23 +191,25 @@ The focused public recovery scenarios are `dispositions`, `steering`, `execution
 
 This amendment applies to new supporting profiles. It replaces only the named clauses below and preserves the dated amendment history. Section 10 remains a separate pending proposal; this amendment does not accept its unrelated clauses or reinterpret existing runs. The new semantic contract is version 3. Existing runs continue with their fixed original runtime and frozen policy.
 
+The exact normative records for the additional software-change outcomes are owned by the engine PRD: `docs/PRD.md#LE-141`, `docs/PRD.md#LE-142`, `docs/PRD.md#LE-143`, and `docs/PRD.md#LE-144`. This section cross-references rather than duplicates those records. In this provider, LE-141 and LE-144 are the two externally judged intent questions; LE-142 is the conditional provider-owned reconciliation/documentation contract; and LE-143 is driver guidance for the owner update, not an engine or provider chat channel. The provider validates policy and evidence shape, state/result shape, and the relevant mode and ordering; external reviewers and the coordinating driver supply semantic judgments, owner decisions, document edits, and Git actions.
+
 ### Review coverage: R2, R9, R12, A3, A6, A13 and A15
 
 Minimal, standard and high-rigor all include ordinary and challenge review at all five phases. The axis sets are:
 
 | Phase | Axes at both ordinary and challenge review |
 |---|---|
-| Intent | solution-agnostic, outside-verifiable, scope-fenced, constraints-are-limits, problem-grounded |
+| Intent | solution-agnostic, outside-verifiable, scope-fenced, constraints-are-limits, problem-grounded, acceptance-granularity, owner-comprehensible |
 | Design | intent-faithful, acceptance-covered, structural-not-procedural, decisions-justified, risk-honest, mechanism-forced |
 | Plan | task-sized, context-sufficient, done-observable, decision-free, design-faithful, dependencies-honest |
 | Implementation | tasks-actually-done, no-scope-creep, design-faithful-final |
 | Validation | intent-delivered, docs-integrated, requirement-proof-mapping |
 
-Minimal requires one independent author covering all axes together. Standard requires two independent authors, each covering all axes together. High requires the same two independent identities to review every axis individually and then each review all axes together on unchanged work before fixes.
+The shipped v11 profiles are `minimal-11`, `standard-11`, and `high-rigor-11`. Minimal requires one independent author covering all axes together. Standard requires two independent authors, each covering all axes together. High requires the same two independent identities to review the five existing intent axes individually and then all intent axes together on unchanged work before fixes; `acceptance-granularity` and `owner-comprehensible` are aggregate-stage intent questions and do not add an individual stage or author floor.
 
-The first high-rigor aggregate reviews use fresh sessions and receive neither author's individual-stage findings or judgments. Inputs and captured outputs make the two stages inspectable. After corrections, affected individual axes receive fresh review, unaffected axes require explicit applicability, and both aggregate authors freshly review all axes.
+The first high-rigor aggregate reviews use fresh sessions and receive neither author's individual-stage findings or judgments. Inputs and captured outputs make the two stages inspectable. After corrections, affected individual axes receive fresh review, unaffected axes require explicit applicability, and both aggregate authors freshly review all axes. The two added intent questions retain ordinary and challenge review while preserving each profile's declared stages and author floors.
 
-Ordinary and challenge remain separate states. Both stages of a high-rigor state are required. Stage-aware evidence cannot be counted toward a different stage. Every assigned axis appears once in its commission; mixed pass/fail results remain valid output. The existing bounded same-worker conformance correction and retained attempts remain in force.
+Ordinary and challenge remain separate states. Both stages of a high-rigor state are required where configured. Stage-aware evidence cannot be counted toward a different stage. Every assigned axis appears once in its commission; mixed pass/fail results remain valid output. The existing bounded same-worker conformance correction and retained attempts remain in force.
 
 Bookends is optional in every shipped profile and is disabled by default. Its existing additional axes apply only when enabled. Shipped profiles remain unbound and contain no prescribed model or machine-local command. Configuration versions change with the shipped contract; old profiles do not silently gain new obligations.
 
@@ -219,7 +221,17 @@ The final criterion and whole-goal author floors are one for minimal and two for
 
 On first high-rigor ordinary validation, the command evidence already exists while prechosen criterion/goal verdict IDs may be unused. Individual-axis workers judge the retained command evidence and fixed index, and return only axis judgments. They do not treat pending IDs as evidence. The aggregate validation commissions alone produce the independent criterion/goal rows under their prechosen IDs. Each aggregate author may return those rows and its own all-axis assessment together. Neither author depends on unpublished peer judgments. Driver triage and append make the real collection available; approval requires complete current criterion/goal and stage coverage. Challenge consumes the completed ordinary collection without recommissioning it. Minimal and standard keep the ordinary combined-output pattern.
 
+Workers run assigned focused checks. The coordinating driver is the designated proof owner for the complete final stable-tree matrix and repeats only checks invalidated by later changes. For new v11 reconciliation runs, the reconciliation state and its document decision precede report finalization, repository checkpoint creation, any configured implementation review, validation, and final proof; edits made by reconciliation therefore cannot be covered by an earlier report or checkpoint. Reviewers consume retained command/outcome evidence rather than rerunning the matrix.
+
 Other final-index, checkpoint, command-freshness, exact-source finding and supplemental-proof obligations remain unchanged. Required evidence cannot be replaced by activity or a report claim.
+
+### Reconciliation and documentation authority: LE-142, R23, R27 and A13
+
+New v11 contract-v3 graphs expose the provider-owned `reconciliation` state after implementation editing and before the final implementation proof boundary. Its unbound `reconciliation-draft` slot authors `reconciliation.json`, and the checked `reconciliation-ready` edge validates the decision. The state does not write implementation or validation reports, checkpoints, or Git commits. It permits a sufficient-existing-wording or change-specific-proof result with no requirement amendment, an implementation-defect result only with a recorded code correction, and a missing-or-changed-enduring-meaning result only with the exact owner-accepted amendment, separately authorized application and commit, and the required updated traceability and proof references. A justified no-document-change result is valid; a blocked result must name concrete blockers.
+
+Bookends-enabled reconciliation reads actual accepted requirement text and every authoritative document it names and applies the live/candidate boundary from the engine PRD. Bookends-disabled reconciliation inspects relevant repository documentation against approved intent and delivered behavior without PRD IDs, Bookends citations, candidate machinery, or overlay obligations. The provider rejects a mode mismatch and rejects PRD/Bookends references on the disabled path. Frozen runs, including v10 profiles and older stored graphs, do not acquire this state or migrate their records.
+
+This state closes repository-document discrepancies; it does not discover semantic authority from an ID, topic, token, parser result, or command exit. The driver or authorized actor performs document edits and Git lifecycle actions, while the provider checks the closed result shape and mode-specific mechanical conditions. The normal compact worker-input path and its observed setup failure remain covered by live LE-127; no separate compact-delivery requirement is inferred without distinct semantics. Owner-facing proactive updates remain the coordinating assistant's active-conversation duty under LE-143, not a provider chat surface.
 
 ### Task coverage: R6, R26 and A13
 

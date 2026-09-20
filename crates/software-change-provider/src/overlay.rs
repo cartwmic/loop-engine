@@ -18,8 +18,18 @@ const NOT_APPLICABLE: &str = "not-applicable";
 const PRD_TRACEABILITY_TYPES: &[&str] = &[LINKED_LIVE, CANDIDATE, NOT_APPLICABLE];
 
 const IDS_GROUNDED_ID: &str = "ids-grounded";
+// These strings are the frozen contract-v10 rubric. Do not strengthen them:
+// old runs must retain the exact live-ID-only question they started with.
 const IDS_GROUNDED_DESCRIPTION: &str = "Linked-live disposition IDs are live PRD IDs relevant to this change. Do not re-judge bookends checker red/green.";
 const IDS_GROUNDED_PROMPT: &str = "Judge ids-grounded only. Confirm every linked-live disposition ID is a live PRD ID relevant to this change. Do not re-judge bookends checker red/green.";
+
+// New profile revisions keep the existing ids-grounded axis, but make its
+// semantic question explicit. This is reviewer guidance, not an automatic
+// semantic matcher: the provider still checks only evidence shape and the
+// mechanical live-ID/candidate rules.
+const SEMANTIC_IDS_GROUNDED_DESCRIPTION: &str = "For each promised enduring outcome, inspect the actual accepted requirement text and every authoritative document it explicitly names. Distinguish sufficient existing wording, missing or changed enduring meaning, and change-specific proof; a related ID, shared topic, or matching token is not semantic coverage. An implementation defect under sufficient wording does not require a new requirement. Do not re-judge Bookends checker red/green.";
+const SEMANTIC_IDS_GROUNDED_PROMPT: &str = "Judge ids-grounded only. Confirm each promised enduring outcome is checked against the actual accepted requirement text and every authoritative document it explicitly names. Distinguish sufficient existing wording, missing or changed enduring meaning, and change-specific proof. A live or related ID, shared topic, or matching token is not semantic coverage; an implementation defect under sufficient wording does not require a new requirement. Candidates remain provisional until exact owner acceptance and separately authorized application and commit. Do not re-judge Bookends checker red/green.";
+const SEMANTIC_IDS_GROUNDED_CHALLENGE_PROMPT: &str = "Falsify ids-grounded only. Attack the ordinary ids-grounded pass by finding a promised enduring outcome whose cited requirement text or explicit cross-reference does not demand it, or by showing that a sufficient requirement is being misclassified as missing when supplied evidence instead shows an implementation defect. A related ID, shared topic, matching token, candidate flag, or parser success cannot establish semantic coverage. Do not re-judge Bookends checker red/green.";
 
 const BYPASS_NOT_GREEN_ID: &str = "bypass-not-green";
 const BYPASS_NOT_GREEN_DESCRIPTION: &str = "The validation report does not present an in-process bookends Red or other non-Green result as a green check or as validation passed. A repository pre-push or CI bypass is not a green check.";
@@ -46,6 +56,30 @@ pub(crate) fn enabled(initial_input: &Value) -> bool {
         == Some(&Value::Bool(true))
 }
 
+/// Whether a new Bookends-enabled profile uses the semantic ids-grounded
+/// handoff. Profile versioning is the run boundary: `*-10` is frozen, while
+/// `*-11` and later revisions opt in. The explicit extra flag is useful for
+/// a caller-owned profile that is new but does not use a shipped name.
+pub(crate) fn semantic_coverage_enabled(initial_input: &Value) -> bool {
+    if !enabled(initial_input) {
+        return false;
+    }
+    let explicit = initial_input
+        .get("extra")
+        .and_then(Value::as_object)
+        .and_then(|extra| extra.get("bookends"))
+        .and_then(Value::as_object)
+        .and_then(|bookends| bookends.get("semantic_coverage"))
+        == Some(&Value::Bool(true));
+    let versioned = initial_input
+        .get("config_version")
+        .and_then(Value::as_str)
+        .and_then(|version| version.rsplit_once('-'))
+        .and_then(|(_, suffix)| suffix.parse::<u64>().ok())
+        .is_some_and(|version| version >= 11);
+    explicit || versioned
+}
+
 /// Clone `initial_input` and inject overlay schema fields and review axes.
 pub(crate) fn apply(initial_input: &Value) -> Value {
     let mut overlayed = initial_input.clone();
@@ -64,6 +98,7 @@ pub(crate) fn apply(initial_input: &Value) -> Value {
         inject_axes(
             policies,
             initial_input["contract_version"].as_u64() == Some(3),
+            semantic_coverage_enabled(initial_input),
         );
     }
     overlayed
@@ -86,6 +121,18 @@ pub(crate) fn is_requirement_id(value: &str) -> bool {
 pub(crate) fn intent_overlay_violations(
     intent: &Value,
     live_ids: &[String],
+) -> Vec<OverlayViolation> {
+    intent_overlay_violations_for_profile(intent, live_ids, false)
+}
+
+/// Validate traceability for a profile revision. The semantic profile adds
+/// only a mechanical minimum for proposed records: parser-valid metadata is
+/// not enough to carry a proposed obligation. It does not decide whether the
+/// prose is substantively correct; that remains an external review decision.
+pub(crate) fn intent_overlay_violations_for_profile(
+    intent: &Value,
+    live_ids: &[String],
+    semantic_coverage: bool,
 ) -> Vec<OverlayViolation> {
     let Some(criteria) = intent.get("acceptance").and_then(Value::as_array) else {
         return Vec::new();
@@ -155,7 +202,13 @@ pub(crate) fn intent_overlay_violations(
                     &["proposed_id", "record_markdown"],
                     &mut violations,
                 );
-                validate_candidate_disposition(disposition, &path, live_ids, &mut violations);
+                validate_candidate_disposition(
+                    disposition,
+                    &path,
+                    live_ids,
+                    semantic_coverage,
+                    &mut violations,
+                );
             }
             NOT_APPLICABLE => {
                 require_fields(
@@ -291,6 +344,7 @@ fn validate_candidate_disposition(
     disposition: &Map<String, Value>,
     path: &str,
     live_ids: &[String],
+    semantic_coverage: bool,
     violations: &mut Vec<OverlayViolation>,
 ) {
     let proposed = disposition.get("proposed_id").and_then(Value::as_str);
@@ -343,6 +397,40 @@ fn validate_candidate_disposition(
             message: format!("proposed_id must equal parser-extracted candidate ID `{parsed_id}`"),
         });
     }
+    if semantic_coverage && !has_substantive_candidate_body(markdown) {
+        violations.push(OverlayViolation {
+            path: format!("{path}/record_markdown"),
+            rule: "candidate-substance".to_owned(),
+            message: "new semantic-coverage profiles require proposed normative or explanatory text after the parser metadata; a title, Status, and Coverage alone is not a requirement proposal".to_owned(),
+        });
+    }
+}
+
+fn has_substantive_candidate_body(markdown: &str) -> bool {
+    let mut in_record = false;
+    markdown.lines().any(|line| {
+        let line = line.trim();
+        if line.starts_with("### ") {
+            in_record = true;
+            return false;
+        }
+        if !in_record
+            || line.is_empty()
+            || [
+                "- Status:",
+                "- Coverage:",
+                "- Owner acceptance:",
+                "- Application:",
+                "- Commit:",
+                "- Traceability:",
+            ]
+            .iter()
+            .any(|prefix| line.starts_with(prefix))
+        {
+            return false;
+        }
+        true
+    })
 }
 
 fn sort_overlay_violations(violations: &mut [OverlayViolation]) {
@@ -422,7 +510,7 @@ fn prd_traceability_schema() -> Value {
     })
 }
 
-fn inject_axes(policies: &mut Map<String, Value>, contract_v3: bool) {
+fn inject_axes(policies: &mut Map<String, Value>, contract_v3: bool, semantic_coverage: bool) {
     let gates: Vec<String> = policies.keys().cloned().collect();
     for gate in gates {
         let Some(axes) = policies.get_mut(&gate).and_then(Value::as_array_mut) else {
@@ -451,11 +539,21 @@ fn inject_axes(policies: &mut Map<String, Value>, contract_v3: bool) {
             BTreeMap::from([("aggregate".to_owned(), 1)])
         };
         for (stage, required_authors) in stages {
+            let (ids_description, ids_prompt) = if semantic_coverage {
+                let prompt = if gate.ends_with("-adversarial-review") {
+                    SEMANTIC_IDS_GROUNDED_CHALLENGE_PROMPT
+                } else {
+                    SEMANTIC_IDS_GROUNDED_PROMPT
+                };
+                (SEMANTIC_IDS_GROUNDED_DESCRIPTION, prompt)
+            } else {
+                (IDS_GROUNDED_DESCRIPTION, IDS_GROUNDED_PROMPT)
+            };
             push_axis_if_absent(
                 axes,
                 IDS_GROUNDED_ID,
-                IDS_GROUNDED_DESCRIPTION,
-                IDS_GROUNDED_PROMPT,
+                ids_description,
+                ids_prompt,
                 contract_v3.then_some(stage.as_str()),
                 required_authors,
             );
@@ -622,6 +720,93 @@ mod tests {
         let adversarial = axis_ids(policies, "validation-adversarial-review");
         assert!(adversarial.contains(&"ids-grounded"));
         assert!(adversarial.contains(&"bypass-not-green"));
+    }
+
+    #[test]
+    fn semantic_coverage_is_opt_in_and_preserves_frozen_ids_rubric() {
+        let base = json!({
+            "contract_version": 3,
+            "config_version": "high-rigor-10",
+            "extra": {"bookends": {"enabled": true}},
+            "review_policies": {
+                "intent-review": [{"id": "ordinary", "description": "ordinary"}],
+                "intent-adversarial-review": [{"id": "ordinary", "description": "ordinary"}]
+            }
+        });
+        assert!(!semantic_coverage_enabled(&base));
+        let old = apply(&base);
+        let old_axis = &old["review_policies"]["intent-review"][1];
+        assert_eq!(old_axis["id"], IDS_GROUNDED_ID);
+        assert_eq!(old_axis["example_prompt"], IDS_GROUNDED_PROMPT);
+
+        let mut next = base.clone();
+        next["config_version"] = json!("high-rigor-11");
+        assert!(semantic_coverage_enabled(&next));
+        let next_overlay = apply(&next);
+        let next_axis = &next_overlay["review_policies"]["intent-review"][1];
+        assert_eq!(next_axis["id"], IDS_GROUNDED_ID);
+        assert!(next_axis["example_prompt"]
+            .as_str()
+            .expect("semantic prompt")
+            .contains("actual accepted requirement text"));
+        assert!(next_axis["example_prompt"]
+            .as_str()
+            .expect("semantic prompt")
+            .contains("explicitly names"));
+        assert!(next_axis["example_prompt"]
+            .as_str()
+            .expect("semantic prompt")
+            .contains("implementation defect"));
+        assert_eq!(
+            next_overlay["review_policies"]["intent-review"]
+                .as_array()
+                .unwrap()
+                .len(),
+            old["review_policies"]["intent-review"]
+                .as_array()
+                .unwrap()
+                .len()
+        );
+        assert!(
+            next_overlay["review_policies"]["intent-adversarial-review"][1]["example_prompt"]
+                .as_str()
+                .expect("challenge prompt")
+                .starts_with("Falsify ids-grounded only")
+        );
+    }
+
+    #[test]
+    fn semantic_candidate_check_rejects_metadata_only_but_keeps_pending_candidate() {
+        let metadata_only = json!({
+            "acceptance": [{
+                "id": "AC-1",
+                "statement": "A proposed enduring outcome.",
+                "prd_traceability": {
+                    "type": "candidate",
+                    "proposed_id": "LE-9",
+                    "record_markdown": "### LE-9: Proposed\n- Status: live\n- Coverage: e2e/journey\n"
+                }
+            }]
+        });
+        let rules = intent_overlay_violations_for_profile(&metadata_only, &[], true)
+            .into_iter()
+            .map(|violation| violation.rule)
+            .collect::<Vec<_>>();
+        assert!(rules.contains(&"candidate-substance".to_owned()));
+        assert!(has_candidate(&metadata_only));
+
+        let substantive = json!({
+            "acceptance": [{
+                "id": "AC-1",
+                "statement": "A proposed enduring outcome.",
+                "prd_traceability": {
+                    "type": "candidate",
+                    "proposed_id": "LE-9",
+                    "record_markdown": "### LE-9: Proposed\n- Status: live\n- Coverage: e2e/journey\n\nThe provider must inspect the authoritative requirement text before treating this outcome as covered.\n"
+                }
+            }]
+        });
+        assert!(intent_overlay_violations_for_profile(&substantive, &[], true).is_empty());
     }
 
     #[test]

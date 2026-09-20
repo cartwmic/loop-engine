@@ -27,12 +27,14 @@ const SCHEMA_DENY_CODE: &str = "software-change-schema-invalid";
 const EVIDENCE_DENY_CODE: &str = "software-change-review-incomplete";
 const FINDING_LEDGER_DENY_CODE: &str = "software-change-finding-ledger-invalid";
 const CHECKPOINT_DENY_CODE: &str = "software-change-checkpoint-invalid";
+const RECONCILIATION_DENY_CODE: &str = "software-change-reconciliation-blocked";
 const BOOKENDS_RED_DENY_CODE: &str = "software-change-bookends-red";
 const BOOKENDS_CANDIDATE_DENY_CODE: &str = "software-change-bookends-candidate";
 const SCHEMA_DENY_MESSAGE: &str = "not judged: fix shape first";
 const EVIDENCE_DENY_MESSAGE: &str = "review evidence incomplete";
 const FINDING_LEDGER_DENY_MESSAGE: &str = "finding ledger missing or malformed";
 const CHECKPOINT_DENY_MESSAGE: &str = "repository checkpoint missing or stale";
+const RECONCILIATION_DENY_MESSAGE: &str = "reconciliation result blocks progression";
 const BOOKENDS_RED_DENY_MESSAGE: &str = "in-process bookends check is red";
 const BOOKENDS_CANDIDATE_DENY_MESSAGE: &str =
     "provisional Bookends candidate blocks Bookends-enabled final completion";
@@ -58,6 +60,7 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
     // deliberately untouched by parse_initial_input. Overlay injection is
     // evaluate-time only and does not mutate the frozen initial_input.
     let overlay_on = overlay::enabled(&request.initial_input);
+    let semantic_coverage = overlay::semantic_coverage_enabled(&request.initial_input);
     let initial_input = if overlay_on {
         overlay::apply(&request.initial_input)
     } else {
@@ -79,10 +82,14 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
     };
 
     // Check-free edges are listed for complete compatibility but the provider
-    // is not normally invoked for them.  They have no subject or obligations,
-    // so they take the same zero-obligation result path.
-    let TransitionDuties::Checked { subject, gate } = duties else {
-        return EvaluationOutcome::Response(allow_response());
+    // is not normally invoked for them. The v3 implementation handoff is a
+    // checked engine boundary with no artifact prerequisite; reconciliation
+    // owns the first post-edit result.
+    let (subject, gate) = match duties {
+        TransitionDuties::Checked { subject, gate } => (subject, gate),
+        TransitionDuties::CheckedNoArtifact | TransitionDuties::CheckFree => {
+            return EvaluationOutcome::Response(allow_response())
+        }
     };
 
     let bookends_report = if overlay_on {
@@ -191,6 +198,25 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
         }
     }
 
+    if subject == crate::workflow::RECONCILIATION_SUBJECT {
+        if let Some(document) = document.as_ref() {
+            if let Err(response) = evaluate_reconciliation_result(
+                request,
+                document.value(),
+                bookends_report
+                    .as_ref()
+                    .map(|report| report.live_ids.as_slice()),
+                Some(if overlay_on {
+                    "bookends-enabled"
+                } else {
+                    "bookends-disabled"
+                }),
+            ) {
+                return EvaluationOutcome::Response(response);
+            }
+        }
+    }
+
     if let Some(document) = document.as_ref() {
         match check_criterion_rules(&config, subject, document, config.contract_version() == 3) {
             Ok(violations) if !violations.is_empty() => {
@@ -240,12 +266,13 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
         };
         let mut overlay_violations = Vec::new();
         if let Some(intent) = current_intent.as_ref() {
-            overlay_violations.extend(overlay::intent_overlay_violations(
+            overlay_violations.extend(overlay::intent_overlay_violations_for_profile(
                 intent.value(),
                 &bookends_report
                     .as_ref()
                     .expect("overlay-on loads the checker")
                     .live_ids,
+                semantic_coverage,
             ));
         }
         if !overlay_violations.is_empty() {
@@ -310,6 +337,14 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
                 .as_ref()
                 .expect("overlay-on loads the checker"),
         ));
+    }
+    if subject == crate::workflow::RECONCILIATION_SUBJECT
+        && request.transition.event.as_str() == crate::workflow::RECONCILIATION_READY_EVENT
+        && request.transition.target.as_str() == "validation"
+    {
+        if let Err(error) = verify_post_reconciliation_checkpoint(&config, request) {
+            return EvaluationOutcome::Response(checkpoint_deny(request, error));
+        }
     }
     if overlay_candidate_blocks {
         return EvaluationOutcome::Response(bookends_candidate_deny(request));
@@ -536,6 +571,356 @@ fn checkpoint_deny(request: &EvaluateRequest, diagnostic: String) -> Value {
     )
 }
 
+fn evaluate_reconciliation_result(
+    request: &EvaluateRequest,
+    value: &Value,
+    live_ids: Option<&[String]>,
+    expected_mode: Option<&str>,
+) -> Result<(), Value> {
+    let decision = value
+        .get("decision")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let blockers = value
+        .get("blockers")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or_default();
+
+    if decision == "blocked" {
+        if blockers == 0 {
+            return Err(reconciliation_deny(
+                request,
+                "a blocked reconciliation must name at least one concrete blocker".to_owned(),
+            ));
+        }
+        return Err(reconciliation_deny(
+            request,
+            "reconciliation decision is blocked".to_owned(),
+        ));
+    }
+    if decision != "complete" {
+        return Err(reconciliation_deny(
+            request,
+            "reconciliation decision must be complete or blocked".to_owned(),
+        ));
+    }
+    if blockers != 0 {
+        return Err(reconciliation_deny(
+            request,
+            "a complete reconciliation cannot retain blockers".to_owned(),
+        ));
+    }
+
+    let branch = value
+        .get("branch")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let mode = value.get("mode").and_then(Value::as_str);
+    if !matches!(mode, Some("bookends-enabled") | Some("bookends-disabled")) {
+        return Err(reconciliation_deny(
+            request,
+            "reconciliation mode must be bookends-enabled or bookends-disabled".to_owned(),
+        ));
+    }
+    if let Some(expected_mode) = expected_mode {
+        if mode != Some(expected_mode) {
+            return Err(reconciliation_deny(
+                request,
+                format!(
+                    "reconciliation mode `{}` does not match the active `{expected_mode}` path",
+                    mode.unwrap_or("missing")
+                ),
+            ));
+        }
+    }
+    let authorization = value.get("authorization").and_then(Value::as_str);
+    let application = value.get("application").and_then(Value::as_str);
+    let commit = value.get("commit").and_then(Value::as_str);
+    let action = value.get("action").and_then(Value::as_str);
+    let traceability = value.get("traceability");
+    let traceability_status = traceability
+        .and_then(|traceability| traceability.get("status"))
+        .and_then(Value::as_str);
+    let traceability_references = traceability
+        .and_then(|traceability| traceability.get("references"))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let proof_references = value
+        .get("proof_references")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let bookends_enabled = mode == Some("bookends-enabled");
+
+    if !bookends_enabled
+        && traceability_references
+            .iter()
+            .chain(proof_references.iter())
+            .filter_map(Value::as_str)
+            .any(is_bookends_reference)
+    {
+        return Err(reconciliation_deny(
+            request,
+            "Bookends-disabled reconciliation must not carry PRD IDs or Bookends citations"
+                .to_owned(),
+        ));
+    }
+    if bookends_enabled
+        && proof_references
+            .iter()
+            .filter_map(Value::as_str)
+            .any(is_bookends_reference)
+    {
+        validate_live_references(request, proof_references, live_ids)?;
+    }
+
+    let has_document_update = value
+        .get("document_observations")
+        .and_then(Value::as_array)
+        .is_some_and(|observations| {
+            observations.iter().any(|observation| {
+                matches!(
+                    observation.get("status").and_then(Value::as_str),
+                    Some("updated")
+                )
+            })
+        });
+    let has_corrected_behavior = value
+        .get("behavior_observations")
+        .and_then(Value::as_array)
+        .is_some_and(|observations| {
+            observations.iter().any(|observation| {
+                observation.get("status").and_then(Value::as_str) == Some("corrected")
+            })
+        });
+
+    match branch {
+        "sufficient-existing-wording" => {
+            if !matches!(action, Some("none") | Some("no-document-change"))
+                || has_document_update
+                || authorization != Some("not-required")
+                || application != Some("not-required")
+                || commit != Some("not-required")
+            {
+                return Err(reconciliation_deny(
+                    request,
+                    "sufficient wording requires no document edit and no requirement-amendment statuses".to_owned(),
+                ));
+            }
+            if bookends_enabled {
+                require_live_traceability(
+                    request,
+                    traceability_status,
+                    traceability_references,
+                    live_ids,
+                )?;
+            }
+        }
+        "change-specific-proof" => {
+            if !matches!(action, Some("none") | Some("no-document-change"))
+                || has_document_update
+                || authorization != Some("not-required")
+                || application != Some("not-required")
+                || commit != Some("not-required")
+            {
+                return Err(reconciliation_deny(
+                    request,
+                    "change-specific proof requires no document edit and no requirement-amendment statuses".to_owned(),
+                ));
+            }
+            if bookends_enabled {
+                allow_change_specific_traceability(
+                    request,
+                    traceability_status,
+                    traceability_references,
+                    live_ids,
+                )?;
+            }
+        }
+        "implementation-defect" => {
+            if action != Some("implementation-correction")
+                || !has_corrected_behavior
+                || authorization != Some("not-required")
+                || application != Some("not-required")
+                || commit != Some("not-required")
+            {
+                return Err(reconciliation_deny(
+                    request,
+                    "an implementation-defect reclassification must record an implementation correction, a corrected behavior observation, and no requirement-amendment statuses".to_owned(),
+                ));
+            }
+            if bookends_enabled && !traceability_references.is_empty() {
+                validate_live_references(request, traceability_references, live_ids)?;
+            }
+        }
+        "missing-or-changed-enduring-meaning" => {
+            if authorization != Some("accepted")
+                || application != Some("applied")
+                || commit != Some("committed")
+                || !has_document_update
+            {
+                return Err(reconciliation_deny(
+                    request,
+                    "missing or changed enduring meaning requires exact owner acceptance, an applied document edit, a committed change, and an updated document observation".to_owned(),
+                ));
+            }
+            if bookends_enabled {
+                if action != Some("amendment-application") {
+                    return Err(reconciliation_deny(
+                        request,
+                        "Bookends-enabled requirement changes must use the amendment-application action".to_owned(),
+                    ));
+                }
+                require_live_traceability(
+                    request,
+                    traceability_status,
+                    traceability_references,
+                    live_ids,
+                )?;
+            } else if action != Some("document-edit")
+                || traceability_status != Some("not-applicable")
+                || !traceability_references.is_empty()
+            {
+                return Err(reconciliation_deny(
+                    request,
+                    "Bookends-disabled document changes must use document-edit and carry no PRD traceability".to_owned(),
+                ));
+            }
+        }
+        _ => {
+            return Err(reconciliation_deny(
+                request,
+                "reconciliation branch is not recognized".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn is_bookends_reference(reference: &str) -> bool {
+    reference.starts_with("LE-") || reference.starts_with("bookends:")
+}
+
+fn validate_live_references(
+    request: &EvaluateRequest,
+    references: &[Value],
+    live_ids: Option<&[String]>,
+) -> Result<(), Value> {
+    let mut has_live_requirement = false;
+    for reference in references.iter().filter_map(Value::as_str) {
+        if !is_bookends_reference(reference) {
+            continue;
+        }
+        let Some(id) = normalized_requirement_id(reference) else {
+            return Err(reconciliation_deny(
+                request,
+                format!("traceability reference `{reference}` is not a valid PRD citation"),
+            ));
+        };
+        if let Some(live_ids) = live_ids {
+            if !live_ids.iter().any(|live_id| live_id == id) {
+                return Err(reconciliation_deny(
+                    request,
+                    format!("traceability reference `{reference}` is provisional or not live"),
+                ));
+            }
+        }
+        has_live_requirement = true;
+    }
+    if !has_live_requirement {
+        return Err(reconciliation_deny(
+            request,
+            "Bookends-enabled completion must retain at least one live PRD ID in traceability"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn normalized_requirement_id(reference: &str) -> Option<&str> {
+    if let Some(id) = reference.strip_prefix("bookends:") {
+        return id
+            .strip_prefix("LE-")
+            .filter(|suffix| valid_requirement_number(suffix))
+            .map(|_| &reference["bookends:".len()..]);
+    }
+    if let Some(id) = reference.strip_prefix("LE-") {
+        return valid_requirement_number(id).then_some(reference);
+    }
+    None
+}
+
+fn valid_requirement_number(value: &str) -> bool {
+    let mut characters = value.chars();
+    matches!(characters.next(), Some(first) if first.is_ascii_digit() && first != '0')
+        && characters.all(|character| character.is_ascii_digit())
+}
+
+fn require_live_traceability(
+    request: &EvaluateRequest,
+    status: Option<&str>,
+    references: &[Value],
+    live_ids: Option<&[String]>,
+) -> Result<(), Value> {
+    if !matches!(status, Some("retained") | Some("updated")) {
+        return Err(reconciliation_deny(
+            request,
+            "Bookends-enabled completion must retain or update live traceability".to_owned(),
+        ));
+    }
+    validate_live_references(request, references, live_ids)
+}
+
+fn allow_change_specific_traceability(
+    request: &EvaluateRequest,
+    status: Option<&str>,
+    references: &[Value],
+    live_ids: Option<&[String]>,
+) -> Result<(), Value> {
+    if status == Some("not-applicable") && references.is_empty() {
+        return Ok(());
+    }
+    if matches!(status, Some("retained") | Some("updated")) {
+        return validate_live_references(request, references, live_ids);
+    }
+    Err(reconciliation_deny(
+        request,
+        "change-specific proof must have no PRD traceability or retain only live traceability"
+            .to_owned(),
+    ))
+}
+
+fn verify_post_reconciliation_checkpoint(
+    config: &crate::config::ValidatedConfig,
+    _request: &EvaluateRequest,
+) -> Result<(), String> {
+    let Some(root) = config.artifact_root().and_then(Value::as_str) else {
+        return Err(
+            "artifact_root is required before reconciliation can enter validation".to_owned(),
+        );
+    };
+    let root = std::path::Path::new(root);
+    checkpoint::verify_from_cwd(checkpoint::CheckpointPhase::Implementation, root)?;
+    // Reviewless v3 graphs skip the implementation-report transition that used
+    // to record accepted implementation proof. Preserve that proof boundary
+    // without making reconciliation write or replace the checkpoint itself.
+    checkpoint::record_accepted_implementation_from_cwd(root)
+}
+
+fn reconciliation_deny(request: &EvaluateRequest, diagnostic: String) -> Value {
+    deny_response(
+        RECONCILIATION_DENY_CODE,
+        RECONCILIATION_DENY_MESSAGE,
+        Some(json!({
+            "phase": "reconciliation",
+            "diagnostic": diagnostic,
+            "prior_denials": prior_denials(request),
+        })),
+    )
+}
+
 fn load_bookends_report() -> Result<bookends_check::CheckReport, String> {
     let cwd = std::env::current_dir()
         .map_err(|error| format!("cannot read evaluate process cwd: {error}"))?;
@@ -634,9 +1019,16 @@ fn duties_for_snapshotted_transition(request: &EvaluateRequest) -> Option<Transi
     if !in_snapshot {
         return None;
     }
-    let duties = workflow::duties_for(transition.source.as_str(), transition.event.as_str())?;
+    let duties = workflow::duties_for_transition(
+        transition.source.as_str(),
+        transition.event.as_str(),
+        transition.target.as_str(),
+    )?;
     match (duties, transition.kind) {
-        (TransitionDuties::Checked { .. }, TransitionKind::Checked)
+        (
+            TransitionDuties::Checked { .. } | TransitionDuties::CheckedNoArtifact,
+            TransitionKind::Checked,
+        )
         | (TransitionDuties::CheckFree, TransitionKind::CheckFree) => Some(duties),
         _ => None,
     }
@@ -750,6 +1142,132 @@ mod tests {
     }
 
     #[test]
+    fn reconciliation_result_branches_require_honest_completion_status() {
+        let workflow = workflow::describe_workflow(Some(&json!({
+            "contract_version": 3,
+            "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+            "config_version": "test-v3",
+            "review_policies": {}
+        })))
+        .expect("v3 workflow");
+        let edge = workflow
+            .transitions
+            .iter()
+            .find(|edge| {
+                edge.source.as_str() == workflow::RECONCILIATION_STATE
+                    && edge.event.as_str() == workflow::RECONCILIATION_READY_EVENT
+            })
+            .expect("reconciliation edge")
+            .clone();
+        let request = request(workflow, edge);
+
+        let mut blocked = json!({
+            "decision": "blocked",
+            "blockers": ["owner authorization is missing"]
+        });
+        let response = evaluate_reconciliation_result(&request, &blocked, None, None)
+            .expect_err("blocked result must deny progression");
+        assert_eq!(response["feedback"]["code"], RECONCILIATION_DENY_CODE);
+
+        blocked["decision"] = json!("complete");
+        assert!(evaluate_reconciliation_result(&request, &blocked, None, None).is_err());
+
+        let unchanged = json!({
+            "mode": "bookends-disabled",
+            "decision": "complete",
+            "blockers": [],
+            "branch": "sufficient-existing-wording",
+            "document_observations": [{"path": "README.md", "status": "sufficient", "observation": "already states the behavior"}],
+            "behavior_observations": [{"status": "matches-intent", "observation": "public result matches"}],
+            "action": "no-document-change",
+            "authorization": "not-required",
+            "application": "not-required",
+            "commit": "not-required",
+            "traceability": {"status": "not-applicable", "references": []},
+            "proof_references": ["journey:reconciliation"],
+        });
+        assert!(evaluate_reconciliation_result(&request, &unchanged, None, None).is_ok());
+
+        let mut change_specific = unchanged.clone();
+        change_specific["mode"] = json!("bookends-enabled");
+        change_specific["branch"] = json!("change-specific-proof");
+        assert!(evaluate_reconciliation_result(&request, &change_specific, None, None).is_ok());
+
+        let missing = json!({
+            "mode": "bookends-enabled",
+            "decision": "complete",
+            "blockers": [],
+            "branch": "missing-or-changed-enduring-meaning",
+            "document_observations": [{"path": "docs/PRD.md", "status": "updated", "observation": "accepted wording is now committed"}],
+            "behavior_observations": [{"status": "matches-intent", "observation": "public proof matches"}],
+            "action": "amendment-application",
+            "authorization": "accepted",
+            "application": "applied",
+            "commit": "pending",
+            "traceability": {"status": "updated", "references": ["bookends:LE-142"]},
+            "proof_references": ["journey:reconciliation"],
+        });
+        assert!(evaluate_reconciliation_result(&request, &missing, None, None).is_err());
+
+        let corrected = json!({
+            "mode": "bookends-enabled",
+            "decision": "complete",
+            "blockers": [],
+            "branch": "implementation-defect",
+            "document_observations": [{"path": "docs/PRD.md", "status": "sufficient", "observation": "existing wording is enough"}],
+            "behavior_observations": [{"status": "corrected", "observation": "completed output now reports the accepted result"}],
+            "action": "implementation-correction",
+            "authorization": "not-required",
+            "application": "not-required",
+            "commit": "not-required",
+            "traceability": {"status": "retained", "references": ["bookends:LE-1"]},
+            "proof_references": ["journey:reconciliation"],
+        });
+        assert!(evaluate_reconciliation_result(&request, &corrected, None, None).is_ok());
+
+        let amended = json!({
+            "mode": "bookends-enabled",
+            "decision": "complete",
+            "blockers": [],
+            "branch": "missing-or-changed-enduring-meaning",
+            "document_observations": [{"path": "docs/PRD.md", "status": "updated", "observation": "accepted wording is now committed"}],
+            "behavior_observations": [{"status": "matches-intent", "observation": "public proof matches"}],
+            "action": "amendment-application",
+            "authorization": "accepted",
+            "application": "applied",
+            "commit": "committed",
+            "traceability": {"status": "updated", "references": ["bookends:LE-142"]},
+            "proof_references": ["journey:reconciliation"],
+        });
+        assert!(evaluate_reconciliation_result(&request, &amended, None, None).is_ok());
+        assert!(evaluate_reconciliation_result(
+            &request,
+            &amended,
+            Some(&["LE-1".to_owned()]),
+            None
+        )
+        .is_err());
+
+        let off_with_prd_reference = json!({
+            "mode": "bookends-disabled",
+            "decision": "complete",
+            "blockers": [],
+            "branch": "change-specific-proof",
+            "document_observations": [{"path": "README.md", "status": "sufficient", "observation": "already states the behavior"}],
+            "behavior_observations": [{"status": "change-specific", "observation": "only this change needs the proof"}],
+            "action": "no-document-change",
+            "authorization": "not-required",
+            "application": "not-required",
+            "commit": "not-required",
+            "traceability": {"status": "retained", "references": []},
+            "proof_references": ["bookends:LE-142"],
+        });
+        assert!(
+            evaluate_reconciliation_result(&request, &off_with_prd_reference, None, None).is_err()
+        );
+    }
+
+    #[test]
     fn union_transitions_match_phase_table_duties() {
         let workflow = workflow::software_change_workflow();
         for edge in workflow.transitions.clone() {
@@ -757,7 +1275,10 @@ mod tests {
                 duties_for_snapshotted_transition(&request(workflow.clone(), edge.clone()))
                     .unwrap_or_else(|| panic!("missing duties for {edge:?}"));
             match (duties, edge.kind) {
-                (TransitionDuties::Checked { .. }, TransitionKind::Checked)
+                (
+                    TransitionDuties::Checked { .. } | TransitionDuties::CheckedNoArtifact,
+                    TransitionKind::Checked,
+                )
                 | (TransitionDuties::CheckFree, TransitionKind::CheckFree) => {}
                 _ => panic!("kind mismatch for {edge:?}"),
             }
@@ -833,7 +1354,10 @@ mod tests {
                 .unwrap_or_else(|| panic!("phase table missing {edge:?}"));
             assert_eq!(duties, expected, "{edge:?}");
             match (duties, edge.kind) {
-                (TransitionDuties::Checked { .. }, TransitionKind::Checked)
+                (
+                    TransitionDuties::Checked { .. } | TransitionDuties::CheckedNoArtifact,
+                    TransitionKind::Checked,
+                )
                 | (TransitionDuties::CheckFree, TransitionKind::CheckFree) => {}
                 _ => panic!("kind mismatch for {edge:?}"),
             }

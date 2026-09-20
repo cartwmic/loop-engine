@@ -24,6 +24,8 @@ struct State {
     last_started: f64,
     digest: String,
     previous: Option<Value>,
+    #[serde(default)]
+    source_locators: Vec<String>,
 }
 struct Active {
     child: Child,
@@ -142,7 +144,38 @@ impl Summary {
         })
     }
     fn status(&self, status: &str, detail: Value, digest: &str) -> Value {
-        json!({"source":"advisory-summary","status":status,"detail":detail,"attempted_calls":self.state.attempted_calls,"max_calls":self.config.max_calls,"evidence_digest":digest,"previous_summary":self.state.previous,"previous_summary_label":if self.state.previous.as_ref().is_some_and(|p|p["evidence_digest"]==digest)&&status!="summary-failed" {"current advisory; truth unverified"}else{"older advisory; truth unverified"},"usage_cost":"only reported values in retained output; otherwise unknown"})
+        let attempt_directory = if self.state.attempted_calls == 0 {
+            Value::Null
+        } else {
+            json!(self
+                .root
+                .join(format!("attempt-{:04}", self.state.attempted_calls)))
+        };
+        json!({
+            "source":"advisory-summary",
+            "status":status,
+            "detail":detail,
+            "attempted_calls":self.state.attempted_calls,
+            "max_calls":self.config.max_calls,
+            "evidence_digest":digest,
+            "evidence": {
+                "state": if self.state.source_locators.is_empty() { "unknown" } else { "selected" },
+                "source_locators": self.state.source_locators,
+                "attempt_directory": attempt_directory,
+                "input_digest": digest
+            },
+            "freshness": {
+                "state": if self.state.digest == digest { "current-input" } else { "changed-since-last-attempt" },
+                "meaning": "advisory input freshness only; it is not semantic acceptance"
+            },
+            "uncertainty": {
+                "state":"present",
+                "reasons":["advisory prose is fallible", "deterministic workflow and acceptance remain independent"]
+            },
+            "previous_summary":self.state.previous,
+            "previous_summary_label":if self.state.previous.as_ref().is_some_and(|p|p["evidence_digest"]==digest)&&status!="summary-failed" {"current advisory; truth unverified"}else{"older advisory; truth unverified"},
+            "usage_cost":"only reported values in retained output; otherwise unknown"
+        })
     }
     pub fn tick(&mut self, packets: &[Value]) -> Result<Value, String> {
         let mut evidence = json!(packets);
@@ -151,6 +184,10 @@ impl Summary {
             "sha256:{:x}",
             Sha256::digest(serde_json::to_vec(&evidence).unwrap())
         );
+        self.state.source_locators = packets
+            .iter()
+            .filter_map(|packet| packet["source"].as_str().map(str::to_owned))
+            .collect();
         if let Some(mut a) = self.active.take() {
             let mut exit = a.child.try_wait().map_err(|e| e.to_string())?;
             let timeout =

@@ -5,13 +5,22 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
+use super::bounded_process::CommandExt;
 use super::support;
 
 const PROFILES: &[&str] = &["minimal", "standard", "high-rigor"];
 const CURRENT_INVOCATION: &str = "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.";
 const PENDING_INVOCATION: &str = "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.";
 const NEUTRAL_REVISION: &str = "r15";
-const EXPECTED_AXIS_KEYS: usize = 184;
+const HISTORICAL_CONFIG_SUFFIX: &str = "-10";
+const CURRENT_CONFIG_SUFFIX: &str = "-11";
+const HISTORICAL_ROW_COUNT: usize = 368;
+const CURRENT_ROW_COUNT: usize = 396;
+const HISTORICAL_AXIS_KEYS: usize = 184;
+const CURRENT_AXIS_KEYS: usize = 196;
+const EXPECTED_AXIS_KEYS: usize = HISTORICAL_AXIS_KEYS + CURRENT_AXIS_KEYS;
+const HISTORICAL_MANIFEST_CANONICAL_SHA256: &str =
+    "33abfe998f3b1c75d6d27cc01da308e722238ee8e822a7a2e64023876a69168a";
 const IMPLEMENTATION_COMPANION_LABEL: &str =
     "companion:fictional-repo/implementation-evidence/repository-state.txt";
 const REQUIREMENT_PROOF_SCRIPT_DATA_PATH: &str =
@@ -35,10 +44,10 @@ fn read_data(relative: &str) -> Vec<u8> {
 
 fn profile_name(config_version: &str) -> &'static str {
     match config_version {
-        "minimal-10" => "minimal",
-        "standard-10" => "standard",
-        "high-rigor-10" => "high-rigor",
-        other => panic!("unknown shipped config version {other}"),
+        "minimal-11" => "minimal",
+        "standard-11" => "standard",
+        "high-rigor-11" => "high-rigor",
+        other => panic!("current calibration source records do not accept {other}"),
     }
 }
 
@@ -542,7 +551,11 @@ fn source_records_for_entry(entry: &Map<String, Value>) -> CalibrationInput {
     let config_version = string_field(entry, "config_version");
     let profile_name = profile_name(config_version);
     let profile = support::load_profile(profile_name);
-    assert_eq!(profile["config_version"].as_str(), Some(config_version));
+    let shipped_version = profile["config_version"].as_str().expect("profile version");
+    assert_eq!(
+        shipped_version, config_version,
+        "current source record rows must use their shipped profile version"
+    );
     let subject = subject_for_gate(gate);
     let template = template_for_gate(gate);
     let subject_value = fixture_value(fixture_id);
@@ -621,41 +634,58 @@ fn manifest() -> Vec<Value> {
     serde_json::from_slice(&read_data("calibration/manifest.json")).expect("manifest JSON")
 }
 
+fn is_historical_entry(entry: &Map<String, Value>) -> bool {
+    string_field(entry, "config_version").ends_with(HISTORICAL_CONFIG_SUFFIX)
+}
+
+fn canonical_sha256(value: &Value) -> String {
+    Sha256::digest(serde_json::to_vec(&sorted_json(value)).expect("canonical JSON"))
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 #[test]
 fn calibration_manifest_binds_exact_source_record_stream_and_covers_profile_axes() {
     let entries = manifest();
-    // Mechanical draft rehash aid; the assertion below still rejects drift.
-    // This emits no semantic attestation and never writes the manifest.
-    let hashes: Vec<_> = entries
-        .iter()
-        .map(|entry| digest(&source_records_for_entry(entry.as_object().unwrap())))
-        .collect();
-    if entries
-        .iter()
-        .zip(&hashes)
-        .any(|(entry, hash)| entry["input_sha256"].as_str() != Some(hash))
-    {
-        eprintln!(
-            "CALIBRATION_HASHES={}",
-            serde_json::to_string(&hashes).unwrap()
-        );
-    }
-    assert_eq!(entries.len() % 2, 0);
-    let mut expected_keys = BTreeSet::new();
+    assert_eq!(entries.len(), HISTORICAL_ROW_COUNT + CURRENT_ROW_COUNT);
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| is_historical_entry(entry.as_object().expect("manifest row object")))
+            .count(),
+        HISTORICAL_ROW_COUNT
+    );
+    let mut current_expected_keys = BTreeSet::new();
+    let mut historical_expected_keys = BTreeSet::new();
     for profile in PROFILES {
         let config = support::load_profile(profile);
         let version = config["config_version"].as_str().unwrap().to_owned();
         for (gate, axes) in config["review_policies"].as_object().unwrap() {
             for axis in axes.as_array().unwrap() {
-                expected_keys.insert((
+                let axis_id = axis["id"].as_str().unwrap().to_owned();
+                let stage = axis["review_stage"].as_str().unwrap().to_owned();
+                current_expected_keys.insert((
                     version.clone(),
                     gate.clone(),
-                    axis["id"].as_str().unwrap().to_owned(),
-                    axis["review_stage"].as_str().unwrap().to_owned(),
+                    axis_id.clone(),
+                    stage.clone(),
                 ));
+                // Historic rows cover the pre-v11 policy surface and are
+                // retained as opaque evidence rather than rehashed with v11.
+                if axis_id != "acceptance-granularity" && axis_id != "owner-comprehensible" {
+                    historical_expected_keys.insert((
+                        version.replace(CURRENT_CONFIG_SUFFIX, HISTORICAL_CONFIG_SUFFIX),
+                        gate.clone(),
+                        axis_id,
+                        stage,
+                    ));
+                }
             }
         }
     }
+    assert_eq!(current_expected_keys.len(), CURRENT_AXIS_KEYS);
+    assert_eq!(historical_expected_keys.len(), HISTORICAL_AXIS_KEYS);
 
     let mut coverage: BTreeMap<(String, String, String, String), BTreeSet<String>> =
         BTreeMap::new();
@@ -692,32 +722,11 @@ fn calibration_manifest_binds_exact_source_record_stream_and_covers_profile_axes
             "manifest row must be coherently attested or pending: {entry:?}"
         );
 
-        let input = source_records_for_entry(entry);
-        assert_eq!(
-            input
-                .source_records
-                .first()
-                .map(|record| record.label.as_str()),
-            Some("system-developer-instruction:data/calibration/reviewer-instruction.txt")
-        );
-        assert_eq!(
-            input
-                .source_records
-                .last()
-                .map(|record| record.label.as_str()),
-            Some("request-json")
-        );
-
         let hash = string_field(entry, "input_sha256");
         assert_eq!(hash.len(), 64);
         assert!(hash
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
-        assert_eq!(
-            hash,
-            digest(&input),
-            "source record drift for row {entry:?}"
-        );
 
         let key = (
             string_field(entry, "config_version").to_owned(),
@@ -725,17 +734,186 @@ fn calibration_manifest_binds_exact_source_record_stream_and_covers_profile_axes
             string_field(entry, "axis").to_owned(),
             string_field(entry, "review_stage").to_owned(),
         );
-        assert!(expected_keys.contains(&key));
+        if is_historical_entry(entry) {
+            assert!(
+                historical_expected_keys.contains(&key),
+                "unknown historical calibration key {key:?}"
+            );
+        } else {
+            assert!(
+                current_expected_keys.contains(&key),
+                "unknown current calibration key {key:?}"
+            );
+            let input = source_records_for_entry(entry);
+            assert_eq!(
+                input
+                    .source_records
+                    .first()
+                    .map(|record| record.label.as_str()),
+                Some("system-developer-instruction:data/calibration/reviewer-instruction.txt")
+            );
+            assert_eq!(
+                input
+                    .source_records
+                    .last()
+                    .map(|record| record.label.as_str()),
+                Some("request-json")
+            );
+            assert_eq!(
+                hash,
+                digest(&input),
+                "current source record drift for row {entry:?}"
+            );
+        }
         coverage.entry(key).or_default().insert(expected.to_owned());
     }
-    assert_eq!(coverage.len(), expected_keys.len());
-    assert_eq!(expected_keys.len(), EXPECTED_AXIS_KEYS);
-    for key in expected_keys {
+    assert_eq!(coverage.len(), EXPECTED_AXIS_KEYS);
+    assert_eq!(
+        coverage
+            .keys()
+            .filter(|key| key.0.ends_with(HISTORICAL_CONFIG_SUFFIX))
+            .count(),
+        HISTORICAL_AXIS_KEYS
+    );
+    assert_eq!(
+        coverage
+            .keys()
+            .filter(|key| key.0.ends_with(CURRENT_CONFIG_SUFFIX))
+            .count(),
+        CURRENT_AXIS_KEYS
+    );
+    for key in coverage.keys() {
         assert_eq!(
-            coverage.get(&key),
+            coverage.get(key),
             Some(&BTreeSet::from(["fail".to_owned(), "pass".to_owned()]))
         );
     }
+}
+
+#[test]
+fn historical_rows_remain_attested_and_current_packets_stay_v11() {
+    let entries = manifest();
+    let historical: Vec<Value> = entries
+        .iter()
+        .filter(|entry| is_historical_entry(entry.as_object().expect("manifest row object")))
+        .cloned()
+        .collect();
+    assert_eq!(historical.len(), HISTORICAL_ROW_COUNT);
+    assert_eq!(
+        canonical_sha256(&Value::Array(historical.clone())),
+        HISTORICAL_MANIFEST_CANONICAL_SHA256
+    );
+    for entry in &historical {
+        let entry = entry.as_object().expect("historical manifest row object");
+        assert!(is_historical_entry(entry));
+        assert!(matches!(string_field(entry, "observed"), "pass" | "fail"));
+        assert_eq!(
+            string_field(entry, "observed"),
+            string_field(entry, "expected")
+        );
+        assert!(!string_field(entry, "attested_by").is_empty());
+        assert_eq!(string_field(entry, "invocation"), CURRENT_INVOCATION);
+    }
+
+    let current: Vec<&Value> = entries
+        .iter()
+        .filter(|entry| !is_historical_entry(entry.as_object().expect("manifest row object")))
+        .collect();
+    assert_eq!(current.len(), CURRENT_ROW_COUNT);
+    assert!(current.iter().all(|entry| {
+        let entry = entry.as_object().expect("current manifest row object");
+        string_field(entry, "config_version").ends_with(CURRENT_CONFIG_SUFFIX)
+            && string_field(entry, "observed") == "pending"
+            && string_field(entry, "attested_by").is_empty()
+            && string_field(entry, "invocation") == PENDING_INVOCATION
+    }));
+
+    let repository = provider_root()
+        .parent()
+        .and_then(Path::parent)
+        .expect("software-change repository root")
+        .to_path_buf();
+    let temporary = support::TestDir::new("calibration-history");
+    let output_root = temporary.path().join("packets");
+    let row_key = "minimal-11|intent-review|solution-agnostic|aggregate|intent-good";
+    let mut prepare = Command::new("python3");
+    prepare
+        .current_dir(&repository)
+        .arg(repository.join("scripts/prepare-calibration-input.py"))
+        .arg("--procedure")
+        .arg(provider_root().join("data/calibration/PROCEDURE.md"))
+        .arg("--manifest")
+        .arg(provider_root().join("data/calibration/manifest.json"))
+        .arg("--profile")
+        .arg(provider_root().join("data/configs/minimal.json"))
+        .arg("--repository")
+        .arg(&repository)
+        .arg("--output-root")
+        .arg(&output_root)
+        .arg("--row-key")
+        .arg(row_key);
+    let prepared = prepare
+        .bounded_output("prepare current calibration packet")
+        .expect("prepare utility should run");
+    assert_eq!(
+        prepared.status.code(),
+        Some(0),
+        "prepare stderr: {}",
+        String::from_utf8_lossy(&prepared.stderr)
+    );
+    let case_dir = output_root.join(row_key);
+    let preparation: Value = serde_json::from_slice(
+        &fs::read(case_dir.join("preparation.json")).expect("preparation metadata"),
+    )
+    .expect("preparation JSON");
+    assert_eq!(preparation["config_version"], "minimal-11");
+    assert_eq!(preparation["row_key"], row_key);
+    for forbidden in ["expected", "observed", "attested_by", "oracle"] {
+        assert!(
+            preparation.get(forbidden).is_none(),
+            "packet metadata leaked manifest field {forbidden}"
+        );
+    }
+    let current_row = current
+        .iter()
+        .find(|entry| entry["config_version"] == "minimal-11")
+        .and_then(|entry| {
+            (entry["gate"] == "intent-review"
+                && entry["axis"] == "solution-agnostic"
+                && entry["fixture_id"] == "intent-good")
+                .then_some(*entry)
+        })
+        .expect("current row for prepared packet");
+    assert_eq!(
+        preparation["input_sha256"], current_row["input_sha256"],
+        "current packet must use current-version mechanical identity"
+    );
+
+    let mut legacy = Command::new("python3");
+    legacy
+        .current_dir(&repository)
+        .arg(repository.join("scripts/prepare-calibration-input.py"))
+        .arg("--procedure")
+        .arg(provider_root().join("data/calibration/PROCEDURE.md"))
+        .arg("--manifest")
+        .arg(provider_root().join("data/calibration/manifest.json"))
+        .arg("--profile")
+        .arg(provider_root().join("data/configs/minimal.json"))
+        .arg("--repository")
+        .arg(&repository)
+        .arg("--output-root")
+        .arg(temporary.path().join("legacy"))
+        .arg("--row-key")
+        .arg("minimal-10|intent-review|solution-agnostic|aggregate|intent-good");
+    let refused = legacy
+        .bounded_output("refuse historical calibration packet")
+        .expect("legacy preparation should run");
+    assert_ne!(refused.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("does not match row"),
+        "legacy refusal did not identify the profile/version mismatch: {}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
 }
 
 #[test]
@@ -828,7 +1006,7 @@ fn counterpart_keys_have_good_fail_pairs_and_good_fixtures_pass_adversarial() {
         );
     }
     assert_eq!(
-        counterpart_keys, 92,
+        counterpart_keys, 190,
         "all three v3 profiles carry ordinary/challenge counterpart keys"
     );
 }
@@ -870,22 +1048,24 @@ fn implementation_rows_have_total_commit_mapped_companion_coverage() {
             }
             *commits.entry(commit.to_owned()).or_insert(0usize) += 1;
 
-            let input = source_records_for_entry(entry);
-            let companion_index = input
-                .source_records
-                .iter()
-                .position(|record| {
-                    record
-                        .label
-                        .starts_with("companion:fictional-repo/implementation-evidence/")
-                })
-                .expect("implementation companion source record");
-            let request_index = input
-                .source_records
-                .iter()
-                .position(|record| record.label == "request-json")
-                .expect("request source record");
-            assert_eq!(companion_index + 1, request_index);
+            if !is_historical_entry(entry) {
+                let input = source_records_for_entry(entry);
+                let companion_index = input
+                    .source_records
+                    .iter()
+                    .position(|record| {
+                        record
+                            .label
+                            .starts_with("companion:fictional-repo/implementation-evidence/")
+                    })
+                    .expect("implementation companion source record");
+                let request_index = input
+                    .source_records
+                    .iter()
+                    .position(|record| record.label == "request-json")
+                    .expect("request source record");
+                assert_eq!(companion_index + 1, request_index);
+            }
         } else if !(gate_family(gate) == "validation"
             && matches!(axis, "intent-delivered" | "requirement-proof-mapping"))
         {
@@ -897,12 +1077,12 @@ fn implementation_rows_have_total_commit_mapped_companion_coverage() {
             );
         }
     }
-    assert_eq!(implementation_rows, 48);
+    assert_eq!(implementation_rows, 96);
     assert_eq!(
         commits,
         BTreeMap::from([
-            ("repo-state-2026-08-12".to_owned(), 24usize),
-            ("repo-state-2026-08-13".to_owned(), 24usize),
+            ("repo-state-2026-08-12".to_owned(), 48usize),
+            ("repo-state-2026-08-13".to_owned(), 48usize),
         ])
     );
 }
@@ -969,8 +1149,9 @@ fn implementation_companion_mutation_changes_digest() {
         .find(|entry| {
             entry["gate"] == "implementation-review"
                 && entry["fixture_id"] == "implementation-report-good"
+                && entry["config_version"] == "standard-11"
         })
-        .expect("implementation row");
+        .expect("current implementation row");
     let input = source_records_for_entry(entry.as_object().expect("manifest row object"));
     let index = input
         .source_records
@@ -990,6 +1171,12 @@ fn implementation_companion_mutation_changes_digest() {
 const SUBJECT_FIXTURES: &[&str] = &[
     "intent-good",
     "intent-defective",
+    "intent-granularity-good",
+    "intent-granularity-bundled",
+    "intent-granularity-fragmented",
+    "intent-granularity-impractical",
+    "intent-owner-good",
+    "intent-owner-unstated-background",
     "design-good",
     "design-defective",
     "design-overbuilt",
@@ -1264,8 +1451,8 @@ fn validation_docs_coverage_has_exact_mapped_companion_bytes() {
         }
     }
     assert_eq!(
-        docs_rows, 16,
-        "expected good/defective docs rows on parent and adversarial validation gates"
+        docs_rows, 32,
+        "expected historic and v11 good/defective docs rows on parent and adversarial validation gates"
     );
 }
 
@@ -1322,8 +1509,8 @@ fn validation_intent_delivered_has_inspectable_repository_state_companion() {
         }
     }
     assert_eq!(
-        intent_delivered_rows, 16,
-        "expected good/defective intent-delivered rows across shipped validation gates"
+        intent_delivered_rows, 32,
+        "expected historic and v11 good/defective intent-delivered rows across shipped validation gates"
     );
 }
 
@@ -1384,8 +1571,8 @@ fn validation_requirement_proof_mapping_has_inspectable_public_proof_companions(
         }
     }
     assert_eq!(
-        rows, 16,
-        "expected parent/adversarial good/defective proof rows"
+        rows, 32,
+        "expected historic and v11 parent/adversarial good/defective proof rows"
     );
 }
 
@@ -1499,6 +1686,9 @@ fn reviewer_visible_companion_content_rejects_oracle_and_class_markers() {
     let mut checked_labels = BTreeSet::new();
     for entry in manifest() {
         let entry = entry.as_object().expect("manifest row object");
+        if is_historical_entry(entry) {
+            continue;
+        }
         let input = source_records_for_entry(entry);
         for record in input
             .source_records
@@ -1536,6 +1726,9 @@ fn source_record_identity_preserves_pairing_and_neutral_request() {
 
     for entry in manifest() {
         let entry = entry.as_object().expect("manifest row object");
+        if is_historical_entry(entry) {
+            continue;
+        }
         let fixture_id = string_field(entry, "fixture_id");
         let gate = string_field(entry, "gate");
         let review_stage = string_field(entry, "review_stage");
@@ -1612,15 +1805,27 @@ fn source_record_identity_preserves_pairing_and_neutral_request() {
 
     assert_eq!(
         pairs.len(),
-        EXPECTED_AXIS_KEYS,
-        "expected all configured keys to form pairs"
+        CURRENT_AXIS_KEYS,
+        "expected current configured keys to form pairs"
     );
     for (key, pair) in pairs {
-        assert_eq!(
-            pair.len(),
-            2,
-            "expected one paired row per class for {key:?}"
-        );
+        if key.0.ends_with("-11")
+            && matches!(
+                key.2.as_str(),
+                "acceptance-granularity" | "owner-comprehensible"
+            )
+        {
+            assert!(
+                pair.len() >= 2,
+                "expected named supplied contrasts for {key:?}"
+            );
+        } else {
+            assert_eq!(
+                pair.len(),
+                2,
+                "expected one paired row per class for {key:?}"
+            );
+        }
         let pass = pair
             .iter()
             .find(|(fixture_id, _)| fixture_id.ends_with("-good"))
@@ -1628,7 +1833,12 @@ fn source_record_identity_preserves_pairing_and_neutral_request() {
         let failing = pair
             .iter()
             .find(|(fixture_id, _)| {
-                fixture_id.ends_with("-defective") || fixture_id.ends_with("-overbuilt")
+                fixture_id.ends_with("-defective")
+                    || fixture_id.ends_with("-overbuilt")
+                    || fixture_id.ends_with("-bundled")
+                    || fixture_id.ends_with("-fragmented")
+                    || fixture_id.ends_with("-impractical")
+                    || fixture_id.ends_with("-unstated-background")
             })
             .expect("defective owner fixture row");
 
@@ -1784,9 +1994,9 @@ fn canonical_source_records_have_exact_order_and_labels() {
             entry["gate"] == "validation-review"
                 && entry["axis"] == "docs-integrated"
                 && entry["expected"] == "pass"
-                && entry["config_version"] == "standard-10"
+                && entry["config_version"] == "standard-11"
         })
-        .expect("docs-integrated row");
+        .expect("docs-integrated current row");
     let entry = entry.as_object().expect("manifest row object");
     let input = source_records_for_entry(entry);
     let labels: Vec<&str> = input
@@ -1831,11 +2041,11 @@ fn canonical_request_json_has_exact_fields_and_no_trailing_newline() {
         "aggregate",
         "validation-report.json",
         "r15",
-        "standard-10",
+        "standard-11",
     );
     assert_eq!(
         request,
-        br#"{"gate":"validation-review","policy_id":"docs-integrated","review_stage":"aggregate","subject":"validation-report.json","subject_revision":"r15","config_version":"standard-10"}"#
+        br#"{"gate":"validation-review","policy_id":"docs-integrated","review_stage":"aggregate","subject":"validation-report.json","subject_revision":"r15","config_version":"standard-11"}"#
     );
     assert_ne!(request.last(), Some(&b'\n'));
 }
@@ -1848,9 +2058,9 @@ fn every_supplied_source_record_mutation_changes_digest() {
             entry["gate"] == "validation-review"
                 && entry["axis"] == "docs-integrated"
                 && entry["expected"] == "pass"
-                && entry["config_version"] == "standard-10"
+                && entry["config_version"] == "standard-11"
         })
-        .expect("docs-integrated row");
+        .expect("docs-integrated current row");
     let entry = entry.as_object().expect("manifest row object");
     let input = source_records_for_entry(entry);
     let labels: Vec<&str> = input

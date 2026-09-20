@@ -11,7 +11,7 @@ use loop_core::{
     ProjectedInvocationStatus, RunId, Timestamp, WorkSlotId, WorkSlotInvocation,
 };
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
@@ -40,6 +40,9 @@ pub struct InvocationProgressSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub graph: Option<GraphProgress>,
     pub traces: Vec<ProgressTrace>,
+    /// Explicit source/detail lanes for drivers.  Progress never interprets
+    /// worker output or semantic acceptance.
+    pub visibility: Value,
 }
 
 /// Locator-backed per-step helper liveness.
@@ -143,12 +146,13 @@ fn collect_snapshot<P, F>(
 ) -> Result<InvocationProgressSnapshot, CliError>
 where
     P: Persistence + ?Sized,
-    F: Fn(&WorkSlotInvocation) -> bool,
+    F: Fn(&WorkSlotInvocation) -> bool + Copy,
 {
     let invocations = persistence
         .load_work_slot_invocations(run_id)
         .map_err(|error| CliError::new(error.code(), error.to_string()))?;
     let selected = select_invocation_by_identity(&invocations, invocation_id, now, waiter_alive)?;
+    let selected_status = project_invocation_status(selected, now, waiter_alive(selected));
     let capture_dir = selected.capture_dir.clone();
     if capture_dir.is_empty() || !Path::new(&capture_dir).is_dir() {
         return Err(CliError::new(
@@ -159,6 +163,35 @@ where
     let capture_path = Path::new(&capture_dir);
     let graph = read_graph(capture_path, timeout)?;
     let traces = enumerate_traces(capture_path)?;
+    let mut evidence_locations = vec![capture_dir.clone()];
+    if let Some(graph) = graph.as_ref() {
+        evidence_locations.push(locator_path(capture_path).to_string_lossy().into_owned());
+        evidence_locations.push(graph.locator.dagu_home.clone());
+    }
+    evidence_locations.extend(traces.iter().map(|trace| trace.path.clone()));
+    let execution_state = match selected_status {
+        ProjectedInvocationStatus::Running => "running",
+        ProjectedInvocationStatus::Succeeded => "succeeded",
+        ProjectedInvocationStatus::Failed => "failed",
+        ProjectedInvocationStatus::Overrun => "attention",
+    };
+    let next_action = if matches!(selected_status, ProjectedInvocationStatus::Running) {
+        json!({"kind":"wait","reason":"owned invocation work is still running","evidence":"capture_dir and graph"})
+    } else {
+        json!({"kind":"inspect","reason":"progress is execution/helper evidence only; inspect output and provider acceptance separately","evidence":"capture_dir"})
+    };
+    let visibility = json!({
+        "workflow": {"state":"unknown","reason":"invocation-progress does not read workflow state; use show"},
+        "execution": {"state":execution_state,"source":"show.work_slot_invocations.status","meaning":"overlay/helper execution only; not acceptance"},
+        "worker": {"state":"unknown","reason":"progress names helper traces but does not read worker output"},
+        "conformance": {"state":"unknown","reason":"progress does not inspect declared worker output contracts"},
+        "acceptance": {"state":"unknown","reason":"progress never supplies provider or driver acceptance"},
+        "evidence": {"state":"available","locations":evidence_locations,"meaning":"named capture and trace locations; contents remain to be inspected"},
+        "freshness": {"state":"observed","meaning":"read during this progress sample; source may change after the read"},
+        "uncertainty": {"state":"present","reasons":["worker output/conformance are not read by progress","semantic acceptance is unknown"]},
+        "next_action": next_action,
+        "owner_update_guidance": {"channel":"active Pi conversation","required_fields":["observed_change","needed_action_or_decision"],"before_next_decision":["wait","inspect","help"],"machine_notification_is_not_owner_update":true}
+    });
     Ok(InvocationProgressSnapshot {
         run_id: run_id.clone(),
         invocation_id: selected.invocation_id.clone(),
@@ -167,6 +200,7 @@ where
         ownership: selected.ownership.clone().map(Box::new),
         graph,
         traces,
+        visibility,
     })
 }
 
@@ -793,6 +827,7 @@ mod tests {
             ownership: None,
             graph: None,
             traces: Vec::new(),
+            visibility: json!({"acceptance":{"state":"unknown"}}),
         };
         let value = serde_json::to_value(&snapshot).expect("serialize snapshot");
         let object = value.as_object().expect("object");
@@ -801,6 +836,8 @@ mod tests {
         assert!(object.contains_key("slot_id"));
         assert!(object.contains_key("capture_dir"));
         assert!(object.contains_key("traces"));
+        assert!(object.contains_key("visibility"));
+        assert_eq!(object["visibility"]["acceptance"]["state"], "unknown");
         assert!(!object.contains_key("graph"));
         assert!(!object.contains_key("overlay"));
         assert!(!object.contains_key("overlay_meaning"));

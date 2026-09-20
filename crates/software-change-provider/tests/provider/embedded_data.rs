@@ -96,7 +96,7 @@ fn data_dump_matches_tree_and_refuses_existing_targets_without_writing() {
         let mut profile: serde_json::Value =
             serde_json::from_slice(&fs::read(data.join(format!("configs/{name}.json"))).unwrap())
                 .unwrap();
-        assert_eq!(profile["config_version"], format!("{name}-10"));
+        assert_eq!(profile["config_version"], format!("{name}-11"));
         assert_eq!(profile["contract_version"], 3);
         let expected_authors = if name == "minimal" { 1 } else { 2 };
         assert_eq!(

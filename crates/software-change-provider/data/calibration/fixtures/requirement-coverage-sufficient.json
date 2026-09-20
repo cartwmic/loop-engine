@@ -1,0 +1,43 @@
+{
+  "revision": "r1",
+  "author": {
+    "name": "fixture-owner",
+    "kind": "human"
+  },
+  "operating_context": {
+    "operators": ["trusted local repository operator", "external requirement reviewer"],
+    "environment": ["fictional local job runner", "public operator status view"],
+    "threat_boundary": {
+      "in_scope": ["one local operator", "the named status view", "the accepted requirement text"],
+      "excluded": ["hostile operators", "multi-tenant authorization", "distributed monitoring"]
+    },
+    "accepted_risks": [],
+    "outside_obligations": [
+      {
+        "source": "fictional-repo/docs/requirement-coverage.md#REQ-COVERAGE-1",
+        "obligation": "Use the accepted requirement and its named document as the authoritative requirement input."
+      }
+    ]
+  },
+  "promised_outcome": "After the operator starts a job, the public status view distinguishes running, succeeded, failed, and unknown, and does not treat process exit alone as acceptance.",
+  "requirement_references": [
+    {
+      "id": "REQ-COVERAGE-1",
+      "authoritative_text": "After an operator starts a job, the public status view must show running, succeeded, failed, or unknown. Process exit by itself is not acceptance.",
+      "explicit_cross_references": ["fictional-repo/docs/requirement-coverage.md"]
+    }
+  ],
+  "delivered_behavior": {
+    "operator_started_job": true,
+    "status_view": "running",
+    "process_exit": "not-yet-observed",
+    "acceptance": "not-yet-determined"
+  },
+  "handoff": {
+    "owner_acceptance": "not-required",
+    "application": "not-required",
+    "commit": "not-required",
+    "traceability": "retain the live requirement reference",
+    "proof_references": ["fixture:status-journey"]
+  }
+}

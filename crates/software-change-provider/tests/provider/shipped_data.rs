@@ -81,6 +81,8 @@ fn high_rigor_axes() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
                 "scope-fenced",
                 "constraints-are-limits",
                 "problem-grounded",
+                "acceptance-granularity",
+                "owner-comprehensible",
             ]),
         ),
         (
@@ -279,9 +281,9 @@ fn all_profiles_pass_production_config_validation_and_have_exact_subjects() {
     for profile in PROFILES {
         let config = load_profile(profile);
         let expected_version = match *profile {
-            "minimal" => "minimal-10",
-            "standard" => "standard-10",
-            "high-rigor" => "high-rigor-10",
+            "minimal" => "minimal-11",
+            "standard" => "standard-11",
+            "high-rigor" => "high-rigor-11",
             _ => unreachable!("unknown profile {profile}"),
         };
         assert_eq!(config["config_version"], expected_version);
@@ -629,10 +631,22 @@ fn profiles_carry_exact_shipped_profile_mapping_and_author_counts() {
             assert_eq!(entry["required_authors"], 2, "{gate} author floor");
         }
         assert_eq!(stages.len(), 2, "{gate} must have two review stages");
-        assert_eq!(
-            stages["individual"], stages["aggregate"],
-            "{gate} stage axes"
-        );
+        if gate == "intent-review" || gate == "intent-adversarial-review" {
+            let mut expected_individual = stages["aggregate"].clone();
+            expected_individual.remove("acceptance-granularity");
+            expected_individual.remove("owner-comprehensible");
+            assert_eq!(
+                stages["individual"], expected_individual,
+                "{gate} existing stage axes"
+            );
+            assert!(stages["aggregate"].contains("acceptance-granularity"));
+            assert!(stages["aggregate"].contains("owner-comprehensible"));
+        } else {
+            assert_eq!(
+                stages["individual"], stages["aggregate"],
+                "{gate} stage axes"
+            );
+        }
     }
     for gate in RETIRED_GATES {
         assert!(
@@ -1022,6 +1036,16 @@ fn authoritative_docs_integrate_convergence_contract_and_routes() {
             "AGENTS.md missing required graph or scope clause: {clause}"
         );
     }
+    assert!(agents.contains(
+        "](skills/using-software-change-provider/SKILL.md#work-slot-policy-confirm-before-start)"
+    ));
+    let work_slot_policy = skill
+        .split_once("## Work-slot policy (confirm before start)\n")
+        .expect("AGENTS-linked work-slot policy heading must exist")
+        .1
+        .split("\n## ")
+        .next()
+        .expect("linked work-slot policy section");
     for slot in [
         "`intent-draft`",
         "`intent-review`",
@@ -1029,8 +1053,8 @@ fn authoritative_docs_integrate_convergence_contract_and_routes() {
         "`validation-review`",
     ] {
         assert!(
-            agents_lower.contains(slot),
-            "AGENTS.md missing required slot literal: {slot}"
+            work_slot_policy.contains(slot),
+            "AGENTS-linked work-slot policy missing required slot literal: {slot}"
         );
     }
     // AGENTS routes drivers to the owning procedure instead of duplicating it.

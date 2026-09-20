@@ -1,0 +1,46 @@
+{
+  "revision": "r1",
+  "author": {
+    "name": "fixture-owner",
+    "kind": "human"
+  },
+  "operating_context": {
+    "operators": ["trusted local repository operator", "external requirement reviewer"],
+    "environment": ["fictional local job runner", "public operator status view", "active conversation"],
+    "threat_boundary": {
+      "in_scope": ["one local operator", "the named status view", "the accepted requirement text"],
+      "excluded": ["hostile operators", "multi-tenant authorization", "distributed monitoring"]
+    },
+    "accepted_risks": [],
+    "outside_obligations": [
+      {
+        "source": "fictional-repo/docs/requirement-coverage.md#REQ-COVERAGE-1",
+        "obligation": "Read the actual requirement text and every authoritative cross-reference before classifying coverage."
+      }
+    ]
+  },
+  "promised_outcome": "After the coordinating assistant observes a meaningful job development, it posts a concise owner-facing update in the active conversation before its next wait, inspect, or help decision.",
+  "requirement_references": [
+    {
+      "id": "REQ-COVERAGE-1",
+      "authoritative_text": "After an operator starts a job, the public status view must show running, succeeded, failed, or unknown. Process exit by itself is not acceptance.",
+      "explicit_cross_references": ["fictional-repo/docs/requirement-coverage.md"]
+    }
+  ],
+  "delivered_behavior": {
+    "operator_started_job": true,
+    "status_view": "succeeded",
+    "meaningful_development_observed": true,
+    "owner_chat_update": "not-specified"
+  },
+  "proposed_requirement": {
+    "record_markdown": "### LE-999: Owner-facing proactive status updates\n- Status: live\n- Coverage: e2e/journey\n\nAfter the coordinating assistant observes a meaningful development in active software-change work, it must post a concise source-backed update in the active owner conversation before its next wait, inspect, or help decision. Unchanged observations must not produce a repetitive heartbeat. Machine notifications alone do not satisfy this obligation.",
+    "owner_acceptance": "pending",
+    "application": "not-applied",
+    "commit": "not-committed"
+  },
+  "handoff": {
+    "traceability": "candidate only; not a live requirement",
+    "proof_references": ["fixture:owner-update-journey"]
+  }
+}

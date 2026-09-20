@@ -1,0 +1,56 @@
+{
+  "revision": "r15",
+  "author": {
+    "name": "change-owner",
+    "kind": "human"
+  },
+  "operating_context": {
+    "operators": [
+      "trusted sole operator",
+      "repository maintainer"
+    ],
+    "environment": [
+      "local repository checkout",
+      "Loop Engine and software-change provider CLIs",
+      "configured local worker CLIs"
+    ],
+    "threat_boundary": {
+      "in_scope": [
+        "operator-visible software-change runs",
+        "local repository artifacts and configured workers"
+      ],
+      "excluded": [
+        "hostile users",
+        "mutually distrusting tenants",
+        "enterprise authorization or audit infrastructure"
+      ]
+    },
+    "accepted_risks": [],
+    "outside_obligations": [
+      {
+        "source": "Loop Engine provider boundary",
+        "obligation": "The provider remains deterministic and external reviewers retain semantic authority."
+      }
+    ]
+  },
+  "problem": "When a local software change is running, the owner cannot tell whether to wait, inspect evidence, or ask for help.",
+  "outcome": "The owner can understand the change promise and decide what to do from this intent and the stated background.",
+  "acceptance": [
+    {
+      "id": "AC-1",
+      "statement": "After the owner starts a change, the public status view shows running, succeeded, failed, or unknown. A capture, meaning the saved worker input and output, lets the owner inspect the evidence; process exit alone is not acceptance."
+    },
+    {
+      "id": "AC-2",
+      "statement": "The owner can tell which outcomes are in scope, which adjacent capabilities are excluded, and whether the acceptance decision is waiting for evidence or complete."
+    }
+  ],
+  "constraints": [
+    "The provider checks structure while an external reviewer decides semantic truth.",
+    "The local workflow remains passive and does not approve or control work."
+  ],
+  "non_goals": [
+    "A new notification channel, daemon, or distributed monitoring service.",
+    "Hostile-user or multi-tenant authorization."
+  ]
+}

@@ -270,7 +270,7 @@ fn assert_setup_output(
     assert_eq!(profile["contract_version"], 3);
     assert_eq!(
         profile["config_version"],
-        format!("{rigor}-10").replace("high-10", "high-rigor-10")
+        format!("{rigor}-11").replace("high-11", "high-rigor-11")
     );
     assert_eq!(
         profile["work_slot_bindings"].as_object().unwrap().len(),

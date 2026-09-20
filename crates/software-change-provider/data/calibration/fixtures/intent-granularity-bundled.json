@@ -1,0 +1,52 @@
+{
+  "revision": "r15",
+  "author": {
+    "name": "change-owner",
+    "kind": "human"
+  },
+  "operating_context": {
+    "operators": [
+      "trusted sole operator",
+      "repository maintainer"
+    ],
+    "environment": [
+      "local repository checkout",
+      "Loop Engine and software-change provider CLIs",
+      "configured local worker CLIs"
+    ],
+    "threat_boundary": {
+      "in_scope": [
+        "operator-visible software-change runs",
+        "local repository artifacts and configured workers"
+      ],
+      "excluded": [
+        "hostile users",
+        "mutually distrusting tenants",
+        "enterprise authorization or audit infrastructure"
+      ]
+    },
+    "accepted_risks": [],
+    "outside_obligations": [
+      {
+        "source": "Loop Engine provider boundary",
+        "obligation": "The provider remains deterministic and external reviewers retain semantic authority."
+      }
+    ]
+  },
+  "problem": "A trusted operator cannot reliably understand a local job, its owner-facing update, its retained worker evidence, or its cancellation behavior from the current change surface.",
+  "outcome": "The change makes the local job understandable, visible, communicative, inspectable, and controllable for the operator.",
+  "acceptance": [
+    {
+      "id": "AC-1",
+      "statement": "After the operator starts a job, the public status view shows running, succeeded, failed, or unknown; the coordinating assistant posts a proactive owner update; every worker attempt is retained; and the operator can cancel the job."
+    }
+  ],
+  "constraints": [
+    "The behavior remains within the existing local software-change path.",
+    "The operator must be able to inspect each promised result independently."
+  ],
+  "non_goals": [
+    "Hostile-user or multi-tenant authorization.",
+    "A distributed monitoring service."
+  ]
+}

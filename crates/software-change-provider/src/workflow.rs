@@ -1,9 +1,10 @@
 //! Union phase table and live-graph stitcher for software-change.
 //!
 //! Describe and evaluate both read [`PHASES`] so live topology and evaluation
-//! duties cannot drift. When `review_policies` is omitted, describe emits the
-//! sixteen-state union. When the key is present, only live review states are
-//! emitted and ready/approved/passed rewire onto the next live successor.
+//! duties cannot drift. Bare describe emits the historical sixteen-state
+//! union. A new contract-v3 input adds the provider-owned reconciliation hop;
+//! when `review_policies` is present, only its live review states are emitted
+//! and ready/approved/passed rewire onto the next live successor.
 
 use crate::overlay;
 use loop_core::{State, Transition, WorkSlot, Workflow};
@@ -16,6 +17,33 @@ use std::collections::BTreeSet;
 /// finding-ledger records.
 pub(crate) const FINDING_LEDGER_KIND: &str = "finding-ledger";
 pub(crate) const REVIEW_EVIDENCE_KIND: &str = "review-evidence";
+
+/// Public provider contract for the post-implementation reconciliation phase.
+/// Keep these names stable: fresh contract-v3 graphs expose them and dependants
+/// consume this source contract rather than reconstructing it from task output.
+pub(crate) const RECONCILIATION_STATE: &str = "reconciliation";
+pub(crate) const RECONCILIATION_DRAFT_SLOT: &str = "reconciliation-draft";
+pub(crate) const RECONCILIATION_READY_EVENT: &str = "reconciliation-ready";
+pub(crate) const RECONCILIATION_SUBJECT: &str = "reconciliation.json";
+pub(crate) const RECONCILIATION_SCHEMA_PATH: &str =
+    "crates/software-change-provider/data/reconciliation-schema.json";
+pub(crate) const RECONCILIATION_RESULT_FIELDS: &[&str] = &[
+    "revision",
+    "author",
+    "mode",
+    "branch",
+    "document_observations",
+    "behavior_observations",
+    "action",
+    "action_reason",
+    "authorization",
+    "application",
+    "commit",
+    "traceability",
+    "proof_references",
+    "blockers",
+    "decision",
+];
 
 const BOOKENDS_STATE_GUIDANCE: &str = "Bookends overlay: every current intent criterion has one `prd_traceability` disposition (`linked-live`, `candidate`, or `not-applicable`). Linked-live IDs must be live PRD IDs; candidates must be parser-valid proposed records. At every durable e2e/journey or declared contract test boundary, cite the applicable live PRD ID in the captured result for driver triage. Never mint an ID.";
 
@@ -160,6 +188,20 @@ pub(crate) const PHASES: &[Phase] = &[
     },
 ];
 
+fn reconciliation_instructions(bookends_enabled: bool) -> String {
+    let mode = if bookends_enabled {
+        "With Bookends enabled, reread the actual accepted PRD wording and every authoritative document it names; preserve live traceability and never treat a related ID as semantic coverage."
+    } else {
+        "With Bookends disabled, inspect only the relevant authoritative repository documents against the approved intent and delivered behavior; do not add PRD IDs, Bookends citations, candidate machinery, or overlay obligations."
+    };
+    format!(
+        "Reconcile the frozen intent `operating_context`, approved intent, delivered behavior, and current authoritative repository documents. Author exactly `{}` using `{}`. Set `{}`. {mode} Distinguish sufficient existing wording, change-specific proof, missing or changed enduring meaning, and an implementation defect. A justified no-document-change action is valid. A requirements amendment needs exact owner acceptance and separately authorized application and commit; a wrong implementation is corrected as code. A blocked decision must retain its concrete blockers. This state does not approve, progress, commit, or write `implementation-report.json`, `validation-report.json`, or checkpoint files. The graph summarizer remains the sole implementation-report writer. Report finalization, repository checkpoint, implementation review, validation, and final proof consume the post-reconciliation tree downstream.",
+        RECONCILIATION_SUBJECT,
+        RECONCILIATION_SCHEMA_PATH,
+        RECONCILIATION_RESULT_FIELDS.join("`, `"),
+    )
+}
+
 const END_INSTRUCTIONS: &str = "The software change is complete. Preserve the final artifacts, evidence, coverage manifest, and authoritative document integration described by the shipped templates.";
 
 /// Duties evaluate applies for a source state plus event, taken from [`PHASES`].
@@ -170,12 +212,22 @@ pub(crate) enum TransitionDuties {
         subject: &'static str,
         gate: Option<&'static str>,
     },
+    /// A checked handoff whose destination owns the next artifact. It has no
+    /// report, checkpoint, or other artifact prerequisite of its own.
+    CheckedNoArtifact,
     /// Check-free revise events are zero-obligation.
     CheckFree,
 }
 
 /// Look up evaluation duties for a source state and event from the phase table.
 pub(crate) fn duties_for(source: &str, event: &str) -> Option<TransitionDuties> {
+    if source == RECONCILIATION_STATE && event == RECONCILIATION_READY_EVENT {
+        return Some(TransitionDuties::Checked {
+            subject: RECONCILIATION_SUBJECT,
+            gate: None,
+        });
+    }
+
     for phase in PHASES {
         if source == phase.draft_state {
             if event == phase.ready_event || (phase.next_draft.is_none() && event == "passed") {
@@ -201,6 +253,21 @@ pub(crate) fn duties_for(source: &str, event: &str) -> Option<TransitionDuties> 
         }
     }
     None
+}
+
+/// Look up duties for an exact snapshotted edge. The target matters for the
+/// contract-v3 implementation handoff: entering reconciliation is checked by
+/// the engine but has no report or checkpoint prerequisite. Historical edges
+/// still use the original phase-table duties.
+pub(crate) fn duties_for_transition(
+    source: &str,
+    event: &str,
+    target: &str,
+) -> Option<TransitionDuties> {
+    if source == "implement" && event == "implementation-ready" && target == RECONCILIATION_STATE {
+        return Some(TransitionDuties::CheckedNoArtifact);
+    }
+    duties_for(source, event)
 }
 
 fn review_duties(phase: &Phase, gate: &'static str, event: &str) -> Option<TransitionDuties> {
@@ -240,12 +307,33 @@ pub(crate) fn software_change_workflow() -> Workflow {
 ///
 /// Omitted `initial_input`, a non-object, or an object without
 /// `review_policies` yields the sixteen-state union. A present
-/// `review_policies` object keeps only live review states.
+/// `review_policies` object keeps only live review states. A new contract-v3
+/// input also gets the provider-owned reconciliation hop; the workflow is
+/// snapshotted by engine start, so stored older graphs remain unchanged.
 pub(crate) fn describe_workflow(initial_input: Option<&Value>) -> Result<Workflow, String> {
     let review_policies = initial_input
         .and_then(Value::as_object)
         .and_then(|object| object.get("review_policies"));
-    let mut workflow = stitch(review_policies, initial_input.is_some_and(overlay::enabled))?;
+    let reconciliation_enabled = initial_input
+        .filter(|input| input.get("contract_version").and_then(Value::as_u64) == Some(3))
+        .is_some_and(|input| {
+            // Version-10 contract-v3 inputs are historical snapshots. New
+            // profile revisions gain the provider-owned phase; custom/test
+            // contract-v3 inputs remain enabled unless they explicitly carry
+            // the frozen -10 suffix.
+            !input
+                .get("config_version")
+                .and_then(Value::as_str)
+                .is_some_and(|version| version.ends_with("-10"))
+        });
+    let bookends_enabled = initial_input.is_some_and(overlay::enabled);
+    let semantic_coverage = initial_input.is_some_and(overlay::semantic_coverage_enabled);
+    let mut workflow = stitch(
+        review_policies,
+        bookends_enabled,
+        reconciliation_enabled,
+        semantic_coverage,
+    )?;
     if initial_input.is_some_and(|v| matches!(v["contract_version"].as_u64(), Some(2 | 3))) {
         for slot in &mut workflow.work_slots {
             if slot.id.as_str().starts_with("validation") || slot.id.as_str() == "implement" {
@@ -305,7 +393,12 @@ pub(crate) fn describe_workflow(initial_input: Option<&Value>) -> Result<Workflo
     Ok(workflow)
 }
 
-fn stitch(review_policies: Option<&Value>, bookends_enabled: bool) -> Result<Workflow, String> {
+fn stitch(
+    review_policies: Option<&Value>,
+    bookends_enabled: bool,
+    reconciliation_enabled: bool,
+    semantic_coverage: bool,
+) -> Result<Workflow, String> {
     if let Some(value) = review_policies {
         if !value.is_object() {
             return Err("`review_policies` must be an object".to_owned());
@@ -316,6 +409,9 @@ fn stitch(review_policies: Option<&Value>, bookends_enabled: bool) -> Result<Wor
     for phase in PHASES {
         let (parent_live, adversarial_live) = live_reviews(phase, review_policies)?;
         hops.push(Hop::Draft(phase));
+        if reconciliation_enabled && phase.name == "implementation" {
+            hops.push(Hop::Reconciliation);
+        }
         if parent_live {
             hops.push(Hop::Parent(phase));
         }
@@ -333,13 +429,16 @@ fn stitch(review_policies: Option<&Value>, bookends_enabled: bool) -> Result<Wor
     let mut transitions = Vec::new();
     let mut work_slots = Vec::new();
     for (index, hop) in hops.iter().copied().enumerate() {
-        states.push(hop.state(bookends_enabled));
+        states.push(hop.state(bookends_enabled, semantic_coverage));
         let event = hop_event(hop, index == last_index);
         let target = if index == last_index {
             "end"
         } else {
             hops[index + 1].state_id()
         };
+        // The implementation handoff is an engine-checked boundary with no
+        // report/checkpoint obligation. Reconciliation owns its own result;
+        // the following checked `reconciliation-ready` edge validates it.
         transitions.push(Transition::checked(hop.state_id(), event, target));
         if let Hop::Draft(phase) = hop {
             for revise in phase.draft_revises {
@@ -440,6 +539,7 @@ fn axis_ids(list: &Value, gate: &str) -> Result<BTreeSet<String>, String> {
 #[derive(Clone, Copy)]
 enum Hop {
     Draft(&'static Phase),
+    Reconciliation,
     Parent(&'static Phase),
     Adversarial(&'static Phase),
 }
@@ -448,28 +548,48 @@ impl Hop {
     fn state_id(self) -> &'static str {
         match self {
             Self::Draft(phase) => phase.draft_state,
+            Self::Reconciliation => RECONCILIATION_STATE,
             Self::Parent(phase) => phase.parent_review,
             Self::Adversarial(phase) => phase.adversarial_review,
         }
     }
 
-    fn state(self, bookends_enabled: bool) -> State {
+    fn state(self, bookends_enabled: bool, semantic_coverage: bool) -> State {
         match self {
             Self::Draft(phase) => State::new(
                 phase.draft_state,
                 phase.draft_title,
-                with_bookends_guidance(phase.draft_instructions, bookends_enabled),
+                with_bookends_guidance(
+                    phase.draft_instructions,
+                    bookends_enabled,
+                    semantic_coverage,
+                ),
+                false,
+            ),
+            Self::Reconciliation => State::new(
+                RECONCILIATION_STATE,
+                "Reconciliation",
+                with_bookends_guidance(
+                    &reconciliation_instructions(bookends_enabled),
+                    bookends_enabled,
+                    semantic_coverage,
+                ),
                 false,
             ),
             Self::Parent(phase) => State::new(
                 phase.parent_review,
                 phase.parent_review_title,
-                with_bookends_guidance(phase.parent_review_instructions, bookends_enabled),
+                with_bookends_guidance(
+                    phase.parent_review_instructions,
+                    bookends_enabled,
+                    semantic_coverage,
+                ),
                 false,
             ),
             Self::Adversarial(phase) => {
                 let title = adversarial_title(phase.parent_review_title);
-                let instructions = adversarial_instructions(phase, bookends_enabled);
+                let instructions =
+                    adversarial_instructions(phase, bookends_enabled, semantic_coverage);
                 State::new(phase.adversarial_review, title, instructions, false)
             }
         }
@@ -491,6 +611,7 @@ impl Hop {
     fn slot_id(self) -> &'static str {
         match self {
             Self::Draft(phase) => phase.draft_slot,
+            Self::Reconciliation => RECONCILIATION_DRAFT_SLOT,
             Self::Parent(phase) => phase.parent_review,
             Self::Adversarial(phase) => phase.adversarial_review,
         }
@@ -503,6 +624,7 @@ fn hop_event(hop: Hop, last: bool) -> &'static str {
     }
     match hop {
         Hop::Draft(phase) => phase.ready_event,
+        Hop::Reconciliation => RECONCILIATION_READY_EVENT,
         Hop::Parent(_) | Hop::Adversarial(_) => "approved",
     }
 }
@@ -514,20 +636,32 @@ fn adversarial_title(parent_title: &str) -> String {
     }
 }
 
-fn adversarial_instructions(phase: &Phase, bookends_enabled: bool) -> String {
+fn adversarial_instructions(
+    phase: &Phase,
+    bookends_enabled: bool,
+    semantic_coverage: bool,
+) -> String {
     with_bookends_guidance(
         &format!(
             "This challenge review follows parent `{}` and must meaningfully falsify that parent's pass claim only with current supplied evidence, a violated frozen obligation, a concrete consequence for change success, and why existing validation does not resolve the issue. Reject hypothetical threats, invented requirements, silence or style complaints, and mechanism-for-its-own-sake findings; do not waive material failures. {}",
             phase.parent_review, phase.parent_review_instructions
         ),
         bookends_enabled,
+        semantic_coverage,
     )
 }
 
-fn with_bookends_guidance(instructions: &str, enabled: bool) -> String {
+const BOOKENDS_SEMANTIC_GUIDANCE: &str = "For a new semantic-coverage profile, `ids-grounded` is not an ID/topic/token check: read each cited requirement's actual normative wording and every authoritative document it explicitly names. Classify sufficient existing wording, change-specific proof, missing or changed enduring meaning, or an implementation defect under sufficient wording. Keep proposals provisional and preserve owner acceptance, application, and commit as explicit pending statuses; a parser-valid candidate is not live. Bookends-disabled runs do not acquire PRD IDs or overlay obligations.";
+
+fn with_bookends_guidance(instructions: &str, enabled: bool, semantic_coverage: bool) -> String {
     if enabled {
+        let semantic = if semantic_coverage {
+            format!(" {BOOKENDS_SEMANTIC_GUIDANCE}")
+        } else {
+            String::new()
+        };
         format!(
-            "{instructions} {BOOKENDS_STATE_GUIDANCE} Citation spelling: `{}`.",
+            "{instructions} {BOOKENDS_STATE_GUIDANCE}{semantic} Citation spelling: `{}`.",
             bookends_citation_hint()
         )
     } else {
@@ -756,6 +890,46 @@ mod tests {
                 .instructions
                 .contains(&["bookends", ":LE-", "<n>"].concat()));
         }
+    }
+
+    #[test]
+    fn new_bookends_profiles_receive_semantic_handoff_guidance_without_new_axis() {
+        let workflow = describe_workflow(Some(&json!({
+            "contract_version": 3,
+            "config_version": "standard-11",
+            "extra": {"bookends": {"enabled": true}},
+            "review_policies": {
+                "intent-review": [{"id": "ordinary"}],
+                "intent-adversarial-review": [{"id": "ordinary"}]
+            }
+        })))
+        .expect("new semantic profile");
+        for state_id in ["explore", "intent-review", "intent-adversarial-review"] {
+            let state = workflow
+                .states
+                .iter()
+                .find(|state| state.id.as_str() == state_id)
+                .expect(state_id);
+            assert!(state.instructions.contains("actual normative wording"));
+            assert!(state.instructions.contains("explicitly names"));
+            assert!(state.instructions.contains("implementation defect"));
+        }
+        let old = describe_workflow(Some(&json!({
+            "contract_version": 3,
+            "config_version": "standard-10",
+            "extra": {"bookends": {"enabled": true}},
+            "review_policies": {
+                "intent-review": [{"id": "ordinary"}],
+                "intent-adversarial-review": [{"id": "ordinary"}]
+            }
+        })))
+        .expect("frozen semantic profile");
+        let old_state = old
+            .states
+            .iter()
+            .find(|state| state.id.as_str() == "intent-review")
+            .expect("old intent review");
+        assert!(!old_state.instructions.contains("actual normative wording"));
     }
 
     #[test]
@@ -1239,6 +1413,169 @@ mod tests {
                 phase.adversarial_review
             );
         }
+    }
+
+    #[test]
+    fn contract_v3_inserts_reconciliation_without_migrating_older_graphs() {
+        let v3 = describe_workflow(Some(&json!({
+            "contract_version": 3,
+            "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+            "config_version": "test-v3",
+            "review_policies": {
+                "implementation-review": [axis("code")]
+            }
+        })))
+        .expect("v3 workflow");
+
+        let state_ids = v3
+            .states
+            .iter()
+            .map(|state| state.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            state_ids,
+            vec![
+                "explore",
+                "design",
+                "plan",
+                "implement",
+                "reconciliation",
+                "implementation-review",
+                "validation",
+                "end",
+            ]
+        );
+        let implement_edge = v3
+            .transitions
+            .iter()
+            .find(|edge| {
+                edge.source.as_str() == "implement"
+                    && edge.event.as_str() == "implementation-ready"
+                    && edge.target.as_str() == RECONCILIATION_STATE
+            })
+            .expect("implementation enters reconciliation");
+        assert_eq!(implement_edge.kind, TransitionKind::Checked);
+        assert_eq!(
+            duties_for_transition(
+                implement_edge.source.as_str(),
+                implement_edge.event.as_str(),
+                implement_edge.target.as_str()
+            ),
+            Some(TransitionDuties::CheckedNoArtifact)
+        );
+        let reconciliation_edge = v3
+            .transitions
+            .iter()
+            .find(|edge| {
+                edge.source.as_str() == RECONCILIATION_STATE
+                    && edge.event.as_str() == RECONCILIATION_READY_EVENT
+            })
+            .expect("reconciliation enters final implementation boundary");
+        assert_eq!(reconciliation_edge.target.as_str(), "implementation-review");
+        assert_eq!(
+            duties_for_transition(
+                reconciliation_edge.source.as_str(),
+                reconciliation_edge.event.as_str(),
+                reconciliation_edge.target.as_str()
+            ),
+            Some(TransitionDuties::Checked {
+                subject: RECONCILIATION_SUBJECT,
+                gate: None,
+            })
+        );
+        let slot = v3
+            .work_slots
+            .iter()
+            .find(|slot| slot.id.as_str() == RECONCILIATION_DRAFT_SLOT)
+            .expect("reconciliation draft slot");
+        assert_eq!(slot.state.as_str(), RECONCILIATION_STATE);
+        assert_eq!(slot.event.as_str(), RECONCILIATION_READY_EVENT);
+        let state = v3
+            .states
+            .iter()
+            .find(|state| state.id.as_str() == RECONCILIATION_STATE)
+            .expect("reconciliation state");
+        assert!(state.instructions.contains(RECONCILIATION_SCHEMA_PATH));
+        for field in RECONCILIATION_RESULT_FIELDS {
+            assert!(
+                state.instructions.contains(field),
+                "missing result field {field}"
+            );
+        }
+        assert!(state
+            .instructions
+            .contains("sole implementation-report writer"));
+        assert!(state.instructions.contains("Bookends disabled"));
+
+        let bookends = describe_workflow(Some(&json!({
+            "contract_version": 3,
+            "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+            "config_version": "test-v3",
+            "extra": {"bookends": {"enabled": true}},
+            "review_policies": {}
+        })))
+        .expect("Bookends workflow");
+        let bookends_state = bookends
+            .states
+            .iter()
+            .find(|state| state.id.as_str() == RECONCILIATION_STATE)
+            .expect("Bookends reconciliation state");
+        assert!(bookends_state
+            .instructions
+            .contains("actual accepted PRD wording"));
+        assert!(!bookends_state.instructions.contains("do not add PRD IDs"));
+
+        let old_v2 = describe_workflow(Some(&json!({
+            "contract_version": 2,
+            "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+            "config_version": "old-v2",
+            "review_policies": {}
+        })))
+        .expect("old workflow");
+        assert!(!old_v2
+            .states
+            .iter()
+            .any(|state| state.id.as_str() == RECONCILIATION_STATE));
+        assert_eq!(
+            old_v2
+                .transitions
+                .iter()
+                .find(|edge| {
+                    edge.source.as_str() == "implement"
+                        && edge.event.as_str() == "implementation-ready"
+                })
+                .expect("old implementation edge")
+                .target
+                .as_str(),
+            "validation"
+        );
+
+        // A stored pre-feature v3 snapshot still names the old target. The
+        // target-aware duty lookup must not reinterpret it as reconciliation.
+        assert_eq!(
+            duties_for_transition("implement", "implementation-ready", "implementation-review"),
+            Some(TransitionDuties::Checked {
+                subject: "implementation-report.json",
+                gate: None,
+            })
+        );
+    }
+
+    #[test]
+    fn reconciliation_result_fields_match_the_closed_schema_source() {
+        let schema: Value =
+            serde_json::from_str(include_str!("../data/reconciliation-schema.json"))
+                .expect("reconciliation schema JSON");
+        let required = schema["required"].as_array().expect("required fields");
+        let required = required
+            .iter()
+            .map(|value| value.as_str().expect("required field"))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            required,
+            RECONCILIATION_RESULT_FIELDS.iter().copied().collect()
+        );
+        assert_eq!(schema["additionalProperties"], Value::Bool(false));
     }
 
     #[test]

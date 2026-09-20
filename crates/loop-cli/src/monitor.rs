@@ -1,10 +1,11 @@
 //! Passive deterministic observation with an optional separate advisory subprocess.
 #[path = "monitor_summary.rs"]
 mod monitor_summary;
+use crate::visibility;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
@@ -12,7 +13,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-const HELP: &str = "Usage: loop-engine monitor [--run ID]... [--capture-dir ABS]... [--invocation ID] [--engine ABS] [--database PATH] [--observation ABS]... [--json] [--attention-seconds N] [--poll-seconds N] [--summary-config FILE --output-dir ABS]\nOptional external summaries are advisory; config/call failure never stops observation.\nNative reads use non-arming status. --engine selects released compatibility reads (list/history/invocation-progress only). At least one source is required. --invocation requires exactly one run. JSON mode emits flushed JSONL snapshots and source-identified completion/attention events; human output is stderr. Both follow until interrupted. Attention deadline is observer elapsed time, not ETA. Restart rereads durable evidence; no exactly-once promise. Stopping this observer never cancels work. Unknown judgment is not approval.\n";
+const HELP: &str = "Usage: loop-engine monitor [--run ID]... [--capture-dir ABS]... [--invocation ID] [--engine ABS] [--database PATH] [--observation ABS]... [--json] [--attention-seconds N] [--poll-seconds N] [--summary-config FILE --output-dir ABS]\nOptional external summaries are advisory; config/call failure never stops observation.\nNative reads use non-arming status. --engine selects released compatibility reads (list/history/invocation-progress only). At least one source is required. --invocation requires exactly one run. JSON mode emits flushed JSONL snapshots and source-identified completion/attention events; inspect workflow_lane, execution, worker, conformance, acceptance, evidence, freshness and uncertainty separately. owner_update is assistant-owned active-chat guidance, not a notification channel. Human output is stderr. Both follow until interrupted. Attention deadline is observer elapsed time, not ETA. Restart rereads durable evidence; no exactly-once promise. Stopping this observer never cancels work. Unknown judgment is not approval.\n";
 
 #[derive(Default)]
 struct Options {
@@ -258,10 +259,15 @@ fn capture(root: &Path) -> Value {
                 }
             }
             Err(e) => {
+                // A regular external command may not produce a fan-out
+                // summary. Keep its execution completion separate from the
+                // unknown worker/conformance lanes; graph callers still use
+                // the explicit inventory check below to raise attention.
                 p["diagnostics"] = json!([e]);
             }
         }
     }
+    visibility::enrich_monitor_packet(&mut p);
     p
 }
 fn backend(o: &Options, tail: &[String]) -> Result<Value, String> {
@@ -350,6 +356,8 @@ fn run_source(o: &Options, id: &str) -> Value {
                 &["show".into(), id.into(), "--view".into(), "status".into()],
             )?
         };
+        let mut workflow = workflow;
+        visibility::strip_observation_clocks(&mut workflow);
         p["workflow"] = workflow.clone();
         p["workflow_source"] = json!({"engine":o.engine,"database":o.database,"interface":if o.engine.is_some(){"list"}else{"show --view status"}});
         let history = backend(o, &["history".into(), id.into()])?;
@@ -459,15 +467,19 @@ fn run_source(o: &Options, id: &str) -> Value {
     })();
     if let Err(e) = result {
         p["diagnostics"] = json!([e]);
+        attention(&mut p, "selected source is unavailable or needs inspection");
     }
+    visibility::enrich_monitor_packet(&mut p);
     p
 }
 fn emit(o: &Options, mut p: Value, event: &str) -> Result<(), String> {
     p["event"] = json!(event);
-    p["sampled_at_ms"] = json!(SystemTime::now()
+    let sampled_at_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis());
+        .as_millis();
+    p["sampled_at_ms"] = json!(sampled_at_ms);
+    visibility::add_rendered_freshness(&mut p, sampled_at_ms);
     if o.json {
         let mut out = io::stdout().lock();
         serde_json::to_writer(&mut out, &p).map_err(|e| e.to_string())?;
@@ -479,10 +491,22 @@ fn emit(o: &Options, mut p: Value, event: &str) -> Result<(), String> {
     }
     Ok(())
 }
+fn advisory_summary_failure(detail: impl Into<String>, summaries_disabled: bool) -> Value {
+    json!({
+        "source": "advisory-summary",
+        "status": "summary-failed",
+        "detail": detail.into(),
+        "summaries_disabled": summaries_disabled,
+        "evidence": {"state":"unknown","source_locators":[]},
+        "freshness": {"state":"unknown","meaning":"no usable advisory input was retained"},
+        "uncertainty": {"state":"present","reasons":["advisory summary is unavailable; deterministic observation continues"]}
+    })
+}
+
 fn run(o: Options) -> Result<(), String> {
     let start = Instant::now();
     let mut previous = BTreeMap::new();
-    let mut deadline = false;
+    let mut deadline_sources = BTreeSet::new();
     let mut boundaries = BTreeMap::new();
     let mut summary = match (&o.summary_config, &o.output_dir) {
         (None, _) => None,
@@ -490,11 +514,7 @@ fn run(o: Options) -> Result<(), String> {
             match monitor_summary::Summary::open(config, root) {
                 Ok(s) => Some(s),
                 Err(e) => {
-                    emit(
-                        &o,
-                        json!({"source":"advisory-summary","status":"summary-failed","detail":e}),
-                        "summary",
-                    )?;
+                    emit(&o, advisory_summary_failure(e, false), "summary")?;
                     None
                 }
             }
@@ -502,7 +522,7 @@ fn run(o: Options) -> Result<(), String> {
         _ => {
             emit(
                 &o,
-                json!({"source":"advisory-summary","status":"summary-failed","detail":"summaries require --output-dir ABS"}),
+                advisory_summary_failure("summaries require --output-dir ABS", false),
                 "summary",
             )?;
             None
@@ -526,19 +546,18 @@ fn run(o: Options) -> Result<(), String> {
                     }
                 }
                 Err(e) => {
-                    emit(
-                        &o,
-                        json!({"source":"advisory-summary","status":"summary-failed","detail":e,"summaries_disabled":true}),
-                        "summary",
-                    )?;
+                    emit(&o, advisory_summary_failure(e, true), "summary")?;
                     summary = None;
                 }
             }
         }
         for p in packets {
             let key = p["source"].as_str().unwrap().to_owned();
-            if previous.get(&key) != Some(&p) {
-                emit(&o, p.clone(), "snapshot")?;
+            let changed = previous.get(&key) != Some(&p);
+            let mut rendered = p.clone();
+            rendered["owner_update"] = visibility::owner_update(previous.get(&key), &p);
+            if changed {
+                emit(&o, rendered.clone(), "snapshot")?;
                 let identity = json!([
                     p["boundary"],
                     p["helper"]["invocation_id"],
@@ -547,24 +566,29 @@ fn run(o: Options) -> Result<(), String> {
                 ]);
                 if boundaries.get(&key) != Some(&identity) {
                     if let Some(event) = p["boundary"]["event"].as_str() {
-                        emit(&o, p.clone(), event)?;
+                        emit(&o, rendered.clone(), event)?;
                     }
                     boundaries.insert(key.clone(), identity);
                 }
-                previous.insert(key, p.clone());
+                previous.insert(key.clone(), p.clone());
             }
-            if !deadline
-                && o.attention
-                    .is_some_and(|n| start.elapsed().as_secs_f64() >= n)
+            if o.attention
+                .is_some_and(|n| start.elapsed().as_secs_f64() >= n)
+                && deadline_sources.insert(key)
             {
-                let mut timed = p;
+                let mut timed = rendered;
                 attention(&mut timed, "configured observer attention deadline reached");
+                timed["owner_update"] = json!({
+                    "required_before_next_decision": true,
+                    "channel": "active Pi conversation",
+                    "observed_change": "observer attention deadline reached",
+                    "needed_action_or_decision": timed["next_action"],
+                    "before_next_decision": ["wait", "inspect", "help"],
+                    "machine_notification_is_not_owner_update": true
+                });
                 emit(&o, timed, "attention")?;
             }
         }
-        deadline |= o
-            .attention
-            .is_some_and(|n| start.elapsed().as_secs_f64() >= n);
         std::thread::sleep(Duration::from_secs_f64(o.poll));
     }
 }

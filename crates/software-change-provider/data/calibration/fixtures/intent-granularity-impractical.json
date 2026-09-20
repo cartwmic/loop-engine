@@ -1,0 +1,52 @@
+{
+  "revision": "r15",
+  "author": {
+    "name": "change-owner",
+    "kind": "human"
+  },
+  "operating_context": {
+    "operators": [
+      "trusted sole operator",
+      "repository maintainer"
+    ],
+    "environment": [
+      "local repository checkout",
+      "Loop Engine and software-change provider CLIs",
+      "configured local worker CLIs"
+    ],
+    "threat_boundary": {
+      "in_scope": [
+        "operator-visible software-change runs",
+        "local repository artifacts and configured workers"
+      ],
+      "excluded": [
+        "hostile users",
+        "mutually distrusting tenants",
+        "enterprise authorization or audit infrastructure"
+      ]
+    },
+    "accepted_risks": [],
+    "outside_obligations": [
+      {
+        "source": "Loop Engine provider boundary",
+        "obligation": "The provider remains deterministic and external reviewers retain semantic authority."
+      }
+    ]
+  },
+  "problem": "A trusted operator needs a practical status result for a started local job, but the draft demands proof that cannot be obtained from a finite local observation.",
+  "outcome": "The operator receives a status result for the started job through evidence that can be captured in the local workflow.",
+  "acceptance": [
+    {
+      "id": "AC-1",
+      "statement": "For every future job, every possible worker, every future workload, and every execution instant, a single finite local capture must prove that the public status is correct with zero delay and without any unobserved interval."
+    }
+  ],
+  "constraints": [
+    "Proof must use the existing local CLI and captured worker path.",
+    "The workflow has finite observation points and no always-on monitoring service."
+  ],
+  "non_goals": [
+    "A guaranteed real-time deadline or universal workload proof.",
+    "A distributed monitoring service or hostile-user authorization."
+  ]
+}

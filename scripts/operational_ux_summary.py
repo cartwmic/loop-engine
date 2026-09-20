@@ -88,6 +88,9 @@ print(json.dumps(dict(developments='fixture claim' if not previous else 'correct
         cfg=config('main')
         item=start('session',cfg)
         first=wait(item,'summary-usable');assert first['attempted_calls']==1
+        assert first['evidence']['source_locators']==['capture:'+str(source)]
+        assert first['freshness']['state']=='current-input'
+        assert first['uncertainty']['state']=='present'
         attempt=root/'session'/'attempt-0001'
         initial=json.loads((attempt/'stdin.json').read_text())
         assert initial['selected_sources']==['capture:'+str(source)]
@@ -112,6 +115,8 @@ print(json.dumps(dict(developments='fixture claim' if not previous else 'correct
             a=root/'session'/f'attempt-{n:04}'
             assert all((a/p).exists() for p in ['stdin.json','stdout','stderr','exit.json','command.json'])
             fact=json.loads((a/'exit.json').read_text());assert not fact['output_conformant']
+            assert str(a) == value['evidence']['attempt_directory']
+            assert value['evidence']['source_locators']==['capture:'+str(source)]
             if failure=='timeout': assert fact['timed_out']
             if failure=='nonzero': assert fact['exit_code']==7
             time.sleep(.35)

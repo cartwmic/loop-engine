@@ -1,0 +1,218 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "revision",
+    "author",
+    "mode",
+    "branch",
+    "document_observations",
+    "behavior_observations",
+    "action",
+    "action_reason",
+    "authorization",
+    "application",
+    "commit",
+    "traceability",
+    "proof_references",
+    "blockers",
+    "decision"
+  ],
+  "properties": {
+    "revision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "author": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kind"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "human",
+            "agent",
+            "script"
+          ]
+        }
+      }
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "bookends-enabled",
+        "bookends-disabled"
+      ]
+    },
+    "branch": {
+      "type": "string",
+      "enum": [
+        "sufficient-existing-wording",
+        "change-specific-proof",
+        "missing-or-changed-enduring-meaning",
+        "implementation-defect"
+      ]
+    },
+    "document_observations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "status",
+          "observation"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "unchanged",
+              "sufficient",
+              "missing",
+              "changed",
+              "updated",
+              "unrelated"
+            ]
+          },
+          "observation": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "behavior_observations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "observation"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "matches-intent",
+              "implementation-defect",
+              "change-specific",
+              "corrected",
+              "unknown"
+            ]
+          },
+          "observation": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "none",
+        "no-document-change",
+        "document-edit",
+        "implementation-correction",
+        "amendment-application",
+        "blocked"
+      ]
+    },
+    "action_reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "authorization": {
+      "type": "string",
+      "enum": [
+        "not-required",
+        "pending",
+        "accepted",
+        "rejected"
+      ]
+    },
+    "application": {
+      "type": "string",
+      "enum": [
+        "not-required",
+        "pending",
+        "applied",
+        "not-applied"
+      ]
+    },
+    "commit": {
+      "type": "string",
+      "enum": [
+        "not-required",
+        "pending",
+        "committed",
+        "not-committed"
+      ]
+    },
+    "traceability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "references"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "retained",
+            "updated",
+            "not-applicable",
+            "pending",
+            "blocked"
+          ]
+        },
+        "references": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "proof_references": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "decision": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "blocked"
+      ]
+    }
+  }
+}

@@ -51,6 +51,11 @@ def monitor_case(args):
                     assert self.process.poll() is None, 'notification was not received while observer alive'
                     return row
             raise AssertionError('no matching live notification')
+        def drain(self):
+            rows = []
+            while True:
+                try: rows.append(self.events.get_nowait())
+                except queue.Empty: return rows
         def stop(self):
             self.process.terminate(); self.process.wait(timeout=10); self.reader.join(timeout=5)
             self.errors.close(); record(self.argv, self.process.returncode, self.out, self.err)
@@ -77,7 +82,15 @@ else: print(json.dumps({'result':'allow'}))
         ids.append(run)
     ob = Observer(['--database', db, '--run', ids[0], '--run', ids[1], '--attention-seconds', '.2'])
     try:
-        ob.wait('snapshot', 'run:'+ids[0]); ob.wait('snapshot', 'run:'+ids[1])
+        first = ob.wait('snapshot', 'run:'+ids[0])
+        for key in ('workflow_lane', 'execution', 'worker_lane', 'conformance', 'acceptance',
+                    'evidence', 'freshness', 'uncertainty', 'next_action', 'owner_update'):
+            assert key in first, (key, first)
+        assert first['acceptance']['state'] == 'unknown'
+        assert first['owner_update']['required_before_next_decision']
+        assert first['owner_update']['observed_change']
+        assert first['owner_update']['needed_action_or_decision']
+        ob.wait('snapshot', 'run:'+ids[1])
         denied = call([*base, 'append', ids[0], 'note', '{}'], 10)
         assert denied['code'] == 'run-not-observed'
         ob.wait('attention', reason='deadline')
@@ -96,7 +109,20 @@ else: print(json.dumps({'result':'allow'}))
     fanout=call([engine,'--json',*fanout_args])
     fanout_root=Path(fanout['output_dir'])
     ob=Observer(['--capture-dir',fanout_root])
-    try: ob.wait('completion')
+    try:
+        completed = ob.wait('completion')
+        assert completed['execution']['state'] == 'succeeded', completed
+        assert completed['acceptance']['state'] == 'unknown', completed
+        assert completed['evidence']['locations'], completed
+        assert completed['owner_update']['observed_change']
+    finally: ob.stop()
+    # A stable completed capture is not a polling heartbeat. The completion
+    # notification remains available, but unchanged snapshots are suppressed.
+    ob=Observer(['--capture-dir',fanout_root])
+    try:
+        ob.wait('snapshot')
+        time.sleep(.2)
+        assert not [row for row in ob.drain() if row.get('event') == 'snapshot'], 'unchanged capture heartbeat'
     finally: ob.stop()
     # Removing an inventoried node remains unknown, never inferred success.
     import shutil

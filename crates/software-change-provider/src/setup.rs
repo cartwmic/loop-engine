@@ -42,6 +42,13 @@ struct ReviewRosterEntry {
     args: Vec<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct DraftWorkerInput {
+    command: String,
+    args: Vec<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ImplementationInput {
@@ -58,6 +65,7 @@ struct SetupArgs {
     provider: String,
     output: PathBuf,
     bookends: bool,
+    draft_worker_path: Option<PathBuf>,
     implementation_path: Option<PathBuf>,
 }
 
@@ -135,7 +143,7 @@ pub fn run_from_args(args: &[String]) -> i32 {
 }
 
 fn usage() -> &'static str {
-    "usage: software-change setup --rigor minimal|standard|high --roster PATH --engine ABS --provider ABS --output PATH [--bookends] [--implementation PATH]"
+    "usage: software-change setup --rigor minimal|standard|high --roster PATH --engine ABS --provider ABS --output PATH [--bookends] [--draft-worker PATH] [--implementation PATH]"
 }
 
 fn parse_args(args: &[String]) -> Result<SetupArgs, String> {
@@ -145,6 +153,7 @@ fn parse_args(args: &[String]) -> Result<SetupArgs, String> {
     let mut provider = None;
     let mut output = None;
     let mut bookends = false;
+    let mut draft_worker_path = None;
     let mut implementation_path = None;
     let mut index = 0;
 
@@ -179,6 +188,10 @@ fn parse_args(args: &[String]) -> Result<SetupArgs, String> {
             ("--output", Some(value.to_owned()))
         } else if token == "--output" {
             ("--output", None)
+        } else if let Some(value) = token.strip_prefix("--draft-worker=") {
+            ("--draft-worker", Some(value.to_owned()))
+        } else if token == "--draft-worker" {
+            ("--draft-worker", None)
         } else if let Some(value) = token.strip_prefix("--implementation=") {
             ("--implementation", Some(value.to_owned()))
         } else if token == "--implementation" {
@@ -207,6 +220,7 @@ fn parse_args(args: &[String]) -> Result<SetupArgs, String> {
             "--engine" => set_once(&mut engine, value, name)?,
             "--provider" => set_once(&mut provider, value, name)?,
             "--output" => set_once(&mut output, PathBuf::from(value), name)?,
+            "--draft-worker" => set_once(&mut draft_worker_path, PathBuf::from(value), name)?,
             "--implementation" => set_once(&mut implementation_path, PathBuf::from(value), name)?,
             _ => unreachable!(),
         }
@@ -225,6 +239,7 @@ fn parse_args(args: &[String]) -> Result<SetupArgs, String> {
         provider: absolute_command(provider, "--provider")?,
         output,
         bookends,
+        draft_worker_path,
         implementation_path,
     })
 }
@@ -263,6 +278,11 @@ struct SetupReport {
 
 fn build(args: SetupArgs) -> Result<SetupReport, String> {
     let roster = read_roster(&args.roster_path)?;
+    let draft_worker = args
+        .draft_worker_path
+        .as_deref()
+        .map(read_draft_worker)
+        .transpose()?;
     let implementation = args
         .implementation_path
         .as_deref()
@@ -293,6 +313,7 @@ fn build(args: SetupArgs) -> Result<SetupReport, String> {
         &args.provider,
         &preamble,
         &output_schema,
+        draft_worker.as_ref(),
         implementation.as_ref(),
     )?;
     output_profile["work_slot_bindings"] = bindings.clone();
@@ -385,6 +406,35 @@ fn read_roster(path: &Path) -> Result<Vec<ReviewRosterEntry>, String> {
     Ok(roster)
 }
 
+fn read_draft_worker(path: &Path) -> Result<DraftWorkerInput, String> {
+    let bytes = fs::read(path)
+        .map_err(|error| format!("could not read draft worker {}: {error}", path.display()))?;
+    let worker: DraftWorkerInput = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("draft worker {} is invalid: {error}", path.display()))?;
+    validate_worker_command(&worker.command, &worker.args, "draft worker")?;
+    Ok(worker)
+}
+
+fn validate_worker_command(command: &str, args: &[String], label: &str) -> Result<(), String> {
+    if command.trim().is_empty() {
+        return Err(format!("{label} command must be non-empty"));
+    }
+    if command.contains(['\n', '\r', '\0']) {
+        return Err(format!(
+            "{label} command cannot contain a line break or NUL"
+        ));
+    }
+    if let Some(argument_index) = args
+        .iter()
+        .position(|argument| argument.contains(['\n', '\r', '\0']))
+    {
+        return Err(format!(
+            "{label} argument {argument_index} cannot contain a line break or NUL"
+        ));
+    }
+    Ok(())
+}
+
 fn read_implementation(path: &Path) -> Result<ImplementationInput, String> {
     let bytes = fs::read(path).map_err(|error| {
         format!(
@@ -398,29 +448,11 @@ fn read_implementation(path: &Path) -> Result<ImplementationInput, String> {
             path.display()
         )
     })?;
-    if implementation.command.trim().is_empty() {
-        return Err("implementation command must be non-empty".to_owned());
-    }
-    if implementation.command.contains(['\n', '\r']) {
-        return Err("implementation command cannot contain a line break".to_owned());
-    }
-    if let Some(argument_index) = implementation
-        .args
-        .iter()
-        .position(|argument| argument.contains(['\n', '\r']))
-    {
-        return Err(format!(
-            "implementation argument {argument_index} cannot contain a line break"
-        ));
-    }
-    if implementation.command.contains('\0')
-        || implementation
-            .args
-            .iter()
-            .any(|argument| argument.contains('\0'))
-    {
-        return Err("implementation command and args cannot contain NUL".to_owned());
-    }
+    validate_worker_command(
+        &implementation.command,
+        &implementation.args,
+        "implementation",
+    )?;
     if implementation.working_directory.trim().is_empty()
         || !Path::new(&implementation.working_directory).is_absolute()
     {
@@ -493,6 +525,7 @@ fn enable_bookends(profile: &mut Value) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_bindings(
     profile: &Value,
     roster: &[ReviewRosterEntry],
@@ -500,6 +533,7 @@ fn build_bindings(
     provider: &str,
     preamble: &str,
     output_schema: &Value,
+    draft_worker: Option<&DraftWorkerInput>,
     implementation: Option<&ImplementationInput>,
 ) -> Result<Value, String> {
     let policies = profile
@@ -507,6 +541,13 @@ fn build_bindings(
         .and_then(Value::as_object)
         .ok_or("effective profile is missing object review_policies")?;
     let mut bindings = Map::new();
+
+    if let Some(worker) = draft_worker {
+        bindings.insert(
+            "intent-draft".to_owned(),
+            json!({"command": worker.command, "args": worker.args}),
+        );
+    }
 
     for gate in REVIEW_GATES {
         let Some(entries) = policies.get(*gate).and_then(Value::as_array) else {
@@ -965,5 +1006,54 @@ mod tests {
         let error = read_roster(&path).expect_err("duplicate author");
         assert!(error.contains("duplicate author"));
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn draft_worker_is_a_closed_command_and_args_object() {
+        let path = std::env::temp_dir().join(format!(
+            "software-change-setup-draft-worker-{}-{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::write(&path, br#"{"command":"worker","args":["--draft"]}"#).expect("draft worker");
+        assert_eq!(
+            read_draft_worker(&path).expect("valid draft worker"),
+            DraftWorkerInput {
+                command: "worker".to_owned(),
+                args: vec!["--draft".to_owned()]
+            }
+        );
+        fs::write(
+            &path,
+            br#"{"command":"worker","args":[],"preamble":"not allowed"}"#,
+        )
+        .expect("unknown field");
+        assert!(read_draft_worker(&path)
+            .expect_err("unknown draft worker field")
+            .contains("unknown field"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn draft_worker_binding_is_added_without_review_policy_inputs() {
+        let draft = DraftWorkerInput {
+            command: "/engine".to_owned(),
+            args: vec!["fan-out".to_owned(), "--worker".to_owned()],
+        };
+        let bindings = build_bindings(
+            &json!({"review_policies": {}}),
+            &[],
+            "/engine",
+            "/provider",
+            "preamble",
+            &json!({"type":"object"}),
+            Some(&draft),
+            None,
+        )
+        .expect("draft-only binding");
+        assert_eq!(
+            bindings["intent-draft"],
+            json!({"command":"/engine","args":["fan-out","--worker"]})
+        );
     }
 }

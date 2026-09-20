@@ -744,8 +744,9 @@ def assert_projected_fan_out_capture(invocation: Mapping[str, Any]) -> dict[str,
         if preamble is not None:
             expected_bytes = preamble.encode() + (b"" if preamble.endswith("\n") else b"\n") + expected_bytes + b"---\n\n"
         assert raw == expected_bytes, "current instructions and preamble composition changed"
-        if invocation["controls"].get("force_fresh"):
-            assert location["controls"] == invocation["controls"]
+        controls = invocation.get("controls") or {}
+        if controls.get("force_fresh"):
+            assert location["controls"] == controls
         else:
             assert "controls" not in location
         equivalent = dict(location, context=full)
