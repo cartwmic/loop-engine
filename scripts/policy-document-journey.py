@@ -597,6 +597,10 @@ def main() -> int:
         profile_path = work / "readme.json"
         shutil.copy2(shipped_profile, profile_path)
         profile = json.loads(profile_path.read_text(encoding="utf-8"))
+        agents_profile = profile["profile_version"] == "agents-2"
+        if agents_profile:
+            target = work / "AGENTS.md"
+            target.write_text("", encoding="utf-8")
         work_slot_journey.assert_no_review_bindings(
             profile.get("work_slot_bindings"),
             source=str(shipped_profile),
@@ -626,7 +630,7 @@ def main() -> int:
                 run_id,
                 "policy-document",
                 "@" + str(profile_path),
-                f"README {args.mode} journey",
+                f"{target_id} {args.mode} journey",
             ],
         )
         assert started["status"] == "completed", started
@@ -651,16 +655,14 @@ def main() -> int:
             "policy-document-nonconforming",
             "deterministic",
         )
-        assert [item["policy_id"] for item in deterministic["violations"]] == [
-            "document-present",
-            "project-title",
-            "purpose",
-            "onboarding",
-            "usage",
-            "validation",
-            "onboarding-command",
-            "validation-command",
-        ]
+        expected_empty = (
+            ["document-present", "scope-authority", "workflow-validation",
+             "completion-handoff", "workflow-command"]
+            if agents_profile else
+            ["document-present", "project-title", "purpose", "onboarding",
+             "usage", "validation", "onboarding-command", "validation-command"]
+        )
+        assert [item["policy_id"] for item in deterministic["violations"]] == expected_empty
         show_state(engine, database, run_id, "deterministic-review")
 
         conforming = (
@@ -668,6 +670,12 @@ def main() -> int:
             "```sh\ncargo build\n```\n\n## Usage\nRun it.\n\n## Validation\n"
             "```sh\ncargo test\n```\n"
         )
+        if agents_profile:
+            conforming = (
+                "# Agent instructions\n\n## Scope\nWork in this fixture only.\n\n"
+                "## Workflow\n```sh\ncargo test\n```\n\n"
+                "## Completion\nRetain command results and report remaining blockers.\n"
+            )
         target.write_text(conforming, encoding="utf-8")
         moved = call(engine, database, ["event", run_id, "passed"])
         assert moved["status"] == "completed", moved
@@ -746,17 +754,19 @@ def main() -> int:
         # Finalization must rerun deterministic policy before consulting evidence.
         # bookends:LE-61 — finalization rechecks the externally changed document, not stale engine state.
         # bookends:LE-62 — the target file and Loop Engine state are deliberately separate commits.
-        broken = conforming.replace("## Validation", "Validation")
+        checked_heading = "Workflow" if agents_profile else "Validation"
+        broken = conforming.replace("## " + checked_heading, checked_heading)
         target.write_text(broken, encoding="utf-8")
         final_deterministic = expect_denial(
             call(engine, database, ["event", run_id, "passed"]),
             "policy-document-nonconforming",
             "deterministic",
         )
-        assert [item["policy_id"] for item in final_deterministic["violations"]] == [
-            "validation",
-            "validation-command",
-        ]
+        expected_broken = (
+            ["workflow-validation", "workflow-command"] if agents_profile
+            else ["validation", "validation-command"]
+        )
+        assert [item["policy_id"] for item in final_deterministic["violations"]] == expected_broken
 
         repaired = conforming + "\nRepair revision.\n"
         target.write_text(repaired, encoding="utf-8")
