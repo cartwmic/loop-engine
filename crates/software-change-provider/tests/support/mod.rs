@@ -354,6 +354,33 @@ pub fn valid_metadata(revision: &str) -> Value {
     })
 }
 
+pub fn reconciliation_fixture() -> Value {
+    json!({
+        "revision": "reconciliation-1",
+        "author": {"name": "fixture-driver", "kind": "script"},
+        "mode": "bookends-disabled",
+        "branch": "sufficient-existing-wording",
+        "document_observations": [{
+            "path": "docs/README.md",
+            "status": "unchanged",
+            "observation": "The fixture document already matches the approved behavior."
+        }],
+        "behavior_observations": [{
+            "status": "matches-intent",
+            "observation": "The fixture behavior matches the approved intent."
+        }],
+        "action": "no-document-change",
+        "action_reason": "Existing wording is sufficient; no document edit is required.",
+        "authorization": "not-required",
+        "application": "not-required",
+        "commit": "not-required",
+        "traceability": {"status": "not-applicable", "references": []},
+        "proof_references": ["fixture:reconciliation"],
+        "blockers": [],
+        "decision": "complete"
+    })
+}
+
 pub fn axis_config(root: &TestDir, axis: &str) -> Value {
     json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
         "config_version": "test-1",

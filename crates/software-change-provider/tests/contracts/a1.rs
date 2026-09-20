@@ -67,6 +67,8 @@ fn standard_run_progresses_schema_deny_then_evidence_deny_then_allow() {
         "scope-fenced",
         "constraints-are-limits",
         "problem-grounded",
+        "acceptance-granularity",
+        "owner-comprehensible",
     ];
     for author in ["reviewer-a1", "reviewer-a1-second"] {
         for axis in axes {

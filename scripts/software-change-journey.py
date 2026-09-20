@@ -8192,7 +8192,8 @@ else:
                     "proposed_id": BOOKENDS_CANDIDATE_ID,
                     "record_markdown": (
                         f"### {BOOKENDS_CANDIDATE_ID}: Proposed requirement\n"
-                        "- Status: live\n- Coverage: e2e/journey\n"
+                        "- Status: live\n- Coverage: e2e/journey\n\n"
+                        "The software-change provider must preserve the proposed behavior in ordinary runs and expose proof that an owner can inspect before completion.\n"
                     ),
                 }
                 if candidate

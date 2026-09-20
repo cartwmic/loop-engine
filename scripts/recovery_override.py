@@ -180,19 +180,30 @@ def software(engine, provider, checker, checkout, work_root):
     skipped = f.override("implementation-ready")["history"]["action"]["outcome"]["exception"]
     assert [row["slot_id"] for row in skipped["skipped_bound_checks"]] == ["implement"]
     assert skipped["skipped_bound_checks"][0]["subject"]
-    f.show()
+    current = f.show()
+    override_count = 4
+    if current["current_state"] == "reconciliation":
+        # New profiles retain a separate checked boundary here. Skipping the
+        # implementation edge must not fabricate its document decision either.
+        denied_reconciliation = f.result(["event", f.name, "reconciliation-ready"], "rejected")
+        assert denied_reconciliation["code"] != "event-unavailable", denied_reconciliation
+        f.override("reconciliation-ready")
+        assert not (f.artifacts / "reconciliation.json").exists()
+        current = f.show()
+        override_count += 1
+    assert current["current_state"] == "validation", current["current_state"]
     f.result(["event", f.name, "passed"], "rejected")
     f.override("passed")
-    summary = f.summary(4)
+    summary = f.summary(override_count)
     terminal = f.show()
     records = {r["id"]: r["data"] for r in terminal["context"]}
     assert records["failed-review"] == review
     assert [records["bookends-" + label] for label in ("RED", "BYPASS")] == bookends
     assert f.history()["result"][:len(original)] == original
     assert all(e["result"]["result"] != "allow" for e in terminal["latest_evaluations"]
-               if e["transition"]["event"] in ("approved", "design-ready", "implementation-ready", "passed"))
+               if e["transition"]["event"] in ("approved", "design-ready", "implementation-ready", "reconciliation-ready", "passed"))
     assert not terminal["work_slot_invocations"]
-    for name in ("design.json", "implementation-report.json", "validation-report.json"):
+    for name in ("design.json", "reconciliation.json", "implementation-report.json", "validation-report.json"):
         assert not (f.artifacts / name).exists(), name
     f.refusal("passed", f.attestation(), code="run-not-active")
     f.proof(summary=summary, skipped=skipped, failed_review_retained=True, bookends=bookends,

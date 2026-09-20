@@ -12,7 +12,7 @@ fn missing_policies_errors_on_first_check_and_leaves_engine_state_unchanged() {
     let state = TestDir::new("a2-missing-state");
     let engine = Engine::new(state.path().join("missing.sqlite"));
     let run = engine.start_ok("missing-policies", json!({"contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1}, "config_version": "custom-v2"}));
-    assert_eq!(run.workflow.states.len(), 16);
+    assert_eq!(run.workflow.states.len(), 17);
     let slot_ids: Vec<_> = run
         .workflow
         .work_slots
@@ -21,6 +21,7 @@ fn missing_policies_errors_on_first_check_and_leaves_engine_state_unchanged() {
         .collect();
     assert!(slot_ids.contains(&"intent-draft"));
     assert!(slot_ids.contains(&"validation-draft"));
+    assert!(slot_ids.contains(&"reconciliation-draft"));
     assert!(slot_ids.contains(&"intent-review"));
     let draft = run
         .workflow
@@ -113,6 +114,11 @@ fn empty_review_policy_preserves_allocation_but_no_longer_waives_final_criterion
         fs::write(artifact_root.join(name), br#"{"revision":"1"}"#)
             .expect("write checkpoint report");
     }
+    fs::write(
+        artifact_root.join("reconciliation.json"),
+        serde_json::to_vec(&support::reconciliation_fixture()).expect("reconciliation JSON"),
+    )
+    .expect("write reconciliation result");
     for phase in ["implementation", "validation"] {
         let output = Command::new(provider_binary())
             .args([
@@ -157,6 +163,7 @@ fn empty_review_policy_preserves_allocation_but_no_longer_waives_final_criterion
         "design-ready",
         "plan-ready",
         "implementation-ready",
+        "reconciliation-ready",
     ] {
         let result = engine.event("empty-policies", event);
         assert!(

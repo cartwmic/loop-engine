@@ -413,6 +413,10 @@ fn backlog_t05_high_validation_uses_aggregate_only_criterion_rows() {
             "author": {"name": "owner", "kind": "human"}
         }),
     );
+    write_json(
+        &artifact_root.join("reconciliation.json"),
+        &super::reconciliation_fixture(),
+    );
 
     for event in ["intent-ready", "design-ready", "plan-ready"] {
         let result = observe_event(&database, &repository, run_id, event);
@@ -423,6 +427,11 @@ fn backlog_t05_high_validation_uses_aggregate_only_criterion_rows() {
     assert_eq!(
         result["status"], "completed",
         "implementation-ready: {result}"
+    );
+    let result = observe_event(&database, &repository, run_id, "reconciliation-ready");
+    assert_eq!(
+        result["status"], "completed",
+        "reconciliation-ready: {result}"
     );
 
     let validation_show = show(&database, &repository, run_id);

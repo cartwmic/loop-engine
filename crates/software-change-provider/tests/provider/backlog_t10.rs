@@ -339,6 +339,10 @@ fn backlog_t10_prepare_validation_addition_is_publicly_appendable_and_collected(
         &actual_artifact_root.join("implementation-report.json"),
         &json!({"revision": "implementation-1", "author": {"name": "owner", "kind": "human"}}),
     );
+    write_json(
+        &actual_artifact_root.join("reconciliation.json"),
+        &super::reconciliation_fixture(),
+    );
 
     for event in ["intent-ready", "design-ready", "plan-ready"] {
         assert_eq!(
@@ -350,6 +354,10 @@ fn backlog_t10_prepare_validation_addition_is_publicly_appendable_and_collected(
     t10_checkpoint(&actual_artifact_root, &repository, "implementation");
     assert_eq!(
         t10_event(&database, &repository, run_id, "implementation-ready")["status"],
+        "completed"
+    );
+    assert_eq!(
+        t10_event(&database, &repository, run_id, "reconciliation-ready")["status"],
         "completed"
     );
     let validation_show = t10_show(&database, &repository, run_id);

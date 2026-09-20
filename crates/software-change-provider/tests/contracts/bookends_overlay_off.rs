@@ -21,6 +21,7 @@ fn write_good_artifacts(root: &TestDir) {
         "validation-report.json",
         &load_fixture("validation-report-good.json"),
     );
+    root.write_json("reconciliation.json", &support::reconciliation_fixture());
 }
 
 fn nonempty_axes(profile: &Value, gate: &str) -> Vec<(String, String, u64)> {
@@ -230,6 +231,13 @@ fn walk_shipped_profile_to_end(profile_name: &str) {
             matches!(outcome, OperationOutcome::Completed(_)),
             "{profile_name} {ready}: {outcome:?}"
         );
+        if ready == "implementation-ready" {
+            let reconciliation = engine.event(profile_name, "reconciliation-ready");
+            assert!(
+                matches!(reconciliation, OperationOutcome::Completed(_)),
+                "{profile_name} reconciliation-ready: {reconciliation:?}"
+            );
+        }
         for gate in [parent, adversarial] {
             let axes = nonempty_axes(&input, gate);
             if axes.is_empty() {

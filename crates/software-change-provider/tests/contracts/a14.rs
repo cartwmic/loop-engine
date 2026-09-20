@@ -300,12 +300,14 @@ fn draft_events_to_review(source: &str) -> &'static [&'static str] {
             "design-ready",
             "plan-ready",
             "implementation-ready",
+            "reconciliation-ready",
         ],
         "validation-review" => &[
             "intent-ready",
             "design-ready",
             "plan-ready",
             "implementation-ready",
+            "reconciliation-ready",
             "validation-ready",
         ],
         other => panic!("no draft path to {other}"),
@@ -403,6 +405,14 @@ fn assert_owning_phase_route(index: usize) {
             serde_json::to_vec(&valid_metadata("1")).expect("serialize implementation report"),
         )
         .expect("write implementation report");
+    }
+    if matches!(source, "implementation-review" | "validation-review") {
+        fs::write(
+            Path::new(root).join("reconciliation.json"),
+            serde_json::to_vec(&support::reconciliation_fixture())
+                .expect("serialize reconciliation result"),
+        )
+        .expect("write reconciliation result");
     }
     if source == "validation-review" {
         for name in [

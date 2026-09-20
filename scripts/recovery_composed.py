@@ -126,6 +126,30 @@ def assert_terminal(shown, history, initial, sentinels):
     assert any(r['kind'] == 'criterion-verdict' and r['data']['result'] == 'fail' for r in shown['context'])
 
 
+def complete_reconciliation(f, revision):
+    (f.artifacts / 'reconciliation.json').write_text(json.dumps({
+        'revision': 'reconciliation-' + str(revision),
+        'author': {'name': 'fixture-driver', 'kind': 'script'},
+        'mode': 'bookends-disabled',
+        'branch': 'sufficient-existing-wording',
+        'document_observations': [{'path': 'README.md', 'status': 'unchanged',
+                                   'observation': 'The fixture document already matches the approved behavior.'}],
+        'behavior_observations': [{'status': 'matches-intent',
+                                   'observation': 'The fixture behavior matches the approved intent.'}],
+        'action': 'no-document-change',
+        'action_reason': 'Existing wording is sufficient; no document edit is required.',
+        'authorization': 'not-required',
+        'application': 'not-required',
+        'commit': 'not-required',
+        'traceability': {'status': 'not-applicable', 'references': []},
+        'proof_references': ['fixture:reconciliation'],
+        'blockers': [],
+        'decision': 'complete',
+    }))
+    f.show()
+    f.result(['event', f.name, 'reconciliation-ready'])
+
+
 def prove(journey):
     journey.work_root.mkdir(parents=True, exist_ok=True)
     root = Path(tempfile.mkdtemp(prefix='recovery-composed-', dir=journey.work_root))
@@ -295,6 +319,7 @@ def prove(journey):
         revision=graph()
         assert (repo/'product.txt').read_text()=='broken\n'
         event('implementation-ready')
+        complete_reconciliation(f, revision)
         review('product-fail',revision,'product-reviewer')
         review('newline-fail',revision,'unaffected-reviewer','newline')
         findings=[finding('F-product','product-fail','product is broken'),
@@ -313,6 +338,7 @@ def prove(journey):
         assert (repo/'product.txt').read_text()=='almost\n'
         findings[0].update(status='resolved',reason='task A removed the ordinary broken output; focused assertion retained')
         event('implementation-ready')
+        complete_reconciliation(f, revision)
         review('product-repaired',revision,'product-reviewer')
         ledger('implementation-review',revision,findings)
         event('approved')
@@ -384,6 +410,7 @@ def prove(journey):
         assert (f.artifacts/'plan.json').read_bytes()==plan_bytes
         for item in criterion_findings:item.update(status='resolved',reason='task A fixed product; fresh criterion and goal proof follow')
         event('implementation-ready')
+        complete_reconciliation(f, revision)
         review('product-final',revision,'product-reviewer')
         ledger('implementation-review',revision,findings)
         event('approved')

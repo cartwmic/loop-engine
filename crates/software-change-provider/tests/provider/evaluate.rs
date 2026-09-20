@@ -715,6 +715,7 @@ fn empty_axis_policy_allows_drafts_but_cannot_waive_v2_final_criteria() {
     }
     artifacts.write_json("implementation-report.json", &json!({"revision": "1"}));
     artifacts.write_json("validation-report.json", &json!({"revision": "1"}));
+    artifacts.write_json("reconciliation.json", &super::reconciliation_fixture());
     let repository = TestDir::new();
     fs::write(repository.path.join("marker.txt"), b"baseline\n").unwrap();
     for args in [
@@ -757,7 +758,8 @@ fn empty_axis_policy_allows_drafts_but_cannot_waive_v2_final_criteria() {
         ("explore", "intent-ready", "design"),
         ("design", "design-ready", "plan"),
         ("plan", "plan-ready", "implement"),
-        ("implement", "implementation-ready", "validation"),
+        ("implement", "implementation-ready", "reconciliation"),
+        ("reconciliation", "reconciliation-ready", "validation"),
         ("validation", "passed", "end"),
     ];
     for (source, event, target) in routes {

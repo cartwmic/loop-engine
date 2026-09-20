@@ -9,6 +9,30 @@ import tempfile
 from recovery_override import Fixture
 
 
+def complete_reconciliation(f, revision):
+    (f.artifacts / "reconciliation.json").write_text(json.dumps({
+        "revision": "reconciliation-" + revision,
+        "author": {"name": "fixture-driver", "kind": "script"},
+        "mode": "bookends-disabled",
+        "branch": "sufficient-existing-wording",
+        "document_observations": [{"path": "README.md", "status": "unchanged",
+                                    "observation": "The fixture document already matches the approved behavior."}],
+        "behavior_observations": [{"status": "matches-intent",
+                                    "observation": "The fixture behavior matches the approved intent."}],
+        "action": "no-document-change",
+        "action_reason": "Existing wording is sufficient; no document edit is required.",
+        "authorization": "not-required",
+        "application": "not-required",
+        "commit": "not-required",
+        "traceability": {"status": "not-applicable", "references": []},
+        "proof_references": ["fixture:reconciliation"],
+        "blockers": [],
+        "decision": "complete",
+    }))
+    f.show()
+    f.result(["event", f.name, "reconciliation-ready"])
+
+
 def prove(journey):
     journey.work_root.mkdir(parents=True, exist_ok=True)
     root = Path(tempfile.mkdtemp(prefix="recovery-criterion-", dir=journey.work_root))
@@ -69,6 +93,7 @@ def prove(journey):
             f.show(); f.result(["event",f.name,event])
         checkpoint(f,"implementation")
         f.show(); f.result(["event",f.name,"implementation-ready"])
+        complete_reconciliation(f, "1")
         proof["runs"].append({"id":f.name,"database":str(f.db),"artifacts":str(f.artifacts)})
         return f
     def checkpoint(f, phase):
@@ -137,7 +162,7 @@ def prove(journey):
     event(f,"revise-implementation")
     (repo/"product.txt").write_text("fixed\n")
     (f.artifacts/"implementation-report.json").write_text(json.dumps({"revision":"2","author":author}))
-    checkpoint(f,"implementation"); event(f,"implementation-ready")
+    checkpoint(f,"implementation"); event(f,"implementation-ready"); complete_reconciliation(f, "2")
     new=run(f,"v2")
     # Prechoose one genuine applicability ID in the new immutable index.
     new["criteria"][1]["verdict_ids"]=["carry-ac2"]
@@ -272,7 +297,7 @@ print(json.dumps({"review_stage":"aggregate","author":author,"judgments":[{"axis
             (repo/"product.txt").write_text("changed after commands\n")
             (f.artifacts/"implementation-report.json").write_text(json.dumps({"revision":"2","author":author}))
             # Honest new implementation admission first; command capture still old.
-            event(f,"revise-implementation"); checkpoint(f,"implementation"); event(f,"implementation-ready")
+            event(f,"revise-implementation"); checkpoint(f,"implementation"); event(f,"implementation-ready"); complete_reconciliation(f, "2")
             report["implementation_revision"]="2"; (f.artifacts/"validation-report.json").write_text(json.dumps(report)); checkpoint(f,"validation")
         event(f,"passed","rejected")
         proof["cases"].append(label)

@@ -390,6 +390,7 @@ fn write_checkpoints(repo: &Repo, artifacts: &TestDir) {
         };
         artifacts.write_json(name, &value);
     }
+    artifacts.write_json("reconciliation.json", &support::reconciliation_fixture());
     for phase in ["implementation", "validation"] {
         let output = Command::new(provider_binary())
             .args([
@@ -411,8 +412,8 @@ fn write_checkpoints(repo: &Repo, artifacts: &TestDir) {
         );
     }
 
-    // Validation proof is admitted only after implementation proof has been
-    // accepted by the provider transition that records its immutable history.
+    // Admit current-profile proof through reconciliation. These focused
+    // overlay tests must not select a legacy graph just to create history.
     let config = json!({
         "contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
         "config_version": "test-1",
@@ -427,7 +428,7 @@ fn write_checkpoints(repo: &Repo, artifacts: &TestDir) {
             "workflow": workflow,
             "initial_input": config,
             "context": [],
-            "transition": support::checked("implement", "implementation-ready", "validation"),
+            "transition": support::checked("reconciliation", "reconciliation-ready", "validation"),
             "prior_evaluations": []
         }),
     );
@@ -509,7 +510,7 @@ fn candidate_disposition() -> Value {
     json!({
         "type": "candidate",
         "proposed_id": "LE-9",
-        "record_markdown": "### LE-9: Proposed requirement\n- Status: live\n- Coverage: e2e/journey\n"
+        "record_markdown": "### LE-9: Proposed requirement\n- Status: live\n- Coverage: e2e/journey\n\nThe software-change provider must preserve the proposed behavior in ordinary runs and expose proof that an owner can inspect before completion.\n"
     })
 }
 
@@ -584,7 +585,7 @@ fn refresh_implementation_checkpoint(repo: &Repo, artifacts: &TestDir) {
             "workflow": workflow,
             "initial_input": config,
             "context": [],
-            "transition": support::checked("implement", "implementation-ready", "validation"),
+            "transition": support::checked("reconciliation", "reconciliation-ready", "validation"),
             "prior_evaluations": []
         }),
     );

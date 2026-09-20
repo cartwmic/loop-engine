@@ -92,6 +92,10 @@ fn create_run(label: &str, axis: &str, required_authors: u64) -> RunFixture {
         )
         .unwrap_or_else(|error| panic!("copy {name}: {error}"));
     }
+    write_json(
+        &artifacts.join("reconciliation.json"),
+        &super::reconciliation_fixture(),
+    );
     let mut plan: Value =
         serde_json::from_slice(&fs::read(artifacts.join("plan.json")).expect("plan fixture"))
             .expect("plan JSON");
@@ -543,8 +547,13 @@ fn drive_run(run: &RunFixture, foreign_intent_records: &[Value]) -> Value {
     checkpoint(run, "implementation");
     assert_completed(
         &event(run, "implementation-ready", "implementation-ready"),
-        "implementation-review",
+        "reconciliation",
         "implementation-ready",
+    );
+    assert_completed(
+        &event(run, "reconciliation-ready", "reconciliation-ready"),
+        "implementation-review",
+        "reconciliation-ready",
     );
     pass_review(
         run,
