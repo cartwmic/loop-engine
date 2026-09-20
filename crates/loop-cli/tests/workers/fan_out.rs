@@ -1082,29 +1082,41 @@ fn emitted_yaml(capture_dir: &Path) -> String {
     std::fs::read_to_string(home.join("dags").join(format!("{name}.yaml"))).expect("emitted yaml")
 }
 
+#[test]
+fn locator_wait_requires_complete_json() {
+    let directory = tempdir().expect("locator wait tempdir");
+    let path = directory.path().join("dagu-locator.json");
+    std::fs::write(&path, b"").expect("create empty locator");
+    assert!(!wait_for_file(&path, Duration::ZERO));
+    std::fs::write(&path, b"{\"dagu_home\":").expect("partial locator");
+    assert!(!wait_for_file(&path, Duration::ZERO));
+    std::fs::write(
+        &path,
+        br#"{"dagu_home":"home","dag_name":"dag","run_name":"run"}"#,
+    )
+    .expect("complete locator");
+    assert!(wait_for_file(&path, Duration::ZERO));
+}
+
 fn wait_for_file(path: &Path, timeout: Duration) -> bool {
+    let ready = || {
+        let Ok(bytes) = std::fs::read(path) else {
+            return false;
+        };
+        if path.ends_with("dagu-locator.json") {
+            serde_json::from_slice::<Value>(&bytes).is_ok()
+        } else {
+            !bytes.is_empty()
+        }
+    };
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if path.is_file() {
-            if std::fs::metadata(path)
-                .map(|meta| meta.len() > 0)
-                .unwrap_or(false)
-            {
-                return true;
-            }
-            if path.extension().is_none() && path.file_name().is_some() {
-                // locator may be a small JSON object; existence is enough
-                if path.file_name() == Some(std::ffi::OsStr::new("dagu-locator.json")) {
-                    return true;
-                }
-            }
-        }
-        if path.is_file() && path.ends_with("dagu-locator.json") {
+        if ready() {
             return true;
         }
         thread::sleep(Duration::from_millis(20));
     }
-    path.is_file()
+    ready()
 }
 
 fn kill_direct_children(parent: u32) {
