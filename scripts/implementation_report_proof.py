@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,93 @@ from test_contract import ROOT, repository_proof_identity
 def write(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+
+def prove_committed(root: Path) -> list[dict]:
+    """Drive the copied public checker against real clean fixture commits."""
+    repo = root / "checkout"
+    (repo / "scripts").mkdir(parents=True)
+    for name in ("assert-implementation-report.py", "test_contract.py"):
+        shutil.copy2(ROOT / "scripts" / name, repo / "scripts" / name)
+    (repo / ".gitignore").write_text("__pycache__/\n")
+
+    def git(*args: str) -> str:
+        return subprocess.check_output(["git", *args], cwd=repo, text=True, stderr=subprocess.PIPE).strip()
+
+    git("init", "-q")
+    git("config", "user.name", "Checker fixture")
+    git("config", "user.email", "checker@example.invalid")
+    git("config", "core.hooksPath", "/dev/null")
+    (repo / "a.txt").write_text("before\n")
+    (repo / "removed.txt").write_text("removed by delivery\n")
+    git("add", ".")
+    git("commit", "-qm", "baseline")
+    baseline = git("rev-parse", "HEAD")
+    (repo / "a.txt").write_text("after\n")
+    (repo / "removed.txt").unlink()
+    (repo / "z.txt").write_text("delivered\n")
+    git("add", "-A")
+    git("commit", "-qm", "delivery")
+    head = git("rev-parse", "HEAD")
+    unrelated = git("commit-tree", "HEAD^{tree}", "-m", "unrelated fixture commit")
+    identity = repository_proof_identity(repo)
+    argv = [sys.executable, "-c", "print('committed fixture proof')"]
+    started = time.time()
+    proc = subprocess.run(argv, cwd=repo, capture_output=True, check=True)
+    finished = time.time()
+    (root / "stdout").write_bytes(proc.stdout)
+    (root / "stderr").write_bytes(proc.stderr)
+    receipt = {"id": "committed-proof", "argv": argv, "cwd": str(repo),
+               "started_at": started, "finished_at": finished, "wall_seconds": finished - started,
+               "exit_code": proc.returncode, "timed_out": False, "spawn_error": None,
+               "stdout": str(root / "stdout"), "stderr": str(root / "stderr"),
+               "repository_before": identity, "repository_after": repository_proof_identity(repo)}
+    matrix = {"schema_version": 1, "plan_revision": "5", "local_final": [
+        {"id": "committed-proof", "command": argv[0], "args": argv[1:]}],
+        "post_report": [{"id": "implementation-report-check"}], "after_separate_authorization": []}
+    report = {"revision": "committed", "plan_revision": "5", "coverage": {"commit": head},
+              "changed_surface": ["a.txt", "removed.txt", "z.txt"],
+              "validation": [{"proof": "committed-proof: passed"}]}
+    results = []
+
+    def case(label: str, expected: int, *, base=baseline, value=None, missing=False, stale=False, diagnostic=None):
+        directory = root / label
+        directory.mkdir()
+        write(directory / "report.json", report if value is None else value)
+        write(directory / "matrix.json", matrix)
+        actual = copy.deepcopy(receipt)
+        if stale:
+            actual["repository_before"] = "sha256:stale"
+        write(directory / "receipt.json", actual)
+        write(directory / "proof/receipts.json", {"plan_revision": "5", "target_directory": str(repo / "target"),
+              "commands": [] if missing else [{"id": "committed-proof", "receipt": str(directory / "receipt.json")}]})
+        command = [sys.executable, str(repo / "scripts/assert-implementation-report.py"),
+                   "--report", str(directory / "report.json"), "--revision", "committed", "--plan-revision", "5",
+                   "--matrix", str(directory / "matrix.json"), "--baseline-commit", base]
+        result = subprocess.run(command, cwd=repo, text=True, capture_output=True, timeout=30)
+        (directory / "stdout").write_text(result.stdout)
+        (directory / "stderr").write_text(result.stderr)
+        write(directory / "cli-receipt.json", {"argv": command, "cwd": str(repo), "exit_code": result.returncode})
+        assert result.returncode == expected, (label, result.returncode, result.stderr)
+        assert diagnostic is None or diagnostic in result.stderr, (label, result.stderr)
+        results.append({"case": label, "expected_exit": expected, "actual_exit": result.returncode, "capture": str(directory)})
+
+    case("committed-positive", 0)
+    value = copy.deepcopy(report)
+    value["coverage"]["commit"] += "+uncommitted-worktree"
+    case("committed-wrong-head", 1, value=value, diagnostic="coverage.commit mismatch")
+    value = copy.deepcopy(report)
+    value["changed_surface"] = list(reversed(value["changed_surface"]))
+    case("committed-wrong-path-order", 1, value=value, diagnostic="changed_surface mismatch")
+    case("committed-short-baseline", 1, base=baseline[:7], diagnostic="full commit SHA")
+    case("committed-unknown-baseline", 1, base="0" * 40)
+    case("committed-nonancestor", 1, base=unrelated, diagnostic="ancestor")
+    case("committed-empty-delivery", 1, base=head, diagnostic="no changed paths")
+    case("committed-missing-proof", 1, missing=True, diagnostic="required local proof is pending")
+    case("committed-stale-proof", 1, stale=True, diagnostic="repository_before mismatch")
+    (repo / "a.txt").write_text("uncommitted correction\n")
+    case("committed-dirty-tree", 1, diagnostic="clean checkout")
+    return results
 
 
 def prove(root: Path) -> int:
@@ -193,6 +281,7 @@ def prove(root: Path) -> int:
     failed_report = copy.deepcopy(report)
     failed_report["validation"][3]["proof"] = "benchmark-compare: failed"
     case("honest-failed-comparison", 1, r=failed_report, m=failed_matrix, ix=failed_index, diagnostic="benchmark-compare: required local proof is failed")
+    results.extend(prove_committed(root / "committed"))
     assert repository_proof_identity(ROOT) == identity, "proof changed maintained checkout"
     write(root / "outcomes.json", {"scope": "scripted public checker mechanics only", "cases": results,
                                     "production_matrix_executed": False, "after_authorization": "pending"})

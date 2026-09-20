@@ -139,16 +139,32 @@ def check_receipt(path: Path, row: dict[str, Any], argv: list[str], identity: st
     return ("passed" if passed else "failed"), start, finish
 
 
-def check_report(path: Path, *, matrix_path: Path, revision: str, plan_revision: str) -> dict[str, Any]:
+def check_report(path: Path, *, matrix_path: Path, revision: str, plan_revision: str,
+                 baseline_commit: str | None = None) -> dict[str, Any]:
     report = load_report(path)
     head, changed_paths = repository_state()
+    covered_commit = f"{head}+uncommitted-worktree"
+    if baseline_commit is not None:
+        if not re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", baseline_commit):
+            raise ReportError("baseline must be a full commit SHA")
+        baseline = git_output(["rev-parse", "--verify", f"{baseline_commit}^{{commit}}"]).strip()
+        if changed_paths:
+            raise ReportError("--baseline-commit requires a clean checkout")
+        ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", baseline, head],
+                                  cwd=ROOT, capture_output=True)
+        if ancestor.returncode != 0:
+            raise ReportError("baseline must be an ancestor of current HEAD")
+        changed_paths = git_output(["diff", "--name-only", "--no-renames", baseline, head, "--"]).splitlines()
+        if not changed_paths:
+            raise ReportError("baseline-to-HEAD delivery has no changed paths")
+        covered_commit = head
     identity = repository_proof_identity(ROOT)
     assert_equal("revision", report.get("revision"), revision)
     assert_equal("plan_revision", report.get("plan_revision"), plan_revision)
     coverage = report.get("coverage")
     if not isinstance(coverage, dict):
         raise ReportError("coverage must be an object")
-    assert_equal("coverage.commit", coverage.get("commit"), f"{head}+uncommitted-worktree")
+    assert_equal("coverage.commit", coverage.get("commit"), covered_commit)
     assert_equal("changed_surface", report.get("changed_surface"), changed_paths)
     matrix_path = matrix_path.resolve()
     matrix = load_report(matrix_path)
@@ -228,7 +244,7 @@ def check_report(path: Path, *, matrix_path: Path, revision: str, plan_revision:
     if errors:
         raise ReportError("\n".join(errors))
     return {"revision": revision, "plan_revision": plan_revision,
-            "commit": f"{head}+uncommitted-worktree", "local_final": outcomes,
+            "commit": covered_commit, "local_final": outcomes,
             "after_separate_authorization": [{"id": row["id"], "status": "pending"} for row in later],
             "post_report": "externally evidenced; not a preexisting report claim"}
 
@@ -239,12 +255,13 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--revision")
     parser.add_argument("--plan-revision")
     parser.add_argument("--matrix", type=Path)
+    parser.add_argument("--baseline-commit", help="full starting commit SHA for clean committed delivery")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--self-test-output", type=Path, help="retain scripted CLI proof fixtures/captures in a new directory")
     args = parser.parse_args(argv)
     report_args = (args.report, args.revision, args.plan_revision, args.matrix)
     if args.self_test:
-        if any(arg is not None for arg in report_args):
+        if any(arg is not None for arg in report_args) or args.baseline_commit is not None:
             parser.error("--self-test cannot be combined with report arguments")
     elif any(arg is None for arg in report_args) or args.self_test_output is not None:
         parser.error("--report, --revision, --plan-revision and --matrix are required; --self-test-output needs --self-test")
@@ -257,7 +274,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.self_test:
             from implementation_report_proof import self_test
             return self_test(args.self_test_output)
-        result = check_report(args.report, matrix_path=args.matrix, revision=args.revision, plan_revision=args.plan_revision)
+        result = check_report(args.report, matrix_path=args.matrix, revision=args.revision,
+                              plan_revision=args.plan_revision, baseline_commit=args.baseline_commit)
     except (ReportError, ContractError, OSError, subprocess.SubprocessError) as error:
         print(f"implementation-report assertion failed: {error}", file=sys.stderr)
         return 1

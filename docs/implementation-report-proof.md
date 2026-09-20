@@ -24,11 +24,24 @@ non-circular local obligation.
 
 ## Report claims
 
-Keep the provider's existing report schema. `coverage.commit` is exactly current
-`git rev-parse HEAD` plus `+uncommitted-worktree`. `changed_surface` is exactly the
-ordered pathname list after each two-letter status from
-`git status --porcelain=v1 --untracked-files=all` (including Git's quoting/rename
-notation). This is not a sorted set.
+Keep the provider's existing report schema. By default, `coverage.commit` is
+exactly current `git rev-parse HEAD` plus `+uncommitted-worktree`.
+`changed_surface` is exactly the ordered pathname list after each two-letter
+status from `git status --porcelain=v1 --untracked-files=all` (including Git's
+quoting/rename notation). This is not a sorted set.
+
+For a clean, committed delivery, pass `--baseline-commit FULL_STARTING_SHA`.
+Use the recorded starting commit of the delivery, not an inferred `HEAD^`.
+The checker requires a full commit SHA that is an ancestor of current HEAD,
+a clean checkout, and a nonempty delivered path list. In this mode,
+`coverage.commit` is exactly HEAD without a suffix, and `changed_surface` is
+exactly the ordered output lines of
+`git diff --name-only --no-renames FULL_STARTING_SHA HEAD --`.
+This includes committed additions, modifications and deletions; a rename is
+represented by its old and new paths. It does not invent a dirty file or relax
+the provider's schema. Current-tree receipts and all other checks remain
+required. Add the flag to the declared post-report executor through the normal
+plan/steering procedure; it grants no Git or workflow authority.
 
 `validation` uses the provider's closed `{proof, criterion_id?}` objects, not
 strings. Rows without `criterion_id` contain one matrix status in `proof`: all
@@ -192,7 +205,10 @@ Neither terminal records nor pre-commit reports are rewritten.
 actual tiny scripted subprocess receipts, including an actual exit-7 comparison.
 It checks positive current evidence, revision/path-order errors, missing
 measurements/captures, failure/pending status, stale tree/argv/cwd, missing stdout
-markers, serialization, and circular/hosted claims. These synthetic benchmark
+markers, serialization, and circular/hosted claims. A separate temporary Git
+fixture proves clean committed delivery through the same public CLI, including
+baseline ancestry, delivered paths, dirty-tree refusal and unchanged receipt
+requirements. These synthetic benchmark
 names test evidence plumbing, not real speedup.
 
 To retain fixtures and each CLI result outside the checkout:
