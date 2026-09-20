@@ -78,11 +78,16 @@ an already valid observation. After a transition, read action/full before the
 next mutation. JSON status exposes current state/control identity, sample time,
 active work and explicit `workflow`, `execution`, `worker`, `conformance`,
 `acceptance`, `evidence`, `freshness`, and `uncertainty` lanes; omitted evidence
-has full/history locators. `acceptance: unknown` is preserved until the existing
-provider/driver evidence process accepts the result. The text status retains the
-fixed-order concise display and optional inner progress. Missing graph/capture/Dagu
-data renders unavailable, never success.
-`reaped` is Dagu helper completion, not worker success or provider acceptance.
+has full/history locators. `acceptance` is `accepted` or `rejected` only when an
+explicit attributed provider/driver decision with supporting locators matches the
+observed run/invocation; missing, stale, malformed, mismatched, multiple, or
+conflicting decisions remain `unknown`. Workflow allow/deny, process exit,
+helper/lifecycle completion, worker output and conformance are separate lanes.
+See [operational UX contracts](operational-ux-contracts.md#passive-monitor) for
+the exact context/observation shape. The text status retains the fixed-order
+concise display and optional inner progress. Missing graph/capture/Dagu data
+renders unavailable, never success. `reaped` is Dagu helper completion, not
+worker success or provider acceptance.
 
 ```sh
 loop-engine --json --config /absolute/path/to/providers.toml \
@@ -325,7 +330,7 @@ Every new contract-v3 plan task has a non-empty unique `criterion_ids` list of c
 
 For a new v11 software-change run, `implementation-ready` enters the provider-owned `reconciliation` state before implementation review or the final implementation proof boundary. Its unbound `reconciliation-draft` slot authors `reconciliation.json`; `reconciliation-ready` is the checked handoff. The state does not write reports or checkpoints and does not commit. It must make one honest three-way branch decision: sufficient existing wording, including a corrected implementation defect, needs only the needed implementation and public proof and retains live traceability when Bookends is enabled; change-specific proof creates no requirement proposal or PRD commit; only missing or changed enduring meaning requires exact owner acceptance, separately authorized application and commit, updated traceability, and independent inspection. A justified no-document-change result is valid, while a blocked result names concrete blockers.
 
-With Bookends enabled, read the actual accepted requirement text and every authoritative document it explicitly names, preserve live traceability, and keep candidate or merely related citations from closing the gap. With Bookends disabled, inspect relevant repository documents against approved intent and delivered behavior without PRD IDs, Bookends citations, candidate machinery, or overlay obligations. After reconciliation, finalize the implementation report, create the repository checkpoint, run any configured implementation review, validation, and final proof against the resulting tree. The current run and older stored graphs are not migrated; use their existing workflow and retained evidence for equivalent reconciliation.
+With Bookends enabled, read the actual accepted requirement text and every authoritative document it explicitly names, preserve live traceability, and keep candidate or merely related citations from closing the gap. With Bookends disabled, inspect relevant repository documents against approved intent and delivered behavior without PRD IDs, Bookends citations, candidate machinery, or overlay obligations. After reconciliation, finalize the implementation report, create the repository checkpoint, run any configured implementation review, validation, and final proof against the resulting tree. If an authorized reconciliation edit makes an earlier report or checkpoint stale, both reviewful and reviewless graphs expose the check-free `revise-implementation` return to `implement`; invoke the existing bound implementation/report owner through its supported selection (or perform the unbound correction), preserve the document edits, and return through `implementation-ready` without reapplying them before finalizing proof. The current run and older stored graphs are not migrated; use their existing workflow and retained evidence for equivalent reconciliation.
 
 The coordinating assistant owns the passive owner update: after reading existing status or monitor output and observing a meaningful development, it posts the concise observed change and needed action or decision in the active conversation before its next wait, inspect, or help decision. Machine completion/attention does not replace that update. Workers run focused checks; the coordinating driver remains the designated proof owner for the complete final stable-tree matrix and repeats only invalidated checks. The observed oversized compact setup path remains classified against live LE-127 unless distinct semantics are demonstrated; compact delivery preserves meaningful model context and full deterministic verification rather than stripping generic protocol data.
 

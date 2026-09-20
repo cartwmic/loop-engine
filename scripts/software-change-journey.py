@@ -80,6 +80,13 @@ SUBJECTS = {
 RECONCILIATION_SUBJECT = "reconciliation.json"
 # Durable integrated citation spelling is exactly `bookends:LE-142`.
 RECONCILIATION_REQUIREMENT_ID = "LE-142"
+# Post-edit report-finalization cases drive the check-free
+# `revise-implementation` return through real engine/provider processes: the
+# reviewed case keeps `implementation-review` live with Bookends on, the
+# reviewless case drops the review and runs Bookends off.
+RECONCILIATION_REPORT_CORRECTION_CASES = frozenset(
+    {"bookends-enabled-report-correction", "bookends-disabled-report-correction"}
+)
 GATE_SUBJECT = {
     "intent-review": "intent.json",
     "intent-adversarial-review": "intent.json",
@@ -1498,7 +1505,12 @@ class Journey:
         return observations
 
     def _prepare_reconciliation_profile(
-        self, case_dir: Path, artifacts: Path, *, bookends_enabled: bool
+        self,
+        case_dir: Path,
+        artifacts: Path,
+        *,
+        bookends_enabled: bool,
+        implementation_review_live: bool = True,
     ) -> Dict[str, Any]:
         """Construct a small v11 profile from shipped data for the public fixture."""
         profile = self._read_json(
@@ -1509,13 +1521,17 @@ class Journey:
             raise JourneyFailure("reconciliation source profile omitted review_policies")
         profile["config_version"] = "journey-reconciliation-11"
         profile["review_policies"] = {gate: [] for gate in policies}
-        profile["review_policies"]["implementation-review"] = [{
-            "id": "tasks-actually-done",
-            "description": "Reconciliation journey implementation proof boundary.",
-            "example_prompt": "Judge tasks-actually-done only.",
-            "review_stage": "aggregate",
-            "required_authors": 1,
-        }]
+        if implementation_review_live:
+            profile["review_policies"]["implementation-review"] = [{
+                "id": "tasks-actually-done",
+                "description": "Reconciliation journey implementation proof boundary.",
+                "example_prompt": "Judge tasks-actually-done only.",
+                "review_stage": "aggregate",
+                "required_authors": 1,
+            }]
+        # With the implementation review empty the stitched graph sends
+        # `reconciliation-ready` straight to validation; the provider then
+        # verifies the implementation checkpoint on that checked edge.
         profile["artifact_root"] = str(artifacts)
         profile["work_slot_bindings"] = {}
         if bookends_enabled:
@@ -1531,7 +1547,12 @@ class Journey:
         return profile
 
     def _initialize_reconciliation_case(
-        self, case_dir: Path, case_name: str, *, bookends_enabled: bool
+        self,
+        case_dir: Path,
+        case_name: str,
+        *,
+        bookends_enabled: bool,
+        implementation_review_live: bool = True,
     ) -> None:
         """Create one isolated fixture repository and fresh public run shell."""
         assert self.fixture_root is not None
@@ -1565,7 +1586,12 @@ class Journey:
         self.command_cwd = checkout
         self.command_env = {"BOOKENDS_BYPASS": ""}
         self.profile_source = self.data_root / PROFILE_SUBPATH
-        profile = self._prepare_reconciliation_profile(case_dir, self.artifact_root, bookends_enabled=bookends_enabled)
+        profile = self._prepare_reconciliation_profile(
+            case_dir,
+            self.artifact_root,
+            bookends_enabled=bookends_enabled,
+            implementation_review_live=implementation_review_live,
+        )
         if bookends_enabled:
             self._write_overlay_artifacts(self.artifact_root, candidate=False, unfulfilled=False)
         else:
@@ -1984,6 +2010,232 @@ class Journey:
             "citation": citation,
         }
 
+    def _run_reconciliation_report_correction_case(
+        self, case_name: str, *, bookends_enabled: bool, reviewless: bool
+    ) -> Dict[str, Any]:
+        """Drive the post-edit report finalization return through public processes.
+
+        An authorized reconciliation edit makes the implementation report and
+        checkpoint stale.  The supported route is the check-free
+        `revise-implementation` return to the existing bound implementation
+        owner, which finalizes a new report identity and the current checkpoint
+        against the post-reconciliation tree, then returns through
+        `implementation-ready` without reapplying the edit.  The reviewed graph
+        then consumes the result through `implementation-review`; the reviewless
+        graph verifies the checkpoint on `reconciliation-ready` and enters
+        validation directly.
+        """
+        self._initialize_reconciliation_case(
+            self.run_dir / case_name,
+            case_name,
+            bookends_enabled=bookends_enabled,
+            implementation_review_live=not reviewless,
+        )
+        assert self.artifact_root is not None
+        assert self.repository_root is not None
+        mode = "bookends-enabled" if bookends_enabled else "bookends-disabled"
+        citation = self._committed_reconciliation_reference()
+        target = self.repository_root / "docs" / ("PRD.md" if bookends_enabled else "reconciliation-target.md")
+        before = target.read_bytes() if target.exists() else b""
+        prd_target = self.repository_root / "docs" / "PRD.md"
+        prd_before = prd_target.read_bytes() if prd_target.exists() else b""
+        self._expect_allow("implementation-ready", "reconciliation")
+        # The authorized document edit happens inside the reconciliation state.
+        marker = f"\n<!-- reconciliation journey {case_name}: authorized post-edit fixture edit -->\n"
+        target.write_bytes(before + marker.encode("utf-8"))
+        edited = target.read_bytes()
+        fixture_commit = self._commit_fixture_document(target)
+        if bookends_enabled:
+            traceability = {"status": "updated", "references": [citation["reference"]]}
+            proof = [citation["reference"], f"git:{fixture_commit}"]
+            action = "amendment-application"
+        else:
+            traceability = {"status": "not-applicable", "references": []}
+            proof = [f"git:{fixture_commit}"]
+            action = "document-edit"
+        first_result = self._write_reconciliation_result(
+            revision=f"reconciliation-{case_name}-r1",
+            mode=mode,
+            branch="missing-or-changed-enduring-meaning",
+            document_observations=[
+                {
+                    "path": target.relative_to(self.repository_root).as_posix(),
+                    "status": "updated",
+                    "observation": f"authorized post-edit fixture bytes; observed fixture commit {fixture_commit}",
+                }
+            ],
+            behavior_observations=[
+                {"status": "matches-intent", "observation": "the delivered fixture behavior matches the approved branch"}
+            ],
+            action=action,
+            action_reason="The authorized edit landed; the implementation report/checkpoint predates it and must be finalized before ready.",
+            authorization="accepted",
+            application="applied",
+            commit="committed",
+            traceability=traceability,
+            proof_references=proof,
+            blockers=[],
+            decision="complete",
+        )
+        first_result_bytes = first_result.read_bytes()
+        shown = self._assert_show("reconciliation", f"{case_name}-edited-show")
+        if shown.get("current_state") != "reconciliation" or target.read_bytes() != edited:
+            raise JourneyFailure(
+                f"{case_name} lost the authorized edit before the report-finalization return"
+            )
+        # The stale implementation report must not be accepted: return to the
+        # existing bound implementation owner through the check-free route.
+        self._expect_allow("revise-implementation", "implement")
+        report_path = self.artifact_root / "implementation-report.json"
+        before_report_bytes = report_path.read_bytes()
+        report = self._read_json(report_path, "pre-finalization implementation report")
+        finalized_revision = f"{report['revision']}-post-reconciliation"
+        report["revision"] = finalized_revision
+        report["coverage"]["commit"] = fixture_commit
+        report["summary"] = (
+            f"{report.get('summary', '')} Finalized against the post-reconciliation "
+            f"tree including the authorized document commit {fixture_commit}."
+        )
+        report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        after_report_bytes = report_path.read_bytes()
+        if before_report_bytes == after_report_bytes:
+            raise JourneyFailure(f"{case_name} claimed report finalization without new report bytes")
+        checkpoint = self._create_checkpoint("implementation")
+        checkpoint_path = self.artifact_root / "implementation-checkpoint.json"
+        if not checkpoint_path.is_file():
+            raise JourneyFailure(f"{case_name} did not retain the post-reconciliation implementation checkpoint")
+        if checkpoint.get("report", {}).get("revision") != finalized_revision:
+            raise JourneyFailure(
+                f"{case_name} checkpoint did not bind the finalized report revision: {checkpoint.get('report')}"
+            )
+        if checkpoint.get("repository", {}).get("head") != fixture_commit:
+            raise JourneyFailure(
+                f"{case_name} checkpoint did not consume the post-reconciliation tree head"
+            )
+        # Return through the same reconciliation state; the authorized edit is
+        # preserved exactly once and must not be reapplied.
+        self._expect_allow("implementation-ready", "reconciliation")
+        if target.read_bytes() != edited:
+            raise JourneyFailure(f"{case_name} lost the authorized edit across the finalization return")
+        if target.read_bytes().count(marker.encode("utf-8")) != 1:
+            raise JourneyFailure(f"{case_name} reapplied the authorized edit after finalization")
+        # The second reconciliation visit re-authors the same complete decision
+        # with the finalization observation; the superseded draft bytes stay in
+        # the case outcome.
+        result_path = self._write_reconciliation_result(
+            revision=f"reconciliation-{case_name}-r2",
+            mode=mode,
+            branch="missing-or-changed-enduring-meaning",
+            document_observations=[
+                {
+                    "path": target.relative_to(self.repository_root).as_posix(),
+                    "status": "updated",
+                    "observation": (
+                        f"authorized post-edit fixture bytes; observed fixture commit {fixture_commit}; "
+                        f"implementation report finalized as {finalized_revision}"
+                    ),
+                }
+            ],
+            behavior_observations=[
+                {"status": "matches-intent", "observation": "the delivered fixture behavior matches the approved branch"}
+            ],
+            action=action,
+            action_reason="The authorized edit and the post-edit report/checkpoint finalization are both observed.",
+            authorization="accepted",
+            application="applied",
+            commit="committed",
+            traceability=traceability,
+            proof_references=proof,
+            blockers=[],
+            decision="complete",
+        )
+        downstream = "validation" if reviewless else "implementation-review"
+        self._expect_allow("reconciliation-ready", downstream)
+        if reviewless:
+            # The reviewless graph skips implementation-review; the provider
+            # verifies and records the current checkpoint on this checked edge.
+            shown = self._assert_show("validation", f"{case_name}-reviewless-validation")
+        else:
+            if bookends_enabled:
+                self._pass_overlay_review(
+                    "implementation-review",
+                    "approved",
+                    "validation",
+                    subject_revision=finalized_revision,
+                )
+            else:
+                self._pass_review(
+                    "implementation-review",
+                    "approved",
+                    "validation",
+                    subject_revision=finalized_revision,
+                )
+            shown = self._assert_show("validation", f"{case_name}-after-review")
+        history = self._engine(["history", self.run_id], state="validation", event="history")
+        self._expect_status(history, "completed", event="history", state="validation")
+        transitions = [
+            entry.get("action", {}).get("transition", {})
+            for entry in history.get("result", [])
+            if entry.get("action", {}).get("kind") == "transition"
+            and entry.get("action", {}).get("outcome", {}).get("outcome") == "committed"
+        ]
+        edge_list = [(item.get("source"), item.get("event"), item.get("target")) for item in transitions]
+        required_edges = [
+            ("implement", "implementation-ready", "reconciliation"),
+            ("reconciliation", "revise-implementation", "implement"),
+            ("reconciliation", "reconciliation-ready", downstream),
+        ]
+        if any(edge not in edge_list for edge in required_edges):
+            raise JourneyFailure(f"{case_name} did not retain the finalization return ordering: {transitions}")
+        if edge_list.count(("implement", "implementation-ready", "reconciliation")) < 2:
+            raise JourneyFailure(
+                f"{case_name} did not return to reconciliation after report finalization: {edge_list}"
+            )
+        implementation_history = sorted(
+            (self.artifact_root / "implementation-proof-history").glob("*.json")
+        ) if (self.artifact_root / "implementation-proof-history").is_dir() else []
+        if len(implementation_history) != 1:
+            raise JourneyFailure(
+                f"{case_name} accepted implementation proof history is not one current entry: "
+                f"{[path.name for path in implementation_history]}"
+            )
+        if not bookends_enabled:
+            prd_after = prd_target.read_bytes() if prd_target.exists() else b""
+            if prd_after != prd_before:
+                raise JourneyFailure(f"{case_name} changed PRD bytes despite Bookends being disabled")
+            if traceability != {"status": "not-applicable", "references": []}:
+                raise JourneyFailure(f"{case_name} carried Bookends traceability despite Bookends being disabled")
+        return {
+            "case": case_name,
+            "mode": mode,
+            "reviewless": reviewless,
+            "decision": "complete",
+            "artifact": str(result_path),
+            "superseded_draft_sha256": hashlib.sha256(first_result_bytes).hexdigest(),
+            "downstream_target": downstream,
+            "checkpoint": str(checkpoint_path),
+            "checkpoint_report_revision": checkpoint.get("report", {}).get("revision"),
+            "checkpoint_repository_head": checkpoint.get("repository", {}).get("head"),
+            "document": str(target),
+            "before_sha256": hashlib.sha256(before).hexdigest(),
+            "after_sha256": hashlib.sha256(edited).hexdigest(),
+            "document_commit": fixture_commit,
+            "report_before_sha256": hashlib.sha256(before_report_bytes).hexdigest(),
+            "report_after_sha256": hashlib.sha256(after_report_bytes).hexdigest(),
+            "finalized_report_revision": finalized_revision,
+            "accepted_implementation_history_entries": len(implementation_history),
+            "state_after": shown.get("current_state"),
+            "state_order": [
+                "implement",
+                "reconciliation",
+                "implement-finalization",
+                "reconciliation",
+                downstream,
+                "validation",
+            ],
+            "citation": citation,
+        }
+
     def _run_reconciliation_scenarios(self) -> Path:
         """Exercise all supported reconciliation outcomes in isolated public runs."""
         assert self.run_dir is not None
@@ -1991,20 +2243,39 @@ class Journey:
         root = parent_run_dir / "reconciliation-journey"
         root.mkdir(parents=True, exist_ok=True)
         outcomes = []
-        for case_name, bookends_enabled in (
-            ("bookends-disabled-no-change", False),
-            ("bookends-disabled-edit", False),
-            ("bookends-disabled-implementation-correction", False),
-            ("bookends-enabled-edit", True),
-            ("bookends-enabled-implementation-correction", True),
-            ("bookends-enabled-unresolved", True),
-            ("bookends-enabled-missing-authorization", True),
+        for case_name, bookends_enabled, reviewless in (
+            ("bookends-disabled-no-change", False, False),
+            ("bookends-disabled-edit", False, False),
+            ("bookends-disabled-implementation-correction", False, False),
+            ("bookends-enabled-edit", True, False),
+            ("bookends-enabled-implementation-correction", True, False),
+            ("bookends-enabled-unresolved", True, False),
+            ("bookends-enabled-missing-authorization", True, False),
+            ("bookends-enabled-report-correction", True, False),
+            ("bookends-disabled-report-correction", False, True),
         ):
             # Each case owns a sibling database, artifact root and checkout;
             # the previous case mutates this Journey shell while it runs.
             self.run_dir = parent_run_dir
-            outcomes.append(
-                self._run_reconciliation_case(case_name, bookends_enabled=bookends_enabled)
+            if case_name in RECONCILIATION_REPORT_CORRECTION_CASES:
+                outcomes.append(
+                    self._run_reconciliation_report_correction_case(
+                        case_name, bookends_enabled=bookends_enabled, reviewless=reviewless
+                    )
+                )
+            else:
+                outcomes.append(
+                    self._run_reconciliation_case(case_name, bookends_enabled=bookends_enabled)
+                )
+        report_finalization = [
+            outcome for outcome in outcomes if outcome.get("case") in RECONCILIATION_REPORT_CORRECTION_CASES
+        ]
+        if len(report_finalization) != 2 or not all(
+            outcome.get("checkpoint_report_revision") and outcome.get("document_commit")
+            for outcome in report_finalization
+        ):
+            raise JourneyFailure(
+                "post-edit report-finalization journey lost a reviewed/reviewless case"
             )
         contrasts = self._write_requirement_coverage_contrasts(root)
         documents = self._provider_document_observations()
@@ -2032,6 +2303,19 @@ class Journey:
             "schema_version": 1,
             "status": "passed-mechanics; semantic-owner-review-pending",
             "cases": outcomes,
+            "report_finalization": {
+                "reviewed": next(
+                    outcome
+                    for outcome in report_finalization
+                    if not outcome.get("reviewless")
+                ),
+                "reviewless": next(
+                    outcome
+                    for outcome in report_finalization
+                    if outcome.get("reviewless")
+                ),
+                "route": "check-free revise-implementation return finalizes a new report identity and the current checkpoint without reapplying the authorized edit",
+            },
             "requirement_coverage_contrasts": contrasts,
             "provider_document_observations": documents,
             "accepted_requirement_citation": {
@@ -2063,7 +2347,12 @@ class Journey:
         path = root / "reconciliation-journey-proof.json"
         _write_json(path, proof)
         self.reconciliation_proof = path
-        print("reconciliation journey passed: successful edit, justified no-change, implementation correction with live-traceability denial/recovery, unresolved discrepancy, missing authorization, and Bookends on/off")
+        print(
+            "reconciliation journey passed: successful edit, justified no-change, "
+            "implementation correction with live-traceability denial/recovery, "
+            "unresolved discrepancy, missing authorization, post-edit report finalization "
+            "for reviewed and reviewless graphs, and Bookends on/off"
+        )
         print("reconciliation synthetic limit: owner approval, semantic calibration, and provider-document target-run completion remain pending")
         return path
 
@@ -8236,9 +8525,10 @@ else:
         record_prefix: str = "",
         failing_axis: Optional[str] = None,
         failure_findings: str = "",
+        subject_revision: Optional[str] = None,
     ) -> Optional[str]:
         subject = GATE_SUBJECT[gate]
-        revision = self._fixture_revision(subject)
+        revision = subject_revision or self._fixture_revision(subject)
         failure_record_id: Optional[str] = None
         for entry in self._overlay_axes(gate):
             axis = entry["id"]
@@ -8285,12 +8575,27 @@ else:
                     failure_record_id = record_id
         return failure_record_id
 
-    def _pass_overlay_review(self, gate: str, event: str, target: str) -> None:
+    def _pass_overlay_review(
+        self,
+        gate: str,
+        event: str,
+        target: str,
+        *,
+        subject_revision: Optional[str] = None,
+    ) -> None:
         prefix = f"overlay-{gate}-"
         self._assert_show(self.state, f"{prefix}before")
-        self._append_overlay_evidence(gate, record_prefix=prefix)
+        self._append_overlay_evidence(
+            gate,
+            record_prefix=prefix,
+            subject_revision=subject_revision,
+        )
         self._append_finding_ledger_for(
-            self.run_id, gate, state=self.state, record_prefix=prefix
+            self.run_id,
+            gate,
+            state=self.state,
+            record_prefix=prefix,
+            subject_revision=subject_revision,
         )
         self._expect_allow(event, target)
 
@@ -10681,14 +10986,18 @@ def assert_focused_boundary_scenarios() -> None:
         "bookends-enabled-implementation-correction",
         "bookends-enabled-unresolved",
         "bookends-enabled-missing-authorization",
+        "bookends-enabled-report-correction",
+        "bookends-disabled-report-correction",
     ):
         if case_name not in source:
             raise JourneyFailure(f"reconciliation journey omitted case {case_name}")
     if "bookends:LE-142" not in source or "pending-owner-integration" not in source:
         raise JourneyFailure("reconciliation journey omitted exact live-citation/pending-owner handling")
     reconciliation_start = source.index("    def _run_reconciliation_case")
-    reconciliation_end = source.find("\n    def ", reconciliation_start + len("    def _run_reconciliation_case"))
-    reconciliation_source = source[reconciliation_start:reconciliation_end if reconciliation_end >= 0 else len(source)]
+    reconciliation_end = source.find("    def _run_reconciliation_scenarios")
+    if reconciliation_end < 0:
+        raise JourneyFailure("reconciliation journey lost its scenario dispatcher")
+    reconciliation_source = source[reconciliation_start:reconciliation_end]
     if (
         'self._expect_allow("implementation-ready", "reconciliation")' not in reconciliation_source
         or 'self._expect_allow("reconciliation-ready", "implementation-review")' not in reconciliation_source
@@ -10698,6 +11007,19 @@ def assert_focused_boundary_scenarios() -> None:
         or 'prd_after != prd_before' not in reconciliation_source
     ):
         raise JourneyFailure("reconciliation journey omitted checked entry, exit, or committed document assertions")
+    correction_start = reconciliation_source.index("    def _run_reconciliation_report_correction_case")
+    correction_source = reconciliation_source[correction_start:]
+    if (
+        'self._expect_allow("revise-implementation", "implement")' not in correction_source
+        or "implementation_review_live=not reviewless" not in correction_source
+        or 'checkpoint.get("repository", {}).get("head") != fixture_commit' not in correction_source
+        or "reapplied the authorized edit" not in correction_source
+        or '("reconciliation", "revise-implementation", "implement")' not in correction_source
+        or 'downstream = "validation" if reviewless else "implementation-review"' not in correction_source
+    ):
+        raise JourneyFailure(
+            "reconciliation journey omitted the post-edit report-finalization return assertions"
+        )
     global_start = source.index("    def _run_global_tail_proof")
     global_end = source.find("    def ", global_start + len("    def _run_global_tail_proof"))
     global_source = source[global_start:global_end if global_end >= 0 else len(source)]

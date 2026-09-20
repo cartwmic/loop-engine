@@ -156,7 +156,7 @@ pub(crate) const PHASES: &[Phase] = &[
         name: "implementation",
         draft_state: "implement",
         draft_title: "Implement",
-        draft_instructions: "Perform external work against the accepted plan and frozen intent `operating_context`; do not add excluded hostile or multi-tenant requirements or waive stated outcomes and outside obligations. Document the implementation and validation report shapes using `crates/software-change-provider/data/templates/implementation-report.md` and `crates/software-change-provider/data/templates/validation-report.md`. Doc integration is part of this change: update authoritative repository documents rather than leaving a parallel change truth. Before `implementation-ready`, read run-frozen obligations via `show`. If the owner rejects earlier work, choose `revise-plan` to plan, `revise-design` to design, or `revise-intent` to explore directly; no implementation report is required for these check-free routes. First wait for owned work to finish or use `cancel-invocation` and verify cleanup, including elapsed-but-live work and pending cancellation. Routes preserve artifacts, captures, invocation and denial history; neither engine nor provider classifies the defect or rolls back the repository. Only routes in this run's stored graph are available; upgrading does not add them to historical runs.",
+        draft_instructions: "Perform external work against the accepted plan and frozen intent `operating_context`; do not add excluded hostile or multi-tenant requirements or waive stated outcomes and outside obligations. Document the implementation and validation report shapes using `crates/software-change-provider/data/templates/implementation-report.md` and `crates/software-change-provider/data/templates/validation-report.md`. Doc integration is part of this change: update authoritative repository documents rather than leaving a parallel change truth. Before `implementation-ready`, read run-frozen obligations via `show`. If returning from reconciliation through `revise-implementation`, preserve already-authorized document edits, do not reapply them, and finalize the implementation report/checkpoint against the current post-reconciliation tree before `implementation-ready`. If the owner rejects earlier work, choose `revise-plan` to plan, `revise-design` to design, or `revise-intent` to explore directly; no implementation report is required for these check-free routes. First wait for owned work to finish or use `cancel-invocation` and verify cleanup, including elapsed-but-live work and pending cancellation. Routes preserve artifacts, captures, invocation and denial history; neither engine nor provider classifies the defect or rolls back the repository. Only routes in this run's stored graph are available; upgrading does not add them to historical runs.",
         draft_slot: "implement",
         ready_event: "implementation-ready",
         draft_revises: &[REVISE_PLAN, REVISE_DESIGN, REVISE_INTENT],
@@ -195,7 +195,7 @@ fn reconciliation_instructions(bookends_enabled: bool) -> String {
         "With Bookends disabled, inspect only the relevant authoritative repository documents against the approved intent and delivered behavior; do not add PRD IDs, Bookends citations, candidate machinery, or overlay obligations."
     };
     format!(
-        "Reconcile the frozen intent `operating_context`, approved intent, delivered behavior, and current authoritative repository documents. Author exactly `{}` using `{}`. Set `{}`. {mode} Distinguish sufficient existing wording (including an implementation defect corrected under sufficient wording), change-specific proof, and missing or changed enduring meaning. A justified no-document-change action is valid. A requirements amendment needs exact owner acceptance and separately authorized application and commit; a wrong implementation is corrected as code. A blocked decision must retain its concrete blockers. This state does not approve, progress, commit, or write `implementation-report.json`, `validation-report.json`, or checkpoint files. The graph summarizer remains the sole implementation-report writer. Report finalization, repository checkpoint, implementation review, validation, and final proof consume the post-reconciliation tree downstream.",
+        "Reconcile the frozen intent `operating_context`, approved intent, delivered behavior, and current authoritative repository documents. Author exactly `{}` using `{}`. Set `{}`. {mode} Distinguish sufficient existing wording (including an implementation defect corrected under sufficient wording), change-specific proof, and missing or changed enduring meaning. A justified no-document-change action is valid. A requirements amendment needs exact owner acceptance and separately authorized application and commit; a wrong implementation is corrected as code. A blocked decision must retain its concrete blockers. This state does not approve, progress, commit, or write `implementation-report.json`, `validation-report.json`, or checkpoint files. The graph summarizer remains the sole implementation-report writer. Report finalization, repository checkpoint, implementation review, validation, and final proof consume the post-reconciliation tree downstream. If an implementation report or checkpoint is stale after an authorized reconciliation edit, use check-free `revise-implementation` to return to `implement`, invoke the existing bound implementation/report owner through its supported selection, and return here through `implementation-ready`; preserve the authorized document edits and do not reapply them.",
         RECONCILIATION_SUBJECT,
         RECONCILIATION_SCHEMA_PATH,
         RECONCILIATION_RESULT_FIELDS.join("`, `"),
@@ -221,11 +221,16 @@ pub(crate) enum TransitionDuties {
 
 /// Look up evaluation duties for a source state and event from the phase table.
 pub(crate) fn duties_for(source: &str, event: &str) -> Option<TransitionDuties> {
-    if source == RECONCILIATION_STATE && event == RECONCILIATION_READY_EVENT {
-        return Some(TransitionDuties::Checked {
-            subject: RECONCILIATION_SUBJECT,
-            gate: None,
-        });
+    if source == RECONCILIATION_STATE {
+        if event == RECONCILIATION_READY_EVENT {
+            return Some(TransitionDuties::Checked {
+                subject: RECONCILIATION_SUBJECT,
+                gate: None,
+            });
+        }
+        if event == REVISE_IMPLEMENTATION.event {
+            return Some(TransitionDuties::CheckFree);
+        }
     }
 
     for phase in PHASES {
@@ -440,6 +445,16 @@ fn stitch(
         // report/checkpoint obligation. Reconciliation owns its own result;
         // the following checked `reconciliation-ready` edge validates it.
         transitions.push(Transition::checked(hop.state_id(), event, target));
+        if let Hop::Reconciliation = hop {
+            // A post-edit report/checkpoint correction must reuse the existing
+            // implementation owner and return through this same reconciliation
+            // hop; it must not bypass the state or reapply document edits.
+            transitions.push(Transition::check_free(
+                hop.state_id(),
+                REVISE_IMPLEMENTATION.event,
+                REVISE_IMPLEMENTATION.target,
+            ));
+        }
         if let Hop::Draft(phase) = hop {
             for revise in phase.draft_revises {
                 transitions.push(Transition::check_free(
@@ -1483,6 +1498,24 @@ mod tests {
                 gate: None,
             })
         );
+        let reconciliation_revise = v3
+            .transitions
+            .iter()
+            .find(|edge| {
+                edge.source.as_str() == RECONCILIATION_STATE
+                    && edge.event.as_str() == REVISE_IMPLEMENTATION.event
+            })
+            .expect("reconciliation report-correction route");
+        assert_eq!(reconciliation_revise.target.as_str(), "implement");
+        assert_eq!(reconciliation_revise.kind, TransitionKind::CheckFree);
+        assert_eq!(
+            duties_for_transition(
+                reconciliation_revise.source.as_str(),
+                reconciliation_revise.event.as_str(),
+                reconciliation_revise.target.as_str()
+            ),
+            Some(TransitionDuties::CheckFree)
+        );
         let slot = v3
             .work_slots
             .iter()
@@ -1506,6 +1539,26 @@ mod tests {
             .instructions
             .contains("sole implementation-report writer"));
         assert!(state.instructions.contains("Bookends disabled"));
+        assert!(state
+            .instructions
+            .contains("check-free `revise-implementation`"));
+        assert!(state.instructions.contains("do not reapply them"));
+
+        let reviewless_v3 = describe_workflow(Some(&json!({
+            "contract_version": 3,
+            "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+            "config_version": "test-v3",
+            "review_policies": {}
+        })))
+        .expect("reviewless v3 workflow");
+        assert_eq!(
+            check_free_target(
+                &reviewless_v3,
+                RECONCILIATION_STATE,
+                REVISE_IMPLEMENTATION.event
+            ),
+            "implement"
+        );
 
         let bookends = describe_workflow(Some(&json!({
             "contract_version": 3,
@@ -1621,6 +1674,10 @@ mod tests {
         );
         assert_eq!(
             duties_for("validation-adversarial-review", "revise-implementation"),
+            Some(TransitionDuties::CheckFree)
+        );
+        assert_eq!(
+            duties_for(RECONCILIATION_STATE, REVISE_IMPLEMENTATION.event),
             Some(TransitionDuties::CheckFree)
         );
         assert_eq!(duties_for("design-review", "passed"), None);

@@ -227,15 +227,25 @@ work. A pipe consumer should read until the selected source's `event` is
 `helper` fields remain raw source detail for compatibility. `source` names
 `run:ID` or `capture:ABS`; packets include sample time and available invocation,
 attempt, receipt, history sequence/time and engine/catalog locators. Completion is
-selected execution/workflow termination, **not semantic approval**; acceptance
-stays `unknown` until the provider/driver evidence process says otherwise. One
-peer's completion is never promoted to another source. Unchanged source packets
-produce no repetitive snapshot/owner heartbeat. Restart rereads retained evidence
-and can notify again; there is no exact-once/replay contract or new event journal.
+selected execution/workflow termination, **not semantic approval**. The
+`acceptance` lane becomes `accepted` or `rejected` only from one explicit,
+attributed decision: a run/show context record may use `data.acceptance` or
+`data.judgment` with an accepted/rejected `state` or `result`, non-empty
+`source_locators`/`evidence`, and a `provider` or `attesting_driver`; an
+`--observation` file supplies the same decision shape alongside its required
+`run_id`, `sampled_at_ms`, and `attesting_driver`. An optional target must match
+the observed run and recorded invocation. Missing, malformed, stale/unknown,
+mismatched, multiple, or conflicting decisions remain `unknown`. Workflow
+allow/deny, process exit, helper/lifecycle completion, worker output, and
+mechanical conformance stay separate and cannot populate this lane. One peer's
+completion is never promoted to another source. Unchanged source packets produce
+no repetitive snapshot/owner heartbeat. Restart rereads retained evidence and can
+notify again; there is no exact-once/replay contract or new event journal.
 
 The `owner_update` field is assistant-owned conversation guidance, not an engine
-chat channel. After a meaningful packet change, the coordinating assistant reads
-it and posts `observed_change` plus `needed_action_or_decision` in the active Pi
+chat channel. After a meaningful packet change, including a newly explicit
+accepted, rejected, or unresolved decision, the coordinating assistant reads it
+and posts `observed_change` plus `needed_action_or_decision` in the active Pi
 conversation before its first later wait, inspect, or help decision. Machine
 completion/attention is not that owner update. `next_action` is descriptive and
 never authorizes workflow mutation.
@@ -262,11 +272,13 @@ semantic acceptance remain unknown until the driver reads the retained capture
 and provider evidence. The graph's `reaped` state is helper liveness only.
 
 Optional repeatable `--observation ABS` attaches driver-supplied JSON containing
-`run_id`, `sampled_at_ms`, and nonempty `attesting_driver`, plus opaque supplied
-content. Matching observations appear attributed and dated in the judgment lane;
-current applicability is unknown. Mismatched/malformed observations remain unknown.
-They do not override engine evidence or create completion. Deterministic observation
-neither interprets provider verdict semantics nor makes model calls.
+`run_id`, `sampled_at_ms`, and nonempty `attesting_driver`, plus the explicit
+accepted/rejected decision shape described above. Matching observations appear
+attributed and dated in the judgment lane; current applicability is still an
+external driver/provider decision. Mismatched, malformed, stale, or conflicting
+observations remain unknown. They do not override engine evidence or create
+completion. Deterministic observation neither interprets provider verdict
+semantics nor makes model calls.
 
 ### Optional advisory summaries
 
@@ -343,8 +355,15 @@ semantic coverage. Bookends-disabled reconciliation checks relevant repository
 documents against approved intent and delivered behavior without PRD IDs,
 Bookends citations, candidate machinery, or overlay obligations. After the
 state, report finalization, repository checkpoint, any configured implementation
-review, validation, and final proof use the resulting document tree. Older stored runs
-retain their original graph and evidence.
+review, validation, and final proof use the resulting document tree. If an
+authorized reconciliation edit makes an earlier report or checkpoint stale,
+both reviewful and reviewless graphs expose the check-free
+`revise-implementation` return to `implement`; invoke the existing bound
+implementation/report owner through its supported selection (or perform the
+unbound correction), preserve the authorized document edits, and return through
+`implementation-ready` without reapplying them before finalizing proof. This is
+not a new phase or report framework. Older stored runs retain their original
+graph and evidence.
 
 The coordinating assistant owns the owner-facing conversation update. After it
 reads existing status or monitor output and observes a meaningful development,
