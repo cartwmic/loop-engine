@@ -436,6 +436,9 @@ class Journey:
                 raise JourneyFailure(f"operational UX binary missing or not executable: {binary}")
         if self.provider != binary_dir / "software-change":
             raise JourneyFailure("operational UX requires the selected provider beside the engine")
+        # bookends:LE-143 — monitor_case checks changed source-backed update
+        # packets and unchanged-poll silence; guidance_case checks the assistant's
+        # posting duty. Actual conversation delivery remains external evidence.
         cases = (
             "monitor",  # bookends:LE-120 — monitor_case: live notifications, unknown judgments, no cancellation.
             "capture",  # bookends:LE-121 — capture_case: real exit 7, immutable receipts, stale-resume refusal.
@@ -10241,6 +10244,10 @@ def assert_worker_data_skill_and_root_policy(
     print("worker-data skill/root policy assertions passed")
 
 
+# bookends:LE-141 bookends:LE-144
+# These assertions check every shipped profile's ordinary/challenge questions,
+# stages and author floors; the full source traversal exercises their gates.
+# Supplied-material semantic calibration remains separate external evidence.
 def assert_reconciliation_documents_and_profiles() -> None:
     """Check shipped profile floors and the authored reconciliation contract."""
     repository = Path(__file__).resolve().parent.parent
