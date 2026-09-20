@@ -34,8 +34,9 @@ Finally it runs the reduced criterion-spine scenarios: overlay-off proves AC-N
 without PRD metadata, while overlay-on proves one disposition per criterion,
 candidate blocking, and the non-waiver of not-applicable. The source tail also
 runs isolated v11 reconciliation cases through the real provider/engine path,
-inspecting document bytes, state ordering, Bookends mode, pending owner status,
-and requirement-coverage contrast fixtures.
+inspecting document bytes, state ordering, Bookends mode, implementation
+correction (including missing and valid live traceability), pending owner
+status, and requirement-coverage contrast fixtures.
 """
 
 from __future__ import annotations
@@ -1593,7 +1594,9 @@ class Journey:
         expected = {
             "sufficient": "sufficient-existing-wording",
             "related-insufficient": "missing-or-changed-enduring-meaning",
-            "implementation-defect": "implementation-defect",
+            # The observed defect is corrected under sufficient wording; it is
+            # not a fourth provider branch or a reason to mint a requirement.
+            "implementation-defect": "sufficient-existing-wording",
         }
         for name, branch in expected.items():
             fixture = self._read_json(
@@ -1697,6 +1700,8 @@ class Journey:
         citation = self._committed_reconciliation_reference()
         target = self.repository_root / "docs" / ("PRD.md" if bookends_enabled else "reconciliation-target.md")
         before = target.read_bytes() if target.exists() else b""
+        prd_target = self.repository_root / "docs" / "PRD.md"
+        prd_before = prd_target.read_bytes() if prd_target.exists() else b""
         edit = case_name in {"bookends-enabled-edit", "bookends-disabled-edit", "bookends-enabled-missing-authorization"}
         if edit:
             marker = f"\n<!-- reconciliation journey {case_name}: authorized fixture edit -->\n"
@@ -1712,6 +1717,67 @@ class Journey:
         # denial proves the real reconciliation boundary rather than an
         # unavailable event from `implement`.
         self._expect_allow("implementation-ready", "reconciliation")
+        correction_denial: Optional[Dict[str, Any]] = None
+        correction_invalid_artifact: Optional[Path] = None
+        if case_name == "bookends-enabled-implementation-correction":
+            # First drive the actual regression: sufficient accepted wording
+            # plus a corrected implementation must still retain a live PRD
+            # reference when Bookends is enabled.  Preserve the rejected
+            # result bytes before replacing them with the corrected result.
+            invalid_result = self._write_reconciliation_result(
+                revision="reconciliation-correction-missing-live-r1",
+                mode=mode,
+                branch="sufficient-existing-wording",
+                document_observations=[
+                    {"path": "docs/PRD.md", "status": "sufficient", "observation": "accepted text was inspected"},
+                ],
+                behavior_observations=[
+                    {"status": "corrected", "observation": "the implementation correction now reports the accepted result"},
+                ],
+                action="implementation-correction",
+                action_reason="The implementation defect is corrected under sufficient accepted wording; no amendment is needed.",
+                authorization="not-required",
+                application="not-required",
+                commit="not-required",
+                traceability={"status": "retained", "references": []},
+                proof_references=["journey:reconciliation-bookends-enabled-implementation-correction"],
+                blockers=[],
+                decision="complete",
+            )
+            correction_invalid_artifact = self.artifact_root / "reconciliation-missing-live-references.json"
+            shutil.copy2(invalid_result, correction_invalid_artifact)
+            correction_denial = self._expect_denial(
+                "reconciliation-ready",
+                "reconciliation",
+                "software-change-reconciliation-blocked",
+            )
+            diagnostic = correction_denial.get("details", {}).get("diagnostic", "")
+            if "live PRD ID" not in diagnostic:
+                raise JourneyFailure(
+                    f"missing live traceability denial omitted its actionable diagnostic: {correction_denial}",
+                    state="reconciliation",
+                    event="reconciliation-ready",
+                )
+            shown = self._assert_show("reconciliation", "correction-missing-live-show")
+            if shown.get("current_state") != "reconciliation" or target.read_bytes() != before:
+                raise JourneyFailure(
+                    "missing live traceability denial changed state or document bytes",
+                    state="reconciliation",
+                    event="reconciliation-ready",
+                )
+        if case_name in {"bookends-disabled-implementation-correction", "bookends-enabled-implementation-correction"}:
+            branch = "sufficient-existing-wording"
+            action = "implementation-correction"
+            action_reason = "The implementation defect is corrected under sufficient accepted wording; no amendment is needed."
+            document_status = "sufficient"
+            behavior_status = "corrected"
+            authorization = application = commit = "not-required"
+            if bookends_enabled:
+                traceability = {"status": "retained", "references": [citation["reference"]]}
+                proof = [citation["reference"], "journey:reconciliation-bookends-enabled-implementation-correction"]
+            else:
+                traceability = {"status": "not-applicable", "references": []}
+                proof = ["journey:reconciliation-bookends-disabled-implementation-correction"]
         if case_name == "bookends-enabled-unresolved":
             missing_document = self.repository_root / "docs" / "missing-authoritative-document.md"
             if missing_document.exists():
@@ -1774,7 +1840,11 @@ class Journey:
                 raise JourneyFailure("missing authorization fixture unexpectedly committed its document edit")
             return {"case": case_name, "mode": mode, "decision": "blocked", "denial": denial.get("code"), "artifact": str(result_path), "state": shown.get("current_state"), "document_status": "updated-but-uncommitted", "citation": citation}
 
-        if case_name == "bookends-disabled-no-change":
+        if case_name in {"bookends-disabled-implementation-correction", "bookends-enabled-implementation-correction"}:
+            # The correction branch was prepared above; this explicit branch
+            # keeps it distinct from an enduring-requirement amendment.
+            pass
+        elif case_name == "bookends-disabled-no-change":
             branch = "sufficient-existing-wording"
             action = "no-document-change"
             action_reason = "The relevant repository document already matches the approved fixture behavior."
@@ -1794,7 +1864,7 @@ class Journey:
             authorization = "accepted"
             application = "applied"
             commit = "committed"
-        else:
+        elif case_name == "bookends-enabled-edit":
             branch = "missing-or-changed-enduring-meaning"
             action = "amendment-application"
             action_reason = "The fixture applies the exact accepted amendment before downstream proof."
@@ -1836,6 +1906,44 @@ class Journey:
             raise JourneyFailure(f"{case_name} claimed a successful edit without an observed fixture commit")
         if not edit and after != before:
             raise JourneyFailure(f"{case_name} claimed no change but document bytes changed")
+        prd_after = prd_target.read_bytes() if prd_target.exists() else b""
+        if not bookends_enabled:
+            if prd_after != prd_before:
+                raise JourneyFailure(
+                    f"{case_name} changed PRD bytes despite Bookends being disabled"
+                )
+            if any(
+                str(reference).startswith(("bookends:", "LE-"))
+                for reference in [
+                    *traceability.get("references", []),
+                    *proof,
+                ]
+            ):
+                raise JourneyFailure(
+                    f"{case_name} carried Bookends traceability despite Bookends being disabled"
+                )
+        if case_name in {"bookends-disabled-implementation-correction", "bookends-enabled-implementation-correction"}:
+            if after != before:
+                raise JourneyFailure(
+                    f"{case_name} changed document bytes while correcting implementation"
+                )
+            if bookends_enabled:
+                if correction_denial is None or correction_invalid_artifact is None:
+                    raise JourneyFailure(
+                        "Bookends-enabled implementation correction omitted its red traceability attempt"
+                    )
+                if not correction_invalid_artifact.is_file():
+                    raise JourneyFailure(
+                        "Bookends-enabled implementation correction did not retain the denied result bytes"
+                    )
+                if traceability != {"status": "retained", "references": [citation["reference"]]}:
+                    raise JourneyFailure(
+                        f"Bookends-enabled correction did not retain its valid live reference: {traceability}"
+                    )
+            elif correction_denial is not None or traceability != {"status": "not-applicable", "references": []}:
+                raise JourneyFailure(
+                    "Bookends-disabled implementation correction acquired overlay traceability"
+                )
         if bookends_enabled:
             self._pass_overlay_review("implementation-review", "approved", "validation")
         else:
@@ -1866,6 +1974,11 @@ class Journey:
             "before_sha256": hashlib.sha256(before).hexdigest(),
             "after_sha256": hashlib.sha256(after).hexdigest(),
             "document_commit": fixture_commit,
+            "prd_before_sha256": hashlib.sha256(prd_before).hexdigest(),
+            "prd_after_sha256": hashlib.sha256(prd_after).hexdigest(),
+            "traceability": traceability,
+            "correction_denial": correction_denial.get("code") if correction_denial else None,
+            "correction_invalid_artifact": str(correction_invalid_artifact) if correction_invalid_artifact else None,
             "state_after_review": shown.get("current_state"),
             "state_order": ["implement", "reconciliation", "implementation-review", "validation"],
             "citation": citation,
@@ -1881,7 +1994,9 @@ class Journey:
         for case_name, bookends_enabled in (
             ("bookends-disabled-no-change", False),
             ("bookends-disabled-edit", False),
+            ("bookends-disabled-implementation-correction", False),
             ("bookends-enabled-edit", True),
+            ("bookends-enabled-implementation-correction", True),
             ("bookends-enabled-unresolved", True),
             ("bookends-enabled-missing-authorization", True),
         ):
@@ -1897,7 +2012,12 @@ class Journey:
             requirement_id: self._committed_requirement_status(requirement_id)
             for requirement_id in ("LE-141", "LE-142", "LE-143", "LE-144")
         }
-        reconciliation_citation = outcomes[2]["citation"]
+        reconciliation_outcome = next(
+            outcome
+            for outcome in outcomes
+            if outcome.get("case") == "bookends-enabled-edit"
+        )
+        reconciliation_citation = reconciliation_outcome["citation"]
         if requirement_citations[RECONCILIATION_REQUIREMENT_ID]["status"] == "committed-owner-integrated":
             expected_reference = f"bookends:{RECONCILIATION_REQUIREMENT_ID}"
             if reconciliation_citation.get("reference") != expected_reference:
@@ -1916,8 +2036,8 @@ class Journey:
             "provider_document_observations": documents,
             "accepted_requirement_citation": {
                 "requested": f"bookends:{RECONCILIATION_REQUIREMENT_ID}",
-                "status": outcomes[2]["citation"]["status"],
-                "public_results_use_exact_requested_citation_after_committed_integration": outcomes[2]["citation"]["status"] == "committed-owner-integrated",
+                "status": reconciliation_outcome["citation"]["status"],
+                "public_results_use_exact_requested_citation_after_committed_integration": reconciliation_outcome["citation"]["status"] == "committed-owner-integrated",
             },
             "required_owner_citations": requirement_citations,
             "calibration": {
@@ -1943,7 +2063,7 @@ class Journey:
         path = root / "reconciliation-journey-proof.json"
         _write_json(path, proof)
         self.reconciliation_proof = path
-        print("reconciliation journey passed: successful edit, justified no-change, unresolved discrepancy, missing authorization, and Bookends on/off")
+        print("reconciliation journey passed: successful edit, justified no-change, implementation correction with live-traceability denial/recovery, unresolved discrepancy, missing authorization, and Bookends on/off")
         print("reconciliation synthetic limit: owner approval, semantic calibration, and provider-document target-run completion remain pending")
         return path
 
@@ -6002,7 +6122,7 @@ class Journey:
             "candidate blocks Bookends-enabled final completion, not-applicable does not waive or "
             "fulfill its criterion"
         )
-        print("reconciliation journey passed: successful edit, justified no-change, unresolved discrepancy, missing authorization, and Bookends on/off")
+        print("reconciliation journey passed: successful edit, justified no-change, implementation correction with live-traceability denial/recovery, unresolved discrepancy, missing authorization, and Bookends on/off")
         print("full recovery inventory passed: " + ", ".join(SCENARIOS))
 
     def _scenario_engine_call(
@@ -10287,6 +10407,13 @@ def assert_reconciliation_documents_and_profiles() -> None:
         "proof_references", "blockers", "decision",
     }:
         raise JourneyFailure("reconciliation schema is not the closed provider contract")
+    branch_values = schema.get("properties", {}).get("branch", {}).get("enum", [])
+    if "implementation-defect" in branch_values or set(branch_values) != {
+        "sufficient-existing-wording",
+        "change-specific-proof",
+        "missing-or-changed-enduring-meaning",
+    }:
+        raise JourneyFailure("reconciliation schema retained a fourth implementation-defect branch")
     fixture_root = repository / FIXTURE_SUBPATH
     for name in ("sufficient", "related-insufficient", "implementation-defect"):
         fixture = _load_json(fixture_root / f"requirement-coverage-{name}.json")
@@ -10549,7 +10676,9 @@ def assert_focused_boundary_scenarios() -> None:
     for case_name in (
         "bookends-disabled-no-change",
         "bookends-disabled-edit",
+        "bookends-disabled-implementation-correction",
         "bookends-enabled-edit",
+        "bookends-enabled-implementation-correction",
         "bookends-enabled-unresolved",
         "bookends-enabled-missing-authorization",
     ):
@@ -10564,6 +10693,9 @@ def assert_focused_boundary_scenarios() -> None:
         'self._expect_allow("implementation-ready", "reconciliation")' not in reconciliation_source
         or 'self._expect_allow("reconciliation-ready", "implementation-review")' not in reconciliation_source
         or 'self._commit_fixture_document(target)' not in reconciliation_source
+        or 'implementation-correction' not in reconciliation_source
+        or 'live PRD ID' not in reconciliation_source
+        or 'prd_after != prd_before' not in reconciliation_source
     ):
         raise JourneyFailure("reconciliation journey omitted checked entry, exit, or committed document assertions")
     global_start = source.index("    def _run_global_tail_proof")

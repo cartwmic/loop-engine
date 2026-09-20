@@ -655,15 +655,16 @@ fn evaluate_reconciliation_result(
     let bookends_enabled = mode == Some("bookends-enabled");
 
     if !bookends_enabled
-        && traceability_references
-            .iter()
-            .chain(proof_references.iter())
-            .filter_map(Value::as_str)
-            .any(is_bookends_reference)
+        && (traceability_status != Some("not-applicable")
+            || !traceability_references.is_empty()
+            || proof_references
+                .iter()
+                .filter_map(Value::as_str)
+                .any(is_bookends_reference))
     {
         return Err(reconciliation_deny(
             request,
-            "Bookends-disabled reconciliation must not carry PRD IDs or Bookends citations"
+            "Bookends-disabled reconciliation must not carry PRD traceability or Bookends citations"
                 .to_owned(),
         ));
     }
@@ -698,15 +699,18 @@ fn evaluate_reconciliation_result(
 
     match branch {
         "sufficient-existing-wording" => {
-            if !matches!(action, Some("none") | Some("no-document-change"))
+            let implementation_correction = action == Some("implementation-correction");
+            if (!matches!(action, Some("none") | Some("no-document-change"))
+                && !implementation_correction)
                 || has_document_update
                 || authorization != Some("not-required")
                 || application != Some("not-required")
                 || commit != Some("not-required")
+                || (implementation_correction && !has_corrected_behavior)
             {
                 return Err(reconciliation_deny(
                     request,
-                    "sufficient wording requires no document edit and no requirement-amendment statuses".to_owned(),
+                    "sufficient wording requires no document edit and no requirement-amendment statuses; an implementation correction must record corrected behavior".to_owned(),
                 ));
             }
             if bookends_enabled {
@@ -737,22 +741,6 @@ fn evaluate_reconciliation_result(
                     traceability_references,
                     live_ids,
                 )?;
-            }
-        }
-        "implementation-defect" => {
-            if action != Some("implementation-correction")
-                || !has_corrected_behavior
-                || authorization != Some("not-required")
-                || application != Some("not-required")
-                || commit != Some("not-required")
-            {
-                return Err(reconciliation_deny(
-                    request,
-                    "an implementation-defect reclassification must record an implementation correction, a corrected behavior observation, and no requirement-amendment statuses".to_owned(),
-                ));
-            }
-            if bookends_enabled && !traceability_references.is_empty() {
-                validate_live_references(request, traceability_references, live_ids)?;
             }
         }
         "missing-or-changed-enduring-meaning" => {
@@ -1188,6 +1176,13 @@ mod tests {
         });
         assert!(evaluate_reconciliation_result(&request, &unchanged, None, None).is_ok());
 
+        let mut off_corrected = unchanged.clone();
+        off_corrected["behavior_observations"][0]["status"] = json!("corrected");
+        off_corrected["action"] = json!("implementation-correction");
+        assert!(evaluate_reconciliation_result(&request, &off_corrected, None, None).is_ok());
+        off_corrected["traceability"]["status"] = json!("retained");
+        assert!(evaluate_reconciliation_result(&request, &off_corrected, None, None).is_err());
+
         let mut change_specific = unchanged.clone();
         change_specific["mode"] = json!("bookends-enabled");
         change_specific["branch"] = json!("change-specific-proof");
@@ -1209,11 +1204,11 @@ mod tests {
         });
         assert!(evaluate_reconciliation_result(&request, &missing, None, None).is_err());
 
-        let corrected = json!({
+        let mut corrected = json!({
             "mode": "bookends-enabled",
             "decision": "complete",
             "blockers": [],
-            "branch": "implementation-defect",
+            "branch": "sufficient-existing-wording",
             "document_observations": [{"path": "docs/PRD.md", "status": "sufficient", "observation": "existing wording is enough"}],
             "behavior_observations": [{"status": "corrected", "observation": "completed output now reports the accepted result"}],
             "action": "implementation-correction",
@@ -1224,6 +1219,8 @@ mod tests {
             "proof_references": ["journey:reconciliation"],
         });
         assert!(evaluate_reconciliation_result(&request, &corrected, None, None).is_ok());
+        corrected["traceability"]["references"] = json!([]);
+        assert!(evaluate_reconciliation_result(&request, &corrected, None, None).is_err());
 
         let amended = json!({
             "mode": "bookends-enabled",

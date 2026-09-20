@@ -360,6 +360,80 @@ fn overlay_on_tombstoned_linked_id_deny() {
         .any(|rule| rule == "requirement-ids-live"));
 }
 
+#[test]
+fn overlay_on_reconciliation_implementation_correction_requires_live_traceability() {
+    let repo = Repo::new();
+    enable_green_prd(&repo, live_prd());
+    let artifacts = TestDir::new("reconciliation-implementation-correction");
+    let mut result = support::reconciliation_fixture();
+    result["mode"] = json!("bookends-enabled");
+    result["branch"] = json!("implementation-defect");
+    result["document_observations"][0]["status"] = json!("sufficient");
+    result["behavior_observations"][0]["status"] = json!("corrected");
+    result["action"] = json!("implementation-correction");
+    result["action_reason"] =
+        json!("The implementation was corrected under the sufficient live requirement.");
+    result["traceability"] = json!({"status": "retained", "references": []});
+    artifacts.write_json("reconciliation.json", &result);
+    let config = with_root(enable_overlay(load_profile("high-rigor")), &artifacts);
+
+    let legacy_branch = evaluate_in(
+        repo.path(),
+        config.clone(),
+        support::checked(
+            "reconciliation",
+            "reconciliation-ready",
+            "implementation-review",
+        ),
+        json!([]),
+    );
+    assert_eq!(
+        legacy_branch["feedback"]["code"],
+        "software-change-schema-invalid"
+    );
+    assert!(schema_rules(&legacy_branch)
+        .iter()
+        .any(|rule| rule == "enum"));
+
+    result["branch"] = json!("sufficient-existing-wording");
+    artifacts.write_json("reconciliation.json", &result);
+    let missing = evaluate_in(
+        repo.path(),
+        config.clone(),
+        support::checked(
+            "reconciliation",
+            "reconciliation-ready",
+            "implementation-review",
+        ),
+        json!([]),
+    );
+    assert_eq!(
+        missing["feedback"]["code"],
+        "software-change-reconciliation-blocked"
+    );
+    assert!(missing["feedback"]["details"]["diagnostic"]
+        .as_str()
+        .expect("reconciliation denial diagnostic")
+        .contains("live PRD ID"));
+
+    result["traceability"] = json!({
+        "status": "retained",
+        "references": ["bookends:LE-1"]
+    });
+    artifacts.write_json("reconciliation.json", &result);
+    let valid = evaluate_in(
+        repo.path(),
+        config,
+        support::checked(
+            "reconciliation",
+            "reconciliation-ready",
+            "implementation-review",
+        ),
+        json!([]),
+    );
+    assert_eq!(valid, json!({"result": "allow"}));
+}
+
 fn overlay_validation_config(root: &TestDir) -> Value {
     json!({
         "contract_version": 3, "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},

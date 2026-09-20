@@ -328,12 +328,13 @@ For new `contract_version: 3` software-change profiles, the provider-owned
 implementation proof and review. Its unbound `reconciliation-draft` slot
 writes `reconciliation.json`; `reconciliation-ready` checks that decision. The
 state does not write implementation or validation reports, checkpoints, or Git
-commits. It records one conditional result: sufficient existing wording and
-change-specific proof need no requirement amendment, an implementation defect
-requires an observed code correction, and only missing or changed enduring
-meaning requires exact owner acceptance plus separately authorized application
-and commit. A justified no-document-change result is valid; a blocked result
-names concrete blockers.
+commits. It records one conditional three-way result: sufficient existing
+wording, including a corrected implementation defect, needs no requirement
+amendment and retains live traceability when Bookends is enabled;
+change-specific proof needs no requirement amendment; and only missing or
+changed enduring meaning requires exact owner acceptance plus separately
+authorized application and commit. A justified no-document-change result is
+valid; a blocked result names concrete blockers.
 
 Bookends-enabled reconciliation reads the actual accepted requirement wording
 and every authoritative document it names, retains live traceability, and does

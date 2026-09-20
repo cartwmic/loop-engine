@@ -57,8 +57,7 @@
       "enum": [
         "sufficient-existing-wording",
         "change-specific-proof",
-        "missing-or-changed-enduring-meaning",
-        "implementation-defect"
+        "missing-or-changed-enduring-meaning"
       ]
     },
     "document_observations": {
