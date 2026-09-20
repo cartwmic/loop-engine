@@ -281,13 +281,27 @@ def verify_receipt(
     if receipt.get("instructions_sha256") != prep["instructions_sha256"]:
         fail(f"receipt instructions hash does not match preparation: {receipt_path}")
     command = receipt.get("command")
-    if not isinstance(command, list) or "--no-context-files" not in command:
-        fail(f"capture command did not disable inherited context files: {receipt_path}")
-    if "--tools" not in command:
-        fail(f"capture command did not declare empty tools: {receipt_path}")
-    tools_index = command.index("--tools")
-    if tools_index + 1 >= len(command) or command[tools_index + 1] != "":
-        fail(f"capture command did not use empty tools: {receipt_path}")
+    if not isinstance(command, list) or not all(isinstance(arg, str) for arg in command):
+        fail(f"capture command is not an argv array: {receipt_path}")
+    if len(command) < 2 or command[1] != "fan-out" or command.count("--worker") != 1:
+        fail(f"capture must declare exactly one fan-out worker: {receipt_path}")
+    try:
+        declared_worker = json.loads(command[command.index("--worker") + 1])
+    except (IndexError, ValueError):
+        fail(f"capture has invalid nested worker JSON: {receipt_path}")
+    if not isinstance(declared_worker, dict) or set(declared_worker) != {"command", "args"}:
+        fail(f"capture has invalid nested worker fields: {receipt_path}")
+    worker_args = declared_worker["args"]
+    if not isinstance(worker_args, list) or not all(isinstance(arg, str) for arg in worker_args):
+        fail(f"nested worker args are not strings: {receipt_path}")
+    if "--no-context-files" not in worker_args:
+        fail(f"capture worker did not disable inherited context files: {receipt_path}")
+    for flag, expected in (("--tools", ""), ("--model", receipt.get("model")), ("--thinking", receipt.get("thinking"))):
+        if worker_args.count(flag) != 1:
+            fail(f"capture worker must declare {flag} once: {receipt_path}")
+        position = worker_args.index(flag) + 1
+        if position >= len(worker_args) or worker_args[position] != expected:
+            fail(f"capture worker {flag} differs from required metadata: {receipt_path}")
     attempt_dir = receipt_path.parent
     raw_stdout = read_bytes(attempt_dir / "stdout", "raw facade stdout")
     raw_stderr = read_bytes(attempt_dir / "stderr", "raw facade stderr")
@@ -299,11 +313,24 @@ def verify_receipt(
         fail(f"returned output is empty: {receipt_path}")
     if receipt.get("returned_output_sha256") != hashlib.sha256(returned).hexdigest():
         fail(f"returned output hash mismatch: {receipt_path}")
-    for field in ("captured_stdout", "captured_stderr"):
+    summary = json.loads(raw_stdout)
+    workers = summary.get("workers") if isinstance(summary, dict) else None
+    if not isinstance(workers, list) or len(workers) != 1 or not isinstance(workers[0], dict):
+        fail(f"facade summary must contain exactly one captured worker: {receipt_path}")
+    worker = workers[0]
+    if worker.get("exit_code") != 0:
+        fail(f"captured worker failed: {receipt_path}")
+    if any(worker.get(key) != declared_worker[key] for key in ("command", "args")):
+        fail(f"captured worker differs from declared command/args: {receipt_path}")
+    for field, summary_field in (("captured_stdout", "stdout_path"), ("captured_stderr", "stderr_path")):
         value = receipt.get(field)
         if not isinstance(value, str) or not Path(value).is_absolute():
             fail(f"receipt {field} must be an absolute raw capture path: {receipt_path}")
-        read_bytes(Path(value), field)
+        if value != worker.get(summary_field):
+            fail(f"receipt {field} differs from actual worker capture: {receipt_path}")
+        content = read_bytes(Path(value), field)
+        if field == "captured_stdout" and content != returned:
+            fail(f"returned judgment differs from captured worker stdout: {receipt_path}")
     # Preserve the facade's own raw streams and the worker's selected output;
     # this check never parses or changes the returned judgment.
     return {

@@ -823,9 +823,9 @@ fn historical_rows_remain_attested_and_current_packets_stay_v11() {
     assert!(current.iter().all(|entry| {
         let entry = entry.as_object().expect("current manifest row object");
         string_field(entry, "config_version").ends_with(CURRENT_CONFIG_SUFFIX)
-            && string_field(entry, "observed") == "pending"
-            && string_field(entry, "attested_by").is_empty()
-            && string_field(entry, "invocation") == PENDING_INVOCATION
+            && historical
+                .iter()
+                .all(|old| old["input_sha256"] != entry["input_sha256"])
     }));
 
     let repository = provider_root()
@@ -887,6 +887,65 @@ fn historical_rows_remain_attested_and_current_packets_stay_v11() {
     assert_eq!(
         preparation["input_sha256"], current_row["input_sha256"],
         "current packet must use current-version mechanical identity"
+    );
+
+    // Drive the public receipt checker with a scripted retained-capture fixture.
+    // Model flags belong to the nested fan-out worker, not its outer argv.
+    let checked = Command::new("python3")
+        .arg("-c")
+        .arg(r#"
+import copy, hashlib, json, pathlib, subprocess, sys
+repo, root = map(pathlib.Path, sys.argv[1:3])
+key = sys.argv[3]
+case = root / key
+prep = json.loads((case / 'preparation.json').read_text())
+attempt = case / 'scripted-capture'
+attempt.mkdir()
+returned = b'{"result":"pass","findings":""}\n'
+worker_out, worker_err = attempt / 'worker.stdout', attempt / 'worker.stderr'
+worker_out.write_bytes(returned)
+worker_err.write_bytes(b'')
+(attempt / 'returned-output').write_bytes(returned)
+(attempt / 'stderr').write_bytes(b'')
+args = ['--print', '--no-context-files', '--tools', '', '--model', 'scripted', '--thinking', 'high']
+worker = {'command': 'scripted-worker', 'args': args, 'exit_code': 0,
+          'stdout_path': str(worker_out), 'stderr_path': str(worker_err)}
+receipt = {'case': key, 'command': ['loop-engine', 'fan-out', '--worker',
+           json.dumps({'command': worker['command'], 'args': args})],
+           'model': 'scripted', 'thinking': 'high', 'exit_code': 0,
+           'owner_attestation': 'pending', 'semantic_disposition': 'pending-driver-inspection',
+           'instructions_sha256': prep['instructions_sha256'],
+           'returned_output_sha256': hashlib.sha256(returned).hexdigest(),
+           'captured_stdout': str(worker_out), 'captured_stderr': str(worker_err)}
+receipt_path = attempt / 'receipt.json'
+(root / 'driver-capture-index-scripted.json').write_text(json.dumps({
+    'owner_attestation': 'pending', 'cases': [{'case': key, 'receipt': str(receipt_path)}]}))
+for variant in ['valid', 'context-enabled', 'tools-enabled', 'inner-failed', 'argv-mismatch', 'output-mismatch']:
+    r, w = copy.deepcopy(receipt), copy.deepcopy(worker)
+    worker_out.write_bytes(returned)
+    if variant == 'context-enabled': w['args'].remove('--no-context-files')
+    if variant == 'tools-enabled': w['args'][w['args'].index('--tools') + 1] = 'read'
+    if variant in ['context-enabled', 'tools-enabled']:
+        r['command'][-1] = json.dumps({'command': w['command'], 'args': w['args']})
+    if variant == 'inner-failed': w['exit_code'] = 9
+    if variant == 'argv-mismatch': w['args'].append('--unexpected')
+    if variant == 'output-mismatch': worker_out.write_bytes(b'different output')
+    receipt_path.write_text(json.dumps(r))
+    (attempt / 'stdout').write_text(json.dumps({'workers': [w]}))
+    result = subprocess.run([sys.executable, str(repo / 'scripts/assert-calibration-capture.py'),
+                             '--root', str(root), '--row-key', key], capture_output=True, text=True)
+    assert (result.returncode == 0) == (variant == 'valid'), (variant, result.stderr)
+print('nested calibration receipt: positive and five refusals passed')
+"#)
+        .arg(&repository)
+        .arg(&output_root)
+        .arg(row_key)
+        .bounded_output("verify nested calibration capture through public CLI")
+        .expect("calibration capture regression should run");
+    assert!(
+        checked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
     );
 
     let mut legacy = Command::new("python3");
