@@ -182,7 +182,12 @@ working-tree and single-snapshot contract.
 Publication checks use the range contract. For each ref update, the checker
 enumerates every commit reachable from the new tip and absent from the old tip,
 including merged branches, and validates each introduced commit against every
-parent. A new ref with a zero old tip traverses its reachable history. The
+parent. Coverage timing is tip-only (LE-133): snapshot-state findings on
+intermediate introduced commits are retained as visible `note:` diagnostics
+when the pushed tip tree is independently clean, because eligible citations
+may land later in the same range. Per-commit continuity findings and any
+acquisition, state-capture, or enumeration failure still block wherever they
+appear. A new ref with a zero old tip traverses its reachable history. The
 checker acquires missing ancestry from the configured source remote without
 moving HEAD, local branches, the index, or the worktree. Missing ancestry,
 failed acquisition, or incomplete enumeration remains incomplete and returns

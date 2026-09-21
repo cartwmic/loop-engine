@@ -88,6 +88,24 @@ fn validate_oid(value: &str, line: usize, side: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Acquisition and local-state failures fail closed wherever they appear;
+/// they never become tip-only diagnostics.
+fn is_acquisition_failure(finding: &str) -> bool {
+    [
+        "historical snapshot unavailable",
+        "historical parents unavailable",
+        "history enumeration incomplete",
+        "required historical PRD unavailable",
+        "cannot establish historical Bookends state",
+        "local Git state",
+        "could not capture",
+        "not a git work tree",
+        "publication history is incomplete",
+    ]
+    .iter()
+    .any(|marker| finding.contains(marker))
+}
+
 fn is_zero_oid(oid: &str) -> bool {
     oid.bytes().all(|byte| byte == b'0')
 }
@@ -170,10 +188,30 @@ pub fn check_publication(
     let mut ranges = Vec::new();
     let mut checked_commits = Vec::new();
     let mut live_ids = Vec::new();
+    // Tip-only publication rule (LE-133): coverage-timing findings on
+    // intermediate introduced commits are retained as visible diagnostics
+    // because eligible citations may legitimately land later in the same
+    // pushed range; the published tip tree must still be independently clean.
+    // Per-commit continuity findings (removal, reassignment, revival,
+    // tombstone and adoption games) and any acquisition/state failure still
+    // block wherever they appear.
+    let mut intermediate = Vec::new();
     for update in updates {
         let (range, range_findings, range_live_ids) = check_update(repo_root, update, options);
         checked_commits.extend(range.introduced_commits.iter().cloned());
-        findings.extend(range_findings);
+        let tip_mark = format!("{}:", update.new_oid);
+        let tip_paren = format!("{} (", update.new_oid);
+        for finding in range_findings {
+            if finding.starts_with(&tip_mark)
+                || finding.starts_with(&tip_paren)
+                || finding.contains(" (parent ")
+                || is_acquisition_failure(&finding)
+            {
+                findings.push(finding);
+            } else {
+                intermediate.push(finding);
+            }
+        }
         live_ids.extend(range_live_ids);
         ranges.push(range);
     }
@@ -211,7 +249,8 @@ pub fn check_publication(
     live_ids.dedup();
     checked_commits.sort();
     checked_commits.dedup();
-    let diagnostics = findings.clone();
+    let mut diagnostics = findings.clone();
+    diagnostics.extend(intermediate.iter().cloned());
     let status = if findings.is_empty() {
         CheckStatus::Green
     } else if let Some((class, reason)) = bypass {
@@ -222,11 +261,14 @@ pub fn check_publication(
     } else {
         CheckStatus::Red
     };
-    let findings = if matches!(status, CheckStatus::Bypass { .. }) {
+    let mut findings = if matches!(status, CheckStatus::Bypass { .. }) {
         Vec::new()
     } else {
         findings
     };
+    if matches!(status, CheckStatus::Red) {
+        findings.extend(intermediate);
+    }
 
     Ok(PublicationReport {
         status,

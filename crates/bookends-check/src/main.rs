@@ -347,6 +347,9 @@ fn run_publication(
     match &report.status {
         CheckStatus::Green => {
             writeln!(stdout, "GREEN")?;
+            for diagnostic in &report.diagnostics {
+                writeln!(stdout, "note: {diagnostic}")?;
+            }
             Ok(ExitCode::from(0))
         }
         CheckStatus::Red => {

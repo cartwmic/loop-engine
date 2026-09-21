@@ -279,7 +279,7 @@ fn ref_oid(repo: &Path, reference: &str) -> Option<String> {
 }
 
 #[test]
-fn backlog_t08_invalid_intermediate_is_not_hidden_by_later_repair() {
+fn backlog_t08_intermediate_coverage_gap_is_note_when_tip_is_clean() {
     let root = tempfile::tempdir().expect("tempdir");
     let repo = init_repo(root.path());
     enable_graph(&repo, &live("LE-1", "One"), "# bookends:LE-1\n");
@@ -290,13 +290,54 @@ fn backlog_t08_invalid_intermediate_is_not_hidden_by_later_repair() {
         "docs/PRD.md",
         &(live("LE-1", "One") + &live("LE-2", "Two")),
     );
-    let invalid = commit(&repo, "invalid uncovered intermediate");
+    let uncovered = commit(&repo, "intermediate adds uncovered LE-2");
+    write_file(
+        &repo,
+        "tests/journey.py",
+        "# bookends:LE-1\n# bookends:LE-2\n",
+    );
+    let new = commit(&repo, "tip covers LE-2");
+
+    let receipts = root.path().join("receipts");
+    let updates = format!("refs/heads/main {new} refs/heads/main {old}\n");
+    let output = run_checker(&repo, &updates, &receipts, &[]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert_eq!(first_line(&output), "GREEN", "{stdout}");
+    assert!(
+        stdout.contains(&uncovered),
+        "intermediate note missing: {stdout}"
+    );
+    let receipt = one_receipt(&receipts);
+    assert!(receipt.contains("outcome: GREEN"), "{receipt}");
+    assert!(receipt.contains("complete: true"), "{receipt}");
+    // bookends:LE-133 — tip-only coverage timing: the intermediate gap is
+    // retained as a visible diagnostic even though the pushed tip is clean.
+    assert!(
+        receipt.contains(&uncovered) && receipt.contains(&new),
+        "{receipt}"
+    );
+}
+
+#[test]
+fn backlog_t08_intermediate_continuity_violation_still_blocks() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(root.path());
+    enable_graph(
+        &repo,
+        &(live("LE-1", "One") + &live("LE-2", "Two")),
+        "# bookends:LE-1\n# bookends:LE-2\n",
+    );
+    let old = commit(&repo, "base");
+
+    write_file(&repo, "docs/PRD.md", &live("LE-1", "One"));
+    let removal = commit(&repo, "intermediate silently drops LE-2");
     write_file(
         &repo,
         "docs/PRD.md",
-        &(live("LE-1", "One") + &tombstone("LE-2", "Two")),
+        &(live("LE-1", "One") + &live("LE-2", "Two")),
     );
-    let new = commit(&repo, "repair");
+    let new = commit(&repo, "tip restores LE-2");
 
     let receipts = root.path().join("receipts");
     let updates = format!("refs/heads/main {new} refs/heads/main {old}\n");
@@ -305,17 +346,36 @@ fn backlog_t08_invalid_intermediate_is_not_hidden_by_later_repair() {
     assert_eq!(output.status.code(), Some(1), "{stdout}");
     assert_eq!(first_line(&output), "RED", "{stdout}");
     assert!(
-        stdout.contains(&invalid),
-        "intermediate identity missing: {stdout}"
+        stdout.contains(&removal),
+        "continuity finding missing: {stdout}"
     );
-    let receipt = one_receipt(&receipts);
-    assert!(receipt.contains("outcome: RED"), "{receipt}");
-    assert!(receipt.contains("complete: true"), "{receipt}");
-    // bookends:LE-133 — the public publication range retains the invalid
-    // intermediate commit even though the pushed tip is later repaired.
+}
+
+#[test]
+fn backlog_t08_dirty_tip_blocks_despite_clean_intermediates() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(root.path());
+    enable_graph(&repo, &live("LE-1", "One"), "# bookends:LE-1\n");
+    let old = commit(&repo, "base");
+
+    write_file(&repo, "tests/journey.py", "# bookends:LE-1\n# touched\n");
+    let _middle = commit(&repo, "clean intermediate");
+    write_file(
+        &repo,
+        "docs/PRD.md",
+        &(live("LE-1", "One") + &live("LE-3", "Three")),
+    );
+    let new = commit(&repo, "tip adds uncovered LE-3");
+
+    let receipts = root.path().join("receipts");
+    let updates = format!("refs/heads/main {new} refs/heads/main {old}\n");
+    let output = run_checker(&repo, &updates, &receipts, &[]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert_eq!(first_line(&output), "RED", "{stdout}");
     assert!(
-        receipt.contains(&invalid) && receipt.contains(&new),
-        "{receipt}"
+        stdout.contains(&new) && stdout.contains("LE-3"),
+        "tip finding missing: {stdout}"
     );
 }
 
@@ -667,7 +727,7 @@ fn backlog_t08_missing_history_and_limit_are_red_and_bypass_is_recorded() {
 }
 
 #[test]
-fn backlog_t08_pre_push_hook_passes_actual_updates_and_rejects_bad_range() {
+fn backlog_t08_pre_push_hook_notes_intermediate_when_tip_is_clean() {
     let root = tempfile::tempdir().expect("tempdir");
     let source = init_repo(root.path());
     enable_graph(&source, &live("LE-1", "One"), "# bookends:LE-1\n");
@@ -754,30 +814,31 @@ fn backlog_t08_pre_push_hook_passes_actual_updates_and_rejects_bad_range() {
         "docs/PRD.md",
         &(live("LE-1", "One") + &live("LE-2", "Uncovered")),
     );
-    let _invalid = commit(&checkout, "invalid middle commit");
+    let noted = commit(&checkout, "uncovered middle commit");
     write_file(
         &checkout,
         "docs/PRD.md",
         &(live("LE-1", "One") + &tombstone("LE-2", "Uncovered")),
     );
-    let _repair = commit(&checkout, "repair middle commit");
-    let rejected = Command::new("git")
+    let tip = commit(&checkout, "tip tombstones LE-2");
+    let noted_push = Command::new("git")
         .current_dir(&checkout)
         .args(["push", "origin", "main"])
         .env("PATH", &path)
         .env("XDG_STATE_HOME", &state)
         .output()
-        .expect("push rejected range");
-    assert!(!rejected.status.success());
-    let rejected_text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&rejected.stdout),
-        String::from_utf8_lossy(&rejected.stderr)
+        .expect("push tip-clean range");
+    assert!(noted_push.status.success(), "{}", hook_output(&noted_push));
+    assert_hook_marker(&noted_push, "GREEN");
+    // bookends:LE-133 — tip-only coverage timing: the intermediate gap is a
+    // visible note, not a block, when the pushed tip is independently clean.
+    assert!(
+        hook_output(&noted_push).contains(&noted),
+        "{}",
+        hook_output(&noted_push)
     );
-    assert!(rejected_text.contains("RED"), "{rejected_text}");
-    assert_eq!(git(&bare, &["rev-parse", "refs/heads/main"]), base);
+    assert_eq!(git(&bare, &["rev-parse", "refs/heads/main"]), tip);
 
-    git(&checkout, &["reset", "-q", "--hard", &base]);
     write_file(&checkout, "tests/extra.py", "ordinary untagged support\n");
     let pushed = commit(&checkout, "valid publication");
     let accepted = Command::new("git")

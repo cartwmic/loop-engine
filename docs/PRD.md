@@ -1740,7 +1740,7 @@ The resulting policy and commands are visible for owner confirmation before star
 - Status: live
 - Coverage: e2e/journey
 
-Pre-push and required CI inspect every commit introduced by each updated ref, including merged branch commits, and check continuity against each relevant parent. A later repair cannot conceal an invalid intermediate transition. Legitimate first adoption and permanent tombstones retain their meaning. Coverage of the published tip is checked against that tip's content.
+Pre-push and required CI inspect every commit introduced by each updated ref, including merged branch commits, and check continuity against each relevant parent. Per-commit continuity (no silent removal, reassignment, revival, adoption removal, or tombstone games) still blocks wherever it appears, and incomplete history still fails closed. Coverage-timing findings on intermediate commits (eligible citations landing later in the same pushed range) are retained as visible diagnostics instead of blocking, provided the pushed tip tree is independently clean. Legitimate first adoption and permanent tombstones retain their meaning. Coverage of the published tip is checked against that tip's content. Known residual: landing an uncovered live ID then tombstoning it in the same range passes; tombstones are permanent and review-visible.
 
 Local and hosted checks obtain required history before claiming complete coverage. Equivalent available history produces the same decision in full and shallow clones. Missing history, incomplete enumeration, interruption or a resource limit cannot produce complete GREEN. A new ref cannot use a guessed baseline to omit its ancestry. Explicit bypass retains its reason and durable invocation evidence under LE-126.
 
