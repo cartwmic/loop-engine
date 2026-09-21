@@ -54,11 +54,17 @@ Provide both useful on-demand status and concise proactive chat updates for mean
 
 Assess the existing monitor, advisory summaries and driver guidance on real work first; change what fails these outcomes rather than assuming a new monitoring system or dedicated display is needed.
 
+Status (2026-09-20): substantially delivered by run-1789764810283193000-1-10500 (commit 38f89d1, completed with zero overrides): status/visibility lanes separate execution, conformance, acceptance, evidence, freshness and uncertainty; acceptance projects explicit attributed decisions; passive owner updates per LE-143. AC-1..AC-5 pass with executed proof. Remaining: product-level review-commission pruning (see new item below).
+
 ### Avoid unnecessary repeated work after plan changes
 
 Identify ordinary plan-revision cases not adequately served by existing selected-task repair, ad-hoc repair and evidence applicability. Preserve completed work that remains valid under the revised plan, and repeat only work or review invalidated by the change.
 
 Demonstrate a representative revised-plan execution reaching a valid completed outcome without rerunning unaffected work; do not assume that old success remains applicable merely because a task name is unchanged. Choose the smallest adequate change rather than prescribing delta-plan formats, generalized replay or cloned runtime state.
+
+### Commission compact review packets by default
+
+Review slots commission every record of their admitted kinds (observed: 511 records / ~1MB to an implementation-review worker, mostly other gates' ledgers). Small-window models fail; large ones never notice. Run-1789764810283193000-1-10500 proved current-gate-plus-references filtering (511 to ~125 records, preamble byte-identical, all reviews green) via run-scoped binding wrappers only — the product default is unchanged. Scope a provider change that commissions review-necessary records while preserving reuse/applicability references, LE-127 meaningful context, and full verification. Add a journey assertion on commissioned review-context size plus a small-window review probe so the gap cannot hide again.
 
 ## Cross-project work
 
