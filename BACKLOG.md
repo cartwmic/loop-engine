@@ -64,6 +64,8 @@ Possible directions (investigate, do not assume): drop or cap the `status detail
 
 Directive: investigate first for the correct shape of human status — what an owner needs at a glance (current work, next action, blocker, evidence location, freshness, uncertainty) versus what belongs behind locators — against a live messy mid-implementation run, not a finished one. Fix what fails that shape; do not add a parallel monitoring system. Any CLI change keeps status non-arming and the GREEN/RED/BYPASS-style first-line contract intact.
 
+Extend the investigation to every read primitive agents actually consume — show views (status/action/full, human and JSON), history, invocation-progress, monitor packets, list, and the instruction/guidance surfaces — and audit for duplicated information across them: the same evaluation text, lane prose, ledger content, or invocation detail repeated in multiple outputs or repeated per record. Machine consumers stay complete (agents read this output; nothing they need is removed), but each fact should have one authoritative home with locators elsewhere, so agents stop paying context-window rent on the same bytes N times. Demonstrate byte counts per primitive on a live run before and after; do not merely assert efficiency.
+
 ### Avoid unnecessary repeated work after plan changes
 
 Identify ordinary plan-revision cases not adequately served by existing selected-task repair, ad-hoc repair and evidence applicability. Preserve completed work that remains valid under the revised plan, and repeat only work or review invalidated by the change.
