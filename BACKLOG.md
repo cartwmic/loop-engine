@@ -56,6 +56,14 @@ Assess the existing monitor, advisory summaries and driver guidance on real work
 
 Status (2026-09-20): substantially delivered by run-1789764810283193000-1-10500 (commit 38f89d1, completed with zero overrides): status/visibility lanes separate execution, conformance, acceptance, evidence, freshness and uncertainty; acceptance projects explicit attributed decisions; passive owner updates per LE-143. AC-1..AC-5 pass with executed proof. Remaining: product-level review-commission pruning (see new item below).
 
+### Make human status output digestible on active runs
+
+Owner-observed pain (2026-09-21, second machine, brand-new active run): human `show --view status` renders lines and lines of wrapped text instead of the ~8-line digest demonstrated on the completed run-1789764810283193000-1-10500. Root cause, read from `render_show_compact` (`crates/loop-cli/src/lib.rs`): the human status output is the 8 digest lines **plus the entire status JSON packet appended inline** as one single-line blob (`status details ...`). On a finished run that packet is ~2 KB; on an active run it carries every latest durable evaluation with full feedback text, all nine visibility lanes with full reason prose, active invocation ownership/selection objects, and requestable-event details — so the terminal wraps one mega-line into pages and the digest scrolls away unseen. Related: `--view full --json` measured 9 GB on the completed run (~260k duplicated assignment/ledger-adjacent records); that view is machine-only and must never reach a terminal. Every status call also runs a live Dagu snapshot collection even when only the digest is wanted.
+
+Possible directions (investigate, do not assume): drop or cap the `status details` tail in human mode since locators already point at the detail; gate it behind a flag; add a hard-capped digest view; skip the Dagu collection unless progress is requested; determine whether the 260k-record fan-out in full output is a cartesian duplication bug in change-report assembly or legitimate history rendered raw.
+
+Directive: investigate first for the correct shape of human status — what an owner needs at a glance (current work, next action, blocker, evidence location, freshness, uncertainty) versus what belongs behind locators — against a live messy mid-implementation run, not a finished one. Fix what fails that shape; do not add a parallel monitoring system. Any CLI change keeps status non-arming and the GREEN/RED/BYPASS-style first-line contract intact.
+
 ### Avoid unnecessary repeated work after plan changes
 
 Identify ordinary plan-revision cases not adequately served by existing selected-task repair, ad-hoc repair and evidence applicability. Preserve completed work that remains valid under the revised plan, and repeat only work or review invalidated by the change.
