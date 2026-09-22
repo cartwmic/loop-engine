@@ -76,6 +76,12 @@ Demonstrate a representative revised-plan execution reaching a valid completed o
 
 Review slots commission every record of their admitted kinds (observed: 511 records / ~1MB to an implementation-review worker, mostly other gates' ledgers). Small-window models fail; large ones never notice. Run-1789764810283193000-1-10500 proved current-gate-plus-references filtering (511 to ~125 records, preamble byte-identical, all reviews green) via run-scoped binding wrappers only — the product default is unchanged. Scope a provider change that commissions review-necessary records while preserving reuse/applicability references, LE-127 meaningful context, and full verification. Add a journey assertion on commissioned review-context size plus a small-window review probe so the gap cannot hide again.
 
+### Make shipped profiles customizable without forking them wholesale
+
+Owner dogfooding pain (2026-09-22): it is not clear how to take a shipped provider profile, change it slightly, and retain the rest of the defaults. Today the choice looks binary — use the profile as-is or own a full copy that silently drifts from future shipped improvements.
+
+Investigate a better experience for profile layering/overlay: e.g. a documented copy-tweak-own flow, a named-profile-plus-overrides mechanism, or profile inheritance — whatever fits the provider architecture smallest. Outcomes: an owner can state "profile X with these N changes" in one obvious place; the unchanged remainder tracks shipped updates; drift/divergence is visible, not silent; validation still proves the effective profile, not just the base. Demonstrate on a real small customization, not a synthetic example.
+
 ## Cross-project work
 
 ### pi-subagents: verify recovery, result retrieval and lifecycle fixes
