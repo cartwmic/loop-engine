@@ -33,7 +33,7 @@ WORK_SLOT_PROOF = [
     "history invocation started and succeeded",
 ]
 CONSTRUCTOR_PROOF = [
-    "semantic-review constructor vs shipped readme-2 and agents-2",
+    "semantic-review constructor vs shipped readme-3 and agents-3",
     "one worker per semantic policy in profile order",
     "exact example_prompt, author/model, mode, and complete target object",
     "preamble/schema bytes and preview-bindings output",
@@ -211,13 +211,13 @@ def assert_semantic_review_constructor(engine: Path) -> None:
         roster_path = root / "roster.json"
         write_json(roster_path, roster)
 
-        for source_profile, label in ((readme_profile, "readme-2"), (agents_profile, "agents-2")):
+        for source_profile, label in ((readme_profile, "readme-3"), (agents_profile, "agents-3")):
             target_file = root / f"{label}-target.md"
             dest = root / f"{label}.json"
             copied = load_json(source_profile)
             copied["target"]["path"] = str(target_file.resolve())
             selected_filter = None
-            if label == "agents-2":
+            if label == "agents-3":
                 selected_filter = {"command": "/tmp/policy-document-selector", "args": ["commission", json.dumps(copied)]}
                 copied["work_slot_bindings"] = {"semantic-review": {"context_filter": selected_filter}}
             target_file.write_text("# target\n", encoding="utf-8")
@@ -322,7 +322,7 @@ def assert_semantic_review_constructor(engine: Path) -> None:
                 )
 
         two_author = root / "readme-two-authors.json"
-        two_doc = load_json(root / "readme-2.json")
+        two_doc = load_json(root / "readme-3.json")
         two_doc["semantic_policies"][0]["required_authors"] = 2
         write_json(two_author, two_doc)
         two_result = run_pd(two_author, roster_path)
@@ -340,11 +340,11 @@ def assert_semantic_review_constructor(engine: Path) -> None:
         assert first_axis in two_workers[0]["preamble"] and first_axis in two_workers[1]["preamble"]
 
         expect_constructor_closed(
-            lambda: run_pd(root / "readme-2.json", roster_path, slot_id="design-review"),
+            lambda: run_pd(root / "readme-3.json", roster_path, slot_id="design-review"),
             needle="unsupported slot",
             context="policy-document unsupported slot",
         )
-        empty_pd = load_json(root / "readme-2.json")
+        empty_pd = load_json(root / "readme-3.json")
         empty_pd["semantic_policies"] = []
         empty_path = root / "empty-policies.json"
         write_json(empty_path, empty_pd)
@@ -353,7 +353,7 @@ def assert_semantic_review_constructor(engine: Path) -> None:
             needle="semantic_policies must be non-empty",
             context="policy-document empty policies",
         )
-        prompt_pd = load_json(root / "readme-2.json")
+        prompt_pd = load_json(root / "readme-3.json")
         prompt_pd["semantic_policies"][0]["example_prompt"] = ""
         prompt_path = root / "missing-prompt.json"
         write_json(prompt_path, prompt_pd)
@@ -362,7 +362,7 @@ def assert_semantic_review_constructor(engine: Path) -> None:
             needle="example_prompt",
             context="policy-document missing prompt",
         )
-        mode_pd = load_json(root / "readme-2.json")
+        mode_pd = load_json(root / "readme-3.json")
         del mode_pd["mode"]
         mode_path = root / "missing-mode.json"
         write_json(mode_path, mode_pd)
@@ -371,7 +371,7 @@ def assert_semantic_review_constructor(engine: Path) -> None:
             needle="mode must be draft or audit",
             context="policy-document missing mode",
         )
-        target_pd = load_json(root / "readme-2.json")
+        target_pd = load_json(root / "readme-3.json")
         target_pd["target"]["path"] = "relative/README.md"
         target_path = root / "relative-target.json"
         write_json(target_path, target_pd)
@@ -380,7 +380,7 @@ def assert_semantic_review_constructor(engine: Path) -> None:
             needle="complete {id,path}",
             context="policy-document missing/relative target",
         )
-        del_target = load_json(root / "readme-2.json")
+        del_target = load_json(root / "readme-3.json")
         del del_target["target"]
         del_target_path = root / "missing-target.json"
         write_json(del_target_path, del_target)
@@ -395,21 +395,21 @@ def assert_semantic_review_constructor(engine: Path) -> None:
             [roster[0], {"author": roster[0]["author"], "model": "model-c"}],
         )
         expect_constructor_closed(
-            lambda: run_pd(root / "readme-2.json", duplicate_roster),
+            lambda: run_pd(root / "readme-3.json", duplicate_roster),
             needle="pairwise distinct",
             context="policy-document duplicate author",
         )
         empty_author = root / "empty-author.json"
         write_json(empty_author, [{"author": "", "model": "model-a"}])
         expect_constructor_closed(
-            lambda: run_pd(root / "readme-2.json", empty_author),
+            lambda: run_pd(root / "readme-3.json", empty_author),
             needle="non-empty author and model",
             context="policy-document empty author",
         )
         empty_model = root / "empty-model.json"
         write_json(empty_model, [{"author": "reviewer-a", "model": ""}])
         expect_constructor_closed(
-            lambda: run_pd(root / "readme-2.json", empty_model),
+            lambda: run_pd(root / "readme-3.json", empty_model),
             needle="non-empty author and model",
             context="policy-document empty model",
         )
@@ -597,7 +597,7 @@ def main() -> int:
         profile_path = work / "readme.json"
         shutil.copy2(shipped_profile, profile_path)
         profile = json.loads(profile_path.read_text(encoding="utf-8"))
-        agents_profile = profile["profile_version"] == "agents-2"
+        agents_profile = profile["profile_version"] == "agents-3"
         if agents_profile:
             target = work / "AGENTS.md"
             target.write_text("", encoding="utf-8")

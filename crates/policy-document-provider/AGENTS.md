@@ -14,8 +14,8 @@ Choose the shipped profile for the target before starting:
 
 | Target | Copy | Keep `target.id` | Keep `profile_version` |
 |---|---|---|---|
-| README | `data/readme.json` | `README.md` | `readme-2` |
-| AGENTS | `data/agents.json` | `AGENTS.md` | `agents-2` |
+| README | `data/readme.json` | `README.md` | `readme-3` |
+| AGENTS | `data/agents.json` | `AGENTS.md` | `agents-3` |
 
 Change those identities only when intentionally authoring a custom profile. Choose `mode: draft` for an authoring/revision request and `mode: audit` for assessment of an existing target. Mode stays frozen through later corrections within that run. Deterministic and semantic policies live in immutable initial input; do not bake document-specific policy into provider code.
 

@@ -254,10 +254,22 @@ Reuse the returned run ID for every later operation.
 
 | Profile | Deterministic floors | Semantic axes |
 |---|---|---|
-| `readme-2` | non-empty document; H1; purpose, onboarding, usage, and validation sections; commands in onboarding and validation; resolving local references | product-fidelity, onboarding-sufficiency, audience-navigation, clarity-scope, honest-fitness, verifiable-claims, troubleshooting-sharp-edges |
-| `agents-2` | non-empty document; scope/authority, workflow/validation, and completion/handoff sections; workflow command; resolving local references | success-path-completeness, operational-precision, authority-resolution, risk-boundary-sufficiency, completion-handoff, non-discoverable-sharp-edges, ambiguity-resolution, signal-density, living-config |
+| `readme-3` | non-empty document; H1; purpose, onboarding, usage, and validation sections; commands in onboarding and validation; resolving local references | product-fidelity, onboarding-sufficiency, audience-navigation, clarity-scope, honest-fitness, verifiable-claims, troubleshooting-sharp-edges |
+| `agents-3` | non-empty document; scope/authority, workflow/validation, and completion/handoff sections; workflow command; resolving local references | success-path-completeness, operational-precision, authority-resolution, risk-boundary-sufficiency, completion-handoff, non-discoverable-sharp-edges, ambiguity-resolution, signal-density, living-config |
 
 Heading aliases are case-insensitive; profiles do not require exact heading spelling. Commands must be non-comment content inside a fenced block within the matching section. Keep local references relative to target parent; web, mail, data, fragment-only, and protocol-relative links are ignored by local resolution.
+
+## Optional blind-first assessment
+
+For a document assessment, a separate blind reader can help find stalls the repository-aware profile review misses. This is advisory, not a profile axis, transition gate, or mandatory model call. If an isolated reviewer is available and authorized, give it only the target document, intended audience, and assessment task—not the profile, source tree, prior findings, memories, or drafting rationale. Freeze its judgment (defects, optional suggestions, and unknowns) before showing it links or project evidence. Independently commission the source-backed profile review without exposing the blind report; then reconcile each concern against linked documents and repository evidence, distinguishing static inference from executed proof. Only supported defects warrant changes. If isolation or review is unavailable, skip the blind step rather than calling a repository-aware assessment blind. New optional policy candidates need supported counterexamples before inclusion; do not turn every reader suggestion into an axis.
+
+For a later, separately authorized calibration, use both sides of each focused case (expected findings are not actual reviewer results):
+
+- README: build/help succeeds, but the first useful result requires an unexplained compatible service and a placeholder URL/model → find an onboarding gap. An explicit existing-service prerequisite with linked protocol and model-selection guidance → pass without requiring a bundled server or live credentials.
+- AGENTS: focused tests on a fresh checkout import an unbuilt workspace dependency, or use stale artifacts after a source edit → find the missing prerequisite. A test script that builds its own dependencies → pass without redundant explicit builds.
+- AGENTS: cleanup wording could remove unrelated edits, or mandatory disposable test installs conflict with a broad approval rule → find the ownership/destination ambiguity. Task-owned cleanup plus a clear boundary between disposable test installs and persistent user configuration → pass; no cleanup/install commands need no such boilerplate.
+
+A source journey only proves transport and evidence mechanics. These cases need independent semantic verdicts before claiming reviewer calibration.
 
 ## Run loop
 
@@ -352,7 +364,7 @@ loop-engine --json append \
   "author": {"name": "reviewer-sol", "kind": "agent"},
   "target_id": "README.md",
   "target_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-  "profile_version": "readme-2"
+  "profile_version": "readme-3"
 }
 ```
 
