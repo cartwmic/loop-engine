@@ -364,7 +364,7 @@ fn eligible_ids(
     eligible
 }
 
-fn is_internal_rust_source(file: &str) -> bool {
+pub(crate) fn is_internal_rust_source(file: &str) -> bool {
     let normalized = file.replace('\\', "/");
     let mut parts = normalized.split('/');
     parts.next() == Some("crates") && parts.any(|part| part == "src")

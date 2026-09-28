@@ -14,7 +14,7 @@ Every task includes:
 - handoff contract;
 - `criterion_ids`, a non-empty unique list of current intent `AC-N` IDs naming the criteria this task serves. This is required for every task in a contract-v3 plan; other artifact links remain optional.
 
-For contract-v3 plans, every task carries its required criterion reference; other intermediate artifacts remain optional. Do not reproduce a complete criterion matrix or create a parallel PRD-ID spine.
+For contract-v3 plans, every task carries its required criterion reference; other intermediate artifacts remain optional. Do not reproduce a complete criterion matrix or create a parallel PRD-ID spine. With Bookends enabled, the plan phase uses the existing AC/task/proof-command spine to explain which applicable accepted requirement obligations and explicitly named authoritative documents the decomposition covers. Put actionable missing configuration, live wording, or eligible CI/public-location prerequisites in the plan before approval; do not require proof of behavior that has not yet been implemented. Bookends-off plans add no PRD-ID duty.
 
 Validation must use realistic black-box proof of the observable outcome when practical. If black-box proof is genuinely impractical, state the concrete reason and the nearest realistic substitute; a list of completed work, internal tests, or passing commands is not outcome proof by itself. Keep task packets specific enough to preserve acceptance without prescribing replaceable mechanisms. Implementation agents have freedom inside frozen intent, operating context, outside obligations, and design decisions; do not leave product or architectural decisions for them, and do not turn a preferred implementation into a requirement.
 

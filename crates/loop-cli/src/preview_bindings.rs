@@ -79,6 +79,10 @@ pub(crate) struct PreviewWorker {
     pub(crate) args: Vec<String>,
     pub(crate) has_preamble: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) output_schema: Option<crate::fan_out::OutputSchema>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) full_output_schema: Option<Value>,
@@ -90,6 +94,8 @@ impl From<WorkerCli> for PreviewWorker {
             command: worker.command,
             args: worker.args,
             has_preamble: worker.preamble.is_some(),
+            title: worker.title,
+            role: worker.role,
             output_schema: worker.output_schema,
             full_output_schema: worker.full_output_schema,
         }
@@ -315,6 +321,8 @@ fn nested_workers(slot_id: &str, args: &[String]) -> Result<Vec<WorkerCli>, Prev
                     command: task_worker.command,
                     args: task_worker.args,
                     preamble: None,
+                    title: None,
+                    role: None,
                     output_schema: None,
                     full_output_schema: None,
                 }

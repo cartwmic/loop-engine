@@ -4,7 +4,8 @@
 //! performs no workflow start or worker launch. The only intentional file write
 //! is the atomically replaced profile named by `--output`.
 
-use crate::{config, embedded_data, overlay};
+use crate::{config, embedded_data, overlay, workflow};
+use loop_core::{AdviceCommandConfig, AdviceDeparture, AdviceDepartureMap};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -27,12 +28,31 @@ const REVIEW_GATES: &[&str] = &[
     "validation-adversarial-review",
 ];
 const PROFILE_PREFIX: &str = "crates/software-change-provider/data/configs/";
+const LEGACY_SHIPPED_PROFILE_VERSIONS: &[&str] = &[
+    "minimal-10",
+    "standard-10",
+    "high-rigor-10",
+    "minimal-11",
+    "standard-11",
+    "high-rigor-11",
+];
 const PREAMBLE_PATH: &str = "crates/software-change-provider/data/review-worker-preamble.txt";
 const OUTPUT_SCHEMA_PATH: &str =
-    "crates/software-change-provider/data/review-worker-output-schema.json";
+    "crates/software-change-provider/data/review-worker-output-schema-v2.json";
 const REVIEW_CONCURRENCY: &str = "2";
 const IMPLEMENTATION_CONCURRENCY: &str = "1";
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct ReviewTokenBudget {
+    model_id: String,
+    context_window_tokens: u64,
+    system_tokens: u64,
+    framing_tokens: u64,
+    output_reserve_tokens: u64,
+    reasoning_reserve_tokens: u64,
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -40,6 +60,7 @@ struct ReviewRosterEntry {
     author: String,
     command: String,
     args: Vec<String>,
+    token_budget: ReviewTokenBudget,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -59,7 +80,7 @@ struct ImplementationInput {
 
 #[derive(Clone, Debug)]
 struct SetupArgs {
-    rigor: Rigor,
+    profile_source: ProfileSource,
     roster_path: PathBuf,
     engine: String,
     provider: String,
@@ -67,6 +88,7 @@ struct SetupArgs {
     bookends: bool,
     draft_worker_path: Option<PathBuf>,
     implementation_path: Option<PathBuf>,
+    advice_config_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -101,6 +123,21 @@ impl Rigor {
             Self::Minimal => "minimal",
             Self::Standard => "standard",
             Self::High => "high",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum ProfileSource {
+    Bundled(Rigor),
+    File(PathBuf),
+}
+
+impl ProfileSource {
+    fn display_name(&self) -> &'static str {
+        match self {
+            Self::Bundled(rigor) => rigor.as_str(),
+            Self::File(_) => "custom",
         }
     }
 }
@@ -143,11 +180,12 @@ pub fn run_from_args(args: &[String]) -> i32 {
 }
 
 fn usage() -> &'static str {
-    "usage: software-change setup --rigor minimal|standard|high --roster PATH --engine ABS --provider ABS --output PATH [--bookends] [--draft-worker PATH] [--implementation PATH]"
+    "usage: software-change setup (--rigor minimal|standard|high | --profile PATH) --roster PATH --engine ABS --provider ABS --output PATH (--advice-config PATH | --decline-advice) [--bookends] [--draft-worker PATH] [--implementation PATH]\n\nThe standalone minimal, standard, and high-rigor examples expose the same eight advice occasions: review candidates, accepted defects, implementation correction, execution/authority issues, evidence applicability, requirements reconciliation, review-round departure, and final completion. Choose exactly one: --advice-config PATH reads a closed command/argv/timeout/request-limit/response-limit JSON object; --decline-advice freezes advice disabled. Setup does not select or call a backend."
 }
 
 fn parse_args(args: &[String]) -> Result<SetupArgs, String> {
     let mut rigor = None;
+    let mut profile_path = None;
     let mut roster_path = None;
     let mut engine = None;
     let mut provider = None;
@@ -155,6 +193,8 @@ fn parse_args(args: &[String]) -> Result<SetupArgs, String> {
     let mut bookends = false;
     let mut draft_worker_path = None;
     let mut implementation_path = None;
+    let mut advice_config_path = None;
+    let mut decline_advice = false;
     let mut index = 0;
 
     while index < args.len() {
@@ -167,11 +207,23 @@ fn parse_args(args: &[String]) -> Result<SetupArgs, String> {
             index += 1;
             continue;
         }
+        if token == "--decline-advice" {
+            if decline_advice {
+                return Err("--decline-advice may be supplied once".to_owned());
+            }
+            decline_advice = true;
+            index += 1;
+            continue;
+        }
 
         let (name, inline) = if let Some(value) = token.strip_prefix("--rigor=") {
             ("--rigor", Some(value.to_owned()))
         } else if token == "--rigor" {
             ("--rigor", None)
+        } else if let Some(value) = token.strip_prefix("--profile=") {
+            ("--profile", Some(value.to_owned()))
+        } else if token == "--profile" {
+            ("--profile", None)
         } else if let Some(value) = token.strip_prefix("--roster=") {
             ("--roster", Some(value.to_owned()))
         } else if token == "--roster" {
@@ -196,6 +248,10 @@ fn parse_args(args: &[String]) -> Result<SetupArgs, String> {
             ("--implementation", Some(value.to_owned()))
         } else if token == "--implementation" {
             ("--implementation", None)
+        } else if let Some(value) = token.strip_prefix("--advice-config=") {
+            ("--advice-config", Some(value.to_owned()))
+        } else if token == "--advice-config" {
+            ("--advice-config", None)
         } else {
             return Err(format!("unknown or unexpected argument `{token}`"));
         };
@@ -216,12 +272,14 @@ fn parse_args(args: &[String]) -> Result<SetupArgs, String> {
 
         match name {
             "--rigor" => set_once(&mut rigor, Rigor::parse(&value)?, name)?,
+            "--profile" => set_once(&mut profile_path, PathBuf::from(value), name)?,
             "--roster" => set_once(&mut roster_path, PathBuf::from(value), name)?,
             "--engine" => set_once(&mut engine, value, name)?,
             "--provider" => set_once(&mut provider, value, name)?,
             "--output" => set_once(&mut output, PathBuf::from(value), name)?,
             "--draft-worker" => set_once(&mut draft_worker_path, PathBuf::from(value), name)?,
             "--implementation" => set_once(&mut implementation_path, PathBuf::from(value), name)?,
+            "--advice-config" => set_once(&mut advice_config_path, PathBuf::from(value), name)?,
             _ => unreachable!(),
         }
         index += 1;
@@ -232,8 +290,22 @@ fn parse_args(args: &[String]) -> Result<SetupArgs, String> {
         return Err("--output must name a file".to_owned());
     }
 
+    if decline_advice == advice_config_path.is_some() {
+        return Err("choose exactly one of --advice-config JSON or --decline-advice".to_owned());
+    }
+
+    let profile_source = match (rigor, profile_path) {
+        (Some(_), Some(_)) => {
+            return Err("`--profile` and `--rigor` are mutually exclusive".to_owned())
+        }
+        (Some(rigor), None) => ProfileSource::Bundled(rigor),
+        (None, Some(path)) if !path.as_os_str().is_empty() => ProfileSource::File(path),
+        (None, Some(_)) => return Err("--profile must name a file".to_owned()),
+        (None, None) => return Err("one of `--profile` or `--rigor` is required".to_owned()),
+    };
+
     Ok(SetupArgs {
-        rigor: rigor.ok_or("missing required option `--rigor`")?,
+        profile_source,
         roster_path: roster_path.ok_or("missing required option `--roster`")?,
         engine: absolute_command(engine, "--engine")?,
         provider: absolute_command(provider, "--provider")?,
@@ -241,6 +313,7 @@ fn parse_args(args: &[String]) -> Result<SetupArgs, String> {
         bookends,
         draft_worker_path,
         implementation_path,
+        advice_config_path,
     })
 }
 
@@ -264,14 +337,18 @@ fn absolute_command(value: Option<String>, name: &str) -> Result<String, String>
 struct SetupReport {
     status: &'static str,
     rigor: &'static str,
+    profile_selection: Value,
     bookends_enabled: bool,
+    enablement: Value,
     effective_policy: Value,
+    effective_bindings: Value,
     roster: Vec<ReviewRosterEntry>,
     output_path: String,
     output_byte_length: usize,
     output_sha256: String,
     output_sha256_digest: String,
     output_bytes: String,
+    advice_configuration: Value,
     preview: Value,
     started: bool,
 }
@@ -288,9 +365,16 @@ fn build(args: SetupArgs) -> Result<SetupReport, String> {
         .as_deref()
         .map(read_implementation)
         .transpose()?;
+    let advice_config = args
+        .advice_config_path
+        .as_deref()
+        .map(read_advice_config)
+        .transpose()?;
     validate_command_paths(&args)?;
 
-    let profile = shipped_profile(args.rigor)?;
+    let selected = load_selected_profile(&args.profile_source)?;
+    let profile = selected.profile.clone();
+    refuse_legacy_shipped_profile(&profile)?;
     let mut output_profile = profile.clone();
     if args.bookends {
         enable_bookends(&mut output_profile)?;
@@ -317,6 +401,23 @@ fn build(args: SetupArgs) -> Result<SetupReport, String> {
         implementation.as_ref(),
     )?;
     output_profile["work_slot_bindings"] = bindings.clone();
+    let advice_occasions = advice_occasions(&output_profile)?;
+    let advice_departures = if advice_config.is_some() {
+        Some(build_advice_departures(&output_profile, &advice_occasions)?)
+    } else {
+        None
+    };
+    if let Some(config) = &advice_config {
+        output_profile["advice_command"] = serde_json::to_value(config)
+            .map_err(|error| format!("could not encode advice command config: {error}"))?;
+        output_profile["advice_departures"] = serde_json::to_value(
+            advice_departures
+                .as_ref()
+                .expect("configured advice has departures"),
+        )
+        .map_err(|error| format!("could not encode advice departure map: {error}"))?;
+    }
+    validate_profile(&output_profile, "effective output profile")?;
 
     let profile_bytes = profile_bytes(&output_profile)?;
     let preview = preview_bindings(&args.engine, &bindings)?;
@@ -331,14 +432,66 @@ fn build(args: SetupArgs) -> Result<SetupReport, String> {
 
     let sha256 = format!("{:x}", Sha256::digest(&profile_bytes));
     let digest = format!("sha256:{sha256}");
-    let effective_policy =
-        effective_policy(&effective_profile, &bindings, implementation.is_some());
+    let bookends_enabled = overlay::enabled(&effective_profile);
+    let advice_configuration = match &advice_config {
+        Some(config) => json!({
+            "decision": "configure",
+            "enabled": true,
+            "configured": true,
+            "command": config,
+            "limits": {
+                "timeout_ms": config.timeout_ms,
+                "max_request_bytes": config.max_request_bytes,
+                "max_response_bytes": config.max_response_bytes
+            },
+            "occasion_map": advice_occasions,
+            "occasion_descriptions": workflow::advice_occasion_descriptions(),
+            "departure_map": advice_departures
+        }),
+        None => json!({
+            "decision": "decline",
+            "enabled": false,
+            "configured": false,
+            "reason": "operator explicitly declined advice; no backend is selected",
+            "occasion_map": advice_occasions,
+            "occasion_descriptions": workflow::advice_occasion_descriptions()
+        }),
+    };
+    let effective_policy = effective_policy(
+        &effective_profile,
+        &bindings,
+        implementation.is_some(),
+        &advice_configuration,
+    );
+    let selected_bytes = String::from_utf8(selected.bytes.clone())
+        .map_err(|error| format!("selected profile is not UTF-8: {error}"))?;
+    let selected_sha256 = format!("{:x}", Sha256::digest(&selected.bytes));
+    let selected_name = Path::new(&selected.display_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("embedded profile");
+    let profile_selection = json!({
+        "kind": selected.kind,
+        "path": selected.display_path,
+        "basename": selected_name,
+        "byte_length": selected.bytes.len(),
+        "sha256": selected_sha256,
+        "sha256_digest": format!("sha256:{selected_sha256}"),
+        "bytes": selected_bytes
+    });
+    let enablement = json!({
+        "bookends": {"enabled": bookends_enabled},
+        "advice": advice_configuration
+    });
 
     Ok(SetupReport {
         status: "ready",
-        rigor: args.rigor.as_str(),
-        bookends_enabled: args.bookends,
+        rigor: args.profile_source.display_name(),
+        profile_selection,
+        bookends_enabled,
+        enablement,
         effective_policy,
+        effective_bindings: bindings,
         roster,
         output_path: args.output.to_string_lossy().into_owned(),
         output_byte_length: profile_bytes.len(),
@@ -346,6 +499,7 @@ fn build(args: SetupArgs) -> Result<SetupReport, String> {
         output_sha256_digest: digest,
         output_bytes: String::from_utf8(profile_bytes)
             .map_err(|error| format!("generated profile is not UTF-8: {error}"))?,
+        advice_configuration,
         preview,
         started: false,
     })
@@ -402,6 +556,24 @@ fn read_roster(path: &Path) -> Result<Vec<ReviewRosterEntry>, String> {
                 "roster entry {index} argument {argument_index} cannot contain a line break or NUL"
             ));
         }
+        let budget = &entry.token_budget;
+        if budget.model_id.trim().is_empty()
+            || budget.context_window_tokens == 0
+            || budget.system_tokens == 0
+            || budget.framing_tokens == 0
+            || budget.output_reserve_tokens == 0
+            || budget.reasoning_reserve_tokens == 0
+            || budget
+                .system_tokens
+                .saturating_add(budget.framing_tokens)
+                .saturating_add(budget.output_reserve_tokens)
+                .saturating_add(budget.reasoning_reserve_tokens)
+                >= budget.context_window_tokens
+        {
+            return Err(format!(
+                "roster entry {index} needs a real model ID/window and positive system, framing, output, and reasoning reserves that leave input capacity"
+            ));
+        }
     }
     Ok(roster)
 }
@@ -453,6 +625,9 @@ fn read_implementation(path: &Path) -> Result<ImplementationInput, String> {
         &implementation.args,
         "implementation",
     )?;
+    if is_prewrapped_task_worker(&implementation.command, &implementation.args) {
+        return Err("implementation must be an unwrapped task-worker command; setup adds the run-plan-graph --task-worker wrapper".to_owned());
+    }
     if implementation.working_directory.trim().is_empty()
         || !Path::new(&implementation.working_directory).is_absolute()
     {
@@ -473,9 +648,193 @@ fn read_implementation(path: &Path) -> Result<ImplementationInput, String> {
     Ok(implementation)
 }
 
-fn shipped_profile(rigor: Rigor) -> Result<Value, String> {
-    let path = format!("{PROFILE_PREFIX}{}.json", rigor.profile_name());
-    embedded_json(&path)
+struct SelectedProfile {
+    kind: &'static str,
+    display_path: String,
+    bytes: Vec<u8>,
+    profile: Value,
+}
+
+fn load_selected_profile(source: &ProfileSource) -> Result<SelectedProfile, String> {
+    let (kind, display_path, bytes) = match source {
+        ProfileSource::Bundled(rigor) => {
+            let path = format!("{PROFILE_PREFIX}{}.json", rigor.profile_name());
+            let bytes = embedded_bytes(&path)?.to_vec();
+            ("bundled", path, bytes)
+        }
+        ProfileSource::File(path) => {
+            let bytes = fs::read(path).map_err(|error| {
+                format!(
+                    "could not read selected profile {}: {error}",
+                    path.display()
+                )
+            })?;
+            let resolved = fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+            ("file", resolved.to_string_lossy().into_owned(), bytes)
+        }
+    };
+    let profile = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("selected profile {} is invalid JSON: {error}", display_path))?;
+    Ok(SelectedProfile {
+        kind,
+        display_path,
+        bytes,
+        profile,
+    })
+}
+
+fn refuse_legacy_shipped_profile(profile: &Value) -> Result<(), String> {
+    let Some(config_version) = profile.get("config_version").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    if LEGACY_SHIPPED_PROFILE_VERSIONS.contains(&config_version) {
+        return Err(format!(
+            "known historical shipped profile config_version `{config_version}` is unsupported for new setup; use its original provider or revise a caller-owned profile to an explicit custom version"
+        ));
+    }
+    Ok(())
+}
+
+fn is_prewrapped_task_worker(command: &str, args: &[String]) -> bool {
+    let executable = Path::new(command)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(command);
+    match executable {
+        "loop-engine" => args
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "fan-out" | "--worker" | "--task-worker")),
+        "software-change" => args
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "run-plan-graph" | "--task-worker")),
+        _ => args.iter().any(|arg| arg == "--task-worker"),
+    }
+}
+
+const ADVICE_OCCASIONS: &[&str] = &[
+    "review-candidates",
+    "accepted-defect",
+    "implementation-correction",
+    "execution-or-authority-issue",
+    "evidence-applicability",
+    "requirements-reconciliation",
+    "review-round-departure",
+    "final-completion",
+];
+
+fn advice_occasions(profile: &Value) -> Result<Vec<String>, String> {
+    let Some(value) = profile
+        .get("extra")
+        .and_then(Value::as_object)
+        .and_then(|extra| extra.get("advice"))
+    else {
+        return Ok(Vec::new());
+    };
+    let Some(occasions) = value
+        .as_object()
+        .and_then(|advice| advice.get("occasion_map"))
+    else {
+        return Ok(Vec::new());
+    };
+    let occasions = occasions
+        .as_array()
+        .ok_or("profile extra.advice.occasion_map must be an array")?;
+    let mut seen = std::collections::BTreeSet::new();
+    let mut result = Vec::with_capacity(occasions.len());
+    for (index, occasion) in occasions.iter().enumerate() {
+        let id = occasion
+            .as_str()
+            .filter(|id| !id.trim().is_empty())
+            .ok_or_else(|| format!("profile advice occasion {index} must be a non-empty string"))?;
+        if !seen.insert(id) {
+            return Err(format!("profile advice occasion map duplicates `{id}`"));
+        }
+        result.push(id.to_owned());
+    }
+    Ok(result)
+}
+
+fn read_advice_config(path: &Path) -> Result<AdviceCommandConfig, String> {
+    let bytes = fs::read(path).map_err(|error| {
+        format!(
+            "could not read advice command config {}: {error}",
+            path.display()
+        )
+    })?;
+    let config: AdviceCommandConfig = serde_json::from_slice(&bytes).map_err(|error| {
+        format!(
+            "advice command config {} is invalid JSON: {error}",
+            path.display()
+        )
+    })?;
+    config.validate()?;
+    Ok(config)
+}
+
+fn build_advice_departures(
+    profile: &Value,
+    profile_occasions: &[String],
+) -> Result<AdviceDepartureMap, String> {
+    let actual: std::collections::BTreeSet<_> =
+        profile_occasions.iter().map(String::as_str).collect();
+    let required: std::collections::BTreeSet<_> = ADVICE_OCCASIONS.iter().copied().collect();
+    if actual != required {
+        return Err(
+            "configured advice requires the complete eight-family profile occasion map".to_owned(),
+        );
+    }
+    let graph = workflow::describe_workflow(Some(profile))?;
+    let mut departures = Vec::new();
+    for family in ADVICE_OCCASIONS {
+        let mut matched = 0;
+        for transition in &graph.transitions {
+            let source = transition.source.as_str();
+            let event = transition.event.as_str();
+            let review_state = source.ends_with("-review");
+            let target_final = graph
+                .states
+                .iter()
+                .any(|state| state.id == transition.target && state.is_final);
+            let selected = match *family {
+                "review-candidates" | "review-round-departure" => review_state,
+                "accepted-defect" => review_state && event != "approved" && event != "passed",
+                "implementation-correction" => {
+                    event == "revise-implementation"
+                        || (source == "implement" && event == "implementation-ready")
+                        || (review_state
+                            && (source.starts_with("implementation-")
+                                || source.starts_with("validation-"))
+                            && event == "revise")
+                }
+                "execution-or-authority-issue" => {
+                    source == "implement" || source == "reconciliation"
+                }
+                "evidence-applicability" => {
+                    (review_state && event == "approved") || event == "reconciliation-ready"
+                }
+                "requirements-reconciliation" => source == "reconciliation",
+                "final-completion" => target_final,
+                _ => false,
+            };
+            if selected {
+                departures.push(AdviceDeparture {
+                    state: transition.source.clone(),
+                    event: transition.event.clone(),
+                    occasion_id: format!("{family}:{source}:{event}"),
+                });
+                matched += 1;
+            }
+        }
+        if matched == 0 {
+            return Err(format!(
+                "profile workflow has no departure for advice family `{family}`"
+            ));
+        }
+    }
+    Ok(AdviceDepartureMap {
+        version: 1,
+        occasions: departures,
+    })
 }
 
 fn embedded_bytes(path: &str) -> Result<&'static [u8], String> {
@@ -541,7 +900,6 @@ fn build_bindings(
         .and_then(Value::as_object)
         .ok_or("effective profile is missing object review_policies")?;
     let mut bindings = Map::new();
-
     if let Some(worker) = draft_worker {
         bindings.insert(
             "intent-draft".to_owned(),
@@ -557,6 +915,32 @@ fn build_bindings(
             continue;
         }
         let workers = review_workers(profile, gate, entries, roster, preamble, output_schema)?;
+        let used_authors: std::collections::BTreeSet<_> = workers
+            .iter()
+            .filter_map(|worker| worker["preamble"].as_str())
+            .filter_map(|worker_preamble| {
+                worker_preamble
+                    .lines()
+                    .find_map(|line| line.strip_prefix("required_author_claim: "))
+            })
+            .collect();
+        let call_budgets: Vec<_> = roster
+            .iter()
+            .filter(|entry| used_authors.contains(entry.author.as_str()))
+            .map(|entry| {
+                json!({
+                    "author": entry.author,
+                    "model_id": entry.token_budget.model_id,
+                    "context_window_tokens": entry.token_budget.context_window_tokens,
+                    "system_tokens": entry.token_budget.system_tokens,
+                    "framing_tokens": entry.token_budget.framing_tokens,
+                    "output_reserve_tokens": entry.token_budget.output_reserve_tokens,
+                    "reasoning_reserve_tokens": entry.token_budget.reasoning_reserve_tokens
+                })
+            })
+            .collect();
+        let call_budgets = serde_json::to_string(&call_budgets)
+            .map_err(|error| format!("could not encode reviewer token budgets: {error}"))?;
         let mut args = vec![
             "fan-out".to_owned(),
             "--max-active".to_owned(),
@@ -585,7 +969,7 @@ fn build_bindings(
             json!({
                 "command": engine,
                 "args": args,
-                "context_filter": {"command": provider, "args": ["commission"]}
+                "context_filter": {"command": provider, "args": ["commission", "--call-budgets", call_budgets]}
             }),
         );
     }
@@ -618,6 +1002,19 @@ fn build_bindings(
         );
     }
     Ok(Value::Object(bindings))
+}
+
+fn review_subject(gate: &str) -> &'static str {
+    match gate {
+        "intent-review" | "intent-adversarial-review" => "intent.json",
+        "design-review" | "design-adversarial-review" => "design.json",
+        "plan-review" | "plan-adversarial-review" => "plan.json",
+        "implementation-review" | "implementation-adversarial-review" => {
+            "implementation-report.json"
+        }
+        "validation-review" | "validation-adversarial-review" => "validation-report.json",
+        _ => "unknown subject",
+    }
 }
 
 fn review_workers(
@@ -721,10 +1118,14 @@ fn review_workers(
                     contract_version,
                     gate,
                 )?;
+                worker_schema["x-loop-engine-output-recovery"] = json!("repair-first-v1");
                 let mut worker_preamble = String::from(preamble);
                 worker_preamble.push_str("FROZEN REVIEW ASSIGNMENT\n");
+                worker_preamble.push_str("review_contract_version: 2\n");
                 worker_preamble.push_str("provider: software-change\n");
-                worker_preamble.push_str("slot_id: ");
+                worker_preamble.push_str("subject: ");
+                worker_preamble.push_str(review_subject(gate));
+                worker_preamble.push_str("\nslot_id: ");
                 worker_preamble.push_str(gate);
                 worker_preamble.push_str("\nreview_stage: ");
                 worker_preamble.push_str(stage);
@@ -748,7 +1149,26 @@ fn review_workers(
                 );
                 worker_preamble.push_str("\nrequired_author_claim: ");
                 worker_preamble.push_str(&roster_entry.author);
-                worker_preamble.push('\n');
+                worker_preamble.push_str("\nPER-CALL TOKEN WINDOW: model_id=");
+                worker_preamble.push_str(&roster_entry.token_budget.model_id);
+                worker_preamble.push_str(" window=");
+                worker_preamble
+                    .push_str(&roster_entry.token_budget.context_window_tokens.to_string());
+                worker_preamble.push_str(" system_reserve=");
+                worker_preamble.push_str(&roster_entry.token_budget.system_tokens.to_string());
+                worker_preamble.push_str(" framing_reserve=");
+                worker_preamble.push_str(&roster_entry.token_budget.framing_tokens.to_string());
+                worker_preamble.push_str(" output_reserve=");
+                worker_preamble
+                    .push_str(&roster_entry.token_budget.output_reserve_tokens.to_string());
+                worker_preamble.push_str(" reasoning_reserve=");
+                worker_preamble.push_str(
+                    &roster_entry
+                        .token_budget
+                        .reasoning_reserve_tokens
+                        .to_string(),
+                );
+                worker_preamble.push_str(". This exact model and reserve is frozen; do not substitute or split duties.\n");
                 if profile["contract_version"] == 3
                     && gate == "validation-review"
                     && stage == "aggregate"
@@ -762,6 +1182,13 @@ fn review_workers(
                 if has_individual && stage == "aggregate" {
                     worker_preamble.push_str("FIRST AGGREGATE REVIEW\nThis is a fresh independent reviewer session on the unchanged subject. Do not inspect, read, or rely on individual-stage captures, outputs, findings, or judgments; the aggregate group receives none of them.\n");
                 }
+                if gate.ends_with("adversarial-review") {
+                    worker_preamble.push_str("CHALLENGE GROUNDS\nInspect the completed ordinary aggregate judgments for this exact subject and cite the actual parent's reason and evidence locators. Do not infer parent grounds from the finding ledger or replace missing parent reasoning with a paraphrase.\n");
+                }
+                if gate.starts_with("intent-") {
+                    worker_preamble.push_str("OWNER-SOURCE COMPARISON\nCompare the full current intent with retained qualified owner-source statements and their supersession. Distinguish exact owner-authored source records from driver inference or summaries; a driver paraphrase is not an owner instruction. Identify material lost qualifications and unresolved meaning without deciding for the owner.\n");
+                }
+                worker_preamble.push_str("GROUNDED OUTPUT\nReturn review_contract_version 2. Every fresh judgment includes grounds.reason and one or more grounds.evidence references using a repository-relative file#JSON-Pointer or file#Lx-Ly locator and the exact source file SHA-256. Do not invent citations. For validation criterion/goal passes, include a concise reason and retained evidence_context_ids that you actually inspected.\n");
                 workers.push(json!({
                     "command": roster_entry.command,
                     "args": roster_entry.args,
@@ -847,7 +1274,14 @@ fn configure_worker_schema(
                     "properties": {
                         "record_id":{"type":"string","minLength":1},
                         "kind":{"type":"string","enum":["criterion-verdict","goal-verdict"]},
-                        "data":{"type":"object"}
+                        "data":{
+                        "type":"object",
+                        "required":["reason","evidence_context_ids"],
+                        "properties":{
+                            "reason":{"type":"string","minLength":1,"maxLength":1200},
+                            "evidence_context_ids":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}
+                        }
+                    }
                     }
                 }
             }),
@@ -856,7 +1290,12 @@ fn configure_worker_schema(
     Ok(())
 }
 
-fn effective_policy(profile: &Value, bindings: &Value, implementation: bool) -> Value {
+fn effective_policy(
+    profile: &Value,
+    bindings: &Value,
+    implementation: bool,
+    advice_configuration: &Value,
+) -> Value {
     let mut gates = Map::new();
     if let Some(policies) = profile.get("review_policies").and_then(Value::as_object) {
         for gate in REVIEW_GATES {
@@ -873,7 +1312,10 @@ fn effective_policy(profile: &Value, bindings: &Value, implementation: bool) -> 
         "config_version": profile["config_version"],
         "contract_version": profile["contract_version"],
         "criterion_policy": profile["criterion_policy"],
+        "artifact_schemas": profile["artifact_schemas"],
         "bookends_enabled": overlay::enabled(profile),
+        "advice_enabled": advice_configuration["enabled"],
+        "advice": advice_configuration,
         "review_policies": gates,
         "binding_slots": binding_slots,
         "review_concurrency": 2,
@@ -992,6 +1434,118 @@ mod tests {
     }
 
     #[test]
+    fn profile_path_and_rigor_are_mutually_exclusive() {
+        let error = parse_args(&[
+            "--profile".into(),
+            "/tmp/custom.json".into(),
+            "--rigor".into(),
+            "minimal".into(),
+            "--roster".into(),
+            "/tmp/roster.json".into(),
+            "--engine".into(),
+            "/bin/true".into(),
+            "--provider".into(),
+            "/bin/true".into(),
+            "--output".into(),
+            "/tmp/output.json".into(),
+            "--decline-advice".into(),
+        ])
+        .expect_err("both profile selectors");
+        assert!(error.contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn setup_refuses_known_legacy_shipped_profile_ids_only() {
+        for version in LEGACY_SHIPPED_PROFILE_VERSIONS {
+            let error = refuse_legacy_shipped_profile(&json!({"config_version": version}))
+                .expect_err("known shipped successor id must be refused");
+            assert!(error.contains(version), "{error}");
+            assert!(error.contains("original provider"), "{error}");
+        }
+        for version in ["local-profile-11", "custom-10", "custom-revision"] {
+            refuse_legacy_shipped_profile(&json!({"config_version": version}))
+                .expect("caller-managed version claims are not guessed from their suffix");
+        }
+        assert!(refuse_legacy_shipped_profile(&json!({"config_version": 12})).is_ok());
+    }
+
+    #[test]
+    fn setup_rejects_already_wrapped_implementation_task_workers() {
+        assert!(is_prewrapped_task_worker(
+            "/tmp/loop-engine",
+            &["fan-out".into(), "--worker".into()]
+        ));
+        assert!(!is_prewrapped_task_worker(
+            "/bin/echo",
+            &["implementation".into()]
+        ));
+    }
+
+    #[test]
+    fn bundled_profiles_expose_the_same_advice_occasion_extension_point() {
+        let occasion_sets: Vec<_> = [Rigor::Minimal, Rigor::Standard, Rigor::High]
+            .into_iter()
+            .map(|rigor| {
+                let profile =
+                    load_selected_profile(&ProfileSource::Bundled(rigor)).expect("bundled profile");
+                advice_occasions(&profile.profile).expect("occasion map")
+            })
+            .collect();
+        assert!(occasion_sets.windows(2).all(|pair| pair[0] == pair[1]));
+        assert_eq!(occasion_sets[0].len(), 8);
+        for rigor in [Rigor::Minimal, Rigor::Standard, Rigor::High] {
+            let profile = load_selected_profile(&ProfileSource::Bundled(rigor)).expect("profile");
+            let occasions = advice_occasions(&profile.profile).expect("occasion map");
+            let departures = build_advice_departures(&profile.profile, &occasions)
+                .expect("mapped advice departures");
+            assert_eq!(departures.version, 1);
+            assert!(ADVICE_OCCASIONS.iter().all(|family| departures
+                .occasions
+                .iter()
+                .any(|row| row.occasion_id.starts_with(&format!("{family}:")))));
+        }
+    }
+
+    #[test]
+    fn setup_requires_an_explicit_advice_choice() {
+        let args = [
+            "--rigor",
+            "minimal",
+            "--roster",
+            "/tmp/roster.json",
+            "--engine",
+            "/bin/true",
+            "--provider",
+            "/bin/true",
+            "--output",
+            "/tmp/output.json",
+        ]
+        .map(str::to_owned);
+        assert!(parse_args(&args)
+            .unwrap_err()
+            .contains("choose exactly one"));
+        let with_both = [
+            "--rigor",
+            "minimal",
+            "--roster",
+            "/tmp/roster.json",
+            "--engine",
+            "/bin/true",
+            "--provider",
+            "/bin/true",
+            "--output",
+            "/tmp/output.json",
+            "--decline-advice",
+            "--advice-config",
+            "/tmp/advice.json",
+        ]
+        .map(str::to_owned);
+        assert!(parse_args(&with_both)
+            .unwrap_err()
+            .contains("choose exactly one"));
+    }
+
+    #[test]
     fn roster_rejects_duplicate_authors() {
         let path = std::env::temp_dir().join(format!(
             "software-change-setup-roster-{}-{}.json",
@@ -1000,7 +1554,7 @@ mod tests {
         ));
         fs::write(
             &path,
-            br#"[{"author":"a","command":"one","args":[]},{"author":"a","command":"two","args":[]}]"#,
+            br#"[{"author":"a","command":"one","args":[],"token_budget":{"model_id":"fixture","context_window_tokens":64000,"system_tokens":1000,"framing_tokens":1000,"output_reserve_tokens":1000,"reasoning_reserve_tokens":1000}},{"author":"a","command":"two","args":[],"token_budget":{"model_id":"fixture","context_window_tokens":64000,"system_tokens":1000,"framing_tokens":1000,"output_reserve_tokens":1000,"reasoning_reserve_tokens":1000}}]"#,
         )
         .expect("roster");
         let error = read_roster(&path).expect_err("duplicate author");

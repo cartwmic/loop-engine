@@ -133,13 +133,13 @@ pub(crate) fn rows_for_stage<'a>(
 pub(crate) fn rows_for_stage_with_options<'a>(
     schema: &Value,
     value: &'a Value,
-    location: &Value,
-    gate: &str,
-    subject: &str,
-    revision: &str,
+    _location: &Value,
+    _gate: &str,
+    _subject: &str,
+    _revision: &str,
     review_stage: &str,
     require_stage: bool,
-    require_fresh_aggregate: bool,
+    _require_fresh_aggregate: bool,
 ) -> Result<Vec<&'a Value>, String> {
     validate_schema(schema, value)?;
     let schema_stage = schema
@@ -164,20 +164,13 @@ pub(crate) fn rows_for_stage_with_options<'a>(
         .pointer("/properties/judgments/allOf")
         .and_then(Value::as_array)
         .ok_or("batch contract is missing frozen assigned axes")?;
-    let author = value.get("author").ok_or("batch has no author")?;
+    value.get("author").ok_or("batch has no author")?;
     let judgments = value["judgments"]
         .as_array()
         .ok_or("batch has no judgments")?;
     if axes.len() != judgments.len() {
         return Err("batch axis coverage is incomplete".into());
     }
-    let context: Vec<ContextRecord> = serde_json::from_value(
-        location
-            .get("context")
-            .cloned()
-            .unwrap_or(serde_json::json!([])),
-    )
-    .map_err(|e| format!("invalid captured context: {e}"))?;
     let mut ordered = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     for assigned in axes {
@@ -193,36 +186,64 @@ pub(crate) fn rows_for_stage_with_options<'a>(
             return Err(format!("axis `{axis}` must appear exactly once"));
         }
         let row = matches[0];
-        if let Some(reuse) = row.get("reuse") {
-            if require_fresh_aggregate && review_stage == "aggregate" {
-                return Err(
-                    "high-rigor aggregate review requires fresh judgments; carried rows are not allowed"
-                        .into(),
-                );
-            }
-            if location
-                .pointer("/controls/force_fresh")
-                .and_then(Value::as_bool)
-                == Some(true)
-            {
-                return Err("force-fresh commission cannot use carried rows".into());
-            }
-            crate::evidence::validate_batch_reuse_for_stage(
-                &context,
-                reuse.as_str().ok_or("invalid reuse ID")?,
-                gate,
-                axis,
-                author,
-                subject,
-                revision,
-                location.get("artifact_root"),
-                review_stage,
-                require_stage,
-            )?;
-        }
         ordered.push(row);
     }
     Ok(ordered)
+}
+
+/// Validate one structurally valid reuse row independently. Callers retain
+/// fresh siblings when this reference is invalid; the row itself contributes
+/// no judgment or carry until this check succeeds.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn validate_reuse_row(
+    row: &Value,
+    location: &Value,
+    gate: &str,
+    axis: &str,
+    author: &Value,
+    config_version: &str,
+    subject: &str,
+    revision: &str,
+    review_stage: &str,
+    require_stage: bool,
+    require_fresh_aggregate: bool,
+) -> Result<(), String> {
+    let Some(reuse) = row.get("reuse") else {
+        return Ok(());
+    };
+    if require_fresh_aggregate && review_stage == "aggregate" {
+        return Err(
+            "high-rigor aggregate review requires fresh judgments; carried rows are not allowed"
+                .into(),
+        );
+    }
+    if location
+        .pointer("/controls/force_fresh")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return Err("force-fresh commission cannot use carried rows".into());
+    }
+    let context: Vec<ContextRecord> = serde_json::from_value(
+        location
+            .get("context")
+            .cloned()
+            .unwrap_or(serde_json::json!([])),
+    )
+    .map_err(|e| format!("invalid captured context: {e}"))?;
+    crate::evidence::validate_batch_reuse_for_stage(
+        &context,
+        reuse.as_str().ok_or("invalid reuse ID")?,
+        gate,
+        axis,
+        author,
+        subject,
+        revision,
+        location.get("artifact_root"),
+        review_stage,
+        require_stage,
+        Some(config_version),
+    )
 }
 
 #[cfg(test)]
@@ -244,6 +265,46 @@ mod tests {
             "type":"object", "required":["axis"], "properties":{"axis":{"const":axis}}
         }})));
         schema
+    }
+
+    #[test]
+    fn review_output_contract_v2_requires_grounded_fresh_rows_but_allows_reuse() {
+        let mut schema: Value =
+            serde_json::from_str(include_str!("../data/review-worker-output-schema-v2.json"))
+                .unwrap();
+        schema["properties"]["review_stage"]["const"] = json!("aggregate");
+        schema["properties"]["author"]["const"] = json!({"name":"reviewer","kind":"agent"});
+        schema["properties"]["judgments"]["minItems"] = json!(1);
+        schema["properties"]["judgments"]["maxItems"] = json!(1);
+        for branch in schema["properties"]["judgments"]["items"]["oneOf"]
+            .as_array_mut()
+            .unwrap()
+        {
+            if let Some(axis) = branch.pointer_mut("/properties/axis") {
+                axis["enum"] = json!(["alpha"]);
+            }
+        }
+        schema["properties"]["judgments"]["allOf"] =
+            json!([{"contains":{"properties":{"axis":{"const":"alpha"}}}}]);
+        let good = json!({
+            "review_contract_version":2,"review_stage":"aggregate",
+            "author":{"name":"reviewer","kind":"agent"},
+            "judgments":[{"axis":"alpha","result":"pass","findings":"",
+                "grounds":{"reason":"Inspected the cited outcome.","evidence":[{"locator":"intent.json#/outcome","sha256":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}]}}]
+        });
+        assert!(validate_schema(&schema, &good).is_ok());
+        let mut missing = good.clone();
+        missing["judgments"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("grounds");
+        assert!(validate_schema(&schema, &missing).is_err());
+        let carried = json!({
+            "review_contract_version":2,"review_stage":"aggregate",
+            "author":{"name":"reviewer","kind":"agent"},
+            "judgments":[{"axis":"alpha","reuse":"applicability-1"}]
+        });
+        assert!(validate_schema(&schema, &carried).is_ok());
     }
 
     #[test]
@@ -328,7 +389,7 @@ mod tests {
             "2"
         )
         .is_ok());
-        assert!(rows_for_stage_with_options(
+        let ordered = rows_for_stage_with_options(
             &schema(),
             &output,
             &location,
@@ -339,27 +400,140 @@ mod tests {
             false,
             true,
         )
+        .expect("invalid carry does not erase the fresh sibling");
+        assert_eq!(ordered.len(), 2);
+        assert_eq!(ordered[0]["axis"], "alpha");
+
+        let mut ambiguous_context = context.clone();
+        ambiguous_context.push(context[1].clone());
+        let mut ambiguous_location = location.clone();
+        ambiguous_location["context"] = serde_json::to_value(ambiguous_context).unwrap();
+        let ambiguous_rows = rows_for_stage_with_options(
+            &schema(),
+            &output,
+            &ambiguous_location,
+            "implementation-review",
+            "implementation-report.json",
+            "2",
+            "aggregate",
+            false,
+            false,
+        )
+        .expect("ambiguous applicability is diagnosed per row after batch shape passes");
+        assert_eq!(ambiguous_rows.len(), 2);
+        assert_eq!(ambiguous_rows[0]["axis"], "alpha");
+        assert!(validate_reuse_row(
+            &ambiguous_rows[1],
+            &ambiguous_location,
+            "implementation-review",
+            "beta",
+            &output["author"],
+            "fixture",
+            "implementation-report.json",
+            "2",
+            "aggregate",
+            false,
+            false,
+        )
+        .unwrap_err()
+        .contains("not an authorized captured applicability"));
+
+        let mut late_location = location.clone();
+        late_location["context"] = json!([context[0].clone()]);
+        assert!(validate_reuse_row(
+            ordered[1],
+            &late_location,
+            "implementation-review",
+            "beta",
+            &output["author"],
+            "fixture",
+            "implementation-report.json",
+            "2",
+            "aggregate",
+            false,
+            false,
+        )
+        .unwrap_err()
+        .contains("not an authorized captured applicability"));
+        assert!(validate_reuse_row(
+            ordered[1],
+            &location,
+            "implementation-review",
+            "beta",
+            &output["author"],
+            "fixture",
+            "implementation-report.json",
+            "2",
+            "aggregate",
+            false,
+            true,
+        )
         .unwrap_err()
         .contains("aggregate review requires fresh"));
-        assert!(rows(
+        let stale_rows = rows(
             &schema(),
             &output,
             &location,
             "implementation-review",
             "implementation-report.json",
-            "3"
+            "3",
         )
-        .is_err());
+        .expect("stale reuse remains isolated to its row");
+        assert!(validate_reuse_row(
+            stale_rows[1],
+            &location,
+            "implementation-review",
+            "beta",
+            &output["author"],
+            "fixture",
+            "implementation-report.json",
+            "3",
+            "aggregate",
+            false,
+            false,
+        )
+        .unwrap_err()
+        .contains("stale"));
         location["controls"] = json!({"force_fresh":true});
-        assert!(rows(
+        let ordered = rows(
             &schema(),
             &output,
             &location,
             "implementation-review",
             "implementation-report.json",
-            "2"
+            "2",
+        )
+        .expect("force-fresh carry is a row diagnostic");
+        assert!(validate_reuse_row(
+            ordered[1],
+            &location,
+            "implementation-review",
+            "beta",
+            &output["author"],
+            "fixture",
+            "implementation-report.json",
+            "2",
+            "aggregate",
+            false,
+            false,
         )
         .unwrap_err()
         .contains("force-fresh"));
+        location.as_object_mut().unwrap().remove("controls");
+        assert!(validate_reuse_row(
+            ordered[1],
+            &location,
+            "implementation-review",
+            "beta",
+            &output["author"],
+            "other-config",
+            "implementation-report.json",
+            "2",
+            "aggregate",
+            false,
+            false,
+        )
+        .unwrap_err()
+        .contains("stale config version"));
     }
 }

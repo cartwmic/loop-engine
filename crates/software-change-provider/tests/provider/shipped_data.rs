@@ -281,9 +281,9 @@ fn all_profiles_pass_production_config_validation_and_have_exact_subjects() {
     for profile in PROFILES {
         let config = load_profile(profile);
         let expected_version = match *profile {
-            "minimal" => "minimal-11",
-            "standard" => "standard-11",
-            "high-rigor" => "high-rigor-11",
+            "minimal" => "minimal-12",
+            "standard" => "standard-12",
+            "high-rigor" => "high-rigor-12",
             _ => unreachable!("unknown profile {profile}"),
         };
         assert_eq!(config["config_version"], expected_version);
@@ -885,14 +885,14 @@ fn implementation_keeps_coverage_and_validation_is_a_checkpoint_bound_index() {
 
 #[test]
 fn reviewer_protocol_defines_convergence_contract() {
-    let protocol = shipped_text("data/reviewer-protocol.md");
+    let protocol = shipped_text("data/reviewer-protocol.md").replace("**", "");
     for clause in [
         "before append or mutation",
         "mandatory failure burden",
         "scope and materiality",
         "consequence proof",
         "existing validation does not already resolve",
-        "focused external reconsideration",
+        "focused independent reconsideration",
         "comprehensive first review",
         "confirmation review",
         "late material finding",
@@ -984,11 +984,12 @@ fn authoritative_docs_integrate_convergence_contract_and_routes() {
         ("README-linked guidance", linked_guidance.as_str()),
         ("engine PRD", engine_prd.as_str()),
     ] {
+        let normalized = text.to_ascii_lowercase().replace("**", "");
         for clause in [
             "revise-intent",
             "revise-design",
             "revise-plan",
-            "focused external reconsideration",
+            "focused independent reconsideration",
             "validation gap",
             "previously overlooked",
             "validation-report-local",
@@ -999,7 +1000,7 @@ fn authoritative_docs_integrate_convergence_contract_and_routes() {
             "validation-draft",
         ] {
             assert!(
-                text.to_ascii_lowercase().contains(clause),
+                normalized.contains(clause),
                 "{name} missing convergence clause: {clause}"
             );
         }

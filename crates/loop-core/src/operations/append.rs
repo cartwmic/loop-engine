@@ -119,30 +119,89 @@ where
     }
 }
 
-fn path_is_contained(capture_dir: &str, selected_path: &str) -> bool {
+fn path_is_contained(capture_dir: &str, selected_path: &str, allow_relative: bool) -> bool {
     if capture_dir.trim().is_empty() || selected_path.trim().is_empty() {
         return false;
     }
 
     let selected = Path::new(selected_path);
-    if selected
-        .components()
-        .any(|component| matches!(component, Component::ParentDir))
-    {
-        return false;
-    }
-
-    if !selected.is_absolute() {
+    if selected.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::CurDir | Component::Prefix(_)
+        )
+    }) {
         return false;
     }
     let capture = Path::new(capture_dir);
     if !capture.is_absolute() {
         return false;
     }
-    selected
-        .strip_prefix(capture)
-        .map(|relative| !relative.as_os_str().is_empty())
-        .unwrap_or(false)
+    if selected.is_absolute() {
+        selected
+            .strip_prefix(capture)
+            .map(|relative| !relative.as_os_str().is_empty())
+            .unwrap_or(false)
+    } else {
+        allow_relative
+            && selected
+                .components()
+                .all(|component| matches!(component, Component::Normal(_)))
+            && !selected.as_os_str().is_empty()
+    }
+}
+
+fn validate_recovered_worker(
+    request: &Request,
+    invocation: &crate::WorkSlotInvocation,
+    worker: &crate::InnerWorker,
+) -> std::result::Result<Value, PreparationError> {
+    let source = worker.recovery_source.as_ref().ok_or_else(|| {
+        PreparationError::origin("recovered selected output is missing recovery_source")
+    })?;
+    let origin = source.get("origin").ok_or_else(|| {
+        PreparationError::origin("recovered selected output is missing its original source")
+    })?;
+    if source.get("protocol").and_then(Value::as_str) != Some("fan-out-selected-source-v1")
+        || source.get("execution").and_then(Value::as_str) != Some("reused")
+        || !matches!(
+            source.get("source_class").and_then(Value::as_str),
+            Some("original-raw" | "eligible-derived")
+        )
+        || source.get("selected_output_sha256").and_then(Value::as_str)
+            != worker.selected_output_sha256.as_deref()
+        || source.get("selected_output_path").and_then(Value::as_str)
+            != worker.selected_output_path.as_deref()
+        || origin.get("run_id").and_then(Value::as_str) != Some(request.run_id.as_str())
+        || origin.get("slot_id").and_then(Value::as_str) != Some(invocation.slot_id.as_str())
+        || origin.get("assignment_id").and_then(Value::as_str)
+            != Some(worker.assignment_id.as_str())
+        || origin
+            .get("invocation_id")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        || origin
+            .get("raw_attempt")
+            .and_then(Value::as_u64)
+            .is_none_or(|attempt| attempt == 0)
+        || origin
+            .get("raw_stdout_sha256")
+            .and_then(Value::as_str)
+            .is_none_or(|digest| digest.trim().is_empty())
+        || origin
+            .get("raw_stdout_path")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        || origin
+            .get("capture_dir")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+    {
+        return Err(PreparationError::origin(
+            "recovered selected output identity does not match its engine assignment",
+        ));
+    }
+    Ok(source.clone())
 }
 
 fn resolve_selected_output<P>(
@@ -210,12 +269,16 @@ where
         )));
     }
 
-    let Some(selected_attempt) = worker.selected_attempt else {
-        return Err(PreparationError::origin(format!(
-            "assignment `{assignment_id}` in invocation `{}` has no selected output",
-            origin.id
-        )));
+    let recovered_source = if worker.selected_attempt.is_none() {
+        Some(validate_recovered_worker(request, invocation, worker)?)
+    } else if worker.recovery_source.is_some() {
+        return Err(PreparationError::origin(
+            "recovered selected output must not claim a new selected attempt",
+        ));
+    } else {
+        None
     };
+    let selected_attempt = worker.selected_attempt;
     let Some(selected_output_sha256) = worker.selected_output_sha256.as_deref() else {
         return Err(PreparationError::origin(format!(
             "assignment `{assignment_id}` in invocation `{}` has no selected output digest",
@@ -234,13 +297,13 @@ where
             origin.id
         )));
     }
-    if !path_is_contained(&invocation.capture_dir, selected_output_path) {
+    if !path_is_contained(&invocation.capture_dir, selected_output_path, true) {
         return Err(PreparationError::origin(format!(
             "selected output path for assignment `{assignment_id}` is not contained by invocation capture_dir"
         )));
     }
 
-    Ok(EngineOrigin::new(
+    let mut resolved = EngineOrigin::new(
         invocation.invocation_id.clone(),
         worker.assignment_id.clone(),
         selected_attempt,
@@ -250,7 +313,10 @@ where
         worker.command.clone(),
         worker.args.clone(),
         invocation.binding.clone(),
-    ))
+    );
+    resolved.slot_id = Some(invocation.slot_id.as_str().to_owned());
+    resolved.recovery_source = recovered_source;
+    Ok(resolved)
 }
 
 fn prepare_data<P>(

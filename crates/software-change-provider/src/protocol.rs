@@ -53,6 +53,8 @@ pub(crate) struct EvaluateRequest {
     pub(crate) context: Vec<ContextRecord>,
     pub(crate) transition: Transition,
     pub(crate) prior_evaluations: Vec<DurableEvaluation>,
+    #[serde(default)]
+    pub(crate) driver_act: Option<loop_core::DriverActEvidence>,
 }
 
 /// Build the only valid allow response shape.

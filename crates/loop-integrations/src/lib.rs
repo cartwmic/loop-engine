@@ -13,4 +13,4 @@ pub use provider::{
     ProviderDefinition, ProviderInvocation,
 };
 pub use provider_gateway::SubprocessProviderGateway;
-pub use sqlite::SqlitePersistence;
+pub use sqlite::{SqlitePersistence, TargetedReadRequest};

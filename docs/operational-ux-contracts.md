@@ -7,10 +7,31 @@ No existing stored workflow, profile, evaluation or capture is rewritten.
 ## Observation (T02)
 
 `loop-engine --json show RUN --view action|status|full` defaults to action.
-`--compact` aliases status, including JSON. Action/full arm only after loading
-current instructions. Status uses `Persistence.load_status_data`, never
-`load_show_data`; unsupported adapters refuse, not fall back. SQLite uses a
-consistent read transaction with no observation update. T02 owns CLI routing.
+`--compact` aliases status, including JSON. Action arms only after the run
+identity and current instructions are available; full keeps the complete
+arming projection. Status is non-arming and uses a separate read-only SQLite
+connection. The CLI starts its deadline at command entry, gives bounded SQLite
+work 1.1 seconds, and returns a useful partial/unavailable envelope on lock,
+missing index or deadline rather than retrying with a full scan. Indexed reads
+sample at most 20 invocation summaries and 200 current-subject assignments.
+The process-to-last-byte public target remains under two seconds. A status read
+never invokes a provider or Dagu; it samples existing local graph status files
+best-effort. `invocation-progress` remains the separate detailed graph/trace
+query. T02 owns CLI routing.
+
+Machine and human status use the same provider-neutral assignment facts. Frozen
+caller/plan-graph labels are `{assignment_id,title,role}` and are joined to
+invocation and subject revision by stable IDs. Current-revision attempt and
+failure totals come from indexed assignment/attempt records; older revisions
+remain reachable through targeted reads. Legacy completed invocations without
+indexed assignment facts make the assignment lane explicitly partial; no
+migration/backfill is performed. Execution, output conformance and acceptance
+are separate lanes. Quiet or missed samples stay unknown. A local
+Dagu step sample may report queued/running/correcting/finished helper progress,
+but does not establish output validity or semantic acceptance. Completion and
+worker errors preserve their original capture locators. Action exposes current
+duties, available routes and focused locators; provider-fed helpers still use
+`show --view full` unchanged.
 
 `State.action_guidance` is optional opaque JSON, omitted for legacy states.
 Providers author normalized obligations and repair text at describe time. Core
@@ -22,6 +43,20 @@ sequence order, including exact transition, feedback, sequence and occurred_at.
 `latest_evaluations` keeps its existing reduction and identities. Legacy full
 JSON decodes with an empty history; that does not establish completeness.
 Overrides remain separate history, never synthetic allows.
+
+## Targeted reads (T02)
+
+`loop-engine read RUN --kind history|delta|assignment|error|attempt|stdout|stderr`
+reads durable sequence/history and indexed assignment facts without materializing
+full show. Pages report exact total, limit, cursor/next cursor and truncation
+when the selected data is indexed; legacy unindexed assignments return an
+explicit partial envelope with `total: null` and an unindexed-source count.
+History/delta use semantic sequence cursors. Assignment/error/attempt pages use
+stable assignment and optional invocation identities. Original streams require
+an invocation, assignment and attempt; stdout/stderr bytes are returned as exact
+hex with total byte length, offset, next offset and truncation. Unavailable,
+changed or out-of-origin streams fail visibly. `show --view full` remains the
+full-input path for helpers and consumers that require complete context/history.
 
 ## Capture (T03)
 

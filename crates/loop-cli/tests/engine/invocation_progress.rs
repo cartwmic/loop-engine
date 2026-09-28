@@ -185,6 +185,21 @@ fn run_show_compact(database: &Path, run_id: &str, path: OsString) -> std::proce
         .expect("run compact show")
 }
 
+fn run_show_status_json(database: &Path, run_id: &str, path: OsString) -> std::process::Output {
+    Command::new(workspace_integration::binary("loop-engine"))
+        .args([
+            "--json",
+            "--database",
+            database.to_str().expect("utf-8 database"),
+            "show",
+            "--compact",
+            run_id,
+        ])
+        .env("PATH", path)
+        .bounded_output("loop-engine bounded JSON status")
+        .expect("run JSON status")
+}
+
 fn run_show_json(database: &Path, run_id: &str, path: OsString) -> std::process::Output {
     Command::new(workspace_integration::binary("loop-engine"))
         .args([
@@ -276,18 +291,18 @@ fn public_compact_show_covers_running_completed_and_unavailable_progress() {
         String::from_utf8_lossy(&running.stdout)
     );
     let running_text = String::from_utf8_lossy(&running.stdout);
-    assert!(running_text.contains("completed show --compact"));
+    assert!(running_text.contains("completed show --view status"));
     assert!(running_text.contains("lifecycle: active"));
     assert!(running_text.contains("state: start (Start)"));
-    assert!(running_text.contains("requestable events: finish -> start (check-free)"));
-    assert!(running_text.contains("latest checked result: none"));
+    assert!(running_text.contains("requestable events: finish -> start"));
     assert!(
-        running_text.contains("invocation: inv-compact-running slot=slot-1 status=running"),
-        "compact running output:\n{running_text}"
+        running_text.contains("invocation: inv-compact-running slot=slot-1 execution=unknown"),
+        "legacy numeric-only waiter remains unknown in bounded status:\n{running_text}"
     );
-    assert!(running_text.contains(
-        "inner progress (Dagu helper liveness): steps=3 not_started=1 running=1 reaped=1"
-    ));
+    assert!(
+        !running_text.contains("inner progress"),
+        "status must not spawn the Dagu query"
+    );
 
     std::thread::sleep(Duration::from_millis(20));
     let running_again = run_show_compact(&database, "run-compact-running", dagu_path.clone());
@@ -300,8 +315,17 @@ fn public_compact_show_covers_running_completed_and_unavailable_progress() {
             .collect::<Vec<_>>(),
         "concise status header remains stable; the dated status details carry sample time"
     );
-    assert!(running_text.contains("\"mutation_armed\":false"));
-    assert!(running_text.contains("\"observed_at\":"));
+    let running_machine = run_show_status_json(&database, "run-compact-running", dagu_path.clone());
+    assert!(running_machine.status.success());
+    let running_payload: Value =
+        serde_json::from_slice(&running_machine.stdout).expect("bounded status JSON");
+    assert_eq!(running_payload["status"], "completed");
+    assert_eq!(running_payload["result"]["mutation_armed"], false);
+    assert!(running_payload["result"]["sampled_at_ms"].is_u64());
+    assert_eq!(
+        running_payload["result"]["invocations"]["items"][0]["execution"]["state"],
+        "unknown"
+    );
     assert!(load_status(&database, "run-compact-running").is_none());
 
     let running_progress = run_progress(&database, "run-compact-running", dagu_path.clone());
@@ -363,10 +387,11 @@ fn public_compact_show_covers_running_completed_and_unavailable_progress() {
     );
     let completed_text = String::from_utf8_lossy(&completed.stdout);
     assert!(completed_text
-        .contains("invocation: inv-compact-completed slot=slot-1 status=succeeded exit_code=0"));
-    assert!(completed_text.contains(
-        "inner progress (Dagu helper liveness): steps=3 not_started=0 running=0 reaped=3"
-    ));
+        .contains("invocation: inv-compact-completed slot=slot-1 execution=succeeded"));
+    assert!(
+        !completed_text.contains("inner progress"),
+        "status stays a bounded local read"
+    );
     assert_eq!(
         load_status(&database, "run-compact-completed"),
         Some(WaiterWrittenStatus::Succeeded)
@@ -431,8 +456,11 @@ fn public_compact_show_covers_running_completed_and_unavailable_progress() {
         String::from_utf8_lossy(&unavailable.stdout)
     );
     let unavailable_text = String::from_utf8_lossy(&unavailable.stdout);
-    assert!(unavailable_text.contains("status=succeeded exit_code=0"));
-    assert!(unavailable_text.contains("inner progress: unavailable [dagu-unavailable]"));
+    assert!(unavailable_text.contains("execution=succeeded"));
+    assert!(
+        !unavailable_text.contains("inner progress"),
+        "Dagu availability belongs to invocation-progress"
+    );
     assert!(load_status(&database, "run-compact-unavailable").is_some());
 }
 
@@ -458,11 +486,12 @@ fn public_compact_json_combination_is_non_arming_status() {
             ])
             .bounded_output("loop-engine compact JSON status")
             .expect("run compact JSON");
-        assert_eq!(output.status.code(), Some(20), "selector {selector}");
+        assert_eq!(output.status.code(), Some(0), "selector {selector}");
         let payload: Value =
-            serde_json::from_slice(&output.stdout).expect("JSON missing run error");
-        assert_eq!(payload["status"], "error");
-        assert_eq!(payload["code"], "run-not-found");
+            serde_json::from_slice(&output.stdout).expect("bounded unavailable JSON");
+        assert_eq!(payload["status"], "completed");
+        assert_eq!(payload["result"]["completeness"]["run"], "unavailable");
+        assert_eq!(payload["result"]["mutation_armed"], false);
     }
 }
 

@@ -344,12 +344,12 @@ def base_artifact(repo: Path, sccache: Path) -> dict[str, Any]:
             "sccache_version_input": f"v{PINNED_SCCACHE_VERSION}",
         },
         "hosted_runtime_limitation": (
-            "This local macOS session cannot execute the GitHub-hosted required preflight against "
-            "the uncommitted reviewed bytes. Doing so before the required terminal-then-one-commit "
-            "lifecycle would require a second, unreviewed commit; this artifact claims no hosted run."
+            "This local compiler-cache proof does not execute GitHub-hosted required preflight "
+            "or establish hosted proof for any commit. Git lifecycle and hosted execution require "
+            "separate owner authorization; this artifact claims no hosted run."
         ),
         "post_push_obligation": (
-            "After the owner-approved single commit, run the required push-to-main preflight for "
+            "After an owner-authorized push, require successful push-to-main preflight for "
             "that exact commit, verify the checkout SHA equals git rev-parse HEAD, inspect the "
             "hosted sccache startup and final statistics and total wall time, and require success "
             "before Package 7b starts."

@@ -26,6 +26,7 @@ pub(crate) struct Record {
     pub id: String,
     pub title: String,
     pub kind: RecordKind,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,7 +112,12 @@ pub(crate) fn parse_prd(text: &str) -> Result<Prd, Vec<String>> {
                     ));
                 }
                 match parse_record_body(&lines[line_idx + 1..end]) {
-                    Ok(kind) => records.push(Record { id, title, kind }),
+                    Ok(kind) => records.push(Record {
+                        id,
+                        title,
+                        kind,
+                        text: lines[line_idx..end].join("\n"),
+                    }),
                     Err(err) => errors.push(format!("{id}: {err}")),
                 }
             }

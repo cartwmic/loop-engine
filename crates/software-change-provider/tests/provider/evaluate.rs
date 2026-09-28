@@ -776,6 +776,25 @@ fn empty_axis_policy_allows_drafts_but_cannot_waive_v2_final_criteria() {
                 response(&output)["feedback"]["code"],
                 "software-change-criterion-incomplete"
             );
+        } else if source == "reconciliation" {
+            let value = response(&output);
+            assert_eq!(value["result"], "allow", "{source} {event}");
+            assert_eq!(value["context_append"]["kind"], "reconciliation-decision");
+            assert_eq!(
+                value["context_append"]["data"]["revision"],
+                "reconciliation-1"
+            );
+            assert_eq!(
+                value["context_append"]["data"]["sha256"],
+                format!(
+                    "sha256:{:x}",
+                    Sha256::digest(fs::read(artifacts.path.join("reconciliation.json")).unwrap())
+                )
+            );
+            assert_eq!(
+                value["context_append"]["data"]["documents"],
+                json!({"intent": "1", "design": "1", "plan": "1"})
+            );
         } else {
             assert_eq!(
                 response(&output),

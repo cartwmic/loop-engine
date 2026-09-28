@@ -4,7 +4,7 @@
     "required_authors": 2,
     "goal_required_authors": 2
   },
-  "config_version": "high-rigor-11",
+  "config_version": "high-rigor-12",
   "review_policies": {
     "intent-review": [
       {
@@ -1460,6 +1460,18 @@
   ],
   "extra": {
     "profile": "high-rigor",
-    "template_root": "crates/software-change-provider/data/templates"
+    "template_root": "crates/software-change-provider/data/templates",
+    "advice": {
+      "occasion_map": [
+        "review-candidates",
+        "accepted-defect",
+        "implementation-correction",
+        "execution-or-authority-issue",
+        "evidence-applicability",
+        "requirements-reconciliation",
+        "review-round-departure",
+        "final-completion"
+      ]
+    }
   }
 }

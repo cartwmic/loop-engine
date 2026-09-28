@@ -160,7 +160,8 @@
         "cargo test -p software-change-provider --test shipped_data all_profiles_pass_production_config_validation_and_have_exact_subjects -- --exact",
         "cargo test -p software-change-provider --test shipped_data profiles_carry_exact_shipped_profile_mapping_and_author_counts -- --exact",
         "cargo test -p software-change-provider --lib schema::tests::allowlist_pin_matches_normative_subset -- --exact",
-        "cargo test -p software-change-provider --test shipped_data every_axis_prompt_references_subject_template_schema_and_all_antipedantry_guards -- --exact"
+        "cargo test -p software-change-provider --test shipped_data every_axis_prompt_references_subject_template_schema_and_all_antipedantry_guards -- --exact",
+        "Before integrating reference data, retain the exact existing canonical configs, templates, and reviewer protocol as the pre-integration baseline, including any untracked canonical files. Compare the final canonical bytes with that baseline and retain the comparison alongside the existing embedded-to-disk parity result. Explain any integration-only difference; prompt, axis, schema, and protocol semantic changes remain out of scope."
       ],
       "handoff": "After protocol-and-config-contract and schema-and-artifact-validation, expose stable lookup keys and exact unchanged bytes for canonical configs, templates, and reviewer protocol through the existing provider data boundary; checked-transition-evaluator and acceptance-proof consume the validated profile projection without depending on private lookup-module organization.",
       "criterion_ids": [

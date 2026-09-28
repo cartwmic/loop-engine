@@ -8,7 +8,7 @@ use crate::dagu::{names_for_capture_root, resolve_dagu, write_locator};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::io::Write;
@@ -24,6 +24,8 @@ const SUMMARY_FILE: &str = "summary.json";
 const JOIN_COMPLETE_FILE: &str = "join-complete";
 const ATTEMPTS_FILE: &str = "attempts.json";
 const MAX_FULL_SCHEMA_ATTEMPTS: u32 = 2;
+const REPAIR_FIRST_SCHEMA_ANNOTATION: &str = "x-loop-engine-output-recovery";
+const REPAIR_FIRST_SCHEMA_VALUE: &str = "repair-first-v1";
 const RETRY_PROMPT: &str = "\n\n---\n\nSCHEMA-CONFORMANCE RETRY\nReturn only a schema-conforming reconsideration of the same frozen assignment. Do not add commentary or change the semantic review authority.\n\nFIRST_OUTPUT_BEGIN\n";
 const RETRY_PROMPT_ERRORS: &str = "\nFIRST_OUTPUT_END\n\nEXACT_VALIDATION_ERRORS\n";
 const RETRY_PROMPT_END: &str = "\n\nReturn only the schema-conforming reconsideration.\n";
@@ -35,6 +37,10 @@ pub(crate) struct WorkerCli {
     pub(crate) command: String,
     pub(crate) args: Vec<String>,
     pub(crate) preamble: Option<String>,
+    #[serde(default)]
+    pub(crate) title: Option<String>,
+    #[serde(default)]
+    pub(crate) role: Option<String>,
     pub(crate) output_schema: Option<OutputSchema>,
     /// Additive complete JSON Schema contract. The field name is intentionally
     /// distinct from the legacy required-key `output_schema` contract.
@@ -67,12 +73,22 @@ pub(crate) struct InvokePacket {
     pub(crate) context: Option<Vec<Value>>,
     #[serde(default)]
     pub(crate) assignment_selection: Option<Vec<String>>,
+    #[serde(default, rename = "assignment_labels")]
+    pub(crate) _assignment_labels: Vec<loop_core::AssignmentLabel>,
     /// Accepted only for compatibility with the shared invoke envelope.
     /// Fan-out has no provider-specific invocation-input semantics.
     #[serde(default, rename = "invocation_input")]
     pub(crate) _invocation_input: Option<Value>,
     #[serde(default, rename = "standing_assignment_ids")]
     pub(crate) _standing_assignment_ids: Option<Vec<String>>,
+    #[serde(default, rename = "transition_history")]
+    pub(crate) _transition_history: Option<Vec<loop_core::HistoryEntry>>,
+    #[serde(default)]
+    pub(crate) state_visit: Option<u64>,
+    #[serde(default)]
+    pub(crate) binding_sha256: Option<String>,
+    #[serde(default)]
+    pub(crate) recovery_origin: Option<Value>,
     #[serde(default)]
     pub(crate) controls: loop_core::InvocationControls,
 }
@@ -105,6 +121,21 @@ pub(crate) enum FanOutMode {
     },
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct FanOutIdentity {
+    pub(crate) run_id: String,
+    pub(crate) slot_id: String,
+    pub(crate) state_visit: Option<u64>,
+    pub(crate) binding_sha256: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RecoveryOutput {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) delivered_input: Vec<u8>,
+    pub(crate) source: Value,
+}
+
 /// Parse failure for worker JSON, invoke packets, argv, or mode detection.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ParseError {
@@ -134,6 +165,16 @@ pub(crate) enum CollectorError {
     Failed(String),
 }
 
+impl fmt::Display for CollectorError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Invalid(message) | Self::Failed(message) => formatter.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for CollectorError {}
+
 impl From<ParseError> for CollectorError {
     fn from(error: ParseError) -> Self {
         CollectorError::Invalid(error.to_string())
@@ -145,6 +186,8 @@ impl From<ParseError> for CollectorError {
 pub(crate) struct FanOutSummary {
     pub(crate) output_dir: String,
     pub(crate) workers: Vec<FanOutWorkerResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) recovery: Option<Value>,
 }
 
 /// One reaped worker in `--worker` order.
@@ -156,6 +199,8 @@ pub(crate) struct FanOutWorkerResult {
     pub(crate) command: String,
     pub(crate) args: Vec<String>,
     pub(crate) exit_code: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) started: Option<bool>,
     pub(crate) stdout_path: String,
     pub(crate) stderr_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -175,6 +220,14 @@ pub(crate) struct FanOutWorkerResult {
     pub(crate) selected_output_sha256: Option<String>,
     pub(crate) selected_output_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) raw_output_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) raw_output_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) raw_output_attempt: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) recovery_source: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) declared_output_contract: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) routed_inputs: Option<Value>,
@@ -189,33 +242,51 @@ pub(crate) enum ContractStatus {
 }
 
 /// Durable per-invocation spec consumed by join and the facade fallback.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct FanOutSpec {
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub(crate) struct FanOutSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    capture_format: Option<String>,
+    pub(crate) capture_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) slot_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) state_visit: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) binding_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) recovery: Option<Value>,
     /// Index of the first worker in the second group.  The field is absent
     /// for the legacy single-group graph, preserving its scheduling shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    second_group_start: Option<usize>,
-    workers: Vec<FanOutSpecWorker>,
+    pub(crate) second_group_start: Option<usize>,
+    pub(crate) workers: Vec<FanOutSpecWorker>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct FanOutSpecWorker {
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub(crate) struct FanOutSpecWorker {
     #[serde(default)]
-    assignment_id: String,
-    command: String,
-    args: Vec<String>,
+    pub(crate) assignment_id: String,
+    pub(crate) command: String,
+    pub(crate) args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) preamble: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) recovery_source: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    output_schema: Option<OutputSchema>,
+    pub(crate) output_schema: Option<OutputSchema>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    full_output_schema: Option<Value>,
+    pub(crate) full_output_schema: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    routed_inputs: Option<Value>,
-    stdin_path: String,
-    stdout_path: String,
-    stderr_path: String,
-    sidecar_path: String,
+    pub(crate) routed_inputs: Option<Value>,
+    pub(crate) stdin_path: String,
+    pub(crate) stdout_path: String,
+    pub(crate) stderr_path: String,
+    pub(crate) sidecar_path: String,
 }
 
 #[derive(Deserialize)]
@@ -239,11 +310,22 @@ struct AttemptsManifest {
     attempts: Vec<AttemptCapture>,
     selected_attempt: Option<u32>,
     exhausted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recovery_state: Option<AttemptRecoveryState>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum AttemptRecoveryState {
+    Selected,
+    AwaitingOutputRepair,
 }
 
 #[derive(Serialize)]
 struct CaptureSummary<'a> {
     workers: &'a [FanOutWorkerResult],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery: Option<&'a Value>,
 }
 
 /// Parse one nested worker CLI JSON object and validate its exact output shape.
@@ -267,7 +349,42 @@ pub(crate) fn enumerate_bound_assignments(
     )
 }
 
-fn assignment_id(index: usize) -> String {
+pub(crate) fn enumerate_bound_assignment_labels(
+    binding: &loop_core::WorkSlotBinding,
+) -> Option<Vec<loop_core::AssignmentLabel>> {
+    if binding.args.first().map(String::as_str) != Some("fan-out") {
+        return None;
+    }
+    let parsed = parse_fan_out_args(binding.args.iter().skip(1).map(String::as_str)).ok()?;
+    if parsed.instructions_path.is_some() {
+        return None;
+    }
+    Some(
+        parsed
+            .workers
+            .iter()
+            .enumerate()
+            .map(|(index, worker)| {
+                let assignment_id = assignment_id(index);
+                loop_core::AssignmentLabel {
+                    title: worker
+                        .title
+                        .clone()
+                        .filter(|title| !title.trim().is_empty())
+                        .unwrap_or_else(|| assignment_id.clone()),
+                    role: worker
+                        .role
+                        .clone()
+                        .filter(|role| !role.trim().is_empty())
+                        .unwrap_or_else(|| "worker".to_owned()),
+                    assignment_id,
+                }
+            })
+            .collect(),
+    )
+}
+
+pub(crate) fn assignment_id(index: usize) -> String {
     format!("worker-{index}")
 }
 
@@ -296,9 +413,32 @@ pub(crate) fn parse_worker_cli_json(raw: &str) -> Result<WorkerCli, ParseError> 
     }
     if let Some(schema) = worker.full_output_schema.as_mut() {
         normalize_full_output_schema(schema)?;
+        validate_full_output_recovery_annotation(schema)?;
         validate_full_schema_declaration(schema)?;
     }
     Ok(worker)
+}
+
+fn validate_full_output_recovery_annotation(schema: &Value) -> Result<(), ParseError> {
+    if let Some(value) = schema
+        .as_object()
+        .and_then(|object| object.get(REPAIR_FIRST_SCHEMA_ANNOTATION))
+    {
+        if value.as_str() != Some(REPAIR_FIRST_SCHEMA_VALUE) {
+            return Err(ParseError::new(format!(
+                "worker full_output_schema `{REPAIR_FIRST_SCHEMA_ANNOTATION}` must be `{REPAIR_FIRST_SCHEMA_VALUE}`"
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn uses_repair_first_output_recovery(schema: &Value) -> bool {
+    schema
+        .as_object()
+        .and_then(|object| object.get(REPAIR_FIRST_SCHEMA_ANNOTATION))
+        .and_then(Value::as_str)
+        == Some(REPAIR_FIRST_SCHEMA_VALUE)
 }
 
 fn validate_output_schema(schema: &OutputSchema) -> Result<(), ParseError> {
@@ -324,8 +464,10 @@ fn validate_output_schema(schema: &OutputSchema) -> Result<(), ParseError> {
 }
 
 /// Accept the canonical direct-schema form and the equivalent explicit
-/// `{schema, retry_limit: 1}` form. The retry count is deliberately not
-/// configurable: a complete-schema worker gets at most one correction.
+/// `{schema, retry_limit: 1}` form. Legacy schemas keep their fixed one-time
+/// same-worker correction; the explicit repair-first schema annotation instead
+/// retains the first invalid result for output-only recovery before any new
+/// substantive assignment.
 fn normalize_full_output_schema(schema: &mut Value) -> Result<(), ParseError> {
     // JSON Schema permits a boolean schema as well as an object schema.
     if schema.is_boolean() {
@@ -559,6 +701,29 @@ pub(crate) fn run_collector(
                 .transpose()
                 .map_err(|_| CollectorError::Invalid("max_active exceeds supported limit".into()))?
                 .or(max_active);
+            if let Some(input) = packet._invocation_input.as_ref() {
+                if input.get("protocol").and_then(Value::as_str) == Some("fan-out-recovery-v1") {
+                    let recovery: loop_core::FanOutRecoveryInput =
+                        serde_json::from_value(input.clone()).map_err(|error| {
+                            CollectorError::Invalid(format!(
+                                "fan-out recovery input is malformed: {error}"
+                            ))
+                        })?;
+                    if packet.assignment_selection.is_some() {
+                        return Err(CollectorError::Invalid(
+                            "fan-out recovery input cannot be combined with assignment selection"
+                                .to_owned(),
+                        ));
+                    }
+                    return crate::fan_out_recovery::run_recovery_collector(
+                        &packet,
+                        &workers,
+                        second_group_start,
+                        max_active,
+                        &recovery,
+                    );
+                }
+            }
             let (mut workers, assignment_ids, second_group_start) = select_bound_workers(
                 &workers,
                 packet.assignment_selection.as_deref(),
@@ -601,6 +766,14 @@ pub(crate) fn run_collector(
                 &output_dir,
                 max_active,
                 second_group_start,
+                Some(FanOutIdentity {
+                    run_id: packet.run_id.clone(),
+                    slot_id: packet.slot_id.clone(),
+                    state_visit: packet.state_visit,
+                    binding_sha256: packet.binding_sha256.clone(),
+                }),
+                None,
+                None,
             )
         }
         FanOutMode::AdHoc {
@@ -633,6 +806,9 @@ pub(crate) fn run_collector(
                 &output_dir,
                 max_active,
                 second_group_start,
+                None,
+                None,
+                None,
             )
         }
     }
@@ -665,7 +841,7 @@ fn apply_force_fresh_contract(schema: &mut Value) -> Result<(), ParseError> {
 pub(crate) fn run_fan_out_join(capture_dir: &Path) -> Result<(), CollectorError> {
     let spec = read_spec(capture_dir)?;
     let workers = summary_from_spec(&spec, false)?;
-    write_summary_json(capture_dir, &workers)?;
+    write_summary_json(capture_dir, &workers, spec.recovery.as_ref())?;
     fs::write(capture_dir.join(JOIN_COMPLETE_FILE), b"complete\n").map_err(|error| {
         CollectorError::Failed(format!(
             "could not write fan-out join marker `{}`: {error}",
@@ -694,7 +870,7 @@ pub(crate) fn run_fan_out_barrier(capture_dir: &Path) -> Result<(), CollectorErr
     for (index, (spec_worker, worker)) in
         spec.workers.iter().zip(&workers).enumerate().take(boundary)
     {
-        if !worker_started(spec_worker) {
+        if spec_worker.recovery_source.is_none() && !worker_started(spec_worker) {
             return Err(CollectorError::Failed(format!(
                 "first fan-out group worker {index} did not complete"
             )));
@@ -709,9 +885,10 @@ pub(crate) fn run_fan_out_barrier(capture_dir: &Path) -> Result<(), CollectorErr
     Ok(())
 }
 
-/// Execute one complete-schema worker.  Dagu still owns graph scheduling;
-/// this hidden step owns only the bounded same-worker conformance retry and
-/// its immutable attempt capture.
+/// Execute one complete-schema worker. Dagu still owns graph scheduling.
+/// Legacy contracts get their fixed same-worker conformance correction;
+/// repair-first contracts capture the first invalid result and do not relaunch
+/// substantive work before output-only recovery.
 pub(crate) fn run_fan_out_worker(
     capture_dir: &Path,
     worker_index: usize,
@@ -727,6 +904,13 @@ pub(crate) fn run_fan_out_worker(
         return Err(CollectorError::Invalid(format!(
             "fan-out worker index {worker_index} has no full_output_schema"
         )));
+    };
+    let repair_first = uses_repair_first_output_recovery(schema);
+    let manifest_version = if repair_first { "2" } else { "1" };
+    let attempt_limit = if repair_first {
+        1
+    } else {
+        MAX_FULL_SCHEMA_ATTEMPTS
     };
     let assignment = fs::read(&worker.stdin_path).map_err(|error| {
         CollectorError::Failed(format!(
@@ -751,7 +935,7 @@ pub(crate) fn run_fan_out_worker(
     let mut next_assignment = assignment.clone();
     let mut last_exit_code = 1;
 
-    for number in 1..=MAX_FULL_SCHEMA_ATTEMPTS {
+    for number in 1..=attempt_limit {
         let (stdout, stderr, exit_code) =
             run_complete_schema_attempt(worker, &next_assignment, worker_dir)?;
         last_exit_code = exit_code;
@@ -768,12 +952,30 @@ pub(crate) fn run_fan_out_worker(
             stderr_sha256: sha256_digest(&stderr),
             validation_errors: validation_errors.clone(),
         });
+        write_attempts_manifest(
+            worker_dir,
+            &AttemptsManifest {
+                schema_version: manifest_version.to_owned(),
+                attempts: attempts.clone(),
+                selected_attempt: if validation_errors.is_empty() {
+                    Some(number)
+                } else {
+                    None
+                },
+                exhausted: false,
+                recovery_state: repair_first.then_some(if validation_errors.is_empty() {
+                    AttemptRecoveryState::Selected
+                } else {
+                    AttemptRecoveryState::AwaitingOutputRepair
+                }),
+            },
+        )?;
         if validation_errors.is_empty() {
             selected_attempt = Some(number);
             selected_bytes = Some((stdout, stderr));
             break;
         }
-        if number == 1 {
+        if number == 1 && !repair_first {
             next_assignment = retry_assignment(&assignment, &stdout, &validation_errors);
         }
         selected_bytes = Some((stdout, stderr));
@@ -798,25 +1000,45 @@ pub(crate) fn run_fan_out_worker(
     })?;
 
     let manifest = AttemptsManifest {
-        schema_version: "1".to_owned(),
+        schema_version: manifest_version.to_owned(),
         attempts,
         selected_attempt,
-        exhausted: selected_attempt.is_none(),
+        exhausted: !repair_first && selected_attempt.is_none(),
+        recovery_state: repair_first.then_some(if selected_attempt.is_some() {
+            AttemptRecoveryState::Selected
+        } else {
+            AttemptRecoveryState::AwaitingOutputRepair
+        }),
     };
+    write_attempts_manifest(worker_dir, &manifest)?;
+    write_sidecar_exit(&worker.sidecar_path, last_exit_code)
+}
+
+fn write_attempts_manifest(
+    worker_dir: &Path,
+    manifest: &AttemptsManifest,
+) -> Result<(), CollectorError> {
     let manifest_path = worker_dir.join(ATTEMPTS_FILE);
-    let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(|error| {
+    let temporary_path = worker_dir.join(format!(".{ATTEMPTS_FILE}.tmp"));
+    let manifest_bytes = serde_json::to_vec_pretty(manifest).map_err(|error| {
         CollectorError::Failed(format!(
             "could not serialize complete-schema attempts `{}`: {error}",
             manifest_path.display()
         ))
     })?;
-    fs::write(&manifest_path, manifest_bytes).map_err(|error| {
+    fs::write(&temporary_path, manifest_bytes).map_err(|error| {
         CollectorError::Failed(format!(
             "could not write complete-schema attempts `{}`: {error}",
+            temporary_path.display()
+        ))
+    })?;
+    fs::rename(&temporary_path, &manifest_path).map_err(|error| {
+        CollectorError::Failed(format!(
+            "could not publish complete-schema attempts `{}`: {error}",
             manifest_path.display()
         ))
     })?;
-    write_sidecar_exit(&worker.sidecar_path, last_exit_code)
+    Ok(())
 }
 
 fn run_complete_schema_attempt(
@@ -925,7 +1147,7 @@ fn write_sidecar_exit(path: &str, exit_code: i32) -> Result<(), CollectorError> 
     })
 }
 
-fn sha256_digest(bytes: &[u8]) -> String {
+pub(crate) fn sha256_digest(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut output = String::from("sha256:");
     for byte in digest {
@@ -948,7 +1170,7 @@ fn retry_assignment(original_assignment: &[u8], first_stdout: &[u8], errors: &[S
     assignment
 }
 
-fn complete_schema_validation_errors(
+pub(crate) fn complete_schema_validation_errors(
     stdout: &[u8],
     schema: &Value,
     legacy_schema: Option<&OutputSchema>,
@@ -1025,7 +1247,7 @@ fn parse_max_active(raw: &str) -> Result<u32, ParseError> {
         })
 }
 
-fn ensure_workers(workers: &[WorkerCli]) -> Result<(), CollectorError> {
+pub(crate) fn ensure_workers(workers: &[WorkerCli]) -> Result<(), CollectorError> {
     if workers.is_empty() {
         return Err(CollectorError::Invalid(
             "fan-out requires at least one `--worker`".to_owned(),
@@ -1129,7 +1351,7 @@ fn compact_location_json(
     .expect("serializing location object cannot fail")
 }
 
-fn bound_worker_payload(
+pub(crate) fn bound_worker_payload(
     worker: &WorkerCli,
     artifact_root: &str,
     context: Option<&[Value]>,
@@ -1211,7 +1433,7 @@ fn loop_engine_exe() -> Result<PathBuf, CollectorError> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_dagu_graph(
+pub(crate) fn run_dagu_graph(
     dagu: &Path,
     workers: &[WorkerCli],
     assignment_ids: &[String],
@@ -1220,6 +1442,9 @@ fn run_dagu_graph(
     output_dir: &Path,
     max_active: Option<u32>,
     second_group_start: Option<usize>,
+    identity: Option<FanOutIdentity>,
+    recovery: Option<Value>,
+    recovery_sources: Option<&BTreeMap<String, RecoveryOutput>>,
 ) -> Result<FanOutSummary, CollectorError> {
     debug_assert_eq!(workers.len(), payloads.len());
     debug_assert_eq!(workers.len(), assignment_ids.len());
@@ -1253,24 +1478,54 @@ fn run_dagu_graph(
             ))
         })?;
         let stdin_path = worker_dir.join("stdin");
-        fs::write(&stdin_path, &payloads[index]).map_err(|error| {
-            CollectorError::Failed(format!(
-                "could not write worker stdin `{}`: {error}",
-                stdin_path.display()
-            ))
-        })?;
+        let recovered = recovery_sources.and_then(|sources| sources.get(&assignment_ids[index]));
+        if let Some(recovered) = recovered {
+            fs::write(&stdin_path, &recovered.delivered_input).map_err(|error| {
+                CollectorError::Failed(format!(
+                    "could not copy original delivered input into recovery capture: {error}"
+                ))
+            })?;
+            fs::write(worker_dir.join("stdout"), &recovered.bytes).map_err(|error| {
+                CollectorError::Failed(format!(
+                    "could not copy recovered output into capture: {error}"
+                ))
+            })?;
+            fs::write(worker_dir.join("stderr"), b"").map_err(|error| {
+                CollectorError::Failed(format!(
+                    "could not create recovered stderr capture: {error}"
+                ))
+            })?;
+        } else {
+            fs::write(&stdin_path, &payloads[index]).map_err(|error| {
+                CollectorError::Failed(format!(
+                    "could not write worker stdin `{}`: {error}",
+                    stdin_path.display()
+                ))
+            })?;
+        }
         spec_workers.push(FanOutSpecWorker {
             assignment_id: assignment_ids[index].clone(),
             command: worker.command.clone(),
             args: worker.args.clone(),
+            preamble: worker.preamble.clone(),
+            title: worker.title.clone(),
+            role: worker.role.clone(),
+            recovery_source: recovered.map(|item| item.source.clone()),
             output_schema: worker.output_schema.clone(),
             full_output_schema: worker.full_output_schema.clone(),
-            routed_inputs: match full_bound_context {
-                Some(records) => Some(Value::Array(records.to_vec())),
-                None => serde_json::from_slice::<Value>(&payloads[index])
-                    .ok()
-                    .and_then(|value| value.get("context").cloned()),
-            },
+            routed_inputs: recovered
+                .and_then(|item| {
+                    item.source
+                        .get("origin")
+                        .and_then(|origin| origin.get("routed_inputs"))
+                        .cloned()
+                })
+                .or_else(|| match full_bound_context {
+                    Some(records) => Some(Value::Array(records.to_vec())),
+                    None => serde_json::from_slice::<Value>(&payloads[index])
+                        .ok()
+                        .and_then(|value| value.get("context").cloned()),
+                }),
             stdin_path: path_to_string(&stdin_path),
             stdout_path: path_to_string(&worker_dir.join("stdout")),
             stderr_path: path_to_string(&worker_dir.join("stderr")),
@@ -1279,6 +1534,13 @@ fn run_dagu_graph(
     }
     let spec = FanOutSpec {
         capture_format: full_bound_context.map(|_| "bound-context-projection-v1".to_owned()),
+        run_id: identity.as_ref().map(|value| value.run_id.clone()),
+        slot_id: identity.as_ref().map(|value| value.slot_id.clone()),
+        state_visit: identity.as_ref().and_then(|value| value.state_visit),
+        binding_sha256: identity
+            .as_ref()
+            .and_then(|value| value.binding_sha256.clone()),
+        recovery,
         second_group_start,
         workers: spec_workers,
     };
@@ -1348,6 +1610,7 @@ fn run_dagu_graph(
     Ok(FanOutSummary {
         output_dir: path_to_string(&output_dir),
         workers,
+        recovery: spec.recovery.clone(),
     })
 }
 
@@ -1421,6 +1684,9 @@ fn emit_graph_yaml(
     yaml.push_str("steps:\n");
     let mut worker_names = Vec::new();
     for (index, worker) in spec.workers.iter().enumerate() {
+        if worker.recovery_source.is_some() {
+            continue;
+        }
         let name = format!("w{index}");
         worker_names.push(name.clone());
         yaml.push_str("  - name: ");
@@ -1478,9 +1744,12 @@ fn emit_graph_yaml(
     if let Some(boundary) = spec.second_group_start {
         yaml.push_str("  - name: \"barrier\"\n");
         yaml.push_str("    action: exec\n");
-        if boundary > 0 {
+        let first_group_workers = (0..boundary)
+            .filter(|index| spec.workers[*index].recovery_source.is_none())
+            .collect::<Vec<_>>();
+        if !first_group_workers.is_empty() {
             yaml.push_str("    depends:\n");
-            for index in 0..boundary {
+            for index in first_group_workers {
                 yaml.push_str("      - ");
                 yaml.push_str(&yaml_double_quoted(&format!("w{index}")));
                 yaml.push('\n');
@@ -1505,14 +1774,16 @@ fn emit_graph_yaml(
     yaml.push_str(&yaml_double_quoted("join"));
     yaml.push('\n');
     yaml.push_str("    action: exec\n");
-    yaml.push_str("    depends:\n");
-    for name in &worker_names {
-        yaml.push_str("      - ");
-        yaml.push_str(&yaml_double_quoted(name));
-        yaml.push('\n');
-    }
-    if spec.second_group_start.is_some() {
-        yaml.push_str("      - \"barrier\"\n");
+    if !worker_names.is_empty() || spec.second_group_start.is_some() {
+        yaml.push_str("    depends:\n");
+        for name in &worker_names {
+            yaml.push_str("      - ");
+            yaml.push_str(&yaml_double_quoted(name));
+            yaml.push('\n');
+        }
+        if spec.second_group_start.is_some() {
+            yaml.push_str("      - \"barrier\"\n");
+        }
     }
     yaml.push_str("    with:\n");
     yaml.push_str("      command: ");
@@ -1564,7 +1835,7 @@ fn write_isolated_home_files(home: &Path) -> Result<(), CollectorError> {
     })
 }
 
-fn write_spec(output_dir: &Path, spec: &FanOutSpec) -> Result<(), CollectorError> {
+pub(crate) fn write_spec(output_dir: &Path, spec: &FanOutSpec) -> Result<(), CollectorError> {
     let path = output_dir.join(SPEC_FILE);
     let bytes = serde_json::to_vec_pretty(spec).map_err(|error| {
         CollectorError::Failed(format!(
@@ -1581,7 +1852,7 @@ fn write_spec(output_dir: &Path, spec: &FanOutSpec) -> Result<(), CollectorError
     Ok(())
 }
 
-fn read_spec(output_dir: &Path) -> Result<FanOutSpec, CollectorError> {
+pub(crate) fn read_spec(output_dir: &Path) -> Result<FanOutSpec, CollectorError> {
     let path = output_dir.join(SPEC_FILE);
     let bytes = fs::read(&path).map_err(|error| {
         CollectorError::Failed(format!(
@@ -1593,6 +1864,27 @@ fn read_spec(output_dir: &Path) -> Result<FanOutSpec, CollectorError> {
         CollectorError::Failed(format!(
             "could not parse fan-out spec `{}`: {error}",
             path.display()
+        ))
+    })
+}
+
+pub(crate) fn summary_covers_capture(output_dir: &Path) -> bool {
+    let Ok(spec) = read_spec(output_dir) else {
+        return false;
+    };
+    read_summary_workers(output_dir).is_some_and(|workers| summary_covers_spec(&spec, &workers))
+}
+
+pub(crate) fn summary_bytes_for_capture(output_dir: &Path) -> Result<Vec<u8>, CollectorError> {
+    let spec = read_spec(output_dir)?;
+    let workers = summary_from_spec(&spec, false)?;
+    serde_json::to_vec_pretty(&CaptureSummary {
+        workers: &workers,
+        recovery: spec.recovery.as_ref(),
+    })
+    .map_err(|error| {
+        CollectorError::Failed(format!(
+            "could not project recovery capture summary: {error}"
         ))
     })
 }
@@ -1611,7 +1903,7 @@ fn ensure_summary(
     // durable record per assignment so an outside observer sees explicit
     // coverage gaps rather than silently missing workers.
     let workers = summary_from_spec(spec, false)?;
-    write_summary_json(output_dir, &workers)?;
+    write_summary_json(output_dir, &workers, spec.recovery.as_ref())?;
     Ok(workers)
 }
 
@@ -1640,6 +1932,9 @@ fn summary_covers_spec(spec: &FanOutSpec, workers: &[FanOutWorkerResult]) -> boo
 }
 
 fn worker_started(worker: &FanOutSpecWorker) -> bool {
+    if worker.recovery_source.is_some() {
+        return false;
+    }
     Path::new(&worker.stdout_path).is_file()
         || Path::new(&worker.stderr_path).is_file()
         || Path::new(&worker.sidecar_path).is_file()
@@ -1655,6 +1950,61 @@ fn summary_from_spec(
         if started_only && !started {
             continue;
         }
+        if let Some(source) = worker.recovery_source.as_ref() {
+            let stdout = fs::read(&worker.stdout_path).map_err(|error| {
+                CollectorError::Failed(format!("could not read recovered selected output: {error}"))
+            })?;
+            let selected_digest = source
+                .get("selected_output_sha256")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    CollectorError::Failed(
+                        "recovery source omitted selected output digest".to_owned(),
+                    )
+                })?;
+            if sha256_digest(&stdout) != selected_digest {
+                return Err(CollectorError::Failed(
+                    "recovered selected bytes changed after capture".to_owned(),
+                ));
+            }
+            let selected_path = format!("{worker_index}/stdout");
+            results.push(FanOutWorkerResult {
+                assignment_id: if worker.assignment_id.is_empty() {
+                    assignment_id(worker_index)
+                } else {
+                    worker.assignment_id.clone()
+                },
+                command: worker.command.clone(),
+                args: worker.args.clone(),
+                exit_code: source
+                    .get("origin")
+                    .and_then(|origin| origin.get("exit_code"))
+                    .and_then(Value::as_i64)
+                    .and_then(|code| i32::try_from(code).ok())
+                    .unwrap_or(0),
+                started: None,
+                stdout_path: worker.stdout_path.clone(),
+                stderr_path: worker.stderr_path.clone(),
+                status: Some(ContractStatus::Succeeded),
+                conformance_error: None,
+                attempts_path: None,
+                selected_attempt: Some(None),
+                selected_output_sha256: Some(selected_digest.to_owned()),
+                selected_output_path: Some(selected_path),
+                raw_output_sha256: None,
+                raw_output_path: None,
+                raw_output_attempt: None,
+                recovery_source: Some(source.clone()),
+                declared_output_contract: worker.full_output_schema.clone().or_else(|| {
+                    worker
+                        .output_schema
+                        .as_ref()
+                        .map(|schema| serde_json::to_value(schema).unwrap_or(Value::Null))
+                }),
+                routed_inputs: worker.routed_inputs.clone(),
+            });
+            continue;
+        }
         let exit_code = read_sidecar_exit(&worker.sidecar_path).unwrap_or(1);
         if !started {
             results.push(FanOutWorkerResult {
@@ -1666,6 +2016,7 @@ fn summary_from_spec(
                 command: worker.command.clone(),
                 args: worker.args.clone(),
                 exit_code,
+                started: Some(false),
                 stdout_path: worker.stdout_path.clone(),
                 stderr_path: worker.stderr_path.clone(),
                 status: (worker.output_schema.is_some() || worker.full_output_schema.is_some())
@@ -1680,6 +2031,10 @@ fn summary_from_spec(
                 selected_attempt: Some(None),
                 selected_output_sha256: None,
                 selected_output_path: None,
+                raw_output_sha256: None,
+                raw_output_path: None,
+                raw_output_attempt: None,
+                recovery_source: None,
                 declared_output_contract: worker.full_output_schema.clone().or_else(|| {
                     worker
                         .output_schema
@@ -1701,6 +2056,7 @@ fn summary_from_spec(
         if !stderr_path.exists() {
             let _ = fs::write(stderr_path, b"");
         }
+        let raw_identity = raw_output_identity(worker, worker_index);
         let (
             status,
             conformance_error,
@@ -1782,6 +2138,7 @@ fn summary_from_spec(
             command: worker.command.clone(),
             args: worker.args.clone(),
             exit_code,
+            started: Some(true),
             stdout_path: worker.stdout_path.clone(),
             stderr_path: worker.stderr_path.clone(),
             status,
@@ -1790,6 +2147,12 @@ fn summary_from_spec(
             selected_attempt,
             selected_output_sha256,
             selected_output_path,
+            raw_output_sha256: raw_identity
+                .as_ref()
+                .map(|identity| identity.sha256.clone()),
+            raw_output_path: raw_identity.as_ref().map(|identity| identity.path.clone()),
+            raw_output_attempt: raw_identity.as_ref().map(|identity| identity.attempt),
+            recovery_source: None,
             declared_output_contract: worker.full_output_schema.clone().or_else(|| {
                 worker
                     .output_schema
@@ -1808,6 +2171,46 @@ struct SelectedOutput {
     path: String,
 }
 
+struct RawOutputIdentity {
+    attempt: u32,
+    sha256: String,
+    path: String,
+}
+
+fn raw_output_identity(
+    worker: &FanOutSpecWorker,
+    worker_index: usize,
+) -> Option<RawOutputIdentity> {
+    let worker_dir = Path::new(&worker.stdout_path).parent()?;
+    if worker.full_output_schema.is_some() {
+        let manifest: AttemptsManifest =
+            serde_json::from_slice(&fs::read(worker_dir.join(ATTEMPTS_FILE)).ok()?).ok()?;
+        let attempt = manifest.attempts.last()?;
+        let relative_path = format!("{worker_index}/attempts/{}/stdout", attempt.number);
+        let bytes = fs::read(
+            worker_dir
+                .join("attempts")
+                .join(attempt.number.to_string())
+                .join("stdout"),
+        )
+        .ok()?;
+        if attempt.stdout_sha256 != sha256_digest(&bytes) {
+            return None;
+        }
+        return Some(RawOutputIdentity {
+            attempt: attempt.number,
+            sha256: attempt.stdout_sha256.clone(),
+            path: relative_path,
+        });
+    }
+    let bytes = fs::read(&worker.stdout_path).ok()?;
+    Some(RawOutputIdentity {
+        attempt: 1,
+        sha256: sha256_digest(&bytes),
+        path: format!("{worker_index}/stdout"),
+    })
+}
+
 fn evaluate_full_contract(worker: &FanOutSpecWorker) -> Result<SelectedOutput, String> {
     let worker_dir = Path::new(&worker.stdout_path)
         .parent()
@@ -1818,15 +2221,26 @@ fn evaluate_full_contract(worker: &FanOutSpecWorker) -> Result<SelectedOutput, S
             .map_err(|error| format!("could not read attempts manifest: {error}"))?,
     )
     .map_err(|error| format!("attempts manifest is malformed: {error}"))?;
-    if manifest.schema_version != "1" {
+    let schema = worker
+        .full_output_schema
+        .as_ref()
+        .expect("full contract checked before evaluation");
+    let repair_first = uses_repair_first_output_recovery(schema);
+    let expected_version = if repair_first { "2" } else { "1" };
+    let attempt_limit = if repair_first {
+        1
+    } else {
+        MAX_FULL_SCHEMA_ATTEMPTS as usize
+    };
+    if manifest.schema_version != expected_version {
         return Err(format!(
-            "attempts manifest schema_version must be \"1\", got {:?}",
+            "attempts manifest schema_version must be {expected_version:?}, got {:?}",
             manifest.schema_version
         ));
     }
-    if manifest.attempts.is_empty() || manifest.attempts.len() > MAX_FULL_SCHEMA_ATTEMPTS as usize {
+    if manifest.attempts.is_empty() || manifest.attempts.len() > attempt_limit {
         return Err(format!(
-            "attempts manifest must contain between 1 and {MAX_FULL_SCHEMA_ATTEMPTS} attempts"
+            "attempts manifest must contain between 1 and {attempt_limit} attempts"
         ));
     }
     let mut selected_bytes = None;
@@ -1882,7 +2296,59 @@ fn evaluate_full_contract(worker: &FanOutSpecWorker) -> Result<SelectedOutput, S
             selected_bytes = Some((stdout, stderr));
         }
     }
+    if repair_first {
+        match manifest.recovery_state {
+            Some(AttemptRecoveryState::AwaitingOutputRepair) => {
+                if manifest.attempts.len() != 1
+                    || manifest.selected_attempt.is_some()
+                    || manifest.exhausted
+                    || manifest.attempts[0].validation_errors.is_empty()
+                {
+                    return Err(
+                        "repair-first attempts manifest has inconsistent awaiting-repair state"
+                            .to_owned(),
+                    );
+                }
+                let attempt = &manifest.attempts[0];
+                let stdout = fs::read(worker_dir.join("attempts/1/stdout"))
+                    .map_err(|error| format!("could not read first raw stdout: {error}"))?;
+                let stderr = fs::read(worker_dir.join("attempts/1/stderr"))
+                    .map_err(|error| format!("could not read first raw stderr: {error}"))?;
+                if fs::read(&worker.stdout_path)
+                    .map_err(|error| format!("could not read compatibility stdout: {error}"))?
+                    != stdout
+                    || fs::read(&worker.stderr_path)
+                        .map_err(|error| format!("could not read compatibility stderr: {error}"))?
+                        != stderr
+                {
+                    return Err(
+                        "first raw output does not match compatibility stdout/stderr".to_owned(),
+                    );
+                }
+                return Err(format!(
+                    "first full-schema output is invalid; output-only repair is available before an optional new substantive judgment: {}",
+                    attempt.validation_errors.join("; ")
+                ));
+            }
+            Some(AttemptRecoveryState::Selected) if manifest.selected_attempt.is_some() => {}
+            _ => {
+                return Err(
+                    "repair-first attempts manifest is missing a truthful recovery state"
+                        .to_owned(),
+                );
+            }
+        }
+    } else if manifest.recovery_state.is_some() {
+        return Err("legacy retry manifest has an unexpected recovery state".to_owned());
+    }
+
     if manifest.exhausted {
+        if repair_first {
+            return Err(
+                "repair-first attempts cannot be marked exhausted by a same-worker retry"
+                    .to_owned(),
+            );
+        }
         if manifest.attempts.len() != MAX_FULL_SCHEMA_ATTEMPTS as usize {
             return Err(format!(
                 "exhausted attempts manifest must contain exactly {MAX_FULL_SCHEMA_ATTEMPTS} attempts"
@@ -1964,10 +2430,20 @@ fn read_sidecar_exit(path: &str) -> Option<i32> {
         .map(|sidecar| sidecar.exit_code)
 }
 
-fn evaluate_output_conformance(stdout_path: &Path, schema: &OutputSchema) -> Result<(), String> {
+pub(crate) fn evaluate_output_conformance(
+    stdout_path: &Path,
+    schema: &OutputSchema,
+) -> Result<(), String> {
     let bytes = fs::read(stdout_path)
         .map_err(|error| format!("could not read captured stdout: {error}"))?;
-    let object = locate_stdout_object(&bytes)?;
+    evaluate_output_conformance_bytes(&bytes, schema)
+}
+
+pub(crate) fn evaluate_output_conformance_bytes(
+    bytes: &[u8],
+    schema: &OutputSchema,
+) -> Result<(), String> {
+    let object = locate_stdout_object(bytes)?;
     required_key_conformance(&object, schema)
 }
 
@@ -1991,7 +2467,7 @@ fn required_key_conformance(
     }
 }
 
-fn locate_stdout_value(bytes: &[u8]) -> Result<Value, String> {
+pub(crate) fn locate_stdout_value(bytes: &[u8]) -> Result<Value, String> {
     let bare_error = match serde_json::from_slice::<Value>(bytes) {
         Ok(value) => return Ok(value),
         Err(error) => error,
@@ -2040,14 +2516,16 @@ fn locate_stdout_object(bytes: &[u8]) -> Result<Map<String, Value>, String> {
 fn write_summary_json(
     output_dir: &Path,
     workers: &[FanOutWorkerResult],
+    recovery: Option<&Value>,
 ) -> Result<(), CollectorError> {
     let path = output_dir.join(SUMMARY_FILE);
-    let bytes = serde_json::to_vec_pretty(&CaptureSummary { workers }).map_err(|error| {
-        CollectorError::Failed(format!(
-            "could not serialize capture summary `{}`: {error}",
-            path.display()
-        ))
-    })?;
+    let bytes =
+        serde_json::to_vec_pretty(&CaptureSummary { workers, recovery }).map_err(|error| {
+            CollectorError::Failed(format!(
+                "could not serialize capture summary `{}`: {error}",
+                path.display()
+            ))
+        })?;
     fs::write(&path, bytes).map_err(|error| {
         CollectorError::Failed(format!(
             "could not write capture summary `{}`: {error}",
@@ -2110,6 +2588,21 @@ mod tests {
         ] {
             assert!(parse_worker_cli_json(raw).is_err(), "accepted {raw}");
         }
+    }
+
+    #[test]
+    fn repair_first_output_recovery_requires_the_exact_schema_annotation() {
+        let worker = parse_worker_cli_json(
+            r#"{"command":"worker","args":[],"full_output_schema":{"type":"object","x-loop-engine-output-recovery":"repair-first-v1"}}"#,
+        )
+        .expect("recognized repair-first full schema");
+        assert!(uses_repair_first_output_recovery(
+            worker.full_output_schema.as_ref().expect("full schema")
+        ));
+        assert!(parse_worker_cli_json(
+            r#"{"command":"worker","args":[],"full_output_schema":{"type":"object","x-loop-engine-output-recovery":"retry-first"}}"#,
+        )
+        .is_err());
     }
 
     fn full_review_schema(axis: &str, author: &str) -> Value {
@@ -2461,6 +2954,8 @@ mod tests {
             command: "echo".to_owned(),
             args: Vec::new(),
             preamble: None,
+            title: None,
+            role: None,
             output_schema: None,
             full_output_schema: None,
         };
@@ -2486,6 +2981,8 @@ mod tests {
             command: "echo".to_owned(),
             args: Vec::new(),
             preamble: None,
+            title: None,
+            role: None,
             output_schema: None,
             full_output_schema: None,
         };
@@ -2525,6 +3022,8 @@ mod tests {
             command: "echo".to_owned(),
             args: Vec::new(),
             preamble: None,
+            title: None,
+            role: None,
             output_schema: None,
             full_output_schema: None,
         };
@@ -2566,6 +3065,8 @@ mod tests {
             command: "echo".to_owned(),
             args: Vec::new(),
             preamble: Some("role".to_owned()),
+            title: None,
+            role: None,
             output_schema: None,
             full_output_schema: None,
         };
@@ -2696,7 +3197,9 @@ mod tests {
                 stdout_path: "/tmp/0/stdout".to_owned(),
                 stderr_path: "/tmp/0/stderr".to_owned(),
                 sidecar_path: "/tmp/0/inner_exit.json".to_owned(),
+                ..FanOutSpecWorker::default()
             }],
+            ..FanOutSpec::default()
         };
         let yaml = emit_graph_yaml(
             "fanout-inv-1",
@@ -2735,6 +3238,7 @@ mod tests {
                     stdout_path: "/tmp/0/stdout".to_owned(),
                     stderr_path: "/tmp/0/stderr".to_owned(),
                     sidecar_path: "/tmp/0/inner_exit.json".to_owned(),
+                    ..FanOutSpecWorker::default()
                 },
                 FanOutSpecWorker {
                     assignment_id: "worker-1".to_owned(),
@@ -2747,8 +3251,10 @@ mod tests {
                     stdout_path: "/tmp/1/stdout".to_owned(),
                     stderr_path: "/tmp/1/stderr".to_owned(),
                     sidecar_path: "/tmp/1/inner_exit.json".to_owned(),
+                    ..FanOutSpecWorker::default()
                 },
             ],
+            ..FanOutSpec::default()
         };
         let yaml = emit_graph_yaml(
             "fanout-inv-1",
@@ -2802,6 +3308,7 @@ mod tests {
                     stdout_path: path_to_string(&stdout),
                     stderr_path: path_to_string(&stderr),
                     sidecar_path: path_to_string(&sidecar),
+                    ..FanOutSpecWorker::default()
                 },
                 FanOutSpecWorker {
                     assignment_id: "worker-1".to_owned(),
@@ -2816,8 +3323,10 @@ mod tests {
                     stdout_path: path_to_string(&unstarted_dir.join("stdout")),
                     stderr_path: path_to_string(&unstarted_dir.join("stderr")),
                     sidecar_path: path_to_string(&unstarted_dir.join("inner_exit.json")),
+                    ..FanOutSpecWorker::default()
                 },
             ],
+            ..FanOutSpec::default()
         };
         write_spec(directory.path(), &spec).expect("spec");
         let workers = ensure_summary(directory.path(), &spec).expect("summary");

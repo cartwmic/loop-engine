@@ -653,14 +653,13 @@ mod native {
     use std::ptr;
 
     fn boot_id() -> io::Result<String> {
-        let mut mib = [libc::CTL_KERN, libc::KERN_BOOTTIME];
-        let mut boot = MaybeUninit::<libc::timeval>::zeroed();
-        let mut length = std::mem::size_of::<libc::timeval>();
+        const SYSCTL_NAME: &[u8] = b"kern.bootsessionuuid\0";
+        let mut value = [0_u8; 64];
+        let mut length = value.len();
         let result = unsafe {
-            libc::sysctl(
-                mib.as_mut_ptr(),
-                mib.len() as libc::c_uint,
-                boot.as_mut_ptr().cast(),
+            libc::sysctlbyname(
+                SYSCTL_NAME.as_ptr().cast(),
+                value.as_mut_ptr().cast(),
                 &mut length,
                 ptr::null_mut(),
                 0,
@@ -669,8 +668,31 @@ mod native {
         if result != 0 {
             return Err(io::Error::last_os_error());
         }
-        let boot = unsafe { boot.assume_init() };
-        Ok(format!("{}:{}", boot.tv_sec, boot.tv_usec))
+        if length > value.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "macOS boot-session identity exceeds its buffer",
+            ));
+        }
+        parse_boot_session_uuid(&value[..length])
+    }
+
+    fn parse_boot_session_uuid(value: &[u8]) -> io::Result<String> {
+        let value = value.strip_suffix(&[0]).unwrap_or(value);
+        let valid = value.len() == 36
+            && value.iter().enumerate().all(|(index, byte)| match index {
+                8 | 13 | 18 | 23 => *byte == b'-',
+                _ => byte.is_ascii_hexdigit(),
+            });
+        if !valid {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "macOS kern.bootsessionuuid is not a canonical UUID",
+            ));
+        }
+        let value = std::str::from_utf8(value)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        Ok(value.to_ascii_lowercase())
     }
 
     fn normalized_state(status: u32) -> String {
@@ -972,6 +994,45 @@ mod native {
         }
         processes.sort_by_key(|process| process.identity.pid);
         Ok(processes)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{bsd_process_record, parse_boot_session_uuid};
+        use std::mem::MaybeUninit;
+
+        #[test]
+        fn boot_session_uuid_parser_accepts_native_uuid_and_rejects_clock_text() {
+            assert_eq!(
+                parse_boot_session_uuid(b"28C98063-32CD-4BF6-9198-6DCCC213C3D6\0")
+                    .expect("canonical sysctl UUID"),
+                "28c98063-32cd-4bf6-9198-6dccc213c3d6"
+            );
+            assert!(parse_boot_session_uuid(b"1788093355:615983").is_err());
+            assert!(parse_boot_session_uuid(b"\0").is_err());
+        }
+
+        #[test]
+        fn process_record_keeps_boot_session_and_native_start_identity() {
+            let mut info = unsafe { MaybeUninit::<libc::proc_bsdinfo>::zeroed().assume_init() };
+            info.pbi_pid = 42;
+            info.pbi_ppid = 7;
+            info.pbi_pgid = 42;
+            info.pbi_start_tvsec = 1_234;
+            info.pbi_start_tvusec = 567_890;
+            info.pbi_status = libc::SRUN;
+
+            let record = bsd_process_record(info, "28c98063-32cd-4bf6-9198-6dccc213c3d6");
+            assert_eq!(record.identity.pid, 42);
+            assert_eq!(
+                record.identity.boot_id,
+                "28c98063-32cd-4bf6-9198-6dccc213c3d6"
+            );
+            assert_eq!(record.identity.start_time, 1_234_567_890);
+            assert_eq!(record.parent_pid, 7);
+            assert_eq!(record.process_group_id, 42);
+            assert_eq!(record.state, "R");
+        }
     }
 }
 

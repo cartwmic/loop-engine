@@ -1,5 +1,6 @@
 use super::bounded_process::run_with_stdin;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -976,6 +977,26 @@ fn backlog_t05_high_correction_requires_fresh_aggregate_and_carries_only_unaffec
         fan_out_args.push(serde_json::to_string(worker).expect("worker JSON"));
     }
     let config_version = "backlog-t05-ac40-high";
+    let review_budgets = json!([
+        {
+            "author": "reviewer-a",
+            "model_id": "fixture/reviewer-a",
+            "context_window_tokens": 200000,
+            "system_tokens": 4000,
+            "framing_tokens": 4000,
+            "output_reserve_tokens": 4000,
+            "reasoning_reserve_tokens": 16000
+        },
+        {
+            "author": "reviewer-b",
+            "model_id": "fixture/reviewer-b",
+            "context_window_tokens": 200000,
+            "system_tokens": 4000,
+            "framing_tokens": 4000,
+            "output_reserve_tokens": 4000,
+            "reasoning_reserve_tokens": 16000
+        }
+    ]);
     let profile = root.join("profile.json");
     ac40_write_json(
         &profile,
@@ -996,7 +1017,10 @@ fn backlog_t05_high_correction_requires_fresh_aggregate_and_carries_only_unaffec
                 "intent-review": {
                     "command": binaries.engine.to_string_lossy(),
                     "args": fan_out_args,
-                    "context_filter": {"command": binaries.provider.to_string_lossy(), "args": ["commission"]}
+                    "context_filter": {
+                        "command": binaries.provider.to_string_lossy(),
+                        "args": ["commission", "--call-budgets", review_budgets.to_string()]
+                    }
                 }
             }
         }),
@@ -1226,6 +1250,24 @@ fn backlog_t05_high_correction_requires_fresh_aggregate_and_carries_only_unaffec
     assert_eq!(
         ready_again["result"]["run"]["current_state"],
         "intent-review"
+    );
+    ac40_append(
+        &binaries,
+        &database,
+        &repository,
+        run_id,
+        "user-steering",
+        "owner-intent-baseline-r1",
+        &json!({
+            "target": {"kind": "all"},
+            "instruction": "Retain the exact original intent bytes for the corrected revision comparison.",
+            "intent_baseline": {
+                "revision": "1",
+                "locator": "fixture intent.json bytes before the correction",
+                "sha256": format!("sha256:{:x}", Sha256::digest(&initial_intent_bytes)),
+                "json_bytes": String::from_utf8(initial_intent_bytes.clone()).expect("UTF-8 intent")
+            }
+        }),
     );
 
     for author in ["reviewer-a", "reviewer-b"] {

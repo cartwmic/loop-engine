@@ -77,6 +77,7 @@ def _setup(
         str(journey.provider),
         "--output",
         str(output),
+        "--decline-advice",
         *extra,
     ]
     completed = subprocess.run(command, cwd=root, capture_output=True, text=True, check=False)
@@ -195,7 +196,7 @@ def prove(journey):
         [
             str(journey.provider), "setup", "--rigor", "standard", "--roster", str(duplicate),
             "--engine", str(journey.engine), "--provider", str(journey.provider),
-            "--output", str(root / "duplicate-output.json"),
+            "--output", str(root / "duplicate-output.json"), "--decline-advice",
         ], cwd=root, capture_output=True, text=True, check=False,
     )
     assert refused.returncode != 0 and not (root / "duplicate-output.json").exists()

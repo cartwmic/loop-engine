@@ -6,7 +6,11 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
+import sys
+import tempfile
+import unittest
 from pathlib import Path
 from typing import Any, Iterable, NoReturn
 
@@ -289,6 +293,457 @@ def topology_errors(
                 f"metadata={ids}, artifacts={emitted_ids}"
             )
     return errors
+
+
+class CalibrationPacketCliTests(unittest.TestCase):
+    """Exercise calibration preparation and capture verification via their CLIs."""
+
+    DATA = ROOT / "crates/software-change-provider/data/calibration"
+    PREPARE = ROOT / "scripts/prepare-calibration-input.py"
+    CONSUMER = ROOT / "scripts/assert-calibration-capture.py"
+
+    GATES = {
+        "intent-review": ("intent.json", "intent.md", ()),
+        "intent-adversarial-review": ("intent.json", "intent.md", ()),
+        "design-review": ("design.json", "design.md", ("intent-good",)),
+        "plan-review": ("plan.json", "task-packet.md", ("intent-good", "design-good")),
+        "implementation-review": (
+            "implementation-report.json",
+            "implementation-report.md",
+            ("intent-good", "design-good", "plan-good"),
+        ),
+        "validation-review": (
+            "validation-report.json",
+            "validation-report.md",
+            ("intent-good", "design-good", "plan-good", "implementation-report-good"),
+        ),
+    }
+
+    COVERAGE_PROMPTS = {
+        "intent-review": (
+            "Judge ids-grounded only. Confirm each promised enduring outcome is checked against "
+            "the actual accepted requirement text and every authoritative document it explicitly "
+            "names. Distinguish sufficient existing wording, missing or changed enduring meaning, "
+            "and change-specific proof. A live or related ID, shared topic, or matching token is "
+            "not semantic coverage; an implementation defect under sufficient wording does not "
+            "require a new requirement. Candidates remain provisional until exact owner acceptance "
+            "and separately authorized application and commit. Do not re-judge Bookends checker "
+            "red/green."
+        ),
+        "intent-adversarial-review": (
+            "Falsify ids-grounded only. Attack the ordinary ids-grounded pass by finding a "
+            "promised enduring outcome whose cited requirement text or explicit cross-reference "
+            "does not demand it, or by showing that a sufficient requirement is being misclassified "
+            "as missing when supplied evidence instead shows an implementation defect. A related "
+            "ID, shared topic, matching token, candidate flag, or parser success cannot establish "
+            "semantic coverage. Do not re-judge Bookends checker red/green."
+        ),
+    }
+
+    def prepare(self, output: Path, profile: str, row_keys: list[str]) -> None:
+        command = [
+            sys.executable,
+            str(self.PREPARE),
+            "--procedure",
+            str(self.DATA / "PROCEDURE.md"),
+            "--manifest",
+            str(self.DATA / "manifest.json"),
+            "--profile",
+            str(ROOT / f"crates/software-change-provider/data/configs/{profile}.json"),
+            "--repository",
+            str(ROOT),
+            "--output-root",
+            str(output),
+        ]
+        for row_key in row_keys:
+            command.extend(("--row-key", row_key))
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def prepare_coverage(self, output: Path, case: str, gate: str) -> None:
+        fixture = self.DATA / "fixtures" / f"requirement-coverage-{case}.json"
+        companion = self.DATA / "companions/fictional-repo/docs/requirement-coverage.md"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(self.PREPARE),
+                "--procedure",
+                str(self.DATA / "PROCEDURE.md"),
+                "--manifest",
+                str(self.DATA / "manifest.json"),
+                "--profile",
+                str(ROOT / "crates/software-change-provider/data/configs/high-rigor.json"),
+                "--repository",
+                str(ROOT),
+                "--output-root",
+                str(output),
+                "--coverage-case",
+                case,
+                "--coverage-gate",
+                gate,
+                "--fixture",
+                str(fixture),
+                "--companion",
+                str(companion),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def expected_companion_labels(self, metadata: dict[str, Any], subject: dict[str, Any]) -> list[str]:
+        gate = metadata["gate"]
+        axis = metadata["policy_id"]
+        fixture_id = metadata["fixture_id"]
+        selected = subject
+        labels: list[str] = []
+        if gate.startswith("validation-") and subject.get("command_evidence_ids") is not None:
+            evidence_id = subject["command_evidence_ids"][0]
+            suffix = evidence_id.removeprefix("calibration-")
+            selected = json.loads(
+                (self.DATA / "fixtures" / f"validation-evidence-{suffix}.json").read_bytes()
+            )
+            labels.append("companion:validation-evidence.json")
+
+        family = gate.split("-", 1)[0]
+        if family == "implementation" or (
+            family == "validation" and axis in ("intent-delivered", "requirement-proof-mapping")
+        ):
+            commit = selected["coverage"]["commit"]
+            self.assertIn(commit, ("repo-state-2026-08-12", "repo-state-2026-08-13"))
+            labels.append(
+                "companion:fictional-repo/implementation-evidence/repository-state.txt"
+            )
+        if family == "validation" and axis == "docs-integrated":
+            documents = selected["coverage"]["documents"]
+            paths = sorted((doc["path"] for doc in documents), key=lambda value: value.encode("utf-8"))
+            labels.extend(f"companion:{path}" for path in paths)
+        if family == "validation" and axis == "requirement-proof-mapping":
+            labels.extend(
+                (
+                    "companion:fictional-repo/docs/PRD.md",
+                    "companion:fictional-repo/implementation-evidence/requirement-to-proof.md",
+                    "companion:fictional-repo/scripts/assert-requirement-proof.py",
+                    "companion:fictional-repo/scripts/production-journey.py",
+                )
+            )
+        if metadata.get("coverage_case"):
+            labels.append("companion:fictional-repo/docs/requirement-coverage.md")
+        return labels
+
+    def expected_labels(self, metadata: dict[str, Any]) -> list[str]:
+        subject_name, template, predecessors = self.GATES[metadata["gate"]]
+        profile = metadata["profile"]
+        fixture_id = metadata["fixture_id"]
+        labels = [
+            "system-developer-instruction:data/calibration/reviewer-instruction.txt",
+            "example_prompt",
+            "reviewer-protocol:data/reviewer-protocol.md",
+            f"template:data/templates/{template}",
+            f"schema:data/configs/{profile}.json#/artifact_schemas/{subject_name}",
+            f"subject:data/calibration/fixtures/{fixture_id}.json",
+        ]
+        labels.extend(
+            f"required predecessor:data/calibration/fixtures/{fixture}.json"
+            for fixture in predecessors
+        )
+        subject_path = self.DATA / "fixtures" / f"{fixture_id}.json"
+        subject = json.loads(subject_path.read_bytes())
+        labels.extend(self.expected_companion_labels(metadata, subject))
+        labels.append("request-json")
+        return labels
+
+    def expected_content(self, label: str, metadata: dict[str, Any]) -> bytes:
+        if label == "example_prompt":
+            if metadata.get("coverage_case"):
+                return self.COVERAGE_PROMPTS[metadata["gate"]].encode("utf-8")
+            profile = json.loads(
+                (ROOT / f"crates/software-change-provider/data/configs/{metadata['profile']}.json").read_bytes()
+            )
+            matches = [
+                item
+                for item in profile["review_policies"][metadata["gate"]]
+                if item["id"] == metadata["policy_id"]
+                and item.get("review_stage", "aggregate") == metadata["review_stage"]
+            ]
+            self.assertEqual(len(matches), 1)
+            return matches[0]["example_prompt"].encode("utf-8")
+        if label.startswith("schema:"):
+            profile = json.loads(
+                (ROOT / f"crates/software-change-provider/data/configs/{metadata['profile']}.json").read_bytes()
+            )
+            value = profile["artifact_schemas"][metadata["subject"]]
+
+            def sorted_value(item: Any) -> Any:
+                if isinstance(item, dict):
+                    return {
+                        key: sorted_value(item[key])
+                        for key in sorted(item, key=lambda key: key.encode("utf-8"))
+                    }
+                if isinstance(item, list):
+                    return [sorted_value(child) for child in item]
+                return item
+
+            return json.dumps(
+                sorted_value(value), ensure_ascii=False, separators=(",", ":")
+            ).encode("utf-8")
+        if label == "request-json":
+            subject = json.loads(
+                (self.DATA / "fixtures" / f"{metadata['fixture_id']}.json").read_bytes()
+            )
+            request = {
+                "gate": metadata["gate"],
+                "policy_id": metadata["policy_id"],
+                "review_stage": metadata["review_stage"],
+                "subject": metadata["subject"],
+                "subject_revision": subject["revision"],
+                "config_version": metadata["config_version"],
+            }
+            return json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        if label == "companion:validation-evidence.json":
+            subject = json.loads(
+                (self.DATA / "fixtures" / f"{metadata['fixture_id']}.json").read_bytes()
+            )
+            suffix = subject["command_evidence_ids"][0].removeprefix("calibration-")
+            return (self.DATA / "fixtures" / f"validation-evidence-{suffix}.json").read_bytes()
+        if label == "companion:fictional-repo/implementation-evidence/repository-state.txt":
+            selected = json.loads(
+                (self.DATA / "fixtures" / f"{metadata['fixture_id']}.json").read_bytes()
+            )
+            if metadata["gate"].startswith("validation-"):
+                suffix = selected["command_evidence_ids"][0].removeprefix("calibration-")
+                selected = json.loads(
+                    (self.DATA / "fixtures" / f"validation-evidence-{suffix}.json").read_bytes()
+                )
+            commit = selected["coverage"]["commit"]
+            return (
+                self.DATA
+                / "companions/fictional-repo/implementation-evidence"
+                / f"{commit}.txt"
+            ).read_bytes()
+        if label.startswith("companion:fictional-repo/"):
+            relative = label.removeprefix("companion:")
+            return (self.DATA / "companions" / relative).read_bytes()
+        prefixes = (
+            "system-developer-instruction:",
+            "reviewer-protocol:",
+            "template:",
+            "subject:",
+            "required predecessor:",
+        )
+        for prefix in prefixes:
+            if label.startswith(prefix):
+                relative = label.removeprefix(prefix)
+                return (ROOT / "crates/software-change-provider" / relative).read_bytes()
+        self.fail(f"no expected source bytes for {label}")
+
+    def display_labels(self, labels: list[str], metadata: dict[str, Any]) -> list[str]:
+        fixed = {
+            "system-developer-instruction:data/calibration/reviewer-instruction.txt": "reviewer instruction",
+            "example_prompt": "selected review prompt",
+            "reviewer-protocol:data/reviewer-protocol.md": "review protocol",
+            "request-json": "canonical request JSON",
+            "companion:validation-evidence.json": "validation evidence companion",
+            "companion:fictional-repo/implementation-evidence/repository-state.txt": "implementation evidence companion",
+            "companion:fictional-repo/docs/requirement-coverage.md": "requirement coverage companion",
+            "required predecessor:data/calibration/fixtures/intent-good.json": "required predecessor: intent",
+            "required predecessor:data/calibration/fixtures/design-good.json": "required predecessor: design",
+            "required predecessor:data/calibration/fixtures/plan-good.json": "required predecessor: plan",
+            "required predecessor:data/calibration/fixtures/implementation-report-good.json": "required predecessor: implementation report",
+        }
+        display = []
+        companion_number = 0
+        for label in labels:
+            if label in fixed:
+                display.append(fixed[label])
+            elif label.startswith("template:"):
+                display.append(f"artifact template: {metadata['template']}")
+            elif label.startswith("schema:"):
+                display.append(f"artifact schema: {metadata['subject']}")
+            elif label.startswith("subject:"):
+                display.append(f"subject artifact: {metadata['subject']}")
+            elif label.startswith("companion:fictional-repo/"):
+                companion_number += 1
+                display.append(f"supporting document {companion_number}")
+            else:
+                self.fail(f"unexpected canonical label {label}")
+        return display
+
+    def verify_packet(self, case_dir: Path) -> dict[str, Any]:
+        metadata = json.loads((case_dir / "preparation.json").read_bytes())
+        self.assertFalse({"expected", "observed", "oracle"} & set(metadata))
+        records_meta = metadata["source_records"]
+        labels = [record["label"] for record in records_meta]
+        self.assertEqual(labels, self.expected_labels(metadata))
+        records = []
+        for index, record in enumerate(records_meta):
+            self.assertEqual(record["path"], f"source-records/{index:03d}.bin")
+            content = (case_dir / record["path"]).read_bytes()
+            self.assertEqual(len(content), record["byte_length"])
+            self.assertEqual(hashlib.sha256(content).hexdigest(), record["sha256"])
+            self.assertEqual(content, self.expected_content(record["label"], metadata))
+            records.append((record["label"], content))
+
+        stream = bytearray(len(records).to_bytes(8, "big"))
+        for label, content in records:
+            label_bytes = label.encode("utf-8")
+            stream.extend(len(label_bytes).to_bytes(8, "big"))
+            stream.extend(label_bytes)
+            stream.extend(len(content).to_bytes(8, "big"))
+            stream.extend(content)
+        input_hash = hashlib.sha256(stream).hexdigest()
+        self.assertEqual(input_hash, metadata["input_sha256"])
+        self.assertEqual((case_dir / "input_sha256").read_text().strip(), input_hash)
+        self.assertEqual((case_dir / "request.json").read_bytes(), records[-1][1])
+
+        expected_instructions = bytearray()
+        for role, (_label, content) in zip(self.display_labels(labels, metadata), records):
+            expected_instructions.extend(f"=== supplied material: {role} ===\n".encode("utf-8"))
+            expected_instructions.extend(content)
+            if not content.endswith(b"\n"):
+                expected_instructions.extend(b"\n")
+            expected_instructions.extend(b"\n")
+        instructions = (case_dir / "instructions.txt").read_bytes()
+        self.assertEqual(instructions, bytes(expected_instructions))
+        instructions_hash = hashlib.sha256(instructions).hexdigest()
+        self.assertEqual(metadata["instructions_sha256"], instructions_hash)
+        return metadata
+
+    def add_dummy_captures(self, root: Path, packet_dirs: list[Path]) -> None:
+        index_cases = []
+        for case_dir in packet_dirs:
+            metadata = json.loads((case_dir / "preparation.json").read_bytes())
+            attempt_dir = root / "dummy-captures" / case_dir.name / "attempt-1"
+            attempt_dir.mkdir(parents=True, exist_ok=True)
+            returned = b'{"kind":"dummy-capture","purpose":"mechanical consumer compatibility only"}\n'
+            (attempt_dir / "returned-output").write_bytes(returned)
+            worker_stdout = attempt_dir / "worker.stdout"
+            worker_stderr = attempt_dir / "worker.stderr"
+            worker_stdout.write_bytes(returned)
+            worker_stderr.write_bytes(b"")
+            worker = {
+                "command": "/scripted/dummy-worker",
+                "args": ["--no-context-files", "--tools", "", "--model", "dummy-model", "--thinking", "none"],
+            }
+            command = [
+                "/scripted/loop-engine",
+                "fan-out",
+                "--worker",
+                json.dumps(worker, separators=(",", ":")),
+            ]
+            summary = {
+                "workers": [
+                    {
+                        "exit_code": 0,
+                        "command": worker["command"],
+                        "args": worker["args"],
+                        "stdout_path": str(worker_stdout),
+                        "stderr_path": str(worker_stderr),
+                    }
+                ]
+            }
+            raw_stdout = json.dumps(summary, separators=(",", ":")).encode("utf-8")
+            (attempt_dir / "stdout").write_bytes(raw_stdout)
+            (attempt_dir / "stderr").write_bytes(b"")
+            receipt_path = attempt_dir / "receipt.json"
+            receipt = {
+                "owner_attestation": "pending",
+                "semantic_disposition": "pending-driver-inspection",
+                "exit_code": 0,
+                "instructions_sha256": metadata["instructions_sha256"],
+                "command": command,
+                "model": "dummy-model",
+                "thinking": "none",
+                "returned_output_sha256": hashlib.sha256(returned).hexdigest(),
+                "captured_stdout": str(worker_stdout),
+                "captured_stderr": str(worker_stderr),
+                "case": case_dir.name,
+            }
+            receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+            index_cases.append(
+                {
+                    "case": case_dir.name,
+                    "receipt": receipt_path.relative_to(root).as_posix(),
+                }
+            )
+        (root / "driver-capture-index-dummy.json").write_text(
+            json.dumps({"owner_attestation": "pending", "cases": index_cases}),
+            encoding="utf-8",
+        )
+
+    def run_consumer(self, root: Path, *selectors: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(self.CONSUMER), "--root", str(root), *selectors],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_public_preparation_and_capture_consumer_preserve_neutral_packets(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="calibration-packets-") as temporary:
+            output = Path(temporary) / "packets"
+            minimal_rows = [
+                "minimal-12|intent-review|solution-agnostic|aggregate|intent-defective",
+                "minimal-12|intent-review|owner-comprehensible|aggregate|intent-owner-unstated-background",
+            ]
+            self.prepare(output, "minimal", minimal_rows)
+            high_rigor_rows = [
+                "high-rigor-12|plan-review|design-faithful|aggregate|plan-good",
+                "high-rigor-12|implementation-review|tasks-actually-done|aggregate|implementation-report-good",
+                "high-rigor-12|validation-review|docs-integrated|aggregate|validation-report-good",
+                "high-rigor-12|validation-review|requirement-proof-mapping|aggregate|validation-report-good",
+            ]
+            self.prepare(output, "high-rigor", high_rigor_rows)
+            for case in ("sufficient", "related-insufficient", "implementation-defect"):
+                for gate in ("intent-review", "intent-adversarial-review"):
+                    self.prepare_coverage(output, case, gate)
+
+            packets = sorted(
+                child for child in output.iterdir() if child.is_dir() and (child / "preparation.json").is_file()
+            )
+            self.assertEqual(len(packets), 12)
+            metadata_by_key = {}
+            for packet in packets:
+                metadata = self.verify_packet(packet)
+                metadata_by_key[metadata["row_key"]] = metadata
+            defective_key = minimal_rows[0]
+            defective_metadata = metadata_by_key[defective_key]
+            self.assertEqual(defective_metadata["input_sha256"], "519dc8fd0a9d17a211604f1a2b209077050ed7b479427ec6600fb08c26d3a4b4")
+
+            self.add_dummy_captures(output, packets)
+            fresh_result = self.run_consumer(
+                output,
+                "--row-key",
+                defective_key,
+                "--coverage-case",
+                "sufficient",
+            )
+            self.assertEqual(fresh_result.returncode, 0, fresh_result.stderr)
+            self.assertIn('"status": "verified"', fresh_result.stdout)
+
+            stale_root = Path(temporary) / "stale-current-v12"
+            stale_case = stale_root / defective_metadata["row_key"]
+            source_case = next(packet for packet in packets if packet.name == defective_metadata["row_key"])
+            shutil.copytree(source_case, stale_case)
+            stale_metadata = json.loads((stale_case / "preparation.json").read_bytes())
+            legacy = bytearray()
+            for record in stale_metadata["source_records"]:
+                content = (stale_case / record["path"]).read_bytes()
+                legacy.extend(b"=== source-record: " + record["label"].encode("utf-8") + b" ===\n")
+                legacy.extend(content)
+                if not content.endswith(b"\n"):
+                    legacy.extend(b"\n")
+                legacy.extend(b"\n")
+            (stale_case / "instructions.txt").write_bytes(legacy)
+            stale_metadata["instructions_sha256"] = hashlib.sha256(legacy).hexdigest()
+            (stale_case / "preparation.json").write_text(
+                json.dumps(stale_metadata, indent=2) + "\n", encoding="utf-8"
+            )
+            self.add_dummy_captures(stale_root, [stale_case])
+            stale_result = self.run_consumer(stale_root, "--row-key", defective_key)
+            self.assertNotEqual(stale_result.returncode, 0)
+            self.assertIn("instructions do not preserve the prepared source framing", stale_result.stderr)
 
 
 def mask_rust(source: str) -> str:

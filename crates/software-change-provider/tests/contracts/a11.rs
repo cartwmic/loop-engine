@@ -12,15 +12,20 @@ const PROFILES: &[&str] = &["minimal", "standard", "high-rigor"];
 const CURRENT_INVOCATION: &str = "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.";
 const PENDING_INVOCATION: &str = "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.";
 const NEUTRAL_REVISION: &str = "r15";
-const HISTORICAL_CONFIG_SUFFIX: &str = "-10";
-const CURRENT_CONFIG_SUFFIX: &str = "-11";
-const HISTORICAL_ROW_COUNT: usize = 368;
+const HISTORICAL_CONFIG_SUFFIXES: &[&str] = &["-10", "-11"];
+const PREDECESSOR_CONFIG_SUFFIX: &str = "-11";
+const CURRENT_CONFIG_SUFFIX: &str = "-12";
+const HISTORICAL_V10_ROW_COUNT: usize = 368;
+const HISTORICAL_V11_ROW_COUNT: usize = 396;
+const HISTORICAL_ROW_COUNT: usize = HISTORICAL_V10_ROW_COUNT + HISTORICAL_V11_ROW_COUNT;
 const CURRENT_ROW_COUNT: usize = 396;
-const HISTORICAL_AXIS_KEYS: usize = 184;
+const HISTORICAL_V10_AXIS_KEYS: usize = 184;
+const HISTORICAL_V11_AXIS_KEYS: usize = 196;
+const HISTORICAL_AXIS_KEYS: usize = HISTORICAL_V10_AXIS_KEYS + HISTORICAL_V11_AXIS_KEYS;
 const CURRENT_AXIS_KEYS: usize = 196;
 const EXPECTED_AXIS_KEYS: usize = HISTORICAL_AXIS_KEYS + CURRENT_AXIS_KEYS;
 const HISTORICAL_MANIFEST_CANONICAL_SHA256: &str =
-    "33abfe998f3b1c75d6d27cc01da308e722238ee8e822a7a2e64023876a69168a";
+    "3dfec5fc891c3bd191c30e6108fd49fc03d034644c59c5fdd4740d9a3eba80b6";
 const IMPLEMENTATION_COMPANION_LABEL: &str =
     "companion:fictional-repo/implementation-evidence/repository-state.txt";
 const REQUIREMENT_PROOF_SCRIPT_DATA_PATH: &str =
@@ -44,9 +49,9 @@ fn read_data(relative: &str) -> Vec<u8> {
 
 fn profile_name(config_version: &str) -> &'static str {
     match config_version {
-        "minimal-11" => "minimal",
-        "standard-11" => "standard",
-        "high-rigor-11" => "high-rigor",
+        "minimal-12" => "minimal",
+        "standard-12" => "standard",
+        "high-rigor-12" => "high-rigor",
         other => panic!("current calibration source records do not accept {other}"),
     }
 }
@@ -635,7 +640,139 @@ fn manifest() -> Vec<Value> {
 }
 
 fn is_historical_entry(entry: &Map<String, Value>) -> bool {
-    string_field(entry, "config_version").ends_with(HISTORICAL_CONFIG_SUFFIX)
+    let config_version = string_field(entry, "config_version");
+    HISTORICAL_CONFIG_SUFFIXES
+        .iter()
+        .any(|suffix| config_version.ends_with(suffix))
+}
+
+fn row_key(entry: &Map<String, Value>) -> (String, String, String, String, String) {
+    (
+        string_field(entry, "config_version").to_owned(),
+        string_field(entry, "gate").to_owned(),
+        string_field(entry, "axis").to_owned(),
+        string_field(entry, "review_stage").to_owned(),
+        string_field(entry, "fixture_id").to_owned(),
+    )
+}
+
+/// Derive the successor's full row-key universe from every current shipped
+/// profile axis/stage and the predecessor corpus's selected fixture identities.
+/// Historical verdicts, hashes, models, and attestations are never used here.
+fn required_current_row_keys(
+    entries: &[Value],
+) -> Result<BTreeSet<(String, String, String, String, String)>, String> {
+    let mut required = BTreeSet::new();
+    for profile in PROFILES {
+        let config = support::load_profile(profile);
+        let version = config["config_version"]
+            .as_str()
+            .ok_or_else(|| format!("{profile} profile has no config_version"))?;
+        let Some(base) = version.strip_suffix(CURRENT_CONFIG_SUFFIX) else {
+            return Err(format!(
+                "{profile} profile is not a v12 successor: {version}"
+            ));
+        };
+        let predecessor = format!("{base}{PREDECESSOR_CONFIG_SUFFIX}");
+        let policies = config["review_policies"]
+            .as_object()
+            .ok_or_else(|| format!("{profile} profile has no review_policies object"))?;
+        for (gate, axes) in policies {
+            let axes = axes
+                .as_array()
+                .ok_or_else(|| format!("{profile} {gate} policies are not an array"))?;
+            for axis in axes {
+                let axis_id = axis["id"]
+                    .as_str()
+                    .ok_or_else(|| format!("{profile} {gate} axis has no id"))?;
+                let stage = axis["review_stage"]
+                    .as_str()
+                    .ok_or_else(|| format!("{profile} {gate}/{axis_id} has no review_stage"))?;
+                let fixtures: BTreeSet<_> = entries
+                    .iter()
+                    .filter_map(Value::as_object)
+                    .filter(|entry| {
+                        string_field(entry, "config_version") == predecessor
+                            && string_field(entry, "gate") == gate
+                            && string_field(entry, "axis") == axis_id
+                            && string_field(entry, "review_stage") == stage
+                    })
+                    .map(|entry| string_field(entry, "fixture_id").to_owned())
+                    .collect();
+                if fixtures.is_empty() {
+                    return Err(format!(
+                        "no predecessor fixture pairing exists for successor {version}/{gate}/{axis_id}/{stage}"
+                    ));
+                }
+                for fixture in fixtures {
+                    required.insert((
+                        version.to_owned(),
+                        gate.clone(),
+                        axis_id.to_owned(),
+                        stage.to_owned(),
+                        fixture,
+                    ));
+                }
+            }
+        }
+    }
+    if required.is_empty() {
+        return Err("required current calibration corpus is empty".to_owned());
+    }
+    Ok(required)
+}
+
+fn validate_current_corpus(entries: &[Value]) -> Result<(), String> {
+    let required = required_current_row_keys(entries)?;
+    let current_versions: BTreeSet<_> = PROFILES
+        .iter()
+        .map(|profile| {
+            support::load_profile(profile)["config_version"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    let mut actual = BTreeSet::new();
+    for entry in entries.iter().filter_map(Value::as_object) {
+        let config_version = string_field(entry, "config_version");
+        if !current_versions.contains(config_version) {
+            continue;
+        }
+        let key = row_key(entry);
+        if !actual.insert(key.clone()) {
+            return Err(format!("duplicate current calibration row {key:?}"));
+        }
+        if !required.contains(&key) {
+            return Err(format!("unexpected current calibration row {key:?}"));
+        }
+        let expected = string_field(entry, "expected");
+        let observed = string_field(entry, "observed");
+        if !matches!(expected, "pass" | "fail") || observed != expected {
+            return Err(format!("current calibration judgment is missing or disagrees with its manual oracle: {key:?}"));
+        }
+        if string_field(entry, "attested_by").trim().is_empty()
+            || string_field(entry, "invocation") != CURRENT_INVOCATION
+            || string_field(entry, "model").trim().is_empty()
+        {
+            return Err(format!(
+                "current calibration row lacks fresh owner attestation metadata: {key:?}"
+            ));
+        }
+        if string_field(entry, "input_sha256") != digest(&source_records_for_entry(entry)) {
+            return Err(format!(
+                "current calibration input identity is stale: {key:?}"
+            ));
+        }
+    }
+    if actual != required {
+        let missing = required.difference(&actual).count();
+        let extra = actual.difference(&required).count();
+        return Err(format!(
+            "current calibration row coverage is incomplete (missing={missing}, extra={extra})"
+        ));
+    }
+    Ok(())
 }
 
 fn canonical_sha256(value: &Value) -> String {
@@ -657,38 +794,56 @@ fn calibration_manifest_binds_exact_source_record_stream_and_covers_profile_axes
         HISTORICAL_ROW_COUNT
     );
     let mut current_expected_keys = BTreeSet::new();
-    let mut historical_expected_keys = BTreeSet::new();
     for profile in PROFILES {
         let config = support::load_profile(profile);
         let version = config["config_version"].as_str().unwrap().to_owned();
+        assert!(version.ends_with(CURRENT_CONFIG_SUFFIX));
         for (gate, axes) in config["review_policies"].as_object().unwrap() {
             for axis in axes.as_array().unwrap() {
-                let axis_id = axis["id"].as_str().unwrap().to_owned();
-                let stage = axis["review_stage"].as_str().unwrap().to_owned();
                 current_expected_keys.insert((
                     version.clone(),
                     gate.clone(),
-                    axis_id.clone(),
-                    stage.clone(),
+                    axis["id"].as_str().unwrap().to_owned(),
+                    axis["review_stage"].as_str().unwrap().to_owned(),
                 ));
-                // Historic rows cover the pre-v11 policy surface and are
-                // retained as opaque evidence rather than rehashed with v11.
-                if axis_id != "acceptance-granularity" && axis_id != "owner-comprehensible" {
-                    historical_expected_keys.insert((
-                        version.replace(CURRENT_CONFIG_SUFFIX, HISTORICAL_CONFIG_SUFFIX),
-                        gate.clone(),
-                        axis_id,
-                        stage,
-                    ));
-                }
             }
         }
     }
+    let historical_expected_keys: BTreeSet<_> = entries
+        .iter()
+        .filter_map(Value::as_object)
+        .filter(|entry| is_historical_entry(entry))
+        .map(|entry| {
+            (
+                string_field(entry, "config_version").to_owned(),
+                string_field(entry, "gate").to_owned(),
+                string_field(entry, "axis").to_owned(),
+                string_field(entry, "review_stage").to_owned(),
+            )
+        })
+        .collect();
     assert_eq!(current_expected_keys.len(), CURRENT_AXIS_KEYS);
-    assert_eq!(historical_expected_keys.len(), HISTORICAL_AXIS_KEYS);
+    assert_eq!(
+        historical_expected_keys
+            .iter()
+            .filter(|key| key.0.ends_with("-10"))
+            .count(),
+        HISTORICAL_V10_AXIS_KEYS
+    );
+    assert_eq!(
+        historical_expected_keys
+            .iter()
+            .filter(|key| key.0.ends_with("-11"))
+            .count(),
+        HISTORICAL_V11_AXIS_KEYS
+    );
+    let required_current_rows = required_current_row_keys(&entries)
+        .expect("profile axes and predecessor fixture keys define current rows");
+    assert_eq!(required_current_rows.len(), CURRENT_ROW_COUNT);
 
     let mut coverage: BTreeMap<(String, String, String, String), BTreeSet<String>> =
         BTreeMap::new();
+    let mut current_row_keys = BTreeSet::new();
     for entry in entries {
         let entry = entry.as_object().expect("manifest row object");
         for field in [
@@ -764,16 +919,22 @@ fn calibration_manifest_binds_exact_source_record_stream_and_covers_profile_axes
                 digest(&input),
                 "current source record drift for row {entry:?}"
             );
+            assert!(
+                current_row_keys.insert(row_key(entry)),
+                "duplicate current calibration row {:?}",
+                row_key(entry)
+            );
         }
         coverage.entry(key).or_default().insert(expected.to_owned());
     }
     assert_eq!(coverage.len(), EXPECTED_AXIS_KEYS);
     assert_eq!(
-        coverage
-            .keys()
-            .filter(|key| key.0.ends_with(HISTORICAL_CONFIG_SUFFIX))
-            .count(),
-        HISTORICAL_AXIS_KEYS
+        coverage.keys().filter(|key| key.0.ends_with("-10")).count(),
+        HISTORICAL_V10_AXIS_KEYS
+    );
+    assert_eq!(
+        coverage.keys().filter(|key| key.0.ends_with("-11")).count(),
+        HISTORICAL_V11_AXIS_KEYS
     );
     assert_eq!(
         coverage
@@ -782,6 +943,7 @@ fn calibration_manifest_binds_exact_source_record_stream_and_covers_profile_axes
             .count(),
         CURRENT_AXIS_KEYS
     );
+    assert_eq!(current_row_keys, required_current_rows);
     for key in coverage.keys() {
         assert_eq!(
             coverage.get(key),
@@ -791,7 +953,7 @@ fn calibration_manifest_binds_exact_source_record_stream_and_covers_profile_axes
 }
 
 #[test]
-fn historical_rows_remain_attested_and_current_packets_stay_v11() {
+fn historic_v10_v11_rows_remain_unchanged_and_v12_packets_use_fresh_keys() {
     let entries = manifest();
     let historical: Vec<Value> = entries
         .iter()
@@ -803,9 +965,18 @@ fn historical_rows_remain_attested_and_current_packets_stay_v11() {
         canonical_sha256(&Value::Array(historical.clone())),
         HISTORICAL_MANIFEST_CANONICAL_SHA256
     );
-    for entry in &historical {
-        let entry = entry.as_object().expect("historical manifest row object");
-        assert!(is_historical_entry(entry));
+    let v10: Vec<_> = historical
+        .iter()
+        .filter(|entry| entry["config_version"].as_str().unwrap().ends_with("-10"))
+        .collect();
+    let v11: Vec<_> = historical
+        .iter()
+        .filter(|entry| entry["config_version"].as_str().unwrap().ends_with("-11"))
+        .collect();
+    assert_eq!(v10.len(), HISTORICAL_V10_ROW_COUNT);
+    assert_eq!(v11.len(), HISTORICAL_V11_ROW_COUNT);
+    for entry in v10 {
+        let entry = entry.as_object().expect("historic v10 row object");
         assert!(matches!(string_field(entry, "observed"), "pass" | "fail"));
         assert_eq!(
             string_field(entry, "observed"),
@@ -814,12 +985,49 @@ fn historical_rows_remain_attested_and_current_packets_stay_v11() {
         assert!(!string_field(entry, "attested_by").is_empty());
         assert_eq!(string_field(entry, "invocation"), CURRENT_INVOCATION);
     }
+    let v11_states = v11
+        .iter()
+        .fold(BTreeMap::<&str, usize>::new(), |mut counts, entry| {
+            *counts
+                .entry(entry["observed"].as_str().unwrap())
+                .or_default() += 1;
+            counts
+        });
+    assert_eq!(v11_states.get("pending"), Some(&384));
+    assert_eq!(v11_states.get("pass"), Some(&4));
+    assert_eq!(v11_states.get("fail"), Some(&8));
+    for entry in v11 {
+        let entry = entry.as_object().expect("historic v11 row object");
+        if string_field(entry, "observed") == "pending" {
+            assert!(string_field(entry, "attested_by").is_empty());
+            assert_eq!(string_field(entry, "invocation"), PENDING_INVOCATION);
+        } else {
+            assert_eq!(
+                string_field(entry, "observed"),
+                string_field(entry, "expected")
+            );
+            assert!(!string_field(entry, "attested_by").is_empty());
+            assert_eq!(string_field(entry, "invocation"), CURRENT_INVOCATION);
+        }
+    }
 
     let current: Vec<&Value> = entries
         .iter()
-        .filter(|entry| !is_historical_entry(entry.as_object().expect("manifest row object")))
+        .filter(|entry| {
+            entry["config_version"]
+                .as_str()
+                .unwrap()
+                .ends_with(CURRENT_CONFIG_SUFFIX)
+        })
         .collect();
     assert_eq!(current.len(), CURRENT_ROW_COUNT);
+    assert_eq!(
+        current
+            .iter()
+            .map(|entry| row_key(entry.as_object().unwrap()))
+            .collect::<BTreeSet<_>>(),
+        required_current_row_keys(&entries).expect("successor row keys")
+    );
     assert!(current.iter().all(|entry| {
         let entry = entry.as_object().expect("current manifest row object");
         string_field(entry, "config_version").ends_with(CURRENT_CONFIG_SUFFIX)
@@ -835,7 +1043,7 @@ fn historical_rows_remain_attested_and_current_packets_stay_v11() {
         .to_path_buf();
     let temporary = support::TestDir::new("calibration-history");
     let output_root = temporary.path().join("packets");
-    let row_key = "minimal-11|intent-review|solution-agnostic|aggregate|intent-good";
+    let row_key = "minimal-12|intent-review|solution-agnostic|aggregate|intent-good";
     let mut prepare = Command::new("python3");
     prepare
         .current_dir(&repository)
@@ -866,7 +1074,7 @@ fn historical_rows_remain_attested_and_current_packets_stay_v11() {
         &fs::read(case_dir.join("preparation.json")).expect("preparation metadata"),
     )
     .expect("preparation JSON");
-    assert_eq!(preparation["config_version"], "minimal-11");
+    assert_eq!(preparation["config_version"], "minimal-12");
     assert_eq!(preparation["row_key"], row_key);
     for forbidden in ["expected", "observed", "attested_by", "oracle"] {
         assert!(
@@ -876,7 +1084,7 @@ fn historical_rows_remain_attested_and_current_packets_stay_v11() {
     }
     let current_row = current
         .iter()
-        .find(|entry| entry["config_version"] == "minimal-11")
+        .find(|entry| entry["config_version"] == "minimal-12")
         .and_then(|entry| {
             (entry["gate"] == "intent-review"
                 && entry["axis"] == "solution-agnostic"
@@ -948,31 +1156,33 @@ print('nested calibration receipt: positive and five refusals passed')
         String::from_utf8_lossy(&checked.stderr)
     );
 
-    let mut legacy = Command::new("python3");
-    legacy
-        .current_dir(&repository)
-        .arg(repository.join("scripts/prepare-calibration-input.py"))
-        .arg("--procedure")
-        .arg(provider_root().join("data/calibration/PROCEDURE.md"))
-        .arg("--manifest")
-        .arg(provider_root().join("data/calibration/manifest.json"))
-        .arg("--profile")
-        .arg(provider_root().join("data/configs/minimal.json"))
-        .arg("--repository")
-        .arg(&repository)
-        .arg("--output-root")
-        .arg(temporary.path().join("legacy"))
-        .arg("--row-key")
-        .arg("minimal-10|intent-review|solution-agnostic|aggregate|intent-good");
-    let refused = legacy
-        .bounded_output("refuse historical calibration packet")
-        .expect("legacy preparation should run");
-    assert_ne!(refused.status.code(), Some(0));
-    assert!(
-        String::from_utf8_lossy(&refused.stderr).contains("does not match row"),
-        "legacy refusal did not identify the profile/version mismatch: {}",
-        String::from_utf8_lossy(&refused.stderr)
-    );
+    for legacy_version in ["minimal-10", "minimal-11"] {
+        let refused = Command::new("python3")
+            .current_dir(&repository)
+            .arg(repository.join("scripts/prepare-calibration-input.py"))
+            .arg("--procedure")
+            .arg(provider_root().join("data/calibration/PROCEDURE.md"))
+            .arg("--manifest")
+            .arg(provider_root().join("data/calibration/manifest.json"))
+            .arg("--profile")
+            .arg(provider_root().join("data/configs/minimal.json"))
+            .arg("--repository")
+            .arg(&repository)
+            .arg("--output-root")
+            .arg(temporary.path().join(format!("legacy-{legacy_version}")))
+            .arg("--row-key")
+            .arg(format!(
+                "{legacy_version}|intent-review|solution-agnostic|aggregate|intent-good"
+            ))
+            .bounded_output("refuse historical calibration packet")
+            .expect("legacy preparation should run");
+        assert_ne!(refused.status.code(), Some(0));
+        assert!(
+            String::from_utf8_lossy(&refused.stderr).contains("does not match row"),
+            "legacy refusal for {legacy_version} did not identify the profile/version mismatch: {}",
+            String::from_utf8_lossy(&refused.stderr)
+        );
+    }
 }
 
 #[test]
@@ -1065,7 +1275,7 @@ fn counterpart_keys_have_good_fail_pairs_and_good_fixtures_pass_adversarial() {
         );
     }
     assert_eq!(
-        counterpart_keys, 190,
+        counterpart_keys, 288,
         "all three v3 profiles carry ordinary/challenge counterpart keys"
     );
 }
@@ -1136,12 +1346,12 @@ fn implementation_rows_have_total_commit_mapped_companion_coverage() {
             );
         }
     }
-    assert_eq!(implementation_rows, 96);
+    assert_eq!(implementation_rows, 144);
     assert_eq!(
         commits,
         BTreeMap::from([
-            ("repo-state-2026-08-12".to_owned(), 48usize),
-            ("repo-state-2026-08-13".to_owned(), 48usize),
+            ("repo-state-2026-08-12".to_owned(), 72usize),
+            ("repo-state-2026-08-13".to_owned(), 72usize),
         ])
     );
 }
@@ -1208,7 +1418,7 @@ fn implementation_companion_mutation_changes_digest() {
         .find(|entry| {
             entry["gate"] == "implementation-review"
                 && entry["fixture_id"] == "implementation-report-good"
-                && entry["config_version"] == "standard-11"
+                && entry["config_version"] == "standard-12"
         })
         .expect("current implementation row");
     let input = source_records_for_entry(entry.as_object().expect("manifest row object"));
@@ -1510,8 +1720,8 @@ fn validation_docs_coverage_has_exact_mapped_companion_bytes() {
         }
     }
     assert_eq!(
-        docs_rows, 32,
-        "expected historic and v11 good/defective docs rows on parent and adversarial validation gates"
+        docs_rows, 48,
+        "expected v10/v11 history and v12 good/defective docs rows on parent and adversarial validation gates"
     );
 }
 
@@ -1568,8 +1778,8 @@ fn validation_intent_delivered_has_inspectable_repository_state_companion() {
         }
     }
     assert_eq!(
-        intent_delivered_rows, 32,
-        "expected historic and v11 good/defective intent-delivered rows across shipped validation gates"
+        intent_delivered_rows, 48,
+        "expected v10/v11 history and v12 good/defective intent-delivered rows across shipped validation gates"
     );
 }
 
@@ -1630,8 +1840,8 @@ fn validation_requirement_proof_mapping_has_inspectable_public_proof_companions(
         }
     }
     assert_eq!(
-        rows, 32,
-        "expected historic and v11 parent/adversarial good/defective proof rows"
+        rows, 48,
+        "expected v10/v11 history and v12 parent/adversarial good/defective proof rows"
     );
 }
 
@@ -1868,7 +2078,7 @@ fn source_record_identity_preserves_pairing_and_neutral_request() {
         "expected current configured keys to form pairs"
     );
     for (key, pair) in pairs {
-        if key.0.ends_with("-11")
+        if key.0.ends_with(CURRENT_CONFIG_SUFFIX)
             && matches!(
                 key.2.as_str(),
                 "acceptance-granularity" | "owner-comprehensible"
@@ -2053,7 +2263,7 @@ fn canonical_source_records_have_exact_order_and_labels() {
             entry["gate"] == "validation-review"
                 && entry["axis"] == "docs-integrated"
                 && entry["expected"] == "pass"
-                && entry["config_version"] == "standard-11"
+                && entry["config_version"] == "standard-12"
         })
         .expect("docs-integrated current row");
     let entry = entry.as_object().expect("manifest row object");
@@ -2100,11 +2310,11 @@ fn canonical_request_json_has_exact_fields_and_no_trailing_newline() {
         "aggregate",
         "validation-report.json",
         "r15",
-        "standard-11",
+        "standard-12",
     );
     assert_eq!(
         request,
-        br#"{"gate":"validation-review","policy_id":"docs-integrated","review_stage":"aggregate","subject":"validation-report.json","subject_revision":"r15","config_version":"standard-11"}"#
+        br#"{"gate":"validation-review","policy_id":"docs-integrated","review_stage":"aggregate","subject":"validation-report.json","subject_revision":"r15","config_version":"standard-12"}"#
     );
     assert_ne!(request.last(), Some(&b'\n'));
 }
@@ -2117,7 +2327,7 @@ fn every_supplied_source_record_mutation_changes_digest() {
             entry["gate"] == "validation-review"
                 && entry["axis"] == "docs-integrated"
                 && entry["expected"] == "pass"
-                && entry["config_version"] == "standard-11"
+                && entry["config_version"] == "standard-12"
         })
         .expect("docs-integrated current row");
     let entry = entry.as_object().expect("manifest row object");
@@ -2161,16 +2371,86 @@ fn every_supplied_source_record_mutation_changes_digest() {
 }
 
 #[test]
-#[ignore = "final attestation gate; all pending rows must be reviewed first"]
+fn current_calibration_gate_requires_complete_fresh_attested_nonempty_v12_corpus() {
+    let entries = manifest();
+    let mut fully_attested_fixture = entries.clone();
+    for entry in fully_attested_fixture.iter_mut().filter(|entry| {
+        entry["config_version"]
+            .as_str()
+            .is_some_and(|version| version.ends_with(CURRENT_CONFIG_SUFFIX))
+    }) {
+        entry["observed"] = entry["expected"].clone();
+        entry["attested_by"] = Value::String("test-only owner attestation fixture".to_owned());
+        entry["invocation"] = Value::String(CURRENT_INVOCATION.to_owned());
+        entry["model"] = Value::String("test-only fresh reviewer fixture".to_owned());
+    }
+    validate_current_corpus(&fully_attested_fixture)
+        .expect("pending v10/v11 history does not block complete v12 current rows");
+
+    let no_current: Vec<_> = entries
+        .iter()
+        .filter(|entry| is_historical_entry(entry.as_object().expect("manifest row object")))
+        .cloned()
+        .collect();
+    let error = validate_current_corpus(&no_current).expect_err("empty current corpus must fail");
+    assert!(error.contains("coverage is incomplete"), "{error}");
+
+    let mut missing = fully_attested_fixture.clone();
+    let index = missing
+        .iter()
+        .position(|entry| {
+            entry["config_version"]
+                .as_str()
+                .unwrap()
+                .ends_with(CURRENT_CONFIG_SUFFIX)
+        })
+        .expect("one v12 current row");
+    missing.remove(index);
+    assert!(
+        validate_current_corpus(&missing).is_err(),
+        "missing current row must fail"
+    );
+
+    let mut pending = fully_attested_fixture.clone();
+    let current = pending
+        .iter_mut()
+        .find(|entry| {
+            entry["config_version"]
+                .as_str()
+                .unwrap()
+                .ends_with(CURRENT_CONFIG_SUFFIX)
+        })
+        .expect("one v12 current row");
+    current["observed"] = Value::String("pending".to_owned());
+    current["attested_by"] = Value::String(String::new());
+    current["invocation"] = Value::String(PENDING_INVOCATION.to_owned());
+    assert!(
+        validate_current_corpus(&pending).is_err(),
+        "pending current judgment must fail"
+    );
+
+    let mut unattested = fully_attested_fixture;
+    let current = unattested
+        .iter_mut()
+        .find(|entry| {
+            entry["config_version"]
+                .as_str()
+                .unwrap()
+                .ends_with(CURRENT_CONFIG_SUFFIX)
+        })
+        .expect("one v12 current row");
+    current["attested_by"] = Value::String(String::new());
+    assert!(
+        validate_current_corpus(&unattested).is_err(),
+        "unattested current judgment must fail"
+    );
+}
+
+#[test]
+#[ignore = "final attestation gate; all current successor rows require fresh owner review"]
 fn calibration_manifest_has_no_pending_rows_for_final_validation() {
     let entries = manifest();
-    let pending: Vec<&Value> = entries
-        .iter()
-        .filter(|entry| entry["observed"] == "pending")
-        .collect();
-    assert!(
-        pending.is_empty(),
-        "calibration semantic attestation remains pending for {} row(s)",
-        pending.len()
-    );
+    validate_current_corpus(&entries).unwrap_or_else(|error| {
+        panic!("current calibration corpus is not complete and fully owner-attested: {error}")
+    });
 }

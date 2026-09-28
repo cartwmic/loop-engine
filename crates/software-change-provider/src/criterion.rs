@@ -9,7 +9,10 @@
 
 use crate::schema::ValidatedSchema;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Component, Path, PathBuf};
 
 pub(crate) const CRITERION_ID_PATTERN: &str = r"^AC-[1-9][0-9]*$";
 
@@ -34,6 +37,184 @@ impl CriterionViolation {
             message: message.into(),
         }
     }
+}
+
+/// Mechanically resolve reviewer-supplied evidence citations against exact source bytes.
+/// This verifies references only; it does not decide whether a source supports a judgment.
+pub(crate) fn validate_grounding(grounds: &Value, artifact_root: &Path) -> Result<(), String> {
+    let reason = grounds
+        .get("reason")
+        .and_then(Value::as_str)
+        .filter(|reason| !reason.trim().is_empty())
+        .ok_or("grounds.reason must be a non-empty reviewer rationale")?;
+    if reason.len() > 1200 {
+        return Err("grounds.reason exceeds 1200 bytes".to_owned());
+    }
+    let evidence = grounds
+        .get("evidence")
+        .and_then(Value::as_array)
+        .filter(|evidence| !evidence.is_empty() && evidence.len() <= 8)
+        .ok_or("grounds.evidence must contain 1 to 8 source references")?;
+    let root = fs::canonicalize(artifact_root).map_err(|error| error.to_string())?;
+    let cwd = fs::canonicalize(std::env::current_dir().map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?;
+    let mut seen = BTreeSet::new();
+    for reference in evidence {
+        let locator = reference
+            .get("locator")
+            .and_then(Value::as_str)
+            .filter(|locator| !locator.trim().is_empty())
+            .ok_or("evidence locator must be a non-empty repository-relative path and selector")?;
+        let digest = reference
+            .get("sha256")
+            .and_then(Value::as_str)
+            .filter(|digest| digest.starts_with("sha256:") && digest.len() == 71)
+            .ok_or("evidence sha256 must be `sha256:` plus 64 lowercase hex digits")?;
+        if !digest[7..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            || !seen.insert(locator)
+        {
+            return Err("evidence digest is malformed or locator is duplicated".to_owned());
+        }
+        let (file, selector) = locator.split_once('#').ok_or_else(|| {
+            format!("evidence locator `{locator}` needs a JSON Pointer or line selector")
+        })?;
+        let relative = Path::new(file);
+        if relative.as_os_str().is_empty()
+            || relative.is_absolute()
+            || relative.components().any(|component| {
+                matches!(
+                    component,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
+            })
+        {
+            return Err(format!(
+                "evidence locator `{locator}` must stay beneath a source root"
+            ));
+        }
+        let path = resolve_evidence_file(&root, &cwd, relative)?;
+        let bytes = fs::read(&path)
+            .map_err(|error| format!("evidence source `{locator}` is unreadable: {error}"))?;
+        if format!("sha256:{:x}", Sha256::digest(&bytes)) != digest {
+            return Err(format!(
+                "evidence digest does not match exact source bytes for `{file}`"
+            ));
+        }
+        if selector.starts_with('/') {
+            let json: Value = serde_json::from_slice(&bytes)
+                .map_err(|_| format!("evidence selector `{locator}` requires a JSON source"))?;
+            if json.pointer(selector).is_none() {
+                return Err(format!(
+                    "evidence JSON Pointer in `{locator}` does not resolve"
+                ));
+            }
+        } else {
+            validate_line_selector(selector, &bytes, locator)?;
+        }
+    }
+    Ok(())
+}
+
+/// Check retained citation structure without rebinding a historical digest to
+/// a changed current file. Current-source citations use `validate_grounding`.
+pub(crate) fn validate_grounding_shape(grounds: &Value) -> Result<(), String> {
+    let reason = grounds
+        .get("reason")
+        .and_then(Value::as_str)
+        .filter(|reason| !reason.trim().is_empty())
+        .ok_or("grounds.reason must be a non-empty reviewer rationale")?;
+    if reason.len() > 1200 {
+        return Err("grounds.reason exceeds 1200 bytes".to_owned());
+    }
+    let evidence = grounds
+        .get("evidence")
+        .and_then(Value::as_array)
+        .filter(|evidence| !evidence.is_empty() && evidence.len() <= 8)
+        .ok_or("grounds.evidence must contain 1 to 8 source references")?;
+    let mut seen = BTreeSet::new();
+    for reference in evidence {
+        let locator = reference
+            .get("locator")
+            .and_then(Value::as_str)
+            .filter(|locator| !locator.trim().is_empty())
+            .ok_or("evidence locator must be a non-empty repository-relative path and selector")?;
+        let digest = reference
+            .get("sha256")
+            .and_then(Value::as_str)
+            .filter(|digest| digest.starts_with("sha256:") && digest.len() == 71)
+            .ok_or("evidence sha256 must be `sha256:` plus 64 lowercase hex digits")?;
+        if !digest[7..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            || !seen.insert(locator)
+        {
+            return Err("evidence digest is malformed or locator is duplicated".to_owned());
+        }
+        let (file, selector) = locator
+            .split_once('#')
+            .ok_or_else(|| format!("evidence locator `{locator}` needs a selector"))?;
+        let relative = Path::new(file);
+        if relative.as_os_str().is_empty()
+            || relative.is_absolute()
+            || relative.components().any(|component| {
+                matches!(
+                    component,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
+            })
+        {
+            return Err(format!(
+                "evidence locator `{locator}` must stay beneath a source root"
+            ));
+        }
+        if !selector.starts_with('/') && !selector.starts_with('L') {
+            return Err(format!("evidence selector in `{locator}` is malformed"));
+        }
+    }
+    Ok(())
+}
+
+fn resolve_evidence_file(root: &Path, cwd: &Path, relative: &Path) -> Result<PathBuf, String> {
+    for candidate in [root.join(relative), cwd.join(relative)] {
+        let Ok(path) = fs::canonicalize(&candidate) else {
+            continue;
+        };
+        if path.is_file() && (path.starts_with(root) || path.starts_with(cwd)) {
+            return Ok(path);
+        }
+    }
+    Err(format!(
+        "evidence source `{}` was not found beneath artifact_root or repository cwd",
+        relative.display()
+    ))
+}
+
+fn validate_line_selector(selector: &str, bytes: &[u8], locator: &str) -> Result<(), String> {
+    let raw = selector.strip_prefix('L').ok_or_else(|| {
+        format!("evidence selector in `{locator}` must be a JSON Pointer or `Lstart-Lend`")
+    })?;
+    let (start, end) = match raw.split_once("-L") {
+        Some((start, end)) => (start, end),
+        None => (raw, raw),
+    };
+    let start = start.parse::<usize>().ok().filter(|line| *line > 0);
+    let end = end.parse::<usize>().ok().filter(|line| *line > 0);
+    let (Some(start), Some(end)) = (start, end) else {
+        return Err(format!(
+            "evidence line selector in `{locator}` is malformed"
+        ));
+    };
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| format!("evidence line selector in `{locator}` requires UTF-8 source"))?;
+    let line_count = text.lines().count();
+    if start > end || end > line_count {
+        return Err(format!(
+            "evidence line range in `{locator}` is outside the source"
+        ));
+    }
+    Ok(())
 }
 
 /// Validate the AC-N grammar used by the criterion spine.
@@ -489,6 +670,50 @@ mod tests {
         assert!(violations
             .iter()
             .any(|violation| violation.message.contains("not present")));
+    }
+
+    #[test]
+    fn grounding_checks_exact_source_digest_and_json_pointer_or_lines() {
+        use sha2::{Digest, Sha256};
+        let root = std::env::temp_dir().join(format!(
+            "software-change-grounding-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let json_bytes = br#"{"revision":"1","outcome":"delivered"}"#;
+        fs::write(root.join("intent.json"), json_bytes).unwrap();
+        let digest = format!("sha256:{:x}", Sha256::digest(json_bytes));
+        let valid = json!({"reason":"I inspected the current outcome.","evidence":[
+            {"locator":"intent.json#/outcome","sha256":digest}
+        ]});
+        assert!(validate_grounding(&valid, &root).is_ok());
+        let bad_pointer = json!({"reason":"checked","evidence":[
+            {"locator":"intent.json#/missing","sha256":digest}
+        ]});
+        assert!(validate_grounding(&bad_pointer, &root)
+            .unwrap_err()
+            .contains("does not resolve"));
+        let bad_digest = json!({"reason":"checked","evidence":[
+            {"locator":"intent.json#/outcome","sha256":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}
+        ]});
+        assert!(validate_grounding(&bad_digest, &root)
+            .unwrap_err()
+            .contains("does not match"));
+        let escaped = json!({"reason":"checked","evidence":[
+            {"locator":"../intent.json#/outcome","sha256":digest}
+        ]});
+        assert!(validate_grounding(&escaped, &root)
+            .unwrap_err()
+            .contains("stay beneath"));
+        fs::write(root.join("notes.md"), b"one\ntwo\nthree\n").unwrap();
+        let notes_digest = format!("sha256:{:x}", Sha256::digest(b"one\ntwo\nthree\n"));
+        let lines = json!({"reason":"checked","evidence":[
+            {"locator":"notes.md#L2-L3","sha256":notes_digest}
+        ]});
+        assert!(validate_grounding(&lines, &root).is_ok());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

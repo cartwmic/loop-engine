@@ -542,7 +542,7 @@ fn backlog_t05_high_validation_uses_aggregate_only_criterion_rows() {
     let candidate_output = provider_output(
         {
             let mut command = Command::new(provider());
-            command.arg("review-candidates");
+            command.current_dir(&repository).arg("review-candidates");
             command
         },
         &terminal.0,

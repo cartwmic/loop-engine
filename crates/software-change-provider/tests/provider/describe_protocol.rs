@@ -208,14 +208,24 @@ fn describe_all_live_slots_declare_steering_and_projection_sources() {
     let workflow = describe_workflow(json!({"operation": "describe"}));
     for slot in workflow["work_slots"].as_array().expect("work_slots") {
         let id = slot["id"].as_str().expect("id");
-        let expected = json!([
+        let mut expected = vec![
             "finding-ledger",
             "review-evidence",
             "evidence-applicability",
             "user-steering",
-            "steering-incorporation"
-        ]);
-        assert_eq!(slot.get("stdin_context_kinds"), Some(&expected), "{id}");
+            "steering-incorporation",
+        ];
+        if id.ends_with("-review") {
+            expected.extend(["command-evidence", "criterion-verdict", "goal-verdict"]);
+        }
+        if id == "implement" {
+            expected.push("reconciliation-decision");
+        }
+        assert_eq!(
+            slot.get("stdin_context_kinds"),
+            Some(&json!(expected)),
+            "{id}"
+        );
     }
 }
 

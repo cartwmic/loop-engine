@@ -8,7 +8,7 @@
 
 use crate::overlay;
 use loop_core::{State, Transition, WorkSlot, Workflow};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
 /// Context kinds forwarded to review and implementation slots. The
@@ -25,6 +25,7 @@ pub(crate) const RECONCILIATION_STATE: &str = "reconciliation";
 pub(crate) const RECONCILIATION_DRAFT_SLOT: &str = "reconciliation-draft";
 pub(crate) const RECONCILIATION_READY_EVENT: &str = "reconciliation-ready";
 pub(crate) const RECONCILIATION_SUBJECT: &str = "reconciliation.json";
+pub(crate) const RECONCILIATION_DECISION_KIND: &str = "reconciliation-decision";
 pub(crate) const RECONCILIATION_SCHEMA_PATH: &str =
     "crates/software-change-provider/data/reconciliation-schema.json";
 pub(crate) const RECONCILIATION_RESULT_FIELDS: &[&str] = &[
@@ -339,6 +340,7 @@ pub(crate) fn describe_workflow(initial_input: Option<&Value>) -> Result<Workflo
         reconciliation_enabled,
         semantic_coverage,
     )?;
+    apply_driver_act_opt_in(&mut workflow, initial_input)?;
     if initial_input.is_some_and(|v| matches!(v["contract_version"].as_u64(), Some(2 | 3))) {
         for slot in &mut workflow.work_slots {
             if slot.id.as_str().starts_with("validation") || slot.id.as_str() == "implement" {
@@ -389,6 +391,7 @@ pub(crate) fn describe_workflow(initial_input: Option<&Value>) -> Result<Workflo
             "review_axes": axes,
             "policy_status": if review_policies.is_some() { "frozen" } else { "unknown: inspect full initial_input" },
             "criterion_policy": initial_input.and_then(|v| v.get("criterion_policy")),
+            "advice": advice_action_guidance(state.id.as_str(), initial_input),
             "repair": "Keep validation-report-only corrections in validation. For an implementation defect owned by a frozen task, select that task and its dependants. Use repair_finding_ids only for an accepted unresolved implementation finding honestly owned by no task. Revise plan/design/intent only when that phase obligation is materially wrong; reconfirm affected downstream proof and explicitly carry unaffected original evidence.",
             "review": "First review is comprehensive. Confirm accepted fixes and fix-introduced holes, with explicit unaffected applicability; no rerun-until-pass. Falsify circular proof and evidence compatible with opposite outcomes against frozen obligations, without adding axes.",
             "execution": "Bound: invoke the shown frozen slot; do not perform its worker body. Unbound: follow the provider skill externally. Triage captures before append or progression. Budget serial tasks, summarizer, proof and review together; overrun is attention, not retry permission.",
@@ -396,6 +399,107 @@ pub(crate) fn describe_workflow(initial_input: Option<&Value>) -> Result<Workflo
         }));
     }
     Ok(workflow)
+}
+
+pub(crate) fn advice_occasion_descriptions() -> Value {
+    serde_json::json!({
+        "review-candidates": "After actual review candidates exist: assess separate support, materiality, and scope from selected evidence.",
+        "accepted-defect": "After the driver accepts a defect: consider its correction owner.",
+        "implementation-correction": "When an implementation correction is actually needed: consider frozen-task, narrow repair, or upstream routes without granting permission.",
+        "execution-or-authority-issue": "When a captured execution, cleanup, authority, or owner-escalation issue exists.",
+        "evidence-applicability": "When the driver declares selected prior evidence for reuse against a current target.",
+        "requirements-reconciliation": "During actual reconciliation: compare delivered behavior with selected accepted wording and documents.",
+        "review-round-departure": "Before leaving a review round: consider current judgments, driver ledger, fixes, and any real prior-round evidence.",
+        "final-completion": "After current proof: assess each current AC, the whole goal, and whether checks could miss delivery."
+    })
+}
+
+fn advice_action_guidance(state_id: &str, initial_input: Option<&Value>) -> Value {
+    let Some(input) = initial_input else {
+        return json!({
+            "enabled": false,
+            "reason": "advice is disabled for this run; no backend is selected"
+        });
+    };
+    let Some(command) = input.get("advice_command") else {
+        return json!({
+            "enabled": false,
+            "reason": "advice is disabled for this run; no backend is selected"
+        });
+    };
+    let due = input
+        .get("advice_departures")
+        .and_then(|map| map.get("occasions"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|occasion| occasion.get("state").and_then(Value::as_str) == Some(state_id))
+        .map(|occasion| {
+            let occasion_id = occasion
+                .get("occasion_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            json!({
+                "event": occasion.get("event"),
+                "occasion_id": occasion_id,
+                "family": occasion_id.split(':').next().unwrap_or_default()
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "enabled": true,
+        "command": command,
+        "limits": {
+            "timeout_ms": command.get("timeout_ms"),
+            "max_request_bytes": command.get("max_request_bytes"),
+            "max_response_bytes": command.get("max_response_bytes")
+        },
+        "occasion_map": input.pointer("/extra/advice/occasion_map"),
+        "occasion_descriptions": advice_occasion_descriptions(),
+        "due_departures": due,
+        "request_path": "Select actual source context IDs and artifact excerpts from full show, run `software-change advice-request` to prepare the provider-owned typed request, then call `loop-engine advise RUN_ID @REQUEST_FILE`.",
+        "ad_hoc": "While the run is ACTIVE, the driver may call `loop-engine advise RUN_ID @REQUEST_FILE` with any valid named typed questions.",
+        "disposition": "Before any normal departure, append one reasoned advice-disposition for every answer in every successful response, including rejected, ad hoc, and superseded answers. A rejection is ordinary driver progress, not an exception or approval.",
+        "occasion_record": "For every due departure listed here, append exactly one source-linked advice-occasion for this state_visit: triggered with source/response IDs, or not-triggered with a reason.",
+        "authority": "Advice is not a finding, route, permission, review verdict, proof result, or gate approval. Continue the normal ledger, reviewer, criterion, Bookends, and proof checks."
+    })
+}
+
+fn apply_driver_act_opt_in(
+    workflow: &mut Workflow,
+    initial_input: Option<&Value>,
+) -> Result<(), String> {
+    let Some(value) = initial_input.and_then(|input| input.get("driver_act_slots")) else {
+        return Ok(());
+    };
+    let slots = value.as_array().ok_or(
+        "driver_act_slots must be an array of explicitly opted-in draft/implement slot IDs",
+    )?;
+    let allowed = ["intent-draft", "design-draft", "plan-draft", "implement"]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let mut selected = BTreeSet::new();
+    for item in slots {
+        let id = item
+            .as_str()
+            .filter(|id| !id.trim().is_empty())
+            .ok_or("driver_act_slots entries must be nonempty strings")?;
+        if !allowed.contains(id) {
+            return Err(format!(
+                "driver act is not permitted for slot `{id}`; only intent/design/plan draft and implement slots may opt in"
+            ));
+        }
+        if !selected.insert(id) {
+            return Err(format!("driver_act_slots contains duplicate slot `{id}`"));
+        }
+        let slot = workflow
+            .work_slots
+            .iter_mut()
+            .find(|slot| slot.id.as_str() == id)
+            .ok_or_else(|| format!("driver_act_slots names unavailable slot `{id}`"))?;
+        slot.driver_act_allowed = true;
+    }
+    Ok(())
 }
 
 fn stitch(
@@ -612,15 +716,26 @@ impl Hop {
 
     fn slot(self, event: &str) -> WorkSlot {
         let slot = WorkSlot::new(self.slot_id(), self.state_id(), event);
-        // Preserve source records needed by provider projections; steering is
-        // eligible for every later draft/review, not only implementation.
-        slot.with_stdin_context_kinds(vec![
+        // Review projections need prior judgments and, for validation review,
+        // the exact retained command/verdict sources named by the report.
+        let mut kinds = vec![
             FINDING_LEDGER_KIND.to_owned(),
             REVIEW_EVIDENCE_KIND.to_owned(),
             loop_core::EVIDENCE_APPLICABILITY_KIND.to_owned(),
             "user-steering".to_owned(),
             "steering-incorporation".to_owned(),
-        ])
+        ];
+        if matches!(self, Self::Draft(phase) if phase.name == "implementation") {
+            kinds.push(RECONCILIATION_DECISION_KIND.to_owned());
+        }
+        if matches!(self, Self::Parent(_) | Self::Adversarial(_)) {
+            kinds.extend([
+                "command-evidence".to_owned(),
+                "criterion-verdict".to_owned(),
+                "goal-verdict".to_owned(),
+            ]);
+        }
+        slot.with_stdin_context_kinds(kinds)
     }
 
     fn slot_id(self) -> &'static str {
@@ -705,6 +820,23 @@ mod tests {
 
     fn axis(id: &str) -> Value {
         json!({ "id": id, "description": "test axis" })
+    }
+
+    #[test]
+    fn driver_act_requires_explicit_opt_in_and_rejects_review_slots() {
+        let ordinary = union();
+        assert!(!slot(&ordinary, "implement").driver_act_allowed);
+        let opted = describe_workflow(Some(&json!({
+            "driver_act_slots":["design-draft","implement"]
+        })))
+        .expect("future draft/implement opt-in");
+        assert!(slot(&opted, "design-draft").driver_act_allowed);
+        assert!(slot(&opted, "implement").driver_act_allowed);
+        assert!(!slot(&opted, "implementation-review").driver_act_allowed);
+        assert!(describe_workflow(Some(&json!({
+            "driver_act_slots":["implementation-review"]
+        })))
+        .is_err());
     }
 
     fn state_ids(workflow: &Workflow) -> Vec<&str> {
@@ -815,16 +947,22 @@ mod tests {
         let encoded = serde_json::to_value(workflow).expect("workflow JSON");
         for slot in encoded["work_slots"].as_array().expect("work_slots") {
             let id = slot["id"].as_str().expect("slot id");
-            let expected = json!([
+            let mut expected = vec![
                 FINDING_LEDGER_KIND,
                 REVIEW_EVIDENCE_KIND,
                 loop_core::EVIDENCE_APPLICABILITY_KIND,
                 "user-steering",
-                "steering-incorporation"
-            ]);
+                "steering-incorporation",
+            ];
+            if id == "implement" {
+                expected.push(RECONCILIATION_DECISION_KIND);
+            }
+            if id.ends_with("-review") {
+                expected.extend(["command-evidence", "criterion-verdict", "goal-verdict"]);
+            }
             assert_eq!(
                 slot.get("stdin_context_kinds"),
-                Some(&expected),
+                Some(&json!(expected)),
                 "slot {id} must support steering and stable source projection"
             );
         }
@@ -1353,16 +1491,20 @@ mod tests {
             "implement",
             "validation-review",
         ] {
-            assert_eq!(
-                slot(&mixed, id).stdin_context_kinds,
-                vec![
-                    FINDING_LEDGER_KIND,
-                    REVIEW_EVIDENCE_KIND,
-                    loop_core::EVIDENCE_APPLICABILITY_KIND,
-                    "user-steering",
-                    "steering-incorporation"
-                ]
-            );
+            let mut expected = vec![
+                FINDING_LEDGER_KIND,
+                REVIEW_EVIDENCE_KIND,
+                loop_core::EVIDENCE_APPLICABILITY_KIND,
+                "user-steering",
+                "steering-incorporation",
+            ];
+            if id == "implement" {
+                expected.push(RECONCILIATION_DECISION_KIND);
+            }
+            if id.ends_with("-review") {
+                expected.extend(["command-evidence", "criterion-verdict", "goal-verdict"]);
+            }
+            assert_eq!(slot(&mixed, id).stdin_context_kinds, expected);
         }
     }
 

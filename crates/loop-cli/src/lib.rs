@@ -5,11 +5,15 @@
 //! core operation outcome.  Workflow and provider policy remain in the core
 //! and integration crates respectively.
 
+mod advice;
 mod cancel_invocation;
 mod dagu;
 mod fan_out;
+mod fan_out_recovery;
 mod invocation_progress;
 mod preview_bindings;
+mod targeted_read;
+mod terminal_explorer;
 mod visibility;
 
 pub use dagu::{names_for_capture_root, resolve_dagu, write_locator, DaguError, DaguLocator};
@@ -23,12 +27,14 @@ use loop_core::{
     HistoryRequest, InnerWorker, InvocationId, InvokeRequest, OperationOutcome, Persistence,
     ProcessError, ProviderResolutionError, RunId, ShowRequest, StartRequest, StartedWaiter,
     TerminateRunRequest, Timestamp, WaiterSpawnArgs, WaiterWrittenStatus, WorkSlotProcess,
+    WorkerAttempt,
 };
 use loop_integrations::{
     ConfiguredProviderResolver, ProviderConfiguration, SqlitePersistence, SubprocessProviderGateway,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
@@ -112,6 +118,8 @@ pub enum PrimaryCommand {
         run_id: RunId,
         event: String,
         override_attestation: Option<core::StateVisitAttestation>,
+        advice_exception: Option<core::AdviceExceptionAttestation>,
+        driver_act: Option<core::DriverActRequest>,
     },
     History(RunId),
     AmendBinding {
@@ -212,6 +220,22 @@ pub enum ParsedRequest {
         run_id: RunId,
         invocation_id: Option<InvocationId>,
     },
+    Advice {
+        options: CliOptions,
+        run_id: RunId,
+        request_source: String,
+    },
+    TerminalExplore {
+        options: CliOptions,
+        run_id: RunId,
+    },
+    RecoveryPreview {
+        origin_invocation_id: String,
+        source: Option<String>,
+    },
+    RecoverOutput {
+        source: String,
+    },
 }
 
 /// A parser/composition error with a stable actionable code.
@@ -290,6 +314,8 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
     let mut assignment_selection: Option<Vec<String>> = None;
     let mut invoke_controls = None;
     let mut event_override = None;
+    let mut event_advice_exception = None;
+    let mut event_driver_act = None;
     let mut invoke_preview = false;
     let mut assignment_flags_seen = false;
     let mut assignments_option_seen = false;
@@ -753,6 +779,54 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
                     index += 1;
                     continue;
                 }
+                value
+                    if value == "--advice-exception"
+                        || value.starts_with("--advice-exception=") =>
+                {
+                    if event_advice_exception.is_some() {
+                        return Err(CliError::new(
+                            "invalid-invocation",
+                            "--advice-exception may be supplied once",
+                        ));
+                    }
+                    let raw = if let Some(raw) = value.strip_prefix("--advice-exception=") {
+                        index += 1;
+                        raw.to_owned()
+                    } else {
+                        next_option_value(args, &mut index, token)?
+                    };
+                    event_advice_exception = Some(
+                        serde_json::from_value::<core::AdviceExceptionAttestation>(
+                            parse_json_source(&raw, "event advice exception")?,
+                        )
+                        .map_err(|error| {
+                            CliError::new("invalid-advice-exception", error.to_string())
+                        })?,
+                    );
+                    continue;
+                }
+                value if value == "--driver-act" || value.starts_with("--driver-act=") => {
+                    if event_driver_act.is_some() {
+                        return Err(CliError::new(
+                            "invalid-invocation",
+                            "--driver-act may be supplied once",
+                        ));
+                    }
+                    let raw = if let Some(raw) = value.strip_prefix("--driver-act=") {
+                        index += 1;
+                        raw.to_owned()
+                    } else {
+                        next_option_value(args, &mut index, token)?
+                    };
+                    event_driver_act = Some(
+                        serde_json::from_value::<core::DriverActRequest>(parse_json_source(
+                            &raw,
+                            "event driver act",
+                        )?)
+                        .map_err(|error| CliError::new("invalid-driver-act", error.to_string()))?,
+                    );
+                    continue;
+                }
                 value if value == "--override" || value.starts_with("--override=") => {
                     if event_override.is_some() {
                         return Err(CliError::new(
@@ -925,6 +999,31 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
             "--override requires event",
         ));
     }
+    if command_name != "event" && event_advice_exception.is_some() {
+        return Err(CliError::new(
+            "invalid-invocation",
+            "--advice-exception requires event",
+        ));
+    }
+    if command_name != "event" && event_driver_act.is_some() {
+        return Err(CliError::new(
+            "invalid-invocation",
+            "--driver-act requires event",
+        ));
+    }
+    if event_driver_act.is_some() && (event_override.is_some() || event_advice_exception.is_some())
+    {
+        return Err(CliError::new(
+            "invalid-invocation",
+            "--driver-act cannot be combined with --override or --advice-exception",
+        ));
+    }
+    if event_override.is_some() && event_advice_exception.is_some() {
+        return Err(CliError::new(
+            "invalid-invocation",
+            "--override and --advice-exception cannot be combined",
+        ));
+    }
     if command_name != "invoke" && (invoke_controls.is_some() || invoke_preview) {
         return Err(CliError::new(
             "invalid-invocation",
@@ -1006,6 +1105,86 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
         return parse_fan_out_request(options, fan_out_tokens);
     }
 
+    if command_name == "recovery-preview" {
+        reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
+        reject_capture_dir_option(&capture_dir)?;
+        reject_worker_index_option(&worker_index)?;
+        reject_unrelated_options(
+            "recovery-preview",
+            provider,
+            input,
+            label,
+            start_id,
+            kind,
+            data,
+            record_id,
+            event,
+        )?;
+        if run_id.is_some()
+            || options.database.is_some()
+            || options.provider_config.is_some()
+            || options.provider_timeout.is_some()
+        {
+            return Err(CliError::new(
+                "invalid-invocation",
+                "recovery-preview consumes a full show document and is provider/catalog free",
+            ));
+        }
+        if positionals.is_empty() || positionals.len() > 2 {
+            return Err(CliError::new(
+                "invalid-invocation",
+                "recovery-preview requires ORIGIN_INVOCATION_ID and optional @SHOW_FILE",
+            ));
+        }
+        let origin_invocation_id = positionals.remove(0);
+        let source = positionals.pop();
+        return Ok(ParsedRequest::RecoveryPreview {
+            origin_invocation_id,
+            source,
+        });
+    }
+
+    if command_name == "recover-output" {
+        reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
+        reject_capture_dir_option(&capture_dir)?;
+        reject_worker_index_option(&worker_index)?;
+        reject_unrelated_options(
+            "recover-output",
+            provider,
+            input,
+            label,
+            start_id,
+            kind,
+            data,
+            record_id,
+            event,
+        )?;
+        if run_id.is_some()
+            || options.database.is_some()
+            || options.provider_config.is_some()
+            || options.provider_timeout.is_some()
+        {
+            return Err(CliError::new(
+                "invalid-invocation",
+                "recover-output is a captured-file helper and does not open the run catalog",
+            ));
+        }
+        if positionals.len() != 1 {
+            return Err(CliError::new(
+                "invalid-invocation",
+                "recover-output requires @REQUEST_FILE",
+            ));
+        }
+        let source = positionals.remove(0);
+        if !source.starts_with('@') || source.len() == 1 {
+            return Err(CliError::new(
+                "invalid-invocation",
+                "recover-output request must be supplied as @REQUEST_FILE",
+            ));
+        }
+        return Ok(ParsedRequest::RecoverOutput { source });
+    }
+
     if command_name == "preview-bindings" {
         if let Some(option) = fan_out_tokens.first() {
             return Err(CliError::new(
@@ -1034,6 +1213,83 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
             ));
         }
         return parse_preview_bindings_request(options, positionals);
+    }
+
+    if command_name == "advise" {
+        if let Some(option) = fan_out_tokens.first() {
+            return Err(CliError::new(
+                "invalid-invocation",
+                format!("unknown option `{option}`"),
+            ));
+        }
+        reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
+        reject_capture_dir_option(&capture_dir)?;
+        reject_worker_index_option(&worker_index)?;
+        reject_unrelated_options(
+            "advise", provider, input, label, start_id, kind, data, record_id, event,
+        )?;
+        if run_id.is_some() {
+            return Err(CliError::new(
+                "invalid-invocation",
+                "advise takes RUN_ID as a positional argument",
+            ));
+        }
+        if options.provider_config.is_some() || options.provider_timeout.is_some() {
+            return Err(CliError::new(
+                "invalid-invocation",
+                "advise uses only its frozen per-run command and bounds; --config and --timeout-ms do not apply",
+            ));
+        }
+        if positionals.len() != 2 {
+            return Err(CliError::new(
+                "invalid-invocation",
+                "advise requires RUN_ID and @REQUEST_FILE",
+            ));
+        }
+        let run_id = RunId::new(positionals.remove(0));
+        let request_source = positionals.remove(0);
+        if !request_source.starts_with('@') || request_source.len() == 1 {
+            return Err(CliError::new(
+                "invalid-invocation",
+                "advice request must be supplied as @REQUEST_FILE",
+            ));
+        }
+        return Ok(ParsedRequest::Advice {
+            options,
+            run_id,
+            request_source,
+        });
+    }
+
+    if command_name == "explore" {
+        if let Some(option) = fan_out_tokens.first() {
+            return Err(CliError::new(
+                "invalid-invocation",
+                format!("unknown option `{option}`"),
+            ));
+        }
+        reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
+        reject_capture_dir_option(&capture_dir)?;
+        reject_worker_index_option(&worker_index)?;
+        reject_unrelated_options(
+            "explore", provider, input, label, start_id, kind, data, record_id, event,
+        )?;
+        if options.output != OutputFormat::Human {
+            return Err(CliError::new(
+                "invalid-invocation",
+                "explore is an interactive terminal command; omit --json",
+            ));
+        }
+        if options.provider_config.is_some() || options.provider_timeout.is_some() {
+            return Err(CliError::new(
+                "invalid-invocation",
+                "explore is provider-free; --config and --timeout-ms do not apply",
+            ));
+        }
+        let run_id = run_id.or_else(|| take_positional(&mut positionals));
+        let run_id = required(run_id, "run ID")?.into();
+        ensure_no_positionals(&positionals, "explore")?;
+        return Ok(ParsedRequest::TerminalExplore { options, run_id });
     }
 
     if command_name == "invocation-progress" {
@@ -1093,10 +1349,14 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
 
     if let PrimaryCommand::Event {
         override_attestation,
+        advice_exception,
+        driver_act,
         ..
     } = &mut command
     {
         *override_attestation = event_override;
+        *advice_exception = event_advice_exception;
+        *driver_act = event_driver_act;
     }
     if let PrimaryCommand::Invoke {
         controls, preview, ..
@@ -1290,6 +1550,8 @@ fn parse_primary_command(
                 run_id: run.into(),
                 event,
                 override_attestation: None,
+                advice_exception: None,
+                driver_act: None,
             })
         }
         "history" => {
@@ -1495,7 +1757,11 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
+    let operation_started_at = std::time::Instant::now();
     let args = args.into_iter().map(Into::into).collect::<Vec<String>>();
+    if let Some(execution) = targeted_read::dispatch(&args) {
+        return execution;
+    }
     let json_requested = args.iter().enumerate().any(|(index, arg)| {
         arg == "--json"
             || arg == "--machine-readable"
@@ -1530,7 +1796,9 @@ where
             stdout: format!("{VERSION}\n"),
             stderr: String::new(),
         },
-        ParsedRequest::Operation { options, command } => execute_operation(options, command),
+        ParsedRequest::Operation { options, command } => {
+            execute_operation(options, command, operation_started_at)
+        }
         ParsedRequest::WaitInvocation {
             options,
             run_id,
@@ -1552,6 +1820,63 @@ where
             run_id,
             invocation_id,
         } => invocation_progress::execute_invocation_progress(options, run_id, invocation_id),
+        ParsedRequest::Advice {
+            options,
+            run_id,
+            request_source,
+        } => advice::execute(options, run_id, request_source, operation_started_at),
+        ParsedRequest::TerminalExplore { options, run_id } => {
+            execute_terminal_explorer(options, run_id)
+        }
+        ParsedRequest::RecoveryPreview {
+            origin_invocation_id,
+            source,
+        } => {
+            let mut stdin = io::stdin().lock();
+            match preview_bindings::load_source(source.as_deref(), &mut stdin)
+                .map_err(|error| error.message)
+                .and_then(|show| fan_out_recovery::preview_recovery(&show, &origin_invocation_id))
+            {
+                Ok(value) => json_command_result(value),
+                Err(message) => Execution {
+                    exit_code: EXIT_INVALID_INVOCATION,
+                    stdout: String::new(),
+                    stderr: format!("recovery-preview: {message}\n"),
+                },
+            }
+        }
+        ParsedRequest::RecoverOutput { source } => {
+            let mut stdin = io::stdin().lock();
+            match preview_bindings::load_source(Some(&source), &mut stdin)
+                .map_err(|error| error.message)
+                .and_then(|request| fan_out_recovery::recover_output(&request))
+            {
+                Ok(value) => json_command_result(value),
+                Err(message) => Execution {
+                    exit_code: EXIT_INVALID_INVOCATION,
+                    stdout: String::new(),
+                    stderr: format!("recover-output: {message}\n"),
+                },
+            }
+        }
+    }
+}
+
+fn json_command_result(value: Value) -> Execution {
+    match serde_json::to_string_pretty(&value) {
+        Ok(mut output) => {
+            output.push('\n');
+            Execution {
+                exit_code: EXIT_COMPLETED,
+                stdout: output,
+                stderr: String::new(),
+            }
+        }
+        Err(error) => Execution {
+            exit_code: EXIT_ERROR,
+            stdout: String::new(),
+            stderr: format!("could not serialize recovery result: {error}\n"),
+        },
     }
 }
 
@@ -2156,27 +2481,34 @@ fn inner_workers_after_reap(
     run_id: &RunId,
     invocation_id: &InvocationId,
 ) -> Vec<InnerWorker> {
-    let Ok(invocations) = persistence.load_work_slot_invocations(run_id) else {
+    let Ok(Some(invocation)) = persistence.load_work_slot_invocation(run_id, invocation_id) else {
         return Vec::new();
     };
-    let Some(invocation) = invocations
-        .into_iter()
-        .find(|invocation| invocation.invocation_id == *invocation_id)
-    else {
-        return Vec::new();
-    };
-    inner_workers_from_capture_dir(&invocation.capture_dir)
-}
-
-fn inner_workers_from_capture_dir(capture_dir: &str) -> Vec<InnerWorker> {
-    if capture_dir.is_empty() {
+    if invocation.capture_dir.is_empty() {
         return Vec::new();
     }
-    let bytes = match fs::read(Path::new(capture_dir).join("summary.json")) {
-        Ok(bytes) => bytes,
-        Err(_) => return Vec::new(),
-    };
-    parse_summary_inner_workers(&bytes).unwrap_or_default()
+    if let Some(workers) = inner_workers_from_capture_dir(&invocation.capture_dir) {
+        let capture_root = Path::new(&invocation.capture_dir);
+        if !capture_root.join("fan-out-spec.json").is_file()
+            || fan_out::summary_covers_capture(capture_root)
+        {
+            return workers;
+        }
+    }
+    let capture_root = Path::new(&invocation.capture_dir);
+    fan_out::summary_bytes_for_capture(capture_root)
+        .ok()
+        .and_then(|bytes| parse_summary_inner_workers(&bytes, capture_root))
+        .unwrap_or_default()
+}
+
+fn inner_workers_from_capture_dir(capture_dir: &str) -> Option<Vec<InnerWorker>> {
+    if capture_dir.is_empty() {
+        return None;
+    }
+    let root = Path::new(capture_dir);
+    let bytes = fs::read(root.join("summary.json")).ok()?;
+    parse_summary_inner_workers(&bytes, root)
 }
 
 #[derive(Deserialize)]
@@ -2192,11 +2524,31 @@ struct SummaryWorker {
     args: Vec<String>,
     exit_code: i32,
     #[serde(default)]
+    started: Option<bool>,
+    #[serde(default)]
+    stdout_path: Option<String>,
+    #[serde(default)]
+    stderr_path: Option<String>,
+    #[serde(default)]
+    attempts_path: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    conformance_error: Option<String>,
+    #[serde(default)]
     selected_attempt: Option<Option<u32>>,
     #[serde(default)]
     selected_output_sha256: Option<String>,
     #[serde(default)]
     selected_output_path: Option<String>,
+    #[serde(default)]
+    raw_output_sha256: Option<String>,
+    #[serde(default)]
+    raw_output_path: Option<String>,
+    #[serde(default)]
+    raw_output_attempt: Option<u32>,
+    #[serde(default)]
+    recovery_source: Option<Value>,
     #[serde(default)]
     declared_output_contract: Option<Value>,
     #[serde(default)]
@@ -2211,13 +2563,101 @@ struct SummaryWorker {
     repository_effect: Option<Value>,
 }
 
-fn parse_summary_inner_workers(bytes: &[u8]) -> Option<Vec<InnerWorker>> {
-    serde_json::from_slice::<SummaryFile>(bytes)
-        .ok()
-        .and_then(|summary| normalize_summary_inner_workers(summary.workers))
+fn safe_capture_relative(path: &str) -> bool {
+    let path = Path::new(path);
+    !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
 }
 
-fn normalize_summary_inner_workers(workers: Vec<SummaryWorker>) -> Option<Vec<InnerWorker>> {
+fn sha256_prefixed(bytes: &[u8]) -> String {
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+fn parse_summary_inner_workers(bytes: &[u8], capture_root: &Path) -> Option<Vec<InnerWorker>> {
+    serde_json::from_slice::<SummaryFile>(bytes)
+        .ok()
+        .and_then(|summary| normalize_summary_inner_workers(summary.workers, capture_root))
+}
+
+fn load_worker_attempts(
+    capture_root: &Path,
+    relative: &str,
+    expected_selected_attempt: Option<u32>,
+) -> Option<Vec<WorkerAttempt>> {
+    let path = Path::new(relative);
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+    let manifest_path = capture_root.join(path);
+    let metadata = fs::metadata(&manifest_path).ok()?;
+    if metadata.len() > 1024 * 1024 {
+        return None;
+    }
+    let manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).ok()?).ok()?;
+    let version = manifest["schema_version"].as_str()?;
+    let rows = manifest["attempts"].as_array()?;
+    match version {
+        "1" if manifest.get("recovery_state").is_none() => {}
+        "2" => {
+            let recovery_state = manifest["recovery_state"].as_str()?;
+            let exhausted = manifest["exhausted"].as_bool()?;
+            let selected = manifest["selected_attempt"]
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok());
+            if rows.len() != 1 || exhausted {
+                return None;
+            }
+            match recovery_state {
+                "selected"
+                    if selected == expected_selected_attempt
+                        && selected == Some(1)
+                        && rows[0]["validation_errors"].as_array()?.is_empty() => {}
+                "awaiting-output-repair"
+                    if selected.is_none()
+                        && expected_selected_attempt.is_none()
+                        && !rows[0]["validation_errors"].as_array()?.is_empty() => {}
+                _ => return None,
+            }
+        }
+        _ => return None,
+    }
+    let worker_directory = manifest_path.parent()?;
+    let relative_worker_directory = worker_directory.strip_prefix(capture_root).ok()?;
+    if rows.len() > 64 {
+        return None;
+    }
+    rows.iter()
+        .map(|row| {
+            let number = u32::try_from(row["number"].as_u64()?).ok()?;
+            let errors = row["validation_errors"]
+                .as_array()?
+                .iter()
+                .map(|error| error.as_str().map(str::to_owned))
+                .collect::<Option<Vec<_>>>()?;
+            let attempt_root = relative_worker_directory
+                .join("attempts")
+                .join(number.to_string());
+            Some(WorkerAttempt {
+                number,
+                failed: !errors.is_empty(),
+                errors,
+                stdout_path: Some(attempt_root.join("stdout").to_string_lossy().into_owned()),
+                stderr_path: Some(attempt_root.join("stderr").to_string_lossy().into_owned()),
+            })
+        })
+        .collect()
+}
+
+fn normalize_summary_inner_workers(
+    workers: Vec<SummaryWorker>,
+    capture_root: &Path,
+) -> Option<Vec<InnerWorker>> {
     let any_assignment_ids = workers.iter().any(|worker| {
         worker
             .assignment_id
@@ -2240,10 +2680,57 @@ fn normalize_summary_inner_workers(workers: Vec<SummaryWorker>) -> Option<Vec<In
         let selected_attempt = worker.selected_attempt.flatten();
         let has_digest = worker.selected_output_sha256.is_some();
         let has_path = worker.selected_output_path.is_some();
-        // A selected attempt must carry both durable linkage facts. A
-        // coverage gap carries neither; a half-linked record is not a result.
-        if has_digest != has_path || selected_attempt.is_some() != has_digest {
+        let recovered = worker.recovery_source.is_some();
+        // Reused outputs deliberately have no new selected attempt. Their
+        // separately attributed source tuple is the selected identity.
+        if has_digest != has_path
+            || (!recovered && selected_attempt.is_some() != has_digest)
+            || (recovered && (selected_attempt.is_some() || !has_digest || !has_path))
+        {
             return None;
+        }
+        let has_raw_digest = worker.raw_output_sha256.is_some();
+        let has_raw_path = worker.raw_output_path.is_some();
+        if has_raw_digest != has_raw_path || has_raw_digest != worker.raw_output_attempt.is_some() {
+            return None;
+        }
+        if let (Some(digest), Some(path), Some(attempt)) = (
+            worker.raw_output_sha256.as_deref(),
+            worker.raw_output_path.as_deref(),
+            worker.raw_output_attempt,
+        ) {
+            if attempt == 0 || !safe_capture_relative(path) {
+                return None;
+            }
+            let bytes = fs::read(capture_root.join(path)).ok()?;
+            if sha256_prefixed(&bytes) != digest {
+                return None;
+            }
+        }
+        if recovered {
+            let path = worker.selected_output_path.as_deref()?;
+            let digest = worker.selected_output_sha256.as_deref()?;
+            let source = worker.recovery_source.as_ref()?;
+            if worker.started == Some(true)
+                || worker.exit_code != 0
+                || worker.status.as_deref() != Some("succeeded")
+                || source.get("protocol").and_then(Value::as_str)
+                    != Some("fan-out-selected-source-v1")
+                || source.get("execution").and_then(Value::as_str) != Some("reused")
+                || !matches!(
+                    source.get("source_class").and_then(Value::as_str),
+                    Some("original-raw" | "eligible-derived")
+                )
+                || !safe_capture_relative(path)
+                || source.get("selected_output_path").and_then(Value::as_str) != Some(path)
+                || source.get("selected_output_sha256").and_then(Value::as_str) != Some(digest)
+            {
+                return None;
+            }
+            let bytes = fs::read(capture_root.join(path)).ok()?;
+            if sha256_prefixed(&bytes) != digest {
+                return None;
+            }
         }
         if let (Some(attempt), Some(path)) =
             (selected_attempt, worker.selected_output_path.as_deref())
@@ -2282,14 +2769,42 @@ fn normalize_summary_inner_workers(workers: Vec<SummaryWorker>) -> Option<Vec<In
             }
         }
 
+        let attempts = if worker.started == Some(false) || recovered {
+            Vec::new()
+        } else {
+            worker
+                .attempts_path
+                .as_deref()
+                .and_then(|relative| load_worker_attempts(capture_root, relative, selected_attempt))
+                .unwrap_or_else(|| {
+                    vec![WorkerAttempt {
+                        number: selected_attempt.unwrap_or(1).max(1),
+                        failed: worker.exit_code != 0 || worker.status.as_deref() == Some("failed"),
+                        errors: worker.conformance_error.iter().cloned().collect(),
+                        stdout_path: worker.stdout_path.clone(),
+                        stderr_path: worker.stderr_path.clone(),
+                    }]
+                })
+        };
         normalized.push(InnerWorker {
             assignment_id,
             command: worker.command,
             args: worker.args,
             exit_code: worker.exit_code,
+            started: worker.started,
             selected_attempt,
+            stdout_path: worker.stdout_path,
+            stderr_path: worker.stderr_path,
+            attempts_path: worker.attempts_path,
+            attempts,
+            conformance_status: worker.status,
+            conformance_error: worker.conformance_error,
             selected_output_sha256: worker.selected_output_sha256,
             selected_output_path: worker.selected_output_path,
+            raw_output_sha256: worker.raw_output_sha256,
+            raw_output_path: worker.raw_output_path,
+            raw_output_attempt: worker.raw_output_attempt,
+            recovery_source: worker.recovery_source,
             declared_output_contract: worker.declared_output_contract,
             routed_inputs: worker.routed_inputs,
             task_definition: worker.task_definition,
@@ -2371,6 +2886,17 @@ impl WorkSlotProcess for CliWorkSlotProcess {
             return Ok(None);
         }
         Ok(fan_out::enumerate_bound_assignments(binding))
+    }
+
+    fn assignment_labels(
+        &self,
+        binding: &loop_core::WorkSlotBinding,
+        _provider: &core::ProviderAssociation,
+    ) -> std::result::Result<Option<Vec<core::AssignmentLabel>>, ProcessError> {
+        if !same_executable_file(&self.binary, Path::new(&binding.command)) {
+            return Ok(None);
+        }
+        Ok(fan_out::enumerate_bound_assignment_labels(binding))
     }
 
     fn prepare_facade(
@@ -2556,7 +3082,11 @@ impl WorkSlotProcess for CliWorkSlotProcess {
     }
 }
 
-fn execute_operation(options: CliOptions, command: PrimaryCommand) -> Execution {
+fn execute_operation(
+    options: CliOptions,
+    command: PrimaryCommand,
+    started_at: std::time::Instant,
+) -> Execution {
     let output = options.output;
     let show_view = options.show_view.clone();
     let operation = command.name();
@@ -2572,6 +3102,11 @@ fn execute_operation(options: CliOptions, command: PrimaryCommand) -> Execution 
         Ok(paths) => paths,
         Err(error) => return render_operation_error(operation, output, error),
     };
+    if let PrimaryCommand::Show(run_id) = &command {
+        if show_view != "full" {
+            return render_bounded_show(run_id, &paths.database, &show_view, output, started_at);
+        }
+    }
     let persistence = match open_persistence(&paths.database) {
         Ok(persistence) => persistence,
         Err(error) => return render_operation_error(operation, output, error),
@@ -2655,9 +3190,13 @@ fn execute_operation(options: CliOptions, command: PrimaryCommand) -> Execution 
             run_id,
             event,
             override_attestation,
+            advice_exception,
+            driver_act,
         } => {
             let mut request = EventRequest::new(run_id, event);
             request.override_attestation = override_attestation;
+            request.advice_exception = advice_exception;
+            request.driver_act = driver_act;
             let outcome = core::execute_event(request, &gateway, &persistence)
                 .map(CliCommitTransitionResult::from);
             render_operation(operation, output, &outcome)
@@ -2773,6 +3312,65 @@ fn execute_operation(options: CliOptions, command: PrimaryCommand) -> Execution 
             render_operation(operation, output, &outcome)
         }
     }
+}
+
+fn execute_terminal_explorer(options: CliOptions, run_id: RunId) -> Execution {
+    let paths = match resolve_paths(&options) {
+        Ok(paths) => paths,
+        Err(error) => return render_operation_error("explore", OutputFormat::Human, error),
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let persistence =
+        match SqlitePersistence::open_for_observation(&paths.database, deadline, false) {
+            Ok(persistence) => persistence,
+            Err(error) => {
+                return render_operation_error(
+                    "explore",
+                    OutputFormat::Human,
+                    CliError::new(error.code(), error.to_string()),
+                )
+            }
+        };
+    let binary = match std::env::current_exe() {
+        Ok(binary) => binary,
+        Err(error) => {
+            return render_operation_error(
+                "explore",
+                OutputFormat::Human,
+                CliError::new(
+                    "current-executable-unavailable",
+                    format!("could not resolve current executable: {error}"),
+                ),
+            )
+        }
+    };
+    let projection = match core::operations::show::execute_view(
+        ShowRequest::new(run_id.clone()),
+        &persistence,
+        &CliWorkSlotProcess { binary },
+        now_timestamp(),
+        false,
+    ) {
+        OperationOutcome::Completed(projection) => projection,
+        OperationOutcome::Rejected(issue) | OperationOutcome::Error(issue) => {
+            return render_operation_error(
+                "explore",
+                OutputFormat::Human,
+                CliError::new(issue.code, issue.message),
+            )
+        }
+    };
+    let history = match core::execute_history(HistoryRequest::new(run_id), &persistence) {
+        OperationOutcome::Completed(history) => history,
+        OperationOutcome::Rejected(issue) | OperationOutcome::Error(issue) => {
+            return render_operation_error(
+                "explore",
+                OutputFormat::Human,
+                CliError::new(issue.code, issue.message),
+            )
+        }
+    };
+    terminal_explorer::run(&projection, &history)
 }
 
 fn parse_command_json(command: PrimaryCommand) -> Result<PrimaryCommand, CliError> {
@@ -3179,6 +3777,8 @@ struct CliShowProjection {
     run_id: core::RunId,
     label: Option<String>,
     workflow_id: core::WorkflowId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    workflow_graph: Option<core::Workflow>,
     lifecycle: core::Lifecycle,
     current_state: core::StateId,
     current_state_title: String,
@@ -3204,6 +3804,7 @@ impl From<core::ShowProjection> for CliShowProjection {
             run_id: projection.run_id,
             label: projection.label,
             workflow_id: projection.workflow_id,
+            workflow_graph: projection.workflow_graph,
             lifecycle: projection.lifecycle,
             current_state: projection.current_state,
             current_state_title: projection.current_state_title,
@@ -3222,6 +3823,497 @@ impl From<core::ShowProjection> for CliShowProjection {
             work_slot_invocations: projection.work_slot_invocations,
         }
     }
+}
+
+fn render_bounded_show(
+    run_id: &RunId,
+    database: &Path,
+    view: &str,
+    output: OutputFormat,
+    started_at: std::time::Instant,
+) -> Execution {
+    const READ_BUDGET: Duration = Duration::from_millis(1100);
+    let deadline = started_at + READ_BUDGET;
+    let arm = view == "action";
+    let mut snapshot = match SqlitePersistence::open_for_observation(database, deadline, arm)
+        .and_then(|persistence| persistence.read_bounded_observation(run_id, deadline, arm))
+    {
+        Ok(snapshot) => snapshot,
+        Err(error) if !arm => {
+            let packet = unavailable_observation(run_id, view, database, error.to_string());
+            return render_bounded_unavailable(packet, view, output);
+        }
+        Err(error) => {
+            return render_operation_error(
+                "show",
+                output,
+                CliError::new(error.code(), error.to_string()),
+            )
+        }
+    };
+    enrich_bounded_assignment_progress(&mut snapshot, deadline);
+    let packet = bounded_show_packet(snapshot, view, database, deadline);
+    if output == OutputFormat::Json {
+        return Execution {
+            exit_code: EXIT_COMPLETED,
+            stdout: format!(
+                "{}\n",
+                json!({"operation":"show","status":"completed","result":packet})
+            ),
+            stderr: String::new(),
+        };
+    }
+    Execution {
+        exit_code: EXIT_COMPLETED,
+        stdout: render_bounded_show_human(&packet, view),
+        stderr: String::new(),
+    }
+}
+
+fn enrich_bounded_assignment_progress(snapshot: &mut Value, deadline: std::time::Instant) {
+    let invocations = snapshot["invocations"]["items"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let assignments = snapshot["assignments"]["items"].as_array_mut();
+    let Some(assignments) = assignments else {
+        return;
+    };
+    let mut pending_samples = 0usize;
+    let mut sampled_invocations = 0usize;
+    let mut unavailable_invocations = 0usize;
+    let mut missing_assignment_samples = 0usize;
+    for invocation in invocations {
+        let outer_state = invocation["execution"]["state"]
+            .as_str()
+            .unwrap_or("unknown");
+        if outer_state == "cancelled" {
+            for assignment in assignments
+                .iter_mut()
+                .filter(|row| row["invocation_id"] == invocation["invocation_id"])
+            {
+                assignment["state"] = json!("cancelled");
+                assignment["execution"]["state"] = json!("cancelled");
+            }
+            continue;
+        }
+        if !matches!(outer_state, "running" | "overrun" | "unknown") {
+            continue;
+        }
+        pending_samples += 1;
+        if std::time::Instant::now() >= deadline {
+            unavailable_invocations += 1;
+            break;
+        }
+        let Some(capture_dir) = invocation["capture_dir"].as_str() else {
+            unavailable_invocations += 1;
+            continue;
+        };
+        let Some(states) =
+            invocation_progress::sample_assignment_states(Path::new(capture_dir), deadline)
+        else {
+            unavailable_invocations += 1;
+            continue;
+        };
+        sampled_invocations += 1;
+        for assignment in assignments
+            .iter_mut()
+            .filter(|row| row["invocation_id"] == invocation["invocation_id"])
+        {
+            let Some(id) = assignment["assignment_id"].as_str() else {
+                missing_assignment_samples += 1;
+                continue;
+            };
+            let Some(state) = states.get(id) else {
+                missing_assignment_samples += 1;
+                continue;
+            };
+            assignment["helper_state"] = json!(state);
+            if assignment["state"] == "unknown" || assignment["state"] == "queued" {
+                assignment["state"] = json!(state);
+                assignment["execution"]["state"] = json!(state);
+                assignment["execution"]["source"] = json!("bounded local Dagu status sample");
+            }
+        }
+    }
+    let progress_state = if pending_samples == 0 {
+        "not-applicable"
+    } else if unavailable_invocations > 0 || missing_assignment_samples > 0 {
+        "partial"
+    } else {
+        "available"
+    };
+    snapshot["assignments"]["progress_sample"] = json!({
+        "state":progress_state,"pending_invocations":pending_samples,
+        "sampled_invocations":sampled_invocations,"unavailable_invocations":unavailable_invocations,
+        "missing_assignment_samples":missing_assignment_samples,
+        "missed_sample":if progress_state == "available" {"unknown"} else {"true"},
+        "meaning":"local helper progress is a bounded sample, not worker conformance or acceptance"
+    });
+    snapshot["completeness"]["helper_progress"] = json!(progress_state);
+    if std::time::Instant::now() >= deadline {
+        snapshot["completeness"]["assignments"] = json!("partial");
+        snapshot["assignments"]["sampling"] =
+            json!("deadline reached; unsampled assignments remain unknown");
+    }
+}
+
+fn render_bounded_unavailable(packet: Value, view: &str, output: OutputFormat) -> Execution {
+    if output == OutputFormat::Json {
+        return Execution {
+            exit_code: EXIT_COMPLETED,
+            stdout: format!(
+                "{}\n",
+                json!({"operation":"show","status":"completed","result":packet})
+            ),
+            stderr: String::new(),
+        };
+    }
+    Execution {
+        exit_code: EXIT_COMPLETED,
+        stdout: format!(
+            "completed show --view {view}\nrun: {}\nstatus: unavailable; {}\n",
+            packet["run_id"].as_str().unwrap_or("unknown"),
+            packet["uncertainty"]["reason"]
+                .as_str()
+                .unwrap_or("sample unavailable")
+        ),
+        stderr: String::new(),
+    }
+}
+
+fn unavailable_observation(run_id: &RunId, view: &str, database: &Path, reason: String) -> Value {
+    json!({
+        "schema_version":1,"view":view,"run_id":run_id,"mutation_armed":false,
+        "sampled_at_ms":now_timestamp().as_unix_millis(),
+        "completeness":{"run":"unavailable","invocations":"unavailable","assignments":"unavailable"},
+        "uncertainty":{"state":"unavailable","reason":reason},
+        "locators":bounded_locators(run_id,database)
+    })
+}
+
+fn bounded_locators(run_id: &RunId, database: &Path) -> Value {
+    json!({
+        "full":["loop-engine","--database",database,"--json","show",run_id,"--view","full"],
+        "history":["loop-engine","--database",database,"read",run_id,"--kind","history"],
+        "assignment_read":["loop-engine","--database",database,"read",run_id,"--kind","assignment","--assignment","ASSIGNMENT_ID"],
+        "output_read":["loop-engine","--database",database,"read",run_id,"--kind","stdout|stderr","--invocation","INVOCATION_ID","--assignment","ASSIGNMENT_ID","--offset","0","--limit","65536"]
+    })
+}
+
+fn bounded_show_packet(
+    mut snapshot: Value,
+    view: &str,
+    database: &Path,
+    deadline: std::time::Instant,
+) -> Value {
+    let run_id = snapshot["run"]["run_id"]
+        .as_str()
+        .unwrap_or("unknown")
+        .to_owned();
+    let run_id = RunId::from(run_id);
+    let sampled_at = snapshot["sampled_at_ms"].clone();
+    let armed = snapshot["mutation_armed"].as_bool().unwrap_or(false);
+    let current_state = snapshot["run"]["current_state"].clone();
+    let events = snapshot["run"]["requestable_events"].clone();
+    let state = snapshot["run"]["state"].clone();
+    let slots = snapshot["run"]["work_slots"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let mut assignments = snapshot["assignments"]["items"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let invocations = snapshot["invocations"]["items"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if snapshot["assignments"]["state"] == "available"
+        && snapshot["assignments"]["truncated"] != true
+    {
+        let mut configured_partial = false;
+        if let Ok(engine) = std::env::current_exe() {
+            let mut known = assignments
+                .iter()
+                .filter_map(|item| {
+                    Some((
+                        item["slot_id"].as_str()?.to_owned(),
+                        item["assignment_id"].as_str()?.to_owned(),
+                    ))
+                })
+                .collect::<std::collections::BTreeSet<_>>();
+            let mut configured_total = 0u64;
+            let mut configured = Vec::new();
+            for slot in &slots {
+                if std::time::Instant::now() >= deadline {
+                    configured_partial = true;
+                    break;
+                }
+                let Some(slot_id) = slot["id"].as_str() else {
+                    continue;
+                };
+                let Some(binding_value) = snapshot["run"]["effective_bindings"].get(slot_id) else {
+                    continue;
+                };
+                let Ok(binding) =
+                    serde_json::from_value::<core::WorkSlotBinding>(binding_value.clone())
+                else {
+                    continue;
+                };
+                if !same_executable_file(&engine, Path::new(&binding.command)) {
+                    continue;
+                }
+                if binding.args.iter().map(String::len).sum::<usize>() > 1_048_576 {
+                    configured_partial = true;
+                    continue;
+                }
+                let Some(labels) = fan_out::enumerate_bound_assignment_labels(&binding) else {
+                    continue;
+                };
+                for label in labels {
+                    if !known.insert((slot_id.to_owned(), label.assignment_id.clone())) {
+                        continue;
+                    }
+                    configured_total += 1;
+                    if assignments.len() + configured.len() >= 200 {
+                        continue;
+                    }
+                    configured.push(json!({
+                        "slot_id":slot_id,"assignment_id":label.assignment_id,"title":label.title,"role":label.role,
+                        "state":"configured","state_visit":snapshot["run"]["state_visit"],
+                        "execution":{"state":"unknown","reason":"configured work list; no invocation output exists for this visit"},
+                        "conformance":{"state":"unknown","attempt_count":0,"repeated_failure_count":0},
+                        "acceptance":{"state":"unknown","reason":"configuration is not execution or acceptance"}
+                    }));
+                }
+            }
+            if configured_total > 0 {
+                assignments.extend(configured);
+                let previous_total = snapshot["assignments"]["total"].as_u64().unwrap_or(0);
+                let total = previous_total + configured_total;
+                let configured_only = previous_total == 0;
+                let truncated = total > assignments.len() as u64;
+                let returned = assignments.len();
+                snapshot["assignments"]["items"] = json!(assignments.clone());
+                snapshot["assignments"]["total"] = json!(total);
+                snapshot["assignments"]["returned"] = json!(returned);
+                snapshot["assignments"]["configured_only"] = json!(configured_only);
+                snapshot["assignments"]["truncated"] = json!(truncated);
+                snapshot["assignments"]["state"] = json!(if truncated || configured_partial {
+                    "partial"
+                } else {
+                    "available"
+                });
+                snapshot["completeness"]["assignments"] =
+                    json!(if truncated || configured_partial {
+                        "partial"
+                    } else {
+                        "available"
+                    });
+            } else if configured_partial {
+                snapshot["assignments"]["state"] = json!("partial");
+                snapshot["assignments"]["reason"] =
+                    json!("configured assignment inventory exceeded the observation budget");
+                snapshot["completeness"]["assignments"] = json!("partial");
+            }
+        }
+    }
+    let current_slot = slots.iter().find(|slot| slot["state"] == current_state);
+    let current_slot_id = current_slot.and_then(|slot| slot["id"].as_str());
+    let current_binding =
+        current_slot_id.and_then(|slot| snapshot["run"]["effective_bindings"].get(slot));
+    let instructions = if let (Some(slot_id), Some(binding)) = (current_slot_id, current_binding) {
+        format!(
+            "Bound work slot `{slot_id}` is configured (command={}). Exact frozen args and filter: full.effective_bindings.{slot_id}. Legal start: loop-engine invoke {} {}. Read the action guidance and assignments below; worker exit/conformance are not provider acceptance.",
+            binding["command"].as_str().unwrap_or("unknown"),
+            run_id, slot_id
+        )
+    } else {
+        state["instructions"]
+            .as_str()
+            .unwrap_or("Current instructions are unavailable.")
+            .to_owned()
+    };
+    let next_action = if matches!(
+        snapshot["run"]["lifecycle"].as_str(),
+        Some("final" | "terminated")
+    ) {
+        json!({"kind":"inspect","reason":"the run is terminal and read-only"})
+    } else if invocations.iter().any(|row| {
+        matches!(
+            row.pointer("/execution/state").and_then(Value::as_str),
+            Some("running" | "overrun")
+        )
+    }) {
+        json!({"kind":"wait","reason":"owned execution is sampled running; observation did not change it"})
+    } else if let Some(slot_id) = current_slot_id {
+        if current_binding.is_some() {
+            let prior = invocations.iter().find(|row| row["slot_id"] == slot_id);
+            if let Some(prior) = prior {
+                json!({"kind":"inspect","slot_id":slot_id,"invocation_id":prior["invocation_id"],"capture_dir":prior["capture_dir"],"reason":"inspect this invocation and its assignment/conformance lanes before retry or progression"})
+            } else {
+                json!({"kind":"invoke","slot_id":slot_id,"reason":"start the frozen bound invocation, then inspect captured output and conformance"})
+            }
+        } else {
+            json!({"kind":"perform-current-work","slot_id":slot_id,"reason":"follow current instructions, then append required evidence and request a listed event"})
+        }
+    } else {
+        json!({"kind":"inspect","reason":"no current work slot is configured; follow current instructions and listed events"})
+    };
+    let execution_lane = if invocations.is_empty() {
+        json!({"state":"unknown","reason":"no invocation was sampled"})
+    } else {
+        json!({"state":"available","invocations":invocations,"meaning":"outer execution and process liveness only"})
+    };
+    let worker_lane = if assignments.is_empty() {
+        json!({"state":"unknown","reason":"no current-subject assignment facts were sampled"})
+    } else {
+        json!({"state":"available","assignments":assignments,"meaning":"captured worker process facts; no semantic interpretation"})
+    };
+    let conformance_lane = if assignments.is_empty() {
+        json!({"state":"unknown","reason":"no output-conformance facts were sampled"})
+    } else {
+        json!({"state":"available","assignments":assignments.iter().map(|row| json!({
+            "slot_id":row["slot_id"],"assignment_id":row["assignment_id"],
+            "state":row["conformance"]["state"],"attempt_count":row["conformance"]["attempt_count"],
+            "repeated_failure_count":row["conformance"]["repeated_failure_count"],"error":row["conformance"]["error"],
+            "error_truncated":row["conformance"]["error_truncated"]
+        })).collect::<Vec<_>>(),"meaning":"mechanical output checks only; not acceptance"})
+    };
+    let workflow_lane = json!({
+        "state":snapshot["run"]["lifecycle"],"current_state":current_state,
+        "title":state["title"],"requestable_events":events,"mutation_armed":armed
+    });
+    let mut packet = json!({
+        "schema_version":1,"view":view,"sampled_at_ms":sampled_at,
+        "mutation_armed":armed,"run_id":run_id,"label":snapshot["run"]["label"],
+        "workflow_id":snapshot["run"]["workflow_id"],"lifecycle":snapshot["run"]["lifecycle"],
+        "current_state":current_state,"current_state_title":state["title"],
+        "state_visit":snapshot["run"]["state_visit"],"current_state_instructions":instructions,
+        "action_guidance":state["action_guidance"],"requestable_events":events,"work_slots":slots,
+        "override_summary":snapshot["run"]["override_summary"],
+        "invocations":snapshot["invocations"],"assignments":snapshot["assignments"],
+        "delta_sequence":snapshot["delta_sequence"],"completeness":snapshot["completeness"],
+        "workflow":workflow_lane,"execution":execution_lane,"worker":worker_lane,
+        "conformance":conformance_lane,
+        "evidence":{"state":"partial","locations":[bounded_locators(&run_id,database),assignments.iter().filter_map(|row|row["conformance"]["attempts_locator"].as_str()).collect::<Vec<_>>()],"meaning":"bounded locations preserve access to full history and original captures"},
+        "freshness":{"state":"observed","sampled_at_ms":sampled_at,"source":"bounded local observation","meaning":"sampled facts may change after this read"},
+        "owner_update_guidance":{"channel":"active Pi conversation","required_fields":["observed_change","needed_action_or_decision"],"machine_notification_is_not_owner_update":true,"authority":"assistant-owned guidance; it does not approve or control work"},
+        "acceptance":{"state":"unknown","reason":"execution and conformance are not provider acceptance"},
+        "uncertainty":{"state":if snapshot["completeness"].as_object().is_some_and(|o| o.values().any(|v| v == "unavailable" || v == "partial")) {"partial"} else {"sampled"},"sources":[snapshot["completeness"]]},
+        "next_action":next_action,"locators":bounded_locators(&run_id,database)
+    });
+    if view == "status" {
+        packet
+            .as_object_mut()
+            .unwrap()
+            .remove("current_state_instructions");
+        packet.as_object_mut().unwrap().remove("action_guidance");
+        packet.as_object_mut().unwrap().remove("work_slots");
+    }
+    packet
+}
+
+fn render_bounded_show_human(packet: &Value, view: &str) -> String {
+    let mut lines = vec![format!("completed show --view {view}")];
+    lines.push(format!(
+        "run: {}",
+        packet["run_id"].as_str().unwrap_or("unknown")
+    ));
+    lines.push(format!(
+        "state: {} ({})",
+        packet["current_state"].as_str().unwrap_or("unknown"),
+        packet["current_state_title"].as_str().unwrap_or("unknown")
+    ));
+    lines.push(format!(
+        "lifecycle: {}; mutation_armed: {}; override summary: {}",
+        packet["lifecycle"].as_str().unwrap_or("unknown"),
+        packet["mutation_armed"].as_bool().unwrap_or(false),
+        packet["override_summary"]
+    ));
+    if view == "action" {
+        lines.push(format!(
+            "instructions: {}",
+            packet["current_state_instructions"]
+                .as_str()
+                .unwrap_or("unavailable")
+        ));
+        lines.push(format!(
+            "next action: {}",
+            packet["next_action"]["reason"]
+                .as_str()
+                .unwrap_or("inspect uncertainty")
+        ));
+    }
+    let events = packet["requestable_events"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let event_text = events
+        .iter()
+        .map(|event| {
+            format!(
+                "{} -> {}",
+                event["event"].as_str().unwrap_or("?"),
+                event["target"].as_str().unwrap_or("?")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    lines.push(format!(
+        "requestable events: {}",
+        if event_text.is_empty() {
+            "none".to_owned()
+        } else {
+            event_text
+        }
+    ));
+    let invocations = packet["invocations"]["items"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if invocations.is_empty() {
+        lines.push("invocations: unavailable or none sampled".to_owned());
+    }
+    for row in invocations {
+        lines.push(format!(
+            "invocation: {} slot={} execution={}",
+            row["invocation_id"].as_str().unwrap_or("?"),
+            row["slot_id"].as_str().unwrap_or("?"),
+            row["execution"]["state"].as_str().unwrap_or("unknown")
+        ));
+    }
+    let assignments = packet["assignments"]["items"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if assignments.is_empty() {
+        lines.push("assignments: unknown (no current-subject facts sampled)".to_owned());
+    }
+    for row in assignments {
+        let identity = row["assignment_id"].as_str().unwrap_or("unknown");
+        let title = row["title"].as_str().unwrap_or(identity);
+        let role = row["role"].as_str().unwrap_or("unknown");
+        let attempts = row["conformance"]["attempt_count"]
+            .as_u64()
+            .map_or_else(|| "unknown".to_owned(), |count| count.to_string());
+        let failures = row["conformance"]["repeated_failure_count"]
+            .as_u64()
+            .map_or_else(|| "unknown".to_owned(), |count| count.to_string());
+        lines.push(format!("assignment: {title} [{role}] id={identity} state={} execution={} conformance={} attempts={} failures={} acceptance={}",
+            row["state"].as_str().unwrap_or("unknown"),
+            row["execution"]["state"].as_str().unwrap_or("unknown"),
+            row["conformance"]["state"].as_str().unwrap_or("unknown"),
+            attempts,
+            failures,
+            row["acceptance"]["state"].as_str().unwrap_or("unknown")));
+        if let Some(error) = row["conformance"]["error"].as_str() {
+            lines.push(format!("  error: {error}"));
+        }
+    }
+    lines.push(format!("completeness: {}", packet["completeness"]));
+    lines.join("\n") + "\n"
 }
 
 /// Bound execution instructions and provider obligations remain opaque; this
@@ -3259,6 +4351,7 @@ fn show_packet(
         "effective_bindings",
         "evaluation_history",
         "change_report",
+        "workflow_graph",
     ] {
         object.remove(key);
     }
@@ -3831,7 +4924,7 @@ fn usage(command: Option<&str>) -> String {
                 + "the engine resolves the selected attempt and capture metadata. Evidence reuse uses\n"
                 + "kind evidence-applicability with {origin,target,attesting_driver,reason}.\n"
         }
-        Some("event") => "Usage: loop-engine [options] event <run-id> <event> [--override JSON]\n\nOverride: {\"state_visit\":0,\"owner\":\"OWNER\",\"reason\":\"REASON\"}. Requires the current observed visit and quiescent work; skips only this edge's completion/evaluation checks and permanently labels the run.\n".to_owned(),
+        Some("event") => "Usage: loop-engine [options] event <run-id> <event> [--driver-act JSON | --advice-exception JSON | --override JSON]\n\nA future opted-in driver act records author, reason, changed artifacts, and unchanged intent/design/plan revisions; normal checked provider gates still run. Advice exception only excuses exactly named unanswered due advice occasions. --override remains a separate broader exception.\n".to_owned(),
         Some("show") => {
             "Usage: loop-engine [options] show [--compact] <run-id> [--view action|status|full]\n\n".to_owned()
                 + "Default action reveals current instructions and obligations. Full includes all checked evaluations.\n"
@@ -3839,6 +4932,8 @@ fn usage(command: Option<&str>) -> String {
                 + "All views are provider-free. Full-payload consumers must select --view full.\n"
         }
         Some("history") => "Usage: loop-engine [options] history <run-id>\n".to_owned(),
+        Some("explore") => "Usage: loop-engine [--database DB] explore RUN_ID\n\nRead-only interactive workflow navigator. Requires a TTY; arrows or j/k move the one-column list, [ and ] scroll detail, g/G jump, and q exits.\n".to_owned(),
+        Some("advise") => "Usage: loop-engine [options] advise RUN_ID @REQUEST_FILE\n\nRuns the run's explicitly configured provider-neutral advice command with one closed JSON request on stdin. The frozen command, argv, positive per-call timeout, and request/response byte bounds come from initial_input.advice_command. Advice is captured as immutable run context and never completes primary work or advances state. Missing configuration disables advice; there is no default backend. Inspect captures with show --view full.\n".to_owned(),
         Some("terminate") => "Usage: loop-engine [options] terminate <run-id>\n".to_owned(),
         Some("invoke") => {
             "Usage: loop-engine [options] invoke <run-id> <slot-id> [--assignment ID ... | --assignments ID,... | --input JSON] [--preview] [--controls JSON]\n\n"
@@ -3911,6 +5006,7 @@ fn usage(command: Option<&str>) -> String {
                 + "  append\n"
                 + "  event\n"
                 + "  history\n"
+                + "  advise RUN_ID @REQUEST_FILE\n"
                 + "  terminate\n"
                 + "  invoke\n"
                 + "  amend-binding RUN_ID SLOT_ID JSON\n"
@@ -3920,8 +5016,10 @@ fn usage(command: Option<&str>) -> String {
                 + "  capture-command           Stream one external command; --help for raw-stream contract\n"
                 + "  capture-matrix            Execute serial rows, stop on failure, explicitly --resume\n"
                 + "  capture-abort             Request and verify owned capture cleanup\n"
+                + "  explore RUN_ID             Read-only interactive workflow navigator\n"
                 + "  invocation-progress RUN_ID [INVOCATION_ID]\n"
                 + "                             Snapshot capture_dir graph liveness and traces\n"
+                + "  read RUN_ID --kind ...    Bounded sequence, assignment, attempt, and original-stream reads\n"
                 + "                             Opens the catalog; graph state is Dagu helper liveness\n"
                 + "                             --timeout-ms bounds helper spawns only\n"
                 + "  fan-out                    Run worker CLIs concurrently via a local Dagu graph\n"
@@ -3930,7 +5028,9 @@ fn usage(command: Option<&str>) -> String {
                 + "                             --instructions FILE    Required ad hoc; forbidden with bound stdin\n"
                 + "                             --max-active N         Cap concurrent workers; omitted is uncapped\n"
                 + "  preview-bindings [JSON|@FILE]  Inspect work_slot_bindings without starting a run\n"
-                + "                             Omitted operand reads stdin; @FILE reads that path\n\n"
+                + "                             Omitted operand reads stdin; @FILE reads that path\n"
+                + "  recovery-preview ID [@SHOW]   Preview failed fan-out sources and pending assignments\n"
+                + "  recover-output @REQUEST_FILE  Repair captured output without rerunning its worker\n\n"
                 + "Global options:\n"
                 + "  --json, -j                 Render machine-readable JSON\n"
                 + "  --database <path>          SQLite database path\n"
@@ -3955,6 +5055,16 @@ fn help_lists_fan_out_and_hides_wait_invocation() {
     assert!(
         help.stdout.contains("invocation-progress"),
         "help must list invocation-progress: {}",
+        help.stdout
+    );
+    assert!(
+        help.stdout.contains("read RUN_ID --kind"),
+        "help must list targeted read under other commands: {}",
+        help.stdout
+    );
+    assert!(
+        help.stdout.contains("advise RUN_ID @REQUEST_FILE"),
+        "help must list the separate generic advice command: {}",
         help.stdout
     );
     assert!(
@@ -4544,6 +5654,92 @@ mod tests {
     }
 
     #[test]
+    fn parser_advice_is_separate_and_uses_frozen_per_call_configuration() {
+        let parsed = parse_args([
+            "--database",
+            "/tmp/loop.db",
+            "--json",
+            "advise",
+            "run-1",
+            "@request.json",
+        ])
+        .expect("generic advice command should parse");
+        let ParsedRequest::Advice {
+            options,
+            run_id,
+            request_source,
+        } = parsed
+        else {
+            panic!("expected separate advice command");
+        };
+        assert_eq!(run_id.as_str(), "run-1");
+        assert_eq!(request_source, "@request.json");
+        assert_eq!(options.database, Some(PathBuf::from("/tmp/loop.db")));
+        assert_eq!(options.output, OutputFormat::Json);
+
+        for args in [
+            vec!["advise", "run-1", "{}"],
+            vec!["advise", "run-1", "@request.json", "extra"],
+            vec!["advise", "run-1", "@request.json", "--timeout-ms", "50"],
+            vec![
+                "advise",
+                "run-1",
+                "@request.json",
+                "--config",
+                "providers.toml",
+            ],
+        ] {
+            assert_eq!(parse_args(args).unwrap_err().code, "invalid-invocation");
+        }
+    }
+
+    #[test]
+    fn parser_advice_exception_is_event_scoped_and_separate_from_override() {
+        let parsed = parse_args([
+            "event",
+            "run-1",
+            "revise",
+            "--advice-exception",
+            r#"{"state_visit":0,"owner":"owner","reason":"unavailable","occasion_ids":["review"]}"#,
+        ])
+        .expect("scoped advice exception should parse");
+        let ParsedRequest::Operation {
+            command:
+                PrimaryCommand::Event {
+                    advice_exception: Some(exception),
+                    override_attestation: None,
+                    ..
+                },
+            ..
+        } = parsed
+        else {
+            panic!("expected event-scoped advice exception");
+        };
+        assert_eq!(exception.state_visit, 0);
+        assert_eq!(exception.occasion_ids, vec!["review"]);
+
+        for args in [
+            vec![
+                "show",
+                "run-1",
+                "--advice-exception",
+                r#"{"state_visit":0,"owner":"owner","reason":"r","occasion_ids":["x"]}"#,
+            ],
+            vec![
+                "event",
+                "run-1",
+                "revise",
+                "--advice-exception",
+                r#"{"state_visit":0,"owner":"owner","reason":"r","occasion_ids":["x"]}"#,
+                "--override",
+                r#"{"state_visit":0,"owner":"owner","reason":"r"}"#,
+            ],
+        ] {
+            assert_eq!(parse_args(args).unwrap_err().code, "invalid-invocation");
+        }
+    }
+
+    #[test]
     fn parser_show_compact_is_human_only_and_not_a_new_operation() {
         let parsed =
             parse_args(["show", "--compact", "run-1"]).expect("show --compact should parse");
@@ -4720,6 +5916,7 @@ mod tests {
             invocation_id: "inv-1".into(),
             slot_id: "slot-1".into(),
             binding: core::WorkSlotBinding::new("worker", vec!["--flag".to_owned()]),
+            state_visit: 0,
             routed_inputs: Vec::new(),
             instruction_digest: "digest".to_owned(),
             subject: "subject".to_owned(),
@@ -4732,6 +5929,7 @@ mod tests {
             elapsed_ms: 30,
             remaining_allowed_ms: 970,
             capture_dir: "/tmp/capture".to_owned(),
+            assignment_labels: Vec::new(),
             inner_workers: Vec::new(),
             assignment_selection: None,
             invocation_input: None,
@@ -4751,6 +5949,7 @@ mod tests {
             run_id: "run-1".into(),
             label: Some("compact test".to_owned()),
             workflow_id: "workflow".into(),
+            workflow_graph: None,
             lifecycle: core::Lifecycle::Active,
             current_state: "draft".into(),
             current_state_title: "Draft".to_owned(),
@@ -5495,8 +6694,9 @@ printf '%s' '{"id":"cli-fixture","initial_state":"start","states":[{"id":"start"
                 }
             ]
         });
-        let workers = parse_summary_inner_workers(&serde_json::to_vec(&valid).unwrap())
-            .expect("valid selected and coverage-gap workers");
+        let workers =
+            parse_summary_inner_workers(&serde_json::to_vec(&valid).unwrap(), Path::new("/tmp"))
+                .expect("valid selected and coverage-gap workers");
         assert_eq!(workers[0].assignment_id, "axis-a");
         assert_eq!(workers[0].selected_attempt, Some(2));
         assert_eq!(
@@ -5509,16 +6709,28 @@ printf '%s' '{"id":"cli-fixture","initial_state":"start","states":[{"id":"start"
 
         let mut duplicate = valid.clone();
         duplicate["workers"][1]["assignment_id"] = json!("axis-a");
-        assert!(parse_summary_inner_workers(&serde_json::to_vec(&duplicate).unwrap()).is_none());
+        assert!(parse_summary_inner_workers(
+            &serde_json::to_vec(&duplicate).unwrap(),
+            Path::new("/tmp")
+        )
+        .is_none());
 
         let mut half_linked = valid.clone();
         half_linked["workers"][0]["selected_output_path"] = Value::Null;
-        assert!(parse_summary_inner_workers(&serde_json::to_vec(&half_linked).unwrap()).is_none());
+        assert!(parse_summary_inner_workers(
+            &serde_json::to_vec(&half_linked).unwrap(),
+            Path::new("/tmp")
+        )
+        .is_none());
 
         let mut worker_level_path = valid;
         worker_level_path["workers"][0]["selected_output_path"] = json!("/capture/axis-a/stdout");
         assert!(
-            parse_summary_inner_workers(&serde_json::to_vec(&worker_level_path).unwrap()).is_none(),
+            parse_summary_inner_workers(
+                &serde_json::to_vec(&worker_level_path).unwrap(),
+                Path::new("/tmp")
+            )
+            .is_none(),
             "selected attempt must not be linked to the worker-level stdout copy"
         );
     }

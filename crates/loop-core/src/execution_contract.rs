@@ -58,11 +58,11 @@ pub fn effective_binding(
 
 /// The kernel identity of one process incarnation.
 ///
-/// A PID is only a recyclable number. The engine records the boot identity
-/// and kernel start identity alongside it so readers can distinguish the
-/// recorded process from a later occupant of the same PID. The values are
-/// native observations supplied by the integration layer; core does not
-/// interpret their platform-specific clocks.
+/// A PID is only a recyclable number. The engine records the boot-session
+/// identity and native process-start identity alongside it so readers can
+/// distinguish the recorded process from a later occupant of the same PID.
+/// The values are supplied by the integration layer; core does not interpret
+/// their platform-specific representations.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessIdentity {
@@ -146,6 +146,45 @@ pub struct StateVisitAttestation {
     pub state_visit: u64,
     pub owner: String,
     pub reason: String,
+}
+
+/// Small caller-authored facts for an explicitly permitted driver completion.
+/// The engine adds the current slot, visit, binding, and instruction identities.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DriverActRequest {
+    pub author: DriverActAuthor,
+    pub reason: String,
+    pub changed_artifacts: Vec<String>,
+    pub unchanged_documents: DriverActDocuments,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DriverActAuthor {
+    pub name: String,
+    pub kind: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DriverActDocuments {
+    pub intent_revision: String,
+    pub design_revision: String,
+    pub plan_revision: String,
+}
+
+/// Engine-attributed direct completion evidence carried into normal provider
+/// evaluation and immutable transition history. It is not a worker result.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DriverActEvidence {
+    pub request: DriverActRequest,
+    pub slot_id: crate::WorkSlotId,
+    pub state_visit: u64,
+    pub current_subject: String,
+    pub instruction_digest: String,
+    pub binding_sha256: String,
 }
 
 /// Only references may cross the selector boundary; records cannot be rewritten.

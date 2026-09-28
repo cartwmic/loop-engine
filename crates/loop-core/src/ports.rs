@@ -6,10 +6,11 @@
 //! database transaction or a generic CRUD callback.
 
 use crate::{
-    ContextAppendEffect, ContextRecord, ContextRecordId, ControlRevision, DurableEvaluation,
-    EvaluationFeedback, EvaluationRequest, EvaluationResult, HistoryEntry, InnerWorker,
-    InvocationId, Lifecycle, ProviderAssociation, ProviderSelector, Run, RunId, StateId, Timestamp,
-    Transition, WaiterWrittenStatus, WorkSlotBinding, WorkSlotId, WorkSlotInvocation, Workflow,
+    AssignmentLabel, ContextAppendEffect, ContextRecord, ContextRecordId, ControlRevision,
+    DurableEvaluation, EvaluationFeedback, EvaluationRequest, EvaluationResult, HistoryEntry,
+    InnerWorker, InvocationId, Lifecycle, ProviderAssociation, ProviderSelector, Run, RunId,
+    StateId, Timestamp, Transition, WaiterWrittenStatus, WorkSlotBinding, WorkSlotId,
+    WorkSlotInvocation, Workflow,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -397,13 +398,18 @@ impl EvidenceApplicability {
 pub struct EngineOrigin {
     pub invocation_id: InvocationId,
     pub assignment_id: String,
-    pub selected_attempt: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_attempt: Option<u32>,
     pub selected_output_sha256: String,
     pub selected_output_path: String,
     pub capture_dir: String,
     pub command: String,
     pub args: Vec<String>,
     pub binding: WorkSlotBinding,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_source: Option<Value>,
 }
 
 impl EngineOrigin {
@@ -411,7 +417,7 @@ impl EngineOrigin {
     pub fn new(
         invocation_id: impl Into<InvocationId>,
         assignment_id: impl Into<String>,
-        selected_attempt: u32,
+        selected_attempt: Option<u32>,
         selected_output_sha256: impl Into<String>,
         selected_output_path: impl Into<String>,
         capture_dir: impl Into<String>,
@@ -429,6 +435,8 @@ impl EngineOrigin {
             command: command.into(),
             args,
             binding,
+            slot_id: None,
+            recovery_source: None,
         }
     }
 }
@@ -476,6 +484,33 @@ impl AppendContextRequest {
     }
 }
 
+/// A separate immutable generic advice-attempt record. Unlike ordinary
+/// context append, recording an invocation attempt does not arm or complete a
+/// primary work slot.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AppendAdviceAttemptRequest {
+    pub run_id: RunId,
+    pub record_id: ContextRecordId,
+    pub data: Value,
+    pub created_at: Timestamp,
+}
+
+impl AppendAdviceAttemptRequest {
+    pub fn new(
+        run_id: impl Into<RunId>,
+        record_id: impl Into<ContextRecordId>,
+        data: Value,
+        created_at: Timestamp,
+    ) -> Self {
+        Self {
+            run_id: run_id.into(),
+            record_id: record_id.into(),
+            data,
+            created_at,
+        }
+    }
+}
+
 /// Result of an atomic context append.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AppendContextResult {
@@ -518,6 +553,13 @@ pub struct CommitTransitionRequest {
     /// Explicit exception; mutually exclusive with a provider context effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exception: Option<crate::TransitionOverride>,
+    /// Scoped advice-only exception. Unlike `exception`, this never skips
+    /// provider evaluation or bound-slot completion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub advice_exception: Option<crate::AdviceExceptionAttestation>,
+    /// Explicit non-worker act, which still requires a provider checked allow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver_act: Option<crate::DriverActEvidence>,
     /// Slot-visit subjects persisted in the same transaction as the committed
     /// target state. Empty when the target is not a work slot.
     pub slot_subjects: Vec<(WorkSlotId, String)>,
@@ -539,6 +581,8 @@ impl CommitTransitionRequest {
             resulting_lifecycle,
             context_append: None,
             exception: None,
+            advice_exception: None,
+            driver_act: None,
             slot_subjects: Vec::new(),
         }
     }
@@ -555,6 +599,19 @@ impl CommitTransitionRequest {
 
     pub fn with_slot_subjects(mut self, slot_subjects: Vec<(WorkSlotId, String)>) -> Self {
         self.slot_subjects = slot_subjects;
+        self
+    }
+
+    pub fn with_advice_exception(
+        mut self,
+        advice_exception: crate::AdviceExceptionAttestation,
+    ) -> Self {
+        self.advice_exception = Some(advice_exception);
+        self
+    }
+
+    pub fn with_driver_act(mut self, driver_act: crate::DriverActEvidence) -> Self {
+        self.driver_act = Some(driver_act);
         self
     }
 }
@@ -641,6 +698,8 @@ pub struct CreateWorkSlotInvocationRequest {
     pub binding: WorkSlotBinding,
     pub instruction_digest: String,
     pub subject: String,
+    #[serde(default)]
+    pub state_visit: u64,
     pub waiter_pid: u32,
     /// Native incarnation identity captured when the waiter was spawned.
     /// Historical requests may omit it; new local adapters provide it.
@@ -660,6 +719,9 @@ pub struct CreateWorkSlotInvocationRequest {
     /// Optional validated assignment subset. `None` preserves full execution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignment_selection: Option<Vec<String>>,
+    /// Generic display labels supplied by the caller/facade before output.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assignment_labels: Vec<AssignmentLabel>,
     /// Optional opaque JSON supplied for this bound invocation. Core stores
     /// and transports it without interpreting provider semantics.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -687,6 +749,7 @@ impl CreateWorkSlotInvocationRequest {
             binding,
             instruction_digest: instruction_digest.into(),
             subject: subject.into(),
+            state_visit: 0,
             waiter_pid,
             waiter_identity: None,
             started_at,
@@ -696,8 +759,14 @@ impl CreateWorkSlotInvocationRequest {
             frozen_run_identity: None,
             controls: None,
             assignment_selection: None,
+            assignment_labels: Vec::new(),
             invocation_input: None,
         }
+    }
+
+    pub fn with_state_visit(mut self, state_visit: u64) -> Self {
+        self.state_visit = state_visit;
+        self
     }
 
     pub fn with_waiter_identity(mut self, identity: crate::ProcessIdentity) -> Self {
@@ -727,6 +796,11 @@ impl CreateWorkSlotInvocationRequest {
 
     pub fn with_assignment_selection(mut self, selection: Option<Vec<String>>) -> Self {
         self.assignment_selection = selection;
+        self
+    }
+
+    pub fn with_assignment_labels(mut self, labels: Vec<AssignmentLabel>) -> Self {
+        self.assignment_labels = labels;
         self
     }
 
@@ -885,6 +959,25 @@ pub trait Persistence {
         request: AppendContextRequest,
     ) -> Result<AppendContextResult, PersistenceError>;
 
+    /// Atomically retain one generic advisory attempt as immutable run context
+    /// and history, without arming or changing the primary run state.
+    fn append_advice_attempt(
+        &self,
+        _request: AppendAdviceAttemptRequest,
+    ) -> Result<AppendContextResult, PersistenceError> {
+        Err(PersistenceError::failure(PersistenceFailure::new(
+            "advice-capture-unsupported",
+            "persistence adapter cannot retain generic advice attempts",
+        )))
+    }
+
+    /// Return the run-owned artifact root recorded at start. This is separate
+    /// from caller initial input because non-object and caller-supplied roots
+    /// are both valid frozen inputs.
+    fn load_run_artifact_root(&self, _run_id: &RunId) -> Result<Option<String>, PersistenceError> {
+        Ok(None)
+    }
+
     /// Atomically conditionally commit a transition and its history entry.
     /// An exception records an overridden outcome, never a checked allow.
     /// Otherwise the transition kind determines check-free versus checked allow.
@@ -947,6 +1040,15 @@ pub trait Persistence {
 
     /// Return semantic history in sequence order.
     fn load_history(&self, run_id: &RunId) -> Result<Vec<HistoryEntry>, PersistenceError>;
+
+    /// Optional compact source for bound-worker history-sensitive selectors.
+    /// `None` means the adapter cannot provide an authoritative snapshot.
+    fn load_transition_history(
+        &self,
+        _run_id: &RunId,
+    ) -> Result<Option<Vec<HistoryEntry>>, PersistenceError> {
+        Ok(None)
+    }
 
     /// Return all ordered durable allow/deny records for checked transitions
     /// in a run. Unsupported, failed, stale, and uncommitted attempts are
@@ -1019,6 +1121,30 @@ pub trait Persistence {
         &self,
         run_id: &RunId,
     ) -> Result<Vec<WorkSlotInvocation>, PersistenceError>;
+
+    /// Read only the target/candidates needed by `invocation-progress`.
+    /// Lightweight adapters may use the historical full list; indexed stores
+    /// should override this and avoid decoding completed worker payloads.
+    fn load_invocation_progress_candidates(
+        &self,
+        run_id: &RunId,
+        invocation_id: Option<&InvocationId>,
+    ) -> Result<Vec<WorkSlotInvocation>, PersistenceError> {
+        let mut rows = self.load_work_slot_invocations(run_id)?;
+        if let Some(invocation_id) = invocation_id {
+            rows.retain(|row| row.invocation_id == *invocation_id);
+        }
+        rows.sort_by(|left, right| {
+            right
+                .started_at
+                .cmp(&left.started_at)
+                .then_with(|| right.invocation_id.cmp(&left.invocation_id))
+        });
+        if invocation_id.is_none() {
+            rows.truncate(20);
+        }
+        Ok(rows)
+    }
 
     /// Compare a running invocation's recorded waiter incarnation with the
     /// current native process table. Adapters without a native process reader
@@ -1340,6 +1466,17 @@ pub trait WorkSlotProcess {
         &self,
         _binding: &WorkSlotBinding,
     ) -> std::result::Result<Option<Vec<String>>, ProcessError> {
+        Ok(None)
+    }
+
+    /// Supply generic frozen display descriptors when the adapter knows the
+    /// caller's pre-output assignment inventory. Unknown inventories stay
+    /// absent; core never parses worker prompts or provider policy.
+    fn assignment_labels(
+        &self,
+        _binding: &WorkSlotBinding,
+        _provider: &ProviderAssociation,
+    ) -> std::result::Result<Option<Vec<AssignmentLabel>>, ProcessError> {
         Ok(None)
     }
 

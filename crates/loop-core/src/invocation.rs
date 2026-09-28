@@ -21,6 +21,13 @@ pub fn instruction_digest(body: &str) -> String {
     to_hex_lowercase(&digest)
 }
 
+/// SHA-256 of the exact serialized effective binding, with the repository's
+/// standard `sha256:` prefix.
+pub fn work_slot_binding_digest(binding: &crate::WorkSlotBinding) -> String {
+    let bytes = serde_json::to_vec(binding).expect("work-slot binding serialization cannot fail");
+    format!("sha256:{}", to_hex_lowercase(&Sha256::digest(bytes)))
+}
+
 /// Project stored waiter-written status (and liveness/time) to a reader status.
 ///
 /// This function does not probe OS processes. Callers supply `waiter_alive`.

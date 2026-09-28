@@ -13,7 +13,8 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-const SCHEMA_VERSION: &str = "1";
+const SCHEMA_VERSION: &str = "3";
+const ATTEMPTS_SCHEMA_VERSION: &str = "1";
 const WORKFLOW_ID: &str = "software-change";
 const ATTEMPTS_FILE: &str = "attempts.json";
 const REVIEW_FIELDS: &[&str] = &["axis", "author", "result", "findings"];
@@ -24,6 +25,34 @@ const AUTHOR_KINDS: &[&str] = &["human", "agent", "script"];
 pub struct ReviewCandidatesDocument {
     pub schema_version: &'static str,
     pub candidates: Vec<ReviewCandidate>,
+    /// Exact, inert context-record candidates for explicit driver append.
+    pub records: Vec<ReviewRecordPreview>,
+}
+
+/// Read-only source-checked preview of one factual append or reuse diagnostic.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ReviewRecordPreview {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    pub gate: String,
+    pub subject: String,
+    pub subject_revision: String,
+    pub config_version: String,
+    pub review_stage: String,
+    pub origin: CandidateOrigin,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub axis: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub applicability_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_checkpoint: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<String>,
 }
 
 /// One inert candidate or mechanical diagnostic.
@@ -33,6 +62,8 @@ pub enum ReviewCandidate {
     #[serde(rename = "verdict-ready")]
     VerdictReady {
         origin: CandidateOrigin,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        review_contract_version: Option<u32>,
         record_id: String,
         kind: String,
         data: Value,
@@ -45,6 +76,10 @@ pub enum ReviewCandidate {
         author: CandidateAuthor,
         result: String,
         findings: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        review_contract_version: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        grounds: Option<Value>,
     },
     #[serde(rename = "carried")]
     Carried {
@@ -52,6 +87,8 @@ pub enum ReviewCandidate {
         review_stage: String,
         axis: String,
         author: CandidateAuthor,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        review_contract_version: Option<u32>,
         applicability_id: String,
     },
     #[serde(rename = "malformed")]
@@ -141,7 +178,15 @@ pub fn project(input: &Value) -> Result<ReviewCandidatesDocument, ProjectionErro
             ProjectionError::new("show result is missing array `work_slot_invocations`")
         })?;
 
+    let context: Vec<loop_core::ContextRecord> = serde_json::from_value(
+        result
+            .get("context")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
+    )
+    .map_err(|error| ProjectionError::new(format!("show result context is malformed: {error}")))?;
     let mut candidates = Vec::new();
+    let mut records = Vec::new();
     for invocation in invocations {
         let invocation = invocation.as_object().ok_or_else(|| {
             ProjectionError::new("show result work_slot_invocations contains a non-object")
@@ -193,7 +238,13 @@ pub fn project(input: &Value) -> Result<ReviewCandidatesDocument, ProjectionErro
             let Some(contract) = worker.get("declared_output_contract") else {
                 continue;
             };
-            if contract.is_null() || !looks_like_review_contract(contract) {
+            let recovered_review_contract =
+                worker.get("recovery_source").is_some_and(|source| {
+                    source.get("source_class").and_then(Value::as_str) == Some("eligible-derived")
+                }) && derived_legacy_review_schema(contract, slot_id, initial_input).is_some();
+            if contract.is_null()
+                || (!looks_like_review_contract(contract) && !recovered_review_contract)
+            {
                 continue;
             }
 
@@ -227,21 +278,27 @@ pub fn project(input: &Value) -> Result<ReviewCandidatesDocument, ProjectionErro
                                 == Some("individual")
                         })
                     });
-            candidates.extend(project_assignment(
-                origin,
+            let assignment_candidates = project_assignment(
+                origin.clone(),
                 worker,
                 contract,
                 capture_dir,
                 worker_index,
                 slot_id,
                 require_fresh_aggregate,
-            ));
+                invocation,
+                initial_input,
+                &context,
+                &mut records,
+            );
+            candidates.extend(assignment_candidates);
         }
     }
 
     Ok(ReviewCandidatesDocument {
         schema_version: SCHEMA_VERSION,
         candidates,
+        records,
     })
 }
 
@@ -321,8 +378,15 @@ fn project_assignment(
     worker_index: usize,
     gate: &str,
     require_fresh_aggregate: bool,
+    invocation: &Map<String, Value>,
+    initial_input: &Map<String, Value>,
+    context: &[loop_core::ContextRecord],
+    records: &mut Vec<ReviewRecordPreview>,
 ) -> Vec<ReviewCandidate> {
-    if worker.get("selected_attempt").is_none_or(Value::is_null) {
+    let recovered = worker
+        .get("recovery_source")
+        .is_some_and(|value| !value.is_null());
+    if worker.get("selected_attempt").is_none_or(Value::is_null) && !recovered {
         return vec![if reports_exhausted(capture_dir, worker_index) {
             ReviewCandidate::Exhausted {
                 origin,
@@ -337,7 +401,14 @@ fn project_assignment(
         }];
     }
     let bytes = (|| -> Result<Vec<u8>, String> {
-        if !worker["selected_attempt"]
+        if recovered {
+            if worker
+                .get("selected_attempt")
+                .is_some_and(|value| !value.is_null())
+            {
+                return Err("recovered output must not claim a new selected attempt".into());
+            }
+        } else if !worker["selected_attempt"]
             .as_u64()
             .is_some_and(|n| n > 0 && u32::try_from(n).is_ok())
         {
@@ -362,6 +433,56 @@ fn project_assignment(
         Ok(bytes) => bytes,
         Err(diagnostic) => return vec![ReviewCandidate::Unavailable { origin, diagnostic }],
     };
+    if recovered {
+        let Some(source) = worker.get("recovery_source") else {
+            return vec![ReviewCandidate::Malformed {
+                origin,
+                diagnostic: "recovered output has no source metadata".into(),
+            }];
+        };
+        if let Err(diagnostic) = crate::evidence::verify_recovery_source(
+            source,
+            Path::new(capture_dir.unwrap_or_default()),
+            worker["selected_output_path"].as_str().unwrap_or_default(),
+            worker["selected_output_sha256"]
+                .as_str()
+                .unwrap_or_default(),
+        ) {
+            return vec![ReviewCandidate::Malformed { origin, diagnostic }];
+        }
+        let binding = match invocation
+            .get("binding")
+            .cloned()
+            .ok_or_else(|| "recovered assignment has no frozen binding".to_owned())
+            .and_then(|value| {
+                serde_json::from_value::<loop_core::WorkSlotBinding>(value)
+                    .map_err(|error| error.to_string())
+            }) {
+            Ok(binding) => binding,
+            Err(diagnostic) => return vec![ReviewCandidate::Malformed { origin, diagnostic }],
+        };
+        if review_subject_for_gate(gate).is_none() {
+            return vec![ReviewCandidate::Malformed {
+                origin,
+                diagnostic: "recovered assignment has an unknown review gate".into(),
+            }];
+        }
+        let Some(subject) = invocation.get("subject").and_then(Value::as_str) else {
+            return vec![ReviewCandidate::Malformed {
+                origin,
+                diagnostic: "recovered assignment has no current visit subject".into(),
+            }];
+        };
+        if let Err(diagnostic) = crate::evidence::verify_recovery_source_identity(
+            source,
+            &origin.assignment_id,
+            gate,
+            Some(subject),
+            &binding,
+        ) {
+            return vec![ReviewCandidate::Malformed { origin, diagnostic }];
+        }
+    }
     let value = match parse_selected_value(&bytes) {
         Ok(value) => value,
         Err(diagnostic) => return vec![ReviewCandidate::Malformed { origin, diagnostic }],
@@ -374,19 +495,79 @@ fn project_assignment(
             capture_dir,
             gate,
             require_fresh_aggregate,
+            worker,
+            invocation,
+            initial_input,
+            context,
+            records,
         );
     }
-    vec![match normalize_review_output(contract, &value) {
-        Ok(judgment) => ReviewCandidate::Ready {
-            origin,
-            review_stage: judgment.review_stage,
-            axis: judgment.axis,
-            author: judgment.author,
-            result: judgment.result,
-            findings: judgment.findings,
-        },
-        Err(diagnostic) => ReviewCandidate::Malformed { origin, diagnostic },
-    }]
+    let derived_contract;
+    let candidate_contract = if recovered {
+        match derived_legacy_review_schema(contract, gate, initial_input) {
+            Some(schema) => {
+                derived_contract = schema;
+                &derived_contract
+            }
+            None => {
+                return vec![ReviewCandidate::Malformed {
+                    origin,
+                    diagnostic:
+                        "derived legacy output does not contain the frozen review judgment fields"
+                            .into(),
+                }]
+            }
+        }
+    } else {
+        contract
+    };
+    match normalize_review_output(candidate_contract, &value) {
+        Ok(judgment) => {
+            if judgment.review_contract_version == Some(2) {
+                let Some(root) = initial_input.get("artifact_root").and_then(Value::as_str) else {
+                    return vec![ReviewCandidate::Malformed {
+                        origin,
+                        diagnostic:
+                            "version-2 review candidate has no artifact_root for grounding checks"
+                                .into(),
+                    }];
+                };
+                if let Err(diagnostic) = crate::criterion::validate_grounding(
+                    judgment.grounds.as_ref().unwrap_or(&Value::Null),
+                    Path::new(root),
+                ) {
+                    return vec![ReviewCandidate::Malformed { origin, diagnostic }];
+                }
+            }
+            push_review_record(
+                records,
+                origin.clone(),
+                gate,
+                initial_input,
+                context,
+                worker,
+                invocation,
+                &judgment.review_stage,
+                &judgment.axis,
+                &judgment.author,
+                &judgment.result,
+                &judgment.findings,
+                judgment.review_contract_version,
+                judgment.grounds.as_ref(),
+            );
+            vec![ReviewCandidate::Ready {
+                origin,
+                review_stage: judgment.review_stage,
+                axis: judgment.axis,
+                author: judgment.author,
+                result: judgment.result,
+                findings: judgment.findings,
+                review_contract_version: judgment.review_contract_version,
+                grounds: judgment.grounds,
+            }]
+        }
+        Err(diagnostic) => vec![ReviewCandidate::Malformed { origin, diagnostic }],
+    }
 }
 
 fn project_batch(
@@ -396,6 +577,11 @@ fn project_batch(
     capture_dir: Option<&str>,
     gate: &str,
     require_fresh_aggregate: bool,
+    worker: &Map<String, Value>,
+    invocation: &Map<String, Value>,
+    initial_input: &Map<String, Value>,
+    context: &[loop_core::ContextRecord],
+    records_out: &mut Vec<ReviewRecordPreview>,
 ) -> Vec<ReviewCandidate> {
     let result = (|| -> Result<Vec<ReviewCandidate>, String> {
         let capture = capture_dir.ok_or("missing capture directory")?;
@@ -417,6 +603,11 @@ fn project_batch(
         let root = location["artifact_root"]
             .as_str()
             .ok_or("missing artifact root")?;
+        let config_version = initial_input
+            .get("config_version")
+            .and_then(Value::as_str)
+            .filter(|version| !version.trim().is_empty())
+            .ok_or("show initial_input has no config_version")?;
         let target: Value = serde_json::from_slice(
             &fs::read(Path::new(root).join(subject)).map_err(|e| e.to_string())?,
         )
@@ -425,6 +616,10 @@ fn project_batch(
             .as_str()
             .ok_or("subject has no revision")?;
         let review_stage = declared_review_stage(contract, value)?;
+        let review_contract_version = contract
+            .pointer("/properties/review_contract_version/const")
+            .and_then(Value::as_u64)
+            .and_then(|version| u32::try_from(version).ok());
         let rows = crate::review_batch::rows_for_stage_with_options(
             contract,
             value,
@@ -446,30 +641,106 @@ fn project_batch(
                 .ok_or("missing author kind")?
                 .into(),
         };
-        let mut candidates: Vec<ReviewCandidate> = rows
-            .into_iter()
-            .map(|row| {
-                let axis = row["axis"].as_str().ok_or("missing axis")?.to_owned();
-                Ok(if let Some(reuse) = row.get("reuse") {
-                    ReviewCandidate::Carried {
+        let target_checkpoint = crate::checkpoint::current_target(subject, Path::new(root))?;
+        let mut candidates = Vec::new();
+        for row in rows {
+            let axis = row["axis"].as_str().ok_or("missing axis")?.to_owned();
+            if let Some(reuse) = row.get("reuse") {
+                let applicability_id = reuse.as_str().ok_or("missing applicability ID")?;
+                match crate::review_batch::validate_reuse_row(
+                    row,
+                    &location,
+                    gate,
+                    &axis,
+                    &value["author"],
+                    config_version,
+                    subject,
+                    revision,
+                    &review_stage,
+                    review_stage == "individual",
+                    require_fresh_aggregate,
+                ) {
+                    Ok(()) => candidates.push(ReviewCandidate::Carried {
                         origin: origin.clone(),
                         review_stage: review_stage.clone(),
-                        axis,
+                        axis: axis.clone(),
                         author: author.clone(),
-                        applicability_id: reuse.as_str().ok_or("missing applicability ID")?.into(),
+                        review_contract_version,
+                        applicability_id: applicability_id.into(),
+                    }),
+                    Err(diagnostic) => {
+                        candidates.push(ReviewCandidate::Malformed {
+                            origin: origin.clone(),
+                            diagnostic: format!("reuse row `{axis}` is invalid: {diagnostic}"),
+                        });
+                        records_out.push(ReviewRecordPreview {
+                            status: "invalid-reuse".into(),
+                            record_id: None,
+                            kind: None,
+                            gate: gate.into(),
+                            subject: subject.into(),
+                            subject_revision: revision.into(),
+                            config_version: config_version.into(),
+                            review_stage: review_stage.clone(),
+                            origin: origin.clone(),
+                            axis: Some(axis),
+                            applicability_id: Some(applicability_id.into()),
+                            data: None,
+                            target_checkpoint: target_checkpoint.clone(),
+                            diagnostic: Some(diagnostic),
+                        });
                     }
-                } else {
-                    ReviewCandidate::Ready {
+                }
+                continue;
+            }
+
+            let grounds = row.get("grounds").cloned();
+            if review_contract_version == Some(2) {
+                if let Err(diagnostic) = crate::criterion::validate_grounding(
+                    grounds
+                        .as_ref()
+                        .ok_or("version-2 review row is missing grounds")?,
+                    Path::new(root),
+                ) {
+                    candidates.push(ReviewCandidate::Malformed {
                         origin: origin.clone(),
-                        review_stage: review_stage.clone(),
-                        axis,
-                        author: author.clone(),
-                        result: row["result"].as_str().ok_or("missing result")?.into(),
-                        findings: row["findings"].as_str().ok_or("missing findings")?.into(),
-                    }
-                })
-            })
-            .collect::<Result<_, String>>()?;
+                        diagnostic: format!("row `{axis}` has invalid grounds: {diagnostic}"),
+                    });
+                    continue;
+                }
+            }
+            let result = row["result"].as_str().ok_or("missing result")?.to_owned();
+            let findings = row["findings"]
+                .as_str()
+                .ok_or("missing findings")?
+                .to_owned();
+            push_review_record(
+                records_out,
+                origin.clone(),
+                gate,
+                initial_input,
+                context,
+                worker,
+                invocation,
+                &review_stage,
+                &axis,
+                &author,
+                &result,
+                &findings,
+                review_contract_version,
+                grounds.as_ref(),
+            );
+            candidates.push(ReviewCandidate::Ready {
+                origin: origin.clone(),
+                review_stage: review_stage.clone(),
+                axis,
+                author: author.clone(),
+                result,
+                findings,
+                review_contract_version,
+                grounds,
+            });
+        }
         if let Some(verdicts) = value.get("validation_verdicts") {
             if gate != "validation-review" || review_stage != "aggregate" {
                 return Err(
@@ -477,13 +748,17 @@ fn project_batch(
                 );
             }
             let mut seen = std::collections::BTreeSet::new();
-            let context: Vec<loop_core::ContextRecord> = serde_json::from_value(
+            let delivered_context: Vec<loop_core::ContextRecord> = serde_json::from_value(
                 location
                     .get("context")
                     .cloned()
                     .unwrap_or_else(|| serde_json::json!([])),
             )
             .map_err(|e| format!("invalid captured validation context: {e}"))?;
+            let config_version = initial_input
+                .get("config_version")
+                .and_then(Value::as_str)
+                .ok_or("show initial_input has no config_version")?;
             for row in verdicts.as_array().ok_or("invalid validation_verdicts")? {
                 let id = row["record_id"]
                     .as_str()
@@ -515,19 +790,261 @@ fn project_batch(
                         "unassigned, duplicate, wrong-author or stale criterion verdict".into(),
                     );
                 }
-                crate::validation::source(data, kind, &context, Path::new(root))
-                    .map_err(|error| format!("invalid retained validation verdict: {error}"))?;
+                if review_contract_version == Some(2)
+                    && data
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .is_none_or(|reason| reason.trim().is_empty() || reason.len() > 1200)
+                {
+                    return Err(
+                        "version-2 criterion/goal verdict needs a concise reason of at most 1200 bytes".to_owned()
+                    );
+                }
+                let mut candidate_data = data.clone();
+                candidate_data["gate"] = Value::String(gate.into());
+                candidate_data["config_version"] = Value::String(config_version.into());
+                candidate_data["review_stage"] = Value::String(review_stage.clone());
+                candidate_data["origin"] =
+                    serde_json::to_value(&origin).map_err(|error| error.to_string())?;
+                let mut source_check_data = candidate_data.clone();
+                source_check_data[loop_core::ENGINE_ORIGIN_KEY] =
+                    expected_engine_origin(worker, invocation, &origin);
+                crate::validation::source_for_candidate(
+                    &source_check_data,
+                    kind,
+                    &delivered_context,
+                    Path::new(root),
+                    gate,
+                    config_version,
+                )
+                .map_err(|error| format!("invalid retained validation verdict: {error}"))?;
+                records_out.push(preview_record(
+                    context,
+                    id,
+                    kind,
+                    gate,
+                    "validation-report.json",
+                    revision,
+                    config_version,
+                    &review_stage,
+                    origin.clone(),
+                    data.get("criterion_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    candidate_data.clone(),
+                    expected_engine_origin(worker, invocation, &origin),
+                    target_checkpoint.clone(),
+                ));
                 candidates.push(ReviewCandidate::VerdictReady {
                     origin: origin.clone(),
+                    review_contract_version,
                     record_id: id.into(),
                     kind: kind.into(),
-                    data: data.clone(),
+                    data: candidate_data,
                 });
             }
         }
         Ok(candidates)
     })();
     result.unwrap_or_else(|diagnostic| vec![ReviewCandidate::Malformed { origin, diagnostic }])
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_review_record(
+    records: &mut Vec<ReviewRecordPreview>,
+    origin: CandidateOrigin,
+    gate: &str,
+    initial_input: &Map<String, Value>,
+    context: &[loop_core::ContextRecord],
+    worker: &Map<String, Value>,
+    invocation: &Map<String, Value>,
+    review_stage: &str,
+    axis: &str,
+    author: &CandidateAuthor,
+    result: &str,
+    findings: &str,
+    review_contract_version: Option<u32>,
+    grounds: Option<&Value>,
+) {
+    let Some(root) = initial_input.get("artifact_root").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(config_version) = initial_input.get("config_version").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(subject) = review_subject_for_gate(gate) else {
+        return;
+    };
+    let target = (|| -> Result<(String, Option<Value>), String> {
+        let bytes = fs::read(Path::new(root).join(subject)).map_err(|error| error.to_string())?;
+        let value: Value = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+        let revision = value["revision"]
+            .as_str()
+            .ok_or("current review target has no revision")?
+            .to_owned();
+        let checkpoint = crate::checkpoint::current_target(subject, Path::new(root))?;
+        Ok((revision, checkpoint))
+    })();
+    let (subject_revision, target_checkpoint, target_diagnostic) = match target {
+        Ok((revision, checkpoint)) => (revision, checkpoint, None),
+        Err(diagnostic) => (String::new(), None, Some(diagnostic)),
+    };
+    let record_id = review_record_id(&origin, axis);
+    let mut data = serde_json::json!({
+        "gate": gate,
+        "policy_id": axis,
+        "review_stage": review_stage,
+        "result": result,
+        "findings": findings,
+        "author": {"name": author.name, "kind": author.kind},
+        "subject": subject,
+        "subject_revision": subject_revision,
+        "config_version": config_version,
+        "origin": origin.clone(),
+    });
+    if let Some(version) = review_contract_version {
+        data["review_contract_version"] = serde_json::json!(version);
+    }
+    if let Some(grounds) = grounds {
+        data["grounds"] = grounds.clone();
+    }
+    let expected_origin = expected_engine_origin(worker, invocation, &origin);
+    let mut preview = preview_record(
+        context,
+        &record_id,
+        "review-evidence",
+        gate,
+        subject,
+        &subject_revision,
+        config_version,
+        review_stage,
+        origin,
+        Some(axis.to_owned()),
+        data,
+        expected_origin,
+        target_checkpoint,
+    );
+    if let Some(diagnostic) = target_diagnostic {
+        preview.status = "unavailable".into();
+        preview.diagnostic = Some(diagnostic);
+    }
+    records.push(preview);
+}
+
+fn review_record_id(origin: &CandidateOrigin, axis: &str) -> String {
+    let mut hash = Sha256::new();
+    hash.update(origin.id.as_bytes());
+    hash.update([0]);
+    hash.update(origin.assignment_id.as_bytes());
+    hash.update([0]);
+    hash.update(axis.as_bytes());
+    format!("review-evidence-{:x}", hash.finalize())
+}
+
+fn review_subject_for_gate(gate: &str) -> Option<&'static str> {
+    match gate {
+        "intent-review" | "intent-adversarial-review" => Some("intent.json"),
+        "design-review" | "design-adversarial-review" => Some("design.json"),
+        "plan-review" | "plan-adversarial-review" => Some("plan.json"),
+        "implementation-review" | "implementation-adversarial-review" => {
+            Some("implementation-report.json")
+        }
+        "validation-review" | "validation-adversarial-review" => Some("validation-report.json"),
+        _ => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn preview_record(
+    context: &[loop_core::ContextRecord],
+    record_id: &str,
+    kind: &str,
+    gate: &str,
+    subject: &str,
+    subject_revision: &str,
+    config_version: &str,
+    review_stage: &str,
+    origin: CandidateOrigin,
+    axis: Option<String>,
+    data: Value,
+    expected_engine_origin: Value,
+    target_checkpoint: Option<Value>,
+) -> ReviewRecordPreview {
+    let existing: Vec<_> = context
+        .iter()
+        .filter(|record| record.id.as_str() == record_id)
+        .collect();
+    let (status, diagnostic) = match existing.as_slice() {
+        [] => ("ready", None),
+        [existing] => {
+            let mut existing_data = existing.data.clone();
+            let engine_origin = existing_data
+                .as_object_mut()
+                .and_then(|object| object.remove(loop_core::ENGINE_ORIGIN_KEY));
+            if existing.kind == kind
+                && existing_data == data
+                && engine_origin.as_ref() == Some(&expected_engine_origin)
+            {
+                ("already-applied", None)
+            } else {
+                (
+                    "conflict",
+                    Some("record ID exists with different bytes, source, or target".into()),
+                )
+            }
+        }
+        _ => (
+            "conflict",
+            Some("record ID is ambiguous in current context".into()),
+        ),
+    };
+    ReviewRecordPreview {
+        status: status.to_owned(),
+        record_id: Some(record_id.to_owned()),
+        kind: Some(kind.to_owned()),
+        gate: gate.to_owned(),
+        subject: subject.to_owned(),
+        subject_revision: subject_revision.to_owned(),
+        config_version: config_version.to_owned(),
+        review_stage: review_stage.to_owned(),
+        origin,
+        axis,
+        applicability_id: None,
+        data: Some(data),
+        target_checkpoint,
+        diagnostic,
+    }
+}
+
+fn expected_engine_origin(
+    worker: &Map<String, Value>,
+    invocation: &Map<String, Value>,
+    origin: &CandidateOrigin,
+) -> Value {
+    let mut expected = serde_json::json!({
+        "invocation_id": origin.id,
+        "assignment_id": origin.assignment_id,
+        "selected_output_sha256": worker.get("selected_output_sha256").cloned().unwrap_or(Value::Null),
+        "selected_output_path": worker.get("selected_output_path").cloned().unwrap_or(Value::Null),
+        "capture_dir": invocation.get("capture_dir").cloned().unwrap_or(Value::Null),
+        "command": worker.get("command").cloned().unwrap_or(Value::Null),
+        "args": worker.get("args").cloned().unwrap_or_else(|| serde_json::json!([])),
+        "binding": invocation.get("binding").cloned().unwrap_or(Value::Null),
+        "slot_id": invocation.get("slot_id").cloned().unwrap_or(Value::Null),
+    });
+    if let Some(attempt) = worker
+        .get("selected_attempt")
+        .filter(|value| !value.is_null())
+    {
+        expected["selected_attempt"] = attempt.clone();
+    }
+    if let Some(source) = worker
+        .get("recovery_source")
+        .filter(|value| !value.is_null())
+    {
+        expected["recovery_source"] = source.clone();
+    }
+    expected
 }
 
 fn reports_exhausted(capture_dir: Option<&str>, worker_index: usize) -> bool {
@@ -558,7 +1075,7 @@ fn reports_exhausted(capture_dir: Option<&str>, worker_index: usize) -> bool {
         return false;
     };
     manifest.as_object().is_some_and(|object| {
-        object.get("schema_version").and_then(Value::as_str) == Some(SCHEMA_VERSION)
+        object.get("schema_version").and_then(Value::as_str) == Some(ATTEMPTS_SCHEMA_VERSION)
             && object.get("exhausted").and_then(Value::as_bool) == Some(true)
             && object.get("selected_attempt").is_some_and(Value::is_null)
             && object.get("attempts").and_then(Value::as_array).is_some()
@@ -643,6 +1160,82 @@ fn declared_review_stage(contract: &Value, value: &Value) -> Result<String, Stri
     Ok(stage.to_owned())
 }
 
+/// P05's captured required-key output contract cannot itself express a full
+/// review schema. A derived selection is eligible only when that frozen
+/// contract required every v2 judgment field and the run's single-stage gate
+/// supplies the axis and stage domain.
+fn derived_legacy_review_schema(
+    contract: &Value,
+    gate: &str,
+    initial_input: &Map<String, Value>,
+) -> Option<Value> {
+    let required = contract.get("required")?.as_array()?;
+    let required = required
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    if ![
+        "review_contract_version",
+        "review_stage",
+        "author",
+        "axis",
+        "result",
+        "findings",
+        "grounds",
+    ]
+    .iter()
+    .all(|field| required.contains(field))
+    {
+        return None;
+    }
+    let policies = initial_input
+        .get("review_policies")?
+        .get(gate)?
+        .as_array()?;
+    let axes = policies
+        .iter()
+        .filter_map(|entry| entry.get("id").and_then(Value::as_str))
+        .collect::<std::collections::BTreeSet<_>>();
+    let stages = policies
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .get("review_stage")
+                .or_else(|| entry.get("stage"))
+                .and_then(Value::as_str)
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    if axes.is_empty() || stages.len() != 1 {
+        return None;
+    }
+    let stage = *stages.iter().next()?;
+    if !matches!(stage, "individual" | "aggregate") {
+        return None;
+    }
+    Some(serde_json::json!({
+        "type":"object","additionalProperties":false,
+        "required":["review_contract_version","review_stage","author","axis","result","findings","grounds"],
+        "properties":{
+            "review_contract_version":{"type":"integer","const":2},
+            "review_stage":{"type":"string","const":stage},
+            "author":{"type":"object","additionalProperties":false,"required":["name","kind"],
+                "properties":{"name":{"type":"string","minLength":1},"kind":{"type":"string","enum":["human","agent","script"]}}},
+            "axis":{"type":"string","enum":axes.into_iter().collect::<Vec<_>>()},
+            "result":{"type":"string","enum":["pass","fail"]},
+            "findings":{"type":"string"},
+            "grounds":{"type":"object","additionalProperties":false,"required":["reason","evidence"],
+                "properties":{"reason":{"type":"string","minLength":1,"maxLength":1200},
+                    "evidence":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"object","additionalProperties":false,
+                        "required":["locator","sha256"],"properties":{"locator":{"type":"string","minLength":1,"maxLength":1024},
+                            "sha256":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"}}}}}}
+        },
+        "oneOf":[
+            {"properties":{"result":{"const":"pass"},"findings":{"const":""}}},
+            {"properties":{"result":{"const":"fail"},"findings":{"type":"string","minLength":1}}}
+        ]
+    }))
+}
+
 fn looks_like_review_contract(contract: &Value) -> bool {
     let Some(object) = contract.as_object() else {
         return false;
@@ -664,6 +1257,8 @@ struct NormalizedJudgment {
     author: CandidateAuthor,
     result: String,
     findings: String,
+    review_contract_version: Option<u32>,
+    grounds: Option<Value>,
 }
 
 fn normalize_review_output(contract: &Value, value: &Value) -> Result<NormalizedJudgment, String> {
@@ -674,6 +1269,26 @@ fn normalize_review_output(contract: &Value, value: &Value) -> Result<Normalized
         violations.push("review output must be a JSON object".to_owned());
         return Err(malformed_diagnostic(&violations));
     };
+    let review_contract_version = contract
+        .pointer("/properties/review_contract_version/const")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            object
+                .get("review_contract_version")
+                .and_then(Value::as_u64)
+        })
+        .and_then(|version| u32::try_from(version).ok());
+    if object
+        .get("review_contract_version")
+        .and_then(Value::as_u64)
+        .is_some_and(|version| version != 2)
+    {
+        violations.push("review_contract_version must be 2 when present".to_owned());
+    }
+    let grounds = object.get("grounds").cloned();
+    if review_contract_version == Some(2) && grounds.is_none() {
+        violations.push("version-2 review judgment is missing grounds".to_owned());
+    }
     let review_stage = match contract
         .pointer("/properties/review_stage/const")
         .and_then(Value::as_str)
@@ -754,6 +1369,8 @@ fn normalize_review_output(contract: &Value, value: &Value) -> Result<Normalized
             author: author.expect("validated author"),
             result: result.expect("validated result"),
             findings: findings.expect("validated findings"),
+            review_contract_version,
+            grounds,
         })
     } else {
         Err(malformed_diagnostic(&violations))
@@ -1084,6 +1701,8 @@ mod tests {
                 },
                 result: "pass".to_owned(),
                 findings: String::new(),
+                review_contract_version: None,
+                grounds: None,
             }
         );
         assert_eq!(fs::read(&selected).expect("raw selected"), bytes);

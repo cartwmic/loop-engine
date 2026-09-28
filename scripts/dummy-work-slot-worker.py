@@ -13,7 +13,16 @@ import sys
 from pathlib import Path
 
 REQUIRED_KEYS = ("run_id", "slot_id", "artifact_root", "instruction_body", "capture_dir")
-OPTIONAL_KEYS = ("context", "standing_assignment_ids", "assignment_selection", "invocation_input", "controls")
+OPTIONAL_KEYS = (
+    "context",
+    "standing_assignment_ids",
+    "assignment_selection",
+    "invocation_input",
+    "controls",
+    "binding_sha256",
+    "state_visit",
+    "transition_history",
+)
 
 
 def main() -> int:
@@ -42,6 +51,25 @@ def main() -> int:
             return 1
     if "controls" in packet and not isinstance(packet["controls"], dict):
         sys.stderr.write("dummy worker controls must be an object\n")
+        return 1
+    if "binding_sha256" in packet and (
+        not isinstance(packet["binding_sha256"], str)
+        or not packet["binding_sha256"].startswith("sha256:")
+    ):
+        sys.stderr.write("dummy worker binding_sha256 must be a sha256 string\n")
+        return 1
+    if "state_visit" in packet and (
+        not isinstance(packet["state_visit"], int)
+        or isinstance(packet["state_visit"], bool)
+        or packet["state_visit"] < 0
+    ):
+        sys.stderr.write("dummy worker state_visit must be a non-negative integer\n")
+        return 1
+    if "transition_history" in packet and (
+        not isinstance(packet["transition_history"], list)
+        or not all(isinstance(item, dict) for item in packet["transition_history"])
+    ):
+        sys.stderr.write("dummy worker transition_history must be a list of objects\n")
         return 1
 
     artifact_root = packet["artifact_root"]

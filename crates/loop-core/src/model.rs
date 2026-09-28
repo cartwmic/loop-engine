@@ -307,6 +307,10 @@ pub struct WorkSlot {
     pub event: EventId,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stdin_context_kinds: Vec<String>,
+    /// Future opt-in for an explicitly attributed driver act on this bound
+    /// non-review slot. Historical workflows omit this and remain worker-only.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub driver_act_allowed: bool,
 }
 
 impl WorkSlot {
@@ -320,11 +324,17 @@ impl WorkSlot {
             state: state.into(),
             event: event.into(),
             stdin_context_kinds: Vec::new(),
+            driver_act_allowed: false,
         }
     }
 
     pub fn with_stdin_context_kinds(mut self, kinds: Vec<String>) -> Self {
         self.stdin_context_kinds = kinds;
+        self
+    }
+
+    pub fn with_driver_act_allowed(mut self, allowed: bool) -> Self {
+        self.driver_act_allowed = allowed;
         self
     }
 }
@@ -348,6 +358,85 @@ impl WorkSlotBinding {
             context_filter: None,
         }
     }
+}
+
+/// Explicit, versioned selection for a future same-binding fan-out recovery.
+/// This is ordinary `invoke --input` data; it does not change the frozen
+/// binding or make recovered sources reviewer executions.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FanOutRecoveryInput {
+    pub protocol: String,
+    pub run_id: String,
+    pub slot_id: String,
+    pub state_visit: u64,
+    pub subject: String,
+    pub binding_sha256: String,
+    pub origin_invocation_id: String,
+    pub pending_assignment_ids: Vec<String>,
+    pub sources: Vec<FanOutRecoverySource>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FanOutRecoverySource {
+    pub assignment_id: String,
+    pub source_class: String,
+    pub raw_attempt: u32,
+    pub raw_stdout_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_output_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_output_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derivation: Option<FanOutRecoveryDerivation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_approval: Option<FanOutRecoveryApproval>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fidelity_approval: Option<FanOutRecoveryApproval>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FanOutRecoveryDerivation {
+    pub kind: String,
+    pub difference: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter: Option<FanOutRecoveryAdapterUsage>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FanOutRecoveryAdapterUsage {
+    pub command: String,
+    pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    pub usage_accounted: bool,
+    pub calls: u32,
+    pub elapsed_ms: u64,
+    pub metered_cost_micros: u64,
+    pub max_calls: u32,
+    pub max_time_ms: u64,
+    pub max_cost_micros: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture: Option<FanOutRecoveryAdapterCapture>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FanOutRecoveryAdapterCapture {
+    pub directory: String,
+    pub request_sha256: String,
+    pub stdout_sha256: String,
+    pub stderr_sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FanOutRecoveryApproval {
+    pub name: String,
+    pub reason: String,
 }
 
 /// Waiter-written terminal status. Stored values are ONLY `succeeded` and
@@ -375,6 +464,29 @@ pub enum ProjectedInvocationStatus {
     Overrun,
 }
 
+/// Generic frozen display identity supplied before worker output exists.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AssignmentLabel {
+    pub assignment_id: String,
+    pub title: String,
+    pub role: String,
+}
+
+/// One captured execution attempt. Errors are actual mechanical diagnostics,
+/// not semantic judgments.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WorkerAttempt {
+    pub number: u32,
+    #[serde(default)]
+    pub failed: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdout_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr_path: Option<String>,
+}
+
 /// Identity, process exit, and inert output linkage copied from a helper
 /// `summary.json`.
 ///
@@ -389,12 +501,38 @@ pub struct InnerWorker {
     pub command: String,
     pub args: Vec<String>,
     pub exit_code: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started: Option<bool>,
     #[serde(default)]
     pub selected_attempt: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdout_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempts_path: Option<String>,
+    #[serde(default)]
+    pub attempts: Vec<WorkerAttempt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conformance_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conformance_error: Option<String>,
     #[serde(default)]
     pub selected_output_sha256: Option<String>,
     #[serde(default)]
     pub selected_output_path: Option<String>,
+    /// Digest and capture-relative location of raw stdout, including a
+    /// nonconforming legacy `output_schema` response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_output_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_output_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_output_attempt: Option<u32>,
+    /// Generic source tuple for a mechanically joined recovery assignment.
+    /// It never claims that the current invocation launched this worker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_source: Option<Value>,
     /// Opaque, caller-declared output contract. Core transports it but does
     /// not inspect or interpret it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -422,9 +560,20 @@ impl InnerWorker {
             command: command.into(),
             args,
             exit_code,
+            started: None,
             selected_attempt: None,
+            stdout_path: None,
+            stderr_path: None,
+            attempts_path: None,
+            attempts: Vec::new(),
+            conformance_status: None,
+            conformance_error: None,
             selected_output_sha256: None,
             selected_output_path: None,
+            raw_output_sha256: None,
+            raw_output_path: None,
+            raw_output_attempt: None,
+            recovery_source: None,
             declared_output_contract: None,
             routed_inputs: None,
             task_definition: None,
@@ -447,6 +596,10 @@ pub struct WorkSlotInvocation {
     pub binding: WorkSlotBinding,
     pub instruction_digest: String,
     pub subject: String,
+    /// The control revision observed when this bound attempt was admitted.
+    /// Historical records default to zero and cannot prove a fresh visit.
+    #[serde(default)]
+    pub state_visit: u64,
     pub waiter_pid: u32,
     /// Native incarnation identity for the waiter. Absent for historical
     /// invocations and for records created by older runtimes.
@@ -462,6 +615,9 @@ pub struct WorkSlotInvocation {
     pub completed_at: Option<Timestamp>,
     pub capture_dir: String,
     pub inner_workers: Vec<InnerWorker>,
+    /// Caller/plan-graph supplied labels frozen before worker output exists.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assignment_labels: Vec<AssignmentLabel>,
     /// Exact context records forwarded to the worker packet. This is a
     /// durable snapshot; show never reconstructs it from capture files.
     #[serde(default)]
@@ -473,10 +629,12 @@ pub struct WorkSlotInvocation {
     /// Admitted attempt controls; absence preserves historical meaning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controls: Option<crate::InvocationControls>,
-    /// Immutable completion snapshot used to detect mutation of a recorded
-    /// result without consulting captures.
+    /// Legacy inline completion snapshot. New SQLite rows retain a digest
+    /// reference instead of a duplicate worker payload.
     #[serde(default)]
     pub recorded_inner_workers: Vec<InnerWorker>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_snapshot_sha256: Option<String>,
     /// Assignment identities selected for this invocation. `None` means the
     /// frozen binding ran in full; `Some` is a validated non-empty subset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -510,6 +668,7 @@ impl WorkSlotInvocation {
             binding,
             instruction_digest: instruction_digest.into(),
             subject: subject.into(),
+            state_visit: 0,
             waiter_pid,
             waiter_identity: None,
             ownership: None,
@@ -520,13 +679,20 @@ impl WorkSlotInvocation {
             completed_at,
             capture_dir: capture_dir.into(),
             inner_workers,
+            assignment_labels: Vec::new(),
             routed_inputs: Vec::new(),
             frozen_run_identity: None,
             controls: None,
             recorded_inner_workers: Vec::new(),
+            completion_snapshot_sha256: None,
             assignment_selection: None,
             invocation_input: None,
         }
+    }
+
+    pub fn with_state_visit(mut self, state_visit: u64) -> Self {
+        self.state_visit = state_visit;
+        self
     }
 
     pub fn with_waiter_identity(mut self, identity: crate::ProcessIdentity) -> Self {
@@ -554,8 +720,18 @@ impl WorkSlotInvocation {
         self
     }
 
+    pub fn with_completion_snapshot_sha256(mut self, digest: Option<String>) -> Self {
+        self.completion_snapshot_sha256 = digest;
+        self
+    }
+
     pub fn with_routed_inputs(mut self, routed_inputs: Vec<ContextRecord>) -> Self {
         self.routed_inputs = routed_inputs;
+        self
+    }
+
+    pub fn with_assignment_labels(mut self, labels: Vec<AssignmentLabel>) -> Self {
+        self.assignment_labels = labels;
         self
     }
 
@@ -917,6 +1093,8 @@ pub struct EvaluationRequest {
     pub context: Vec<ContextRecord>,
     pub transition: Transition,
     pub prior_evaluations: Vec<DurableEvaluation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver_act: Option<crate::DriverActEvidence>,
 }
 
 impl EvaluationRequest {
@@ -933,6 +1111,7 @@ impl EvaluationRequest {
             context,
             transition,
             prior_evaluations,
+            driver_act: None,
         }
     }
 }
@@ -1277,13 +1456,28 @@ pub enum SkippedProviderEvaluation {
 #[serde(tag = "outcome", rename_all = "lowercase")]
 pub enum TransitionHistoryOutcome {
     Committed,
-    Denied { feedback: EvaluationFeedback },
-    Overridden { exception: TransitionOverride },
+    Denied {
+        feedback: EvaluationFeedback,
+    },
+    Overridden {
+        exception: TransitionOverride,
+    },
+    #[serde(rename = "advice-exception")]
+    AdviceException {
+        exception: crate::AdviceExceptionAttestation,
+    },
+    #[serde(rename = "driver-act")]
+    DriverAct {
+        act: crate::DriverActEvidence,
+    },
 }
 
 impl TransitionHistoryOutcome {
     pub const fn is_committed(&self) -> bool {
-        matches!(self, Self::Committed)
+        matches!(
+            self,
+            Self::Committed | Self::AdviceException { .. } | Self::DriverAct { .. }
+        )
     }
 
     pub const fn is_denied(&self) -> bool {
@@ -1292,7 +1486,10 @@ impl TransitionHistoryOutcome {
 
     pub fn feedback(&self) -> Option<&EvaluationFeedback> {
         match self {
-            Self::Committed | Self::Overridden { .. } => None,
+            Self::Committed
+            | Self::Overridden { .. }
+            | Self::AdviceException { .. }
+            | Self::DriverAct { .. } => None,
             Self::Denied { feedback } => Some(feedback),
         }
     }

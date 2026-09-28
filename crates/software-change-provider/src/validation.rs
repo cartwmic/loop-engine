@@ -645,7 +645,56 @@ pub(crate) fn source(
     context: &[ContextRecord],
     root: &Path,
 ) -> Result<(), String> {
+    source_with_expected_target(data, kind, context, root, None, None)
+}
+
+pub(crate) fn source_for_candidate(
+    data: &Value,
+    kind: &str,
+    context: &[ContextRecord],
+    root: &Path,
+    gate: &str,
+    config_version: &str,
+) -> Result<(), String> {
+    source_with_expected_target(data, kind, context, root, Some(gate), Some(config_version))
+}
+
+fn source_with_expected_target(
+    data: &Value,
+    kind: &str,
+    context: &[ContextRecord],
+    root: &Path,
+    expected_gate: Option<&str>,
+    expected_config_version: Option<&str>,
+) -> Result<(), String> {
+    validate_source_target(data, expected_gate, expected_config_version)?;
     source_with_verified_commands(data, kind, context, root, None)
+}
+
+fn validate_source_target(
+    data: &Value,
+    expected_gate: Option<&str>,
+    expected_config_version: Option<&str>,
+) -> Result<(), String> {
+    let linked = data.get("origin").is_some() || data.get(loop_core::ENGINE_ORIGIN_KEY).is_some();
+    let current_contract = data
+        .get(loop_core::ENGINE_ORIGIN_KEY)
+        .and_then(|origin| origin.get("slot_id"))
+        .is_some();
+    let has_metadata = data.get("gate").is_some()
+        || data.get("config_version").is_some()
+        || data.get("review_stage").is_some();
+    if linked && (current_contract || has_metadata) {
+        let gate = text(data, "gate")?;
+        let config_version = text(data, "config_version")?;
+        if text(data, "review_stage")? != "aggregate"
+            || (expected_gate.is_some_and(|expected| gate != expected))
+            || (expected_config_version.is_some_and(|expected| config_version != expected))
+        {
+            return Err("source-linked verdict has wrong gate, stage, or config version".into());
+        }
+    }
+    Ok(())
 }
 
 fn source_with_verified_commands(
@@ -664,9 +713,13 @@ fn source_with_verified_commands(
         "author",
         "result",
         "findings",
+        "reason",
         "evidence_context_ids",
         "origin",
         loop_core::ENGINE_ORIGIN_KEY,
+        "gate",
+        "config_version",
+        "review_stage",
     ];
     if object.keys().any(|k| !fields.contains(&k.as_str()))
         || (kind == "goal-verdict" && object.contains_key("criterion_id"))
@@ -690,6 +743,17 @@ fn source_with_verified_commands(
     }
     let findings: Vec<String> = serde_json::from_value(data["findings"].clone())
         .map_err(|_| "findings must be string array")?;
+    if let Some(reason) = data.get("reason") {
+        if reason
+            .as_str()
+            .is_none_or(|reason| reason.trim().is_empty() || reason.len() > 1200)
+        {
+            return Err(
+                "verdict reason must be a non-empty string of at most 1200 bytes when present"
+                    .into(),
+            );
+        }
+    }
     if (data["result"] == "pass" && !findings.is_empty())
         || (data["result"] == "fail"
             && (findings.is_empty() || findings.iter().any(|s| s.trim().is_empty())))
@@ -698,7 +762,16 @@ fn source_with_verified_commands(
         return Err("invalid verdict result/findings".into());
     }
     verify_verdict_origin(data, kind)?;
-    for id in ids(&data["evidence_context_ids"])? {
+    if data["result"] == "pass"
+        && data.get("reason").is_some()
+        && data["evidence_context_ids"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+    {
+        return Err("passing criterion/goal verdict requires inspected evidence references".into());
+    }
+    let evidence_ids = ids(&data["evidence_context_ids"])?;
+    for id in evidence_ids {
         let evidence = record(context, &id)?;
         if evidence.kind != "command-evidence" {
             return Err(format!(
@@ -725,7 +798,11 @@ fn verify_verdict_origin(data: &Value, kind: &str) -> Result<Option<String>, Str
     if origin.kind != "selected-assignment-output"
         || origin.id != engine.invocation_id.as_str()
         || origin.assignment_id.as_deref() != Some(engine.assignment_id.as_str())
-        || engine.selected_attempt == 0
+        || matches!(engine.selected_attempt, Some(0))
+        || (engine
+            .slot_id
+            .as_deref()
+            .is_some_and(|slot| data.get("gate").and_then(Value::as_str) != Some(slot)))
     {
         return Err("invalid engine-resolved verdict origin".into());
     }
@@ -740,12 +817,45 @@ fn verify_verdict_origin(data: &Value, kind: &str) -> Result<Option<String>, Str
     if format!("sha256:{:x}", Sha256::digest(&bytes)) != engine.selected_output_sha256 {
         return Err("verdict selected capture digest mismatch".into());
     }
+    match (engine.selected_attempt, engine.recovery_source.as_ref()) {
+        (Some(attempt), None) if attempt > 0 => {}
+        (None, Some(source)) => {
+            crate::evidence::verify_recovery_source(
+                source,
+                Path::new(&engine.capture_dir),
+                &engine.selected_output_path,
+                &engine.selected_output_sha256,
+            )?;
+            crate::evidence::verify_recovery_source_identity(
+                source,
+                &engine.assignment_id,
+                text(data, "gate")?,
+                None,
+                &engine.binding,
+            )?;
+        }
+        _ => return Err("verdict has no verifiable selected raw or derived source".into()),
+    }
     let raw: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    if raw.get("review_contract_version").and_then(Value::as_u64) == Some(2)
+        && (data
+            .get("reason")
+            .and_then(Value::as_str)
+            .is_none_or(|reason| reason.trim().is_empty() || reason.len() > 1200)
+            || ids(&data["evidence_context_ids"])?.is_empty())
+    {
+        return Err(
+            "version-2 criterion/goal source needs a concise reason and inspected evidence".into(),
+        );
+    }
     if raw.get("review_stage").and_then(Value::as_str) != Some("aggregate") {
         return Err("criterion/goal verdicts must come from an aggregate review output".into());
     }
     let mut claimed = data.clone();
     claimed.as_object_mut().unwrap().remove("origin");
+    claimed.as_object_mut().unwrap().remove("gate");
+    claimed.as_object_mut().unwrap().remove("config_version");
+    claimed.as_object_mut().unwrap().remove("review_stage");
     claimed
         .as_object_mut()
         .unwrap()
@@ -942,6 +1052,11 @@ pub(crate) fn evaluate(
             {
                 return Err("verdict kind or criterion identity mismatch".into());
             }
+            validate_source_target(
+                &original.data,
+                Some("validation-review"),
+                input.get("config_version").and_then(Value::as_str),
+            )?;
             source_with_verified_commands(
                 &original.data,
                 kind,
@@ -1038,6 +1153,104 @@ mod tests {
         assert!(current_criteria(&json!({"acceptance":[criterion.clone()]})).is_ok());
         assert!(current_criteria(&json!({"acceptance":[criterion.clone(),criterion]})).is_err());
     }
+    #[test]
+    fn passing_criterion_verdict_checks_inspected_evidence_when_reason_is_present() {
+        use loop_core::{ContextRecord, SemanticSequence, Timestamp};
+        let context = vec![ContextRecord::new(
+            "cmd",
+            "command-evidence",
+            json!({}),
+            SemanticSequence::new(1),
+            Timestamp::from_unix_millis(0),
+        )];
+        let data = json!({
+            "criterion_id":"AC-1","subject":"validation-report.json","subject_revision":"r1",
+            "checkpoint":"validation-checkpoint.json","author":{"name":"reviewer","kind":"agent"},
+            "result":"pass","findings":[],"reason":"The captured result matches the outcome.",
+            "evidence_context_ids":["cmd"]
+        });
+        let retained = BTreeSet::from(["cmd".to_owned()]);
+        assert!(source_with_verified_commands(
+            &data,
+            "criterion-verdict",
+            &context,
+            Path::new("/unused"),
+            Some(&retained)
+        )
+        .is_ok());
+        let mut no_reason = data.clone();
+        no_reason.as_object_mut().unwrap().remove("reason");
+        assert!(
+            source_with_verified_commands(
+                &no_reason,
+                "criterion-verdict",
+                &context,
+                Path::new("/unused"),
+                Some(&retained)
+            )
+            .is_ok(),
+            "legacy external rows retain their frozen shape"
+        );
+        let mut no_evidence = data.clone();
+        no_evidence["evidence_context_ids"] = json!([]);
+        assert!(source_with_verified_commands(
+            &no_evidence,
+            "criterion-verdict",
+            &context,
+            Path::new("/unused"),
+            Some(&retained)
+        )
+        .unwrap_err()
+        .contains("requires inspected evidence"));
+        let mut oversized_reason = data;
+        oversized_reason["reason"] = json!("x".repeat(1201));
+        assert!(source_with_verified_commands(
+            &oversized_reason,
+            "criterion-verdict",
+            &context,
+            Path::new("/unused"),
+            Some(&retained)
+        )
+        .unwrap_err()
+        .contains("1200 bytes"));
+    }
+
+    #[test]
+    fn source_linked_candidate_requires_current_gate_stage_and_config_claims() {
+        let context = [];
+        let data = json!({
+            "gate":"validation-adversarial-review",
+            "config_version":"fixture-1",
+            "review_stage":"aggregate",
+            "origin":{"kind":"selected-assignment-output","id":"invocation-1","assignment_id":"worker-0"},
+            loop_core::ENGINE_ORIGIN_KEY:{"slot_id":"validation-adversarial-review"}
+        });
+        assert!(source_for_candidate(
+            &data,
+            "criterion-verdict",
+            &context,
+            Path::new("/unused"),
+            "validation-review",
+            "fixture-1",
+        )
+        .unwrap_err()
+        .contains("wrong gate, stage, or config"));
+        let mut wrong_config = data.clone();
+        wrong_config["gate"] = json!("validation-review");
+        wrong_config[loop_core::ENGINE_ORIGIN_KEY]["slot_id"] = json!("validation-review");
+        wrong_config["config_version"] = json!("stale-config");
+        assert!(source_for_candidate(
+            &wrong_config,
+            "criterion-verdict",
+            &context,
+            Path::new("/unused"),
+            "validation-review",
+            "fixture-1",
+        )
+        .unwrap_err()
+        .contains("wrong gate, stage, or config"));
+    }
+
     #[test]
     fn recovery_criterion_v2_index_schema_replaces_freehand_results() {
         let schema = crate::schema::validate_schema(

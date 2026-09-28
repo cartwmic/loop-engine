@@ -42,7 +42,7 @@
     },
     {
       "id": "AC-2",
-      "statement": "The owner can tell which outcomes are in scope, which adjacent capabilities are excluded, and whether the acceptance decision is waiting for evidence or complete."
+      "statement": "The owner can tell which outcomes are in scope and which adjacent capabilities are excluded. The owner can tell whether review is still pending, the work was accepted, or the work was rejected. A worker finishing successfully does not itself mean the work was accepted."
     }
   ],
   "constraints": [

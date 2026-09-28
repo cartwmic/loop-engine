@@ -599,7 +599,7 @@ fn report_ledger_derives_current_checkpoint_instead_of_copying_state() {
                 "agent",
                 "implementation-report.json",
                 "r15",
-                "minimal-11",
+                "minimal-12",
             ),
             (sequence + 1) as u64,
         ));

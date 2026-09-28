@@ -340,6 +340,10 @@ pub static FILES: &[EmbeddedFile] = &[
         )),
     },
     EmbeddedFile {
+        path: "crates/software-change-provider/data/review-worker-output-schema-v2.json",
+        bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/review-worker-output-schema-v2.json")),
+    },
+    EmbeddedFile {
         path: "crates/software-change-provider/data/review-worker-preamble.txt",
         bytes: include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),

@@ -10,7 +10,7 @@ use loop_core::ContextRecord;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::io::{self, Read};
@@ -80,6 +80,10 @@ pub(crate) struct InvokePacket {
     /// When present, sidecar standing results must also be members.
     #[serde(default)]
     pub(crate) standing_assignment_ids: Option<Vec<String>>,
+    #[serde(default, rename = "assignment_labels")]
+    pub(crate) _assignment_labels: Vec<loop_core::AssignmentLabel>,
+    #[serde(default)]
+    pub(crate) transition_history: Option<Vec<loop_core::HistoryEntry>>,
     #[serde(default)]
     pub(crate) controls: loop_core::InvocationControls,
     #[serde(default)]
@@ -90,6 +94,7 @@ pub(crate) struct InvokePacket {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum InvocationSelection {
     Plan(PlanSelection),
+    ReportOnly(ReportOnlySelection),
     Repair(RepairSelection),
 }
 
@@ -98,6 +103,15 @@ enum InvocationSelection {
 struct PlanSelection {
     plan_revision: String,
     task_roots: Vec<String>,
+    #[serde(default)]
+    standing_results: Vec<StandingResultMapping>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct ReportOnlySelection {
+    plan_revision: String,
+    report_only: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -222,16 +236,16 @@ pub(crate) fn parse_invoke_packet(raw: &str) -> Result<InvokePacket, ParseError>
 fn parse_invocation_selection(value: &Value) -> Result<InvocationSelection, ExecuteError> {
     let object = value.as_object().ok_or_else(|| {
         ExecuteError::usage(
-            "invocation_input must be exactly {plan_revision,task_roots} or {repair_finding_ids}",
+            "invocation_input must be a task-root selection, {plan_revision,report_only:true}, or {repair_finding_ids}",
         )
     })?;
     let mut keys = object.keys().map(String::as_str).collect::<Vec<_>>();
     keys.sort_unstable();
     match keys.as_slice() {
-        ["plan_revision", "task_roots"] => {
+        ["plan_revision", "task_roots"] | ["plan_revision", "standing_results", "task_roots"] => {
             let selection = serde_json::from_value::<PlanSelection>(value.clone()).map_err(|error| {
                 ExecuteError::usage(format!(
-                    "invocation_input must be exactly {{plan_revision,task_roots}} with a nonempty string plan_revision and nonempty string-array task_roots: {error}"
+                    "invocation_input must be a closed task selection with nonempty plan_revision and task_roots: {error}"
                 ))
             })?;
             if selection.plan_revision.is_empty() {
@@ -253,7 +267,41 @@ fn parse_invocation_selection(value: &Value) -> Result<InvocationSelection, Exec
                     "invocation_input task_roots must not contain blank task ids",
                 ));
             }
+            let mut sources = HashSet::new();
+            for mapping in &selection.standing_results {
+                if mapping.source_result_id.trim().is_empty()
+                    || mapping.source_invocation_id.trim().is_empty()
+                    || mapping.source_assignment_id.trim().is_empty()
+                    || mapping.reason.trim().is_empty()
+                    || mapping.current_obligations.is_empty()
+                    || mapping.current_obligations.iter().any(|id| id.trim().is_empty())
+                    || !sources.insert(&mapping.source_result_id)
+                {
+                    return Err(ExecuteError::usage(
+                        "standing_results requires unique source result IDs, a reason, and nonempty current obligations",
+                    ));
+                }
+                let mut obligations = HashSet::new();
+                if mapping.current_obligations.iter().any(|id| !obligations.insert(id)) {
+                    return Err(ExecuteError::usage(format!(
+                        "standing_results source `{}` repeats a current obligation",
+                        mapping.source_result_id
+                    )));
+                }
+            }
             Ok(InvocationSelection::Plan(selection))
+        }
+        ["plan_revision", "report_only"] => {
+            let selection = serde_json::from_value::<ReportOnlySelection>(value.clone())
+                .map_err(|error| ExecuteError::usage(format!(
+                    "invocation_input must be exactly {{plan_revision,report_only}}: {error}"
+                )))?;
+            if selection.plan_revision.trim().is_empty() || !selection.report_only {
+                return Err(ExecuteError::usage(
+                    "report-only selection requires a nonempty plan_revision and report_only=true",
+                ));
+            }
+            Ok(InvocationSelection::ReportOnly(selection))
         }
         ["repair_finding_ids"] => {
             let selection = serde_json::from_value::<RepairSelection>(value.clone()).map_err(|error| {
@@ -282,7 +330,7 @@ fn parse_invocation_selection(value: &Value) -> Result<InvocationSelection, Exec
             Ok(InvocationSelection::Repair(selection))
         }
         _ => Err(ExecuteError::usage(
-            "invocation_input must be exactly {plan_revision,task_roots} or {repair_finding_ids}",
+            "invocation_input must be a task-root selection, {plan_revision,report_only:true}, or {repair_finding_ids}",
         )),
     }
 }
@@ -533,6 +581,8 @@ struct PlanTaskResultsFile {
     schema_version: String,
     plan_revision: String,
     results: Vec<PlanTaskResult>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    standing_results: Vec<MappedStandingResult>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -546,6 +596,89 @@ struct PlanTaskResult {
     exit_code: i32,
     repository_effect: Value,
     capture_dir: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    invocation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    selected_output_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    effect_snapshot: Option<Vec<EffectIdentity>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    proof: Option<PlanTaskProof>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    result_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct EffectIdentity {
+    path: String,
+    sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct PlanTaskProof {
+    intent_revision: String,
+    design_revision: String,
+    plan_revision: String,
+    report_revision: String,
+    report_sha256: String,
+    checkpoint_sha256: String,
+    repository_state_sha256: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CapturedRepositoryEntry {
+    path: String,
+    tracked: bool,
+    kind: String,
+    mode: String,
+    content_sha256: Option<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CapturedRepositoryWithoutState {
+    head: String,
+    index_sha256: String,
+    status_sha256: String,
+    entries: Vec<CapturedRepositoryEntry>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct StandingResultMapping {
+    source_result_id: String,
+    source_invocation_id: String,
+    source_assignment_id: String,
+    current_obligations: Vec<String>,
+    reason: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct MappedStandingResult {
+    task_id: String,
+    plan_revision: String,
+    task_sha256: String,
+    source_result_ids: Vec<String>,
+    source_invocations: Vec<String>,
+    source_assignments: Vec<String>,
+    reason: String,
+    dependencies: Vec<String>,
+    effect_snapshot: Vec<EffectIdentity>,
+    changed_dimensions: Vec<String>,
+}
+
+#[derive(Default)]
+struct ResolvedStandingResults {
+    standing: HashSet<String>,
+    mappings: Vec<MappedStandingResult>,
+    pending: Vec<Value>,
+}
+
+struct ResolvedPlanSelection {
+    selected_order: Vec<String>,
+    mapped_standing: Vec<MappedStandingResult>,
+    pending_mappings: Vec<Value>,
 }
 
 struct PreparedStep {
@@ -568,6 +701,15 @@ struct CaptureWorker<'a> {
     /// Provider-owned plan-task identity. The engine treats this as opaque
     /// assignment identity and does not classify the task by role.
     assignment_id: &'a str,
+    plan_revision: &'a str,
+    invocation_id: &'a str,
+    capture_dir: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    proof: Option<PlanTaskProof>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effect_snapshot: Option<Vec<EffectIdentity>>,
     command: &'a str,
     args: &'a [String],
     exit_code: i32,
@@ -710,7 +852,13 @@ fn execute_from_packet(args: &RunPlanGraphArgs, raw_packet: &str) -> Result<(), 
         )
         .map_err(ExecuteError::usage)?;
         if packet.preview {
-            println!("{}", serde_json::json!({"prepared": true}));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "prepared": true,
+                    "assignment_labels": [{"assignment_id":"ad-hoc-repair","title":"Implementation repair","role":"repair"}]
+                })
+            );
             return Ok(());
         }
         let dagu = resolve_dagu().map_err(|error| ExecuteError::failed(error.to_string()))?;
@@ -727,42 +875,104 @@ fn execute_from_packet(args: &RunPlanGraphArgs, raw_packet: &str) -> Result<(), 
         );
     }
 
-    let standing_assignment_ids = if packet.controls.force_fresh {
-        Some(HashSet::new())
-    } else {
-        packet
-            .standing_assignment_ids
+    let report_only_selection =
+        invocation_selection
             .as_ref()
-            .map(|ids| ids.iter().cloned().collect::<HashSet<_>>())
-    };
+            .and_then(|selection| match selection {
+                InvocationSelection::ReportOnly(selection) => Some(selection),
+                _ => None,
+            });
+    if let Some(selection) = report_only_selection {
+        if args.task_selection.is_some() || packet.controls.force_fresh {
+            return Err(ExecuteError::usage(
+                "report-only selection cannot be combined with task flags or force-fresh controls",
+            ));
+        }
+        if selection.plan_revision != plan.revision {
+            return Err(ExecuteError::usage(format!(
+                "report-only plan_revision `{}` does not match plan.json revision `{}`",
+                selection.plan_revision, plan.revision
+            )));
+        }
+        verify_report_only_reentry(&packet, &artifact_root)?;
+        let standing =
+            verify_current_standing_tasks(&artifact_root, &args.working_directory, &plan)?;
+        if packet.preview {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "prepared":true,
+                    "mode":"report-only",
+                    "standing_tasks":standing.standing,
+                    "selected_tasks":[],
+                    "assignment_labels":assignment_labels_for_plan(&plan, &[]),
+                })
+            );
+            return Ok(());
+        }
+        let dagu = resolve_dagu().map_err(|error| ExecuteError::failed(error.to_string()))?;
+        return run_dagu_graph(
+            args,
+            &dagu,
+            &artifact_root,
+            &plan_path,
+            &capture_root,
+            &plan,
+            None,
+            &[],
+            packet.context.as_deref(),
+            "report-only",
+            &standing.mappings,
+            &[],
+            true,
+        );
+    }
+
     let invocation_plan_selection =
         invocation_selection
             .as_ref()
             .and_then(|selection| match selection {
                 InvocationSelection::Plan(selection) => Some(selection),
-                InvocationSelection::Repair(_) => None,
+                _ => None,
             });
-    let selected_order = resolve_plan_selection(
+    let resolved = resolve_plan_selection(
         args,
         &artifact_root,
+        &args.working_directory,
         &plan,
-        standing_assignment_ids.as_ref(),
         invocation_plan_selection,
-    ).map_err(|error| {
+        !packet.controls.force_fresh,
+    )
+    .map_err(|error| {
         if packet.controls.force_fresh {
             ExecuteError::usage(format!("{error}; force-fresh selected execution cannot reuse unselected prerequisites: use full execution or a normal standing-aware subset"))
-        } else { error }
+        } else {
+            error
+        }
     })?;
     if packet.preview {
+        let assignment_labels = assignment_labels_for_plan(&plan, &resolved.selected_order);
         println!(
             "{}",
-            serde_json::json!({"prepared": true, "selected_tasks": selected_order, "max_active": args.max_active})
+            serde_json::json!({
+                "prepared":true,
+                "selected_tasks":resolved.selected_order,
+                "standing_results":resolved.mapped_standing,
+                "pending_mappings":resolved.pending_mappings,
+                "max_active":args.max_active,
+                "assignment_labels":assignment_labels
+            })
         );
         return Ok(());
     }
     let requested_selection = invocation_plan_selection
         .map(|selection| selection.task_roots.as_slice())
         .or(args.task_selection.as_deref());
+    let selection_mode = if requested_selection.is_some() {
+        "task-roots"
+    } else {
+        "full"
+    };
     let dagu = resolve_dagu().map_err(|error| ExecuteError::failed(error.to_string()))?;
     run_dagu_graph(
         args,
@@ -772,8 +982,12 @@ fn execute_from_packet(args: &RunPlanGraphArgs, raw_packet: &str) -> Result<(), 
         &capture_root,
         &plan,
         requested_selection,
-        &selected_order,
+        &resolved.selected_order,
         packet.context.as_deref(),
+        selection_mode,
+        &resolved.mapped_standing,
+        &resolved.pending_mappings,
+        false,
     )
 }
 
@@ -926,13 +1140,60 @@ fn has_cycle(order: &[String], successors: &HashMap<String, Vec<String>>) -> boo
         .any(|id| visit(id, successors, &mut visiting, &mut visited))
 }
 
+fn assignment_labels_for_plan(
+    plan: &PlanGraph,
+    selected_order: &[String],
+) -> Vec<loop_core::AssignmentLabel> {
+    let mut labels = selected_order
+        .iter()
+        .map(|id| {
+            let task = plan.tasks.get(id);
+            let title = task
+                .and_then(|task| task.get("title"))
+                .and_then(Value::as_str)
+                .filter(|title| !title.trim().is_empty())
+                .or_else(|| {
+                    task.and_then(|task| task.get("objective"))
+                        .and_then(Value::as_str)
+                        .and_then(|objective| {
+                            objective.lines().find(|line| !line.trim().is_empty())
+                        })
+                })
+                .unwrap_or(id)
+                .chars()
+                .take(160)
+                .collect::<String>();
+            let role = task
+                .and_then(|task| task.get("role"))
+                .and_then(Value::as_str)
+                .filter(|role| !role.trim().is_empty())
+                .unwrap_or("plan-task")
+                .chars()
+                .take(80)
+                .collect::<String>();
+            loop_core::AssignmentLabel {
+                assignment_id: id.clone(),
+                title,
+                role,
+            }
+        })
+        .collect::<Vec<_>>();
+    labels.push(loop_core::AssignmentLabel {
+        assignment_id: SUMMARIZER_STEP.to_owned(),
+        title: "Implementation report".to_owned(),
+        role: "summarizer".to_owned(),
+    });
+    labels
+}
+
 fn resolve_plan_selection(
     args: &RunPlanGraphArgs,
     artifact_root: &Path,
+    working_directory: &Path,
     plan: &PlanGraph,
-    standing_assignment_ids: Option<&HashSet<String>>,
     invocation_selection: Option<&PlanSelection>,
-) -> Result<Vec<String>, ExecuteError> {
+    allow_mapped_standing: bool,
+) -> Result<ResolvedPlanSelection, ExecuteError> {
     let requested = if let Some(selection) = invocation_selection {
         if selection.plan_revision != plan.revision {
             return Err(ExecuteError::usage(format!(
@@ -945,7 +1206,11 @@ fn resolve_plan_selection(
         args.task_selection.as_deref()
     };
     let Some(requested) = requested else {
-        return Ok(plan.order.clone());
+        return Ok(ResolvedPlanSelection {
+            selected_order: plan.order.clone(),
+            mapped_standing: Vec::new(),
+            pending_mappings: Vec::new(),
+        });
     };
     if requested.is_empty() || requested.iter().any(|id| id.trim().is_empty()) {
         return Err(ExecuteError::usage(
@@ -967,12 +1232,27 @@ fn resolve_plan_selection(
         }
     }
 
-    let standing = load_standing_plan_tasks(
+    let mut standing = load_standing_plan_tasks(
         artifact_root,
-        &plan.revision,
-        standing_assignment_ids,
-        invocation_selection.is_some(),
+        working_directory,
+        plan,
+        allow_mapped_standing,
     )?;
+    let mut mapped = if allow_mapped_standing {
+        invocation_selection
+            .map(|selection| {
+                resolve_explicit_standing_results(
+                    artifact_root,
+                    working_directory,
+                    plan,
+                    &selection.standing_results,
+                )
+            })
+            .unwrap_or_default()
+    } else {
+        ResolvedStandingResults::default()
+    };
+    standing.extend(mapped.standing.iter().cloned());
     let mut selected = roots
         .iter()
         .map(|id| (*id).to_owned())
@@ -997,6 +1277,40 @@ fn resolve_plan_selection(
         .filter(|id| selected.contains(*id))
         .cloned()
         .collect::<Vec<_>>();
+    mapped.mappings.retain(|mapping| {
+        if selected.contains(&mapping.task_id) {
+            standing.remove(&mapping.task_id);
+            false
+        } else {
+            true
+        }
+    });
+    // A reused task is standing only while every prerequisite it names is
+    // itself standing in this current revision. Unknown chains remain pending.
+    loop {
+        let invalid = mapped
+            .mappings
+            .iter()
+            .filter(|mapping| {
+                mapping.dependencies.iter().any(|dependency| {
+                    !selected.contains(dependency) && !standing.contains(dependency)
+                })
+            })
+            .map(|mapping| mapping.task_id.clone())
+            .collect::<Vec<_>>();
+        if invalid.is_empty() {
+            break;
+        }
+        for task_id in invalid {
+            standing.remove(&task_id);
+            mapped.mappings.retain(|mapping| mapping.task_id != task_id);
+            mapped.pending.push(json!({
+                "task_id":task_id,
+                "status":"unknown-pending",
+                "reason":"one or more original prerequisites are not standing in the current plan",
+            }));
+        }
+    }
     for id in &selected_order {
         let mut missing = plan
             .predecessors
@@ -1017,15 +1331,328 @@ fn resolve_plan_selection(
         }
     }
 
-    Ok(selected_order)
+    Ok(ResolvedPlanSelection {
+        selected_order,
+        mapped_standing: mapped.mappings,
+        pending_mappings: mapped.pending,
+    })
+}
+
+fn inspect_current_standing_tasks(
+    artifact_root: &Path,
+    working_directory: &Path,
+    plan: &PlanGraph,
+) -> Result<ResolvedStandingResults, ExecuteError> {
+    let path = artifact_root.join(PLAN_TASK_RESULTS_FILE);
+    let raw = match fs::read(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(ResolvedStandingResults::default())
+        }
+        Err(error) => {
+            return Err(ExecuteError::failed(format!(
+                "could not read {}: {error}",
+                path.display()
+            )))
+        }
+    };
+    let file: PlanTaskResultsFile = serde_json::from_slice(&raw).map_err(|error| {
+        ExecuteError::failed(format!("{} is not valid: {error}", path.display()))
+    })?;
+    if file.schema_version != "1" || file.plan_revision != plan.revision {
+        return Ok(ResolvedStandingResults::default());
+    }
+    let mut result = ResolvedStandingResults::default();
+    for row in &file.results {
+        let Some(invocation_id) = row.invocation_id.as_deref() else {
+            result.pending.push(json!({"task_id":row.assignment_id,"status":"unknown-pending","reason":"task result has no invocation identity"}));
+            continue;
+        };
+        let Some(result_id) = row.result_id.as_deref() else {
+            result.pending.push(json!({"task_id":row.assignment_id,"status":"unknown-pending","reason":"task result has no source identity"}));
+            continue;
+        };
+        let source =
+            match verify_source_result(artifact_root, invocation_id, &row.assignment_id, result_id)
+            {
+                Ok(source) => source,
+                Err(error) => {
+                    result.pending.push(
+                    json!({"task_id":row.assignment_id,"status":"unknown-pending","reason":error}),
+                );
+                    continue;
+                }
+            };
+        let Some(current_task) = plan.tasks.get(&row.assignment_id) else {
+            result.pending.push(json!({"task_id":row.assignment_id,"status":"unknown-pending","reason":"task is absent from current plan"}));
+            continue;
+        };
+        let current_dependencies = sorted_predecessors(plan, &row.assignment_id);
+        if row.plan_revision != plan.revision
+            || source.result.plan_revision != plan.revision
+            || row.exit_code != 0
+            || normalized_task_definition(&row.task) != normalized_task_definition(current_task)
+            || row.dependencies != current_dependencies
+            || normalized_task_definition(&source.result.task)
+                != normalized_task_definition(current_task)
+            || source.result.dependencies != current_dependencies
+        {
+            result.pending.push(json!({"task_id":row.assignment_id,"status":"unknown-pending","reason":"task definition, dependency, revision, or result status changed"}));
+            continue;
+        }
+        let expected_effects = row.effect_snapshot.as_ref();
+        let actual_effects =
+            effect_snapshot_from_value(&row.repository_effect, working_directory).ok();
+        if expected_effects.is_none() || actual_effects.as_ref() != expected_effects {
+            result.pending.push(json!({"task_id":row.assignment_id,"status":"unknown-pending","reason":"repository effect identity changed or is unknown"}));
+            continue;
+        }
+        result.standing.insert(row.assignment_id.clone());
+    }
+    for mapped in &file.standing_results {
+        match verify_mapped_standing_record(artifact_root, working_directory, plan, mapped) {
+            Ok(()) => {
+                result.standing.insert(mapped.task_id.clone());
+                result.mappings.push(mapped.clone());
+            }
+            Err(error) => result.pending.push(json!({
+                "task_id":mapped.task_id,
+                "status":"unknown-pending",
+                "reason":error,
+            })),
+        }
+    }
+    loop {
+        let invalid = result
+            .standing
+            .iter()
+            .filter(|task_id| {
+                sorted_predecessors(plan, task_id)
+                    .iter()
+                    .any(|dependency| !result.standing.contains(dependency))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if invalid.is_empty() {
+            break;
+        }
+        for task_id in invalid {
+            result.standing.remove(&task_id);
+            result.mappings.retain(|mapping| mapping.task_id != task_id);
+            result.pending.push(json!({"task_id":task_id,"status":"unknown-pending","reason":"a prerequisite is not standing in the current plan"}));
+        }
+    }
+    Ok(result)
+}
+
+fn verify_mapped_standing_record(
+    artifact_root: &Path,
+    working_directory: &Path,
+    plan: &PlanGraph,
+    mapped: &MappedStandingResult,
+) -> Result<(), String> {
+    let current_task = plan
+        .tasks
+        .get(&mapped.task_id)
+        .ok_or("mapped task is absent from current plan")?;
+    if mapped.plan_revision != plan.revision
+        || mapped.task_sha256 != canonical_json_digest(current_task)?
+        || mapped.dependencies != sorted_predecessors(plan, &mapped.task_id)
+        || mapped.reason.trim().is_empty()
+        || mapped.source_result_ids.is_empty()
+        || mapped.source_result_ids.len() != mapped.source_invocations.len()
+        || mapped.source_result_ids.len() != mapped.source_assignments.len()
+    {
+        return Err("mapped standing result no longer matches current task, dependencies, or source identity".to_owned());
+    }
+    let mut effects = BTreeMap::<String, String>::new();
+    for ((result_id, invocation_id), assignment_id) in mapped
+        .source_result_ids
+        .iter()
+        .zip(&mapped.source_invocations)
+        .zip(&mapped.source_assignments)
+    {
+        let source = verify_source_result(artifact_root, invocation_id, assignment_id, result_id)?;
+        let current =
+            effect_snapshot_from_value(&source.result.repository_effect, working_directory)?;
+        if Some(&current) != source.result.effect_snapshot.as_ref() {
+            return Err("a mapped source repository effect changed in the current tree".to_owned());
+        }
+        for effect in current {
+            if effects
+                .insert(effect.path.clone(), effect.sha256.clone())
+                .is_some_and(|old| old != effect.sha256)
+            {
+                return Err(format!(
+                    "mapped source effects disagree at `{}`",
+                    effect.path
+                ));
+            }
+        }
+    }
+    let mut expected = effects
+        .into_iter()
+        .map(|(path, sha256)| EffectIdentity { path, sha256 })
+        .collect::<Vec<_>>();
+    expected.sort_by(|left, right| left.path.cmp(&right.path));
+    if expected != mapped.effect_snapshot {
+        return Err("mapped standing effect identity changed".to_owned());
+    }
+    Ok(())
+}
+
+fn verify_current_standing_tasks(
+    artifact_root: &Path,
+    working_directory: &Path,
+    plan: &PlanGraph,
+) -> Result<ResolvedStandingResults, ExecuteError> {
+    let inspected = inspect_current_standing_tasks(artifact_root, working_directory, plan)?;
+    if inspected.standing.len() != plan.order.len() {
+        let missing = plan
+            .order
+            .iter()
+            .filter(|id| !inspected.standing.contains(*id))
+            .cloned()
+            .collect::<Vec<_>>();
+        return Err(ExecuteError::failed(format!(
+            "report-only requires every current task to have a verified standing result; unknown or pending: {}",
+            missing.join(", ")
+        )));
+    }
+    Ok(inspected)
+}
+
+fn verify_report_only_reentry(
+    packet: &InvokePacket,
+    artifact_root: &Path,
+) -> Result<(), ExecuteError> {
+    if packet.slot_id != "implement" {
+        return Err(ExecuteError::usage(
+            "report-only is supported only by the current bound implement visit",
+        ));
+    }
+    let history = packet.transition_history.as_ref().ok_or_else(|| {
+        ExecuteError::usage("report-only requires complete engine transition history")
+    })?;
+    let committed = history
+        .iter()
+        .filter_map(|entry| match &entry.action {
+            loop_core::HistoryAction::Transition {
+                transition,
+                outcome,
+            } if outcome.is_committed() => Some((entry.sequence.as_u64(), transition)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let Some((latest_sequence, latest)) = committed.last().copied() else {
+        return Err(ExecuteError::usage(
+            "report-only requires a completed reconciliation and implementation re-entry",
+        ));
+    };
+    if latest.event.as_str() != "revise-implementation" || latest.target.as_str() != "implement" {
+        return Err(ExecuteError::usage(
+            "report-only requires re-entry through the supported revise-implementation transition",
+        ));
+    }
+    if !committed.iter().any(|(sequence, transition)| {
+        *sequence < latest_sequence
+            && transition.source.as_str() == "reconciliation"
+            && transition.event.as_str() == "reconciliation-ready"
+            && transition.target.as_str() != "end"
+    }) {
+        return Err(ExecuteError::usage(
+            "report-only requires a prior checked reconciliation-ready decision before revise-implementation",
+        ));
+    }
+    let context = packet.context.as_deref().unwrap_or_default();
+    let Some(decision_record) = context
+        .iter()
+        .filter(|record| record.kind == crate::workflow::RECONCILIATION_DECISION_KIND)
+        .max_by_key(|record| record.sequence)
+    else {
+        return Err(ExecuteError::usage(
+            "report-only requires the provider-recorded LE-142 reconciliation decision",
+        ));
+    };
+    if !decision_record
+        .id
+        .as_str()
+        .starts_with("engine-context-effect-")
+    {
+        return Err(ExecuteError::usage(
+            "report-only requires the provider-recorded checked reconciliation context effect",
+        ));
+    }
+    let decision_path = artifact_root.join(crate::workflow::RECONCILIATION_SUBJECT);
+    let decision_bytes = fs::read(&decision_path).map_err(|error| {
+        ExecuteError::usage(format!(
+            "current reconciliation decision is unavailable: {error}"
+        ))
+    })?;
+    let decision: Value = serde_json::from_slice(&decision_bytes).map_err(|error| {
+        ExecuteError::usage(format!(
+            "current reconciliation decision is invalid JSON: {error}"
+        ))
+    })?;
+    let decision_digest = format!("sha256:{:x}", Sha256::digest(&decision_bytes));
+    if decision_record.data.get("sha256").and_then(Value::as_str) != Some(decision_digest.as_str())
+        || decision_record.data.get("revision").and_then(Value::as_str)
+            != decision.get("revision").and_then(Value::as_str)
+    {
+        return Err(ExecuteError::usage(
+            "reconciliation decision changed after its checked reconciliation-ready event",
+        ));
+    }
+    for name in ["intent", "design", "plan"] {
+        let Some(current_revision) = read_artifact_revision(artifact_root, &format!("{name}.json"))
+        else {
+            return Err(ExecuteError::usage(format!(
+                "current {name}.json revision is unknown"
+            )));
+        };
+        if decision_record
+            .data
+            .get("documents")
+            .and_then(|documents| documents.get(name))
+            .and_then(Value::as_str)
+            != Some(current_revision.as_str())
+        {
+            return Err(ExecuteError::usage(format!(
+                "{name}.json changed after the checked reconciliation decision; re-enter reconciliation before report-only"
+            )));
+        }
+    }
+    if decision.get("decision").and_then(Value::as_str) != Some("complete")
+        || decision
+            .get("blockers")
+            .and_then(Value::as_array)
+            .is_none_or(|rows| !rows.is_empty())
+    {
+        return Err(ExecuteError::usage(
+            "report-only requires a complete, unblocked LE-142 reconciliation decision",
+        ));
+    }
+    if decision.get("branch").and_then(Value::as_str) == Some("missing-or-changed-enduring-meaning")
+        && (decision.get("authorization").and_then(Value::as_str) != Some("accepted")
+            || decision.get("application").and_then(Value::as_str) != Some("applied")
+            || decision.get("commit").and_then(Value::as_str) != Some("committed"))
+    {
+        return Err(ExecuteError::usage(
+            "report-only is blocked until required reconciliation wording is accepted, applied, and committed",
+        ));
+    }
+    Ok(())
 }
 
 fn load_standing_plan_tasks(
     artifact_root: &Path,
-    plan_revision: &str,
-    standing_assignment_ids: Option<&HashSet<String>>,
-    require_packet_standing: bool,
+    working_directory: &Path,
+    plan: &PlanGraph,
+    allow_standing: bool,
 ) -> Result<HashSet<String>, ExecuteError> {
+    if !allow_standing {
+        return Ok(HashSet::new());
+    }
     let path = artifact_root.join(PLAN_TASK_RESULTS_FILE);
     let raw = match fs::read(&path) {
         Ok(raw) => raw,
@@ -1043,21 +1670,11 @@ fn load_standing_plan_tasks(
             path.display()
         ))
     })?;
-    if file.schema_version != "1" || file.plan_revision != plan_revision {
+    if file.schema_version != "1" || file.plan_revision != plan.revision {
         return Ok(HashSet::new());
     }
-    let mut standing = HashSet::new();
-    for result in file.results {
-        let listed_as_standing = if require_packet_standing {
-            standing_assignment_ids.is_some_and(|ids| ids.contains(&result.assignment_id))
-        } else {
-            standing_assignment_ids.is_none_or(|ids| ids.contains(&result.assignment_id))
-        };
-        if result.plan_revision == plan_revision && result.exit_code == 0 && listed_as_standing {
-            standing.insert(result.assignment_id);
-        }
-    }
-    Ok(standing)
+    let inspected = inspect_current_standing_tasks(artifact_root, working_directory, plan)?;
+    Ok(inspected.standing)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1071,6 +1688,10 @@ fn run_dagu_graph(
     requested_selection: Option<&[String]>,
     selected_order: &[String],
     finding_context: Option<&[ContextRecord]>,
+    selection_mode: &str,
+    mapped_standing: &[MappedStandingResult],
+    pending_mappings: &[Value],
+    report_only: bool,
 ) -> Result<(), ExecuteError> {
     fs::create_dir_all(capture_root).map_err(|error| {
         ExecuteError::failed(format!(
@@ -1133,6 +1754,12 @@ fn run_dagu_graph(
         });
     }
 
+    let previous_report_revision = if report_only {
+        Some(read_report_revision(&artifact_root.join(REPORT_FILE))?)
+    } else {
+        None
+    };
+
     let summarizer_dir = task_capture_dir(capture_root, SUMMARIZER_STEP)?;
     fs::create_dir_all(&summarizer_dir).map_err(|error| {
         ExecuteError::failed(format!(
@@ -1187,7 +1814,14 @@ fn run_dagu_graph(
         &summarizer,
         args.max_active,
     );
-    write_selection_record(capture_root, requested_selection, selected_order)?;
+    write_selection_record(
+        capture_root,
+        selection_mode,
+        requested_selection,
+        selected_order,
+        mapped_standing,
+        pending_mappings,
+    )?;
     let dags_dir = home.join("dags");
     fs::create_dir_all(&dags_dir).map_err(|error| {
         ExecuteError::failed(format!("could not create {}: {error}", dags_dir.display()))
@@ -1231,21 +1865,37 @@ fn run_dagu_graph(
             .is_some_and(|outcome| outcome.exit_code == Some(0))
     });
 
+    let invocation_id = capture_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_owned();
     let summary_error = write_plan_summary(
         capture_root,
         &args.worker,
         &args.working_directory,
+        &plan.revision,
+        &invocation_id,
         &steps,
         &outcomes,
     );
-    let results_error = write_plan_task_results(
-        artifact_root,
-        &args.worker,
-        &args.working_directory,
-        plan,
-        &steps,
-        &outcomes,
-    );
+    let results_error = if report_only {
+        Ok(())
+    } else {
+        write_plan_task_results(
+            artifact_root,
+            &args.worker,
+            &args.working_directory,
+            plan,
+            capture_root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default(),
+            mapped_standing,
+            &steps,
+            &outcomes,
+        )
+    };
     let summarizer_ok = ordinary_ok && summarizer_succeeded(&outcomes);
     let report_error = if summarizer_ok {
         validate_fresh_report(artifact_root, &plan.revision)
@@ -1267,14 +1917,32 @@ fn run_dagu_graph(
     if start_result.is_err() && !(ordinary_ok && summarizer_ok && report_error.is_ok()) {
         start_result?;
     }
-    report_error?;
+    let report_revision = report_error?;
+    if previous_report_revision.as_deref() == Some(report_revision.as_str()) {
+        return Err(ExecuteError::failed(
+            "report-only summarizer did not write a fresh report revision".to_owned(),
+        ));
+    }
     checkpoint::create(
         CheckpointPhase::Implementation,
         artifact_root,
         &args.working_directory,
     )
-    .map(|_| ())
-    .map_err(ExecuteError::failed)
+    .map_err(ExecuteError::failed)?;
+    if report_only {
+        finalize_report_only_summary(artifact_root, capture_root)?;
+    } else {
+        finalize_task_sources(
+            artifact_root,
+            capture_root,
+            &args.working_directory,
+            capture_root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default(),
+        )?;
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1487,14 +2155,20 @@ fn summarizer_succeeded(outcomes: &HashMap<String, StepOutcome>) -> bool {
 
 fn write_selection_record(
     capture_root: &Path,
+    mode: &str,
     requested: Option<&[String]>,
     selected_order: &[String],
+    standing_results: &[MappedStandingResult],
+    pending: &[Value],
 ) -> Result<(), ExecuteError> {
     let path = capture_root.join("selection.json");
     let value = json!({
         "schema_version": "1",
+        "mode": mode,
         "requested": requested,
         "tasks": selected_order,
+        "standing_results": standing_results,
+        "pending_mappings": pending,
     });
     let bytes = serde_json::to_vec_pretty(&value).map_err(|error| {
         ExecuteError::failed(format!(
@@ -1513,8 +2187,10 @@ fn write_selection_record(
 fn write_plan_task_results(
     artifact_root: &Path,
     worker: &WorkerCli,
-    _working_directory: &Path,
+    working_directory: &Path,
     plan: &PlanGraph,
+    invocation_id: &str,
+    mapped_standing: &[MappedStandingResult],
     steps: &[PreparedStep],
     outcomes: &HashMap<String, StepOutcome>,
 ) -> Result<(), ExecuteError> {
@@ -1530,6 +2206,7 @@ fn write_plan_task_results(
             schema_version: "1".to_owned(),
             plan_revision: plan.revision.clone(),
             results: Vec::new(),
+            standing_results: Vec::new(),
         },
         Err(error) => {
             return Err(ExecuteError::failed(format!(
@@ -1543,6 +2220,7 @@ fn write_plan_task_results(
             schema_version: "1".to_owned(),
             plan_revision: plan.revision.clone(),
             results: Vec::new(),
+            standing_results: Vec::new(),
         };
     }
     let replaced = steps
@@ -1552,6 +2230,17 @@ fn write_plan_task_results(
     previous
         .results
         .retain(|result| !replaced.contains(result.assignment_id.as_str()));
+    previous
+        .standing_results
+        .retain(|result| !replaced.contains(result.task_id.as_str()));
+    for mapped in mapped_standing {
+        if !replaced.contains(mapped.task_id.as_str()) {
+            previous
+                .standing_results
+                .retain(|old| old.task_id != mapped.task_id);
+            previous.standing_results.push(mapped.clone());
+        }
+    }
 
     for step in steps {
         let Some(outcome) = outcomes.get(&step.name) else {
@@ -1575,6 +2264,15 @@ fn write_plan_task_results(
         let repository_effect = recorded_repository_effect(step)
             .or_else(|| task.get("repository_effect").cloned())
             .unwrap_or(Value::Null);
+        let output_path = Path::new(&step.stdout_path);
+        let selected_output_sha256 = format!(
+            "sha256:{}",
+            sha256_digest_file(output_path).map_err(|error| {
+                ExecuteError::failed(format!("could not hash {}: {error}", output_path.display()))
+            })?
+        );
+        let effect_snapshot =
+            effect_snapshot_from_value(&repository_effect, working_directory).ok();
         previous.results.push(PlanTaskResult {
             assignment_id: step.name.clone(),
             plan_revision: plan.revision.clone(),
@@ -1584,11 +2282,12 @@ fn write_plan_task_results(
             worker: worker.clone(),
             exit_code,
             repository_effect,
-            capture_dir: path_to_string(
-                Path::new(&step.stdout_path)
-                    .parent()
-                    .unwrap_or_else(|| Path::new(".")),
-            ),
+            capture_dir: path_to_string(output_path.parent().unwrap_or_else(|| Path::new("."))),
+            invocation_id: Some(invocation_id.to_owned()),
+            selected_output_sha256: Some(selected_output_sha256),
+            effect_snapshot,
+            proof: None,
+            result_id: None,
         });
     }
     previous
@@ -1616,10 +2315,906 @@ fn sha256_digest_file(path: &Path) -> io::Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+fn effect_snapshot_from_value(
+    effect: &Value,
+    working_directory: &Path,
+) -> Result<Vec<EffectIdentity>, String> {
+    let files = effect
+        .get("files")
+        .and_then(Value::as_array)
+        .ok_or("repository_effect must name its affected files to establish a standing result")?;
+    let cwd = working_directory
+        .canonicalize()
+        .map_err(|error| format!("could not resolve task checkout: {error}"))?;
+    let mut identities = Vec::new();
+    let mut seen = BTreeSet::new();
+    for file in files {
+        let raw = file
+            .as_str()
+            .filter(|raw| !raw.trim().is_empty())
+            .ok_or("repository_effect.files entries must be nonempty paths")?;
+        let relative = Path::new(raw);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|part| !matches!(part, Component::Normal(_)))
+            || !seen.insert(raw)
+        {
+            return Err(format!(
+                "repository_effect path `{raw}` is unsafe or duplicated"
+            ));
+        }
+        let path = cwd.join(relative);
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| format!("repository effect `{raw}` is unavailable: {error}"))?;
+        if !metadata.file_type().is_file() {
+            return Err(format!("repository effect `{raw}` is not a regular file"));
+        }
+        let canonical = path
+            .canonicalize()
+            .map_err(|error| format!("could not resolve repository effect `{raw}`: {error}"))?;
+        if !canonical.starts_with(&cwd) {
+            return Err(format!(
+                "repository effect `{raw}` escapes the task checkout"
+            ));
+        }
+        identities.push(EffectIdentity {
+            path: raw.to_owned(),
+            sha256: format!(
+                "sha256:{}",
+                sha256_digest_file(&path).map_err(|error| error.to_string())?
+            ),
+        });
+    }
+    identities.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(identities)
+}
+
+struct VerifiedSourceResult {
+    result: PlanTaskResult,
+    summary: Value,
+}
+
+fn verify_source_result(
+    artifact_root: &Path,
+    invocation_id: &str,
+    assignment_id: &str,
+    expected_result_id: &str,
+) -> Result<VerifiedSourceResult, String> {
+    if !is_safe_task_id(invocation_id) || !is_safe_task_id(assignment_id) {
+        return Err("source invocation and task IDs must be path-safe components".to_owned());
+    }
+    let capture_base = artifact_root.join("work-slot-captures").join("implement");
+    let capture_base = capture_base
+        .canonicalize()
+        .map_err(|error| format!("same-run implementation captures are unavailable: {error}"))?;
+    let capture_root = capture_base.join(invocation_id);
+    let metadata = fs::symlink_metadata(&capture_root)
+        .map_err(|error| format!("source invocation capture is unavailable: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("source invocation capture must be a real directory".to_owned());
+    }
+    let capture_root = capture_root
+        .canonicalize()
+        .map_err(|error| format!("could not resolve source invocation capture: {error}"))?;
+    if !capture_root.starts_with(&capture_base) {
+        return Err(
+            "source invocation capture escaped this run's implementation captures".to_owned(),
+        );
+    }
+    let summary_path = capture_root.join(SUMMARY_FILE);
+    let summary: Value = serde_json::from_slice(
+        &fs::read(&summary_path)
+            .map_err(|error| format!("source capture summary is unavailable: {error}"))?,
+    )
+    .map_err(|error| format!("source capture summary is invalid JSON: {error}"))?;
+    let workers = summary
+        .get("workers")
+        .and_then(Value::as_array)
+        .ok_or("source invocation has no plan-task result inventory")?;
+    let matches = workers
+        .iter()
+        .filter(|row| {
+            row.get("assignment_id").and_then(Value::as_str) == Some(assignment_id)
+                && row.get("invocation_id").and_then(Value::as_str) == Some(invocation_id)
+        })
+        .collect::<Vec<_>>();
+    let [row] = matches.as_slice() else {
+        return Err(
+            "source task result is absent or ambiguous in its original invocation".to_owned(),
+        );
+    };
+    if row.get("exit_code").and_then(Value::as_i64) != Some(0) {
+        return Err("source task result did not exit successfully".to_owned());
+    }
+    let plan_revision = row
+        .get("plan_revision")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("source task result has no original plan revision")?
+        .to_owned();
+    let task = row
+        .get("task_definition")
+        .cloned()
+        .ok_or("source task result has no original task definition")?;
+    let packet = row
+        .get("task_packet")
+        .and_then(Value::as_str)
+        .ok_or("source task result has no original task packet")?
+        .to_owned();
+    let dependencies = serde_json::from_value::<Vec<String>>(
+        row.get("dependencies")
+            .cloned()
+            .ok_or("source task result has no dependency identity")?,
+    )
+    .map_err(|error| format!("source dependency identity is invalid: {error}"))?;
+    let repository_effect = row
+        .get("repository_effect")
+        .cloned()
+        .ok_or("source task result has no repository effect")?;
+    let worker = WorkerCli {
+        command: row
+            .get("command")
+            .and_then(Value::as_str)
+            .ok_or("source task result has no worker command")?
+            .to_owned(),
+        args: serde_json::from_value(
+            row.get("args")
+                .cloned()
+                .ok_or("source task result has no worker arguments")?,
+        )
+        .map_err(|error| format!("source worker arguments are invalid: {error}"))?,
+    };
+    let task_capture_dir = row
+        .get("capture_dir")
+        .and_then(Value::as_str)
+        .ok_or("source task result has no capture directory")?;
+    let expected_task_dir = capture_root.join(assignment_id);
+    let canonical_task_dir = Path::new(task_capture_dir)
+        .canonicalize()
+        .map_err(|error| format!("source task capture directory is unavailable: {error}"))?;
+    if canonical_task_dir != expected_task_dir {
+        return Err(
+            "source task capture directory does not match its original invocation and assignment"
+                .to_owned(),
+        );
+    }
+    let selected_output_path = row
+        .get("selected_output_path")
+        .and_then(Value::as_str)
+        .ok_or("source task result has no selected output path")?;
+    let expected_output = expected_task_dir.join("stdout");
+    let selected_output = Path::new(selected_output_path)
+        .canonicalize()
+        .map_err(|error| format!("source selected output is unavailable: {error}"))?;
+    if selected_output != expected_output {
+        return Err("source selected output does not identify the original task stdout".to_owned());
+    }
+    let selected_output_sha256 = row
+        .get("selected_output_sha256")
+        .and_then(Value::as_str)
+        .ok_or("source task result has no selected output digest")?
+        .to_owned();
+    let actual_output_sha256 = format!(
+        "sha256:{}",
+        sha256_digest_file(&selected_output).map_err(|error| error.to_string())?
+    );
+    if selected_output_sha256 != actual_output_sha256 {
+        return Err("source selected output bytes do not match the retained digest".to_owned());
+    }
+    let proof: PlanTaskProof = serde_json::from_value(
+        row.get("proof")
+            .cloned()
+            .ok_or("source task result has no completion proof identity")?,
+    )
+    .map_err(|error| format!("source completion proof is invalid: {error}"))?;
+    let summary_proof: PlanTaskProof = serde_json::from_value(
+        summary
+            .get("completion_proof")
+            .cloned()
+            .ok_or("source summary has no completion proof identity")?,
+    )
+    .map_err(|error| format!("source summary completion proof is invalid: {error}"))?;
+    if summary_proof != proof || proof.plan_revision != plan_revision {
+        return Err("source task result and completion proof revisions do not match".to_owned());
+    }
+    verify_captured_completion_proof(&capture_root, &proof)?;
+    let effect_snapshot: Option<Vec<EffectIdentity>> = row
+        .get("effect_snapshot")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| format!("source effect snapshot is invalid: {error}"))?;
+    let effect_snapshot = effect_snapshot.ok_or("source effect identity is unknown")?;
+    let mut result = PlanTaskResult {
+        assignment_id: assignment_id.to_owned(),
+        plan_revision,
+        task,
+        packet,
+        dependencies,
+        worker,
+        exit_code: 0,
+        repository_effect,
+        capture_dir: task_capture_dir.to_owned(),
+        invocation_id: Some(invocation_id.to_owned()),
+        selected_output_sha256: Some(selected_output_sha256),
+        effect_snapshot: Some(effect_snapshot),
+        proof: Some(proof),
+        result_id: None,
+    };
+    let result_id = plan_task_result_id(&result).map_err(|error| error.to_string())?;
+    if row.get("result_id").and_then(Value::as_str) != Some(result_id.as_str())
+        || expected_result_id != result_id
+    {
+        return Err("source task result identity does not match its original task, output, effects, and proof".to_owned());
+    }
+    result.result_id = Some(result_id);
+    Ok(VerifiedSourceResult { result, summary })
+}
+
+fn resolve_explicit_standing_results(
+    artifact_root: &Path,
+    working_directory: &Path,
+    plan: &PlanGraph,
+    mappings: &[StandingResultMapping],
+) -> ResolvedStandingResults {
+    let mut resolved = ResolvedStandingResults::default();
+    if mappings.is_empty() {
+        return resolved;
+    }
+    let mut sources = HashMap::<String, VerifiedSourceResult>::new();
+    let mut invalid_targets = HashSet::<String>::new();
+    for mapping in mappings {
+        match verify_source_result(
+            artifact_root,
+            &mapping.source_invocation_id,
+            &mapping.source_assignment_id,
+            &mapping.source_result_id,
+        ) {
+            Ok(source) => {
+                sources.insert(mapping.source_result_id.clone(), source);
+            }
+            Err(error) => {
+                for task_id in &mapping.current_obligations {
+                    invalid_targets.insert(task_id.clone());
+                    resolved.pending.push(json!({
+                        "task_id":task_id,
+                        "source_result_id":mapping.source_result_id,
+                        "status":"unknown-pending",
+                        "reason":error,
+                    }));
+                }
+            }
+        }
+    }
+    let mut source_targets = HashMap::<String, Vec<String>>::new();
+    let mut target_sources = HashMap::<String, Vec<&StandingResultMapping>>::new();
+    for mapping in mappings {
+        if !sources.contains_key(&mapping.source_result_id) {
+            continue;
+        }
+        for target in &mapping.current_obligations {
+            if !plan.tasks.contains_key(target) {
+                invalid_targets.insert(target.clone());
+                resolved.pending.push(json!({
+                    "task_id":target,
+                    "source_result_id":mapping.source_result_id,
+                    "status":"unknown-pending",
+                    "reason":"current obligation is not in plan.json",
+                }));
+                continue;
+            }
+            source_targets
+                .entry(mapping.source_result_id.clone())
+                .or_default()
+                .push(target.clone());
+            target_sources
+                .entry(target.clone())
+                .or_default()
+                .push(mapping);
+        }
+    }
+    for targets in source_targets.values_mut() {
+        targets.sort();
+        targets.dedup();
+    }
+
+    let current_intent = read_artifact_revision(artifact_root, "intent.json");
+    let current_design = read_artifact_revision(artifact_root, "design.json");
+    let mut targets = target_sources.keys().cloned().collect::<Vec<_>>();
+    targets.sort();
+    for task_id in targets {
+        if invalid_targets.contains(&task_id) {
+            continue;
+        }
+        let maps = target_sources.get(&task_id).expect("target has mappings");
+        let current_task = plan.tasks.get(&task_id).expect("validated current task");
+        let current_dependencies = sorted_predecessors(plan, &task_id);
+        let mut mapped_dependencies = BTreeSet::new();
+        let mut effect_snapshot = BTreeMap::<String, String>::new();
+        let mut dimensions = BTreeSet::new();
+        let mut source_ids = Vec::new();
+        let mut source_invocations = Vec::new();
+        let mut source_assignments = Vec::new();
+        let mut reasons = Vec::new();
+        let mut invalid_reason = None;
+
+        for mapping in maps {
+            let source = sources
+                .get(&mapping.source_result_id)
+                .expect("source was verified before grouping");
+            let result = &source.result;
+            let Some(proof) = result.proof.as_ref() else {
+                invalid_reason = Some("source completion proof is unknown".to_owned());
+                break;
+            };
+            if result.exit_code != 0
+                || result.selected_output_sha256.is_none()
+                || result.effect_snapshot.is_none()
+            {
+                invalid_reason =
+                    Some("source result, output, or effect identity is incomplete".to_owned());
+                break;
+            }
+            if let Some(current) = current_intent.as_deref() {
+                if current != proof.intent_revision {
+                    dimensions.insert("upstream-intent-revision-changed".to_owned());
+                }
+            } else {
+                invalid_reason = Some("current intent revision is unknown".to_owned());
+                break;
+            }
+            if let Some(current) = current_design.as_deref() {
+                if current != proof.design_revision {
+                    dimensions.insert("upstream-design-revision-changed".to_owned());
+                }
+            } else {
+                invalid_reason = Some("current design revision is unknown".to_owned());
+                break;
+            }
+            if result.plan_revision != plan.revision {
+                dimensions.insert("plan-revision-changed".to_owned());
+            }
+            if result.assignment_id != task_id {
+                dimensions.insert("task-renamed-or-reshaped".to_owned());
+            }
+            if canonical_json_digest(&normalized_task_definition(&result.task)).ok()
+                != canonical_json_digest(&normalized_task_definition(current_task)).ok()
+            {
+                dimensions.insert("task-definition-changed".to_owned());
+            }
+            let actual_effect =
+                match effect_snapshot_from_value(&result.repository_effect, working_directory) {
+                    Ok(effect) => effect,
+                    Err(error) => {
+                        invalid_reason = Some(error);
+                        break;
+                    }
+                };
+            if Some(&actual_effect) != result.effect_snapshot.as_ref() {
+                let paths = result
+                    .effect_snapshot
+                    .as_ref()
+                    .into_iter()
+                    .flatten()
+                    .map(|effect| effect.path.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                dimensions.insert(format!("repository-effect-changed:{paths}"));
+                invalid_reason =
+                    Some("recorded repository effects changed in the current tree".to_owned());
+                break;
+            }
+            dimensions.insert("repository-effects-unchanged".to_owned());
+            for effect in &actual_effect {
+                if effect_snapshot
+                    .insert(effect.path.clone(), effect.sha256.clone())
+                    .is_some_and(|old| old != effect.sha256)
+                {
+                    invalid_reason = Some(format!(
+                        "mapped source effects disagree at `{}`",
+                        effect.path
+                    ));
+                    break;
+                }
+            }
+            if invalid_reason.is_some() {
+                break;
+            }
+            for dependency in &result.dependencies {
+                let dependency_result_ids =
+                    match dependency_result_ids(artifact_root, source, dependency) {
+                        Ok(ids) => ids,
+                        Err(error) => {
+                            invalid_reason = Some(error);
+                            break;
+                        }
+                    };
+                for dependency_result_id in dependency_result_ids {
+                    let Some(mapped) = source_targets.get(&dependency_result_id) else {
+                        invalid_reason = Some(format!("original dependency `{dependency}` has no explicit current obligation mapping"));
+                        break;
+                    };
+                    mapped_dependencies.extend(mapped.iter().cloned());
+                }
+                if invalid_reason.is_some() {
+                    break;
+                }
+            }
+            if invalid_reason.is_some() {
+                break;
+            }
+            source_ids.push(mapping.source_result_id.clone());
+            source_invocations.push(mapping.source_invocation_id.clone());
+            source_assignments.push(mapping.source_assignment_id.clone());
+            reasons.push(mapping.reason.clone());
+        }
+
+        if invalid_reason.is_none()
+            && mapped_dependencies.iter().cloned().collect::<Vec<_>>() != current_dependencies
+        {
+            dimensions.insert("dependency-dimensions-changed".to_owned());
+            invalid_reason = Some(format!(
+                "mapped original dependencies {:?} do not match current dependencies {:?}",
+                mapped_dependencies, current_dependencies
+            ));
+        } else if invalid_reason.is_none() {
+            dimensions.insert("dependencies-verified".to_owned());
+        }
+
+        if let Some(reason) = invalid_reason {
+            resolved.pending.push(json!({
+                "task_id":task_id,
+                "source_result_ids":maps.iter().map(|row| row.source_result_id.clone()).collect::<Vec<_>>(),
+                "status":"unknown-pending",
+                "changed_dimensions":dimensions,
+                "reason":reason,
+            }));
+            continue;
+        }
+        let source_ids = source_ids;
+        let source_invocations = source_invocations;
+        let source_assignments = source_assignments;
+        let mut effects = effect_snapshot
+            .into_iter()
+            .map(|(path, sha256)| EffectIdentity { path, sha256 })
+            .collect::<Vec<_>>();
+        effects.sort_by(|left, right| left.path.cmp(&right.path));
+        let mut changed_dimensions = dimensions.into_iter().collect::<Vec<_>>();
+        changed_dimensions.sort();
+        let reason = reasons.join("; ");
+        let mapped = MappedStandingResult {
+            task_id: task_id.clone(),
+            plan_revision: plan.revision.clone(),
+            task_sha256: canonical_json_digest(current_task).unwrap_or_default(),
+            source_result_ids: source_ids,
+            source_invocations,
+            source_assignments,
+            reason,
+            dependencies: current_dependencies,
+            effect_snapshot: effects,
+            changed_dimensions,
+        };
+        resolved.standing.insert(task_id);
+        resolved.mappings.push(mapped);
+    }
+    resolved
+}
+
+fn dependency_result_ids(
+    artifact_root: &Path,
+    source: &VerifiedSourceResult,
+    dependency: &str,
+) -> Result<Vec<String>, String> {
+    let source_invocation = source
+        .result
+        .invocation_id
+        .as_deref()
+        .ok_or("source dependency has no original invocation")?;
+    let same_invocation = source
+        .summary
+        .get("workers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|row| {
+            row.get("assignment_id").and_then(Value::as_str) == Some(dependency)
+                && row.get("invocation_id").and_then(Value::as_str) == Some(source_invocation)
+        })
+        .and_then(|row| row.get("result_id"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    if let Some(result_id) = same_invocation {
+        return Ok(vec![result_id]);
+    }
+
+    let results_path = artifact_root.join(PLAN_TASK_RESULTS_FILE);
+    let file: PlanTaskResultsFile = serde_json::from_slice(
+        &fs::read(&results_path)
+            .map_err(|error| format!("current task-result source is unavailable: {error}"))?,
+    )
+    .map_err(|error| format!("current task-result source is invalid: {error}"))?;
+    let rows = file
+        .results
+        .iter()
+        .filter(|row| {
+            row.assignment_id == dependency && row.plan_revision == source.result.plan_revision
+        })
+        .collect::<Vec<_>>();
+    if let [row] = rows.as_slice() {
+        let result_id = row
+            .result_id
+            .as_deref()
+            .ok_or("original dependency result has no stable identity")?;
+        let invocation = row
+            .invocation_id
+            .as_deref()
+            .ok_or("original dependency result has no invocation identity")?;
+        verify_source_result(artifact_root, invocation, dependency, result_id)?;
+        return Ok(vec![result_id.to_owned()]);
+    }
+    if rows.len() > 1 {
+        return Err(format!(
+            "original dependency `{dependency}` has ambiguous task-result identities"
+        ));
+    }
+    let mapped = file
+        .standing_results
+        .iter()
+        .find(|row| row.task_id == dependency && row.plan_revision == source.result.plan_revision)
+        .ok_or_else(|| format!("original dependency `{dependency}` has no result in the existing plan-task-results source"))?;
+    if mapped.source_result_ids.is_empty()
+        || mapped.source_result_ids.len() != mapped.source_invocations.len()
+        || mapped.source_result_ids.len() != mapped.source_assignments.len()
+    {
+        return Err(format!(
+            "mapped original dependency `{dependency}` has incomplete source identities"
+        ));
+    }
+    for ((result_id, invocation), assignment) in mapped
+        .source_result_ids
+        .iter()
+        .zip(&mapped.source_invocations)
+        .zip(&mapped.source_assignments)
+    {
+        verify_source_result(artifact_root, invocation, assignment, result_id)?;
+    }
+    Ok(mapped.source_result_ids.clone())
+}
+
+fn read_artifact_revision(artifact_root: &Path, name: &str) -> Option<String> {
+    let bytes = fs::read(artifact_root.join(name)).ok()?;
+    let value: Value = serde_json::from_slice(&bytes).ok()?;
+    value
+        .get("revision")?
+        .as_str()
+        .filter(|revision| !revision.trim().is_empty())
+        .map(str::to_owned)
+}
+
+fn sorted_predecessors(plan: &PlanGraph, task_id: &str) -> Vec<String> {
+    let mut dependencies = plan
+        .predecessors
+        .get(task_id)
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
+    dependencies.sort();
+    dependencies
+}
+
+fn normalized_task_definition(task: &Value) -> Value {
+    let mut normalized = task.clone();
+    if let Some(object) = normalized.as_object_mut() {
+        for key in ["finding_context", "steering_context"] {
+            if object.get(key).is_some_and(Value::is_null)
+                || object
+                    .get(key)
+                    .is_some_and(|value| value.as_array().is_some_and(Vec::is_empty))
+                || object
+                    .get(key)
+                    .is_some_and(|value| value.as_object().is_some_and(serde_json::Map::is_empty))
+            {
+                object.remove(key);
+            }
+        }
+    }
+    normalized
+}
+
+fn canonical_json_digest(value: &Value) -> Result<String, String> {
+    serde_json::to_vec(value)
+        .map(|bytes| format!("sha256:{:x}", Sha256::digest(bytes)))
+        .map_err(|error| error.to_string())
+}
+
+fn verify_captured_completion_proof(
+    capture_root: &Path,
+    proof: &PlanTaskProof,
+) -> Result<(), String> {
+    let checkpoint_bytes = fs::read(capture_root.join("completion-checkpoint.json"))
+        .map_err(|error| format!("original completion checkpoint is unavailable: {error}"))?;
+    let report_bytes = fs::read(capture_root.join("completion-report.json"))
+        .map_err(|error| format!("original completion report is unavailable: {error}"))?;
+    if format!("sha256:{:x}", Sha256::digest(&checkpoint_bytes)) != proof.checkpoint_sha256
+        || format!("sha256:{:x}", Sha256::digest(&report_bytes)) != proof.report_sha256
+    {
+        return Err(
+            "original report/checkpoint bytes do not match their captured proof identities"
+                .to_owned(),
+        );
+    }
+    let checkpoint: Value = serde_json::from_slice(&checkpoint_bytes)
+        .map_err(|error| format!("original checkpoint is invalid JSON: {error}"))?;
+    let report: Value = serde_json::from_slice(&report_bytes)
+        .map_err(|error| format!("original report is invalid JSON: {error}"))?;
+    let repository: CapturedRepositoryWithoutState = serde_json::from_value(json!({
+        "head":checkpoint["repository"]["head"],
+        "index_sha256":checkpoint["repository"]["index_sha256"],
+        "status_sha256":checkpoint["repository"]["status_sha256"],
+        "entries":checkpoint["repository"]["entries"],
+    }))
+    .map_err(|error| format!("original checkpoint repository identity is invalid: {error}"))?;
+    let repository_bytes = serde_json::to_vec(&repository)
+        .map_err(|error| format!("could not verify original checkpoint tree: {error}"))?;
+    let repository_sha256 = format!("sha256:{:x}", Sha256::digest(repository_bytes));
+    if repository_sha256 != proof.repository_state_sha256 {
+        return Err("original checkpoint tree identity is internally inconsistent".to_owned());
+    }
+    if checkpoint["documents"]["intent_revision"] != proof.intent_revision
+        || checkpoint["documents"]["design_revision"] != proof.design_revision
+        || checkpoint["documents"]["plan_revision"] != proof.plan_revision
+        || checkpoint["report"]["revision"] != proof.report_revision
+        || checkpoint["repository"]["state_sha256"] != proof.repository_state_sha256
+        || report["revision"] != proof.report_revision
+        || report["plan_revision"] != proof.plan_revision
+    {
+        return Err(
+            "original task proof does not match its retained checkpoint/report dimensions"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn plan_task_result_id(result: &PlanTaskResult) -> Result<String, ExecuteError> {
+    let payload = json!({
+        "assignment_id": result.assignment_id,
+        "plan_revision": result.plan_revision,
+        "task": result.task,
+        "packet": result.packet,
+        "dependencies": result.dependencies,
+        "worker": result.worker,
+        "exit_code": result.exit_code,
+        "repository_effect": result.repository_effect,
+        "capture_dir": result.capture_dir,
+        "invocation_id": result.invocation_id,
+        "selected_output_sha256": result.selected_output_sha256,
+        "effect_snapshot": result.effect_snapshot,
+        "proof": result.proof,
+    });
+    let bytes = serde_json::to_vec(&payload).map_err(|error| {
+        ExecuteError::failed(format!("could not serialize task result identity: {error}"))
+    })?;
+    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+}
+
+fn task_proof_from_artifacts(artifact_root: &Path) -> Result<PlanTaskProof, ExecuteError> {
+    let report_bytes = fs::read(artifact_root.join(REPORT_FILE)).map_err(|error| {
+        ExecuteError::failed(format!("could not read implementation report: {error}"))
+    })?;
+    let report: Value = serde_json::from_slice(&report_bytes).map_err(|error| {
+        ExecuteError::failed(format!("implementation report is invalid JSON: {error}"))
+    })?;
+    let checkpoint_bytes = fs::read(artifact_root.join(CHECKPOINT_FILE)).map_err(|error| {
+        ExecuteError::failed(format!("could not read implementation checkpoint: {error}"))
+    })?;
+    let checkpoint: Value = serde_json::from_slice(&checkpoint_bytes).map_err(|error| {
+        ExecuteError::failed(format!(
+            "implementation checkpoint is invalid JSON: {error}"
+        ))
+    })?;
+    let text = |value: &Value, path: &str| -> Result<String, ExecuteError> {
+        value
+            .as_str()
+            .filter(|text| !text.trim().is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| ExecuteError::failed(format!("completion proof is missing {path}")))
+    };
+    let revision = text(&report["revision"], "report revision")?;
+    let report_sha256 = format!("sha256:{:x}", Sha256::digest(&report_bytes));
+    if checkpoint["report"]["sha256"] != report_sha256
+        || checkpoint["report"]["revision"] != revision
+    {
+        return Err(ExecuteError::failed(
+            "implementation checkpoint does not identify the current report bytes".to_owned(),
+        ));
+    }
+    Ok(PlanTaskProof {
+        intent_revision: text(
+            &checkpoint["documents"]["intent_revision"],
+            "intent revision",
+        )?,
+        design_revision: text(
+            &checkpoint["documents"]["design_revision"],
+            "design revision",
+        )?,
+        plan_revision: text(&checkpoint["documents"]["plan_revision"], "plan revision")?,
+        report_revision: revision,
+        report_sha256,
+        checkpoint_sha256: format!("sha256:{:x}", Sha256::digest(&checkpoint_bytes)),
+        repository_state_sha256: text(
+            &checkpoint["repository"]["state_sha256"],
+            "repository state identity",
+        )?,
+    })
+}
+
+fn finalize_task_sources(
+    artifact_root: &Path,
+    capture_root: &Path,
+    working_directory: &Path,
+    invocation_id: &str,
+) -> Result<(), ExecuteError> {
+    let proof = task_proof_from_artifacts(artifact_root)?;
+    let report_bytes = fs::read(artifact_root.join(REPORT_FILE)).map_err(|error| {
+        ExecuteError::failed(format!("could not retain implementation report: {error}"))
+    })?;
+    let checkpoint_bytes = fs::read(artifact_root.join(CHECKPOINT_FILE)).map_err(|error| {
+        ExecuteError::failed(format!(
+            "could not retain implementation checkpoint: {error}"
+        ))
+    })?;
+    fs::write(capture_root.join("completion-report.json"), &report_bytes).map_err(|error| {
+        ExecuteError::failed(format!("could not retain source report: {error}"))
+    })?;
+    fs::write(
+        capture_root.join("completion-checkpoint.json"),
+        &checkpoint_bytes,
+    )
+    .map_err(|error| {
+        ExecuteError::failed(format!("could not retain source checkpoint: {error}"))
+    })?;
+
+    let results_path = artifact_root.join(PLAN_TASK_RESULTS_FILE);
+    if results_path.is_file() {
+        let mut results: PlanTaskResultsFile = serde_json::from_slice(
+            &fs::read(&results_path).map_err(|error| ExecuteError::failed(error.to_string()))?,
+        )
+        .map_err(|error| ExecuteError::failed(format!("invalid plan-task results: {error}")))?;
+        for result in &mut results.results {
+            if result.invocation_id.as_deref() == Some(invocation_id) {
+                result.effect_snapshot =
+                    effect_snapshot_from_value(&result.repository_effect, working_directory).ok();
+                result.proof = Some(proof.clone());
+                result.result_id = Some(plan_task_result_id(result)?);
+            }
+        }
+        let bytes = serde_json::to_vec_pretty(&results).map_err(|error| {
+            ExecuteError::failed(format!("could not serialize task results: {error}"))
+        })?;
+        fs::write(&results_path, bytes).map_err(|error| {
+            ExecuteError::failed(format!("could not write task results: {error}"))
+        })?;
+    }
+
+    let summary_path = capture_root.join(SUMMARY_FILE);
+    let mut summary: Value = serde_json::from_slice(&fs::read(&summary_path).map_err(|error| {
+        ExecuteError::failed(format!(
+            "could not read {}: {error}",
+            summary_path.display()
+        ))
+    })?)
+    .map_err(|error| {
+        ExecuteError::failed(format!(
+            "{} is invalid JSON: {error}",
+            summary_path.display()
+        ))
+    })?;
+    summary["completion_proof"] = serde_json::to_value(&proof).map_err(|error| {
+        ExecuteError::failed(format!("could not serialize completion proof: {error}"))
+    })?;
+    if let Some(workers) = summary.get_mut("workers").and_then(Value::as_array_mut) {
+        for worker in workers {
+            let Some(assignment_id) = worker.get("assignment_id").and_then(Value::as_str) else {
+                continue;
+            };
+            let result = results_path
+                .is_file()
+                .then(|| fs::read(&results_path).ok())
+                .flatten()
+                .and_then(|bytes| serde_json::from_slice::<PlanTaskResultsFile>(&bytes).ok())
+                .and_then(|results| {
+                    results.results.into_iter().find(|row| {
+                        row.assignment_id == assignment_id
+                            && row.invocation_id.as_deref() == Some(invocation_id)
+                    })
+                });
+            if let Some(result) = result {
+                worker["result_id"] = json!(result.result_id);
+                worker["proof"] = serde_json::to_value(&proof)
+                    .map_err(|error| ExecuteError::failed(error.to_string()))?;
+                worker["effect_snapshot"] = serde_json::to_value(result.effect_snapshot)
+                    .map_err(|error| ExecuteError::failed(error.to_string()))?;
+            }
+        }
+    }
+    fs::write(
+        &summary_path,
+        serde_json::to_vec_pretty(&summary).map_err(|error| {
+            ExecuteError::failed(format!("could not serialize summary: {error}"))
+        })?,
+    )
+    .map_err(|error| {
+        ExecuteError::failed(format!(
+            "could not update {}: {error}",
+            summary_path.display()
+        ))
+    })?;
+    Ok(())
+}
+
+fn finalize_report_only_summary(
+    artifact_root: &Path,
+    capture_root: &Path,
+) -> Result<(), ExecuteError> {
+    let proof = task_proof_from_artifacts(artifact_root)?;
+    let report_bytes = fs::read(artifact_root.join(REPORT_FILE)).map_err(|error| {
+        ExecuteError::failed(format!("could not retain implementation report: {error}"))
+    })?;
+    let checkpoint_bytes = fs::read(artifact_root.join(CHECKPOINT_FILE)).map_err(|error| {
+        ExecuteError::failed(format!(
+            "could not retain implementation checkpoint: {error}"
+        ))
+    })?;
+    fs::write(capture_root.join("completion-report.json"), report_bytes).map_err(|error| {
+        ExecuteError::failed(format!("could not retain source report: {error}"))
+    })?;
+    fs::write(
+        capture_root.join("completion-checkpoint.json"),
+        checkpoint_bytes,
+    )
+    .map_err(|error| {
+        ExecuteError::failed(format!("could not retain source checkpoint: {error}"))
+    })?;
+    let summary_path = capture_root.join(SUMMARY_FILE);
+    let mut summary: Value = serde_json::from_slice(&fs::read(&summary_path).map_err(|error| {
+        ExecuteError::failed(format!(
+            "could not read {}: {error}",
+            summary_path.display()
+        ))
+    })?)
+    .map_err(|error| {
+        ExecuteError::failed(format!(
+            "{} is invalid JSON: {error}",
+            summary_path.display()
+        ))
+    })?;
+    summary["completion_proof"] = serde_json::to_value(proof).map_err(|error| {
+        ExecuteError::failed(format!("could not serialize completion proof: {error}"))
+    })?;
+    fs::write(
+        &summary_path,
+        serde_json::to_vec_pretty(&summary).map_err(|error| {
+            ExecuteError::failed(format!("could not serialize summary: {error}"))
+        })?,
+    )
+    .map_err(|error| {
+        ExecuteError::failed(format!(
+            "could not update {}: {error}",
+            summary_path.display()
+        ))
+    })?;
+    Ok(())
+}
+
 fn write_plan_summary(
     capture_root: &Path,
     worker: &WorkerCli,
-    _working_directory: &Path,
+    working_directory: &Path,
+    plan_revision: &str,
+    invocation_id: &str,
     steps: &[PreparedStep],
     outcomes: &HashMap<String, StepOutcome>,
 ) -> Result<(), ExecuteError> {
@@ -1665,8 +3260,17 @@ fn write_plan_summary(
             ))
         })?;
         let selected_output_sha256 = format!("sha256:{selected_output_sha256}");
+        let task_capture_dir = stdout_path.parent().unwrap_or_else(|| Path::new("."));
+        let effect_snapshot =
+            effect_snapshot_from_value(&repository_effect, working_directory).ok();
         workers.push(CaptureWorker {
             assignment_id: id,
+            plan_revision,
+            invocation_id,
+            capture_dir: path_to_string(task_capture_dir),
+            result_id: None,
+            proof: None,
+            effect_snapshot,
             command: &worker.command,
             args: &worker.args,
             exit_code,
@@ -1815,6 +3419,27 @@ fn write_repair_summary(
         ))
     })?;
     Ok(())
+}
+
+fn read_report_revision(path: &Path) -> Result<String, ExecuteError> {
+    let raw = fs::read(path).map_err(|error| {
+        ExecuteError::usage(format!(
+            "report-only requires an earlier report for comparison: {error}"
+        ))
+    })?;
+    let value: Value = serde_json::from_slice(&raw).map_err(|error| {
+        ExecuteError::usage(format!(
+            "earlier implementation report is invalid JSON: {error}"
+        ))
+    })?;
+    value
+        .get("revision")
+        .and_then(Value::as_str)
+        .filter(|revision| !revision.trim().is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            ExecuteError::usage("earlier implementation report has no revision".to_owned())
+        })
 }
 
 fn validate_fresh_report(
@@ -2363,6 +3988,63 @@ mod tests {
 
     fn valid_packet_json() -> &'static str {
         r#"{"run_id":"run-1","slot_id":"slot-1","artifact_root":"/tmp/artifacts","instruction_body":"Do the work","capture_dir":"/tmp/captures/inv-1"}"#
+    }
+
+    #[test]
+    fn report_only_selection_is_disjoint_and_empty_task_roots_stay_invalid() {
+        assert!(matches!(
+            parse_invocation_selection(&json!({"plan_revision":"r1","report_only":true})),
+            Ok(InvocationSelection::ReportOnly(_))
+        ));
+        assert!(
+            parse_invocation_selection(&json!({"plan_revision":"r1","task_roots":[]})).is_err()
+        );
+        assert!(parse_invocation_selection(&json!({
+            "plan_revision":"r1","report_only":true,"task_roots":["task-a"]
+        }))
+        .is_err());
+        assert!(matches!(
+            parse_invocation_selection(&json!({"repair_finding_ids":["finding-1"]})),
+            Ok(InvocationSelection::Repair(_))
+        ));
+    }
+
+    #[test]
+    fn plan_graph_preview_labels_are_frozen_from_task_inventory() {
+        let task = json!({"id":"task-a","title":"Task A title","role":"implementation"});
+        let fallback = json!({"id":"task-b","objective":"Second task objective\nmore detail"});
+        let plan = PlanGraph {
+            revision: "r1".into(),
+            order: vec!["task-a".into(), "task-b".into()],
+            tasks: HashMap::from([("task-a".into(), task), ("task-b".into(), fallback)]),
+            predecessors: HashMap::new(),
+            successors: HashMap::new(),
+        };
+        let labels = assignment_labels_for_plan(&plan, &["task-a".into(), "task-b".into()]);
+        assert_eq!(
+            labels[0],
+            loop_core::AssignmentLabel {
+                assignment_id: "task-a".into(),
+                title: "Task A title".into(),
+                role: "implementation".into()
+            }
+        );
+        assert_eq!(
+            labels[1],
+            loop_core::AssignmentLabel {
+                assignment_id: "task-b".into(),
+                title: "Second task objective".into(),
+                role: "plan-task".into()
+            }
+        );
+        assert_eq!(
+            labels[2],
+            loop_core::AssignmentLabel {
+                assignment_id: "summarizer".into(),
+                title: "Implementation report".into(),
+                role: "summarizer".into()
+            }
+        );
     }
 
     #[test]

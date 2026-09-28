@@ -46,6 +46,31 @@ SUBJECTS = {
     ),
 }
 
+IMPLEMENTATION_COMPANION_LABEL = "companion:fictional-repo/implementation-evidence/repository-state.txt"
+IMPLEMENTATION_COMPANIONS = {
+    "repo-state-2026-08-12": "calibration/companions/fictional-repo/implementation-evidence/repo-state-2026-08-12.txt",
+    "repo-state-2026-08-13": "calibration/companions/fictional-repo/implementation-evidence/repo-state-2026-08-13.txt",
+}
+DOC_COMPANIONS = {
+    "fictional-repo/README.md",
+    "fictional-repo/provider/README.md",
+    "fictional-repo/docs/PRD.md",
+    "fictional-repo/docs/review-contract.md",
+    "fictional-repo/implementation-evidence/requirement-to-proof.md",
+    "fictional-repo/loop-engine-software-change-provider-prd.md",
+    "fictional-repo/loop-engine-software-change-provider-task-packets.md",
+    "fictional-repo/loop-engine-software-change-provider-technical-design.md",
+    "fictional-repo/scripts/assert-doc-authority.py",
+    "fictional-repo/scripts/assert-requirement-proof.py",
+    "fictional-repo/scripts/production-journey.py",
+}
+REQUIREMENT_PROOF_COMPANIONS = (
+    "fictional-repo/docs/PRD.md",
+    "fictional-repo/implementation-evidence/requirement-to-proof.md",
+    "fictional-repo/scripts/assert-requirement-proof.py",
+    "fictional-repo/scripts/production-journey.py",
+)
+
 ORDINARY_COVERAGE_PROMPT = (
     "Judge ids-grounded only. Confirm each promised enduring outcome is checked against "
     "the actual accepted requirement text and every authoritative document it explicitly "
@@ -145,6 +170,51 @@ def framed_digest(records: Iterable[tuple[str, bytes]]) -> str:
     return hashlib.sha256(stream).hexdigest()
 
 
+def reviewer_display_label(
+    records: list[tuple[str, bytes]], index: int, subject: str, template: str
+) -> str:
+    """Render a neutral role label without exposing canonical fixture labels."""
+    label = records[index][0]
+    fixed_labels = {
+        "system-developer-instruction:data/calibration/reviewer-instruction.txt": "reviewer instruction",
+        "example_prompt": "selected review prompt",
+        "reviewer-protocol:data/reviewer-protocol.md": "review protocol",
+        "request-json": "canonical request JSON",
+    }
+    if label in fixed_labels:
+        return fixed_labels[label]
+    if label.startswith("template:"):
+        return f"artifact template: {template}"
+    if label.startswith("schema:"):
+        return f"artifact schema: {subject}"
+    if label.startswith("subject:"):
+        return f"subject artifact: {subject}"
+    predecessor_labels = {
+        "required predecessor:data/calibration/fixtures/intent-good.json": "required predecessor: intent",
+        "required predecessor:data/calibration/fixtures/design-good.json": "required predecessor: design",
+        "required predecessor:data/calibration/fixtures/plan-good.json": "required predecessor: plan",
+        "required predecessor:data/calibration/fixtures/implementation-report-good.json": "required predecessor: implementation report",
+    }
+    if label in predecessor_labels:
+        return predecessor_labels[label]
+    companion_labels = {
+        "companion:validation-evidence.json": "validation evidence companion",
+        "companion:fictional-repo/implementation-evidence/repository-state.txt": "implementation evidence companion",
+        "companion:fictional-repo/docs/requirement-coverage.md": "requirement coverage companion",
+    }
+    if label in companion_labels:
+        return companion_labels[label]
+    if label.startswith("companion:fictional-repo/"):
+        ordinal = sum(
+            1
+            for prior, _content in records[:index]
+            if prior.startswith("companion:fictional-repo/")
+            and prior not in companion_labels
+        ) + 1
+        return f"supporting document {ordinal}"
+    die(f"unsupported source record label for reviewer display: {label}")
+
+
 def safe_join(root: Path, relative: str, description: str) -> Path:
     path = (root / relative).resolve()
     if path != root and root not in path.parents:
@@ -227,6 +297,68 @@ def fixture_identity(path: Path, label: str) -> tuple[dict[str, Any], bytes]:
     if not isinstance(revision, str) or not revision:
         die(f"fixture revision must be a non-empty string: {path}")
     return value, content
+
+
+def selected_validation_evidence(
+    repository: Path, subject: dict[str, Any]
+) -> tuple[dict[str, Any], list[tuple[str, bytes]]]:
+    evidence_ids = subject.get("command_evidence_ids")
+    if evidence_ids is None:
+        return subject, []
+    if not isinstance(evidence_ids, list) or not evidence_ids or not isinstance(evidence_ids[0], str):
+        die("validation subject command_evidence_ids must select a supplied narrative")
+    suffix = evidence_ids[0].removeprefix("calibration-")
+    if suffix not in ("2026-08-12", "2026-08-13"):
+        die(f"unsupported selected validation evidence identity: {evidence_ids[0]}")
+    path = safe_join(
+        repository,
+        f"crates/software-change-provider/data/calibration/fixtures/validation-evidence-{suffix}.json",
+        "validation evidence companion",
+    )
+    value = read_json(path, "validation evidence companion")
+    if not isinstance(value, dict):
+        die(f"validation evidence companion must be an object: {path}")
+    return value, [("companion:validation-evidence.json", read_bytes(path, "validation evidence companion"))]
+
+
+def calibration_companions(
+    repository: Path, subject: dict[str, Any], gate: str, axis: str
+) -> list[tuple[str, bytes]]:
+    selected, records = selected_validation_evidence(repository, subject)
+    family = gate.split("-", 1)[0]
+    if family == "implementation" or (family == "validation" and axis in ("intent-delivered", "requirement-proof-mapping")):
+        coverage = selected.get("coverage")
+        commit = coverage.get("commit") if isinstance(coverage, dict) else None
+        relative = IMPLEMENTATION_COMPANIONS.get(commit) if isinstance(commit, str) else None
+        if relative is None:
+            die(f"missing or unknown coverage.commit for {gate}/{axis}: {commit!r}")
+        records.append((
+            IMPLEMENTATION_COMPANION_LABEL,
+            read_bytes(safe_join(repository, f"crates/software-change-provider/data/{relative}", "repository-state companion"), "repository-state companion"),
+        ))
+
+    if family == "validation" and axis == "docs-integrated":
+        coverage = selected.get("coverage")
+        documents = coverage.get("documents") if isinstance(coverage, dict) else None
+        if not isinstance(documents, list):
+            die("docs-integrated selected validation evidence has no coverage.documents")
+        labels: list[str] = []
+        for document in documents:
+            label = document.get("path") if isinstance(document, dict) else None
+            if not isinstance(label, str) or label not in DOC_COMPANIONS:
+                die(f"unmapped docs companion path: {label!r}")
+            labels.append(label)
+        if len(set(labels)) != len(labels):
+            die("docs-integrated coverage has duplicate companion paths")
+        for label in sorted(labels, key=lambda value: value.encode("utf-8")):
+            relative = f"crates/software-change-provider/data/calibration/companions/{label}"
+            records.append((f"companion:{label}", read_bytes(safe_join(repository, relative, "docs companion"), "docs companion")))
+
+    if family == "validation" and axis == "requirement-proof-mapping":
+        for label in REQUIREMENT_PROOF_COMPANIONS:
+            relative = f"crates/software-change-provider/data/calibration/companions/{label}"
+            records.append((f"companion:{label}", read_bytes(safe_join(repository, relative, "requirement-proof companion"), "requirement-proof companion")))
+    return records
 
 
 def make_case(
@@ -346,7 +478,9 @@ def make_case(
                 read_bytes(predecessor_path, "predecessor fixture"),
             )
         )
-    if companion_path is not None:
+    if coverage_case is None:
+        records.extend(calibration_companions(repository, subject_value, gate, axis))
+    elif companion_path is not None:
         companion_bytes = read_bytes(companion_path, "companion")
         records.append(("companion:fictional-repo/docs/requirement-coverage.md", companion_bytes))
 
@@ -381,11 +515,12 @@ def make_case(
             }
         )
 
-    # Delimiters are packet framing only. The exact records remain available in
-    # source-records/ and their unmodified bytes are what input_sha256 covers.
+    # Canonical provenance labels remain in preparation.json and input_sha256;
+    # reviewer-facing framing uses only neutral roles and subject names.
     rendered = bytearray()
-    for label, content in records:
-        rendered.extend(b"=== source-record: " + label.encode("utf-8") + b" ===\n")
+    for index, (label, content) in enumerate(records):
+        display_label = reviewer_display_label(records, index, subject, template)
+        rendered.extend(b"=== supplied material: " + display_label.encode("utf-8") + b" ===\n")
         rendered.extend(content)
         if not content.endswith(b"\n"):
             rendered.extend(b"\n")

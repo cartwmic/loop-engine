@@ -538,6 +538,7 @@ name = "loop-cli"
 version = "0.22.0"
 dependencies = [
  "jsonschema",
+ "libc",
  "loop-core",
  "loop-integrations",
  "serde",

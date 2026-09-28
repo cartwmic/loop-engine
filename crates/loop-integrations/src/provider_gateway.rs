@@ -270,6 +270,8 @@ struct EvaluateRequest {
     context: Vec<loop_core::ContextRecord>,
     transition: loop_core::Transition,
     prior_evaluations: Vec<loop_core::DurableEvaluation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    driver_act: Option<loop_core::DriverActEvidence>,
 }
 
 impl EvaluateRequest {
@@ -280,6 +282,7 @@ impl EvaluateRequest {
             mut context,
             transition,
             prior_evaluations,
+            driver_act,
         } = request;
 
         // Core normally constructs these collections in durable order.  Keep
@@ -304,6 +307,7 @@ impl EvaluateRequest {
             context,
             transition,
             prior_evaluations,
+            driver_act,
         }
     }
 }

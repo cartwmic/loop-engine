@@ -257,6 +257,26 @@ def assert_inner_worker(worker: Mapping[str, Any]) -> None:
         raise WorkSlotJourneyFailure(f"inner worker args must be a string list: {worker}")
     if not isinstance(exit_code, int):
         raise WorkSlotJourneyFailure(f"inner worker omitted int exit_code: {worker}")
+    if "started" in worker and worker["started"] is not None and not isinstance(worker["started"], bool):
+        raise WorkSlotJourneyFailure(f"inner worker started must be boolean: {worker}")
+    for key in ("stdout_path", "stderr_path", "attempts_path", "raw_output_path"):
+        if key in worker and worker[key] is not None and not isinstance(worker[key], str):
+            raise WorkSlotJourneyFailure(f"inner worker {key} must be a path string: {worker}")
+    attempts = worker.get("attempts", [])
+    if not isinstance(attempts, list) or not all(isinstance(item, dict) for item in attempts):
+        raise WorkSlotJourneyFailure(f"inner worker attempts must be a list of objects: {worker}")
+    if "conformance_status" in worker and worker["conformance_status"] is not None and not isinstance(worker["conformance_status"], str):
+        raise WorkSlotJourneyFailure(f"inner worker conformance_status must be a string: {worker}")
+    if "conformance_error" in worker and worker["conformance_error"] is not None and not isinstance(worker["conformance_error"], str):
+        raise WorkSlotJourneyFailure(f"inner worker conformance_error must be a string: {worker}")
+    raw_digest = worker.get("raw_output_sha256")
+    if raw_digest is not None and (not isinstance(raw_digest, str) or not raw_digest.startswith("sha256:")):
+        raise WorkSlotJourneyFailure(f"inner worker raw_output_sha256 must be a sha256 string: {worker}")
+    raw_attempt = worker.get("raw_output_attempt")
+    if raw_attempt is not None and (not isinstance(raw_attempt, int) or isinstance(raw_attempt, bool) or raw_attempt < 1):
+        raise WorkSlotJourneyFailure(f"inner worker raw_output_attempt must be a positive integer: {worker}")
+    if "recovery_source" in worker and worker["recovery_source"] is not None and not isinstance(worker["recovery_source"], dict):
+        raise WorkSlotJourneyFailure(f"inner worker recovery_source must be an object: {worker}")
 
 
 def assert_succeeded_heartbeat(match: Mapping[str, Any], *, slot_id: str) -> None:
@@ -289,6 +309,17 @@ def assert_succeeded_heartbeat(match: Mapping[str, Any], *, slot_id: str) -> Non
         "command",
         "args",
         "exit_code",
+        "started",
+        "stdout_path",
+        "stderr_path",
+        "attempts_path",
+        "attempts",
+        "conformance_status",
+        "conformance_error",
+        "raw_output_sha256",
+        "raw_output_path",
+        "raw_output_attempt",
+        "recovery_source",
         "selected_attempt",
         "selected_output_sha256",
         "selected_output_path",
@@ -453,9 +484,42 @@ def assert_packet_receipt(
         raise WorkSlotJourneyFailure(f"missing dummy worker receipt {path}: {error}") from error
     if not isinstance(packet, dict):
         raise WorkSlotJourneyFailure(f"receipt is not an object: {path}")
-    optional = {"context", "standing_assignment_ids", "assignment_selection", "invocation_input", "controls"}
+    optional = {
+        "context",
+        "standing_assignment_ids",
+        "assignment_selection",
+        "invocation_input",
+        "controls",
+        "binding_sha256",
+        "state_visit",
+        "transition_history",
+    }
     if not PACKET_KEYS <= set(packet) or set(packet) - PACKET_KEYS - optional:
         raise WorkSlotJourneyFailure(f"receipt field set mismatch: {sorted(packet)}")
+    for key in ("context", "standing_assignment_ids", "assignment_selection"):
+        if key in packet and (
+            not isinstance(packet[key], list)
+            or not all(isinstance(item, dict if key == "context" else str) for item in packet[key])
+        ):
+            raise WorkSlotJourneyFailure(f"receipt {key} has invalid transport shape")
+    if "controls" in packet and not isinstance(packet["controls"], dict):
+        raise WorkSlotJourneyFailure("receipt controls must be an object")
+    if "binding_sha256" in packet and (
+        not isinstance(packet["binding_sha256"], str)
+        or not packet["binding_sha256"].startswith("sha256:")
+    ):
+        raise WorkSlotJourneyFailure("receipt binding_sha256 must be a sha256 string")
+    if "state_visit" in packet and (
+        not isinstance(packet["state_visit"], int)
+        or isinstance(packet["state_visit"], bool)
+        or packet["state_visit"] < 0
+    ):
+        raise WorkSlotJourneyFailure("receipt state_visit must be a non-negative integer")
+    if "transition_history" in packet and (
+        not isinstance(packet["transition_history"], list)
+        or not all(isinstance(item, dict) for item in packet["transition_history"])
+    ):
+        raise WorkSlotJourneyFailure("receipt transition_history must be a list of objects")
     if packet["run_id"] != run_id or packet["slot_id"] != slot_id:
         raise WorkSlotJourneyFailure(f"receipt identity mismatch: {packet}")
     if packet["artifact_root"] != str(artifact_root):
@@ -6348,6 +6412,45 @@ def self_test_helpers() -> None:
             ) from error
     else:
         raise WorkSlotJourneyFailure("self-test: summarizer stdin parsed as a task")
+
+    with tempfile.TemporaryDirectory(prefix="dummy-bound-worker-self-test-") as temp:
+        artifact_root = Path(temp) / "artifacts"
+        packet = {
+            "run_id": "fixture-run",
+            "slot_id": "intent-draft",
+            "artifact_root": str(artifact_root),
+            "instruction_body": "record the typed transport envelope",
+            "capture_dir": str(Path(temp) / "capture"),
+            "binding_sha256": "sha256:" + "a" * 64,
+            "state_visit": 0,
+            "transition_history": [],
+        }
+        completed = subprocess.run(
+            [sys.executable, str(WORKER_SCRIPT)],
+            input=json.dumps(packet).encode("utf-8"),
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise WorkSlotJourneyFailure(
+                f"self-test: dummy bound worker rejected typed transport: {completed.stderr!r}"
+            )
+        receipt = artifact_root / RECEIPT_DIRNAME / "fixture-run--intent-draft.json"
+        if not receipt.is_file() or json.loads(receipt.read_text(encoding="utf-8")) != packet:
+            raise WorkSlotJourneyFailure(
+                "self-test: dummy bound worker did not retain the typed transport envelope"
+            )
+        malformed = dict(packet, state_visit=True)
+        refused = subprocess.run(
+            [sys.executable, str(WORKER_SCRIPT)],
+            input=json.dumps(malformed).encode("utf-8"),
+            capture_output=True,
+            check=False,
+        )
+        if refused.returncode == 0 or b"state_visit" not in refused.stderr:
+            raise WorkSlotJourneyFailure(
+                "self-test: dummy bound worker accepted malformed state_visit"
+            )
 
     with tempfile.TemporaryDirectory(prefix="dummy-stdin-worker-self-test-") as temp:
         receipt = Path(temp) / "raw.stdin"

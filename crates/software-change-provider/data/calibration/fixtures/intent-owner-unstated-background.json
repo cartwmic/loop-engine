@@ -46,7 +46,7 @@
     }
   ],
   "constraints": [
-    "The owner is expected to know the provider's Bookends, PRD, fan-out, checkpoint, axis, and evidence-applicability terminology.",
+    "The owner maintains local repositories and can operate the Loop Engine and software-change provider CLIs, but has not previously used the provider's review workflow.",
     "The existing workflow names and overlay machinery must be preserved."
   ],
   "non_goals": [

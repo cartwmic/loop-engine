@@ -2,9 +2,11 @@
 
 use super::{persistence_error, require_current_observation, show};
 use crate::{
-    instruction_digest, ContextRecord, CreateWorkSlotInvocationRequest, InvocationId,
-    OperationOutcome, Persistence, ProcessError, RunId, Timestamp, WaiterSpawnArgs,
-    WorkSlotBinding, WorkSlotId, WorkSlotProcess,
+    instruction_digest, work_slot_binding_digest, AssignmentLabel, ContextRecord,
+    CreateWorkSlotInvocationRequest, FanOutRecoveryInput, FanOutRecoverySource, HistoryAction,
+    HistoryEntry, InvocationId, OperationOutcome, Persistence, ProcessError, RunId, Timestamp,
+    WaiterSpawnArgs, WaiterWrittenStatus, WorkSlotBinding, WorkSlotId, WorkSlotInvocation,
+    WorkSlotProcess,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -80,6 +82,10 @@ pub struct Result {
 struct WorkerPacket {
     run_id: String,
     slot_id: String,
+    state_visit: u64,
+    binding_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery_origin: Option<Value>,
     artifact_root: String,
     instruction_body: String,
     capture_dir: String,
@@ -91,6 +97,10 @@ struct WorkerPacket {
     invocation_input: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     standing_assignment_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    assignment_labels: Vec<AssignmentLabel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transition_history: Option<Vec<HistoryEntry>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     controls: Option<crate::InvocationControls>,
 }
@@ -170,6 +180,10 @@ where
             "`assignment_selection` may not be combined with `invocation_input`",
         );
     }
+    let recovery_input = match parse_fan_out_recovery_input(request.invocation_input.as_ref()) {
+        Ok(input) => input,
+        Err(message) => return OperationOutcome::rejected("invalid-fan-out-recovery", message),
+    };
 
     let controls =
         match process.prepare_controls(&binding, &run.provider_association, &request.controls) {
@@ -226,6 +240,7 @@ where
     };
     let instruction_body = state.instructions.clone();
     let digest = instruction_digest(&instruction_body);
+    let binding_digest = work_slot_binding_digest(&binding);
 
     let subject = match persistence.get_current_slot_subject(&request.run_id, &request.slot_id) {
         Ok(Some(subject)) => subject,
@@ -239,6 +254,25 @@ where
             );
         }
         Err(error) => return persistence_error(error),
+    };
+
+    let recovery_origin = if let Some(recovery) = recovery_input.as_ref() {
+        match validate_fan_out_recovery(
+            recovery,
+            &run,
+            &request.slot_id,
+            &binding,
+            &binding_digest,
+            &digest,
+            &subject,
+            &invocations,
+            process,
+        ) {
+            Ok(origin) => Some(origin),
+            Err(message) => return OperationOutcome::rejected("invalid-fan-out-recovery", message),
+        }
+    } else {
+        None
     };
 
     let forwarded_context = if slot.stdin_context_kinds.is_empty() {
@@ -257,6 +291,18 @@ where
             ),
             Err(error) => return persistence_error(error),
         }
+    };
+
+    let transition_history = match persistence.load_transition_history(&run.id) {
+        Ok(Some(history)) => {
+            let transitions = history
+                .into_iter()
+                .filter(|entry| matches!(entry.action, HistoryAction::Transition { .. }))
+                .collect::<Vec<_>>();
+            (transitions.len() <= 4096).then_some(transitions)
+        }
+        Ok(None) => None,
+        Err(error) => return persistence_error(error),
     };
 
     let artifact_root = artifact_root_from_input(&run.initial_input);
@@ -331,7 +377,8 @@ where
         "run_id": request.run_id, "slot_id": request.slot_id, "artifact_root": artifact_root,
         "instruction_body": instruction_body, "capture_dir": artifact_root,
         "context": forwarded_context, "invocation_input": request.invocation_input,
-        "standing_assignment_ids": standing_assignment_ids, "controls": controls, "preview": true
+        "standing_assignment_ids": standing_assignment_ids, "transition_history": transition_history,
+        "controls": controls, "preview": true
     });
     preparation_packet
         .as_object_mut()
@@ -342,6 +389,18 @@ where
             Ok(prepared) => prepared,
             Err(error) => return process_error(error),
         };
+    let assignment_labels = match process.assignment_labels(&binding, &run.provider_association) {
+        Ok(Some(labels)) => labels,
+        Ok(None) => match labels_from_facade_preparation(facade_preparation.as_ref()) {
+            Ok(labels) => labels,
+            Err(message) => return OperationOutcome::error("invalid-assignment-labels", message),
+        },
+        Err(error) => return process_error(error),
+    };
+    let assignment_labels = match validate_assignment_labels(assignment_labels) {
+        Ok(labels) => labels,
+        Err(message) => return OperationOutcome::error("invalid-assignment-labels", message),
+    };
     if request.preview {
         return OperationOutcome::completed(Result {
             invocation_id: request.invocation_id,
@@ -350,12 +409,14 @@ where
             allowed_time_ms,
             capture_dir: String::new(),
             preview: Some(json!({
-                "slot_id": request.slot_id, "state_visit": run.control_revision,
+                "slot_id": request.slot_id,
                 "binding": binding, "controls": controls, "allowed_time_ms": allowed_time_ms,
                 "context": forwarded_context, "assignment_selection": assignment_selection,
                 "invocation_input": request.invocation_input, "instruction_body": instruction_body,
                 "artifact_root": artifact_root, "standing_assignment_ids": standing_assignment_ids,
-                "facade_preparation": facade_preparation
+                "transition_history": transition_history,
+                "facade_preparation": facade_preparation,
+                "assignment_labels": assignment_labels
             })),
         });
     }
@@ -394,12 +455,14 @@ where
     )
     .with_waiter_identity_opt(waiter_identity)
     .with_controls(controls.clone())
+    .with_state_visit(run.control_revision.as_u64())
     .with_routed_inputs(forwarded_context.clone().unwrap_or_default())
     .with_frozen_run_identity(json!({
         "provider": run.provider_association.as_json(),
         "input": run.initial_input,
     }))
     .with_assignment_selection(assignment_selection.clone())
+    .with_assignment_labels(assignment_labels.clone())
     .with_invocation_input(request.invocation_input.clone());
     if let Err(error) = persistence.create_work_slot_invocation(create) {
         return persistence_error(error);
@@ -411,6 +474,9 @@ where
         worker_packet: WorkerPacket {
             run_id: request.run_id.as_str().to_owned(),
             slot_id: request.slot_id.as_str().to_owned(),
+            state_visit: run.control_revision.as_u64(),
+            binding_sha256: binding_digest,
+            recovery_origin,
             artifact_root,
             instruction_body,
             capture_dir: capture_dir.clone(),
@@ -418,6 +484,8 @@ where
             assignment_selection,
             invocation_input: request.invocation_input,
             standing_assignment_ids,
+            assignment_labels,
+            transition_history,
             controls: (controls != crate::InvocationControls::default()).then_some(controls),
         },
     };
@@ -469,6 +537,831 @@ pub fn prepare_context<P: WorkSlotProcess + ?Sized>(
     crate::resolve_context_filter(&records, &selection)
         .map(Some)
         .map_err(|message| ProcessError::new("invalid-context-filter-selection", message))
+}
+
+const FAN_OUT_RECOVERY_PROTOCOL: &str = "fan-out-recovery-v1";
+
+fn parse_fan_out_recovery_input(
+    input: Option<&Value>,
+) -> std::result::Result<Option<FanOutRecoveryInput>, String> {
+    let Some(input) = input else {
+        return Ok(None);
+    };
+    let Some(object) = input.as_object() else {
+        return Ok(None);
+    };
+    let Some(protocol) = object.get("protocol").and_then(Value::as_str) else {
+        if ["origin_invocation_id", "pending_assignment_ids", "sources"]
+            .iter()
+            .any(|key| object.contains_key(*key))
+        {
+            return Err("fan-out recovery input requires its versioned protocol field".to_owned());
+        }
+        return Ok(None);
+    };
+    if protocol != FAN_OUT_RECOVERY_PROTOCOL {
+        if protocol.starts_with("fan-out-recovery-") {
+            return Err(format!(
+                "unsupported fan-out recovery protocol `{protocol}`"
+            ));
+        }
+        return Ok(None);
+    }
+    serde_json::from_value(input.clone())
+        .map(Some)
+        .map_err(|error| format!("fan-out recovery input is malformed: {error}"))
+}
+
+fn validate_fan_out_recovery<P: WorkSlotProcess + ?Sized>(
+    recovery: &FanOutRecoveryInput,
+    run: &crate::Run,
+    slot_id: &WorkSlotId,
+    binding: &WorkSlotBinding,
+    binding_digest: &str,
+    instruction_digest: &str,
+    current_subject: &str,
+    invocations: &[WorkSlotInvocation],
+    process: &P,
+) -> std::result::Result<Value, String> {
+    if recovery.protocol != FAN_OUT_RECOVERY_PROTOCOL
+        || recovery.run_id != run.id.as_str()
+        || recovery.slot_id != slot_id.as_str()
+        || recovery.state_visit != run.control_revision.as_u64()
+        || recovery.subject != current_subject
+        || recovery.binding_sha256 != binding_digest
+    {
+        return Err(
+            "recovery target, state visit, subject, or frozen binding does not match this invoke"
+                .to_owned(),
+        );
+    }
+    if recovery.origin_invocation_id.trim().is_empty() {
+        return Err("recovery origin invocation ID must be non-empty".to_owned());
+    }
+    let origins = invocations
+        .iter()
+        .filter(|record| record.invocation_id.as_str() == recovery.origin_invocation_id)
+        .collect::<Vec<_>>();
+    let Some(origin) = origins.first().copied() else {
+        return Err(format!(
+            "recovery origin invocation `{}` is not in this run",
+            recovery.origin_invocation_id
+        ));
+    };
+    if origins.len() != 1
+        || origin.slot_id != *slot_id
+        || origin.state_visit != recovery.state_visit
+        || origin.subject != current_subject
+        || origin.instruction_digest != instruction_digest
+        || origin.binding != *binding
+        || origin.status != Some(WaiterWrittenStatus::Failed)
+    {
+        return Err(
+            "recovery origin is not a failed invocation from this exact slot visit and binding"
+                .to_owned(),
+        );
+    }
+    let ownership = origin
+        .ownership
+        .as_ref()
+        .ok_or_else(|| "recovery origin has no verifiable owned-work cleanup record".to_owned())?;
+    if ownership.live_owned_work || ownership.cleanup_pending {
+        return Err("recovery origin still has live owned work or cleanup pending".to_owned());
+    }
+    let artifact_root = artifact_root_from_input(&run.initial_input);
+    let expected_capture = capture_dir_path(&artifact_root, slot_id, &origin.invocation_id);
+    if PathBuf::from(&origin.capture_dir) != expected_capture {
+        return Err(
+            "recovery origin capture is not the engine-allocated capture for this run and slot"
+                .to_owned(),
+        );
+    }
+    let available = process
+        .enumerate_assignments(binding)
+        .map_err(|error| format!("could not enumerate frozen fan-out assignments: {error}"))?
+        .filter(|assignments| !assignments.is_empty())
+        .ok_or_else(|| {
+            "recovery requires the current engine fan-out binding with enumerable assignments"
+                .to_owned()
+        })?;
+    let available = available.into_iter().collect::<BTreeSet<_>>();
+    let mut covered = BTreeSet::new();
+    for source in &recovery.sources {
+        if source.assignment_id.trim().is_empty() || !covered.insert(source.assignment_id.clone()) {
+            return Err("recovery source assignments must be non-empty and unique".to_owned());
+        }
+        if !available.contains(&source.assignment_id) {
+            return Err(format!(
+                "recovery source assignment `{}` is not in the frozen binding",
+                source.assignment_id
+            ));
+        }
+        let workers = origin
+            .inner_workers
+            .iter()
+            .filter(|worker| worker.assignment_id == source.assignment_id)
+            .collect::<Vec<_>>();
+        let Some(worker) = workers.first().copied() else {
+            return Err(format!(
+                "recovery source assignment `{}` has no retained origin result",
+                source.assignment_id
+            ));
+        };
+        if workers.len() != 1 || worker.started != Some(true) || worker.exit_code != 0 {
+            return Err(format!(
+                "recovery source assignment `{}` is not a genuine completed worker",
+                source.assignment_id
+            ));
+        }
+        if !is_sha256(&source.raw_stdout_sha256)
+            || source.raw_attempt == 0
+            || worker.raw_output_sha256.as_deref() != Some(source.raw_stdout_sha256.as_str())
+            || worker.raw_output_attempt != Some(source.raw_attempt)
+        {
+            return Err(format!(
+                "recovery source assignment `{}` has a wrong raw attempt or digest",
+                source.assignment_id
+            ));
+        }
+        verify_origin_stream(
+            origin,
+            worker.raw_output_path.as_deref(),
+            &source.raw_stdout_sha256,
+        )?;
+        match source.source_class.as_str() {
+            "original-raw" => {
+                if worker.conformance_status.as_deref() != Some("succeeded")
+                    || worker.selected_attempt != Some(source.raw_attempt)
+                    || worker.selected_output_sha256.as_deref()
+                        != Some(source.raw_stdout_sha256.as_str())
+                    || worker.selected_output_path.is_none()
+                    || source.selected_output_path.is_some()
+                    || source.selected_output_sha256.is_some()
+                    || source.derivation.is_some()
+                    || source.owner_approval.is_some()
+                    || source.fidelity_approval.is_some()
+                {
+                    return Err(format!(
+                        "raw source `{}` is not the conforming selected origin output",
+                        source.assignment_id
+                    ));
+                }
+                verify_origin_stream(
+                    origin,
+                    worker.selected_output_path.as_deref(),
+                    &source.raw_stdout_sha256,
+                )?;
+            }
+            "eligible-derived" => {
+                if worker.conformance_status.as_deref() != Some("failed")
+                    || worker.declared_output_contract.is_none()
+                {
+                    return Err(format!("derived source `{}` does not originate from a contracted conformance failure", source.assignment_id));
+                }
+                let Some(path) = source.selected_output_path.as_deref() else {
+                    return Err(format!(
+                        "derived source `{}` has no selected bytes path",
+                        source.assignment_id
+                    ));
+                };
+                let Some(digest) = source.selected_output_sha256.as_deref() else {
+                    return Err(format!(
+                        "derived source `{}` has no selected bytes digest",
+                        source.assignment_id
+                    ));
+                };
+                verify_artifact_file(&artifact_root, path, digest)?;
+                validate_recovery_derivation(source, &artifact_root, recovery, invocations)?;
+            }
+            other => {
+                return Err(format!(
+                    "unsupported selected recovery source class `{other}`"
+                ))
+            }
+        }
+    }
+    for assignment in &recovery.pending_assignment_ids {
+        if assignment.trim().is_empty() || !covered.insert(assignment.clone()) {
+            return Err(
+                "pending recovery assignments must be non-empty and disjoint from selected sources"
+                    .to_owned(),
+            );
+        }
+        if !available.contains(assignment) {
+            return Err(format!(
+                "pending recovery assignment `{assignment}` is not in the frozen binding"
+            ));
+        }
+        if origin.inner_workers.iter().any(|worker| {
+            worker.assignment_id == *assignment
+                && worker.started == Some(true)
+                && worker.exit_code == 0
+                && worker.conformance_status.as_deref() == Some("succeeded")
+                && worker.selected_output_sha256.is_some()
+                && worker.selected_output_path.is_some()
+        }) {
+            return Err(format!("pending recovery assignment `{assignment}` already has a conforming completed source"));
+        }
+    }
+    if covered != available {
+        return Err("recovery source and pending assignment groups do not cover the complete frozen binding".to_owned());
+    }
+    if covered.is_empty() {
+        return Err("recovery selection is empty".to_owned());
+    }
+    Ok(recovery_origin_packet(origin, binding_digest))
+}
+
+fn validate_recovery_derivation(
+    source: &FanOutRecoverySource,
+    artifact_root: &str,
+    recovery: &FanOutRecoveryInput,
+    invocations: &[WorkSlotInvocation],
+) -> std::result::Result<(), String> {
+    let derivation = source.derivation.as_ref().ok_or_else(|| {
+        format!(
+            "derived source `{}` has no derivation record",
+            source.assignment_id
+        )
+    })?;
+    if !derivation.difference.is_object() && !derivation.difference.is_array() {
+        return Err(format!(
+            "derived source `{}` has no explicit difference",
+            source.assignment_id
+        ));
+    }
+    for (label, approval) in [
+        ("owner", source.owner_approval.as_ref()),
+        ("fidelity", source.fidelity_approval.as_ref()),
+    ] {
+        let approval = approval.ok_or_else(|| {
+            format!(
+                "derived source `{}` lacks {label} approval",
+                source.assignment_id
+            )
+        })?;
+        if approval.name.trim().is_empty() || approval.reason.trim().is_empty() {
+            return Err(format!(
+                "derived source `{}` has empty {label} approval",
+                source.assignment_id
+            ));
+        }
+    }
+    match derivation.kind.as_str() {
+        "mechanical" if derivation.adapter.is_none() => Ok(()),
+        "scripted" => {
+            let adapter = derivation
+                .adapter
+                .as_ref()
+                .ok_or_else(|| "scripted repair is missing adapter usage accounting".to_owned())?;
+            if adapter.command.trim().is_empty()
+                || adapter.model_id.is_some()
+                || adapter.capture.is_some()
+                || adapter.calls != 1
+                || adapter.max_calls == 0
+                || adapter.calls > adapter.max_calls
+                || adapter.elapsed_ms == 0
+                || adapter.max_time_ms == 0
+                || adapter.elapsed_ms > adapter.max_time_ms
+                || adapter.max_cost_micros == 0
+                || adapter.metered_cost_micros > adapter.max_cost_micros
+                || !adapter.usage_accounted
+            {
+                return Err("scripted repair exceeded or omitted its positive call/time/metered-cost bounds".to_owned());
+            }
+            Ok(())
+        }
+        "model" => {
+            let adapter = derivation
+                .adapter
+                .as_ref()
+                .ok_or_else(|| "model repair is missing attributed usage accounting".to_owned())?;
+            let model_id = adapter
+                .model_id
+                .as_deref()
+                .filter(|model_id| !model_id.trim().is_empty())
+                .ok_or_else(|| "model repair is missing an explicit model identity".to_owned())?;
+            if adapter.command.trim().is_empty()
+                || adapter.calls != 1
+                || adapter.max_calls == 0
+                || adapter.calls > adapter.max_calls
+                || adapter.elapsed_ms == 0
+                || adapter.max_time_ms == 0
+                || adapter.elapsed_ms > adapter.max_time_ms
+                || adapter.max_cost_micros == 0
+                || adapter.metered_cost_micros > adapter.max_cost_micros
+                || !adapter.usage_accounted
+            {
+                return Err(
+                    "model repair exceeded or omitted its positive call/time/metered-cost bounds"
+                        .to_owned(),
+                );
+            }
+            verify_model_repair_capture(
+                source,
+                artifact_root,
+                recovery,
+                invocations,
+                model_id,
+                adapter,
+            )
+        }
+        other => Err(format!("unsupported recovery derivation kind `{other}`")),
+    }
+}
+
+fn verify_model_repair_capture(
+    source: &FanOutRecoverySource,
+    artifact_root: &str,
+    recovery: &FanOutRecoveryInput,
+    invocations: &[WorkSlotInvocation],
+    model_id: &str,
+    selected_usage: &crate::FanOutRecoveryAdapterUsage,
+) -> std::result::Result<(), String> {
+    let capture = selected_usage
+        .capture
+        .as_ref()
+        .ok_or_else(|| "model repair has no retained adapter capture identity".to_owned())?;
+    let root = std::fs::canonicalize(artifact_root)
+        .map_err(|error| format!("artifact_root is unavailable: {error}"))?;
+    let assignment_key = sha256_prefixed(
+        format!(
+            "{}:{}:{}:{}:{}",
+            recovery.run_id,
+            recovery.slot_id,
+            recovery.state_visit,
+            recovery.binding_sha256,
+            source.assignment_id,
+        )
+        .as_bytes(),
+    );
+    let expected_budget_dir = root
+        .join("recovery-adapter-attempts")
+        .join("model")
+        .join(&assignment_key[7..]);
+    let budget_dir = std::fs::canonicalize(&expected_budget_dir)
+        .map_err(|error| format!("model repair assignment history is unavailable: {error}"))?;
+    if !budget_dir.starts_with(&root) {
+        return Err("model repair assignment history escapes artifact_root".to_owned());
+    }
+    if budget_dir.join("budget.lock").exists() {
+        return Err("model repair assignment history is locked or unfinished".to_owned());
+    }
+    let selected_dir = std::fs::canonicalize(&capture.directory)
+        .map_err(|error| format!("selected model repair capture is unavailable: {error}"))?;
+    if selected_dir.parent() != Some(budget_dir.as_path()) || !selected_dir.is_dir() {
+        return Err(
+            "selected model repair capture does not match its assignment history".to_owned(),
+        );
+    }
+    let selected_request_sha = capture.request_sha256.as_str();
+    let selected_stdout_sha = capture.stdout_sha256.as_str();
+    let selected_stderr_sha = capture.stderr_sha256.as_str();
+    let mut total_calls = 0_u64;
+    let mut total_elapsed_ms = 0_u64;
+    let mut total_cost_micros = 0_u64;
+    let mut selected_seen = false;
+    for entry in std::fs::read_dir(&budget_dir)
+        .map_err(|error| format!("could not read model repair assignment history: {error}"))?
+    {
+        let entry =
+            entry.map_err(|error| format!("could not read model repair attempt: {error}"))?;
+        if entry.file_name() == "budget.lock" {
+            continue;
+        }
+        if !entry
+            .file_type()
+            .map_err(|error| format!("could not inspect model repair attempt: {error}"))?
+            .is_dir()
+        {
+            return Err("model repair assignment history contains an unexpected entry".to_owned());
+        }
+        let attempt_dir = std::fs::canonicalize(entry.path())
+            .map_err(|error| format!("model repair attempt is unavailable: {error}"))?;
+        if attempt_dir.parent() != Some(budget_dir.as_path()) {
+            return Err("model repair attempt escapes its assignment history".to_owned());
+        }
+        let configuration = read_recovery_json(&attempt_dir.join("configuration.json"), 64 * 1024)?;
+        let args = serde_json::to_value(&selected_usage.args).map_err(|error| error.to_string())?;
+        if configuration.get("kind").and_then(Value::as_str) != Some("model")
+            || configuration.get("model_id").and_then(Value::as_str) != Some(model_id)
+            || configuration.get("command").and_then(Value::as_str)
+                != Some(selected_usage.command.as_str())
+            || configuration.get("args") != Some(&args)
+            || configuration.get("run_id").and_then(Value::as_str) != Some(recovery.run_id.as_str())
+            || configuration.get("slot_id").and_then(Value::as_str)
+                != Some(recovery.slot_id.as_str())
+            || configuration.get("state_visit").and_then(Value::as_u64)
+                != Some(recovery.state_visit)
+            || configuration.get("binding_sha256").and_then(Value::as_str)
+                != Some(recovery.binding_sha256.as_str())
+            || configuration.get("assignment_id").and_then(Value::as_str)
+                != Some(source.assignment_id.as_str())
+            || configuration.get("max_calls").and_then(Value::as_u64)
+                != Some(u64::from(selected_usage.max_calls))
+            || configuration.get("max_time_ms").and_then(Value::as_u64)
+                != Some(selected_usage.max_time_ms)
+            || configuration.get("max_cost_micros").and_then(Value::as_u64)
+                != Some(selected_usage.max_cost_micros)
+        {
+            return Err(
+                "model repair attempt identity or assignment bounds do not match".to_owned(),
+            );
+        }
+        let attempt_origin_id = configuration
+            .get("origin_invocation_id")
+            .and_then(Value::as_str)
+            .filter(|identity| !identity.trim().is_empty())
+            .ok_or("model repair attempt omitted its original invocation identity")?;
+        let attempt_origin_capture = configuration
+            .get("origin_capture_dir")
+            .and_then(Value::as_str)
+            .filter(|path| !path.trim().is_empty())
+            .ok_or("model repair attempt omitted its raw-origin capture directory")?;
+        let raw_attempt = configuration
+            .get("raw_attempt")
+            .and_then(Value::as_u64)
+            .filter(|attempt| *attempt > 0)
+            .ok_or("model repair attempt omitted its raw-attempt number")?;
+        let raw_path = configuration
+            .get("raw_stdout_path")
+            .and_then(Value::as_str)
+            .ok_or("model repair attempt omitted its raw-attempt path")?;
+        let raw_digest = configuration
+            .get("raw_stdout_sha256")
+            .and_then(Value::as_str)
+            .filter(|digest| is_sha256(digest))
+            .ok_or("model repair attempt omitted its raw-attempt digest")?;
+        let matching_origins = invocations
+            .iter()
+            .filter(|origin| origin.invocation_id.as_str() == attempt_origin_id)
+            .collect::<Vec<_>>();
+        let attempt_origin = matching_origins
+            .first()
+            .copied()
+            .ok_or("model repair raw origin is not present in run history")?;
+        if matching_origins.len() != 1
+            || attempt_origin.slot_id.as_str() != recovery.slot_id
+            || attempt_origin.state_visit != recovery.state_visit
+            || attempt_origin.subject != recovery.subject
+            || work_slot_binding_digest(&attempt_origin.binding) != recovery.binding_sha256
+            || attempt_origin.status != Some(WaiterWrittenStatus::Failed)
+            || attempt_origin
+                .ownership
+                .as_ref()
+                .is_none_or(|ownership| ownership.cleanup_pending || ownership.live_owned_work)
+            || attempt_origin.capture_dir != attempt_origin_capture
+        {
+            return Err("model repair raw origin does not match this failed assignment visit or cleanup state".to_owned());
+        }
+        let origin_workers = attempt_origin
+            .inner_workers
+            .iter()
+            .filter(|worker| worker.assignment_id == source.assignment_id)
+            .collect::<Vec<_>>();
+        let origin_worker = origin_workers
+            .first()
+            .copied()
+            .ok_or("model repair raw origin has no captured assignment")?;
+        if origin_workers.len() != 1
+            || origin_worker.raw_output_attempt != u32::try_from(raw_attempt).ok()
+            || origin_worker.raw_output_sha256.as_deref() != Some(raw_digest)
+            || origin_worker.raw_output_path.as_deref() != Some(raw_path)
+            || (attempt_origin_id == recovery.origin_invocation_id
+                && (raw_attempt != u64::from(source.raw_attempt)
+                    || raw_digest != source.raw_stdout_sha256))
+        {
+            return Err(
+                "model repair raw origin attempt does not match its assignment capture".to_owned(),
+            );
+        }
+        verify_origin_stream(attempt_origin, Some(raw_path), raw_digest)?;
+        let request = read_recovery_file(&attempt_dir.join("request.json"), 2 * 1024 * 1024)?;
+        let stdout = read_recovery_file(&attempt_dir.join("stdout"), 1024 * 1024)?;
+        let stderr = read_recovery_file(&attempt_dir.join("stderr"), 1024 * 1024)?;
+        let usage = read_recovery_json(&attempt_dir.join("usage.json"), 64 * 1024)?;
+        let request_sha = sha256_prefixed(&request);
+        if configuration.get("request_sha256").and_then(Value::as_str) != Some(request_sha.as_str())
+        {
+            return Err(
+                "model repair configuration does not identify its retained request".to_owned(),
+            );
+        }
+        let stdout_sha = sha256_prefixed(&stdout);
+        let stderr_sha = sha256_prefixed(&stderr);
+        let request_value: Value = serde_json::from_slice(&request)
+            .map_err(|error| format!("model repair request capture is malformed: {error}"))?;
+        if usage.get("usage_accounted").and_then(Value::as_bool) != Some(true)
+            || usage.get("model_id").and_then(Value::as_str) != Some(model_id)
+            || usage.get("command").and_then(Value::as_str) != Some(selected_usage.command.as_str())
+            || usage.get("args") != Some(&args)
+            || usage.get("request_sha256").and_then(Value::as_str) != Some(request_sha.as_str())
+            || usage.get("stdout_sha256").and_then(Value::as_str) != Some(stdout_sha.as_str())
+            || usage.get("stderr_sha256").and_then(Value::as_str) != Some(stderr_sha.as_str())
+            || request_value
+                .pointer("/model_adapter/model_id")
+                .and_then(Value::as_str)
+                != Some(model_id)
+            || request_value
+                .pointer("/model_adapter/command")
+                .and_then(Value::as_str)
+                != Some(selected_usage.command.as_str())
+            || request_value.pointer("/model_adapter/args") != Some(&args)
+            || request_value.pointer("/run_id").and_then(Value::as_str)
+                != Some(recovery.run_id.as_str())
+            || request_value.pointer("/slot_id").and_then(Value::as_str)
+                != Some(recovery.slot_id.as_str())
+            || request_value
+                .pointer("/state_visit")
+                .and_then(Value::as_u64)
+                != Some(recovery.state_visit)
+            || request_value
+                .pointer("/binding_sha256")
+                .and_then(Value::as_str)
+                != Some(recovery.binding_sha256.as_str())
+            || request_value
+                .pointer("/origin_invocation_id")
+                .and_then(Value::as_str)
+                != Some(attempt_origin_id)
+            || request_value
+                .pointer("/assignment_id")
+                .and_then(Value::as_str)
+                != Some(source.assignment_id.as_str())
+            || request_value
+                .pointer("/raw_output_sha256")
+                .and_then(Value::as_str)
+                != Some(raw_digest)
+            || request_value
+                .pointer("/raw_attempt")
+                .and_then(Value::as_u64)
+                != Some(raw_attempt)
+            || request_value
+                .pointer("/raw_stdout_path")
+                .and_then(Value::as_str)
+                != Some(raw_path)
+            || request_value.pointer("/budget/max_calls") != configuration.get("max_calls")
+            || request_value.pointer("/budget/max_time_ms") != configuration.get("max_time_ms")
+            || request_value.pointer("/budget/max_cost_micros")
+                != configuration.get("max_cost_micros")
+            || request_value.pointer("/budget/remaining_calls")
+                != configuration.get("remaining_calls")
+            || request_value.pointer("/budget/remaining_time_ms")
+                != configuration.get("remaining_time_ms")
+            || request_value.pointer("/budget/remaining_cost_micros")
+                != configuration.get("remaining_cost_micros")
+        {
+            return Err(
+                "model repair attempt has missing or unverifiable usage attribution".to_owned(),
+            );
+        }
+        let calls = usage
+            .get("calls")
+            .and_then(Value::as_u64)
+            .filter(|calls| *calls > 0)
+            .ok_or("model repair attempt omitted positive metered call usage")?;
+        let elapsed = usage
+            .get("elapsed_ms")
+            .and_then(Value::as_u64)
+            .filter(|elapsed| *elapsed > 0)
+            .ok_or("model repair attempt omitted positive elapsed usage")?;
+        let cost = usage
+            .get("metered_cost_micros")
+            .and_then(Value::as_u64)
+            .ok_or("model repair attempt omitted metered-cost usage")?;
+        for key in ["max_calls", "max_time_ms", "max_cost_micros"] {
+            if usage.get(key) != configuration.get(key) {
+                return Err(
+                    "model repair attempt usage disagrees with its positive bounds".to_owned(),
+                );
+            }
+        }
+        let remaining_time = configuration
+            .get("remaining_time_ms")
+            .and_then(Value::as_u64)
+            .filter(|remaining| *remaining > 0)
+            .ok_or("model repair attempt omitted its remaining time bound")?;
+        let remaining_calls = configuration
+            .get("remaining_calls")
+            .and_then(Value::as_u64)
+            .filter(|remaining| *remaining > 0)
+            .ok_or("model repair attempt omitted its remaining call bound")?;
+        let remaining_cost = configuration
+            .get("remaining_cost_micros")
+            .and_then(Value::as_u64)
+            .filter(|remaining| *remaining > 0)
+            .ok_or("model repair attempt omitted its remaining cost bound")?;
+        if calls > remaining_calls || elapsed > remaining_time || cost > remaining_cost {
+            return Err(
+                "model repair attempt exceeded its remaining per-assignment bound".to_owned(),
+            );
+        }
+        total_calls = total_calls
+            .checked_add(calls)
+            .ok_or("model repair call accounting overflowed")?;
+        total_elapsed_ms = total_elapsed_ms
+            .checked_add(elapsed)
+            .ok_or("model repair time accounting overflowed")?;
+        total_cost_micros = total_cost_micros
+            .checked_add(cost)
+            .ok_or("model repair cost accounting overflowed")?;
+        if attempt_dir == selected_dir {
+            selected_seen = attempt_origin_id == recovery.origin_invocation_id
+                && raw_attempt == u64::from(source.raw_attempt)
+                && raw_digest == source.raw_stdout_sha256
+                && request_sha == selected_request_sha
+                && stdout_sha == selected_stdout_sha
+                && stderr_sha == selected_stderr_sha
+                && calls == u64::from(selected_usage.calls)
+                && elapsed == selected_usage.elapsed_ms
+                && cost == selected_usage.metered_cost_micros;
+        }
+    }
+    if !selected_seen
+        || total_calls > u64::from(selected_usage.max_calls)
+        || total_elapsed_ms > selected_usage.max_time_ms
+        || total_cost_micros > selected_usage.max_cost_micros
+    {
+        return Err(
+            "model repair selected source has unverifiable or exhausted assignment usage"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn read_recovery_file(path: &std::path::Path, limit: u64) -> std::result::Result<Vec<u8>, String> {
+    let metadata = std::fs::metadata(path).map_err(|error| {
+        format!(
+            "model repair capture `{}` is unavailable: {error}",
+            path.display()
+        )
+    })?;
+    if !metadata.is_file() || metadata.len() > limit {
+        return Err(format!(
+            "model repair capture `{}` exceeds its bound",
+            path.display()
+        ));
+    }
+    std::fs::read(path).map_err(|error| {
+        format!(
+            "could not read model repair capture `{}`: {error}",
+            path.display()
+        )
+    })
+}
+
+fn read_recovery_json(path: &std::path::Path, limit: u64) -> std::result::Result<Value, String> {
+    serde_json::from_slice(&read_recovery_file(path, limit)?).map_err(|error| {
+        format!(
+            "model repair capture `{}` is malformed: {error}",
+            path.display()
+        )
+    })
+}
+
+fn verify_origin_stream(
+    origin: &WorkSlotInvocation,
+    relative: Option<&str>,
+    expected_digest: &str,
+) -> std::result::Result<(), String> {
+    let relative =
+        relative.ok_or_else(|| "origin selected stream has no retained path".to_owned())?;
+    let relative_path = PathBuf::from(relative);
+    if relative_path.is_absolute()
+        || relative_path
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err("origin selected stream path is not a safe capture-relative path".to_owned());
+    }
+    let path = PathBuf::from(&origin.capture_dir).join(relative_path);
+    let bytes = std::fs::read(&path)
+        .map_err(|error| format!("origin stream `{}` is unavailable: {error}", path.display()))?;
+    if sha256_prefixed(&bytes) != expected_digest {
+        return Err(format!(
+            "origin stream `{}` no longer matches its retained digest",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn verify_artifact_file(
+    artifact_root: &str,
+    path: &str,
+    expected_digest: &str,
+) -> std::result::Result<(), String> {
+    if !is_sha256(expected_digest) {
+        return Err("derived output digest is malformed".to_owned());
+    }
+    let root = std::fs::canonicalize(artifact_root)
+        .map_err(|error| format!("artifact_root is unavailable: {error}"))?;
+    let path = std::fs::canonicalize(path)
+        .map_err(|error| format!("derived output is unavailable: {error}"))?;
+    if !path.starts_with(&root) {
+        return Err("derived output must be contained in the run artifact_root".to_owned());
+    }
+    let bytes = std::fs::read(&path).map_err(|error| {
+        format!(
+            "derived output `{}` is unavailable: {error}",
+            path.display()
+        )
+    })?;
+    if sha256_prefixed(&bytes) != expected_digest {
+        return Err("derived output bytes do not match their declared digest".to_owned());
+    }
+    Ok(())
+}
+
+fn is_sha256(digest: &str) -> bool {
+    digest.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    })
+}
+
+fn sha256_prefixed(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+fn recovery_origin_packet(origin: &WorkSlotInvocation, binding_digest: &str) -> Value {
+    let assignments = origin
+        .inner_workers
+        .iter()
+        .map(|worker| {
+            json!({
+                "assignment_id": worker.assignment_id,
+                "command": worker.command,
+                "args": worker.args,
+                "exit_code": worker.exit_code,
+                "started": worker.started,
+                "selected_attempt": worker.selected_attempt,
+                "selected_output_sha256": worker.selected_output_sha256,
+                "selected_output_path": worker.selected_output_path,
+                "raw_output_sha256": worker.raw_output_sha256,
+                "raw_output_path": worker.raw_output_path,
+                "raw_output_attempt": worker.raw_output_attempt,
+                "conformance_status": worker.conformance_status,
+                "conformance_error": worker.conformance_error,
+                "declared_output_contract": worker.declared_output_contract,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "protocol": "fan-out-origin-v1",
+        "invocation_id": origin.invocation_id,
+        "slot_id": origin.slot_id,
+        "state_visit": origin.state_visit,
+        "subject": origin.subject,
+        "binding_sha256": binding_digest,
+        "capture_dir": origin.capture_dir,
+        "exit_code": origin.exit_code,
+        "status": "failed",
+        "quiescent": true,
+        "assignments": assignments,
+    })
+}
+
+fn labels_from_facade_preparation(
+    preparation: Option<&Value>,
+) -> std::result::Result<Vec<AssignmentLabel>, String> {
+    let Some(value) = preparation.and_then(|value| value.get("assignment_labels")) else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_value::<Vec<AssignmentLabel>>(value.clone())
+        .map_err(|error| format!("facade assignment_labels are malformed: {error}"))
+}
+
+fn validate_assignment_labels(
+    labels: Vec<AssignmentLabel>,
+) -> std::result::Result<Vec<AssignmentLabel>, String> {
+    if labels.len() > 4096 {
+        return Err("assignment label inventory exceeds 4096 entries".to_owned());
+    }
+    let mut identities = BTreeSet::new();
+    for label in &labels {
+        if label.assignment_id.trim().is_empty()
+            || label.title.trim().is_empty()
+            || label.role.trim().is_empty()
+        {
+            return Err(
+                "assignment labels require non-empty assignment_id, title, and role".to_owned(),
+            );
+        }
+        if label.assignment_id.len() > 1024 || label.title.len() > 1024 || label.role.len() > 1024 {
+            return Err("assignment label fields may not exceed 1024 bytes".to_owned());
+        }
+        if !identities.insert(label.assignment_id.as_str()) {
+            return Err(format!(
+                "assignment label `{}` is duplicated",
+                label.assignment_id
+            ));
+        }
+    }
+    Ok(labels)
 }
 
 fn validate_assignment_selection<P: WorkSlotProcess + ?Sized>(
@@ -1153,6 +2046,8 @@ mod tests {
                 "artifact_root",
                 "instruction_body",
                 "capture_dir",
+                "state_visit",
+                "binding_sha256",
             ])
         );
         assert_eq!(packet["run_id"], "run-1");
@@ -1494,6 +2389,8 @@ mod tests {
                     "artifact_root",
                     "instruction_body",
                     "capture_dir",
+                    "state_visit",
+                    "binding_sha256",
                 ])
             );
         }
@@ -1678,6 +2575,8 @@ mod tests {
                 "artifact_root",
                 "instruction_body",
                 "capture_dir",
+                "state_visit",
+                "binding_sha256",
             ])
         );
 

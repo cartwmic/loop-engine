@@ -182,7 +182,7 @@ fn review_candidates_cli_reads_selected_bytes_without_rewriting_captures() {
     assert_eq!(first.stdout, second.stdout);
 
     let output: Value = serde_json::from_slice(&first.stdout).expect("candidate JSON");
-    assert_eq!(output["schema_version"], "1");
+    assert_eq!(output["schema_version"], "3");
     let candidates = output["candidates"].as_array().expect("candidates");
     assert_eq!(candidates.len(), 2);
     assert_eq!(candidates[0]["status"], "ready");

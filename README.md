@@ -137,15 +137,17 @@ loop-engine --json show RUN_ID --view full
 
 ### Review profiles in current source
 
-Contract v3 uses `minimal-10`, `standard-10` and `high-rigor-10`. Each covers ordinary and challenge review at intent, design, plan, implementation and validation:
+The current bundled contract-v3 profiles are `minimal-12`, `standard-12` and `high-rigor-12`. Each covers ordinary and challenge review at intent, design, plan, implementation and validation:
 
 | Profile | Review pattern | Final criterion/goal authors |
 |---|---|---|
 | Minimal | One reviewer covers all axes together | 1 |
 | Standard | Two reviewers each cover all axes together | 2 |
-| High | The same two identities review individual axes, then each reviews all axes in a fresh session before fixes | 2 |
+| High | The same two identities review individual-stage axes, then each reviews all axes in a fresh session before fixes | 2 |
 
-The source `software-change setup` helper prepares bindings from a small explicit command/argument roster. Models and effort are chosen per run. See the [provider skill](crates/software-change-provider/skills/using-software-change-provider/SKILL.md) for setup and confirmation. Released v0.20.0 carries the earlier contract-v2 profiles.
+After implementation edits, these profiles enter a `reconciliation` state before finalizing the implementation report/checkpoint and any implementation review. The driver compares delivered behavior and approved intent with authoritative documents in `reconciliation.json`: existing wording may suffice, change-specific proof needs no new requirement, and missing or changed enduring meaning requires exact owner acceptance plus separately authorized application and commit. A justified no-document-change result is valid.
+
+The source `software-change setup` helper prepares bindings from an explicit roster; models and effort are chosen per run. New setup refuses the historical shipped `-10` and `-11` profile identities; existing runs retain their frozen obligations and require their original provider rather than migration to these defaults. See the [provider skill](crates/software-change-provider/skills/using-software-change-provider/SKILL.md) for setup and reconciliation details. Released v0.20.0 carries the earlier contract-v2 profiles.
 
 ## Adoption limits
 

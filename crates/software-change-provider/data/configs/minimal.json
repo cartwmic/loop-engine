@@ -4,7 +4,7 @@
     "required_authors": 1,
     "goal_required_authors": 1
   },
-  "config_version": "minimal-11",
+  "config_version": "minimal-12",
   "review_policies": {
     "intent-review": [
       {
@@ -1138,6 +1138,18 @@
   ],
   "extra": {
     "profile": "minimal",
-    "template_root": "crates/software-change-provider/data/templates"
+    "template_root": "crates/software-change-provider/data/templates",
+    "advice": {
+      "occasion_map": [
+        "review-candidates",
+        "accepted-defect",
+        "implementation-correction",
+        "execution-or-authority-issue",
+        "evidence-applicability",
+        "requirements-reconciliation",
+        "review-round-departure",
+        "final-completion"
+      ]
+    }
   }
 }

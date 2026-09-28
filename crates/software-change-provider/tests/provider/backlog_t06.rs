@@ -45,14 +45,28 @@ import json
 import os
 import sys
 from pathlib import Path
+import hashlib
 
 packet = sys.stdin.read()
 def value(prefix, default):
     return next((line[len(prefix):] for line in packet.splitlines() if line.startswith(prefix)), default)
 
+location = next(json.loads(line) for line in reversed(packet.splitlines()) if line.startswith('{"artifact_root"'))
 policies = json.loads(value("assigned_policies: ", "[]"))
 stage = value("review_stage: ", "aggregate")
 author = value("required_author_claim: ", "unknown")
+slot = value("slot_id: ", "intent-review")
+subject = {
+    "intent-review":"intent.json", "intent-adversarial-review":"intent.json",
+    "design-review":"design.json", "design-adversarial-review":"design.json",
+    "plan-review":"plan.json", "plan-adversarial-review":"plan.json",
+    "implementation-review":"implementation-report.json", "implementation-adversarial-review":"implementation-report.json",
+    "validation-review":"validation-report.json", "validation-adversarial-review":"validation-report.json",
+}[slot]
+raw_source = (Path(location["artifact_root"]) / subject).read_bytes()
+source = json.loads(raw_source)
+locator = subject + "#/revision"
+source_sha256 = "sha256:" + hashlib.sha256(raw_source).hexdigest()
 log = Path(sys.argv[1])
 with log.open("a", encoding="utf-8") as stream:
     stream.write(json.dumps({
@@ -64,14 +78,28 @@ with log.open("a", encoding="utf-8") as stream:
         "stdin": packet,
     }) + "\n")
 print(json.dumps({
+    "review_contract_version": 2,
     "review_stage": stage,
     "author": {"name": author, "kind": "agent"},
     "judgments": [
-        {"axis": policy["id"], "result": "pass", "findings": ""}
+        {"axis": policy["id"], "result": "pass", "findings": "",
+         "grounds": {"reason": "Fixture inspected the assigned subject.",
+                     "evidence": [{"locator": locator, "sha256": source_sha256}]}}
         for policy in policies
     ],
 }))
 "##
+}
+
+fn token_budget(model_id: &str) -> Value {
+    json!({
+        "model_id": model_id,
+        "context_window_tokens": 200000,
+        "system_tokens": 4000,
+        "framing_tokens": 4000,
+        "output_reserve_tokens": 4000,
+        "reasoning_reserve_tokens": 16000
+    })
 }
 
 fn setup(
@@ -106,6 +134,7 @@ fn setup_with_provider(
         provider_binary.to_str().expect("provider path"),
         "--output",
         output.to_str().expect("output path"),
+        "--decline-advice",
     ]);
     command.args(extra);
     let completed = command
@@ -270,7 +299,7 @@ fn assert_setup_output(
     assert_eq!(profile["contract_version"], 3);
     assert_eq!(
         profile["config_version"],
-        format!("{rigor}-11").replace("high-11", "high-rigor-11")
+        format!("{rigor}-12").replace("high-12", "high-rigor-12")
     );
     assert_eq!(
         profile["work_slot_bindings"].as_object().unwrap().len(),
@@ -300,12 +329,34 @@ fn assert_setup_output(
         let binding = &profile["work_slot_bindings"][gate];
         assert_eq!(binding["command"], engine().to_string_lossy().as_ref());
         assert_eq!(
-            binding["context_filter"],
-            json!({
-                "command": provider_binary.to_string_lossy(),
-                "args": ["commission"]
-            })
+            binding["context_filter"]["command"],
+            provider_binary.to_string_lossy().as_ref()
         );
+        assert_eq!(binding["context_filter"]["args"][0], "commission");
+        assert_eq!(binding["context_filter"]["args"][1], "--call-budgets");
+        let call_budgets: Vec<Value> = serde_json::from_str(
+            binding["context_filter"]["args"][2]
+                .as_str()
+                .expect("budget JSON"),
+        )
+        .expect("per-call budget vector");
+        let required_authors = report["effective_policy"]["review_policies"][gate]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|policy| policy["required_authors"].as_u64())
+            .max()
+            .unwrap_or(0) as usize;
+        let roster_used = report["roster"].as_array().unwrap();
+        assert_eq!(call_budgets.len(), required_authors.min(roster_used.len()));
+        for (budget, roster_entry) in call_budgets.iter().zip(roster_used.iter()) {
+            assert_eq!(budget["author"], roster_entry["author"]);
+            assert_eq!(budget["model_id"], roster_entry["token_budget"]["model_id"]);
+            assert_eq!(
+                budget["context_window_tokens"],
+                roster_entry["token_budget"]["context_window_tokens"]
+            );
+        }
         let args = binding["args"].as_array().expect("fan-out args");
         assert_eq!(args[0], "fan-out");
         assert_eq!(args[1], "--max-active");
@@ -341,8 +392,8 @@ fn backlog_t06_setup_profiles_are_inspectable_and_closed() {
     fs::write(
         &roster,
         serde_json::to_vec(&json!([
-            {"author":"reviewer-a","command":worker_a,"args":["literal-a","--effort"]},
-            {"author":"reviewer-b","command":worker_b,"args":["literal-b"]}
+            {"author":"reviewer-a","command":worker_a,"args":["literal-a","--effort"],"token_budget":token_budget("fixture/model-a")},
+            {"author":"reviewer-b","command":worker_b,"args":["literal-b"],"token_budget":token_budget("fixture/model-b")}
         ]))
         .expect("roster JSON"),
     )
@@ -480,7 +531,7 @@ fn backlog_t06_setup_profiles_are_inspectable_and_closed() {
     let duplicate = root.join("duplicate-roster.json");
     fs::write(
         &duplicate,
-        br#"[{"author":"reviewer-a","command":"/bin/true","args":[]},{"author":"reviewer-a","command":"/bin/false","args":[]}]"#,
+        br#"[{"author":"reviewer-a","command":"/bin/true","args":[],"token_budget":{"model_id":"fixture/model-a","context_window_tokens":200000,"system_tokens":4000,"framing_tokens":4000,"output_reserve_tokens":4000,"reasoning_reserve_tokens":16000}},{"author":"reviewer-a","command":"/bin/false","args":[],"token_budget":{"model_id":"fixture/model-b","context_window_tokens":200000,"system_tokens":4000,"framing_tokens":4000,"output_reserve_tokens":4000,"reasoning_reserve_tokens":16000}}]"#,
     )
     .expect("duplicate roster");
     let (process, _) = setup(&root, "standard", &duplicate, &sentinel, &[]);
@@ -506,7 +557,7 @@ fn backlog_t06_setup_profiles_are_inspectable_and_closed() {
     let short = root.join("short-roster.json");
     fs::write(
         &short,
-        br#"[{"author":"only","command":"/bin/true","args":[]}]"#,
+        br#"[{"author":"only","command":"/bin/true","args":[],"token_budget":{"model_id":"fixture/model","context_window_tokens":200000,"system_tokens":4000,"framing_tokens":4000,"output_reserve_tokens":4000,"reasoning_reserve_tokens":16000}}]"#,
     )
     .expect("short roster");
     let (process, _) = setup(&root, "standard", &short, &root.join("short.json"), &[]);
@@ -588,8 +639,8 @@ fn backlog_t06_relocated_embedded_setup_executes_distinct_scripted_workers() {
     fs::write(
         &roster,
         serde_json::to_vec(&json!([
-            {"author":"embedded-a","command":worker_a,"args":[log_a,"--literal-a"]},
-            {"author":"embedded-b","command":worker_b,"args":[log_b,"--literal-b"]}
+            {"author":"embedded-a","command":worker_a,"args":[log_a,"--literal-a"],"token_budget":token_budget("fixture/model-a")},
+            {"author":"embedded-b","command":worker_b,"args":[log_b,"--literal-b"],"token_budget":token_budget("fixture/model-b")}
         ]))
         .expect("roster JSON"),
     )
@@ -620,10 +671,15 @@ fn backlog_t06_relocated_embedded_setup_executes_distinct_scripted_workers() {
         !root.join("loop.sqlite").exists(),
         "setup must not create a run database"
     );
+    let context_filter = &profile["work_slot_bindings"]["intent-review"]["context_filter"];
     assert_eq!(
-        profile["work_slot_bindings"]["intent-review"]["context_filter"],
-        json!({"command": relocated_provider.to_string_lossy(), "args": ["commission"]})
+        context_filter["command"],
+        relocated_provider.to_string_lossy().as_ref()
     );
+    assert_eq!(context_filter["args"][0], "commission");
+    assert_eq!(context_filter["args"][1], "--call-budgets");
+    let budgets: Value = serde_json::from_str(context_filter["args"][2].as_str().unwrap()).unwrap();
+    assert_eq!(budgets.as_array().unwrap().len(), 2);
     for worker in worker_values(&profile["work_slot_bindings"]["intent-review"]) {
         assert!(
             worker["command"] == worker_a.to_string_lossy().as_ref()
@@ -805,8 +861,8 @@ fn backlog_t06_setup_drives_each_rigor_stage_with_distinct_scripted_workers() {
         fs::write(
             &roster,
             serde_json::to_vec(&json!([
-                {"author":"reviewer-a","command":worker_a,"args":[log_a]},
-                {"author":"reviewer-b","command":worker_b,"args":[log_b]}
+                {"author":"reviewer-a","command":worker_a,"args":[log_a],"token_budget":token_budget("fixture/model-a")},
+                {"author":"reviewer-b","command":worker_b,"args":[log_b],"token_budget":token_budget("fixture/model-b")}
             ]))
             .expect("roster JSON"),
         )

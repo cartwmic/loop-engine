@@ -96,6 +96,8 @@ pub struct WorkSlotInvocationView {
     pub invocation_id: InvocationId,
     pub slot_id: WorkSlotId,
     pub binding: WorkSlotBinding,
+    #[serde(default)]
+    pub state_visit: u64,
     /// Exact immutable context selected before this invocation started.
     pub routed_inputs: Vec<crate::ContextRecord>,
     pub instruction_digest: String,
@@ -109,6 +111,8 @@ pub struct WorkSlotInvocationView {
     pub elapsed_ms: u64,
     pub remaining_allowed_ms: u64,
     pub capture_dir: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assignment_labels: Vec<crate::AssignmentLabel>,
     pub inner_workers: Vec<InnerWorker>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignment_selection: Option<Vec<String>>,
@@ -174,6 +178,7 @@ impl WorkSlotInvocationView {
             invocation_id: record.invocation_id.clone(),
             slot_id: record.slot_id.clone(),
             binding: record.binding.clone(),
+            state_visit: record.state_visit,
             routed_inputs: record.routed_inputs.clone(),
             instruction_digest: record.instruction_digest.clone(),
             subject: record.subject.clone(),
@@ -186,6 +191,7 @@ impl WorkSlotInvocationView {
             elapsed_ms,
             remaining_allowed_ms,
             capture_dir: record.capture_dir.clone(),
+            assignment_labels: record.assignment_labels.clone(),
             inner_workers,
             assignment_selection: record.assignment_selection.clone(),
             invocation_input: record.invocation_input.clone(),
@@ -217,6 +223,11 @@ pub struct ShowProjection {
     pub run_id: RunId,
     pub label: Option<String>,
     pub workflow_id: WorkflowId,
+    /// The exact frozen provider-described graph. Older serialized projections
+    /// may omit it; CLI consumers then show available work without inventing
+    /// graph structure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_graph: Option<crate::Workflow>,
     pub lifecycle: Lifecycle,
     pub current_state: StateId,
     pub current_state_title: String,
@@ -534,15 +545,25 @@ fn invocation_is_after(candidate: &WorkSlotInvocation, record: &WorkSlotInvocati
 /// selection names assignments explicitly. A provider-owned invocation input
 /// is opaque to core, so its durable worker records are the only assignment
 /// membership core may use. Omitted input is the historical full invocation.
+fn recorded_workers(record: &WorkSlotInvocation) -> &[InnerWorker] {
+    if !record.recorded_inner_workers.is_empty() {
+        &record.recorded_inner_workers
+    } else if record.completion_snapshot_sha256.is_some() {
+        &record.inner_workers
+    } else {
+        &[]
+    }
+}
+
 fn later_invocation_covers_assignment(candidate: &WorkSlotInvocation, assignment_id: &str) -> bool {
     if let Some(selection) = candidate.assignment_selection.as_ref() {
         return selection.iter().any(|id| id == assignment_id);
     }
     if candidate.invocation_input.is_some() {
-        let workers = if candidate.recorded_inner_workers.is_empty() {
-            &candidate.inner_workers
+        let workers = if !recorded_workers(candidate).is_empty() {
+            recorded_workers(candidate)
         } else {
-            &candidate.recorded_inner_workers
+            &candidate.inner_workers
         };
         // An admitted opaque attempt without complete durable membership has
         // unknown scope. Fail closed rather than carrying any older
@@ -583,17 +604,13 @@ pub(crate) fn invocation_change_report(
     // Never infer a current subject from an older invocation. A missing
     // durable visit subject is unknown, and therefore changed.
     let current_subject = current_subjects.get(&record.slot_id).cloned();
-    let baseline_known = !record.recorded_inner_workers.is_empty();
+    let recorded = recorded_workers(record);
+    let baseline_known = record.completion_snapshot_sha256.is_some() || !recorded.is_empty();
     let current_assignments: Vec<_> = record.inner_workers.iter().map(worker_assignment).collect();
-    let recorded_assignments: Vec<_> = record
-        .recorded_inner_workers
-        .iter()
-        .map(worker_assignment)
-        .collect();
+    let recorded_assignments: Vec<_> = recorded.iter().map(worker_assignment).collect();
     let assignment_known = baseline_known
         && !record.inner_workers.is_empty()
-        && record
-            .recorded_inner_workers
+        && recorded
             .iter()
             .chain(record.inner_workers.iter())
             .all(|worker| !worker.assignment_id.is_empty() && !worker.command.is_empty());
@@ -646,16 +663,8 @@ pub(crate) fn invocation_change_report(
                     .iter()
                     .map(output_contract)
                     .collect::<Vec<_>>()
-                    != record
-                        .recorded_inner_workers
-                        .iter()
-                        .map(output_contract)
-                        .collect::<Vec<_>>(),
-            json!(record
-                .recorded_inner_workers
-                .iter()
-                .map(output_contract)
-                .collect::<Vec<_>>()),
+                    != recorded.iter().map(output_contract).collect::<Vec<_>>(),
+            json!(recorded.iter().map(output_contract).collect::<Vec<_>>()),
             json!(record
                 .inner_workers
                 .iter()
@@ -669,15 +678,12 @@ pub(crate) fn invocation_change_report(
         )
     });
 
-    let worker_count = record
-        .inner_workers
-        .len()
-        .max(record.recorded_inner_workers.len());
+    let worker_count = record.inner_workers.len().max(recorded.len());
     let mut assignments = Vec::new();
     let mut plan_task_results = Vec::new();
     for index in 0..worker_count {
         let current = record.inner_workers.get(index);
-        let baseline = record.recorded_inner_workers.get(index);
+        let baseline = recorded.get(index);
         let is_plan_task = current
             .into_iter()
             .chain(baseline)
@@ -966,7 +972,8 @@ pub fn project_with_invocations_and_subjects_by_identity(
         effective_bindings,
         run_id: data.run.id,
         label: data.run.label,
-        workflow_id: data.run.workflow.id,
+        workflow_id: data.run.workflow.id.clone(),
+        workflow_graph: Some(data.run.workflow.clone()),
         lifecycle: data.run.lifecycle,
         current_state: data.run.current_state,
         current_state_title: current_state.title.clone(),
@@ -1582,6 +1589,7 @@ mod tests {
             "routed_inputs",
             "slot_id",
             "started_at",
+            "state_visit",
             "status",
             "subject",
         ];

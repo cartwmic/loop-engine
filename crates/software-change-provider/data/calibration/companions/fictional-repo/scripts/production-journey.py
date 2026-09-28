@@ -159,6 +159,7 @@ def append_path(
 def frozen_profile_is_inspectable_before_transition(
     engine: Path, config: Path, profile: Path, fixtures: Path
 ) -> str:
+    submitted = json.loads(profile.read_text())
     started = invoke(
         engine,
         config,
@@ -173,6 +174,8 @@ def frozen_profile_is_inspectable_before_transition(
     shown_before = invoke(engine, config, "show", run_id)
     assert shown_before["status"] == "completed"
     frozen = data(shown_before)["initial_input"]
+    assert frozen["review_policies"] == submitted["review_policies"]
+    assert frozen["artifact_schemas"] == submitted["artifact_schemas"]
     assert frozen["config_version"] == "standard-7"
     assert set(frozen["review_policies"]) == {
         "intent-review",

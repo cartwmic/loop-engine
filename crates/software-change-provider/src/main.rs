@@ -72,6 +72,19 @@ fn run() -> i32 {
                 }
             };
         }
+        Some(command) if command == "bookends-preview" => {
+            let rest = match args
+                .map(|arg| arg.into_string())
+                .collect::<Result<Vec<_>, _>>()
+            {
+                Ok(rest) => rest,
+                Err(_) => {
+                    eprintln!("bookends-preview arguments must be valid UTF-8");
+                    return 2;
+                }
+            };
+            return bookends_preview_from_args(&rest);
+        }
         Some(command) if command == "setup" => {
             let rest = match args
                 .map(|arg| arg.into_string())
@@ -140,6 +153,19 @@ fn run() -> i32 {
                 }
             };
             return software_change_provider::commission::run_from_stdin(&rest);
+        }
+        Some(command) if command == "advice-request" => {
+            if args.next().is_some() {
+                eprintln!("advice-request accepts one JSON packet on stdin and no arguments");
+                return 2;
+            }
+            return match software_change_provider::advice::prepare_from_stdin() {
+                Ok(request) => write_json(&request),
+                Err(error) => {
+                    eprintln!("advice-request: {error}");
+                    2
+                }
+            };
         }
         Some(command) if command == "review-candidates" => {
             if args.next().is_some() {
@@ -266,9 +292,57 @@ fn run_protocol() -> i32 {
     }
 }
 
+fn bookends_preview_from_args(args: &[String]) -> i32 {
+    if args == ["--help"] || args == ["-h"] {
+        println!("usage: software-change bookends-preview --working-directory ABS");
+        return 0;
+    }
+    let mut working_directory = None;
+    let mut index = 0;
+    while index < args.len() {
+        let token = &args[index];
+        let value = if token == "--working-directory" {
+            index += 1;
+            args.get(index).cloned()
+        } else if let Some(value) = token.strip_prefix("--working-directory=") {
+            Some(value.to_owned())
+        } else {
+            eprintln!("unknown bookends-preview argument `{token}`; usage: software-change bookends-preview --working-directory ABS");
+            return 2;
+        };
+        let Some(value) = value else {
+            eprintln!("bookends-preview requires --working-directory ABS");
+            return 2;
+        };
+        if working_directory.replace(PathBuf::from(value)).is_some() {
+            eprintln!("bookends-preview --working-directory may be supplied once");
+            return 2;
+        }
+        index += 1;
+    }
+    let Some(working_directory) = working_directory else {
+        eprintln!("bookends-preview requires --working-directory ABS");
+        return 2;
+    };
+    if !working_directory.is_absolute() {
+        eprintln!("bookends-preview --working-directory must be absolute");
+        return 2;
+    }
+    match bookends_check::preview_repo(&working_directory) {
+        Ok(preview) => write_json(&preview),
+        Err(error) => {
+            eprintln!(
+                "bookends-preview could not inspect {}: {error}",
+                working_directory.display()
+            );
+            1
+        }
+    }
+}
+
 fn provider_help() -> i32 {
     println!(
-        "software-change\n\nUsage:\n  software-change < stdin\n  software-change data-dump DIR\n  software-change setup --rigor minimal|standard|high --roster PATH --engine ABS --provider ABS --output PATH [--bookends] [--implementation PATH]\n  software-change checkpoint [--json] --phase implementation|validation --artifact-root ABS --working-directory ABS\n  software-change review-candidates\n  software-change prepare-validation < packet.json\n  software-change commission [--slot SLOT] [--task TASK] [--stage individual|aggregate]\n  software-change run-validation --engine ABS --working-directory ABS --revision REV [--commands ID,...] [--timeout-ms N]\n  software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--task ID ... | --tasks ID,ID,...] [--max-active N]\n  software-change --help | -h\n  software-change --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nReview candidates:\n  review-candidates  read one completed `show` JSON envelope from stdin and emit inert selected-review candidates\n\nData:\n  data-dump  materialize embedded provider data under DIR\n\nPlan graph:\n  run-plan-graph  requires --working-directory ABS (one existing driver-selected directory for every selected task and summarizer; no Git/worktree management) and executes plan.json as a Dagu type:graph (--max-active N; omitted means {MAX_CONCURRENCY} ordinary tasks) with a mandatory summarizer"
+        "software-change\n\nUsage:\n  software-change < stdin\n  software-change data-dump DIR\n  software-change bookends-preview --working-directory ABS\n  software-change setup (--rigor minimal|standard|high | --profile PATH) --roster PATH --engine ABS --provider ABS --output PATH (--advice-config PATH | --decline-advice) [--bookends] [--implementation PATH]\n  software-change advice-request < packet.json\n  software-change checkpoint [--json] --phase implementation|validation --artifact-root ABS --working-directory ABS\n  software-change review-candidates\n  software-change prepare-validation < packet.json\n  software-change commission [--slot SLOT] [--task TASK] [--stage individual|aggregate] [--call-budgets JSON]\n  software-change run-validation --engine ABS --working-directory ABS --revision REV [--commands ID,...] [--timeout-ms N]\n  software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--task ID ... | --tasks ID,ID,...] [--max-active N]\n  software-change --help | -h\n  software-change --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nReview candidates:\n  review-candidates  read one completed `show` JSON envelope from stdin and emit inert selected-review candidates\n  advice-request     prepare evidence-selected, provider-owned typed questions from a completed full-show selection; performs no advice call or disposition\n\nData and pre-plan preview:\n  data-dump  materialize embedded provider data under DIR\n  bookends-preview  read-only inspect of Bookends prerequisites; runs no tests or gate\n\nPlan graph:\n  run-plan-graph  requires --working-directory ABS (one existing driver-selected directory for every selected task and summarizer; no Git/worktree management) and executes plan.json as a Dagu type:graph (--max-active N; omitted means {MAX_CONCURRENCY} ordinary tasks) with a mandatory summarizer"
     );
     0
 }

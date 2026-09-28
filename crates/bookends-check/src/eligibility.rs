@@ -9,9 +9,26 @@ pub(crate) enum Collection {
     SingleFile(String),
 }
 
+impl Collection {
+    pub(crate) fn command(&self) -> String {
+        match self {
+            Self::WorkspaceRustTests => "cargo test --workspace".to_owned(),
+            Self::SingleFile(path) => format!("python3 {path}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct JobCommands {
     pub parsed: Vec<Collection>,
+    pub observed: Vec<ObservedRunCommand>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ObservedRunCommand {
+    pub command: String,
+    pub working_directory: String,
+    pub recognized_collection: Option<Collection>,
 }
 
 pub(crate) fn load_workflow_jobs<T: TreeReader>(
@@ -39,6 +56,7 @@ fn merge_jobs(dst: &mut BTreeMap<String, JobCommands>, src: BTreeMap<String, Job
         dst.entry(id)
             .and_modify(|existing| {
                 existing.parsed.extend(job.parsed.iter().cloned());
+                existing.observed.extend(job.observed.iter().cloned());
             })
             .or_insert(job);
     }
@@ -59,20 +77,30 @@ fn parse_workflow_jobs(
             continue;
         };
         let mut parsed = Vec::new();
+        let mut observed = Vec::new();
         if let Some(steps) = job.get("steps").and_then(|value| value.as_sequence()) {
             for step in steps {
                 let Some(run) = step.get("run").and_then(|value| value.as_str()) else {
                     continue;
                 };
-                if !cwd_is_repo_root(&yaml, job, step) {
-                    continue;
+                let workdir = effective_workdir(&yaml, job, step);
+                let (working_directory, root_cwd) = match workdir.as_ref() {
+                    None => ("repository root (implicit)".to_owned(), true),
+                    Some(Workdir::Set(value)) => ((*value).to_owned(), is_repo_root_workdir(value)),
+                    Some(Workdir::Foreign) => ("<non-string working-directory>".to_owned(), false),
+                };
+                let recognized_collection = root_cwd.then(|| parse_run_command(run)).flatten();
+                if let Some(collection) = recognized_collection.as_ref() {
+                    parsed.push(collection.clone());
                 }
-                if let Some(collection) = parse_run_command(run) {
-                    parsed.push(collection);
-                }
+                observed.push(ObservedRunCommand {
+                    command: run.to_owned(),
+                    working_directory,
+                    recognized_collection,
+                });
             }
         }
-        out.insert(id, JobCommands { parsed });
+        out.insert(id, JobCommands { parsed, observed });
     }
     Ok(out)
 }
@@ -116,19 +144,14 @@ enum Workdir<'a> {
     Foreign,
 }
 
-fn cwd_is_repo_root(
-    workflow: &serde_yaml::Value,
-    job: &serde_yaml::Value,
-    step: &serde_yaml::Value,
-) -> bool {
-    match working_directory(step)
+fn effective_workdir<'a>(
+    workflow: &'a serde_yaml::Value,
+    job: &'a serde_yaml::Value,
+    step: &'a serde_yaml::Value,
+) -> Option<Workdir<'a>> {
+    working_directory(step)
         .or_else(|| run_defaults(job))
         .or_else(|| run_defaults(workflow))
-    {
-        None => true,
-        Some(Workdir::Foreign) => false,
-        Some(Workdir::Set(value)) => is_repo_root_workdir(value),
-    }
 }
 
 fn working_directory(node: &serde_yaml::Value) -> Option<Workdir<'_>> {
@@ -854,7 +877,7 @@ pub(crate) fn collection_contains(
     }
 }
 
-fn is_non_proof_surface(file: &str) -> bool {
+pub(crate) fn is_non_proof_surface(file: &str) -> bool {
     let normalized = file.replace('\\', "/");
     if matches!(
         normalized

@@ -36,7 +36,11 @@ candidate blocking, and the non-waiver of not-applicable. The source tail also
 runs isolated v11 reconciliation cases through the real provider/engine path,
 inspecting document bytes, state ordering, Bookends mode, implementation
 correction (including missing and valid live traceability), pending owner
-status, and requirement-coverage contrast fixtures.
+status, and requirement-coverage contrast fixtures. Full source also runs every
+registered ``sol-*`` case as an independent subprocess in the bounded proof
+pool. Each isolated fixture must retain its declared outcome/assertion artifact,
+whose byte count and digest are checked; scripted providers and temporary Git
+repositories prove mechanics only, not semantic approval.
 """
 
 from __future__ import annotations
@@ -711,6 +715,11 @@ class Journey:
                         else None
                     ),
                     "successor_route_cases": successor_route_cases,
+                    "dogfood_inventory_proof": (
+                        str(self.run_dir / "dogfood-inventory.json")
+                        if self.mode == "source" and self.depth == "full"
+                        else None
+                    ),
                     "work_slot_proof": WORK_SLOT_PROOF,
                     "dummy_worker_proof": self.dummy_worker_proof,
                     "package_7b_proof": self.package_7b_proof,
@@ -885,6 +894,7 @@ class Journey:
             str(self.provider),
             "--output",
             str(self.profile_path),
+            "--decline-advice",
         ]
         setup = subprocess.run(
             setup_command,
@@ -903,8 +913,8 @@ class Journey:
             raise JourneyFailure(f"compact setup did not return JSON: {setup.stdout}") from error
         _write_json(self.work_root / "setup-report.json", setup_report)
         setup_profile = self._read_json(self.profile_path, "generated compact setup profile")
-        if setup_profile.get("config_version") != "high-rigor-11":
-            raise JourneyFailure("compact setup did not preserve the high-rigor-11 profile version")
+        if setup_profile.get("config_version") != "high-rigor-12":
+            raise JourneyFailure("compact setup did not preserve the high-rigor-12 profile version")
         if setup_profile.get("criterion_policy") != {"required_authors": 2, "goal_required_authors": 2}:
             raise JourneyFailure("compact setup changed the high-rigor criterion/goal floors")
         for gate in ("intent-review", "intent-adversarial-review"):
@@ -2479,6 +2489,37 @@ class Journey:
             json.dumps({"status": "passed", "scenarios": completed}, indent=2) + "\n")
         print("full recovery inventory passed: " + ", ".join(completed))
 
+    def _run_dogfood_inventory(
+        self, *, global_jobs: Optional[List[Dict[str, Any]]] = None
+    ) -> None:
+        """Run every focused sol-* case through its public CLI in isolation."""
+        if global_jobs is None:
+            raise JourneyFailure("dogfood inventory must use the single full-source proof pool")
+        assert self.run_dir is not None
+        assert self.profile_source is not None
+        from dogfood_cases import SCENARIOS
+
+        script = Path(__file__).resolve()
+        case_root = self.run_dir / "dogfood-inventory"
+        for name in SCENARIOS:
+            global_jobs.append({
+                "name": f"dogfood-{name}",
+                "command": [
+                    sys.executable,
+                    str(script),
+                    "--mode", "source",
+                    "--engine", str(self.engine),
+                    "--provider", str(self.provider),
+                    "--data-root", str(self.data_root),
+                    "--work-root", str(case_root / name),
+                    "--profile", str(self.profile_source),
+                    "--traversal-depth", "full",
+                    "--jobs", str(self.args.jobs),
+                    "--job-timeout", str(self.args.job_timeout),
+                    "--scenario", name,
+                ],
+            })
+
     # bookends:LE-113 — public override reaches visibly exceptional completion,
     # preserves failures/skipped checks and rejects stale/live-work requests.
     def _run_recovery_override(self) -> None:
@@ -2522,9 +2563,9 @@ class Journey:
             raise JourneyFailure(
                 f"journey requires contract_version 3, got {profile.get('contract_version')!r}"
             )
-        if profile.get("config_version") != "high-rigor-11":
+        if profile.get("config_version") != "high-rigor-12":
             raise JourneyFailure(
-                f"journey requires high-rigor-11, got {profile.get('config_version')!r}"
+                f"journey requires high-rigor-12, got {profile.get('config_version')!r}"
             )
         criterion_policy = profile.get("criterion_policy")
         if criterion_policy != {"required_authors": 2, "goal_required_authors": 2}:
@@ -6158,6 +6199,7 @@ class Journey:
         )
         self._run_checkpoint_scenarios(global_jobs=global_jobs)
         self._run_bookends_enabled_source(global_jobs=global_jobs)
+        self._run_dogfood_inventory(global_jobs=global_jobs)
 
         expected_names = {job["name"] for job in global_jobs}
         if len(expected_names) != len(global_jobs):
@@ -6242,6 +6284,75 @@ class Journey:
                 "criterion-overlay-on-not-applicable",
             ],
         )
+
+        from dogfood_cases import CAPTURE_FILES, SCENARIOS as DOGFOOD_SCENARIOS
+        dogfood_rows = []
+        for name in DOGFOOD_SCENARIOS:
+            job_name = f"dogfood-{name}"
+            row = by_name[job_name]
+            stdout = Path(row["stdout"]).read_text(encoding="utf-8", errors="replace")
+            marker = f"dogfood public scenario passed: {name}; assertions retained:"
+            if marker not in stdout:
+                raise JourneyFailure(
+                    f"public dogfood scenario {name} omitted its assertion marker; inspect {report_path}",
+                    state="end",
+                    event="dogfood-inventory",
+                )
+            case_root = self.run_dir / "dogfood-inventory" / name
+            result_path = case_root / "dogfood-case-result.json"
+            try:
+                case_result = json.loads(result_path.read_text(encoding="utf-8"))
+                capture_path = Path(case_result["assertion_capture"])
+                capture_bytes = capture_path.read_bytes()
+            except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
+                raise JourneyFailure(
+                    f"public dogfood scenario {name} omitted retained assertion evidence: {error}",
+                    state="end",
+                    event="dogfood-inventory",
+                ) from error
+            digest = "sha256:" + hashlib.sha256(capture_bytes).hexdigest()
+            if (
+                case_result.get("scenario") != name
+                or case_result.get("status") != "passed-scripted-assertions"
+                or case_result.get("assertion_capture_sha256") != digest
+                or case_result.get("assertion_capture_bytes") != len(capture_bytes)
+                or capture_path.name != CAPTURE_FILES[name]
+            ):
+                raise JourneyFailure(
+                    f"public dogfood scenario {name} assertion capture identity did not verify",
+                    state="end",
+                    event="dogfood-inventory",
+                )
+            dogfood_rows.append({
+                "name": name,
+                "status": "passed-scripted-assertions",
+                "stdout": row["stdout"],
+                "stderr": row["stderr"],
+                "result": str(result_path),
+                "assertion_capture": str(capture_path),
+                "assertion_capture_sha256": digest,
+            })
+            print(f"{marker} {capture_path}")
+        (self.run_dir / "dogfood-inventory-pool-report.json").write_text(
+            json.dumps({
+                "status": "passed-scripted-assertions",
+                "inventory": list(DOGFOOD_SCENARIOS),
+                "jobs": dogfood_rows,
+                "global_pool": str(report_path),
+                "global_pool_peak_jobs": report.get("peak_jobs"),
+                "semantic_approval": "not-established-by-scripted-fixtures",
+            }, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        (self.run_dir / "dogfood-inventory.json").write_text(
+            json.dumps({
+                "status": "passed-scripted-assertions",
+                "scenarios": dogfood_rows,
+                "semantic_approval": "independent reviewers and owner retain semantic duties",
+            }, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print("full sol-* public scenario inventory passed: " + ", ".join(DOGFOOD_SCENARIOS))
 
         for name in SCENARIOS:
             row = by_name[f"recovery-{name}"]
@@ -7875,7 +7986,7 @@ else:
             )
 
         candidates = first_document.get("candidates")
-        if first_document.get("schema_version") != "1" or not isinstance(candidates, list):
+        if first_document.get("schema_version") != "3" or not isinstance(candidates, list):
             raise JourneyFailure(
                 f"Package 7b candidate document was not closed: {first_document}",
                 state="design-review",
@@ -9029,7 +9140,7 @@ else:
                 )
             if (
                 secondary_workflow.get("id") != "software-change"
-                or secondary_input.get("config_version") != "minimal-11"
+                or secondary_input.get("config_version") != "minimal-12"
                 or secondary_input.get("review_policies") == primary_input.get("review_policies")
                 or secondary_input.get("criterion_policy") == primary_input.get("criterion_policy")
             ):
@@ -9632,7 +9743,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--worker-tools", help="comma-separated tools for a positive compact-worker fixture")
     parser.add_argument("--jobs", type=int, default=2, help="independent proof processes (default 2; serial 1)")
     parser.add_argument("--job-timeout", type=float, default=1200, help="per-proof deadline in seconds")
-    parser.add_argument("--scenario", help="focused implemented recovery scenario (source only)")
+    parser.add_argument("--scenario", help="focused implemented source scenario")
     return parser.parse_args(argv)
 
 
@@ -9854,7 +9965,7 @@ def _assert_preview_visibility(
         if "preamble" not in worker or schema_field not in worker:
             raise JourneyFailure(f"preview input omitted preamble/schema: {worker}")
         required = (worker.get(schema_field) or {}).get("required")
-        expected_required = ["review_stage", "author", "judgments"] if schema_field == "full_output_schema" else ["axis", "author", "result", "findings"]
+        expected_required = ["review_contract_version", "review_stage", "author", "judgments"] if schema_field == "full_output_schema" else ["axis", "author", "result", "findings"]
         if required != expected_required:
             raise JourneyFailure(f"preview input omitted required keys: {worker}")
         preamble = worker.get("preamble")
@@ -9972,30 +10083,6 @@ def assert_worker_data_skill_and_root_policy(
         {"author": "reviewer-b", "model": "model-b"},
     ]
     schema_required = {"required": ["axis", "author", "result", "findings"]}
-    full_review_schema = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["axis", "author", "result", "findings"],
-        "properties": {
-            "axis": {"type": "string", "minLength": 1},
-            "author": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["name", "kind"],
-                "properties": {
-                    "name": {"type": "string", "minLength": 1},
-                    "kind": {"type": "string", "enum": ["human", "agent", "script"]},
-                },
-            },
-            "result": {"type": "string", "enum": ["pass", "fail"]},
-            "findings": {"type": "string"},
-        },
-        "oneOf": [
-            {"properties": {"result": {"const": "pass"}, "findings": {"const": ""}}},
-            {"properties": {"result": {"const": "fail"}, "findings": {"type": "string", "minLength": 1}}},
-        ],
-    }
-
     sc_skill_path = (
         repository
         / "crates/software-change-provider/skills/using-software-change-provider/SKILL.md"
@@ -10029,7 +10116,7 @@ def assert_worker_data_skill_and_root_policy(
         repository / "crates/software-change-provider/data/review-worker-preamble.txt"
     )
     sc_schema_path = (
-        repository / "crates/software-change-provider/data/review-worker-output-schema.json"
+        repository / "crates/software-change-provider/data/review-worker-output-schema-v2.json"
     )
     pd_preamble_path = (
         repository / "crates/policy-document-provider/data/semantic-review-worker-preamble.md"
@@ -10103,23 +10190,9 @@ def assert_worker_data_skill_and_root_policy(
     sc_schema = _load_json(sc_schema_path)
     pd_schema = _load_json(pd_schema_path)
     research_schema = _load_json(research_schema_path)
-    fresh_row = copy.deepcopy(full_review_schema)
-    fresh_row["required"].remove("author")
-    del fresh_row["properties"]["author"]
-    # The batch retains the same pass/fail relation, with a separate closed carry row.
-    expected_batch = {"type": "object", "additionalProperties": False,
-        "required": ["review_stage", "author", "judgments"], "properties": {
-        "review_stage": {"type": "string", "enum": ["individual", "aggregate"]},
-        "author": full_review_schema["properties"]["author"],
-        "judgments": {"type": "array", "minItems": 1, "items": {"oneOf": [fresh_row,
-            {"type": "object", "additionalProperties": False, "required": ["axis", "reuse"],
-             "properties": {"axis": {"type": "string", "minLength": 1}, "reuse": {"type": "string", "minLength": 1}}}]}}}}
-    expected_batch["properties"]["judgments"]["items"]["oneOf"][0]["properties"]["result"].pop("type")
-    expected_batch["properties"]["judgments"]["items"]["oneOf"][0]["oneOf"][1]["properties"]["findings"].pop("type")
-    expected_batch["x-loop-engine-force-fresh"] = {
-        "properties": {"judgments": {"items": {"required": ["result", "findings"]}}}}
-    if sc_schema != expected_batch:
-        raise JourneyFailure("software-change complete batch output schema bytes are unsupported")
+    if (sc_schema.get("properties", {}).get("review_contract_version", {}).get("const") != 2
+            or "grounds" not in sc_schema.get("definitions", {})):
+        raise JourneyFailure("software-change reviewer output contract v2 is missing versioned grounds")
     if pd_schema != schema_required or research_schema != schema_required:
         raise JourneyFailure("provider output_schema bytes do not require axis/author/result/findings")
 
@@ -10150,7 +10223,7 @@ def assert_worker_data_skill_and_root_policy(
         ]
         if draft_worker_path is not None:
             command.extend(["--draft-worker", str(draft_worker_path)])
-        command.extend(["--output", str(output)])
+        command.extend(["--output", str(output), "--decline-advice"])
         result = subprocess.run(
             command,
             cwd=str(output.parent),
@@ -10186,11 +10259,16 @@ def assert_worker_data_skill_and_root_policy(
             raise JourneyFailure(
                 f"software-change setup {gate} worker count {len(workers)} != {len(expected)}"
             )
-        if binding.get("context_filter") != {
-            "command": str(software_change_binary),
-            "args": ["commission"],
-        }:
-            raise JourneyFailure(f"software-change setup {gate} lost its commission filter")
+        filter_args = binding.get("context_filter", {}).get("args", [])
+        used_authors = {entry["author"] for _policies, entry in expected}
+        expected_budgets = [
+            {"author": entry["author"], **entry["token_budget"]}
+            for entry in roster_entries if entry["author"] in used_authors
+        ]
+        if (binding.get("context_filter", {}).get("command") != str(software_change_binary)
+                or filter_args[:2] != ["commission", "--call-budgets"]
+                or json.loads(filter_args[2]) != expected_budgets):
+            raise JourneyFailure(f"software-change setup {gate} lost per-call commission budgets")
         args = binding.get("args") or []
         if args[:3] != ["fan-out", "--max-active", "2"]:
             raise JourneyFailure(f"software-change setup {gate} lost review concurrency: {args}")
@@ -10202,6 +10280,7 @@ def assert_worker_data_skill_and_root_policy(
             expected_schema = _batch_schema(
                 sc_schema, policies, {"name": entry["author"], "kind": "agent"}
             )
+            expected_schema["x-loop-engine-output-recovery"] = "repair-first-v1"
             if (
                 gate == "validation-review"
                 and expected_schema["properties"]["review_stage"].get("const") == "aggregate"
@@ -10211,7 +10290,10 @@ def assert_worker_data_skill_and_root_policy(
                     "required": ["record_id", "kind", "data"], "properties": {
                         "record_id": {"type": "string", "minLength": 1},
                         "kind": {"type": "string", "enum": ["criterion-verdict", "goal-verdict"]},
-                        "data": {"type": "object"}}}}
+                        "data": {"type": "object", "required": ["reason", "evidence_context_ids"],
+                                 "properties": {"reason": {"type": "string", "minLength": 1, "maxLength": 1200},
+                                                "evidence_context_ids": {"type": "array", "minItems": 1,
+                                                                          "items": {"type": "string", "minLength": 1}}}}}}}
             if worker.get("full_output_schema") != expected_schema:
                 raise JourneyFailure(f"software-change setup changed worker schema: {worker}")
             assigned = next(
@@ -10336,8 +10418,10 @@ def assert_worker_data_skill_and_root_policy(
         roster_json = json.dumps(roster, separators=(",", ":"))
 
         setup_roster = [
-            {"author": "reviewer-a", "command": "/tmp/software-change-worker-a", "args": ["--worker", "a"]},
-            {"author": "reviewer-b", "command": "/tmp/software-change-worker-b", "args": ["--worker", "b"]},
+            {"author": "reviewer-a", "command": "/tmp/software-change-worker-a", "args": ["--worker", "a"],
+             "token_budget": {"model_id":"fixture/model-a","context_window_tokens":200000,"system_tokens":4000,"framing_tokens":4000,"output_reserve_tokens":4000,"reasoning_reserve_tokens":16000}},
+            {"author": "reviewer-b", "command": "/tmp/software-change-worker-b", "args": ["--worker", "b"],
+             "token_budget": {"model_id":"fixture/model-b","context_window_tokens":200000,"system_tokens":4000,"framing_tokens":4000,"output_reserve_tokens":4000,"reasoning_reserve_tokens":16000}},
         ]
         setup_roster_path = root / "software-change-roster.json"
         _write_json(setup_roster_path, setup_roster)
@@ -10381,7 +10465,8 @@ def assert_worker_data_skill_and_root_policy(
         duplicate_roster_path = root / "software-change-duplicate-roster.json"
         _write_json(
             duplicate_roster_path,
-            [setup_roster[0], {"author": setup_roster[0]["author"], "command": "/tmp/other", "args": []}],
+            [setup_roster[0], {"author": setup_roster[0]["author"], "command": "/tmp/other", "args": [],
+                                "token_budget": setup_roster[0]["token_budget"]}],
         )
         _expect_constructor_closed(
             lambda: run_sc(root / "software-change-duplicate.json", duplicate_roster_path),
@@ -10686,9 +10771,9 @@ def assert_reconciliation_documents_and_profiles() -> None:
             if clause.lower() not in text.lower():
                 raise JourneyFailure(f"{label} omitted reconciliation contract clause {clause!r}")
     expected = {
-        "minimal.json": ("minimal-11", 1, 1),
-        "standard.json": ("standard-11", 2, 2),
-        "high-rigor.json": ("high-rigor-11", 2, 2),
+        "minimal.json": ("minimal-12", 1, 1),
+        "standard.json": ("standard-12", 2, 2),
+        "high-rigor.json": ("high-rigor-12", 2, 2),
     }
     for name, (version, criterion_floor, goal_floor) in expected.items():
         profile = _load_json(repository / "crates/software-change-provider/data/configs" / name)
@@ -10852,9 +10937,9 @@ def assert_operator_contract_surfaces() -> None:
     # worktree to HEAD: a source journey must run against the same bytes it
     # proves.
     expected_versions = {
-        "minimal.json": "minimal-11",
-        "standard.json": "standard-11",
-        "high-rigor.json": "high-rigor-11",
+        "minimal.json": "minimal-12",
+        "standard.json": "standard-12",
+        "high-rigor.json": "high-rigor-12",
     }
     for name, expected_version in expected_versions.items():
         profile = _load_json(repository / "crates/software-change-provider/data/configs" / name)
@@ -11191,11 +11276,32 @@ def assert_focused_boundary_scenarios() -> None:
 
 
 def self_test() -> int:
+    import dogfood_cases
     import recovery_journey
+    dogfood_cases.self_test()
     recovery_journey.self_test()
+    subprocess.run(
+        [
+            sys.executable, "-m", "unittest", "discover",
+            "-s", str(Path(__file__).resolve().parent),
+            "-p", "test_contract.py", "-v",
+        ],
+        check=True,
+    )
     source = Path(__file__).read_text(encoding="utf-8")
-    assert "self._run_recovery_inventory()" in source
-    assert "for name in SCENARIOS:" in source
+    if "self._run_recovery_inventory()" not in source or "for name in SCENARIOS:" not in source:
+        raise JourneyFailure("full source journey lost its focused recovery inventory")
+    global_start = source.index("    def _run_global_tail_proof")
+    global_end = source.find("    def ", global_start + len("    def _run_global_tail_proof"))
+    global_source = source[global_start:global_end if global_end >= 0 else len(source)]
+    if "self._run_dogfood_inventory(global_jobs=global_jobs)" not in global_source:
+        raise JourneyFailure("full source journey lost the isolated sol-* public inventory")
+    inventory_start = source.index("    def _run_dogfood_inventory")
+    inventory_end = source.find("    def ", inventory_start + len("    def _run_dogfood_inventory"))
+    inventory_source = source[inventory_start:inventory_end if inventory_end >= 0 else len(source)]
+    for required in ("--mode", "source", "--scenario", "dogfood-inventory", "--job-timeout"):
+        if required not in inventory_source:
+            raise JourneyFailure(f"sol-* inventory no longer uses its independent public CLI: missing {required}")
     subprocess.run([sys.executable, str(Path(__file__).with_name("proof-pool-self-test.py"))], check=True)
     """Prove interface rejection plus worker-data and root-policy contracts."""
     invalid_pairs = (("source", "checked-prefix"), ("packaged", "full"))
@@ -11259,7 +11365,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             import recovery_journey
             try:
                 journey = Journey(args)
-                if args.scenario == "override":
+                if args.scenario.startswith("sol-"):
+                    import dogfood_cases
+                    # bookends:LE-132 — sol-profiles drives copied-profile bytes,
+                    # configured stages/counts/commands and frozen-floor preview through setup.
+                    # bookends:LE-134 — the same public path asserts setup outcomes and
+                    # read-only prerequisite/CI collection observations, not token matches.
+                    dogfood_cases.dispatch(args.scenario, journey)
+                elif args.scenario == "override":
                     journey._run_recovery_override()
                 elif args.scenario == "criteria":
                     journey._run_recovery_criteria()

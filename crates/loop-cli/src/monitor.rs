@@ -360,7 +360,28 @@ fn run_source(o: &Options, id: &str) -> Value {
         visibility::strip_observation_clocks(&mut workflow);
         p["workflow"] = workflow.clone();
         p["workflow_source"] = json!({"engine":o.engine,"database":o.database,"interface":if o.engine.is_some(){"list"}else{"show --view status"}});
-        let history = backend(o, &["history".into(), id.into()])?;
+        let history = if o.engine.is_some() {
+            backend(o, &["history".into(), id.into()])?
+        } else {
+            let after = workflow["delta_sequence"]
+                .as_u64()
+                .unwrap_or(0)
+                .saturating_sub(20)
+                .to_string();
+            backend(
+                o,
+                &[
+                    "read".into(),
+                    id.into(),
+                    "--kind".into(),
+                    "delta".into(),
+                    "--cursor".into(),
+                    after,
+                    "--limit".into(),
+                    "20".into(),
+                ],
+            )?
+        };
         p["judgment"] = json!({"state":"unknown","reason":"history is attributed historical evidence, not current semantic approval","history":history});
         let mut observations = Vec::new();
         for path in &o.observations {
@@ -387,7 +408,8 @@ fn run_source(o: &Options, id: &str) -> Value {
                     }
                 }
                 let selected = progress["invocation_id"].as_str();
-                if let Some(rows) = history.as_array() {
+                let history_rows = history.as_array().or_else(|| history["items"].as_array());
+                if let Some(rows) = history_rows {
                     if let Some(entry) = rows.iter().rev().find(|r| {
                         r["action"]["kind"] == "invocation_status_changed"
                             && r["action"]["invocation_id"].as_str() == selected
@@ -430,20 +452,23 @@ fn run_source(o: &Options, id: &str) -> Value {
             }
             Err(e) => p["diagnostics"] = json!([e]),
         }
-        if let Some(rows) = workflow["work_slot_invocations"].as_array() {
+        if let Some(rows) = workflow
+            .pointer("/invocations/items")
+            .and_then(Value::as_array)
+        {
             for row in rows.iter().filter(|r| {
                 o.invocation
                     .as_ref()
                     .is_none_or(|id| r["invocation_id"] == *id)
             }) {
-                if row["ownership"]["cleanup_pending"] == true {
-                    attention(&mut p, "unresolved invocation cleanup");
-                } else if row["status"] == "overrun" {
+                if row["execution"]["state"] == "cancelled" {
+                    attention(&mut p, "invocation cancellation was acknowledged; inspect retained assignment facts");
+                } else if row["execution"]["state"] == "overrun" {
                     attention(
                         &mut p,
                         "invocation allowance exceeded; no automatic cancellation",
                     );
-                } else if row["status"] == "running"
+                } else if row["execution"]["state"] == "running"
                     && row["invocation_id"] == p["helper"]["invocation_id"]
                     && p["boundary"]["event"] == "completion"
                 {
@@ -456,10 +481,7 @@ fn run_source(o: &Options, id: &str) -> Value {
         }
         if o.invocation.is_none()
             && p["boundary"].is_null()
-            && matches!(
-                workflow["lifecycle"].as_str(),
-                Some("completed" | "completed-with-overrides" | "terminated")
-            )
+            && matches!(workflow["lifecycle"].as_str(), Some("final" | "terminated"))
         {
             p["boundary"] = json!({"event":"completion","reason":"selected workflow terminal; not semantic approval"});
         }

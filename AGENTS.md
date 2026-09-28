@@ -117,7 +117,17 @@ python3 scripts/packaged-smoke.py --mode archive --expected-version X.Y.Z --plat
 
 For skill/constructor or root policy changes, `python3 scripts/software-change-journey.py --self-test` must reach `worker-data skill/root policy assertions passed` after testing setup/constructors and root rules. Full source must reach `contracted fan-out failure` after proving the actual contracted-worker failure path. Synthetic evidence establishes mechanics and persistence; it supplies no semantic review.
 
-Before every push, run `scripts/bookends-check-gate.sh` from the root; do not assume the checkout's `.githooks/pre-push` has been activated. Required CI also runs the gate. Only explicit `BOOKENDS_BYPASS=<class>:<reason>` may bypass RED, with durable evidence; recording failure refuses bypass. Follow the [Bookends command contract](crates/bookends-check/schema/runner-grammar.md) and [operational UX contract](docs/operational-ux-contracts.md) for publication history, shallow acquisition and proof eligibility. README.md and AGENTS.md are outside Bookends coverage.
+Before every push, run `scripts/bookends-check-gate.sh` from the root; do not assume the checkout's `.githooks/pre-push` has been activated. The gate prefers any `bookends-check` on `PATH` over compiling the checkout, so a stale installed checker can be selected. For a current-source gate, after the required local tool/cache setup, use the same Cargo environment to resolve the actual target directory, build the current checker, and prepend its build-output directory to `PATH`:
+
+```sh
+set -eu
+CHECKER_BIN_DIR="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"] + "/debug")')"
+cargo build --locked -p bookends-check --bin bookends-check
+test -x "$CHECKER_BIN_DIR/bookends-check"
+PATH="$CHECKER_BIN_DIR:$PATH" scripts/bookends-check-gate.sh
+```
+
+Required CI also runs the gate. Only explicit `BOOKENDS_BYPASS=<class>:<reason>` may bypass RED, with durable evidence; recording failure refuses bypass. Follow the [Bookends command contract](crates/bookends-check/schema/runner-grammar.md) and [operational UX contract](docs/operational-ux-contracts.md) for publication history, shallow acquisition and proof eligibility. README.md and AGENTS.md are outside Bookends coverage.
 
 ## Document and Git safety
 
@@ -165,6 +175,6 @@ gh workflow run release.yml --ref main -f "tag=$TAG"
 
 Completion requires the accepted behavior, current authoritative documentation, passing workspace baseline and all applicable public-boundary proof. Missing or failed required checks block completion. Record an explicit owner exception with its scope and risk; never report it as a pass.
 
-For software-change report finalization, load [docs/implementation-report-proof.md](docs/implementation-report-proof.md). It owns the exact current Git/path identity, matrix/receipt and post-report checker contract. Keep the graph summarizer as sole report writer. Keep separately authorized Git/hosted work pending until observed. Hosted delivery requires successful preflight for the exact owner-authorized commit, including cache startup, final statistics and wall time; require that proof before Package 7b.
+For software-change report finalization, load [docs/implementation-report-proof.md](docs/implementation-report-proof.md). It owns the exact current Git/path identity, matrix/receipt and post-report checker contract. The graph summarizer is the sole report writer for full or selected plan-graph execution and for report-only execution where supported. Supported no-task repair instead has its repair worker write the report, with no summarizer. Follow the owning [software-change skill](crates/software-change-provider/skills/using-software-change-provider/SKILL.md) and the run's frozen runtime, graph and obligations; this guidance does not enable a recovery route that run does not support. Keep separately authorized Git/hosted work pending until observed. Hosted delivery requires successful preflight for the exact owner-authorized commit, including cache startup, final statistics and wall time; require that proof before Package 7b.
 
 Handoff includes changed files and why; command outcomes including failures/skips; current Git revision and staged/committed/pushed/uncommitted state; run IDs and actual database path; remaining risks and out-of-scope follow-up. A checked transition alone establishes no semantic review. Use the engine skill for durable resumption and terminal-state limits.

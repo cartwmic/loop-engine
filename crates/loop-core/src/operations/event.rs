@@ -16,6 +16,9 @@ use crate::{
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
+use std::path::{Component, Path};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const BOUND_SLOT_INVOCATION_REQUIRED: &str = "bound-slot-invocation-required";
@@ -32,6 +35,10 @@ pub struct Request {
     pub now: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub override_attestation: Option<crate::StateVisitAttestation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub advice_exception: Option<crate::AdviceExceptionAttestation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver_act: Option<crate::DriverActRequest>,
 }
 
 impl Request {
@@ -41,6 +48,8 @@ impl Request {
             event: event.into(),
             now: current_timestamp(),
             override_attestation: None,
+            advice_exception: None,
+            driver_act: None,
         }
     }
 
@@ -51,6 +60,16 @@ impl Request {
 
     pub fn with_override(mut self, attestation: crate::StateVisitAttestation) -> Self {
         self.override_attestation = Some(attestation);
+        self
+    }
+
+    pub fn with_advice_exception(mut self, attestation: crate::AdviceExceptionAttestation) -> Self {
+        self.advice_exception = Some(attestation);
+        self
+    }
+
+    pub fn with_driver_act(mut self, act: crate::DriverActRequest) -> Self {
+        self.driver_act = Some(act);
         self
     }
 
@@ -67,12 +86,13 @@ pub type Result = CommitTransitionResult;
 ///
 /// The first read is authoritative: it verifies existence/activity and
 /// resolves the requested event from the run's stored workflow and current
-/// state. An explicit override retains observation and quiescence guards,
-/// then commits exceptional history without bound completion or evaluation.
-/// Ordinary check-free edges go directly to a conditional atomic commit. A
-/// checked edge captures one durable snapshot, ends persistence activity,
-/// invokes the provider, and conditionally commits or records the result
-/// against the snapshot's original control point.
+/// state. Enabled advice closure is checked on both checked and check-free
+/// normal departures. Its scoped exception is retained in transition history
+/// but does not skip bound completion or provider evaluation. The broader
+/// pre-existing event override remains separate. Ordinary check-free edges
+/// commit atomically; a checked edge captures a durable snapshot, invokes the
+/// provider outside persistence, and conditionally commits or records the
+/// result against the snapshot's original control point.
 ///
 /// No branch retries or re-resolves an event after a conflict. Persistence
 /// conflicts are classified as operation errors by the core persistence-error
@@ -109,6 +129,16 @@ where
         Err(error) => return transition_resolution_error(error),
     };
 
+    if (request.override_attestation.is_some() && request.advice_exception.is_some())
+        || (request.driver_act.is_some()
+            && (request.override_attestation.is_some() || request.advice_exception.is_some()))
+    {
+        return OperationOutcome::rejected(
+            "incompatible-event-exceptions",
+            "driver acts, advice exceptions, and general event overrides are separate and cannot be combined",
+        );
+    }
+
     if let Some(attestation) = &request.override_attestation {
         if attestation.owner.trim().is_empty() || attestation.reason.trim().is_empty() {
             return OperationOutcome::rejected(
@@ -127,7 +157,18 @@ where
     // Preserve the pre-existing bound-slot refusal before adding the
     // observation guard. A caller missing both prerequisites must still see
     // the actionable bound-slot reason that made the event invalid already.
-    if request.override_attestation.is_none() && transition.kind.is_checked() {
+    let driver_act = match request.driver_act.as_ref() {
+        Some(act) => match prepare_driver_act(&run, &transition, act, persistence) {
+            Ok(evidence) => Some(evidence),
+            Err(outcome) => return outcome,
+        },
+        None => None,
+    };
+
+    if request.override_attestation.is_none()
+        && driver_act.is_none()
+        && transition.kind.is_checked()
+    {
         if let Some(rejected) = enforce_bound_slot_gate(&run, &transition, persistence, request.now)
         {
             return rejected;
@@ -144,15 +185,27 @@ where
         return outcome;
     }
 
+    let advice_exception = match enforce_advice_closure(&run, &transition, &request, persistence) {
+        Ok(exception) => exception,
+        Err(outcome) => return outcome,
+    };
+
     if let Some(attestation) = request.override_attestation {
         return commit_override(&run, &transition, attestation, persistence);
     }
 
     if transition.kind.is_check_free() {
-        return commit_check_free(&run, &transition, persistence);
+        return commit_check_free(&run, &transition, advice_exception, persistence);
     }
 
-    evaluate_checked(run, &transition, gateway, persistence)
+    evaluate_checked(
+        run,
+        &transition,
+        advice_exception,
+        driver_act,
+        gateway,
+        persistence,
+    )
 }
 
 /// Execute `event` with ports first, which is convenient for composition
@@ -227,9 +280,68 @@ fn target_lifecycle(
     })
 }
 
+fn enforce_advice_closure<P>(
+    run: &crate::Run,
+    transition: &Transition,
+    request: &Request,
+    persistence: &P,
+) -> std::result::Result<Option<crate::AdviceExceptionAttestation>, OperationOutcome<Result>>
+where
+    P: Persistence + ?Sized,
+{
+    let enabled = run
+        .initial_input
+        .as_object()
+        .is_some_and(|input| input.contains_key(crate::ADVICE_DEPARTURES_INPUT_KEY));
+    if !enabled {
+        return if request.advice_exception.is_some() {
+            Err(OperationOutcome::rejected(
+                "advice-exception-disabled",
+                "this run has no frozen advice departure map",
+            ))
+        } else {
+            Ok(None)
+        };
+    }
+
+    let context = persistence
+        .load_context_records(&run.id)
+        .map_err(persistence_error)?;
+    let due = crate::unanswered_due_occasions(
+        &run.initial_input,
+        &run.id,
+        &run.workflow,
+        &run.current_state,
+        transition,
+        run.control_revision.as_u64(),
+        &context,
+    )
+    .map_err(|message| OperationOutcome::rejected("advice-transition-incomplete", message))?
+    .expect("enabled map returns advice closure status");
+
+    match request.advice_exception.as_ref() {
+        Some(exception) => {
+            crate::validate_advice_exception(exception, run.control_revision.as_u64(), &due)
+                .map_err(|message| {
+                    OperationOutcome::rejected("invalid-advice-exception", message)
+                })?;
+            Ok(Some(exception.clone()))
+        }
+        None if due.is_empty() => Ok(None),
+        None => Err(OperationOutcome::rejected(
+            "advice-transition-incomplete",
+            format!(
+                "unanswered due advice occasions: {}; record valid advice and per-answer dispositions, or use an owner-attested --advice-exception naming exactly these occasions",
+                due.join(", ")
+            ),
+        )),
+    }
+}
+
 fn commit_check_free<P>(
     run: &crate::Run,
     transition: &Transition,
+    advice_exception: Option<crate::AdviceExceptionAttestation>,
     persistence: &P,
 ) -> OperationOutcome<Result>
 where
@@ -241,7 +353,7 @@ where
     };
 
     let slot_subjects = slot_subjects_for_state(&run.workflow, &transition.target);
-    let request = CommitTransitionRequest::new(
+    let mut request = CommitTransitionRequest::new(
         run.id.clone(),
         run.control_revision,
         run.current_state.clone(),
@@ -249,6 +361,9 @@ where
         resulting_lifecycle,
     )
     .with_slot_subjects(slot_subjects);
+    if let Some(exception) = advice_exception {
+        request = request.with_advice_exception(exception);
+    }
 
     match persistence.commit_transition(request) {
         Ok(result) => OperationOutcome::completed(result),
@@ -317,6 +432,8 @@ fn commit_override<P: Persistence + ?Sized>(
 fn evaluate_checked<G, P>(
     run: crate::Run,
     transition: &Transition,
+    advice_exception: Option<crate::AdviceExceptionAttestation>,
+    driver_act: Option<crate::DriverActEvidence>,
     gateway: &G,
     persistence: &P,
 ) -> OperationOutcome<Result>
@@ -337,7 +454,8 @@ where
     // provider-supplied or independently selected target.
     let mut snapshot_for_request = snapshot.clone();
     snapshot_for_request.transition = transition.clone();
-    let evaluation_request = request_from_snapshot(&snapshot_for_request);
+    let mut evaluation_request = request_from_snapshot(&snapshot_for_request);
+    evaluation_request.driver_act = driver_act.clone();
 
     // `load_checked_evaluation_snapshot` is the complete persistence activity
     // for this phase.  The gateway call is deliberately made after it
@@ -348,9 +466,14 @@ where
         Err(error) => return provider_error(error),
     };
     match evaluation {
-        EvaluationResult::Allow { context_append } => {
-            commit_checked_allow(snapshot, transition, context_append, persistence)
-        }
+        EvaluationResult::Allow { context_append } => commit_checked_allow(
+            snapshot,
+            transition,
+            context_append,
+            advice_exception,
+            driver_act,
+            persistence,
+        ),
         EvaluationResult::Deny { feedback } => {
             record_checked_denial(snapshot, transition, feedback, persistence)
         }
@@ -368,6 +491,8 @@ fn commit_checked_allow<P>(
     snapshot: crate::CheckedEvaluationSnapshot,
     transition: &Transition,
     context_append: Option<crate::ContextAppendEffect>,
+    advice_exception: Option<crate::AdviceExceptionAttestation>,
+    driver_act: Option<crate::DriverActEvidence>,
     persistence: &P,
 ) -> OperationOutcome<Result>
 where
@@ -379,7 +504,7 @@ where
     };
 
     let slot_subjects = slot_subjects_for_state(&snapshot.run.workflow, &transition.target);
-    let request = CommitTransitionRequest::new(
+    let mut request = CommitTransitionRequest::new(
         snapshot.run.id,
         snapshot.observed_control_revision,
         snapshot.run.current_state,
@@ -388,6 +513,12 @@ where
     )
     .with_context_append(context_append)
     .with_slot_subjects(slot_subjects);
+    if let Some(exception) = advice_exception {
+        request = request.with_advice_exception(exception);
+    }
+    if let Some(act) = driver_act {
+        request = request.with_driver_act(act);
+    }
 
     match persistence.commit_transition(request) {
         Ok(result) => OperationOutcome::completed(result),
@@ -451,6 +582,123 @@ fn slot_subjects_for_state(
         .filter(|slot| slot.state == *state_id)
         .map(|slot| (slot.id.clone(), mint_visit_subject(&slot.id)))
         .collect()
+}
+
+fn prepare_driver_act<P>(
+    run: &crate::Run,
+    transition: &Transition,
+    request: &crate::DriverActRequest,
+    persistence: &P,
+) -> std::result::Result<crate::DriverActEvidence, OperationOutcome<Result>>
+where
+    P: Persistence + ?Sized,
+{
+    if !transition.kind.is_checked() {
+        return Err(OperationOutcome::rejected(
+            "driver-act-requires-checked-edge",
+            "a driver act is only an alternative bound-completion input on a checked edge",
+        ));
+    }
+    if request.author.name.trim().is_empty()
+        || !matches!(request.author.kind.as_str(), "human" | "agent" | "script")
+        || request.reason.trim().is_empty()
+        || request.reason.len() > 4096
+        || request.changed_artifacts.is_empty()
+        || request.changed_artifacts.len() > 128
+    {
+        return Err(OperationOutcome::rejected(
+            "invalid-driver-act",
+            "driver act requires a known author, concise reason, and 1..=128 changed artifact paths",
+        ));
+    }
+    let mut paths = BTreeSet::new();
+    for path in &request.changed_artifacts {
+        let mut components = Path::new(path).components();
+        if path.trim().is_empty()
+            || path.len() > 1024
+            || Path::new(path).is_absolute()
+            || !matches!(components.next(), Some(Component::Normal(_)))
+            || components.any(|part| !matches!(part, Component::Normal(_)))
+            || !paths.insert(path)
+        {
+            return Err(OperationOutcome::rejected(
+                "invalid-driver-act",
+                "driver-act artifact paths must be unique, relative, and contain no dot or parent components",
+            ));
+        }
+    }
+    if [
+        &request.unchanged_documents.intent_revision,
+        &request.unchanged_documents.design_revision,
+        &request.unchanged_documents.plan_revision,
+    ]
+    .iter()
+    .any(|revision| revision.trim().is_empty())
+    {
+        return Err(OperationOutcome::rejected(
+            "invalid-driver-act",
+            "driver act must name the unchanged accepted intent, design, and plan revisions",
+        ));
+    }
+    let slot = run
+        .workflow
+        .work_slots
+        .iter()
+        .find(|slot| slot.state == run.current_state && slot.event == transition.event)
+        .ok_or_else(|| {
+            OperationOutcome::rejected(
+                "driver-act-not-opted-in",
+                "this checked edge has no opt-in bound work slot",
+            )
+        })?;
+    if !slot.driver_act_allowed {
+        return Err(OperationOutcome::rejected(
+            "driver-act-not-opted-in",
+            format!("bound slot `{}` does not permit driver acts", slot.id),
+        ));
+    }
+    let binding = crate::effective_binding(run, &slot.id)
+        .and_then(std::result::Result::ok)
+        .ok_or_else(|| {
+            OperationOutcome::rejected(
+                "driver-act-requires-bound-slot",
+                format!("opted-in slot `{}` has no valid frozen binding", slot.id),
+            )
+        })?;
+    let state = run
+        .workflow
+        .states
+        .iter()
+        .find(|state| state.id == slot.state)
+        .ok_or_else(|| {
+            OperationOutcome::error(
+                "invalid-run",
+                format!("driver-act slot `{}` has no source state", slot.id),
+            )
+        })?;
+    let current_subject = persistence
+        .get_current_slot_subject(&run.id, &slot.id)
+        .map_err(persistence_error)?
+        .filter(|subject| !subject.trim().is_empty())
+        .ok_or_else(|| {
+            OperationOutcome::rejected(
+                "no-current-visit-subject",
+                format!("driver-act slot `{}` has no current visit subject", slot.id),
+            )
+        })?;
+    let binding_bytes = serde_json::to_vec(&binding).map_err(|error| {
+        OperationOutcome::error("driver-act-binding-invalid", error.to_string())
+    })?;
+    let binding_sha256 = format!("sha256:{:x}", Sha256::digest(binding_bytes));
+
+    Ok(crate::DriverActEvidence {
+        request: request.clone(),
+        slot_id: slot.id.clone(),
+        state_visit: run.control_revision.as_u64(),
+        current_subject,
+        instruction_digest: instruction_digest(&state.instructions),
+        binding_sha256,
+    })
 }
 
 fn enforce_bound_slot_gate<P>(
@@ -898,6 +1146,81 @@ mod tests {
             owner: "owner".into(),
             reason: "explicit exception".into(),
         }
+    }
+
+    fn driver_act_request() -> crate::DriverActRequest {
+        crate::DriverActRequest {
+            author: crate::DriverActAuthor {
+                name: "driver".into(),
+                kind: "agent".into(),
+            },
+            reason: "narrow correction".into(),
+            changed_artifacts: vec!["src/fix.rs".into()],
+            unchanged_documents: crate::DriverActDocuments {
+                intent_revision: "intent-r1".into(),
+                design_revision: "design-r1".into(),
+                plan_revision: "plan-r1".into(),
+            },
+        }
+    }
+
+    #[test]
+    fn opted_in_driver_act_is_attributed_and_still_runs_provider_evaluation() {
+        let transition = workflow()
+            .transitions
+            .into_iter()
+            .find(|edge| edge.event.as_str() == "approve")
+            .expect("checked edge");
+        let mut run = run(Lifecycle::Active, "start");
+        run.workflow.work_slots =
+            vec![WorkSlot::new("implement", "start", "approve").with_driver_act_allowed(true)];
+        run.initial_input =
+            json!({"work_slot_bindings":{"implement":{"command":"worker","args":[]}}});
+        let persistence = FakePersistence::with_run_and_snapshot(run.clone(), transition.clone());
+        persistence
+            .subjects
+            .borrow_mut()
+            .insert("implement".into(), "visit-current".into());
+        *persistence.commit.borrow_mut() = Some(Ok(successful_commit(run, transition.clone())));
+        let gateway = FakeGateway::with_result(Ok(crate::EvaluationResult::Allow));
+        let outcome = execute(
+            Request::new("run-1", "approve").with_driver_act(driver_act_request()),
+            &gateway,
+            &persistence,
+        );
+        assert!(outcome.is_completed(), "{outcome:?}");
+        let requests = gateway.requests.borrow();
+        let act = requests[0]
+            .driver_act
+            .as_ref()
+            .expect("provider receives the act");
+        assert_eq!(act.slot_id.as_str(), "implement");
+        assert_eq!(act.state_visit, 4);
+        assert_eq!(act.current_subject, "visit-current");
+        assert!(!act.binding_sha256.is_empty());
+        assert!(!act.instruction_digest.is_empty());
+        let commits = persistence.commit_requests.borrow();
+        assert!(commits[0].exception.is_none());
+        assert_eq!(commits[0].driver_act.as_ref(), Some(act));
+        assert_eq!(persistence.invocations.borrow().len(), 0);
+    }
+
+    #[test]
+    fn driver_act_cannot_use_a_non_opted_in_review_slot() {
+        let mut run = run(Lifecycle::Active, "start");
+        run.workflow.work_slots = vec![WorkSlot::new("review-slot", "start", "approve")];
+        run.initial_input =
+            json!({"work_slot_bindings":{"review-slot":{"command":"worker","args":[]}}});
+        let persistence = FakePersistence::with_run(run);
+        let gateway = FakeGateway::default();
+        let outcome = execute(
+            Request::new("run-1", "approve").with_driver_act(driver_act_request()),
+            &gateway,
+            &persistence,
+        );
+        assert_eq!(outcome.issue().unwrap().code, "driver-act-not-opted-in");
+        assert!(gateway.requests.borrow().is_empty());
+        assert!(persistence.commit_requests.borrow().is_empty());
     }
 
     #[test]

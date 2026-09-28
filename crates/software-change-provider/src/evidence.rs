@@ -194,6 +194,8 @@ pub(crate) struct ConformingEvidence {
     pub(crate) review_stage: String,
     pub(crate) result: EvidenceResult,
     pub(crate) findings: String,
+    pub(crate) review_contract_version: Option<u32>,
+    pub(crate) grounds: Option<Value>,
     pub(crate) author: AuthorIdentity,
     pub(crate) subject_revision: String,
     pub(crate) config_version: String,
@@ -1078,7 +1080,7 @@ fn parse_conforming(
 fn parse_conforming_with_stage(
     data: &Map<String, Value>,
     expected_subject: &str,
-    _artifact_root: Option<&Value>,
+    artifact_root: Option<&Value>,
     require_stage: bool,
 ) -> Result<ConformingEvidence, EvidenceParseError> {
     let mut reasons = Vec::new();
@@ -1104,6 +1106,53 @@ fn parse_conforming_with_stage(
         }
     };
     let author = parse_author(data.get("author"), &mut reasons);
+    let review_contract_version = match data.get("review_contract_version") {
+        None => None,
+        Some(Value::Number(number)) if number.as_u64() == Some(2) => Some(2),
+        Some(_) => {
+            reasons.push("`review_contract_version` must be 2 when present".to_owned());
+            None
+        }
+    };
+    let grounds = data.get("grounds").cloned();
+    if review_contract_version == Some(2) {
+        match grounds.as_ref() {
+            Some(grounds) => {
+                let root = artifact_root.and_then(Value::as_str).map(Path::new);
+                if let Some(root) = root {
+                    let target_revision = fs::read(root.join(expected_subject))
+                        .ok()
+                        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                        .and_then(|value| {
+                            value
+                                .get("revision")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned)
+                        });
+                    let check = match target_revision.as_deref() {
+                        Some(current)
+                            if data.get("subject_revision").and_then(Value::as_str)
+                                == Some(current) =>
+                        {
+                            crate::criterion::validate_grounding(grounds, root)
+                        }
+                        Some(_) => crate::criterion::validate_grounding_shape(grounds),
+                        None => Err(format!(
+                            "cannot resolve current `{expected_subject}` revision for grounding"
+                        )),
+                    };
+                    if let Err(error) = check {
+                        reasons.push(error);
+                    }
+                } else {
+                    reasons.push("grounded review evidence requires artifact_root to verify source references".to_owned());
+                }
+            }
+            None => reasons.push("version-2 review evidence requires grounds".to_owned()),
+        }
+    } else if grounds.is_some() {
+        reasons.push("grounds require review_contract_version 2".to_owned());
+    }
     let subject = non_empty_string(data, "subject", &mut reasons);
     let subject_revision = non_empty_string(data, "subject_revision", &mut reasons);
     let config_version = non_empty_string(data, "config_version", &mut reasons);
@@ -1165,6 +1214,8 @@ fn parse_conforming_with_stage(
         review_stage,
         result,
         findings,
+        review_contract_version,
+        grounds,
         author,
         subject_revision,
         config_version,
@@ -1349,6 +1400,7 @@ pub(crate) fn validate_batch_reuse(
         artifact_root,
         "aggregate",
         false,
+        None,
     )
 }
 
@@ -1364,6 +1416,7 @@ pub(crate) fn validate_batch_reuse_for_stage(
     artifact_root: Option<&Value>,
     review_stage: &str,
     require_stage: bool,
+    expected_config_version: Option<&str>,
 ) -> Result<(), String> {
     let records: Vec<_> = context.iter().filter(|r| r.id.as_str() == id).collect();
     if records.len() != 1 || records[0].kind != EVIDENCE_APPLICABILITY_KIND {
@@ -1389,7 +1442,15 @@ pub(crate) fn validate_batch_reuse_for_stage(
         || author.get("name").and_then(Value::as_str) != Some(evidence.author.name())
         || author.get("kind").and_then(Value::as_str) != Some(evidence.author.kind())
     {
-        return Err(format!("reuse `{id}` has wrong gate, axis or author"));
+        return Err(format!(
+            "reuse `{id}` has wrong gate, axis, stage or author"
+        ));
+    }
+    if expected_config_version.is_some_and(|expected| evidence.config_version != expected) {
+        return Err(format!(
+            "reuse `{id}` has stale config version `{}`",
+            evidence.config_version
+        ));
     }
     Ok(())
 }
@@ -1612,8 +1673,33 @@ fn verify_engine_selected_output(
     require_stage: bool,
     data: &Map<String, Value>,
 ) -> Result<(), String> {
-    if origin.selected_attempt == 0 {
-        return Err("engine-resolved selected_attempt must be positive".to_owned());
+    match (origin.selected_attempt, origin.recovery_source.as_ref()) {
+        (Some(attempt), None) if attempt > 0 => {}
+        (None, Some(source)) => {
+            verify_recovery_source(
+                source,
+                Path::new(&origin.capture_dir),
+                &origin.selected_output_path,
+                &origin.selected_output_sha256,
+            )?;
+            verify_recovery_source_identity(
+                source,
+                &origin.assignment_id,
+                data.get("gate").and_then(Value::as_str).unwrap_or_default(),
+                None,
+                &origin.binding,
+            )?;
+        }
+        (Some(_), Some(_)) => {
+            return Err(
+                "engine origin cannot claim both a new attempt and a recovered source".to_owned(),
+            );
+        }
+        _ => {
+            return Err(
+                "engine origin has no verifiable selected attempt or recovery source".to_owned(),
+            )
+        }
     }
     if origin.selected_output_sha256.trim().is_empty()
         || !valid_digest(&origin.selected_output_sha256)
@@ -1656,6 +1742,16 @@ fn verify_engine_selected_output(
     let object = value
         .as_object()
         .ok_or_else(|| "engine-resolved selected output is not a JSON object".to_owned())?;
+    let raw_contract_version = object
+        .get("review_contract_version")
+        .and_then(Value::as_u64);
+    if origin
+        .slot_id
+        .as_deref()
+        .is_some_and(|slot| data.get("gate").and_then(Value::as_str) != Some(slot))
+    {
+        return Err("selected invocation gate does not match review-evidence gate".to_owned());
+    }
     let output_author = object
         .get("author")
         .and_then(Value::as_object)
@@ -1711,7 +1807,808 @@ fn verify_engine_selected_output(
     if object.get("findings").and_then(Value::as_str) != Some(findings) {
         return Err("judgment findings disagree with review-evidence findings".to_owned());
     }
+    match raw_contract_version {
+        Some(2) => {
+            if data.get("review_contract_version").and_then(Value::as_u64) != Some(2)
+                || object.get("grounds") != data.get("grounds")
+            {
+                return Err(
+                    "reviewer grounds/version disagree with selected raw judgment".to_owned(),
+                );
+            }
+        }
+        None if data.contains_key("review_contract_version") || data.contains_key("grounds") => {
+            return Err(
+                "review-evidence claims grounds absent from the selected output contract"
+                    .to_owned(),
+            );
+        }
+        Some(_) => return Err("unsupported selected review output contract version".to_owned()),
+        None => {}
+    }
     Ok(())
+}
+
+/// Verify that a joined selected source is tied to the same assignment,
+/// gate, visit subject and frozen binding as the current selection.
+pub(crate) fn verify_recovery_source_identity(
+    source: &Value,
+    assignment_id: &str,
+    gate: &str,
+    expected_subject: Option<&str>,
+    binding: &loop_core::WorkSlotBinding,
+) -> Result<(), String> {
+    let origin = source
+        .get("origin")
+        .and_then(Value::as_object)
+        .ok_or("recovery source has no original raw origin")?;
+    let expected_binding = loop_core::work_slot_binding_digest(binding);
+    if origin.get("assignment_id").and_then(Value::as_str) != Some(assignment_id)
+        || origin.get("slot_id").and_then(Value::as_str) != Some(gate)
+        || expected_subject
+            .is_some_and(|subject| origin.get("subject").and_then(Value::as_str) != Some(subject))
+        || origin.get("binding_sha256").and_then(Value::as_str) != Some(&expected_binding)
+    {
+        return Err(
+            "recovery raw origin does not match the selected assignment, gate, subject or binding"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+/// Verify a joined assignment's selected bytes against its immutable raw
+/// origin. Derived bytes additionally require a retained derivation and a
+/// separate, explicit fidelity triage claim.
+pub(crate) fn verify_recovery_source(
+    source: &Value,
+    current_capture: &Path,
+    selected_output_path: &str,
+    selected_output_sha256: &str,
+) -> Result<(), String> {
+    let source_class = source
+        .get("source_class")
+        .and_then(Value::as_str)
+        .ok_or("recovery source has no source_class")?;
+    if source.get("protocol").and_then(Value::as_str) != Some("fan-out-selected-source-v1")
+        || source.get("execution").and_then(Value::as_str) != Some("reused")
+        || source.get("selected_output_path").and_then(Value::as_str) != Some(selected_output_path)
+        || source.get("selected_output_sha256").and_then(Value::as_str)
+            != Some(selected_output_sha256)
+    {
+        return Err(
+            "recovery selected-source identity disagrees with engine-selected bytes".into(),
+        );
+    }
+    let selected = read_capture_output(current_capture, selected_output_path)?;
+    if sha256_digest(&selected) != selected_output_sha256 {
+        return Err("recovered selected output digest does not match its bytes".into());
+    }
+
+    let original = source
+        .get("origin")
+        .and_then(Value::as_object)
+        .ok_or("recovery source has no original raw origin")?;
+    for field in [
+        "invocation_id",
+        "run_id",
+        "slot_id",
+        "subject",
+        "binding_sha256",
+        "assignment_id",
+    ] {
+        if original
+            .get(field)
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        {
+            return Err(format!("recovery raw origin has no `{field}`"));
+        }
+    }
+    if original.get("execution").is_some() {
+        return Err("recovery raw origin contains unexpected execution metadata".into());
+    }
+    if original.get("exit_code").and_then(Value::as_i64) != Some(0)
+        || original
+            .get("raw_attempt")
+            .and_then(Value::as_u64)
+            .is_none_or(|attempt| attempt == 0)
+    {
+        return Err("recovery raw origin is not a completed positive attempt".into());
+    }
+    let raw_digest = original
+        .get("raw_stdout_sha256")
+        .and_then(Value::as_str)
+        .ok_or("recovery raw origin has no digest")?;
+    if !valid_digest(raw_digest) {
+        return Err("recovery raw origin digest is malformed".into());
+    }
+    let raw_path = original
+        .get("raw_stdout_path")
+        .and_then(Value::as_str)
+        .ok_or("recovery raw origin has no retained stdout path")?;
+    let origin_capture = original
+        .get("capture_dir")
+        .and_then(Value::as_str)
+        .ok_or("recovery raw origin has no capture directory")?;
+    let raw = read_capture_output(Path::new(origin_capture), raw_path)?;
+    if sha256_digest(&raw) != raw_digest {
+        return Err("recovery raw-origin bytes do not match their retained digest".into());
+    }
+
+    match source_class {
+        "original-raw" => {
+            if source
+                .get("derivation")
+                .is_some_and(|value| !value.is_null())
+                || source
+                    .get("owner_approval")
+                    .is_some_and(|value| !value.is_null())
+                || source
+                    .get("fidelity_approval")
+                    .is_some_and(|value| !value.is_null())
+                || original
+                    .get("selected_output_sha256")
+                    .and_then(Value::as_str)
+                    != Some(raw_digest)
+            {
+                return Err(
+                    "original-raw source does not retain the exact selected raw origin".into(),
+                );
+            }
+            let source_path = original
+                .get("selected_output_path")
+                .and_then(Value::as_str)
+                .ok_or("original-raw source has no selected raw path")?;
+            let source_bytes = read_capture_output(Path::new(origin_capture), source_path)?;
+            if source_bytes != raw || selected != raw {
+                return Err("original-raw selected bytes differ from the exact raw attempt".into());
+            }
+        }
+        "eligible-derived" => {
+            let declared_contract = source
+                .get("declared_output_contract")
+                .and_then(Value::as_object)
+                .ok_or("eligible-derived source has no frozen output contract")?;
+            let direct_fields = [
+                "review_contract_version",
+                "review_stage",
+                "author",
+                "axis",
+                "result",
+                "findings",
+                "grounds",
+            ];
+            let legacy_fields = declared_contract
+                .get("required")
+                .and_then(Value::as_array)
+                .is_some_and(|required| {
+                    direct_fields
+                        .iter()
+                        .all(|field| required.contains(&Value::String((*field).into())))
+                });
+            let schema = declared_contract
+                .get("schema")
+                .unwrap_or_else(|| source.get("declared_output_contract").expect("present"));
+            let batch_fields = schema
+                .pointer("/properties/review_contract_version")
+                .is_some()
+                && schema.pointer("/properties/review_stage").is_some()
+                && schema.pointer("/properties/author").is_some()
+                && schema.pointer("/properties/judgments").is_some();
+            if !legacy_fields && !batch_fields {
+                return Err(
+                    "eligible-derived source contract does not retain the review judgment fields"
+                        .into(),
+                );
+            }
+            let derivation = source
+                .get("derivation")
+                .and_then(Value::as_object)
+                .ok_or("eligible-derived source has no derivation")?;
+            let difference = derivation
+                .get("difference")
+                .filter(|value| !value.is_null())
+                .ok_or("eligible-derived source has no explicit difference")?;
+            if !(difference
+                .as_object()
+                .is_some_and(|value| !value.is_empty())
+                || difference.as_array().is_some_and(|value| !value.is_empty()))
+            {
+                return Err("eligible-derived source has an empty derivation difference".into());
+            }
+            match derivation.get("kind").and_then(Value::as_str) {
+                Some("mechanical") if derivation.get("adapter").is_none_or(Value::is_null) => {}
+                Some("scripted") => {
+                    let adapter = derivation
+                        .get("adapter")
+                        .and_then(Value::as_object)
+                        .ok_or("scripted derivation has no usage accounting")?;
+                    let calls = adapter.get("calls").and_then(Value::as_u64).unwrap_or(0);
+                    let elapsed = adapter
+                        .get("elapsed_ms")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    let cost = adapter
+                        .get("metered_cost_micros")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(u64::MAX);
+                    if adapter
+                        .get("command")
+                        .and_then(Value::as_str)
+                        .is_none_or(str::is_empty)
+                        || adapter
+                            .get("model_id")
+                            .is_some_and(|value| !value.is_null())
+                        || adapter.get("capture").is_some_and(|value| !value.is_null())
+                        || adapter.get("usage_accounted") != Some(&Value::Bool(true))
+                        || calls != 1
+                        || calls
+                            > adapter
+                                .get("max_calls")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0)
+                        || elapsed == 0
+                        || elapsed
+                            > adapter
+                                .get("max_time_ms")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0)
+                        || cost
+                            > adapter
+                                .get("max_cost_micros")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0)
+                        || adapter
+                            .get("max_cost_micros")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0)
+                            == 0
+                    {
+                        return Err(
+                            "scripted derivation has invalid or exceeded usage bounds".into()
+                        );
+                    }
+                }
+                Some("model") => {
+                    let adapter = derivation
+                        .get("adapter")
+                        .and_then(Value::as_object)
+                        .ok_or("model derivation has no attributed usage accounting")?;
+                    let model_id = adapter
+                        .get("model_id")
+                        .and_then(Value::as_str)
+                        .filter(|model_id| !model_id.trim().is_empty())
+                        .ok_or("model derivation has no explicit model identity")?;
+                    let calls = adapter.get("calls").and_then(Value::as_u64).unwrap_or(0);
+                    let elapsed = adapter
+                        .get("elapsed_ms")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    let cost = adapter
+                        .get("metered_cost_micros")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(u64::MAX);
+                    if adapter
+                        .get("command")
+                        .and_then(Value::as_str)
+                        .is_none_or(str::is_empty)
+                        || adapter.get("usage_accounted") != Some(&Value::Bool(true))
+                        || calls != 1
+                        || calls
+                            > adapter
+                                .get("max_calls")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0)
+                        || elapsed == 0
+                        || elapsed
+                            > adapter
+                                .get("max_time_ms")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0)
+                        || cost
+                            > adapter
+                                .get("max_cost_micros")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0)
+                        || adapter
+                            .get("max_cost_micros")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0)
+                            == 0
+                    {
+                        return Err(
+                            "model derivation has invalid or exceeded positive usage bounds".into(),
+                        );
+                    }
+                    verify_model_repair_capture(source, current_capture, model_id, adapter)?;
+                }
+                _ => {
+                    return Err("eligible-derived source has an unsupported derivation kind".into())
+                }
+            }
+            let approval_name = |field: &str| -> Result<&str, String> {
+                let approval = source
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| format!("eligible-derived source lacks {field}"))?;
+                let name = approval
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .filter(|name| !name.trim().is_empty())
+                    .ok_or_else(|| format!("eligible-derived source has an empty {field}"))?;
+                if approval
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .is_none_or(|reason| reason.trim().is_empty())
+                {
+                    return Err(format!("eligible-derived source has an empty {field}"));
+                }
+                Ok(name)
+            };
+            approval_name("owner_approval")?;
+            let fidelity = approval_name("fidelity_approval")?;
+            let derived_value = parse_originating_judgment(&selected)?;
+            let reviewer = derived_value
+                .pointer("/author/name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.trim().is_empty())
+                .ok_or("eligible-derived review output has no declared author")?;
+            if reviewer == fidelity {
+                return Err(
+                    "eligible-derived fidelity triage must be independent of the declared reviewer"
+                        .into(),
+                );
+            }
+        }
+        other => return Err(format!("unsupported recovery source class `{other}`")),
+    }
+    Ok(())
+}
+
+fn verify_model_repair_capture(
+    source: &Value,
+    current_capture: &Path,
+    model_id: &str,
+    selected_usage: &Map<String, Value>,
+) -> Result<(), String> {
+    let origin = source
+        .get("origin")
+        .and_then(Value::as_object)
+        .ok_or("model-derived source has no original origin")?;
+    let origin_id = origin
+        .get("invocation_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("model-derived source has no original invocation identity")?;
+    let assignment_id = origin
+        .get("assignment_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("model-derived source has no assignment identity")?;
+    let raw_digest = origin
+        .get("raw_stdout_sha256")
+        .and_then(Value::as_str)
+        .ok_or("model-derived source has no raw-origin digest")?;
+    let model_capture = selected_usage
+        .get("capture")
+        .and_then(Value::as_object)
+        .ok_or("model-derived source has no adapter capture identity")?;
+
+    let current_capture = fs::canonicalize(current_capture)
+        .map_err(|error| format!("joined invocation capture is unavailable: {error}"))?;
+    let slots_dir = current_capture
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("joined invocation capture has no work-slot capture root")?;
+    if slots_dir.file_name().and_then(|name| name.to_str()) != Some("work-slot-captures") {
+        return Err(
+            "joined invocation capture is outside the engine work-slot capture layout".into(),
+        );
+    }
+    let artifact_root = slots_dir
+        .parent()
+        .ok_or("joined invocation capture has no artifact_root")?;
+    let artifact_root = fs::canonicalize(artifact_root)
+        .map_err(|error| format!("model repair artifact_root is unavailable: {error}"))?;
+    let origin_capture = origin
+        .get("capture_dir")
+        .and_then(Value::as_str)
+        .ok_or("model-derived source has no original capture directory")?;
+    let origin_capture = fs::canonicalize(origin_capture)
+        .map_err(|error| format!("model repair raw-origin capture is unavailable: {error}"))?;
+    if !origin_capture.starts_with(&artifact_root) || !current_capture.starts_with(&artifact_root) {
+        return Err("model repair capture identities do not share the joined artifact_root".into());
+    }
+
+    let run_id = origin
+        .get("run_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("model-derived source has no run identity")?;
+    let slot_id = origin
+        .get("slot_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("model-derived source has no slot identity")?;
+    let state_visit = origin
+        .get("state_visit")
+        .and_then(Value::as_u64)
+        .ok_or("model-derived source has no state-visit identity")?;
+    let binding_sha256 = origin
+        .get("binding_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("model-derived source has no binding identity")?;
+    let identity = sha256_digest(
+        format!("{run_id}:{slot_id}:{state_visit}:{binding_sha256}:{assignment_id}").as_bytes(),
+    );
+    let expected_budget_dir = artifact_root
+        .join("recovery-adapter-attempts")
+        .join("model")
+        .join(&identity[7..]);
+    let budget_dir = fs::canonicalize(&expected_budget_dir)
+        .map_err(|error| format!("model repair assignment history is unavailable: {error}"))?;
+    if !budget_dir.starts_with(&artifact_root) || budget_dir.join("budget.lock").exists() {
+        return Err(
+            "model repair assignment history escapes artifact_root or is unfinished".into(),
+        );
+    }
+    let selected_dir = model_capture
+        .get("directory")
+        .and_then(Value::as_str)
+        .ok_or("model repair capture omitted its directory")?;
+    let selected_dir = fs::canonicalize(selected_dir)
+        .map_err(|error| format!("selected model repair capture is unavailable: {error}"))?;
+    if selected_dir.parent() != Some(budget_dir.as_path()) || !selected_dir.is_dir() {
+        return Err("selected model repair capture does not match its assignment history".into());
+    }
+
+    let command = selected_usage
+        .get("command")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("model repair usage omitted command identity")?;
+    let args = selected_usage
+        .get("args")
+        .and_then(Value::as_array)
+        .ok_or("model repair usage omitted command arguments")?;
+    let max_calls = selected_usage
+        .get("max_calls")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .ok_or("model repair usage omitted its positive call cap")?;
+    let max_time_ms = selected_usage
+        .get("max_time_ms")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .ok_or("model repair usage omitted its positive time cap")?;
+    let max_cost_micros = selected_usage
+        .get("max_cost_micros")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .ok_or("model repair usage omitted its positive metered-cost cap")?;
+    let mut total_calls = 0_u64;
+    let mut total_elapsed_ms = 0_u64;
+    let mut total_cost_micros = 0_u64;
+    let mut selected_seen = false;
+    for entry in fs::read_dir(&budget_dir)
+        .map_err(|error| format!("could not read model repair assignment history: {error}"))?
+    {
+        let entry =
+            entry.map_err(|error| format!("could not read model repair attempt: {error}"))?;
+        if entry.file_name() == "budget.lock" {
+            continue;
+        }
+        if !entry
+            .file_type()
+            .map_err(|error| format!("could not inspect model repair attempt: {error}"))?
+            .is_dir()
+        {
+            return Err("model repair assignment history contains an unexpected entry".into());
+        }
+        let attempt_dir = fs::canonicalize(entry.path())
+            .map_err(|error| format!("model repair attempt is unavailable: {error}"))?;
+        if attempt_dir.parent() != Some(budget_dir.as_path()) {
+            return Err("model repair attempt escapes its assignment history".into());
+        }
+        let configuration =
+            read_recovery_capture_json(&attempt_dir.join("configuration.json"), 64 * 1024)?;
+        if configuration.get("kind").and_then(Value::as_str) != Some("model")
+            || configuration.get("model_id").and_then(Value::as_str) != Some(model_id)
+            || configuration.get("command").and_then(Value::as_str) != Some(command)
+            || configuration.get("args") != Some(&Value::Array(args.clone()))
+            || configuration.get("run_id").and_then(Value::as_str) != Some(run_id)
+            || configuration.get("slot_id").and_then(Value::as_str) != Some(slot_id)
+            || configuration.get("state_visit").and_then(Value::as_u64) != Some(state_visit)
+            || configuration.get("binding_sha256").and_then(Value::as_str) != Some(binding_sha256)
+            || configuration.get("assignment_id").and_then(Value::as_str) != Some(assignment_id)
+            || configuration.get("max_calls").and_then(Value::as_u64) != Some(max_calls)
+            || configuration.get("max_time_ms").and_then(Value::as_u64) != Some(max_time_ms)
+            || configuration.get("max_cost_micros").and_then(Value::as_u64) != Some(max_cost_micros)
+        {
+            return Err(
+                "model repair attempt identity or per-assignment bounds do not match".into(),
+            );
+        }
+        let attempt_origin_id = configuration
+            .get("origin_invocation_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or("model repair attempt omitted original invocation identity")?;
+        let attempt_origin_capture = configuration
+            .get("origin_capture_dir")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or("model repair attempt omitted raw-origin capture directory")?;
+        let attempt_origin_capture = fs::canonicalize(attempt_origin_capture)
+            .map_err(|error| format!("model repair raw-origin capture is unavailable: {error}"))?;
+        let raw_path = configuration
+            .get("raw_stdout_path")
+            .and_then(Value::as_str)
+            .ok_or("model repair attempt omitted raw-attempt path")?;
+        let raw_attempt = configuration
+            .get("raw_attempt")
+            .and_then(Value::as_u64)
+            .filter(|value| *value > 0)
+            .ok_or("model repair attempt omitted raw-attempt number")?;
+        let attempt_raw_digest = configuration
+            .get("raw_stdout_sha256")
+            .and_then(Value::as_str)
+            .filter(|value| valid_digest(value))
+            .ok_or("model repair attempt omitted raw-attempt digest")?;
+        if !attempt_origin_capture.starts_with(&artifact_root) {
+            return Err("model repair raw-origin capture escapes artifact_root".into());
+        }
+        let original_raw = read_capture_output(&attempt_origin_capture, raw_path)?;
+        if sha256_digest(&original_raw) != attempt_raw_digest {
+            return Err(
+                "model repair attempt does not match its immutable raw-origin bytes".into(),
+            );
+        }
+        let request =
+            read_recovery_capture_file(&attempt_dir.join("request.json"), 2 * 1024 * 1024)?;
+        let stdout = read_recovery_capture_file(&attempt_dir.join("stdout"), 1024 * 1024)?;
+        let stderr = read_recovery_capture_file(&attempt_dir.join("stderr"), 1024 * 1024)?;
+        let request_sha = sha256_digest(&request);
+        let stdout_sha = sha256_digest(&stdout);
+        let stderr_sha = sha256_digest(&stderr);
+        let request_value: Value = serde_json::from_slice(&request)
+            .map_err(|error| format!("model repair request capture is malformed: {error}"))?;
+        let usage = read_recovery_capture_json(&attempt_dir.join("usage.json"), 64 * 1024)?;
+        if usage.get("usage_accounted").and_then(Value::as_bool) != Some(true)
+            || usage.get("model_id").and_then(Value::as_str) != Some(model_id)
+            || usage.get("command").and_then(Value::as_str) != Some(command)
+            || usage.get("args") != Some(&Value::Array(args.clone()))
+            || usage.get("request_sha256").and_then(Value::as_str) != Some(request_sha.as_str())
+            || usage.get("stdout_sha256").and_then(Value::as_str) != Some(stdout_sha.as_str())
+            || usage.get("stderr_sha256").and_then(Value::as_str) != Some(stderr_sha.as_str())
+            || request_value
+                .pointer("/model_adapter/model_id")
+                .and_then(Value::as_str)
+                != Some(model_id)
+            || request_value
+                .pointer("/model_adapter/command")
+                .and_then(Value::as_str)
+                != Some(command)
+            || request_value.pointer("/model_adapter/args") != Some(&Value::Array(args.clone()))
+            || request_value.pointer("/run_id").and_then(Value::as_str) != Some(run_id)
+            || request_value.pointer("/slot_id").and_then(Value::as_str) != Some(slot_id)
+            || request_value
+                .pointer("/state_visit")
+                .and_then(Value::as_u64)
+                != Some(state_visit)
+            || request_value
+                .pointer("/binding_sha256")
+                .and_then(Value::as_str)
+                != Some(binding_sha256)
+            || request_value
+                .pointer("/origin_invocation_id")
+                .and_then(Value::as_str)
+                != Some(attempt_origin_id)
+            || request_value
+                .pointer("/assignment_id")
+                .and_then(Value::as_str)
+                != Some(assignment_id)
+            || request_value
+                .pointer("/raw_output_sha256")
+                .and_then(Value::as_str)
+                != Some(attempt_raw_digest)
+            || request_value
+                .pointer("/raw_attempt")
+                .and_then(Value::as_u64)
+                != Some(raw_attempt)
+            || request_value
+                .pointer("/raw_stdout_path")
+                .and_then(Value::as_str)
+                != Some(raw_path)
+            || request_value
+                .pointer("/budget/max_calls")
+                .and_then(Value::as_u64)
+                != Some(max_calls)
+            || request_value
+                .pointer("/budget/max_time_ms")
+                .and_then(Value::as_u64)
+                != Some(max_time_ms)
+            || request_value
+                .pointer("/budget/max_cost_micros")
+                .and_then(Value::as_u64)
+                != Some(max_cost_micros)
+            || configuration.get("request_sha256").and_then(Value::as_str)
+                != Some(request_sha.as_str())
+            || request_value
+                .pointer("/budget/max_time_ms")
+                .and_then(Value::as_u64)
+                != Some(max_time_ms)
+            || request_value
+                .pointer("/budget/max_cost_micros")
+                .and_then(Value::as_u64)
+                != Some(max_cost_micros)
+            || request_value
+                .pointer("/budget/remaining_calls")
+                .and_then(Value::as_u64)
+                != configuration.get("remaining_calls").and_then(Value::as_u64)
+            || request_value
+                .pointer("/budget/remaining_time_ms")
+                .and_then(Value::as_u64)
+                != configuration
+                    .get("remaining_time_ms")
+                    .and_then(Value::as_u64)
+            || request_value
+                .pointer("/budget/remaining_cost_micros")
+                .and_then(Value::as_u64)
+                != configuration
+                    .get("remaining_cost_micros")
+                    .and_then(Value::as_u64)
+        {
+            return Err(
+                "model repair attempt has missing or unverifiable usage attribution".into(),
+            );
+        }
+        let calls = usage
+            .get("calls")
+            .and_then(Value::as_u64)
+            .filter(|value| *value > 0)
+            .ok_or("model repair attempt omitted positive metered call usage")?;
+        let elapsed = usage
+            .get("elapsed_ms")
+            .and_then(Value::as_u64)
+            .filter(|value| *value > 0)
+            .ok_or("model repair attempt omitted positive elapsed usage")?;
+        let cost = usage
+            .get("metered_cost_micros")
+            .and_then(Value::as_u64)
+            .ok_or("model repair attempt omitted metered-cost usage")?;
+        if usage.get("max_calls").and_then(Value::as_u64) != Some(max_calls)
+            || usage.get("max_time_ms").and_then(Value::as_u64) != Some(max_time_ms)
+            || usage.get("max_cost_micros").and_then(Value::as_u64) != Some(max_cost_micros)
+            || calls
+                > configuration
+                    .get("remaining_calls")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+            || elapsed
+                > configuration
+                    .get("remaining_time_ms")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+            || cost
+                > configuration
+                    .get("remaining_cost_micros")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+        {
+            return Err(
+                "model repair attempt exceeded or omitted its remaining per-assignment bounds"
+                    .into(),
+            );
+        }
+        total_calls = total_calls
+            .checked_add(calls)
+            .ok_or("model repair call accounting overflowed")?;
+        total_elapsed_ms = total_elapsed_ms
+            .checked_add(elapsed)
+            .ok_or("model repair time accounting overflowed")?;
+        total_cost_micros = total_cost_micros
+            .checked_add(cost)
+            .ok_or("model repair cost accounting overflowed")?;
+        if attempt_dir == selected_dir {
+            selected_seen = attempt_origin_id == origin_id
+                && attempt_raw_digest == raw_digest
+                && raw_attempt
+                    == origin
+                        .get("raw_attempt")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0)
+                && raw_path
+                    == origin
+                        .get("raw_stdout_path")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                && attempt_origin_capture == origin_capture
+                && model_capture.get("request_sha256").and_then(Value::as_str)
+                    == Some(request_sha.as_str())
+                && model_capture.get("stdout_sha256").and_then(Value::as_str)
+                    == Some(stdout_sha.as_str())
+                && model_capture.get("stderr_sha256").and_then(Value::as_str)
+                    == Some(stderr_sha.as_str())
+                && calls
+                    == selected_usage
+                        .get("calls")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0)
+                && elapsed
+                    == selected_usage
+                        .get("elapsed_ms")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0)
+                && cost
+                    == selected_usage
+                        .get("metered_cost_micros")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(u64::MAX);
+        }
+    }
+    if !selected_seen
+        || total_calls > max_calls
+        || total_elapsed_ms > max_time_ms
+        || total_cost_micros > max_cost_micros
+    {
+        return Err("model repair assignment usage is unverifiable or exhausted".into());
+    }
+    Ok(())
+}
+
+fn read_recovery_capture_file(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
+    let metadata = fs::metadata(path).map_err(|error| {
+        format!(
+            "model repair capture `{}` is unavailable: {error}",
+            path.display()
+        )
+    })?;
+    if !metadata.is_file() || metadata.len() > limit {
+        return Err(format!(
+            "model repair capture `{}` is not a bounded file",
+            path.display()
+        ));
+    }
+    fs::read(path).map_err(|error| {
+        format!(
+            "could not read model repair capture `{}`: {error}",
+            path.display()
+        )
+    })
+}
+
+fn read_recovery_capture_json(path: &Path, limit: u64) -> Result<Value, String> {
+    serde_json::from_slice(&read_recovery_capture_file(path, limit)?).map_err(|error| {
+        format!(
+            "model repair capture `{}` is malformed: {error}",
+            path.display()
+        )
+    })
+}
+
+fn read_capture_output(capture_dir: &Path, path: &str) -> Result<Vec<u8>, String> {
+    let relative = Path::new(path);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err("recovery output path is not a safe capture-relative path".into());
+    }
+    let capture = fs::canonicalize(capture_dir)
+        .map_err(|error| format!("recovery capture directory is unavailable: {error}"))?;
+    if !capture.is_dir() {
+        return Err("recovery capture directory is not a directory".into());
+    }
+    let selected = fs::canonicalize(capture.join(relative))
+        .map_err(|error| format!("recovery output is unavailable: {error}"))?;
+    if selected == capture || !selected.starts_with(&capture) || !selected.is_file() {
+        return Err("recovery output escapes its capture directory".into());
+    }
+    fs::read(selected).map_err(|error| format!("recovery output is unavailable: {error}"))
 }
 
 fn parse_originating_judgment(bytes: &[u8]) -> Result<Value, String> {
@@ -1986,6 +2883,42 @@ mod tests {
         );
         assert!(!result.is_satisfied());
         assert!(has_category(&result, "missing"));
+    }
+
+    #[test]
+    fn historical_grounding_keeps_original_digest_without_rebinding_to_current_file() {
+        let root = std::env::temp_dir().join(format!(
+            "software-change-historical-ground-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let old = br#"{"revision":"r1","outcome":"old"}"#;
+        let current = br#"{"revision":"r2","outcome":"new"}"#;
+        fs::write(root.join("intent.json"), current).unwrap();
+        let grounds = json!({"reason":"The original reviewer inspected the old outcome.","evidence":[
+            {"locator":"intent.json#/outcome","sha256":format!("sha256:{:x}",Sha256::digest(old))}
+        ]});
+        let stale = json!({
+            "gate":"intent-review","policy_id":"solution-agnostic","review_contract_version":2,
+            "review_stage":"aggregate","grounds":grounds,"result":"pass","findings":"","author":{"name":"reviewer","kind":"agent"},
+            "subject":"intent.json","subject_revision":"r1","config_version":"high-rigor-11"
+        });
+        let stale_result =
+            parse_evidence_record_for_stage(&stale, "intent.json", Some(&json!(root)), true);
+        assert!(stale_result.is_ok(), "{}", stale_result.unwrap_err());
+        let mut current_bad = stale;
+        current_bad["subject_revision"] = json!("r2");
+        assert!(parse_evidence_record_for_stage(
+            &current_bad,
+            "intent.json",
+            Some(&json!(root)),
+            true
+        )
+        .unwrap_err()
+        .contains("does not match exact source bytes"));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -2586,5 +3519,117 @@ mod tests {
         let details = result.details_value();
         assert!(details.get("satisfied").is_some());
         assert!(details.get("diagnostics").is_some());
+    }
+
+    #[test]
+    fn derived_selected_source_requires_exact_raw_origin_derivation_and_fidelity_triage() {
+        struct Scratch(PathBuf);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let scratch = Scratch(std::env::temp_dir().join(format!(
+            "software-change-derived-source-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        )));
+        let original = scratch.0.join("origin");
+        let current = scratch.0.join("joined");
+        fs::create_dir_all(original.join("0")).expect("origin worker dir");
+        fs::create_dir_all(current.join("0")).expect("joined worker dir");
+        let raw = b"FAIL: selected review still identifies an unresolved defect";
+        let derived = br#"{"review_contract_version":2,"review_stage":"aggregate","author":{"name":"fixture-reviewer","kind":"agent"},"axis":"fixture-axis","result":"fail","findings":"unresolved defect","grounds":{"reason":"The explicit failure was preserved.","evidence":[{"locator":"intent.json#/revision","sha256":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}]}}"#;
+        fs::write(original.join("0/stdout"), raw).expect("write raw attempt");
+        fs::write(current.join("0/stdout"), derived).expect("write derived selection");
+        let raw_digest = sha256_digest(raw);
+        let selected_digest = sha256_digest(derived);
+        let binding = loop_core::WorkSlotBinding::new("fixture-reviewer", vec!["--review".into()]);
+        let source = serde_json::json!({
+            "protocol":"fan-out-selected-source-v1","source_class":"eligible-derived","execution":"reused",
+            "origin":{"invocation_id":"origin-inv","run_id":"run","slot_id":"intent-review","state_visit":1,
+                "subject":"visit-intent-review-1","binding_sha256":loop_core::work_slot_binding_digest(&binding),"capture_dir":original.to_string_lossy(),
+                "assignment_id":"worker-0","exit_code":0,"raw_attempt":1,"raw_stdout_sha256":raw_digest,
+                "raw_stdout_path":"0/stdout","selected_output_sha256":null,"selected_output_path":null,
+                "routed_inputs":[]},
+            "selected_output_sha256":selected_digest,"selected_output_path":"0/stdout",
+            "derivation":{"kind":"mechanical","difference":{"format":"prose-to-closed-review-json"}},
+            "owner_approval":{"name":"fixture-owner","reason":"isolated mechanics"},
+            "fidelity_approval":{"name":"fixture-driver","reason":"checked that explicit fail and finding were preserved"},
+            "declared_output_contract":{"required":["review_contract_version","review_stage","author","axis","result","findings","grounds"]}
+        });
+        assert!(verify_recovery_source(&source, &current, "0/stdout", &selected_digest,).is_ok());
+        let mut same_owner_and_driver = source.clone();
+        same_owner_and_driver["owner_approval"]["name"] = json!("fixture-human-owner-driver");
+        same_owner_and_driver["fidelity_approval"]["name"] = json!("fixture-human-owner-driver");
+        assert!(verify_recovery_source(
+            &same_owner_and_driver,
+            &current,
+            "0/stdout",
+            &selected_digest,
+        )
+        .is_ok());
+
+        let mut reviewer_self_triage = source.clone();
+        reviewer_self_triage["fidelity_approval"]["name"] = json!("fixture-reviewer");
+        assert!(verify_recovery_source(
+            &reviewer_self_triage,
+            &current,
+            "0/stdout",
+            &selected_digest,
+        )
+        .unwrap_err()
+        .contains("independent of the declared reviewer"));
+        assert!(verify_recovery_source_identity(
+            &source,
+            "worker-0",
+            "intent-review",
+            Some("visit-intent-review-1"),
+            &binding,
+        )
+        .is_ok());
+        let mut wrong_binding = source.clone();
+        wrong_binding["origin"]["binding_sha256"] = json!("sha256:wrong");
+        assert!(verify_recovery_source_identity(
+            &wrong_binding,
+            "worker-0",
+            "intent-review",
+            Some("visit-intent-review-1"),
+            &binding,
+        )
+        .unwrap_err()
+        .contains("binding"));
+        let mut wrong_assignment = source.clone();
+        wrong_assignment["origin"]["assignment_id"] = json!("worker-1");
+        assert!(verify_recovery_source_identity(
+            &wrong_assignment,
+            "worker-0",
+            "intent-review",
+            Some("visit-intent-review-1"),
+            &binding,
+        )
+        .unwrap_err()
+        .contains("assignment"));
+
+        let mut missing_fidelity = source.clone();
+        missing_fidelity
+            .as_object_mut()
+            .unwrap()
+            .remove("fidelity_approval");
+        assert!(
+            verify_recovery_source(&missing_fidelity, &current, "0/stdout", &selected_digest,)
+                .unwrap_err()
+                .contains("fidelity_approval")
+        );
+
+        fs::write(original.join("0/stdout"), b"changed raw attempt").expect("drift raw");
+        assert!(
+            verify_recovery_source(&source, &current, "0/stdout", &selected_digest,)
+                .unwrap_err()
+                .contains("raw-origin bytes")
+        );
     }
 }

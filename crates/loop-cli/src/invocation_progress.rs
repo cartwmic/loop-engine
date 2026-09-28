@@ -14,7 +14,7 @@ use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -149,8 +149,16 @@ where
     F: Fn(&WorkSlotInvocation) -> bool + Copy,
 {
     let invocations = persistence
-        .load_work_slot_invocations(run_id)
+        .load_invocation_progress_candidates(run_id, invocation_id)
         .map_err(|error| CliError::new(error.code(), error.to_string()))?;
+    if invocations.is_empty() {
+        if let Some(invocation_id) = invocation_id {
+            return Err(CliError::new(
+                "invocation-not-found",
+                format!("invocation `{invocation_id}` was not found on run `{run_id}`"),
+            ));
+        }
+    }
     let selected = select_invocation_by_identity(&invocations, invocation_id, now, waiter_alive)?;
     let selected_status = project_invocation_status(selected, now, waiter_alive(selected));
     let capture_dir = selected.capture_dir.clone();
@@ -517,6 +525,154 @@ fn dagu_failure_detail(code: Option<i32>, stderr: &str) -> String {
     } else {
         " (terminated by signal)".to_owned()
     }
+}
+
+pub(crate) fn sample_assignment_states(
+    capture_dir: &Path,
+    deadline: Instant,
+) -> Option<HashMap<String, &'static str>> {
+    let locator_bytes = fs::read(capture_dir.join("dagu-locator.json")).ok()?;
+    if locator_bytes.len() > 16 * 1024 || Instant::now() >= deadline {
+        return None;
+    }
+    let locator: DaguLocator = serde_json::from_slice(&locator_bytes).ok()?;
+    let status_path = latest_status_jsonl_bounded(Path::new(&locator.dagu_home), deadline)?;
+    let metadata = fs::metadata(&status_path).ok()?;
+    let read_len = metadata.len().min(64 * 1024);
+    if read_len == 0 || Instant::now() >= deadline {
+        return None;
+    }
+    let mut file = fs::File::open(&status_path).ok()?;
+    file.seek(std::io::SeekFrom::End(-(read_len as i64))).ok()?;
+    let mut bytes = vec![0; read_len as usize];
+    file.read_exact(&mut bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    let line = text.lines().rev().find(|line| !line.trim().is_empty())?;
+    let value: Value = serde_json::from_str(line).ok()?;
+    let nodes = value.get("nodes")?.as_array()?;
+    let mut step_states = HashMap::new();
+    for node in nodes {
+        let name = node
+            .get("step")
+            .and_then(|step| step.get("name"))
+            .and_then(Value::as_str)
+            .or_else(|| node.get("name").and_then(Value::as_str))?;
+        let state = graph_state_from_node(
+            node.get("status").and_then(Value::as_u64),
+            node.get("startedAt").and_then(Value::as_str).unwrap_or(""),
+        );
+        step_states.insert(name.to_owned(), state);
+    }
+    let mut labels_by_step = HashMap::new();
+    if let Ok(spec_bytes) = fs::read(capture_dir.join("fan-out-spec.json")) {
+        if spec_bytes.len() <= 1024 * 1024 {
+            if let Ok(spec) = serde_json::from_slice::<Value>(&spec_bytes) {
+                if let Some(workers) = spec.get("workers").and_then(Value::as_array) {
+                    for (index, worker) in workers.iter().enumerate() {
+                        if let Some(assignment) =
+                            worker.get("assignment_id").and_then(Value::as_str)
+                        {
+                            labels_by_step.insert(format!("w{index}"), assignment.to_owned());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if labels_by_step.is_empty() {
+        // Plan-graph providers use the frozen task IDs as their Dagu step names.
+        labels_by_step.extend(step_states.keys().map(|id| (id.clone(), id.clone())));
+    }
+    let mut assignments = HashMap::new();
+    for (step, assignment_id) in labels_by_step {
+        let Some(state) = step_states.get(&step) else {
+            continue;
+        };
+        let state = match state {
+            GraphStepState::NotStarted => "queued",
+            GraphStepState::Running if fanout_step_has_failed_attempt(capture_dir, &step) => {
+                "correcting"
+            }
+            GraphStepState::Running => "running",
+            GraphStepState::Reaped => "finished",
+        };
+        assignments.insert(assignment_id, state);
+    }
+    if Instant::now() >= deadline {
+        None
+    } else {
+        Some(assignments)
+    }
+}
+
+fn fanout_step_has_failed_attempt(capture_dir: &Path, step: &str) -> bool {
+    let Some(index) = step
+        .strip_prefix('w')
+        .and_then(|index| index.parse::<usize>().ok())
+    else {
+        return false;
+    };
+    let path = capture_dir.join(index.to_string()).join("attempts.json");
+    let Ok(metadata) = fs::metadata(&path) else {
+        return false;
+    };
+    if metadata.len() > 64 * 1024 {
+        return false;
+    }
+    let Ok(bytes) = fs::read(path) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+        return false;
+    };
+    value["attempts"].as_array().is_some_and(|attempts| {
+        attempts.iter().any(|attempt| {
+            attempt["validation_errors"]
+                .as_array()
+                .is_some_and(|errors| !errors.is_empty())
+        })
+    })
+}
+
+fn latest_status_jsonl_bounded(dagu_home: &Path, deadline: Instant) -> Option<PathBuf> {
+    let mut best: Option<(SystemTime, PathBuf)> = None;
+    let mut stack = vec![dagu_home.to_path_buf()];
+    let mut visited = 0usize;
+    while let Some(dir) = stack.pop() {
+        if Instant::now() >= deadline || visited >= 4096 {
+            return None;
+        }
+        visited += 1;
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries {
+            if Instant::now() >= deadline || visited >= 4096 {
+                return None;
+            }
+            let Ok(entry) = entry else {
+                continue;
+            };
+            visited += 1;
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.file_name().is_some_and(|name| name == "status.jsonl") {
+                let Ok(metadata) = entry.metadata() else {
+                    continue;
+                };
+                let Ok(mtime) = metadata.modified() else {
+                    continue;
+                };
+                if best.as_ref().is_none_or(|(time, _)| mtime >= *time) {
+                    best = Some((mtime, path));
+                }
+            }
+        }
+    }
+    best.map(|(_, path)| path)
 }
 
 fn node_states_from_status_jsonl(dagu_home: &Path) -> HashMap<String, GraphStepState> {

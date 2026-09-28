@@ -20,6 +20,7 @@ use crate::workflow::{self, TransitionDuties};
 use bookends_check::CheckStatus;
 use loop_core::{DurableEvaluationResult, TransitionKind};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fmt;
 
@@ -80,6 +81,15 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
         Ok(config) => config,
         Err(error) => return EvaluationOutcome::EvaluationError(error.to_string()),
     };
+    if let Some(act) = request.driver_act.as_ref() {
+        if let Err(diagnostic) = validate_driver_act(request, &config, act) {
+            return EvaluationOutcome::Response(deny_response(
+                "software-change-driver-act-invalid",
+                "driver act is not applicable to the frozen accepted documents",
+                Some(json!({"diagnostic":diagnostic})),
+            ));
+        }
+    }
 
     // Check-free edges are listed for complete compatibility but the provider
     // is not normally invoked for them. The v3 implementation handoff is a
@@ -428,7 +438,115 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
         }
     }
 
+    if subject == workflow::RECONCILIATION_SUBJECT
+        && request.transition.event.as_str() == workflow::RECONCILIATION_READY_EVENT
+    {
+        let document = document.expect("reconciliation-ready reads its decision artifact");
+        let bytes = match std::fs::read(document.path()) {
+            Ok(bytes) => bytes,
+            Err(error) => return EvaluationOutcome::EvaluationError(error.to_string()),
+        };
+        let revision = document.value()["revision"].as_str().unwrap_or_default();
+        let mut document_revisions = serde_json::Map::new();
+        for name in ["intent.json", "design.json", "plan.json"] {
+            let current = match read_artifact(config.artifact_root(), name) {
+                ArtifactReadOutcome::Present(current) => current,
+                ArtifactReadOutcome::Deny(deny) => {
+                    return EvaluationOutcome::Response(schema_deny_for_read(request, deny))
+                }
+                ArtifactReadOutcome::EvaluationError(error) => {
+                    return EvaluationOutcome::EvaluationError(error.to_string())
+                }
+            };
+            let Some(current_revision) = current.value().get("revision").and_then(Value::as_str)
+            else {
+                return EvaluationOutcome::EvaluationError(format!(
+                    "{name} has no revision identity"
+                ));
+            };
+            document_revisions.insert(
+                name.trim_end_matches(".json").to_owned(),
+                json!(current_revision),
+            );
+        }
+        return EvaluationOutcome::Response(json!({
+            "result":"allow",
+            "context_append":{
+                "kind":workflow::RECONCILIATION_DECISION_KIND,
+                "data":{
+                    "revision":revision,
+                    "sha256":format!("sha256:{:x}", Sha256::digest(bytes)),
+                    "documents":document_revisions
+                }
+            }
+        }));
+    }
     EvaluationOutcome::Response(allow_response())
+}
+
+fn validate_driver_act(
+    request: &EvaluateRequest,
+    config: &crate::config::ValidatedConfig,
+    act: &loop_core::DriverActEvidence,
+) -> Result<(), String> {
+    let slot = request
+        .workflow
+        .work_slots
+        .iter()
+        .find(|slot| {
+            slot.id == act.slot_id
+                && slot.state == request.transition.source
+                && slot.event == request.transition.event
+        })
+        .ok_or("driver act does not match this transition's work slot")?;
+    if !slot.driver_act_allowed || request.transition.kind != TransitionKind::Checked {
+        return Err("driver acts are not enabled on this checked slot".to_owned());
+    }
+    let changed = &act.request.changed_artifacts;
+    if changed.is_empty()
+        || changed.iter().any(|path| {
+            matches!(
+                path.as_str(),
+                "intent.json" | "design.json" | "plan.json" | "README.md" | "AGENTS.md"
+            ) || path.ends_with("/PRD.md")
+                || path.ends_with("/prd.md")
+                || path.ends_with("/README.md")
+                || path.ends_with("/AGENTS.md")
+        })
+    {
+        return Err("changed_artifacts must name narrow non-normative files and cannot change intent/design/plan or PRD requirements".to_owned());
+    }
+    let root = config
+        .artifact_root()
+        .ok_or("artifact_root is required to verify unchanged accepted documents")?;
+    for (name, expected) in [
+        (
+            "intent.json",
+            &act.request.unchanged_documents.intent_revision,
+        ),
+        (
+            "design.json",
+            &act.request.unchanged_documents.design_revision,
+        ),
+        ("plan.json", &act.request.unchanged_documents.plan_revision),
+    ] {
+        let document = match read_artifact(Some(root), name) {
+            ArtifactReadOutcome::Present(document) => document,
+            ArtifactReadOutcome::Deny(deny) => return Err(deny.message()),
+            ArtifactReadOutcome::EvaluationError(error) => return Err(error.to_string()),
+        };
+        let current = document
+            .value()
+            .get("revision")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("{name} has no revision identity"))?;
+        if current != expected {
+            return Err(format!(
+                "{name} revision changed: driver declared `{expected}`, current is `{current}`"
+            ));
+        }
+    }
+    Ok(())
 }
 
 enum CriterionResolutionError {
@@ -1126,7 +1244,170 @@ mod tests {
             context: Vec::new(),
             transition: edge,
             prior_evaluations: Vec::new(),
+            driver_act: None,
         }
+    }
+
+    #[test]
+    fn driver_act_requires_unchanged_documents_and_never_opts_in_review() {
+        let root = std::env::temp_dir().join(format!(
+            "software-change-driver-act-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        for (name, revision) in [
+            ("intent.json", "intent-r1"),
+            ("design.json", "design-r1"),
+            ("plan.json", "plan-r1"),
+        ] {
+            std::fs::write(root.join(name), json!({"revision":revision}).to_string()).unwrap();
+        }
+        let mut initial: Value =
+            serde_json::from_str(include_str!("../data/configs/minimal.json")).unwrap();
+        initial["artifact_root"] = json!(root);
+        initial["driver_act_slots"] = json!(["implement"]);
+        let workflow = workflow::describe_workflow(Some(&initial)).unwrap();
+        let act_request = loop_core::DriverActRequest {
+            author: loop_core::DriverActAuthor {
+                name: "driver".into(),
+                kind: "agent".into(),
+            },
+            reason: "narrow correction".into(),
+            changed_artifacts: vec!["src/fix.rs".into()],
+            unchanged_documents: loop_core::DriverActDocuments {
+                intent_revision: "intent-r1".into(),
+                design_revision: "design-r1".into(),
+                plan_revision: "plan-r1".into(),
+            },
+        };
+        let act = loop_core::DriverActEvidence {
+            request: act_request,
+            slot_id: "implement".into(),
+            state_visit: 7,
+            current_subject: "visit-7".into(),
+            instruction_digest: "sha256:instruction".into(),
+            binding_sha256: "sha256:binding".into(),
+        };
+        let implementation_ready = workflow
+            .transitions
+            .iter()
+            .find(|edge| {
+                edge.source.as_str() == "implement" && edge.event.as_str() == "implementation-ready"
+            })
+            .unwrap()
+            .clone();
+        let mut evaluate_request = EvaluateRequest {
+            operation: "evaluate".into(),
+            workflow: workflow.clone(),
+            initial_input: initial.clone(),
+            context: Vec::new(),
+            transition: implementation_ready,
+            prior_evaluations: Vec::new(),
+            driver_act: Some(act.clone()),
+        };
+        assert!(
+            matches!(evaluate(&evaluate_request), EvaluationOutcome::Response(ref response) if response["result"]=="allow")
+        );
+
+        std::fs::write(
+            root.join("intent.json"),
+            json!({"revision":"intent-r2"}).to_string(),
+        )
+        .unwrap();
+        assert!(
+            matches!(evaluate(&evaluate_request), EvaluationOutcome::Response(ref response)
+            if response["result"]=="deny" && response["feedback"]["code"]=="software-change-driver-act-invalid")
+        );
+        std::fs::write(
+            root.join("intent.json"),
+            json!({"revision":"intent-r1"}).to_string(),
+        )
+        .unwrap();
+
+        let review_edge = workflow
+            .transitions
+            .iter()
+            .find(|edge| {
+                edge.source.as_str() == "implementation-review" && edge.event.as_str() == "approved"
+            })
+            .unwrap()
+            .clone();
+        evaluate_request.transition = review_edge;
+        evaluate_request.driver_act.as_mut().unwrap().slot_id = "implementation-review".into();
+        assert!(
+            matches!(evaluate(&evaluate_request), EvaluationOutcome::Response(ref response)
+            if response["result"]=="deny" && response["feedback"]["code"]=="software-change-driver-act-invalid")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reconciliation_ready_records_exact_decision_and_document_revisions() {
+        let root = std::env::temp_dir().join(format!(
+            "software-change-reconciliation-context-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        for (name, revision) in [
+            ("intent.json", "intent-r1"),
+            ("design.json", "design-r1"),
+            ("plan.json", "plan-r1"),
+        ] {
+            std::fs::write(root.join(name), json!({"revision":revision}).to_string()).unwrap();
+        }
+        let decision = json!({
+            "revision":"reconciliation-r1","author":{"name":"driver","kind":"agent"},
+            "mode":"bookends-disabled","branch":"sufficient-existing-wording",
+            "document_observations":[{"path":"docs/PRD.md","status":"sufficient","observation":"No enduring wording change."}],
+            "behavior_observations":[{"status":"matches-intent","observation":"Fixture behavior is current."}],
+            "action":"no-document-change","action_reason":"Existing wording is sufficient.",
+            "authorization":"not-required","application":"not-required","commit":"not-required",
+            "traceability":{"status":"not-applicable","references":[]},
+            "proof_references":["scripted-fixture"],"blockers":[],"decision":"complete"
+        });
+        std::fs::write(
+            root.join("reconciliation.json"),
+            serde_json::to_vec(&decision).unwrap(),
+        )
+        .unwrap();
+        let mut initial: Value =
+            serde_json::from_str(include_str!("../data/configs/minimal.json")).unwrap();
+        initial["artifact_root"] = json!(root);
+        let workflow = workflow::describe_workflow(Some(&initial)).unwrap();
+        let edge = workflow
+            .transitions
+            .iter()
+            .find(|edge| {
+                edge.source.as_str() == workflow::RECONCILIATION_STATE
+                    && edge.event.as_str() == workflow::RECONCILIATION_READY_EVENT
+            })
+            .unwrap()
+            .clone();
+        let mut request = request(workflow, edge);
+        request.initial_input = initial;
+        let EvaluationOutcome::Response(response) = evaluate(&request) else {
+            panic!("reconciliation evaluation failed")
+        };
+        assert_eq!(response["result"], "allow");
+        let data = &response["context_append"]["data"];
+        assert_eq!(
+            response["context_append"]["kind"],
+            workflow::RECONCILIATION_DECISION_KIND
+        );
+        assert_eq!(data["revision"], "reconciliation-r1");
+        assert_eq!(data["documents"]["intent"], "intent-r1");
+        assert_eq!(data["documents"]["design"], "design-r1");
+        assert_eq!(data["documents"]["plan"], "plan-r1");
+        assert!(data["sha256"].as_str().unwrap().starts_with("sha256:"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

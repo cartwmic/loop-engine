@@ -80,6 +80,51 @@ def framed_digest(records: list[tuple[str, bytes]]) -> str:
     return hashlib.sha256(stream).hexdigest()
 
 
+def reviewer_display_label(
+    records: list[tuple[str, bytes]], index: int, subject: str, template: str
+) -> str:
+    """Recompute neutral packet framing without exposing canonical labels."""
+    label = records[index][0]
+    fixed_labels = {
+        "system-developer-instruction:data/calibration/reviewer-instruction.txt": "reviewer instruction",
+        "example_prompt": "selected review prompt",
+        "reviewer-protocol:data/reviewer-protocol.md": "review protocol",
+        "request-json": "canonical request JSON",
+    }
+    if label in fixed_labels:
+        return fixed_labels[label]
+    if label.startswith("template:"):
+        return f"artifact template: {template}"
+    if label.startswith("schema:"):
+        return f"artifact schema: {subject}"
+    if label.startswith("subject:"):
+        return f"subject artifact: {subject}"
+    predecessor_labels = {
+        "required predecessor:data/calibration/fixtures/intent-good.json": "required predecessor: intent",
+        "required predecessor:data/calibration/fixtures/design-good.json": "required predecessor: design",
+        "required predecessor:data/calibration/fixtures/plan-good.json": "required predecessor: plan",
+        "required predecessor:data/calibration/fixtures/implementation-report-good.json": "required predecessor: implementation report",
+    }
+    if label in predecessor_labels:
+        return predecessor_labels[label]
+    companion_labels = {
+        "companion:validation-evidence.json": "validation evidence companion",
+        "companion:fictional-repo/implementation-evidence/repository-state.txt": "implementation evidence companion",
+        "companion:fictional-repo/docs/requirement-coverage.md": "requirement coverage companion",
+    }
+    if label in companion_labels:
+        return companion_labels[label]
+    if label.startswith("companion:fictional-repo/"):
+        ordinal = sum(
+            1
+            for prior, _content in records[:index]
+            if prior.startswith("companion:fictional-repo/")
+            and prior not in companion_labels
+        ) + 1
+        return f"supporting document {ordinal}"
+    fail(f"unsupported source record label for reviewer display: {label}")
+
+
 def contained(root: Path, path: Path, description: str) -> Path:
     resolved = path.resolve()
     if resolved != root and root not in resolved.parents:
@@ -103,7 +148,7 @@ def expected_specs(args: argparse.Namespace) -> list[dict[str, str]]:
     specs = [parse_row_key(value) for value in args.row_key]
     for case in args.coverage_case:
         for gate in COVERAGE_GATES:
-            config = "high-rigor-11"
+            config = "high-rigor-12"
             fixture = f"requirement-coverage-{case}"
             specs.append(
                 {
@@ -216,8 +261,13 @@ def verify_preparation(root: Path, case_dir: Path, metadata: dict[str, Any], spe
     if hashlib.sha256(instructions).hexdigest() != metadata["instructions_sha256"]:
         fail(f"instructions_sha256 mismatch: {case_dir}")
     expected_instructions = bytearray()
-    for label, content in records:
-        expected_instructions.extend(b"=== source-record: " + label.encode("utf-8") + b" ===\n")
+    for index, (_label, content) in enumerate(records):
+        display_label = reviewer_display_label(
+            records, index, str(metadata["subject"]), str(metadata["template"])
+        )
+        expected_instructions.extend(
+            b"=== supplied material: " + display_label.encode("utf-8") + b" ===\n"
+        )
         expected_instructions.extend(content)
         if not content.endswith(b"\n"):
             expected_instructions.extend(b"\n")

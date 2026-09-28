@@ -748,3 +748,253 @@ fn backlog_t03_completion_receipt_does_not_promote_uncommitted_catalog_row() {
         "uncommitted completion created semantic history"
     );
 }
+
+#[cfg(unix)]
+mod terminal_explorer_regression {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::process::Child;
+
+    struct ChildGuard(Child);
+
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            if self.0.try_wait().ok().flatten().is_none() {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+    }
+
+    fn await_text(master: &mut fs::File, output: &mut Vec<u8>, start: usize, marker: &str) {
+        let marker = marker.as_bytes();
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while !output[start.min(output.len())..]
+            .windows(marker.len())
+            .any(|window| window == marker)
+        {
+            assert!(
+                Instant::now() < deadline,
+                "PTY did not render {:?}: {:?}",
+                String::from_utf8_lossy(marker),
+                String::from_utf8_lossy(output)
+            );
+            let mut bytes = [0u8; 8192];
+            match master.read(&mut bytes) {
+                Ok(count) if count > 0 => output.extend_from_slice(&bytes[..count]),
+                Ok(_) => thread::sleep(Duration::from_millis(10)),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(error) => panic!("PTY read failed: {error}"),
+            }
+        }
+    }
+
+    fn key(master: &mut fs::File, output: &mut Vec<u8>, bytes: &[u8], marker: &str) {
+        let start = output.len();
+        master.write_all(bytes).expect("write PTY key");
+        await_text(master, output, start, marker);
+    }
+
+    fn resize(master: &fs::File, rows: u16, columns: u16) {
+        let size = libc::winsize {
+            ws_row: rows,
+            ws_col: columns,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        // SAFETY: ioctl receives the valid PTY master and an initialized size.
+        assert_eq!(
+            unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &size) },
+            0
+        );
+    }
+
+    fn marker(key: &str) -> String {
+        if let Some(rest) = key.strip_prefix("assignment:") {
+            let (slot, assignment) = rest.split_once(':').expect("slot and assignment IDs");
+            format!("selected_assignment_id={assignment} slot={slot}")
+        } else {
+            format!("selected={key}")
+        }
+    }
+
+    #[test]
+    fn public_explorer_keeps_current_and_assignment_selection_through_reflow_read_only() {
+        let root = tempfile::tempdir().expect("terminal explorer fixture");
+        let database = root.path().join("loop.sqlite");
+        let engine = workspace_integration::binary_string("loop-engine");
+        let binding = loop_core::WorkSlotBinding::new(
+            &engine,
+            vec![
+                "fan-out".to_owned(),
+                "--worker".to_owned(),
+                json!({
+                    "command":"/bin/true","args":[],"title":"Configured task","role":"implementer"
+                })
+                .to_string(),
+            ],
+        );
+        let workflow = Workflow::new(
+            "terminal-explorer-test",
+            "current",
+            vec![
+                State::new("graph-head", "Graph head", "Not current", false),
+                State::new("current", "Current", "Observe only", false),
+                State::new("done", "Done", "Finished", true),
+            ],
+            vec![Transition::checked("current", "advance", "done")],
+        )
+        .with_work_slots(vec![WorkSlot::new("tasks", "current", "advance")]);
+        let initial_input = json!({"work_slot_bindings":{"tasks":binding}});
+        let persistence = SqlitePersistence::open(&database).expect("open fixture database");
+        persistence
+            .create_run(CreateRunRequest::new(
+                "terminal-explorer-run",
+                None,
+                workflow,
+                ProviderAssociation::new(json!({"command":"fixture-provider","args":[]})),
+                initial_input,
+                "current",
+                Lifecycle::Active,
+                loop_core::Timestamp::from_unix_millis(1),
+                "fixture",
+                Some(root.path().join("artifacts").to_string_lossy().into_owned()),
+            ))
+            .expect("seed run");
+        let run_id: loop_core::RunId = "terminal-explorer-run".into();
+        let before = persistence
+            .load_authoritative_run(&run_id)
+            .expect("read seeded run");
+        let history_before = persistence.load_history(&run_id).expect("read history");
+        let invocations_before = persistence
+            .load_work_slot_invocations(&run_id)
+            .expect("read invocations");
+        assert!(invocations_before.is_empty());
+
+        let mut size = libc::winsize {
+            ws_row: 34,
+            ws_col: 62,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        let (mut master_fd, mut slave_fd) = (-1, -1);
+        // SAFETY: openpty initializes its descriptors and terminal dimensions.
+        assert_eq!(
+            unsafe {
+                libc::openpty(
+                    &mut master_fd,
+                    &mut slave_fd,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    &mut size,
+                )
+            },
+            0
+        );
+        // SAFETY: openpty returned owned descriptors.
+        let mut master = unsafe { fs::File::from_raw_fd(master_fd) };
+        // SAFETY: openpty returned an owned slave descriptor.
+        let slave = unsafe { fs::File::from_raw_fd(slave_fd) };
+        let stdin = slave.try_clone().expect("clone stdin");
+        let stdout = slave.try_clone().expect("clone stdout");
+        let mut command = Command::new(&engine);
+        command
+            .arg("--database")
+            .arg(&database)
+            .arg("explore")
+            .arg("terminal-explorer-run")
+            .stdin(Stdio::from(stdin))
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(slave));
+        let mut child = ChildGuard(command.spawn().expect("spawn public explorer"));
+        // SAFETY: set O_NONBLOCK on the owned PTY master.
+        let flags = unsafe { libc::fcntl(master.as_raw_fd(), libc::F_GETFL) };
+        assert_ne!(flags, -1);
+        assert_eq!(
+            unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) },
+            0
+        );
+
+        let mut output = Vec::new();
+        await_text(&mut master, &mut output, 0, "terminal-size=34x62");
+        await_text(&mut master, &mut output, 0, "selected=state:current");
+        assert!(String::from_utf8_lossy(&output).contains("state:graph-head"));
+        key(
+            &mut master,
+            &mut output,
+            b"j",
+            "selected_assignment_id=worker-0 slot=tasks",
+        );
+        for (rows, columns) in [(27, 114), (34, 62)] {
+            let start = output.len();
+            resize(&master, rows, columns);
+            await_text(
+                &mut master,
+                &mut output,
+                start,
+                &format!("terminal-size={rows}x{columns}"),
+            );
+            assert!(String::from_utf8_lossy(&output[start..])
+                .contains("selected_assignment_id=worker-0 slot=tasks"));
+        }
+        key(&mut master, &mut output, b"]", "detail-offset=3");
+        key(&mut master, &mut output, b"[", "detail-offset=0");
+
+        let items = [
+            "state:graph-head",
+            "state:current",
+            "assignment:tasks:worker-0",
+            "state:done",
+        ];
+        key(&mut master, &mut output, b"g", &marker(items[0]));
+        for (index, item) in items.iter().enumerate().skip(1) {
+            let navigation = if index % 2 == 0 {
+                b"j".as_slice()
+            } else {
+                b"\x1b[B".as_slice()
+            };
+            key(&mut master, &mut output, navigation, &marker(item));
+        }
+        key(&mut master, &mut output, b"G", &marker(items[3]));
+        master.write_all(b"aei\r").expect("send inert keys");
+        master.write_all(b"q").expect("quit explorer");
+        let deadline = Instant::now() + Duration::from_secs(4);
+        loop {
+            if let Some(status) = child.0.try_wait().expect("poll explorer") {
+                assert!(status.success(), "explorer exited unsuccessfully: {status}");
+                break;
+            }
+            assert!(Instant::now() < deadline, "explorer did not exit on q");
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        let after = persistence
+            .load_authoritative_run(&run_id)
+            .expect("read run after explorer");
+        assert_eq!(after.current_state, before.current_state);
+        assert_eq!(after.control_revision, before.control_revision);
+        assert_eq!(
+            persistence.load_history(&run_id).expect("history after"),
+            history_before
+        );
+        assert_eq!(
+            persistence
+                .load_work_slot_invocations(&run_id)
+                .expect("invocations after"),
+            invocations_before
+        );
+        let transcript = String::from_utf8_lossy(&output);
+        for item in items {
+            assert!(
+                transcript.contains(&marker(item)),
+                "unreachable {item}: {transcript}"
+            );
+        }
+        assert!(transcript.contains("visited does not mean passed"));
+        assert!(!transcript.contains("acceptance: passed"));
+    }
+}

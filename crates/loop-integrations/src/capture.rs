@@ -71,6 +71,11 @@ fn immutable(path: &Path, value: &Value) -> io::Result<()> {
     f.write_all(b"\n")?;
     f.sync_all()
 }
+fn immutable_bytes(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}
 fn atomic(path: &Path, value: &Value) -> io::Result<()> {
     let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
     let mut f = File::create(&tmp)?;
@@ -375,6 +380,7 @@ fn pump(
     mut input: impl Read + std::os::fd::AsRawFd + Send + 'static,
     path: PathBuf,
     stderr: bool,
+    forward: bool,
     stop: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
 ) -> thread::JoinHandle<io::Result<()>> {
@@ -409,14 +415,16 @@ fn pump(
                 }
                 file.write_all(&bytes[..n])?;
                 file.flush()?;
-                if stderr {
-                    let mut out = io::stderr().lock();
-                    out.write_all(&bytes[..n])?;
-                    out.flush()?;
-                } else {
-                    let mut out = io::stdout().lock();
-                    out.write_all(&bytes[..n])?;
-                    out.flush()?;
+                if forward {
+                    if stderr {
+                        let mut out = io::stderr().lock();
+                        out.write_all(&bytes[..n])?;
+                        out.flush()?;
+                    } else {
+                        let mut out = io::stdout().lock();
+                        out.write_all(&bytes[..n])?;
+                        out.flush()?;
+                    }
                 }
             }
         })();
@@ -433,6 +441,19 @@ pub fn execute_row(row: &Row, cwd: &Path, attempt: &Path, root: &Path) -> io::Re
     execute_row_with_forwarding(row, cwd, attempt, root, false)
 }
 
+/// Run one captured command with exact caller bytes on stdin. Unlike the
+/// repository-evidence capture commands, this provider-neutral path does not
+/// require the caller's working directory to be a Git checkout.
+pub fn execute_row_with_stdin(
+    row: &Row,
+    cwd: &Path,
+    attempt: &Path,
+    root: &Path,
+    stdin: &[u8],
+) -> io::Result<Value> {
+    execute_row_with_options(row, cwd, attempt, root, false, false, Some(stdin), false)
+}
+
 fn execute_row_with_forwarding(
     row: &Row,
     cwd: &Path,
@@ -440,8 +461,23 @@ fn execute_row_with_forwarding(
     root: &Path,
     stdout_to_stderr: bool,
 ) -> io::Result<Value> {
+    execute_row_with_options(row, cwd, attempt, root, stdout_to_stderr, true, None, true)
+}
+
+fn execute_row_with_options(
+    row: &Row,
+    cwd: &Path,
+    attempt: &Path,
+    root: &Path,
+    stdout_to_stderr: bool,
+    forward_streams: bool,
+    stdin: Option<&[u8]>,
+    record_repository: bool,
+) -> io::Result<Value> {
     fs::create_dir(attempt)?;
-    let before = repository_proof_identity(cwd)?;
+    let before = record_repository
+        .then(|| repository_proof_identity(cwd))
+        .transpose()?;
     let executable = resolve(row, cwd);
     let token = format!(
         "{}-{}",
@@ -452,6 +488,19 @@ fn execute_row_with_forwarding(
             .as_nanos()
     );
     let mut receipt = json!({"id":row.id,"argv":row.argv,"resolved_executable":executable,"cwd":cwd,"settings":settings(row),"obligations":row.obligations,"repository_before":before,"started_at":now()});
+    if let Some(stdin) = stdin {
+        immutable_bytes(&attempt.join("stdin"), stdin)?;
+        receipt.as_object_mut().unwrap().extend(
+            json!({
+                "stdin": "stdin",
+                "stdin_bytes": stdin.len(),
+                "stdin_sha256": hash(stdin),
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+    }
     immutable(&attempt.join("started.json"), &receipt)?;
     File::create(attempt.join("stdout"))?.sync_all()?;
     File::create(attempt.join("stderr"))?.sync_all()?;
@@ -467,7 +516,11 @@ fn execute_row_with_forwarding(
         .current_dir(cwd)
         .envs(&row.environment)
         .env("LOOP_CAPTURE_OWNER", &token)
-        .stdin(Stdio::null())
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0);
@@ -484,6 +537,7 @@ fn execute_row_with_forwarding(
     let mut aborted = interrupted_before_spawn;
     let mut cleanup = "complete";
     let mut capture_error = None;
+    let mut stdin_error = None;
     let (status, spawn_error) = match child {
         Err(e) => (None, Some(e.to_string())),
         Ok(mut child) => {
@@ -492,12 +546,18 @@ fn execute_row_with_forwarding(
                 &root.join("state.json"),
                 &json!({"status":"running","attempt":attempt,"owner_token":token,"root_pid":pid,"cleanup":"pending"}),
             )?;
+            let stdin_writer = stdin.map(|bytes| {
+                let mut pipe = child.stdin.take().expect("piped stdin was requested");
+                let bytes = bytes.to_vec();
+                thread::spawn(move || pipe.write_all(&bytes))
+            });
             let stop_streams = Arc::new(AtomicBool::new(false));
             let stream_failure = Arc::new(AtomicBool::new(false));
             let stdout = pump(
                 child.stdout.take().unwrap(),
                 attempt.join("stdout"),
                 stdout_to_stderr,
+                forward_streams,
                 stop_streams.clone(),
                 stream_failure.clone(),
             );
@@ -505,6 +565,7 @@ fn execute_row_with_forwarding(
                 child.stderr.take().unwrap(),
                 attempt.join("stderr"),
                 true,
+                forward_streams,
                 stop_streams.clone(),
                 stream_failure.clone(),
             );
@@ -581,12 +642,27 @@ fn execute_row_with_forwarding(
                     capture_error.get_or_insert_with(|| e.to_string());
                 }
             }
+            if let Some(writer) = stdin_writer {
+                match writer.join() {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => stdin_error = Some(e.to_string()),
+                    Err(_) => stdin_error = Some("stdin capture thread panicked".to_owned()),
+                }
+            }
             (result, None)
         }
     };
-    let after = repository_proof_identity(cwd)?;
+    let after = record_repository
+        .then(|| repository_proof_identity(cwd))
+        .transpose()?;
     let object = receipt.as_object_mut().unwrap();
     object.extend(json!({"repository_after":after,"finished_at":now(),"wall_seconds":started.elapsed().as_secs_f64(),"exit_code":status.and_then(|s|s.code()),"signal":status.and_then(|s|s.signal()),"timed_out":timed_out,"aborted":aborted,"spawn_error":spawn_error,"capture_error":capture_error,"cleanup":cleanup,"stdout":"stdout","stderr":"stderr","stdout_sha256":hash(&fs::read(attempt.join("stdout"))?),"stderr_sha256":hash(&fs::read(attempt.join("stderr"))?)}).as_object().unwrap().clone());
+    if stdin.is_some() {
+        object.insert(
+            "stdin_error".to_owned(),
+            serde_json::to_value(stdin_error).unwrap(),
+        );
+    }
     immutable(&attempt.join("receipt.json"), &receipt)?;
     Ok(receipt)
 }

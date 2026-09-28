@@ -47,6 +47,9 @@ const TOP_LEVEL_KEYS: &[&str] = &[
     "config_version",
     "artifact_root",
     "work_slot_bindings",
+    "driver_act_slots",
+    "advice_command",
+    "advice_departures",
     "review_policies",
     "artifact_schemas",
     "revision_links",
@@ -1393,6 +1396,17 @@ mod tests {
         assert!(parsed.work_slot_bindings().is_none());
         assert!(parsed.schemas_by_subject().is_empty());
         assert!(parsed.axes_by_gate().is_empty());
+    }
+
+    #[test]
+    fn advice_command_and_departures_are_reserved_unread() {
+        let mut config = empty_config();
+        config["advice_command"] = json!({
+            "command":"/bin/true","args":[],"timeout_ms":100,
+            "max_request_bytes":1024,"max_response_bytes":1024
+        });
+        config["advice_departures"] = json!({"version":1,"occasions":[]});
+        assert!(parse_initial_input(&config).is_ok());
     }
 
     #[test]

@@ -33,24 +33,16 @@
       }
     ]
   },
-  "problem": "A trusted operator needs one status decision for a started local job, but the draft treats every possible status label as a separate deliverable.",
+  "problem": "A trusted operator cannot tell the current status of a started local job from the available captured worker evidence.",
   "outcome": "The public status view reports the result of the started local job.",
   "acceptance": [
     {
       "id": "AC-1",
-      "statement": "The public status view reports that a started job is running."
+      "statement": "The public status view reports the started job's status as"
     },
     {
       "id": "AC-2",
-      "statement": "The public status view reports that a started job succeeded."
-    },
-    {
-      "id": "AC-3",
-      "statement": "The public status view reports that a started job failed."
-    },
-    {
-      "id": "AC-4",
-      "statement": "The public status view reports that a started job is unknown when evidence is missing."
+      "statement": "running, succeeded, failed, or unknown."
     }
   ],
   "constraints": [

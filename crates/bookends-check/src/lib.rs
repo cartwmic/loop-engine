@@ -10,6 +10,7 @@ mod continuity;
 mod eligibility;
 mod git;
 mod prd;
+mod preview;
 mod publication;
 
 use std::io;
@@ -17,6 +18,7 @@ use std::path::Path;
 
 pub use check::check_repo;
 pub use prd::{candidate_ids, validate_candidate};
+pub use preview::{preview_repo, BookendsPreview};
 pub use publication::{
     check_publication, parse_ref_updates, PublicationOptions, PublicationRange, PublicationReport,
     RefUpdate, DEFAULT_MAX_COMMITS,
