@@ -6296,14 +6296,24 @@ class Journey:
             row = by_name[job_name]
             stdout = Path(row["stdout"]).read_text(encoding="utf-8", errors="replace")
             marker = f"dogfood public scenario passed: {name}; assertions retained:"
-            if marker not in stdout:
+            markers = [line[len(marker):].strip() for line in stdout.splitlines() if line.startswith(marker)]
+            if len(markers) != 1:
                 raise JourneyFailure(
-                    f"public dogfood scenario {name} omitted its assertion marker; inspect {report_path}",
+                    f"public dogfood scenario {name} needs exactly one assertion marker; inspect {report_path}",
                     state="end",
                     event="dogfood-inventory",
                 )
             case_root = self.run_dir / "dogfood-inventory" / name
-            result_path = case_root / "dogfood-case-result.json"
+            # Multi-part scenarios retain their final assertion in a fresh
+            # nested run. Follow the emitted locator, not an assumed root.
+            emitted_capture = Path(markers[0]).resolve()
+            if not emitted_capture.is_relative_to(case_root.resolve()):
+                raise JourneyFailure(
+                    f"public dogfood scenario {name} assertion locator escaped its case root",
+                    state="end",
+                    event="dogfood-inventory",
+                )
+            result_path = emitted_capture.parent / "dogfood-case-result.json"
             try:
                 case_result = json.loads(result_path.read_text(encoding="utf-8"))
                 capture_path = Path(case_result["assertion_capture"])
@@ -6321,6 +6331,7 @@ class Journey:
                 or case_result.get("assertion_capture_sha256") != digest
                 or case_result.get("assertion_capture_bytes") != len(capture_bytes)
                 or capture_path.name != CAPTURE_FILES[name]
+                or capture_path.resolve() != emitted_capture
             ):
                 raise JourneyFailure(
                     f"public dogfood scenario {name} assertion capture identity did not verify",
