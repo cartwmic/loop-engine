@@ -15,9 +15,9 @@ mod ports;
 mod workflow;
 
 pub use advice::{
-    parse_json_rejecting_duplicate_keys, AdviceAnswer, AdviceCommandConfig, AdviceQuestion,
-    AdviceRequest, AdviceResponse, AdviceScoreLevel, ADVICE_CAPTURE_KIND, ADVICE_COMMAND_INPUT_KEY,
-    ADVICE_PROTOCOL_VERSION,
+    parse_json_rejecting_duplicate_keys, AdviceAdmissibility, AdviceAnswer, AdviceCommandConfig,
+    AdviceQuestion, AdviceRequest, AdviceResponse, AdviceScoreLevel, ADVICE_CAPTURE_KIND,
+    ADVICE_COMMAND_INPUT_KEY, ADVICE_PROTOCOL_VERSION,
 };
 pub(crate) use advice_transition::{unanswered_due_occasions, validate_advice_exception};
 pub use advice_transition::{

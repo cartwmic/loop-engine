@@ -44,12 +44,34 @@ impl AdviceCommandConfig {
     }
 }
 
+/// Explicit caller assessment, not an engine judgment of semantic sufficiency.
+/// All questions in a batch must meet both conditions before any backend runs.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdviceAdmissibility {
+    pub bounded_judgment: bool,
+    pub evidence_sufficient: bool,
+}
+
+impl AdviceAdmissibility {
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.bounded_judgment {
+            return Err("advice requires bounded judgments, not investigation, planning or multi-step reasoning; keep that work with the driver".to_owned());
+        }
+        if !self.evidence_sufficient {
+            return Err("advice requires sufficient supplied evidence; obtain missing facts before calling an advisor".to_owned());
+        }
+        Ok(())
+    }
+}
+
 /// Closed caller-supplied advice request. `state` and `target` are structured
 /// JSON objects; the engine does not derive either from run state or show.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AdviceRequest {
     pub version: u32,
+    pub admissibility: AdviceAdmissibility,
     pub state: Value,
     pub target: Value,
     pub occasion: String,
@@ -71,6 +93,7 @@ impl AdviceRequest {
                 "advice request version must be {ADVICE_PROTOCOL_VERSION}"
             ));
         }
+        self.admissibility.validate()?;
         if !self.state.is_object() || !self.target.is_object() {
             return Err("advice state and target must be JSON objects".to_owned());
         }
@@ -503,6 +526,7 @@ mod tests {
     fn request() -> AdviceRequest {
         serde_json::from_value(json!({
             "version": 1,
+            "admissibility": {"bounded_judgment":true,"evidence_sufficient":true},
             "state": {"fact": "present"},
             "target": {"revision": "r1"},
             "occasion": "test",
@@ -515,6 +539,19 @@ mod tests {
                 "noul": {"type":"noul", "instructions":"Is it true?", "proposition":"fact is true"}
             }
         })).unwrap()
+    }
+
+    #[test]
+    fn refuses_missing_or_negative_admissibility_before_advice() {
+        let original = serde_json::to_value(request()).unwrap();
+        let mut missing = original.clone();
+        missing.as_object_mut().unwrap().remove("admissibility");
+        assert!(AdviceRequest::parse(&serde_json::to_vec(&missing).unwrap()).is_err());
+        for field in ["bounded_judgment", "evidence_sufficient"] {
+            let mut value = original.clone();
+            value["admissibility"][field] = json!(false);
+            assert!(AdviceRequest::parse(&serde_json::to_vec(&value).unwrap()).is_err());
+        }
     }
 
     fn response() -> AdviceResponse {

@@ -3,7 +3,9 @@
 //! This module only prepares requests from an explicit full-show selection. It
 //! neither launches the configured advisor nor decides or records its answers.
 
-use loop_core::{AdviceQuestion, AdviceRequest, AdviceScoreLevel, ADVICE_COMMAND_INPUT_KEY};
+use loop_core::{
+    AdviceAdmissibility, AdviceQuestion, AdviceRequest, AdviceScoreLevel, ADVICE_COMMAND_INPUT_KEY,
+};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -33,6 +35,9 @@ struct SelectedDocument {
 struct PreparationPacket {
     show: Value,
     occasion_id: String,
+    admissibility: AdviceAdmissibility,
+    /// Driver-supplied atomic claims with caller-chosen stable question IDs.
+    judgments: BTreeMap<String, String>,
     source_context_ids: Vec<String>,
     #[serde(default)]
     source_invocation_ids: Vec<String>,
@@ -60,6 +65,15 @@ pub fn prepare_from_stdin() -> Result<Value, String> {
 }
 
 fn prepare(packet: PreparationPacket) -> Result<Value, String> {
+    packet.admissibility.validate()?;
+    if packet.judgments.is_empty()
+        || packet
+            .judgments
+            .iter()
+            .any(|(id, claim)| id.trim().is_empty() || claim.trim().is_empty())
+    {
+        return Err("advice-request requires explicit nonempty bounded judgments from the driver; broad occasion questions are not advisor assignments".to_owned());
+    }
     if packet.occasion_id.trim().is_empty() {
         return Err("occasion_id must be non-empty".to_owned());
     }
@@ -279,10 +293,13 @@ fn prepare(packet: PreparationPacket) -> Result<Value, String> {
         "selected_documents": documents,
         "selected_invocations": invocations,
         "selected_policies": selected_policies,
-        "selected_check_assertions": selected_checks
+        "selected_check_assertions": selected_checks,
+        "agent_judgments": packet.judgments
     });
 
-    let questions = build_questions(
+    // The occasion catalog checks evidence and available topics. Its broad
+    // decision rubrics are not dispatched to a non-reasoning advisor.
+    let _available_topics = build_questions(
         family,
         &sources,
         &artifacts,
@@ -290,8 +307,20 @@ fn prepare(packet: PreparationPacket) -> Result<Value, String> {
         &invocations,
         initial,
     )?;
+    let mut questions = BTreeMap::new();
+    for (id, claim) in &packet.judgments {
+        questions.insert(id.clone(), choice_question(
+            format!("Classify only the supplied evidence's direct support for this driver-supplied bounded claim: {claim}\nDo not investigate, plan, infer missing facts, assess the whole workflow, or perform multi-step reasoning. The driver owns evidence sufficiency and all resulting decisions. If direct support or contradiction is absent, select not-established; do not fill the gap."),
+            &[
+                ("supported", "The supplied evidence directly supports the bounded claim."),
+                ("contradicted", "The supplied evidence directly contradicts the bounded claim."),
+                ("not-established", "The supplied evidence does not directly establish or contradict the bounded claim."),
+            ],
+        ));
+    }
     let request = AdviceRequest {
         version: loop_core::ADVICE_PROTOCOL_VERSION,
+        admissibility: packet.admissibility,
         state,
         target,
         occasion: packet.occasion_id,
@@ -1400,8 +1429,21 @@ mod tests {
             json!([])
         };
         let family_id = format!("{family}:intent-review:approved");
+        let topic = match family {
+            "review-candidates" => "finding.review-fail.support",
+            "accepted-defect" => "defect.F-advice-1.owner",
+            "implementation-correction" => "defect.F-advice-1.route",
+            "execution-or-authority-issue" => "blocker.authority",
+            "evidence-applicability" => "source.driver-observation.same-assertion",
+            "requirements-reconciliation" => "outcome.branch",
+            "review-round-departure" => "gate.intent-review.quiet",
+            "final-completion" => "criterion.AC-1.checks-could-miss",
+            _ => unreachable!(),
+        };
         let packet = json!({
             "show":show,"occasion_id":family_id,
+            "admissibility":{"bounded_judgment":true,"evidence_sufficient":true},
+            "judgments":{topic:"The selected excerpt describes completed work rather than a future plan."},
             "source_context_ids":source_context_ids,"source_invocation_ids":invocation_ids,
             "artifact_names":artifacts,"documents":documents
         });
@@ -1492,31 +1534,37 @@ mod tests {
                 .all(|source| source.get("id").is_some() && source.get("data").is_some()));
             prepared.insert(family, request);
         }
-        let finding_questions = &prepared["review-candidates"].questions;
-        assert!(finding_questions.contains_key("finding.review-fail.support"));
-        assert!(finding_questions.contains_key("finding.review-fail.materiality"));
-        assert!(finding_questions.contains_key("finding.review-fail.scope"));
-        let route = &prepared["implementation-correction"].questions["defect.F-advice-1.route"];
-        assert!(serde_json::to_string(route)
-            .unwrap()
-            .contains("narrow-direct-driver-act"));
-        let branch = &prepared["requirements-reconciliation"].questions["outcome.branch"];
-        let substantive_branches = match branch {
-            AdviceQuestion::Choice { criteria, .. } => criteria
-                .keys()
-                .filter(|key| key.as_str() != "unclear")
-                .cloned()
-                .collect::<BTreeSet<_>>(),
-            _ => panic!("reconciliation must remain a Choice"),
-        };
-        assert_eq!(
-            substantive_branches,
-            BTreeSet::from([
-                "change-specific-proof".to_owned(),
-                "missing-or-changed-enduring-meaning".to_owned(),
-                "sufficient-existing-wording".to_owned(),
-            ])
-        );
+        for request in prepared.values() {
+            assert_eq!(
+                request.questions.len(),
+                1,
+                "no automatic broad question batch"
+            );
+            let (id, question) = request.questions.iter().next().unwrap();
+            assert_eq!(
+                request.state["agent_judgments"][id],
+                "The selected excerpt describes completed work rather than a future plan."
+            );
+            let AdviceQuestion::Choice {
+                instructions,
+                criteria,
+            } = question
+            else {
+                panic!("prepared advice is a bounded support judgment");
+            };
+            assert!(instructions.contains("Do not investigate, plan, infer missing facts"));
+            assert_eq!(
+                criteria.keys().cloned().collect::<BTreeSet<_>>(),
+                BTreeSet::from([
+                    "supported".to_owned(),
+                    "contradicted".to_owned(),
+                    "not-established".to_owned()
+                ])
+            );
+        }
+        assert!(prepared["review-candidates"]
+            .questions
+            .contains_key("finding.review-fail.support"));
         assert!(prepared["evidence-applicability"]
             .questions
             .contains_key("source.driver-observation.same-assertion"));
@@ -1524,10 +1572,8 @@ mod tests {
             .questions
             .contains_key("gate.intent-review.quiet"));
         let final_questions = &prepared["final-completion"].questions;
-        assert!(final_questions.contains_key("criterion.AC-1.fulfillment"));
         assert!(final_questions.contains_key("criterion.AC-1.checks-could-miss"));
-        assert!(final_questions.contains_key("goal.fulfillment"));
-        assert!(final_questions.contains_key("goal.checks-could-miss"));
+        assert!(!final_questions.contains_key("goal.fulfillment"));
         let serialized = serde_json::to_string(&prepared["final-completion"]).unwrap();
         assert!(serialized.contains("The public command showed the selected evidence"));
 
@@ -1556,6 +1602,36 @@ mod tests {
             .unwrap_err()
             .contains("driver-triaged accepted unresolved finding"));
         assert!(!serialized.contains("answer"));
+        for field in ["bounded_judgment", "evidence_sufficient"] {
+            let mut packet = request_for(
+                &show,
+                &root,
+                "review-candidates",
+                &["review-fail"],
+                &["intent.json"],
+                &[],
+                false,
+            );
+            if field == "bounded_judgment" {
+                packet.admissibility.bounded_judgment = false;
+            } else {
+                packet.admissibility.evidence_sufficient = false;
+            }
+            assert!(prepare(packet).is_err());
+        }
+        let mut packet = request_for(
+            &show,
+            &root,
+            "review-candidates",
+            &["review-fail"],
+            &["intent.json"],
+            &[],
+            false,
+        );
+        packet.judgments.clear();
+        assert!(prepare(packet)
+            .unwrap_err()
+            .contains("explicit nonempty bounded judgments"));
         let _ = fs::remove_dir_all(root);
     }
 }

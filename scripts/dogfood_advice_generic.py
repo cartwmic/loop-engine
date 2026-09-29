@@ -61,18 +61,19 @@ def _engine(journey, root: Path, database: Path, *args: str, expect: str = "comp
 def _request(occasion: str) -> dict[str, Any]:
     return {
         "version": 1,
-        "state": {"evidence": "The scripted non-software workflow has one independent primary task."},
+        "admissibility": {"bounded_judgment": True, "evidence_sufficient": True},
+        "state": {"evidence": "The selected observation says: the task finished and its output was inspected."},
         "target": {"revision": "fixture-r1", "evidence_ids": ["evidence-1"]},
         "occasion": occasion,
         "questions": {
             "route": {
                 "type": "choice",
-                "instructions": "Which supplied action best fits this evidence?",
-                "criteria": {"continue": "The evidence supports continuing.", "pause": "The evidence is insufficient."},
+                "instructions": "Classify this one supplied sentence as an observation or an intention. The option keys are fixture labels, not actions.",
+                "criteria": {"continue": "The sentence describes completed work.", "pause": "The sentence describes planned work."},
             },
             "quality": {
                 "type": "score",
-                "instructions": "Rate the supplied evidence.",
+                "instructions": "Rate how directly the supplied sentence describes an actual observation, without inferring task quality.",
                 "levels": [
                     {"description": "weak", "criteria": "The evidence is incomplete."},
                     {"description": "strong", "criteria": "The evidence is directly supported."},
@@ -81,7 +82,7 @@ def _request(occasion: str) -> dict[str, Any]:
             "premise": {
                 "type": "noul",
                 "instructions": "Is the stated premise supported?",
-                "proposition": "The fixture contains the stated evidence.",
+                "proposition": "The supplied sentence describes completed work rather than planned work.",
             },
         },
     }
@@ -236,6 +237,21 @@ def advice_case(journey) -> None:
         ("large-response", "advice-command-failed"),
     ]
     retained_attempts = [result["attempt_id"]]
+    # Public admission refuses before spawning any configured backend. The
+    # declaration is the driver's assessment, not a semantic engine classifier.
+    for field in ("missing", "bounded_judgment", "evidence_sufficient"):
+        inadmissible = _request("inadmissible-" + field)
+        if field == "missing":
+            del inadmissible["admissibility"]
+        else:
+            inadmissible["admissibility"][field] = False
+        path = root / f"request-inadmissible-{field}.json"
+        path.write_text(json.dumps(inadmissible), encoding="utf-8")
+        before_count = counter.read_text()
+        refused, _, _ = _engine(journey, root, database, "advise", "generic-advice-run", f"@{path}", expect="error")
+        if refused.get("code") != "invalid-advice-request" or counter.read_text() != before_count:
+            raise ValueError(f"inadmissible {field} request reached the advisor or had the wrong refusal: {refused}")
+        retained_attempts.append(refused["details"]["attempt_id"])
     for mode, expected_code in negative_modes:
         request_path = root / f"request-{mode}.json"
         request_bytes = json.dumps(_request(mode), separators=(",", ":")).encode()

@@ -211,6 +211,40 @@ def _append_record(journey, run_id: str, state: str, record_id: str, kind: str, 
     return result
 
 
+def _fixture_judgments(show, occasion_id, source_ids):
+    """Explicit scripted driver claims; not provider-generated reasoning tasks."""
+    family = occasion_id.split(":", 1)[0]
+    selected = [r for r in show["context"] if r["id"] in source_ids]
+    ids = []
+    if family == "review-candidates":
+        ids = [f"finding.{r['id']}.{axis}" for r in selected
+               if r["kind"] == "review-evidence" and r["data"].get("result") == "fail"
+               for axis in ("support", "materiality", "scope")]
+    elif family in ("accepted-defect", "implementation-correction"):
+        suffix = "owner" if family == "accepted-defect" else "route"
+        ids = [f"defect.{f['id']}.{suffix}" for r in selected if r["kind"] == "finding-ledger"
+               for f in r["data"]["findings"] if f.get("disposition") == "accepted" and f.get("status") == "unresolved"]
+    elif family == "execution-or-authority-issue":
+        ids = ["blocker.authority"]
+    elif family == "evidence-applicability":
+        ids = [f"source.{r['id']}.applicability" for r in selected if r["kind"] == "evidence-applicability"]
+        ids += [f"source.{r['id']}.same-assertion" for r in selected if "before_assertion" in r["data"] and "after_assertion" in r["data"]]
+    elif family == "requirements-reconciliation":
+        ids = ["outcome.branch"]
+    elif family == "review-round-departure":
+        ids = ["gate.departure"]
+    elif family == "final-completion":
+        intent = json.loads((Path(show["initial_input"]["artifact_root"]) / "intent.json").read_text())
+        ids = [f"criterion.{r['id']}.{axis}" for r in intent["acceptance"] for axis in ("fulfillment", "checks-could-miss")]
+        ids += ["goal.fulfillment", "goal.checks-could-miss"]
+    claim = "The selected excerpt describes an actual observation rather than a future plan."
+    if family == "review-candidates":
+        claim = "The selected finding's cited revision alone does not describe an observable failure."
+    elif family == "evidence-applicability":
+        claim = "The supplied before and after assertions describe the same observable behavior."
+    return {id: claim for id in ids}
+
+
 def _provider_request(
     journey,
     root: Path,
@@ -223,6 +257,8 @@ def _provider_request(
     packet = {
         "show": {"status": "completed", "result": show},
         "occasion_id": occasion_id,
+        "admissibility": {"bounded_judgment": True, "evidence_sufficient": True},
+        "judgments": _fixture_judgments(show, occasion_id, source_ids),
         "source_context_ids": source_ids,
         "artifact_names": artifacts,
         "documents": documents or [],
@@ -242,7 +278,9 @@ def _answer(request: dict[str, Any], mode: str) -> dict[str, Any]:
         rationale = "The answer is limited to the supplied evidence." if ordinal % 2 == 0 else None
         if kind == "choice":
             choices = list(question["criteria"])
-            if mode.startswith("wrong") and question_id.endswith((".fulfillment", ".materiality")):
+            if "supported" in choices:
+                choice = "contradicted" if mode.startswith("wrong") else "supported"
+            elif mode.startswith("wrong") and question_id.endswith((".fulfillment", ".materiality")):
                 choice = "delivery-failed" if "delivery-failed" in choices else "material"
                 if choice not in choices:
                     choice = choices[-1]
@@ -616,7 +654,7 @@ def _final_completion_departure(journey, root: Path, run_id: str, state: str, ev
         raise ValueError("software-change scripted answers did not preserve optional rationale absent and present")
     first_ac = json.loads((journey.artifact_root / "intent.json").read_text())["acceptance"][0]["id"]
     wrong_answer = wrong["response"]["answers"][f"criterion.{first_ac}.fulfillment"]
-    if wrong_answer.get("choice") != "delivery-failed" or wrong_answer.get("confidence", 0) < 0.99:
+    if wrong_answer.get("choice") != "contradicted" or wrong_answer.get("confidence", 0) < 0.99:
         raise ValueError("future-run scripted advisor did not return the planned confidently wrong fulfillment answer")
     for response, status in ((correct, "accept"), (wrong, "reject")):
         _dispositions(journey, run_id, state, response, status=status,
@@ -749,7 +787,8 @@ def _write_advisor(root: Path) -> tuple[Path, Path]:
         " rationale='Only the selected evidence was considered.' if i%2==0 else None\n"
         " if t=='choice':\n"
         "  keys=list(q['criteria'])\n"
-        "  if wrong and qid.endswith(('.fulfillment','.materiality')): choice='delivery-failed' if 'delivery-failed' in keys else 'material'\n"
+        "  if 'supported' in keys: choice='contradicted' if wrong else 'supported'\n"
+        "  elif wrong and qid.endswith(('.fulfillment','.materiality')): choice='delivery-failed' if 'delivery-failed' in keys else 'material'\n"
         "  elif qid.endswith('.owner') and 'implementation' in keys: choice='implementation'\n"
         "  elif qid.endswith('.route') and 'task-and-dependants' in keys: choice='task-and-dependants'\n"
         "  elif qid=='outcome.branch' and 'sufficient-existing-wording' in keys: choice='sufficient-existing-wording'\n"
@@ -971,8 +1010,14 @@ def _public_setup_and_question_families(journey, root: Path, setup_results: dict
         {key.rsplit(".",1)[-1] for key in requests["review-candidates"]["questions"]}
     ):
         raise ValueError("finding advice did not keep support/materiality/scope separate")
-    if "narrow-direct-driver-act" not in json.dumps(requests["implementation-correction"]):
-        raise ValueError("implementation routing omitted the explicitly narrow direct-act option")
+    for prepared in requests.values():
+        if set(prepared["questions"]) != set(prepared["state"]["agent_judgments"]):
+            raise ValueError("provider added unrequested broad questions")
+        if not prepared["state"]["selected_evidence"]:
+            raise ValueError("tool-selected evidence was replaced with driver-only claims")
+        for question in prepared["questions"].values():
+            if set(question.get("criteria", {})) != {"supported", "contradicted", "not-established"}:
+                raise ValueError("provider emitted a workflow decision rather than bounded claim support")
     if "LE-1: Selected operator outcome" not in json.dumps(requests["requirements-reconciliation"]):
         raise ValueError("reconciliation question did not include the exact selected authoritative excerpt")
     for row in intent["acceptance"]:
@@ -986,12 +1031,16 @@ def _public_setup_and_question_families(journey, root: Path, setup_results: dict
     # Dependent routing refuses before the driver supplies actual owner triage.
     missing_owner = copy.deepcopy(requests["implementation-correction"])
     no_owner_packet = {"show":{"status":"completed","result":full},
+        "admissibility":{"bounded_judgment":True,"evidence_sufficient":True},
+        "judgments":requests["implementation-correction"]["state"]["agent_judgments"],
         "occasion_id":occasion("implementation-correction"),
         "source_context_ids":[implementation_ledger_id],"artifact_names":["plan.json","implementation-report.json"]}
     _, refused = _capture(root, [str(journey.provider),"advice-request"], input_value=no_owner_packet, expected_code=2)
     if b"explicit driver correction-owner triage" not in refused.stderr:
         raise ValueError("implementation routing did not wait for actual owner triage")
     no_accepted_packet = {"show":{"status":"completed","result":full},
+        "admissibility":{"bounded_judgment":True,"evidence_sufficient":True},
+        "judgments":requests["accepted-defect"]["state"]["agent_judgments"],
         "occasion_id":occasion("accepted-defect"),"source_context_ids":[intent_fail_id],"artifact_names":["intent.json"]}
     _, refused = _capture(root, [str(journey.provider),"advice-request"], input_value=no_accepted_packet, expected_code=2)
     if b"driver-triaged accepted unresolved finding" not in refused.stderr:
@@ -1002,7 +1051,7 @@ def _public_setup_and_question_families(journey, root: Path, setup_results: dict
     correct_f = _advise(journey, root, journey.run_id, requests["review-candidates"], "correct-with-finding")
     wrong_f = _advise(journey, root, journey.run_id, requests["review-candidates"], "wrong-finding")
     wrong_materiality = wrong_f["response"]["answers"]["finding." + intent_fail_id + ".materiality"]
-    if wrong_materiality["confidence"] < 0.99 or wrong_materiality["choice"] != "material":
+    if wrong_materiality["confidence"] < 0.99 or wrong_materiality["choice"] != "contradicted":
         raise ValueError("scripted wrong finding advice was not confidently wrong for the rejected nonmaterial fixture")
     _dispositions(journey, journey.run_id, journey.state, correct_f, status="partial",
                   reason="The driver considered but did not delegate the finding judgment.")
@@ -1011,14 +1060,14 @@ def _public_setup_and_question_families(journey, root: Path, setup_results: dict
     correct_w = _advise(journey, root, journey.run_id, requests["final-completion"], "correct")
     wrong_w = _advise(journey, root, journey.run_id, requests["final-completion"], "wrong-high-confidence")
     bad_goal = wrong_w["response"]["answers"]["criterion." + intent["acceptance"][0]["id"] + ".fulfillment"]
-    if bad_goal["choice"] != "delivery-failed" or bad_goal["confidence"] < 0.99:
+    if bad_goal["choice"] != "contradicted" or bad_goal["confidence"] < 0.99:
         raise ValueError("scripted final response did not provide the confidently wrong negative")
     _dispositions(journey, journey.run_id, journey.state, correct_w, status="accept",
                   reason="The driver compared this answer with the selected passing assertion.")
     _dispositions(journey, journey.run_id, journey.state, wrong_w, status="reject",
                   reason="The actual selected check passed; this confidently wrong advice is rejected without an exception.")
     ad_hoc = {
-        "version":1,"state":{"selected_source":"driver-note/question-driver-observation"},
+        "version":1,"admissibility":{"bounded_judgment":True,"evidence_sufficient":True},"state":{"selected_source":"driver-note/question-driver-observation"},
         "target":{"run_id":journey.run_id,"state":"intent-review","state_visit":full["state_visit"],"source_context_ids":[driver_note_id]},
         "occasion":"ad-hoc:p11-active-operator-question",
         "questions":{"operator-note":{"type":"noul","instructions":"Is this selected note relevant to the operator's current question?",
@@ -1429,7 +1478,7 @@ def _completed_bookends_run(
     })
     ad_hoc_show = journey._show_for(journey.run_id, state="explore", event="p11-adhoc-show")
     ad_hoc_request = {
-        "version":1,"state":{"selected_source_id":ad_hoc_source},
+        "version":1,"admissibility":{"bounded_judgment":True,"evidence_sufficient":True},"state":{"selected_source_id":ad_hoc_source},
         "target":{"run_id":journey.run_id,"state":"explore","state_visit":ad_hoc_show["state_visit"],
                   "source_context_ids":[ad_hoc_source]},
         "occasion":"ad-hoc:p11-active-driver-question",
@@ -1630,7 +1679,7 @@ def _disabled_and_exception_variants(journey, root: Path, setup_results: dict[st
     if advice_guidance.get("enabled") is not False:
         raise ValueError("declined future run did not expose effective advice-disabled state")
     config = json.loads((root / "advice-config.json").read_text())
-    disabled_request = {"version":1,"state":{"fact":"fixture"},"target":{"revision":"r1"},
+    disabled_request = {"version":1,"admissibility":{"bounded_judgment":True,"evidence_sufficient":True},"state":{"fact":"fixture"},"target":{"revision":"r1"},
                         "occasion":"ad-hoc:disabled","questions":{"q":{"type":"noul","instructions":"Judge the supplied fact.","proposition":"The fact is present."}}}
     request_path = run_root / "disabled-request.json"
     _write_json(request_path, disabled_request)
@@ -1677,7 +1726,7 @@ def _disabled_and_exception_variants(journey, root: Path, setup_results: dict[st
                    {"observation":"A selected active-run note supplies this mapped review-candidate question."})
     visit = journey._show_for(journey.run_id,state="intent-review",event="owner-exception-visit")["state_visit"]
     target = {"run_id":journey.run_id,"state":"intent-review","state_visit":visit,"source_context_ids":[source_id]}
-    request = {"version":1,"state":{"selected_source_id":source_id},"target":target,
+    request = {"version":1,"admissibility":{"bounded_judgment":True,"evidence_sufficient":True},"state":{"selected_source_id":source_id},"target":target,
                "occasion":due["occasion_id"],
                "questions":{"selected-note":{"type":"noul","instructions":"Judge the supplied note only.",
                                                 "proposition":"The note records the current observation."}}}

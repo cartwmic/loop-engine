@@ -139,13 +139,14 @@ def _map(event: str, occasion_id: str):
 def _request(occasion: str, target: dict[str, Any], *, mode="valid"):
     return {
         "version": 1,
-        "state": {"mode": mode, "evidence": ["driver-observation"]},
+        "admissibility": {"bounded_judgment": True, "evidence_sufficient": True},
+        "state": {"mode": mode, "evidence": ["Observed: the label was clipped after resizing. Expected: the label remains readable. Proposed check: resize and inspect the label."]},
         "target": target,
         "occasion": occasion,
         "questions": {
-            "decision": {"type": "noul", "instructions": "Is this supplied decision supported?", "proposition": "The evidence supports the decision."},
-            "coverage": {"type": "noul", "instructions": "Is the stated coverage complete?", "proposition": "All named cases are covered."},
-            "risk": {"type": "noul", "instructions": "Is a material risk present?", "proposition": "The described risk can affect delivery."},
+            "decision": {"type": "noul", "instructions": "Classify only the supplied observation.", "proposition": "The observation describes an actual failure rather than a proposed improvement."},
+            "coverage": {"type": "noul", "instructions": "Compare only the supplied observation and proposed check.", "proposition": "They describe the same observable behavior."},
+            "risk": {"type": "noul", "instructions": "Judge only the supplied observation and explicit expectation.", "proposition": "The observation contradicts that expectation."},
         },
     }
 
@@ -251,7 +252,7 @@ def advice_transition_case(journey) -> None:
     adhoc_id = adhoc["result"]["attempt_id"]
     _append(journey, root, adhoc_db, "advice-adhoc", "occ-adhoc", "advice-occasion",
             _occasion_record(0, "revise", "mapped-review", target, adhoc_source, [], triggered=False,
-                             reason="No mapped decision is due on this visit."))
+                             reason="No admissible bounded question: resolving this issue requires investigation by the driver, not an advisor."))
     _show(journey, root, adhoc_db, "advice-adhoc")
     missing_adhoc = _engine(journey, root, adhoc_db, "event", "advice-adhoc", "revise", expect="error")[0]
     if "advice answer" not in missing_adhoc.get("message", ""):

@@ -1946,11 +1946,19 @@ Before plan approval in Bookends mode, a read-only check exposes missing reposit
 
 A configured provider-reusable command receives one structured JSON state and independently keyed questions, with exact-key typed answers and separately retained original input, command, response and failure; no backend or model is selected by the engine, and advice cannot complete primary work or grant workflow authority. Choice supplies selected named option key, finite normalized full probabilities over exactly the supplied options and confidence in [0,1]. Score supplies a probability-weighted value over ordered rubric-level indices, a matching indexed level-to-description legend, finite normalized full level probabilities and confidence in [0,1]. Noul supplies a yes-probability in [0,1], **without mandatory separate confidence**. Each type permits absent or present per-answer string rationale. No fourth abstain type, invented missing probability/field, required prose, vendor HTTP envelope or named backend follows. A generic non-software provider can use the same interface.
 
+Every advisory question must be one bounded judgment over sufficient explicitly supplied evidence. Independent questions may be batched; questions requiring investigation, missing-fact inference, planning, multi-step reasoning, or whole-workflow synthesis must not be sent to an advisor. Those tasks remain with the coordinating driver; there is no automatic reasoning-model fallback through the advice feature.
+
+The driver is responsible for deciding whether a question and its evidence meet that boundary before invocation. Mechanical checks may reject missing or malformed inputs, but must not claim to prove semantic sufficiency. Shipped question builders must not generate the excluded classes of question.
+
+Advice remains fallible and non-authoritative regardless of confidence. The driver accepts, partially accepts, or rejects each actual answer with a reason.
+
 ### LE-164: Software-change advice for eight evidenced decisions
 - Status: live
 - Coverage: e2e/journey
 
 Software-change supplies provider-owned questions and actual selected evidence for finding support/materiality/scope separately, correction owner, implementation route including only authorized narrow driver repair, execution recovery or owner escalation, semantic evidence applicability, three-way requirements reconciliation, review-round convergence and each current AC-N plus whole-goal/check-gap fulfillment. Batch independent questions; dependent ones wait for real driver triage or fixes. Advice never discovers repository defects by fiat, decides a route, replaces independent reviewers or weakens finding-ledger, Bookends or public proof obligations.
+
+These occasions identify where bounded judgments can assist the driver; they do not assign the broader decision or synthesis to the advisor. Preserve both agent-supplied claims and tool-resolved selected evidence rather than replacing the latter with an agent paraphrase.
 
 ### LE-165: Explicit advisory enablement and accountable occasions
 - Status: live
@@ -1962,7 +1970,9 @@ All three standalone software-change examples name the same eight occasions, wit
 - Status: live
 - Coverage: e2e/journey
 
-Only on new runs explicitly enabling a frozen advisory departure map, every relevant normal **checked or check-free workflow transition** requires valid due advice and reasoned dispositions of all successful answers (including ad hoc and superseded). A changed target requires explicit driver applicability or fresh advice. A failed, timed-out or invalid required response is no answer and blocks that prerequisite until valid response or a scoped owner-attested exception for precisely unanswered due occasions. Even an exception cannot waive a successful answer's missing disposition, a provider/reviewer/criterion/Bookends/proof gate or owned-work cleanup; retain exceptional history visibly. A reasoned reject of wrong advice permits ordinary progression. Earlier edit, append and invoke timing is guidance, not an action interlock; cancellation/cleanup do not wait for advice. Disabled graphs and older frozen runs retain their original prerequisites; no existing run is migrated.
+When a configured occasion has no admissible advisory question, the driver records why no call is appropriate and continues through the unchanged ordinary checks and authorization rules. This is not a fabricated advisor response or permission to bypass those checks. A failed eligible advice call retains its existing failure and recovery rules.
+
+Only on new runs explicitly enabling a frozen advisory departure map, every relevant normal **checked or check-free workflow transition** requires valid admissible due advice and reasoned dispositions of all successful answers (including ad hoc and superseded). A changed target requires explicit driver applicability or fresh advice. A failed, timed-out or invalid required response is no answer and blocks that prerequisite until valid response or a scoped owner-attested exception for precisely unanswered due occasions. Even an exception cannot waive a successful answer's missing disposition, a provider/reviewer/criterion/Bookends/proof gate or owned-work cleanup; retain exceptional history visibly. A reasoned reject of wrong advice permits ordinary progression. Earlier edit, append and invoke timing is guidance, not an action interlock; cancellation/cleanup do not wait for advice. Disabled graphs and older frozen runs retain their original prerequisites; no existing run is migrated.
 
 ## 15. Complexity Guardrails
 
