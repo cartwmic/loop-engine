@@ -2,6 +2,7 @@ use super::bounded_process::CommandExt;
 use super::support;
 
 use serde_json::{json, Value};
+use sha2::Digest;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -375,6 +376,12 @@ fn overlay_on_reconciliation_implementation_correction_requires_live_traceabilit
         json!("The implementation was corrected under the sufficient live requirement.");
     result["traceability"] = json!({"status": "retained", "references": []});
     artifacts.write_json("reconciliation.json", &result);
+    for name in ["intent.json", "design.json", "plan.json"] {
+        artifacts.write_json(
+            name,
+            &load_fixture(&format!("{}-good.json", name.trim_end_matches(".json"))),
+        );
+    }
     let config = with_root(enable_overlay(load_profile("high-rigor")), &artifacts);
 
     let legacy_branch = evaluate_in(
@@ -431,7 +438,7 @@ fn overlay_on_reconciliation_implementation_correction_requires_live_traceabilit
         ),
         json!([]),
     );
-    assert_eq!(valid, json!({"result": "allow"}));
+    assert_reconciliation_allow(&valid, &artifacts);
 }
 
 fn overlay_validation_config(root: &TestDir) -> Value {
@@ -445,6 +452,36 @@ fn overlay_validation_config(root: &TestDir) -> Value {
             "validation-report.json": load_profile("minimal")["artifact_schemas"]["validation-report.json"].clone()
         }
     })
+}
+
+fn assert_reconciliation_allow(response: &Value, artifacts: &TestDir) {
+    let bytes =
+        fs::read(artifacts.path().join("reconciliation.json")).expect("reconciliation bytes");
+    let reconciliation: Value = serde_json::from_slice(&bytes).expect("reconciliation JSON");
+    let documents = ["intent", "design", "plan"]
+        .into_iter()
+        .map(|name| {
+            let value: Value = serde_json::from_slice(
+                &fs::read(artifacts.path().join(format!("{name}.json"))).expect("document bytes"),
+            )
+            .expect("document JSON");
+            (name.to_owned(), value["revision"].clone())
+        })
+        .collect::<serde_json::Map<_, _>>();
+    assert_eq!(
+        response,
+        &json!({
+            "result": "allow",
+            "context_append": {
+                "kind": "reconciliation-decision",
+                "data": {
+                    "revision": reconciliation["revision"],
+                    "sha256": format!("sha256:{:x}", sha2::Sha256::digest(&bytes)),
+                    "documents": documents
+                }
+            }
+        })
+    );
 }
 
 fn write_checkpoints(repo: &Repo, artifacts: &TestDir) {
@@ -507,7 +544,7 @@ fn write_checkpoints(repo: &Repo, artifacts: &TestDir) {
         }),
     );
     support::assert_exit(&output, 0);
-    assert_eq!(support::response(&output), json!({"result": "allow"}));
+    assert_reconciliation_allow(&support::response(&output), artifacts);
 }
 
 #[test]
@@ -664,7 +701,7 @@ fn refresh_implementation_checkpoint(repo: &Repo, artifacts: &TestDir) {
         }),
     );
     support::assert_exit(&output, 0);
-    assert_eq!(support::response(&output), json!({"result": "allow"}));
+    assert_reconciliation_allow(&support::response(&output), artifacts);
     refresh_validation_checkpoint(repo, artifacts);
 }
 

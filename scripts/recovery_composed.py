@@ -186,6 +186,12 @@ def prove(journey):
     graph_worker = root/'graph-worker.py'; graph_worker.write_text(GRAPH_WORKER)
     waiting = root/'waiting-worker.py'
     waiting.write_text("import json,os,time\nfrom pathlib import Path\np=json.load(__import__('sys').stdin)\nr=Path(p['artifact_root'])\n(r/'waiting.pid').write_text(str(os.getpid()))\nprint('cancelled unfinished product work',flush=True)\nwhile True:time.sleep(.05)\n")
+    # Scripted review commission capacity; no actual model token usage claimed.
+    budgets=[{'author':'criterion-reviewer','model_id':'scripted-composed-fixture',
+              'context_window_tokens':64000,'system_tokens':1000,'framing_tokens':1000,
+              'output_reserve_tokens':1000,'reasoning_reserve_tokens':1000}]
+    review_filter={'command':str(journey.provider),
+                   'args':['commission','--call-budgets',json.dumps(budgets)]}
     filter_binding = {'command':str(journey.provider),'args':['commission']}
     initial_binding = {'command':sys.executable,'args':[str(waiting)],'context_filter':filter_binding}
     graph_binding = {'command':str(journey.provider),'args':['run-plan-graph','--working-directory',str(repo),
@@ -352,7 +358,7 @@ def prove(journey):
         for variant in judgments['items']['oneOf']:variant['properties']['axis']['enum']=['delivery']
         output_schema['properties']['validation_verdicts']={'type':'array','items':{'type':'object'}}
         review_binding={'command':str(journey.engine),'args':['fan-out','--worker',json.dumps({'command':sys.executable,
-            'args':[str(reviewer),str(repo)],'full_output_schema':output_schema})],'context_filter':filter_binding}
+            'args':[str(reviewer),str(repo)],'full_output_schema':output_schema})],'context_filter':review_filter}
         amend('validation-review',review_binding)
 
         def validation(revision, carry=None):
@@ -375,7 +381,7 @@ def prove(journey):
             event('validation-ready')
             before=preserved(f.artifacts) # compare only immutable index/checkpoint below
             f.show(); row=wait(f.result(['invoke',f.name,'validation-review']))
-            candidates=external([journey.provider,'review-candidates'],{'status':'completed','operation':'show','result':f.show()})['candidates']
+            candidates=external([journey.provider,'review-candidates'],{'status':'completed','operation':'show','result':f.show()},cwd=repo)['candidates']
             current=[c for c in candidates if c['origin']['id']==row['invocation_id']]
             assert len(current)==(3 if carry else 4),candidates
             for historical in [c for c in candidates if c not in current]:

@@ -627,6 +627,24 @@ fn matches_review(record: &ContextRecord, gate: &str, subject: &str) -> bool {
         && record.data.get("subject").and_then(Value::as_str) == Some(subject)
 }
 
+// Validation findings may originate in the fixed criterion/goal index, not
+// only in axis review evidence. Keep all other gates review-evidence-only.
+fn matches_finding_source(record: &ContextRecord, gate: &str, subject: &str) -> bool {
+    matches_review(record, gate, subject)
+        || (gate == "validation-review"
+            && subject == "validation-report.json"
+            && (record.kind == "criterion-verdict"
+                && record
+                    .data
+                    .get("criterion_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(crate::criterion::is_criterion_id)
+                || record.kind == "goal-verdict" && record.data.get("criterion_id").is_none())
+            && record.data.get("subject").and_then(Value::as_str) == Some(subject)
+            && record.data.get("checkpoint").and_then(Value::as_str)
+                == Some("validation-checkpoint.json"))
+}
+
 fn latest_aggregate_by_axis_author<'a>(
     records: &'a [ContextRecord],
     gate: &str,
@@ -691,7 +709,7 @@ fn has_material_confirmation_sources(
         .filter_map(|finding| finding.pointer("/source/id").and_then(Value::as_str))
         .filter_map(|id| records.iter().find(|record| record.id.as_str() == id))
         .any(|source| {
-            matches_review(source, gate, subject)
+            matches_finding_source(source, gate, subject)
                 && source.data.get("subject_revision").and_then(Value::as_str) != Some(revision)
         });
     if old_finding_source {
@@ -715,7 +733,7 @@ fn has_material_confirmation_sources(
                 .and_then(Value::as_str)
                 .and_then(|id| records.iter().find(|source| source.id.as_str() == id))
                 .is_some_and(|source| {
-                    matches_review(source, gate, subject)
+                    matches_finding_source(source, gate, subject)
                         && source.data.get("subject_revision").and_then(Value::as_str)
                             != Some(revision)
                 })
@@ -792,7 +810,7 @@ fn validation_record_ids(
     let Ok(report) = serde_json::from_slice::<Value>(&bytes) else {
         return BTreeMap::new();
     };
-    let mut ids = BTreeMap::new();
+    let mut ids: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for (field, kind) in [
         ("command_evidence_ids", "command-evidence"),
         ("goal_verdict_ids", "goal-verdict"),
@@ -826,19 +844,35 @@ fn validation_record_ids(
         .chain(ids.get("goal-verdict").into_iter().flatten())
         .cloned()
         .collect();
-    let applicable: BTreeSet<_> = context
+    // A carried position names the current applicability record in the fixed
+    // index. Its origin names an earlier verdict, never the current index ID.
+    let applicable: Vec<_> = context
         .iter()
-        .filter(|record| record.kind == "evidence-applicability")
         .filter(|record| {
-            record
-                .data
-                .pointer("/origin/id")
-                .and_then(Value::as_str)
-                .is_some_and(|id| indexed.contains(id))
+            record.kind == "evidence-applicability" && indexed.contains(record.id.as_str())
         })
-        .map(|record| record.id.as_str().to_owned())
         .collect();
-    ids.insert("evidence-applicability".to_owned(), applicable);
+    for carry in &applicable {
+        if let Some(source) = carry
+            .data
+            .pointer("/origin/id")
+            .and_then(Value::as_str)
+            .and_then(|id| context.iter().find(|record| record.id.as_str() == id))
+        {
+            if matches!(source.kind.as_str(), "criterion-verdict" | "goal-verdict") {
+                ids.entry(source.kind.clone())
+                    .or_default()
+                    .insert(source.id.as_str().to_owned());
+            }
+        }
+    }
+    ids.insert(
+        "evidence-applicability".to_owned(),
+        applicable
+            .iter()
+            .map(|record| record.id.as_str().to_owned())
+            .collect(),
+    );
     ids
 }
 
@@ -970,9 +1004,22 @@ fn project_review_context(
                 .iter()
                 .find(|record| record.id.as_str() == source_id)
                 .ok_or_else(|| format!("mandatory confirmation finding source `{source_id}` is missing; inspect retained source for {ledger_gate}/{subject}"))?;
-            if !matches_review(source, ledger_gate, subject) {
+            if !matches_finding_source(source, ledger_gate, subject)
+                || (matches!(source.kind.as_str(), "criterion-verdict" | "goal-verdict")
+                    && finding.get("policy_id").and_then(Value::as_str)
+                        != Some(
+                            source
+                                .data
+                                .get("criterion_id")
+                                .and_then(Value::as_str)
+                                .unwrap_or("goal"),
+                        ))
+            {
                 return Err(format!("mandatory confirmation finding source `{source_id}` has the wrong gate or subject"));
             }
+            // The checked ledger validates original verdict bytes, commands,
+            // revision, checkpoint and source identity with validation::source.
+            // Commission keeps the cited original for focused confirmation.
         }
     }
     let validation_ids = if gate.starts_with("validation-") {
@@ -983,6 +1030,8 @@ fn project_review_context(
     let mut selected_review_ids = BTreeSet::new();
     for record in records {
         let own = matches_review(record, gate, subject);
+        let own_verdict_source =
+            matches_finding_source(record, gate, subject) && record.kind != "review-evidence";
         let parent_source = parent.is_some_and(|parent| matches_review(record, parent, subject));
         if excluded_ids.contains(record.id.as_str()) {
             continue;
@@ -993,6 +1042,7 @@ fn project_review_context(
                 || (requested_stage.is_some_and(|stage| evidence_stage(record) == stage)
                     && record.data.get("subject_revision").and_then(Value::as_str)
                         == Some(revision))))
+            || (own_verdict_source && ledger_refs.contains(record.id.as_str()))
             || (parent_source
                 && (parent_aggregate_ids.contains(record.id.as_str())
                     || ledger_refs.contains(record.id.as_str())
@@ -1007,6 +1057,13 @@ fn project_review_context(
             if selected_review_ids.contains(record.id.as_str()) {
                 selected.push(record.clone());
             }
+            continue;
+        }
+        if matches_finding_source(record, gate, subject)
+            && record.kind != "review-evidence"
+            && selected_review_ids.contains(record.id.as_str())
+        {
+            selected.push(record.clone());
             continue;
         }
         if record.kind == "evidence-applicability" {
@@ -1030,11 +1087,21 @@ fn project_review_context(
                     .find(|candidate| candidate.id.as_str() == source_id)
                     .ok_or_else(|| format!("validation applicability `{}` is missing its original verdict `{source_id}`", record.id))?;
                 if !matches!(source.kind.as_str(), "criterion-verdict" | "goal-verdict")
+                    || source.data.get("subject").and_then(Value::as_str) != Some(subject)
+                    || source.data.get("checkpoint").and_then(Value::as_str)
+                        != Some("validation-checkpoint.json")
                     || record
                         .data
                         .pointer("/target/subject")
                         .and_then(Value::as_str)
                         != Some(subject)
+                    || record
+                        .data
+                        .pointer("/target/subject_revision")
+                        .and_then(Value::as_str)
+                        != Some(revision)
+                    || record.data.pointer("/target/checkpoint")
+                        != Some(&json!({"phase":"validation","report_revision":revision}))
                 {
                     return Err(format!("validation applicability `{}` does not reference a validation verdict for `{subject}`", record.id));
                 }
@@ -2000,6 +2067,174 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("mandatory confirmation finding source `missing-source` is missing"));
+    }
+
+    #[test]
+    fn validation_confirmation_projects_original_verdicts_and_only_indexed_carries() {
+        let root = std::env::temp_dir().join(format!(
+            "software-change-commission-validation-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("validation-report.json"),
+            serde_json::to_vec(&json!({
+                "revision":"v2", "criteria":[
+                    {"criterion_id":"AC-1","verdict_ids":["fresh-ac1"]},
+                    {"criterion_id":"AC-2","verdict_ids":["carry-ac2"]}],
+                "goal_verdict_ids":["carry-goal"]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let source = |id, kind, criterion: Option<&str>| {
+            let mut data = json!({"subject":"validation-report.json","subject_revision":"v1",
+                "checkpoint":"validation-checkpoint.json","author":{"name":"independent","kind":"agent"},
+                "result":"fail","findings":["original failure"]});
+            if let Some(criterion) = criterion {
+                data["criterion_id"] = json!(criterion);
+            }
+            typed_record(id, kind, 1, data)
+        };
+        let original_fail = source("old-ac1", "criterion-verdict", Some("AC-1"));
+        let original_ac2 = source("old-ac2", "criterion-verdict", Some("AC-2"));
+        let original_goal = source("old-goal", "goal-verdict", None);
+        let carry = |id, origin, n| {
+            typed_record(
+                id,
+                "evidence-applicability",
+                n,
+                json!({
+                    "origin":{"kind":"context-record","id":origin},
+                    "target":{"subject":"validation-report.json","subject_revision":"v2",
+                              "checkpoint":{"phase":"validation","report_revision":"v2"}},
+                    "attesting_driver":{"name":"driver","kind":"agent"},"reason":"unaffected original"
+                }),
+            )
+        };
+        let ac2 = carry("carry-ac2", "old-ac2", 2);
+        let goal = carry("carry-goal", "old-goal", 3);
+        let unindexed = carry("unindexed", "old-ac2", 4);
+        let ledger = typed_record(
+            "current-ledger",
+            "finding-ledger",
+            5,
+            json!({
+                "gate":"validation-review","subject":"validation-report.json","subject_revision":"v2",
+                "findings":[{"source":{"kind":"context-record","id":"old-ac1"},
+                    "policy_id":"AC-1","statement":"original failure","disposition":"accepted","status":"resolved"}]
+            }),
+        );
+        let records = vec![
+            original_fail.clone(),
+            original_ac2.clone(),
+            original_goal.clone(),
+            ac2.clone(),
+            goal.clone(),
+            unindexed,
+            ledger.clone(),
+        ];
+        let projected = project_review_context(
+            &records,
+            "validation-review",
+            "validation-report.json",
+            "v2",
+            Some("aggregate"),
+            &root,
+        )
+        .unwrap();
+        let ids: BTreeSet<_> = projected.iter().map(|record| record.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            BTreeSet::from([
+                "old-ac1",
+                "old-ac2",
+                "old-goal",
+                "carry-ac2",
+                "carry-goal",
+                "current-ledger"
+            ])
+        );
+        assert_eq!(
+            projected
+                .iter()
+                .find(|record| record.id.as_str() == "old-ac1")
+                .unwrap()
+                .data["result"],
+            "fail"
+        );
+        assert_eq!(
+            projected
+                .iter()
+                .find(|record| record.id.as_str() == "old-ac1")
+                .unwrap()
+                .data["author"]["name"],
+            "independent"
+        );
+        assert_eq!(
+            projected
+                .iter()
+                .find(|record| record.id.as_str() == "current-ledger")
+                .unwrap()
+                .data["findings"][0]["source"]["id"],
+            "old-ac1"
+        );
+
+        for (invalid, expected) in [
+            (
+                typed_record("old-ac1", "goal-verdict", 1, original_fail.data.clone()),
+                "wrong gate or subject",
+            ),
+            (
+                source("old-ac1", "criterion-verdict", Some("AC-2")),
+                "wrong gate or subject",
+            ),
+            (
+                typed_record(
+                    "old-ac1",
+                    "criterion-verdict",
+                    1,
+                    json!({"subject":"design.json","subject_revision":"v1","checkpoint":"validation-checkpoint.json","criterion_id":"AC-1"}),
+                ),
+                "wrong gate or subject",
+            ),
+            (
+                typed_record(
+                    "old-ac1",
+                    "criterion-verdict",
+                    1,
+                    json!({"subject":"validation-report.json","subject_revision":"v1","checkpoint":"wrong-checkpoint","criterion_id":"AC-1"}),
+                ),
+                "wrong gate or subject",
+            ),
+        ] {
+            let mut bad = records.clone();
+            bad[0] = invalid;
+            assert!(project_review_context(
+                &bad,
+                "validation-review",
+                "validation-report.json",
+                "v2",
+                Some("aggregate"),
+                &root
+            )
+            .unwrap_err()
+            .contains(expected));
+        }
+        let mut bad = records;
+        bad[3].data["target"]["subject_revision"] = json!("v1");
+        assert!(project_review_context(
+            &bad,
+            "validation-review",
+            "validation-report.json",
+            "v2",
+            Some("aggregate"),
+            &root
+        )
+        .unwrap_err()
+        .contains("does not reference a validation verdict"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

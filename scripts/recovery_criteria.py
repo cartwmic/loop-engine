@@ -184,11 +184,15 @@ def prove(journey):
     # Its explicit carry selection dispatches no reviewer for AC-2. Installing
     # a fail-if-executed backend there makes accidental reruns observable.
     worker=root/"combined-review.py"
-    worker.write_text('''import json,sys,subprocess
+    worker.write_text('''import hashlib,json,sys,subprocess
 from pathlib import Path
 packet=json.loads(sys.stdin.read().split("---",1)[0])
 root=Path(packet["artifact_root"])
-report=json.loads((root/"validation-report.json").read_text())
+report_bytes=(root/"validation-report.json").read_bytes()
+report=json.loads(report_bytes)
+grounds={"reason":"Inspected the corrected current validation report and named command evidence.",
+         "evidence":[{"locator":"validation-report.json#/revision",
+                      "sha256":"sha256:"+hashlib.sha256(report_bytes).hexdigest()}]}
 context={r["id"]:r for r in packet["context"]}
 author={"name":"independent","kind":"agent"}
 rows=[]
@@ -196,20 +200,28 @@ for row in report["criteria"]:
     id=row["verdict_ids"][0]
     if context.get(id,{}).get("kind")=="evidence-applicability": continue
     if row["criterion_id"]=="AC-2": subprocess.run([sys.executable,sys.argv[1]],check=True)
-    v={"criterion_id":row["criterion_id"],"subject":"validation-report.json","subject_revision":report["revision"],"checkpoint":"validation-checkpoint.json","author":author,"result":"pass","findings":[],"evidence_context_ids":report["command_evidence_ids"]}
+    v={"criterion_id":row["criterion_id"],"subject":"validation-report.json","subject_revision":report["revision"],"checkpoint":"validation-checkpoint.json","author":author,"result":"pass","findings":[],
+       "reason":"Inspected the corrected product command evidence for this current criterion.","evidence_context_ids":report["command_evidence_ids"]}
     rows.append({"record_id":id,"kind":"criterion-verdict","data":v})
-v={"subject":"validation-report.json","subject_revision":report["revision"],"checkpoint":"validation-checkpoint.json","author":author,"result":"pass","findings":[],"evidence_context_ids":report["command_evidence_ids"]}
+v={"subject":"validation-report.json","subject_revision":report["revision"],"checkpoint":"validation-checkpoint.json","author":author,"result":"pass","findings":[],
+   "reason":"Inspected the corrected product command evidence for the current goal.","evidence_context_ids":report["command_evidence_ids"]}
 rows.append({"record_id":report["goal_verdict_ids"][0],"kind":"goal-verdict","data":v})
-print(json.dumps({"review_stage":"aggregate","author":author,"judgments":[{"axis":"delivery","result":"pass","findings":""}],"validation_verdicts":rows}))
+print(json.dumps({"review_contract_version":2,"review_stage":"aggregate","author":author,
+                  "judgments":[{"axis":"delivery","result":"pass","findings":"","grounds":grounds}],
+                  "validation_verdicts":rows}))
 ''')
-    output_schema=json.loads((journey.data_root/"crates/software-change-provider/data/review-worker-output-schema.json").read_text())
+    output_schema=json.loads((journey.data_root/"crates/software-change-provider/data/review-worker-output-schema-v2.json").read_text())
     output_schema["properties"]["author"]["const"]=reviewer
     judgments=output_schema["properties"]["judgments"]
     judgments.update(minItems=1,maxItems=1,allOf=[{"contains":{"type":"object","required":["axis"],"properties":{"axis":{"const":"delivery"}}}}])
     for variant in judgments["items"]["oneOf"]:variant["properties"]["axis"]["enum"]=["delivery"]
     output_schema["properties"]["validation_verdicts"]={"type":"array","items":{"type":"object"}}
+    # Explicit scripted-call budget, not measured live-model usage.
+    budgets=[{"author":"independent","model_id":"scripted-criterion-fixture",
+              "context_window_tokens":64000,"system_tokens":1000,"framing_tokens":1000,
+              "output_reserve_tokens":1000,"reasoning_reserve_tokens":1000}]
     binding={"command":str(journey.engine),"args":["fan-out","--worker",json.dumps({"command":sys.executable,"args":[str(worker),str(sentinel)],"full_output_schema":output_schema})],
-             "context_filter":{"command":str(journey.provider),"args":["commission"]}}
+             "context_filter":{"command":str(journey.provider),"args":["commission","--call-budgets",json.dumps(budgets)]}}
     f.result(["amend-binding",f.name,"validation-review",json.dumps({"state_visit":f.show()["state_visit"],"owner":"fixture-owner","reason":"combine affected criterion, goal and axis commission","binding":binding})])
     f.show(); invocation=f.result(["invoke",f.name,"validation-review"])["invocation_id"]
     import time
@@ -231,7 +243,8 @@ print(json.dumps({"review_stage":"aggregate","author":author,"judgments":[{"axis
         else:
             assert row["status"]=="ready",row
             f.append("review-evidence","axis",{"gate":"validation-review","policy_id":row["axis"],"review_stage":"aggregate","subject":"validation-report.json","subject_revision":"v2",
-                "config_version":"recovery-criterion-3","author":row["author"],"result":row["result"],"findings":row["findings"],"origin":row["origin"]})
+                "config_version":"recovery-criterion-3","author":row["author"],"result":row["result"],"findings":row["findings"],
+                "review_contract_version":row["review_contract_version"],"grounds":row["grounds"],"origin":row["origin"]})
     projection=external([journey.provider,"commission","--slot","validation-review"],{"status":"completed","result":f.show()})
     assert [r["mode"] for r in projection["validation_collection"]]==["fresh","carried","fresh"],projection
     assert projection["validation_collection"][1]["source"]["data"]==verdict(report,"AC-2")

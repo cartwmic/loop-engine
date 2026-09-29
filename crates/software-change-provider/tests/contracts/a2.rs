@@ -45,7 +45,10 @@ fn missing_policies_errors_on_first_check_and_leaves_engine_state_unchanged() {
             "review-evidence",
             "evidence-applicability",
             "user-steering",
-            "steering-incorporation"
+            "steering-incorporation",
+            "command-evidence",
+            "criterion-verdict",
+            "goal-verdict"
         ]
     );
 

@@ -481,13 +481,25 @@ fn wait_invocation_copies_well_formed_summary_inner_workers() {
     let (status, exit_code, inner_workers) = load_invocation(&database, "run-wait-summary");
     assert_eq!(status, Some(WaiterWrittenStatus::Succeeded));
     assert_eq!(exit_code, Some(0));
-    assert_eq!(
-        inner_workers,
-        vec![
-            InnerWorker::new("python3", vec!["a.py".to_owned()], 0),
-            InnerWorker::new("python3", vec!["b.py".to_owned()], 7),
-        ]
-    );
+    assert_eq!(inner_workers.len(), 2);
+    for (worker, script, exit, path, failed) in [
+        (&inner_workers[0], "a.py", 0, "/tmp/0/stdout", false),
+        (&inner_workers[1], "b.py", 7, "/tmp/1/stderr", true),
+    ] {
+        assert_eq!(worker.command, "python3");
+        assert_eq!(worker.args, [script]);
+        assert_eq!(worker.exit_code, exit);
+        assert_eq!(worker.attempts.len(), 1);
+        assert_eq!(worker.attempts[0].number, 1);
+        assert_eq!(worker.attempts[0].failed, failed);
+        if failed {
+            assert_eq!(worker.stderr_path.as_deref(), Some(path));
+            assert_eq!(worker.attempts[0].stderr_path.as_deref(), Some(path));
+        } else {
+            assert_eq!(worker.stdout_path.as_deref(), Some(path));
+            assert_eq!(worker.attempts[0].stdout_path.as_deref(), Some(path));
+        }
+    }
 }
 
 #[test]

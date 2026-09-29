@@ -158,6 +158,15 @@ def prove_facades(engine, provider, checkout, work_root=None):
     print(f"execution facade captures: {root}", flush=True)
     artifacts = root / "artifacts"
     artifacts.mkdir()
+    work_repo = root / "checkout"
+    work_repo.mkdir()
+    for argv in (["init", "-q"], ["config", "user.name", "fixture"],
+                 ["config", "user.email", "fixture@example.invalid"],
+                 ["config", "commit.gpgsign", "false"]):
+        subprocess.run(["git", *argv], cwd=work_repo, check=True, capture_output=True)
+    (work_repo / ".baseline").write_text("fixture baseline\n")
+    for argv in (["add", "-A"], ["commit", "-qm", "baseline"]):
+        subprocess.run(["git", *argv], cwd=work_repo, check=True, capture_output=True)
     db = root / "loop.sqlite"
     transcript = []
 
@@ -212,9 +221,12 @@ if name=='summarizer':
     report={'revision':str(time.time_ns()),'author':{'name':'dummy','kind':'script'},'plan_revision':'1','coverage':['fixture'],'summary':'deterministic controls proof','changed_surface':['fixture'],'validation':['focused controls']}
     (root/'implementation-report.json').write_text(json.dumps(report))
 event('end')
-print(json.dumps({'task':name,'fresh':True,'repository_effect':{'kind':'fixture-receipt-only'}}))
+if name!='summarizer':
+    effect='task-'+name+'.txt'
+    pathlib.Path(effect).write_text('completed '+name+'\\n')
+    print(json.dumps({'task':name,'fresh':True,'repository_effect':{'files':[effect]}}))
 ''')
-    binding = {"command": provider, "args": ["run-plan-graph", "--working-directory", str(checkout),
+    binding = {"command": provider, "args": ["run-plan-graph", "--working-directory", str(work_repo),
         "--max-active", "4", "--task-worker", json.dumps({"command": sys.executable, "args": [str(worker), "actual-graph-worker"]})],
         "context_filter": {"command": provider, "args": ["commission"]}}
     schema = {"type": "object", "required": ["revision", "author"], "properties": {

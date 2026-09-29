@@ -457,33 +457,10 @@ fn dagu_sentinel(bin_dir: &Path) -> PathBuf {
     bin_dir.join("probed")
 }
 
-fn write_standing_plan_task(artifact_root: &Path, plan_revision: &str, task_id: &str) {
-    let task = json!({"id": task_id});
-    let packet = format!(
-        "{{\"artifact_root\":\"{}\"}}\\n---\\n\\n{}",
-        artifact_root.display(),
-        task
-    );
-    let file = json!({
-        "schema_version": "1",
-        "plan_revision": plan_revision,
-        "results": [{
-            "assignment_id": task_id,
-            "plan_revision": plan_revision,
-            "task": task,
-            "packet": packet,
-            "dependencies": [],
-            "worker": {"command": "python3", "args": []},
-            "exit_code": 0,
-            "repository_effect": null,
-            "capture_dir": artifact_root.join("standing").to_string_lossy()
-        }]
-    });
-    fs::write(
-        artifact_root.join("plan-task-results.json"),
-        serde_json::to_vec_pretty(&file).expect("standing result JSON"),
-    )
-    .expect("write standing result");
+fn verified_capture(artifact_root: &Path, invocation_id: &str) -> PathBuf {
+    artifact_root
+        .join("work-slot-captures/implement")
+        .join(invocation_id)
 }
 
 fn emitted_yaml(capture_root: &Path) -> String {
@@ -1002,17 +979,50 @@ fn bound_invocation_selection_runs_dependants_with_standing_prerequisite() {
             ]
         }),
     );
-    write_standing_plan_task(&artifact_root, "plan-r1", "a");
-    let mut invoke_packet = packet(
+    let first_capture = verified_capture(&artifact_root, "inv-first-standing");
+    let first = invoke_graph(
+        &task_worker(&receipt_dir, &["--write-report", "--record-task-effects"]),
+        &packet_with_capture(
+            "run-bound-selection",
+            "implement",
+            artifact_root.to_str().unwrap(),
+            "Implement",
+            &first_capture,
+        ),
+        None,
+    );
+    assert_eq!(first.status.code(), Some(0), "first: {first:?}");
+    let results: Value = serde_json::from_slice(
+        &fs::read(artifact_root.join("plan-task-results.json")).expect("source results"),
+    )
+    .expect("source results JSON");
+    let a = results["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["assignment_id"] == "a")
+        .unwrap();
+    assert_eq!(a["invocation_id"], "inv-first-standing");
+    assert!(a["result_id"]
+        .as_str()
+        .is_some_and(|id| id.starts_with("sha256:")));
+    assert_eq!(a["repository_effect"]["files"], json!([".task-effect-a"]));
+    assert!(first_capture.join("completion-checkpoint.json").is_file());
+    for task in ["a", "b", "c", "unselected", "summarizer"] {
+        fs::remove_file(receipt_dir.join(format!("{task}.stdin")))
+            .expect("clear first-run receipt");
+    }
+    let mut invoke_packet = packet_with_capture(
         "run-bound-selection",
         "implement",
         artifact_root.to_str().unwrap(),
         "Implement",
+        &verified_capture(&artifact_root, "inv-selected-b"),
     );
     invoke_packet["invocation_input"] = json!({"plan_revision": "plan-r1", "task_roots": ["b"]});
     invoke_packet["standing_assignment_ids"] = json!(["a"]);
     let output = invoke_graph(
-        &task_worker(&receipt_dir, &["--write-report"]),
+        &task_worker(&receipt_dir, &["--write-report", "--record-task-effects"]),
         &invoke_packet,
         None,
     );
@@ -1033,7 +1043,7 @@ fn bound_invocation_selection_runs_dependants_with_standing_prerequisite() {
         .is_file());
 
     let selection: Value = serde_json::from_slice(
-        &fs::read(capture_dir_for_root(&artifact_root).join("selection.json"))
+        &fs::read(verified_capture(&artifact_root, "inv-selected-b").join("selection.json"))
             .expect("selection record"),
     )
     .expect("selection JSON");
@@ -1209,9 +1219,12 @@ fn subset_plan_graph_refuses_missing_prerequisite_and_runs_dependants() {
 
     let first_receipts = artifact_root.parent().unwrap().join("receipts-first");
     fs::create_dir_all(&first_receipts).expect("first receipts");
-    let first_capture = artifact_root.parent().unwrap().join("captures/inv-first");
+    let first_capture = verified_capture(&artifact_root, "inv-first");
     let first = invoke_graph_with(
-        &task_worker(&first_receipts, &["--write-report"]),
+        &task_worker(
+            &first_receipts,
+            &["--write-report", "--record-task-effects"],
+        ),
         &packet_with_capture(
             "run-subset",
             "implement",
@@ -1231,12 +1244,29 @@ fn subset_plan_graph_refuses_missing_prerequisite_and_runs_dependants() {
     for task in ["a", "b", "c"] {
         assert!(first_receipts.join(format!("{task}.stdin")).is_file());
     }
+    let first_results: Value = serde_json::from_slice(
+        &fs::read(artifact_root.join("plan-task-results.json")).expect("first results"),
+    )
+    .expect("first results JSON");
+    assert!(first_results["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["assignment_id"] == "a"
+            && row["invocation_id"] == "inv-first"
+            && row["result_id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("sha256:"))
+            && row["repository_effect"]["files"] == json!([".task-effect-a"])));
 
     let second_receipts = artifact_root.parent().unwrap().join("receipts-second");
     fs::create_dir_all(&second_receipts).expect("second receipts");
-    let second_capture = artifact_root.parent().unwrap().join("captures/inv-second");
+    let second_capture = verified_capture(&artifact_root, "inv-second");
     let second = invoke_graph_with(
-        &task_worker(&second_receipts, &["--write-report"]),
+        &task_worker(
+            &second_receipts,
+            &["--write-report", "--record-task-effects"],
+        ),
         &packet_with_capture(
             "run-subset",
             "implement",
@@ -2697,12 +2727,16 @@ fn backlog_t02_replaced_failed_prerequisite_never_resurrects_old_success() {
         }),
     );
     let initial = invoke_graph(
-        &task_worker(&initial_receipts, &["--write-report"]),
-        &packet(
+        &task_worker(
+            &initial_receipts,
+            &["--write-report", "--record-task-effects"],
+        ),
+        &packet_with_capture(
             "backlog-t02-replaced-initial",
             "implement",
             &artifact_root.to_string_lossy(),
             "Implement",
+            &verified_capture(&artifact_root, "inv-initial"),
         ),
         None,
     );
@@ -2714,7 +2748,21 @@ fn backlog_t02_replaced_failed_prerequisite_never_resurrects_old_success() {
     let parent = artifact_root.parent().unwrap();
     let failed_receipts = parent.join("failed-receipts");
     fs::create_dir_all(&failed_receipts).expect("failed receipts");
-    let failed_capture = parent.join("captures/inv-failed-b");
+    let source_results: Value = serde_json::from_slice(
+        &fs::read(artifact_root.join("plan-task-results.json")).expect("initial source results"),
+    )
+    .expect("source results JSON");
+    assert!(source_results["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["assignment_id"] == "b"
+            && row["invocation_id"] == "inv-initial"
+            && row["result_id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("sha256:"))
+            && row["repository_effect"]["files"] == json!([".task-effect-b"])));
+    let failed_capture = verified_capture(&artifact_root, "inv-failed-b");
     let failed = invoke_graph_with(
         &task_worker(&failed_receipts, &["--fail-task", "b"]),
         &packet_with_capture(
@@ -2737,7 +2785,7 @@ fn backlog_t02_replaced_failed_prerequisite_never_resurrects_old_success() {
 
     let retry_receipts = parent.join("retry-receipts");
     fs::create_dir_all(&retry_receipts).expect("retry receipts");
-    let retry_capture = parent.join("captures/inv-retry-c");
+    let retry_capture = verified_capture(&artifact_root, "inv-retry-c");
     let fake_dagu = parent.join("fake-dagu-bin");
     let probe_marker = dagu_sentinel(&fake_dagu);
     let retry = invoke_graph_with_env(

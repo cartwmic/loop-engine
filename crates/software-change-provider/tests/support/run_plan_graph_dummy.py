@@ -91,6 +91,7 @@ def main() -> int:
     parser.add_argument("--write-repair-report", action="store_true")
     parser.add_argument("--repair-report-revision", default="repair-1")
     parser.add_argument("--repair-effect-file")
+    parser.add_argument("--record-task-effects", action="store_true")
     parser.add_argument("--summarizer-kill", action="store_true")
     parser.add_argument("--spawn-marker")
     parser.add_argument("--wait-peers", type=int, default=0)
@@ -100,10 +101,10 @@ def main() -> int:
         Path(args.spawn_marker).write_text("spawned\n", encoding="utf-8")
 
     stdin = sys.stdin.read()
-    sys.stdout.write(stdin)
-    sys.stdout.flush()
-
     location, rest, is_summarizer, is_repair = split_stdin(stdin)
+    if not args.record_task_effects or is_summarizer:
+        sys.stdout.write(stdin)
+        sys.stdout.flush()
     task_id = parse_task_id(rest, is_summarizer, is_repair)
     receipt = Path(args.receipt_dir)
     receipt.mkdir(parents=True, exist_ok=True)
@@ -144,6 +145,12 @@ def main() -> int:
 
     if not is_summarizer and args.fail_task == task_id:
         return 1
+    if args.record_task_effects and not is_summarizer and not is_repair:
+        # A real, stable file in the selected checkout is the task's declared
+        # effect. The graph computes the content snapshot and source proof.
+        effect = f".task-effect-{task_id}"
+        Path(effect).write_text(f"completed {task_id}\n", encoding="utf-8")
+        print(json.dumps({"repository_effect": {"files": [effect]}}))
     return args.exit_code
 
 

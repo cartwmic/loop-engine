@@ -44,11 +44,18 @@ root=pathlib.Path(p['artifact_root'])
 (root/'started').write_text('started')
 while (root/'hold').exists(): time.sleep(.02)
 steering=[r for r in p.get('context',[]) if r['kind']=='user-steering']
-output=json.dumps({'outcome':[r['data']['instruction'] for r in steering], 'context':p.get('context',[])})
+superseded={id for r in steering for id in r['data'].get('supersedes',[])}
+output=json.dumps({'outcome':[r['data']['instruction'] for r in steering if r['id'] not in superseded], 'context':p.get('context',[])})
 (pathlib.Path(p['capture_dir'])/'stdout').write_text(output)
 print(output)
 ''')
-    filter_binding = {"command": str(journey.provider), "args": ["commission"]}
+    # Scripted reviewer only: explicit per-call capacity, not observed model use.
+    budgets = [{"author": "reviewer", "model_id": "scripted-steering-fixture",
+                "context_window_tokens": 64000, "system_tokens": 1000,
+                "framing_tokens": 1000, "output_reserve_tokens": 1000,
+                "reasoning_reserve_tokens": 1000}]
+    filter_binding = {"command": str(journey.provider),
+                      "args": ["commission", "--call-budgets", json.dumps(budgets)]}
     binding = {"command": sys.executable, "args": [str(worker)], "context_filter": filter_binding}
     config = root / "providers.toml"
     config.write_text('[providers.software-change]\ncommand = ' + json.dumps(str(journey.provider)) + '\n')

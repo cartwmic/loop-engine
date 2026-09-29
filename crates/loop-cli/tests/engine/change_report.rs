@@ -205,6 +205,51 @@ fn show_projects_durable_change_report_without_capture_files() {
     );
     assert_eq!(after_shared_remainder, first);
 
+    // Direct changes below deliberately exercise a legacy inline completion
+    // snapshot, which keeps the original workers for comparison. A new-format
+    // digest-backed row must reject independent worker-payload mutation.
+    let connection = Connection::open(&database).expect("open mutation database");
+    let mut corrupt = task_worker.clone();
+    corrupt.repository_effect = Some(json!({"recorded": "tampered"}));
+    connection
+        .execute(
+            "UPDATE work_slot_invocations SET inner_workers_json = ?1 WHERE invocation_id = 'inv-plan'",
+            [serde_json::to_string(&vec![corrupt]).expect("corrupt worker JSON")],
+        )
+        .expect("mutate digest-backed worker payload");
+    let denied = Command::new(workspace_integration::binary("loop-engine"))
+        .args([
+            "--database",
+            database.to_str().unwrap(),
+            "--json",
+            "show",
+            "--view",
+            "full",
+            "report-run",
+        ])
+        .bounded_output("loop-engine rejects corrupted completion digest")
+        .expect("corrupt show");
+    assert_eq!(denied.status.code(), Some(20));
+    let error: Value = serde_json::from_slice(&denied.stdout).expect("JSON error on stdout");
+    assert_eq!(error["status"], "error");
+    assert_eq!(error["code"], "persistence-failure");
+    assert!(error["message"]
+        .as_str()
+        .unwrap()
+        .contains("sqlite-completion-snapshot-mismatch"));
+    connection
+        .execute(
+            "UPDATE work_slot_invocations SET inner_workers_json = ?1 WHERE invocation_id = 'inv-plan'",
+            [serde_json::to_string(&vec![task_worker.clone()]).expect("original worker JSON")],
+        )
+        .expect("restore digest-backed worker payload");
+    assert_eq!(show(&database)["status"], "completed");
+    connection
+        .execute(
+            "UPDATE work_slot_invocations SET completion_snapshot_json = ?1 WHERE invocation_id = 'inv-plan'",
+            [serde_json::to_string(&vec![task_worker.clone()]).expect("original snapshot JSON")],
+        )
+        .expect("seed legacy inline snapshot");
     let mut mutations = Vec::new();
     let mut changed = task_worker.clone();
     changed.task_definition = Some(json!({"id": "task-a", "change": "two"}));
@@ -238,8 +283,8 @@ fn show_projects_durable_change_report_without_capture_files() {
         assert_eq!(report[dimension]["changed"], true, "{dimension}");
         connection
             .execute(
-                "UPDATE work_slot_invocations SET inner_workers_json = completion_snapshot_json WHERE invocation_id = 'inv-plan'",
-                [],
+                "UPDATE work_slot_invocations SET inner_workers_json = ?1 WHERE invocation_id = 'inv-plan'",
+                [serde_json::to_string(&vec![task_worker.clone()]).expect("original worker JSON")],
             )
             .expect("restore durable result");
     }

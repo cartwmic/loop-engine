@@ -173,6 +173,7 @@ fn append_resolves_selected_assignment_from_durable_state_only() {
         json!({
             "invocation_id": "invocation-1",
             "assignment_id": "axis-a",
+            "slot_id": "review",
             "selected_attempt": 2,
             "selected_output_sha256": "sha256:selected-output",
             "selected_output_path": capture.join("axis-a/attempts/2/stdout").to_string_lossy(),
@@ -453,7 +454,23 @@ fn detailed_compact_and_history_are_capture_free_and_terminal_history_remains_re
         .bounded_output("loop-engine compact stable references")
         .expect("compact show");
     assert!(compact.status.success(), "{compact:?}");
-    assert!(String::from_utf8_lossy(&compact.stdout).contains("completed show --compact"));
+    assert!(String::from_utf8_lossy(&compact.stdout).contains("completed show --view status"));
+    let (_, status, _) = cli(&database, &["show", "--view", "status", "stable-run"]);
+    assert_eq!(status["status"], "completed");
+    assert_eq!(status["result"]["acceptance"]["state"], "unknown");
+    assert_eq!(
+        status["result"]["locators"]["full"],
+        json!([
+            "loop-engine",
+            "--database",
+            database,
+            "--json",
+            "show",
+            "stable-run",
+            "--view",
+            "full"
+        ])
+    );
 
     let (_, terminated, _) = cli(&database, &["terminate", "stable-run"]);
     assert_eq!(terminated["status"], "completed", "{terminated}");
@@ -656,9 +673,23 @@ fn public_show_projects_explicit_accepted_result_separate_from_execution_and_wor
         .contains("not inferred"));
     assert_eq!(acceptance["uncertainty"]["state"], "present");
 
-    // The same decision is visible from the non-mutating status view.
+    // Bounded status does not interpret the full decision history; its locator
+    // directs the caller to the full, attributed decision above.
     let (_, status, _) = cli(&database, &["show", "--view", "status", "acceptance-run"]);
-    assert_eq!(status["result"]["acceptance"]["state"], "accepted");
+    assert_eq!(status["result"]["acceptance"]["state"], "unknown");
+    assert_eq!(
+        status["result"]["locators"]["full"],
+        json!([
+            "loop-engine",
+            "--database",
+            database,
+            "--json",
+            "show",
+            "acceptance-run",
+            "--view",
+            "full"
+        ])
+    );
 }
 
 #[test]
@@ -986,5 +1017,18 @@ fn public_show_projects_explicit_rejected_decision_and_keeps_lanes_separate() {
     assert_eq!(after["execution"]["state"], "succeeded");
     assert_ne!(acceptance, &after["execution"]);
     let (_, status, _) = cli(&database, &["show", "--view", "status", "rejected-run"]);
-    assert_eq!(status["result"]["acceptance"]["state"], "rejected");
+    assert_eq!(status["result"]["acceptance"]["state"], "unknown");
+    assert_eq!(
+        status["result"]["locators"]["full"],
+        json!([
+            "loop-engine",
+            "--database",
+            database,
+            "--json",
+            "show",
+            "rejected-run",
+            "--view",
+            "full"
+        ])
+    );
 }

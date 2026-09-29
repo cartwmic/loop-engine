@@ -407,32 +407,6 @@ fn run_invoke(fixture: &PlanFixture, run_id: &str, input: Option<Value>) -> (Out
     run_invoke_with_controls(fixture, run_id, input, None)
 }
 
-fn run_invoke_preview(fixture: &PlanFixture, run_id: &str, input: Value) -> (Output, Value) {
-    let mut command = Command::new(workspace_integration::binary("loop-engine"));
-    command.args([
-        "--database",
-        fixture.database.to_str().expect("database UTF-8"),
-        "--json",
-        "--input",
-        &serde_json::to_string(&input).expect("input JSON"),
-        "invoke",
-        run_id,
-        "implement",
-        "--preview",
-    ]);
-    let output = command
-        .bounded_output("backlog_t02 loop-engine invoke preview")
-        .expect("invoke preview process");
-    let value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
-        panic!(
-            "invoke preview did not return JSON: {error}; stdout={}; stderr={}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        )
-    });
-    (output, value)
-}
-
 fn run_invoke_with_controls(
     fixture: &PlanFixture,
     run_id: &str,
@@ -617,6 +591,15 @@ fn backlog_t02_optional_repository_effect_distinguishes_missing_task_record_publ
     assert_eq!(dimensions["repository_effect"]["changed"], false);
 
     let connection = Connection::open(&database).expect("open report mutation database");
+    // Mutations below exercise the supported legacy inline snapshot, which
+    // retains an independent original worker. New digest-backed snapshots
+    // correctly reject changes to their bound worker payload as corruption.
+    connection
+        .execute(
+            "UPDATE work_slot_invocations SET completion_snapshot_json = ?1 WHERE invocation_id = 'inv-task'",
+            [serde_json::to_string(&vec![task.clone()]).expect("original worker snapshot JSON")],
+        )
+        .expect("seed legacy comparison snapshot");
     let mut changed_effect = task.clone();
     changed_effect.repository_effect = Some(json!({"changed": true}));
     connection
@@ -725,7 +708,7 @@ fn show_full_report(database: &Path, run_id: &str) -> Value {
 }
 
 #[test]
-fn backlog_t02_plan_graph_recovery_reuses_b_before_retry_and_reaches_current_checkpoint() {
+fn backlog_t02_failed_outer_refuses_partial_reuse_then_full_rerun_reaches_current_checkpoint() {
     let fixture = PlanFixture::new("recovery");
     let run_id = "backlog-t02-recovery";
     fixture.seed(run_id);
@@ -753,7 +736,10 @@ fn backlog_t02_plan_graph_recovery_reuses_b_before_retry_and_reaches_current_che
         .find(|result| result["assignment_id"] == "b")
         .expect("b report");
     assert_eq!(b["dimensions"]["repository_effect"]["changed"], false);
-    assert_eq!(b["standing"], true, "b must stand before retry: {b}");
+    // Core's provider-neutral standing compares recorded inputs. A failed
+    // outer graph has no finalized result/source/completion proof, so this is
+    // not provider-certified standing for a selected graph prerequisite.
+    assert_eq!(b["standing"], true, "core input comparison changed: {b}");
 
     let (force_output, force_fresh) = run_invoke_with_controls(
         &fixture,
@@ -790,80 +776,78 @@ fn backlog_t02_plan_graph_recovery_reuses_b_before_retry_and_reaches_current_che
         .iter()
         .find(|result| result["assignment_id"] == "b")
         .unwrap();
-    assert_eq!(
-        after_force_b["standing"], true,
-        "rejected force-fresh attempt displaced b standing: {after_force_b}"
-    );
-
-    let (retry_output, retry) = run_invoke(
+    assert_eq!(after_force_b["standing"], true);
+    // A normal selected retry also refuses before Dagu: A/B in the failed
+    // outer graph are not finalized sources, despite core's weaker comparison.
+    let (selected_output, selected) = run_invoke(
         &fixture,
         run_id,
         Some(json!({"plan_revision": "plan-r1", "task_roots": ["c"]})),
     );
-    assert_eq!(retry_output.status.code(), Some(0), "retry invoke: {retry}");
+    assert_ne!(
+        selected_output.status.code(),
+        Some(0),
+        "partial task salvage: {selected}"
+    );
+    assert!(
+        selected
+            .to_string()
+            .contains("missing standing prerequisites"),
+        "{selected}"
+    );
+    assert_eq!(load_invocations(&fixture, run_id).len(), 1);
+    assert_eq!(read_count(&fixture.receipt_dir, "c"), 1);
+
+    // Rerun the complete prerequisite closure through the ordinary bound
+    // invocation; no fabricated standing ID or partial-failure salvage.
+    let (retry_output, retry) = run_invoke(&fixture, run_id, None);
+    assert_eq!(
+        retry_output.status.code(),
+        Some(0),
+        "full retry invoke: {retry}"
+    );
     assert_eq!(retry["status"], "completed");
     let invocations = wait_for_invocation(&fixture, run_id, 2);
     assert_eq!(invocations.len(), 2);
     assert_eq!(invocations[0].status, Some(WaiterWrittenStatus::Failed));
     assert_eq!(invocations[1].status, Some(WaiterWrittenStatus::Succeeded));
-
     let after_retry = show_full(&fixture, run_id);
-    let first_after_retry = after_retry["result"]["work_slot_invocations"]
+    let original = after_retry["result"]["work_slot_invocations"]
         .as_array()
         .unwrap()
         .iter()
         .find(|view| view["invocation_id"] == first["result"]["invocation_id"])
         .unwrap();
-    for task_id in ["a", "b"] {
-        let result = first_after_retry["change_report"]["plan_task_results"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|result| result["assignment_id"] == task_id)
-            .unwrap();
-        assert_eq!(result["standing"], true, "unchanged {task_id} was retired");
-    }
-    let old_c = first_after_retry["change_report"]["plan_task_results"]
+    assert_eq!(
+        original["status"], "failed",
+        "original failure history must survive"
+    );
+    let old_c = original["change_report"]["plan_task_results"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|result| result["assignment_id"] == "c")
+        .find(|row| row["assignment_id"] == "c")
         .unwrap();
-    assert_eq!(old_c["standing"], false, "replaced c was resurrected");
+    assert_eq!(old_c["standing"], false, "failed c cannot stand");
     let retry_view = after_retry["result"]["work_slot_invocations"]
         .as_array()
         .unwrap()
         .iter()
         .find(|view| view["invocation_id"] == retry["result"]["invocation_id"])
         .unwrap();
-    let retry_c = retry_view["change_report"]["plan_task_results"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|result| result["assignment_id"] == "c")
-        .unwrap();
-    assert_eq!(retry_c["standing"], true);
-
-    // A later selected recovery must not retire unchanged results from the
-    // earlier full invocation. Re-preparing the same selected recovery is a
-    // second public selection and must succeed without launching anything.
-    let (repeat_output, repeat) = run_invoke_preview(
-        &fixture,
-        run_id,
-        json!({"plan_revision": "plan-r1", "task_roots": ["c"]}),
-    );
-    assert_eq!(
-        repeat_output.status.code(),
-        Some(0),
-        "repeat preview: {repeat}"
-    );
-    assert_eq!(repeat["status"], "completed");
-    assert_eq!(load_invocations(&fixture, run_id).len(), 2);
-    assert_eq!(read_count(&fixture.receipt_dir, "c"), 2);
-
-    assert_eq!(read_count(&fixture.receipt_dir, "a"), 1);
-    assert_eq!(read_count(&fixture.receipt_dir, "b"), 1);
-    assert_eq!(read_count(&fixture.receipt_dir, "c"), 2);
+    for task_id in ["a", "b", "c"] {
+        let result = retry_view["change_report"]["plan_task_results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["assignment_id"] == task_id)
+            .unwrap();
+        assert_eq!(
+            result["standing"], true,
+            "rerun {task_id} did not stand: {result}"
+        );
+        assert_eq!(read_count(&fixture.receipt_dir, task_id), 2);
+    }
     assert_eq!(read_count(&fixture.receipt_dir, "summarizer"), 1);
 
     let results: Value = serde_json::from_slice(

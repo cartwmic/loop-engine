@@ -610,22 +610,28 @@ fn invoke_happy_path_writes_worker_packet_without_command() {
     let captured = std::fs::read_to_string(&packet_file).expect("read worker packet file");
     let packet: Value = serde_json::from_str(&captured).expect("worker stdin json");
     let object = packet.as_object().expect("packet object");
-    assert_eq!(object.len(), 5);
+    assert_eq!(
+        object.len(),
+        8,
+        "packet must contain only the five work keys and three engine identity/history fields"
+    );
     assert!(object.contains_key("run_id"));
     assert!(object.contains_key("slot_id"));
     assert!(object.contains_key("artifact_root"));
     assert!(object.contains_key("instruction_body"));
     assert!(object.contains_key("capture_dir"));
-    assert_eq!(
-        packet,
-        json!({
-            "run_id": "run-happy",
-            "slot_id": "slot-1",
-            "artifact_root": artifact_root,
-            "instruction_body": "Begin the work",
-            "capture_dir": capture_dir,
-        })
-    );
+    assert_eq!(packet["run_id"], "run-happy");
+    assert_eq!(packet["slot_id"], "slot-1");
+    assert_eq!(packet["artifact_root"], artifact_root);
+    assert_eq!(packet["instruction_body"], "Begin the work");
+    assert_eq!(packet["capture_dir"], capture_dir);
+    assert_eq!(packet["state_visit"], 0);
+    assert!(packet["binding_sha256"]
+        .as_str()
+        .is_some_and(|digest| digest.starts_with("sha256:") && digest.len() == 71));
+    assert!(packet["transition_history"]
+        .as_array()
+        .is_some_and(Vec::is_empty));
     assert!(
         packet.get("command").is_none(),
         "worker packet must not contain command: {captured}"

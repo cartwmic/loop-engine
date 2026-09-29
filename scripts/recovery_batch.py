@@ -15,6 +15,7 @@ def _write_json(path: Path, value: object) -> None:
 
 def _worker_body() -> str:
     return r'''#!/usr/bin/env python3
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -25,13 +26,20 @@ def value(prefix, default):
 policies = json.loads(value("assigned_policies: ", "[]"))
 stage = value("review_stage: ", "aggregate")
 author = value("required_author_claim: ", "unknown")
+location = next(json.loads(line) for line in packet.splitlines() if line.startswith('{"artifact_root":'))
+source = Path(location["artifact_root"], "intent.json").read_bytes()
+assert json.loads(source)["revision"]
+grounds = {"reason": "Inspected the current intent revision in the fixture source.",
+           "evidence": [{"locator": "intent.json#/revision",
+                         "sha256": "sha256:" + hashlib.sha256(source).hexdigest()}]}
 with Path(sys.argv[1]).open("a", encoding="utf-8") as stream:
     stream.write(json.dumps({"stage": stage, "author": author, "stdin": packet}) + "\n")
 print(json.dumps({
+    "review_contract_version": 2,
     "review_stage": stage,
     "author": {"name": author, "kind": "agent"},
     "judgments": [
-        {"axis": policy["id"], "result": "pass", "findings": ""}
+        {"axis": policy["id"], "result": "pass", "findings": "", "grounds": grounds}
         for policy in policies
     ],
 }))
@@ -138,9 +146,19 @@ def _profile_checks(profile: dict, report: dict, roster_len: int, *, bookends: b
         assert len(_workers(profile, gate)) == _expected_worker_count(
             report["effective_policy"]["review_policies"][gate], roster_len
         )
-        assert binding["context_filter"]["args"] == ["commission"]
+        filter_args = binding["context_filter"]["args"]
+        assert filter_args[:2] == ["commission", "--call-budgets"] and len(filter_args) == 3
+        expected_authors = list(dict.fromkeys(
+            worker["preamble"].split("required_author_claim: ", 1)[1].splitlines()[0]
+            for worker in _workers(profile, gate)
+        ))
+        assert json.loads(filter_args[2]) == [
+            {"author": author, **next(row["token_budget"] for row in report["roster"] if row["author"] == author)}
+            for author in expected_authors
+        ]
         for worker in _workers(profile, gate):
             assert worker["full_output_schema"]["required"] == [
+                "review_contract_version",
                 "review_stage",
                 "author",
                 "judgments",
@@ -169,8 +187,14 @@ def prove(journey):
     _write_json(
         roster,
         [
-            {"author": "reviewer-a", "command": str(worker_a), "args": [str(log_a)]},
-            {"author": "reviewer-b", "command": str(worker_b), "args": [str(log_b)]},
+            {"author": "reviewer-a", "command": str(worker_a), "args": [str(log_a)],
+             "token_budget": {"model_id": "scripted-fixture-a", "context_window_tokens": 64000,
+                              "system_tokens": 1000, "framing_tokens": 1000,
+                              "output_reserve_tokens": 1000, "reasoning_reserve_tokens": 1000}},
+            {"author": "reviewer-b", "command": str(worker_b), "args": [str(log_b)],
+             "token_budget": {"model_id": "scripted-fixture-b", "context_window_tokens": 64000,
+                              "system_tokens": 1000, "framing_tokens": 1000,
+                              "output_reserve_tokens": 1000, "reasoning_reserve_tokens": 1000}},
         ],
     )
 
@@ -188,9 +212,10 @@ def prove(journey):
     _profile_checks(profile, report, 2, bookends=True)
 
     duplicate = root / "duplicate.json"
+    roster_rows = json.loads(roster.read_text(encoding="utf-8"))
     _write_json(duplicate, [
-        {"author": "reviewer-a", "command": str(worker_a), "args": []},
-        {"author": "reviewer-a", "command": str(worker_b), "args": []},
+        {**roster_rows[0], "args": []},
+        {**roster_rows[1], "author": "reviewer-a", "args": []},
     ])
     refused = subprocess.run(
         [
@@ -200,7 +225,18 @@ def prove(journey):
         ], cwd=root, capture_output=True, text=True, check=False,
     )
     assert refused.returncode != 0 and not (root / "duplicate-output.json").exists()
-    proof["cases"].append("all rigor levels, Bookends opt-in, exact bytes, concurrency and invalid roster")
+    bad_budget = root / "bad-budget.json"
+    _write_json(bad_budget, [{**roster_rows[0], "token_budget": {
+        **roster_rows[0]["token_budget"], "reasoning_reserve_tokens": 0,
+    }}, roster_rows[1]])
+    bad = subprocess.run(
+        [str(journey.provider), "setup", "--rigor", "standard", "--roster", str(bad_budget),
+         "--engine", str(journey.engine), "--provider", str(journey.provider),
+         "--output", str(root / "bad-budget-output.json"), "--decline-advice"],
+        cwd=root, capture_output=True, text=True, check=False,
+    )
+    assert bad.returncode != 0 and not (root / "bad-budget-output.json").exists()
+    proof["cases"].append("all rigor levels, Bookends opt-in, exact bytes, concurrency, duplicate author and bad budget")
 
     config = root / "providers.toml"
     config.write_text(
