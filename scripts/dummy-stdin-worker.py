@@ -148,6 +148,11 @@ def main() -> int:
         help="Write this exact string to stdout after recording stdin",
     )
     parser.add_argument(
+        "--record-task-effects",
+        action="store_true",
+        help="Write a real per-task effect file and emit its inventory for standing proof",
+    )
+    parser.add_argument(
         "--no-report",
         action="store_true",
         help="Do not write implementation-report.json even when this process is the summarizer",
@@ -238,7 +243,11 @@ def main() -> int:
 
     dest.with_name(dest.name + ".done").write_text("done\n", encoding="utf-8")
 
-    if args.stdout is not None:
+    if args.record_task_effects and task_id and not is_summarizer and not is_repair:
+        effect = f".task-effect-{task_id}"
+        Path(effect).write_text(f"completed {task_id}\n", encoding="utf-8")
+        print(json.dumps({"repository_effect": {"files": [effect]}}))
+    elif args.stdout is not None:
         sys.stdout.write(args.stdout)
         sys.stdout.flush()
 

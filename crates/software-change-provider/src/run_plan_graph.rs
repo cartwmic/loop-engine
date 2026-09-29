@@ -900,8 +900,13 @@ fn execute_from_packet(args: &RunPlanGraphArgs, raw_packet: &str) -> Result<(), 
             )));
         }
         verify_report_only_reentry(&packet, &artifact_root)?;
-        let standing =
-            verify_current_standing_tasks(&artifact_root, &args.working_directory, &plan)?;
+        let standing = verify_current_standing_tasks(
+            &artifact_root,
+            &args.working_directory,
+            &plan,
+            packet.context.as_deref(),
+            packet.standing_assignment_ids.as_deref(),
+        )?;
         if packet.preview {
             println!(
                 "{}",
@@ -946,7 +951,7 @@ fn execute_from_packet(args: &RunPlanGraphArgs, raw_packet: &str) -> Result<(), 
         &args.working_directory,
         &plan,
         invocation_plan_selection,
-        !packet.controls.force_fresh,
+        &packet,
     )
     .map_err(|error| {
         if packet.controls.force_fresh {
@@ -1197,8 +1202,9 @@ fn resolve_plan_selection(
     working_directory: &Path,
     plan: &PlanGraph,
     invocation_selection: Option<&PlanSelection>,
-    allow_mapped_standing: bool,
+    packet: &InvokePacket,
 ) -> Result<ResolvedPlanSelection, ExecuteError> {
+    let allow_mapped_standing = !packet.controls.force_fresh;
     let requested = if let Some(selection) = invocation_selection {
         if selection.plan_revision != plan.revision {
             return Err(ExecuteError::usage(format!(
@@ -1242,6 +1248,8 @@ fn resolve_plan_selection(
         working_directory,
         plan,
         allow_mapped_standing,
+        packet.context.as_deref(),
+        packet.standing_assignment_ids.as_deref(),
     )?;
     let mut mapped = if allow_mapped_standing {
         invocation_selection
@@ -1347,6 +1355,8 @@ fn inspect_current_standing_tasks(
     artifact_root: &Path,
     working_directory: &Path,
     plan: &PlanGraph,
+    context: Option<&[ContextRecord]>,
+    engine_standing: Option<&[String]>,
 ) -> Result<ResolvedStandingResults, ExecuteError> {
     let path = artifact_root.join(PLAN_TASK_RESULTS_FILE);
     let raw = match fs::read(&path) {
@@ -1369,6 +1379,13 @@ fn inspect_current_standing_tasks(
     }
     let mut result = ResolvedStandingResults::default();
     for row in &file.results {
+        // Engine standing is necessary for automatic bound reuse, not a
+        // substitute for the source/effect checks below. Explicit mapped
+        // standing remains separately verified under its driver declaration.
+        if engine_standing.is_some_and(|ids| !ids.contains(&row.assignment_id)) {
+            result.pending.push(json!({"task_id":row.assignment_id,"status":"unknown-pending","reason":"task is not standing in the engine invocation snapshot"}));
+            continue;
+        }
         let Some(invocation_id) = row.invocation_id.as_deref() else {
             result.pending.push(json!({"task_id":row.assignment_id,"status":"unknown-pending","reason":"task result has no invocation identity"}));
             continue;
@@ -1392,14 +1409,24 @@ fn inspect_current_standing_tasks(
             result.pending.push(json!({"task_id":row.assignment_id,"status":"unknown-pending","reason":"task is absent from current plan"}));
             continue;
         };
+        // Compare like-for-like task inputs: recorded tasks include the
+        // findings and steering delivered to their worker, not just plan data.
+        // Re-project current context rather than ignoring changed instructions.
+        let current_task = project_task_finding_context(
+            artifact_root,
+            working_directory,
+            current_task,
+            &row.assignment_id,
+            context,
+        )?;
         let current_dependencies = sorted_predecessors(plan, &row.assignment_id);
         if row.plan_revision != plan.revision
             || source.result.plan_revision != plan.revision
             || row.exit_code != 0
-            || normalized_task_definition(&row.task) != normalized_task_definition(current_task)
+            || normalized_task_definition(&row.task) != normalized_task_definition(&current_task)
             || row.dependencies != current_dependencies
             || normalized_task_definition(&source.result.task)
-                != normalized_task_definition(current_task)
+                != normalized_task_definition(&current_task)
             || source.result.dependencies != current_dependencies
         {
             result.pending.push(json!({"task_id":row.assignment_id,"status":"unknown-pending","reason":"task definition, dependency, revision, or result status changed"}));
@@ -1510,8 +1537,16 @@ fn verify_current_standing_tasks(
     artifact_root: &Path,
     working_directory: &Path,
     plan: &PlanGraph,
+    context: Option<&[ContextRecord]>,
+    engine_standing: Option<&[String]>,
 ) -> Result<ResolvedStandingResults, ExecuteError> {
-    let inspected = inspect_current_standing_tasks(artifact_root, working_directory, plan)?;
+    let inspected = inspect_current_standing_tasks(
+        artifact_root,
+        working_directory,
+        plan,
+        context,
+        engine_standing,
+    )?;
     if inspected.standing.len() != plan.order.len() {
         let missing = plan
             .order
@@ -1654,6 +1689,8 @@ fn load_standing_plan_tasks(
     working_directory: &Path,
     plan: &PlanGraph,
     allow_standing: bool,
+    context: Option<&[ContextRecord]>,
+    engine_standing: Option<&[String]>,
 ) -> Result<HashSet<String>, ExecuteError> {
     if !allow_standing {
         return Ok(HashSet::new());
@@ -1678,7 +1715,13 @@ fn load_standing_plan_tasks(
     if file.schema_version != "1" || file.plan_revision != plan.revision {
         return Ok(HashSet::new());
     }
-    let inspected = inspect_current_standing_tasks(artifact_root, working_directory, plan)?;
+    let inspected = inspect_current_standing_tasks(
+        artifact_root,
+        working_directory,
+        plan,
+        context,
+        engine_standing,
+    )?;
     Ok(inspected.standing)
 }
 

@@ -2124,7 +2124,7 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
     # the resulting working tree rather than a selected-task projection.
     subset_root = work_dir / "subset-resulting-tree"
     subset_receipts = subset_root / "receipts"
-    subset_capture = subset_root / "captures" / "inv-subset"
+    subset_capture = subset_root / "work-slot-captures" / "implement"
     subset_root.mkdir(parents=True, exist_ok=True)
     _ensure_git_repository(subset_root)
     subset_plan = {
@@ -2152,7 +2152,9 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
         "    report = {'revision':'1','author':{'name':'subset-worker','kind':'script'},'plan_revision':plan['revision'],'coverage':{'commit':'subset','documents':[{'path':'plan.json','revision':plan['revision']}]},'summary':'resulting tree','changed_surface':sorted(p.name for p in Path.cwd().iterdir()),'validation':[{'proof':'subset'}]}\n"
         "    (root / 'implementation-report.json').write_text(json.dumps(report)+'\\n')\n"
         "else:\n"
-        "    task = json.loads(rest); (Path.cwd() / ('effect-' + task['id'] + '.txt')).write_text('present\\n')\n",
+        "    task = json.loads(rest); effect = 'effect-' + task['id'] + '.txt'\n"
+        "    (Path.cwd() / effect).write_text('present\\n')\n"
+        "    print(json.dumps({'repository_effect': {'files': [effect]}}))\n",
         encoding="utf-8",
     )
     base_binding = implement_graph_runner_binding(
@@ -2230,8 +2232,8 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
     if not (subset_root / "implementation-checkpoint.json").is_file():
         raise WorkSlotJourneyFailure("subset graph omitted resulting-tree checkpoint")
 
-    # A direct provider invocation has no engine standing-id packet, so a
-    # matching successful sidecar result may satisfy alpha. Select beta only
+    # The canonical successful capture and unchanged file effect certify
+    # alpha without an engine standing-id hint. Select beta only
     # and prove the summarizer still reports the leftover gamma effect from the
     # resulting working tree; selecting alpha here would hide the leftover.
     leftover_capture = subset_capture / "leftover"
@@ -2251,7 +2253,7 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
     )
     if leftover.returncode != 0:
         raise WorkSlotJourneyFailure(
-            f"direct beta subset with sidecar-standing alpha failed: {leftover.stderr.decode('utf-8', 'replace')}"
+            f"direct beta subset with verified alpha failed: {leftover.stderr.decode('utf-8', 'replace')}"
         )
     leftover_workers = _load_summary_workers(leftover_capture)
     if [worker.get("assignment_id") for worker in leftover_workers] != ["beta"]:
@@ -2406,19 +2408,19 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
             )
 
     for label, invocation_input, frozen_selection_args, expected_error in (
-        ("malformed", "not an object", (), "invocation_input must be exactly"),
+        ("malformed", "not an object", (), "invocation_input must be a task-root selection"),
         ("null", None, (), "must be an object when present"),
         (
             "wrong-types",
             {"plan_revision": 7, "task_roots": ["alpha"]},
             (),
-            "invocation_input must be exactly",
+            "invocation_input must be a closed task selection",
         ),
         (
             "extra",
             {"plan_revision": plan_revision, "task_roots": ["alpha"], "extra": True},
             (),
-            "invocation_input must be exactly",
+            "invocation_input must be a task-root selection",
         ),
         (
             "empty-roots",
@@ -2545,8 +2547,11 @@ def prove_graph_runner(*, provider: Path, work_dir: Path) -> list[str]:
         ) from error
     expected_selection = {
         "schema_version": "1",
+        "mode": "task-roots",
         "requested": ["root"],
         "tasks": selected_ids,
+        "standing_results": [],
+        "pending_mappings": [],
     }
     if selection_record != expected_selection:
         raise WorkSlotJourneyFailure(
@@ -2587,7 +2592,7 @@ def prove_engine_standing_join(
     _write_small_plan(artifact_root)
     record_receipts = work_dir / "record-receipts"
     select_receipts = work_dir / "select-receipts"
-    known_effect = ('--stdout', '{"repository_effect":{"kind":"dummy"}}')
+    known_effect = ("--record-task-effects",)
     record_binding = implement_graph_runner_binding(
         provider=provider,
         task_worker=stdin_worker_cli(record_receipts, known_effect),
@@ -2618,7 +2623,7 @@ def prove_engine_standing_join(
         "transitions": [],
         "work_slots": [
             {
-                "id": "record",
+                "id": "implement",
                 "state": "work",
                 "event": "recorded",
                 "stdin_context_kinds": ["finding-ledger"],
@@ -2651,7 +2656,7 @@ def prove_engine_standing_join(
     initial_input = {
         "artifact_root": str(artifact_root),
         "work_slot_bindings": {
-            "record": record_binding,
+            "implement": record_binding,
             "select": select_binding,
         },
     }
@@ -2680,7 +2685,7 @@ def prove_engine_standing_join(
     if shown.get("status") != "completed":
         raise WorkSlotJourneyFailure(f"standing join initial show failed: {shown}")
     recorded = invoke_until_succeeded(
-        engine_call, run_id, "record", timeout_s=30.0
+        engine_call, run_id, "implement", timeout_s=30.0
     )
     record_workers = recorded.get("inner_workers")
     if not isinstance(record_workers, list) or [
@@ -2698,6 +2703,12 @@ def prove_engine_standing_join(
         ).fetchone()
         if row is None:
             raise WorkSlotJourneyFailure("standing join record invocation was not durable")
+        # Deliberate durable-input comparison uses the legacy inline snapshot;
+        # new digest-backed rows correctly reject independent payload mutation.
+        connection.execute(
+            "UPDATE work_slot_invocations SET completion_snapshot_json = ?1 WHERE invocation_id = ?2",
+            (row[0], recorded["invocation_id"]),
+        )
         current_workers = json.loads(row[0])
         alpha = next(
             worker
@@ -3099,7 +3110,7 @@ def prove_full_schema_retry(*, engine: Path, work_dir: Path) -> list[str]:
         or success_summary.get("selected_attempt") != 2
         or success_summary.get("selected_output_sha256")
         != "sha256:" + hashlib.sha256(selected_attempt_path.read_bytes()).hexdigest()
-        or success_summary.get("selected_output_path") != str(selected_attempt_path)
+        or success_summary.get("selected_output_path") != "0/attempts/2/stdout"
         or success_manifest.get("selected_attempt") != 2
         or success_manifest.get("exhausted") is not False
         or success_stdout != (success_capture / "0" / "attempts" / "2" / "stdout").read_bytes()
@@ -3574,7 +3585,7 @@ def prove_selected_attempt_ledger_linkage(
         shown_worker.get("assignment_id") != "worker-0"
         or shown_worker.get("selected_attempt") != 2
         or shown_worker.get("selected_output_sha256") != expected_digest
-        or shown_worker.get("selected_output_path") != str(selected_attempt_path)
+        or shown_worker.get("selected_output_path") != "0/attempts/2/stdout"
     ):
         raise WorkSlotJourneyFailure(
             f"show did not expose the originating selected attempt: {shown_worker}"
@@ -3768,7 +3779,7 @@ def prove_selected_attempt_ledger_linkage(
         or selected_data.get("origin") != selected_origin
         or not isinstance(resolved_origin, dict)
         or resolved_origin.get("selected_attempt") != 2
-        or resolved_origin.get("selected_output_path") != str(selected_attempt_path)
+        or resolved_origin.get("selected_output_path") != "0/attempts/2/stdout"
         or resolved_origin.get("selected_output_sha256") != output_digest
     ):
         raise WorkSlotJourneyFailure(
@@ -4256,7 +4267,7 @@ def prove_subset_applicability_checked(
     source_records: dict[str, str] = {}
     for worker in full_workers:
         assignment = worker["assignment_id"]
-        output_path = Path(worker["selected_output_path"])
+        output_path = Path(full_overlay["capture_dir"]) / worker["selected_output_path"]
         output_digest = "sha256:" + hashlib.sha256(output_path.read_bytes()).hexdigest()
         author = f"subset-{assignment}"
         if worker.get("selected_attempt") != 1 or worker.get("selected_output_sha256") != output_digest:
@@ -4306,12 +4317,12 @@ def prove_subset_applicability_checked(
         raise WorkSlotJourneyFailure(f"subset re-invoke changed assignment counts unexpectedly: {counts}")
 
     subset_worker = subset_workers[0]
-    subset_output_path = Path(subset_worker["selected_output_path"])
+    subset_output_path = Path(subset["capture_dir"]) / subset_worker["selected_output_path"]
     subset_output_digest = "sha256:" + hashlib.sha256(subset_output_path.read_bytes()).hexdigest()
     if (
         subset_worker.get("selected_attempt") != 1
         or subset_worker.get("selected_output_sha256") != subset_output_digest
-        or subset_output_path == Path(full_workers[0]["selected_output_path"])
+        or subset_output_path == Path(full_overlay["capture_dir"]) / full_workers[0]["selected_output_path"]
     ):
         raise WorkSlotJourneyFailure(f"subset overlay omitted fresh worker-0 output evidence: {subset_worker}")
     subset_evidence = {

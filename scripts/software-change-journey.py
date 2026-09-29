@@ -195,9 +195,12 @@ PACKAGE_7B_PROOF = [
 def _review_stdin_kinds(slot_ids: Sequence[str]) -> dict[str, list[str]]:
     return {
         slot_id: ["finding-ledger", "review-evidence", "evidence-applicability",
-                  "user-steering", "steering-incorporation"] + (
-                      ["command-evidence", "validation-command", "criterion-verdict", "goal-verdict", "criterion-revalidation"]
-                      if slot_id == "implement" or slot_id.startswith("validation") else [])
+                  "user-steering", "steering-incorporation"]
+        + (["reconciliation-decision"] if slot_id == "implement" else [])
+        + (["command-evidence", "criterion-verdict", "goal-verdict"]
+           if slot_id.endswith("-review") else [])
+        + (["command-evidence", "validation-command", "criterion-verdict", "goal-verdict", "criterion-revalidation"]
+           if slot_id == "implement" or slot_id.startswith("validation") else [])
         for slot_id in slot_ids
     }
 WORK_SLOT_PROOF = [
@@ -2501,6 +2504,7 @@ class Journey:
 
         script = Path(__file__).resolve()
         case_root = self.run_dir / "dogfood-inventory"
+        case_root.mkdir(parents=True, exist_ok=True)
         for name in SCENARIOS:
             global_jobs.append({
                 "name": f"dogfood-{name}",
@@ -2647,8 +2651,7 @@ class Journey:
             implementation_worker = work_slot_journey.stdin_worker_cli(
                 implementation_receipts,
                 (
-                    "--stdout",
-                    '{"repository_effect":{"kind":"dummy"}}',
+                    "--record-task-effects",
                     "--repair-revision-file",
                     str(repair_revision_file),
                     "--repair-effect-file",
@@ -5873,10 +5876,11 @@ class Journey:
         ):
             for result in task_results:
                 effect = result.get("dimensions", {}).get("repository_effect", {})
+                expected_effect = {"files": [f".task-effect-{result['assignment_id']}"]}
                 if (
                     effect.get("changed") is not False
-                    or effect.get("recorded") != {"kind": "dummy"}
-                    or effect.get("current") != {"kind": "dummy"}
+                    or effect.get("recorded") != expected_effect
+                    or effect.get("current") != expected_effect
                 ):
                     raise JourneyFailure(
                         f"durable {label} plan-task result omitted its repository effect: {result}",

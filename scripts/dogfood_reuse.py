@@ -854,6 +854,22 @@ def reuse_case(journey) -> None:
     _write_json(artifacts / "intent.json", {"revision":"intent-r2"})
     _write_json(artifacts / "design.json", {"revision":"design-r2"})
     _write_json(plan_path,_fixture_plan("plan-r2",reshaped=True))
+    # This generic binding admits refusals as failed opaque invocations. Such
+    # attempts invalidate automatic standing, so test them before the mapped
+    # replan establishes the fresh baseline used by the later direct act.
+    report_before_refusal = report_path.read_bytes()
+    checkpoint_before_refusal = checkpoint_path.read_bytes()
+    results_before_refusal = results_path.read_bytes()
+    for label, value, expected in (
+        ("empty roots",{"plan_revision":"plan-r2","task_roots":[]},"task_roots"),
+        ("pre-decision report-only",{"plan_revision":"plan-r2","report_only":True},"reconciliation"),
+    ):
+        _invoke_refused(journey,database,run_id,value,expected)
+    if report_path.read_bytes() != report_before_refusal or checkpoint_path.read_bytes() != checkpoint_before_refusal:
+        raise ValueError("preflight refusal changed the earlier report/checkpoint")
+    if results_path.read_bytes() != results_before_refusal:
+        raise ValueError("preflight refusal rewrote the existing task results")
+
     mappings = [
         {**old_sources["beta"],"current_obligations":["beta-renamed","beta-split","beta-merge"],"reason":"The completed beta output still covers these split and renamed obligations."},
         {**old_sources["gamma"],"current_obligations":["beta-merge"],"reason":"The completed gamma output remains one part of the merged obligation."},
@@ -886,21 +902,6 @@ def reuse_case(journey) -> None:
     mapped_result_file = json.loads(results_path.read_text(encoding="utf-8"))
     if mapped_result_file.get("plan_revision") != "plan-r2" or len(mapped_result_file.get("standing_results",[])) != 3:
         raise ValueError("mapped standing observations were not retained in the existing plan-task-results file")
-
-    # Empty roots stay rejected. A report-only selector is a disjoint future
-    # mode, and it still refuses until a current checked decision and re-entry.
-    report_before_refusal = report_path.read_bytes()
-    checkpoint_before_refusal = checkpoint_path.read_bytes()
-    results_before_refusal = results_path.read_bytes()
-    for label, value, expected in (
-        ("empty roots",{"plan_revision":"plan-r2","task_roots":[]},"task_roots"),
-        ("pre-decision report-only",{"plan_revision":"plan-r2","report_only":True},"reconciliation"),
-    ):
-        _invoke_refused(journey,database,run_id,value,expected)
-    if report_path.read_bytes() != report_before_refusal or checkpoint_path.read_bytes() != checkpoint_before_refusal:
-        raise ValueError("preflight refusal changed the earlier report/checkpoint")
-    if results_path.read_bytes() != results_before_refusal:
-        raise ValueError("preflight refusal rewrote the existing task results")
 
     # Exercise a checked reconciliation, check-free implementation re-entry,
     # explicit non-worker act, and current artifact identity checks.

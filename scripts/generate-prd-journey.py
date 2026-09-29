@@ -239,8 +239,14 @@ def run_bound_worker(arguments: argparse.Namespace) -> int:
         print("worker packet must be an object", file=sys.stderr)
         return 1
     required = {"run_id", "slot_id", "artifact_root", "instruction_body", "capture_dir"}
-    if set(packet) != required:
-        print(f"worker packet keys {sorted(packet)} != {sorted(required)}", file=sys.stderr)
+    optional = {"binding_sha256", "state_visit", "transition_history"}
+    if not required <= set(packet) <= required | optional:
+        print(f"worker packet has missing or unknown keys: {sorted(packet)}", file=sys.stderr)
+        return 1
+    if ("binding_sha256" in packet and not isinstance(packet["binding_sha256"], str)
+            or "state_visit" in packet and (type(packet["state_visit"]) is not int or packet["state_visit"] < 0)
+            or "transition_history" in packet and not isinstance(packet["transition_history"], list)):
+        print("worker packet has malformed engine identity/history fields", file=sys.stderr)
         return 1
     slot = packet["slot_id"]
     artifact_root = packet["artifact_root"]

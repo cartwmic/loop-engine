@@ -980,15 +980,21 @@ fn bound_invocation_selection_runs_dependants_with_standing_prerequisite() {
         }),
     );
     let first_capture = verified_capture(&artifact_root, "inv-first-standing");
+    let mut first_packet = packet_with_capture(
+        "run-bound-selection",
+        "implement",
+        artifact_root.to_str().unwrap(),
+        "Implement",
+        &first_capture,
+    );
+    let steering = json!([{
+        "id":"direction-1", "sequence":1, "created_at":1, "kind":"user-steering",
+        "data":{"target":{"kind":"all"},"instruction":"Preserve the original task effects."}
+    }]);
+    first_packet["context"] = steering.clone();
     let first = invoke_graph(
         &task_worker(&receipt_dir, &["--write-report", "--record-task-effects"]),
-        &packet_with_capture(
-            "run-bound-selection",
-            "implement",
-            artifact_root.to_str().unwrap(),
-            "Implement",
-            &first_capture,
-        ),
+        &first_packet,
         None,
     );
     assert_eq!(first.status.code(), Some(0), "first: {first:?}");
@@ -1021,6 +1027,43 @@ fn bound_invocation_selection_runs_dependants_with_standing_prerequisite() {
     );
     invoke_packet["invocation_input"] = json!({"plan_revision": "plan-r1", "task_roots": ["b"]});
     invoke_packet["standing_assignment_ids"] = json!(["a"]);
+    invoke_packet["context"] = steering.clone();
+    // Changed or removed prerequisite steering must still invalidate standing.
+    let mut changed_steering = steering.clone();
+    changed_steering.as_array_mut().unwrap().push(json!({
+        "id":"direction-2", "sequence":2, "created_at":2, "kind":"user-steering",
+        "data":{"target":{"kind":"all"},"instruction":"Change the task effects.",
+                "supersedes":["direction-1"]}
+    }));
+    for (context, standing_ids) in [
+        (changed_steering, json!(["a"])),
+        (json!([]), json!(["a"])),
+        (steering.clone(), json!([])),
+    ] {
+        let mut preview = invoke_packet.clone();
+        preview["preview"] = json!(true);
+        preview["context"] = context;
+        preview["standing_assignment_ids"] = standing_ids;
+        let denied = invoke_graph(
+            &task_worker(&receipt_dir, &["--write-report", "--record-task-effects"]),
+            &preview,
+            None,
+        );
+        assert_eq!(denied.status.code(), Some(2), "{denied:?}");
+        assert!(
+            String::from_utf8_lossy(&denied.stderr).contains("missing standing prerequisites: a")
+        );
+        assert!(!receipt_dir.join("b.stdin").exists());
+    }
+    // New instructions for an unrelated task do not invalidate prerequisite A.
+    invoke_packet["context"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id":"other-task", "sequence":3, "created_at":3, "kind":"user-steering",
+            "data":{"target":{"kind":"tasks","plan_revision":"plan-r1","ids":["unselected"]},
+                    "instruction":"Change only the unrelated task."}
+        }));
     let output = invoke_graph(
         &task_worker(&receipt_dir, &["--write-report", "--record-task-effects"]),
         &invoke_packet,

@@ -273,10 +273,11 @@ class Journey:
             check=False,
         )
         help_text = help_run.stdout
-        primary = ("start", "list", "show", "append", "event", "history", "terminate", "invoke", "amend-binding", "cancel-invocation")
+        primary = ("start", "list", "show", "append", "event", "history", "advise", "terminate", "invoke", "amend-binding", "cancel-invocation")
         other = ("invocation-progress", "fan-out", "preview-bindings")
         hidden = ("wait-invocation", "stdin-exec", "fan-out-join")
-        # bookends:LE-119 — real help exposes exactly ten primary operations, separate utilities and no internal helpers (recovery amendment draft).
+        # bookends:LE-119 — real help exposes the exact primary operations,
+        # including optional advice, separate utilities and no internal helpers.
         if (
             help_run.returncode != 0
             or tuple(line.strip().split()[0] for line in help_text.split("Operations:\n", 1)[-1].split("Other commands:", 1)[0].splitlines() if line.strip()) != primary
