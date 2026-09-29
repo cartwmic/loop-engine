@@ -575,10 +575,10 @@ mod tests {
         }
 
         let mut probability_response = response();
-        if let Some(answer) = probability_response.answers.get_mut("choice") {
-            if let AdviceAnswer::Choice { probabilities, .. } = answer {
-                probabilities.insert("no".into(), 0.2);
-            }
+        if let Some(AdviceAnswer::Choice { probabilities, .. }) =
+            probability_response.answers.get_mut("choice")
+        {
+            probabilities.insert("no".into(), 0.2);
         }
         assert!(request
             .validate_response(&probability_response)
@@ -586,10 +586,8 @@ mod tests {
             .contains("normalized"));
 
         let mut noul_response = response();
-        if let Some(answer) = noul_response.answers.get_mut("noul") {
-            if let AdviceAnswer::Noul { noul, .. } = answer {
-                *noul = 1.1;
-            }
+        if let Some(AdviceAnswer::Noul { noul, .. }) = noul_response.answers.get_mut("noul") {
+            *noul = 1.1;
         }
         assert!(request
             .validate_response(&noul_response)
@@ -597,10 +595,8 @@ mod tests {
             .contains("[0,1]"));
 
         let mut score_response = response();
-        if let Some(answer) = score_response.answers.get_mut("score") {
-            if let AdviceAnswer::Score { score, .. } = answer {
-                *score = 1.0;
-            }
+        if let Some(AdviceAnswer::Score { score, .. }) = score_response.answers.get_mut("score") {
+            *score = 1.0;
         }
         assert!(request
             .validate_response(&score_response)

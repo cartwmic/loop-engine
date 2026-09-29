@@ -450,7 +450,7 @@ fn build_questions(
                 questions.insert(
                     format!("{prefix}.scope"),
                     choice_question(
-                        format!("Classify the supplied finding against the actual frozen intent and named obligation; do not infer an owner decision."),
+                        "Classify the supplied finding against the actual frozen intent and named obligation; do not infer an owner decision.".to_owned(),
                         &[
                             ("original-obligation", "The defect violates an obligation in the approved scope."),
                             ("introduced-by-change", "The supplied evidence shows this change introduced the defect."),
@@ -671,7 +671,7 @@ fn build_questions(
                 .and_then(Value::as_str)
                 .map(PathBuf::from)
                 .ok_or("final-completion omitted artifact_root")?;
-            let checks = selected_check_assertions(&report, &plan, sources, &artifact_root)?;
+            let checks = selected_check_assertions(report, plan, sources, &artifact_root)?;
             let check_summary = selected_assertion_summary(&checks);
             let verdicts = sources
                 .iter()
@@ -1411,7 +1411,8 @@ mod tests {
     #[test]
     fn prepares_eight_evidence_selected_question_families_and_waits_for_triage() {
         let (show, root) = fixture();
-        let cases: [(&str, &[&str], &[&str], &[&str], bool); 8] = [
+        type AdviceCase<'a> = (&'a str, &'a [&'a str], &'a [&'a str], &'a [&'a str], bool);
+        let cases: [AdviceCase<'_>; 8] = [
             (
                 "review-candidates",
                 &["review-fail"],

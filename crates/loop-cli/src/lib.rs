@@ -180,6 +180,10 @@ pub struct AppendArgs {
 /// A parsed CLI request, including the two non-operation informational
 /// requests.  `Help` and `Version` do not dispatch a semantic operation.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "boxing the operation payload would change the public parsed-request variant shape"
+)]
 pub enum ParsedRequest {
     Help {
         command: Option<String>,

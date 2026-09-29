@@ -285,7 +285,7 @@ def _adapter(path: Path) -> None:
     )
 
 
-def _write_run(journey, root: Path, label: str, axes: list[str], worker: dict[str, Any], *, schema: dict[str, Any] | None = None):
+def _write_run(journey, root: Path, label: str, axes: list[str], worker: dict[str, Any], *, schema: dict[str, Any] | None = None, binding: dict[str, Any] | None = None):
     run_root = root / label
     run_root.mkdir(parents=True)
     artifacts = run_root / "artifacts"
@@ -315,7 +315,7 @@ def _write_run(journey, root: Path, label: str, axes: list[str], worker: dict[st
     if schema is not None:
         binding_worker["full_output_schema"] = schema
     profile["work_slot_bindings"] = {
-        "intent-review": dogfood_recovery._fanout_binding(journey.engine, [binding_worker], max_active=1)
+        "intent-review": binding or dogfood_recovery._fanout_binding(journey.engine, [binding_worker], max_active=1)
     }
     profile_path = run_root / "initial-input.json"
     _json(profile_path, profile)
@@ -378,6 +378,122 @@ def _append_applicability(journey, root, database, run_id, record_id, source_id,
 
 def _axes_from_records(records: list[dict[str, Any]], status: str) -> list[str]:
     return sorted(record["axis"] for record in records if record["status"] == status and record.get("axis"))
+
+
+def high_rigor_refusal_case(journey, root: Path) -> dict[str, Any]:
+    """Prove four distinct real high-rigor review refusals with a valid ledger."""
+    profile_source = journey.data_root / "crates/software-change-provider/data/configs/high-rigor.json"
+    fixture = journey.data_root / "crates/software-change-provider/data/calibration/fixtures/intent-good.json"
+    selected_stage, selected_axis = "aggregate", "acceptance-granularity"
+    proof: dict[str, Any] = {}
+    for deficit in ("stale", "self-authored", "duplicate-author", "incomplete-axis"):
+        case = root / f"high-rigor-{deficit}"
+        case.mkdir()
+        artifacts = case / "artifacts"
+        artifacts.mkdir()
+        intent_bytes = fixture.read_bytes()
+        (artifacts / "intent.json").write_bytes(intent_bytes)
+        intent = json.loads(intent_bytes)
+        profile = json.loads(profile_source.read_text())
+        policies = profile["review_policies"]["intent-review"]
+        selected = [axis for axis in policies if axis["review_stage"] == selected_stage
+                    and axis["id"] == selected_axis]
+        if len(selected) != 1 or selected[0]["required_authors"] != 2:
+            raise ValueError("selected high-rigor aggregate axis lost its two-author floor")
+        profile["artifact_root"] = str(artifacts)
+        profile["work_slot_bindings"] = {}
+        _json(case / "profile.json", profile)
+        (case / "providers.toml").write_text(
+            "[providers.software-change]\n"
+            f"command = {json.dumps(str(journey.provider))}\nargs = []\n", encoding="utf-8")
+        database = case / "loop.sqlite"
+        run_id = f"sol-evidence-{deficit}"
+        _engine(journey, case, database, "--config", str(case / "providers.toml"),
+                "start", "--id", run_id, "software-change", "@" + str(case / "profile.json"))
+        _event(journey, case, database, run_id, "intent-ready")
+        digest = _sha(intent_bytes)
+        authors = [{"name": f"independent-{index}", "kind": "script"} for index in (0, 1)]
+        repair: list[tuple[str, dict[str, Any]]] = []
+        populated = 0
+        for policy in policies:
+            stage, axis = policy["review_stage"], policy["id"]
+            if policy["required_authors"] != 2:
+                raise ValueError(f"high-rigor selected policy changed its floor: {policy}")
+            for index, author in enumerate(authors):
+                record_id = f"evidence-{stage}-{axis}-{index}"
+                data = {
+                    "gate": "intent-review", "policy_id": axis, "review_stage": stage,
+                    "result": "pass", "findings": "", "review_contract_version": 2,
+                    "grounds": {"reason": "Scripted external judgment refers to the exact current fixture intent.",
+                                "evidence": [{"locator": "intent.json#/revision", "sha256": digest}]},
+                    "author": author, "subject": "intent.json",
+                    "subject_revision": intent["revision"], "config_version": profile["config_version"],
+                }
+                if (stage, axis) == (selected_stage, selected_axis):
+                    if deficit == "incomplete-axis":
+                        repair.append((record_id, data))
+                        continue
+                    if index == 1:
+                        if deficit == "stale":
+                            stale = {**data, "subject_revision": "previous-intent-revision"}
+                            _append(journey, case, database, run_id, "stale-" + record_id,
+                                    "review-evidence", stale)
+                        elif deficit == "self-authored":
+                            self_row = {**data, "author": intent["author"]}
+                            _append(journey, case, database, run_id, "self-" + record_id,
+                                    "review-evidence", self_row)
+                        else:
+                            duplicate = {**data, "author": authors[0]}
+                            _append(journey, case, database, run_id, "duplicate-" + record_id,
+                                    "review-evidence", duplicate)
+                        repair.append((record_id, data))
+                        continue
+                _append(journey, case, database, run_id, record_id, "review-evidence", data)
+                populated += 1
+        _append(journey, case, database, run_id, "driver-ledger", "finding-ledger", {
+            "schema_version": "1", "gate": "intent-review", "subject": "intent.json",
+            "subject_revision": intent["revision"],
+            "author": {"name": "fixture-driver", "kind": "agent"}, "findings": [],
+        })
+        denied = _event(journey, case, database, run_id, "approved", expect="rejected")
+        details = denied.get("details", {})
+        diagnostics = details.get("diagnostics", [])
+        expected = [item for item in diagnostics
+                    if item.get("review_stage") == selected_stage and item.get("axis") == selected_axis]
+        if (denied.get("code") != "software-change-review-incomplete"
+                or details.get("phase") != "evidence" or len(diagnostics) != 1
+                or len(expected) != 1):
+            raise ValueError(f"{deficit} was not isolated to the selected configured axis: {denied}")
+        categories = {item.get("category") for item in expected[0].get("diagnostics", [])}
+        if deficit == "incomplete-axis":
+            if not {"missing", "independence"} <= categories:
+                raise ValueError(f"missing configured axis had the wrong cause: {denied}")
+        elif "independence" not in categories or expected[0]["diagnostics"][-1].get("distinct_present") != 1:
+            raise ValueError(f"{deficit} was not refused for insufficient distinct non-subject authors: {denied}")
+        if deficit == "stale" and not any(
+            item.get("axis") == selected_axis and item.get("review_stage") == selected_stage
+            and any(d.get("category") == "stale" for d in item.get("diagnostics", []))
+            for item in details.get("informational", [])
+        ):
+            raise ValueError(f"stale source did not yield a real stale diagnostic: {denied}")
+        after_denial = _show_full(journey, case, database, run_id)["result"]
+        if after_denial["current_state"] != "intent-review" or after_denial["lifecycle"] != "active":
+            raise ValueError(f"{deficit} refusal changed workflow state")
+        _json(case / "specific-refusal.json", denied)
+        for record_id, data in repair:
+            _append(journey, case, database, run_id, record_id, "review-evidence", data)
+        _event(journey, case, database, run_id, "approved")
+        after_repair = _show_full(journey, case, database, run_id)["result"]
+        if after_repair["current_state"] != "intent-adversarial-review":
+            raise ValueError(f"{deficit} repaired records did not pass the checked gate")
+        proof[deficit] = {"database": str(database), "run_id": run_id,
+                          "refusal": str(case / "specific-refusal.json"),
+                          "axis": f"{selected_stage}/{selected_axis}",
+                          "configured_floor": 2, "valid_rows_before_denial": populated,
+                          "repair_record_ids": [id for id, _ in repair],
+                          "checked_state": after_repair["current_state"]}
+    _json(root / "high-rigor-refusals-proof.json", proof)
+    return proof
 
 
 def evidence_case(journey) -> None:
@@ -616,6 +732,7 @@ def evidence_case(journey) -> None:
         raise ValueError(f"changed selected bytes or contradictory manual records did not block gate: {forged_denial}")
 
     validation_preview = validation_preview_case(journey, root)
+    high_rigor_refusals = high_rigor_refusal_case(journey, root)
     proof = {
         "status": "passed",
         "fresh_siblings": sorted(by_axis),
@@ -629,10 +746,11 @@ def evidence_case(journey) -> None:
         "external_authorship": "declared claim without bound-source origin",
         "changed_source_not_resumable": True,
         "criterion_goal_preview": validation_preview,
+        "high_rigor_review_refusals": high_rigor_refusals,
         "full_show_stdout": "not persisted; only byte-count/hash projections retained",
     }
     _json(root / "sol-evidence-proof.json", proof)
-    print("sol-evidence passed: row-local reuse refusal, exact current-target preview, explicit append/resume, and source-linked forgery denials")
+    print("sol-evidence passed: row-local reuse, source forgery, and high-rigor stale/self/duplicate/missing-axis checked refusals followed by repair")
 
 
 def _adapter_config(path: Path, counter: Path) -> dict[str, Any]:
@@ -663,6 +781,144 @@ def _preview_in_memory(journey, root: Path, invocation_id: str, show: dict[str, 
     if value.get("ready") is not True:
         raise ValueError(f"recovery-preview did not retain a ready source: {value}")
     return value
+
+
+def mixed_review_recovery_case(journey, root: Path, label: str, *, cancel: bool) -> dict[str, Any]:
+    """Admit a preserved failed/cancelled sibling and fresh barrier work at a real gate."""
+    case = root / label
+    case.mkdir()
+    script = case / "mixed-reviewer.py"
+    script.write_text(
+        "import hashlib,json,pathlib,sys,time\n"
+        "role=sys.argv[1]; counter=pathlib.Path(sys.argv[2]); marker=pathlib.Path(sys.argv[3]); axes=json.loads(sys.argv[4])\n"
+        "packet=json.loads(sys.stdin.buffer.read()); subject=pathlib.Path(packet['artifact_root'])/'intent.json'\n"
+        "count=int(counter.read_text()) if counter.exists() else 0; counter.write_text(str(count+1))\n"
+        "if role=='b' and count==0:\n"
+        " if sys.argv[5]=='cancel': marker.write_text('started\\n'); time.sleep(60)\n"
+        " print(json.dumps({'wrong':'first b output lacks the required review envelope'})); raise SystemExit(0)\n"
+        "digest='sha256:'+hashlib.sha256(subject.read_bytes()).hexdigest()\n"
+        "rows=[{'axis':axis,'result':'pass','findings':'','grounds':{'reason':'Scripted independent review of the current intent source.','evidence':[{'locator':'intent.json#/revision','sha256':digest}]}} for axis in axes]\n"
+        "print(json.dumps({'review_contract_version':2,'review_stage':'aggregate','author':{'name':'fixture-'+role,'kind':'script'},'judgments':rows}))\n",
+        encoding="utf-8",
+    )
+    source = json.loads((journey.data_root / "crates/software-change-provider/data/configs/minimal.json").read_text())
+    axes = [row["id"] for row in source["review_policies"]["intent-review"]]
+    groups = [axes[:2], axes[2:5], axes[5:]]
+    counters = {role: case / f"{role}-launches" for role in "abc"}
+    marker = case / "b-started"
+    workers = []
+    for role, assigned in zip("abc", groups):
+        schema = _review_schema(assigned, author={"name": f"fixture-{role}", "kind": "script"})
+        schema["x-loop-engine-output-recovery"] = "repair-first-v1"
+        workers.append({
+            "command": sys.executable,
+            "args": [str(script), role, str(counters[role]), str(marker), json.dumps(assigned), "cancel" if cancel else "failure"],
+            "title": f"Independent scripted review {role}", "role": "reviewer",
+            "full_output_schema": schema,
+        })
+    binding = dogfood_recovery._fanout_binding(journey.engine, workers, max_active=1, split=2)
+    _, artifacts, checkout, database, run_id = _write_run(
+        journey, case, "software-mixed", axes, workers[0], binding=binding,
+    )
+    _show_action(journey, case, database, run_id)
+    started, _ = _engine(journey, case, database, "--timeout-ms", "120000", "invoke", run_id, "intent-review")
+    original_id = started["result"]["invocation_id"]
+    if cancel:
+        deadline = time.monotonic() + 20
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if not marker.exists():
+            raise ValueError("mixed software-change cancellation never started the second reviewer")
+        _show_action(journey, case, database, run_id)
+        overlap, _ = _engine(journey, case, database, "invoke", run_id, "intent-review", expect="rejected")
+        if "already-running" not in overlap.get("code", ""):
+            raise ValueError(f"mixed software-change live work permitted overlap: {overlap}")
+        _show_action(journey, case, database, run_id)
+        _engine(journey, case, database, "cancel-invocation", run_id, original_id)
+    original_show, original = _wait(journey, case, database, run_id, original_id)
+    if original["status"] != "failed" or (cancel and original.get("ownership", {}).get("cleanup_pending") is not False):
+        raise ValueError(f"mixed software-change origin was not quiescent and failed: {original}")
+    capture = Path(original["capture_dir"])
+    original_bytes = dogfood_recovery._capture_manifest(capture)
+    original_summary = json.loads((capture / "summary.json").read_text())
+    if original_summary["workers"][0].get("status") != "succeeded" or original_summary["workers"][2].get("started") is not False:
+        raise ValueError(f"mixed original lost completed sibling or unstarted barrier: {original_summary}")
+    preview = dogfood_recovery._preview(journey, case, journey.engine, original_id, original_show)
+    by_id = {row["assignment_id"]: row for row in preview["assignments"]}
+    if (by_id["worker-0"]["classification"] != "conforming-completed"
+            or by_id["worker-2"]["classification"] != "never-started"
+            or preview["barriers"]["second_group"] != ["worker-2"]
+            or preview["recovery_input"]["pending_assignment_ids"] != ["worker-1", "worker-2"]):
+        raise ValueError(f"mixed software-change preview lost source, pending selection or barrier: {preview}")
+    if not cancel:
+        bad = by_id["worker-1"]
+        if (bad["classification"] != "invalid" or bad["exit_code"] != 0
+                or bad["conformance_status"] != "failed" or not bad["raw_output"]["available"]):
+            raise ValueError(f"exit-zero invalid full-schema review was incorrectly eligible: {bad}")
+        forged = copy.deepcopy(preview["recovery_input"])
+        forged["pending_assignment_ids"].remove("worker-1")
+        forged["sources"].append({
+            "assignment_id": "worker-1", "source_class": "original-raw",
+            "raw_attempt": bad["raw_output"]["attempt"],
+            "raw_stdout_sha256": bad["raw_output"]["sha256"],
+        })
+        dogfood_recovery._reject_recovery(
+            journey, case, database, run_id, "intent-review", forged,
+            "not the conforming selected origin output", len(original_show["result"]["work_slot_invocations"]),
+        )
+    # Outer success alone is not admission: the checked provider gate still
+    # needs exact-source append and the new judgments from both pending workers.
+    _show_action(journey, case, database, run_id)
+    joined_start, _ = _engine(
+        journey, case, database, "--timeout-ms", "120000", "invoke", run_id, "intent-review",
+        "--input", json.dumps(preview["recovery_input"], separators=(",", ":")),
+    )
+    joined_show, joined = _wait(journey, case, database, run_id, joined_start["result"]["invocation_id"])
+    recovered = {row["assignment_id"]: row for row in joined["inner_workers"]}
+    preserved = recovered["worker-0"].get("recovery_source", {})
+    if (joined["status"] != "succeeded" or preserved.get("source_class") != "original-raw"
+            or preserved.get("origin", {}).get("invocation_id") != original_id
+            or recovered["worker-0"].get("started") is not None
+            or any(recovered[f"worker-{n}"].get("started") is not True for n in (1, 2))
+            or [counters[role].read_text() for role in "abc"] != ["1", "2", "1"]):
+        raise ValueError(f"mixed software-change join did not retain original/fresh assignments: {joined}")
+    selected = Path(joined["capture_dir"]) / recovered["worker-0"]["selected_output_path"]
+    if _sha(selected.read_bytes()) != recovered["worker-0"]["selected_output_sha256"]:
+        raise ValueError("preserved sibling's selected bytes differ from the joined capture")
+    old = next(row for row in joined_show["result"]["work_slot_invocations"] if row["invocation_id"] == original_id)
+    if old["status"] != "failed" or dogfood_recovery._capture_manifest(capture) != original_bytes:
+        raise ValueError("mixed join rewrote original failed/cancelled status or raw capture")
+    before = _event(journey, case, database, run_id, "approved", expect="rejected")
+    if "missing" not in json.dumps(before).lower() and "review" not in json.dumps(before).lower():
+        raise ValueError(f"outer success incorrectly passed a gate without evidence: {before}")
+    document = _candidate_doc(journey, case, checkout, joined_show)
+    rows = [row for row in document["records"] if row.get("status") == "ready"
+            and row.get("origin", {}).get("id") == joined["invocation_id"]]
+    if (len(rows) != len(axes) or {row["axis"] for row in rows} != set(axes)
+            or {row["origin"]["assignment_id"] for row in rows} != {"worker-0", "worker-1", "worker-2"}):
+        raise ValueError(f"mixed original/fresh review candidates were not all source-ready: {document}")
+    for row in rows:
+        _append(journey, case, database, run_id, row["record_id"], row["kind"], row["data"])
+    _append(journey, case, database, run_id, "mixed-driver-ledger", "finding-ledger", {
+        "schema_version": "1", "gate": "intent-review", "subject": "intent.json",
+        "subject_revision": json.loads((artifacts / "intent.json").read_text())["revision"],
+        "author": {"name": "fixture-driver", "kind": "agent"}, "findings": [],
+    })
+    approved = _event(journey, case, database, run_id, "approved")
+    final = _show_full(journey, case, database, run_id)["result"]
+    if approved["status"] != "completed" or final["current_state"] != "design":
+        raise ValueError(f"selected original plus fresh reviews did not pass the real checked gate: {approved}")
+    if dogfood_recovery._capture_manifest(capture) != original_bytes:
+        raise ValueError("checked admission changed the original failed/cancelled capture")
+    return {
+        "run_id": run_id, "database": str(database), "origin_invocation": original_id,
+        "selected_invocation": joined["invocation_id"], "origin_status": old["status"],
+        "cancelled": cancel, "origin_capture": str(capture), "origin_capture_manifest": original_bytes,
+        "candidate_record_ids": [row["record_id"] for row in rows],
+        "original_assignment_axes": groups[0], "fresh_assignment_axes": groups[1:],
+        "gate_denied_without_append": before["code"], "checked_state": final["current_state"],
+        "counters": {role: counters[role].read_text() for role in "abc"},
+    }
 
 
 def recovery_case(journey) -> None:
@@ -864,6 +1120,8 @@ def recovery_case(journey) -> None:
     model_recovery = dogfood_recovery._software_change_model_repair_case(journey, root)
     model_budget_negatives = dogfood_recovery._software_change_model_budget_negatives(journey, root)
     model_cross_origin_budget = dogfood_recovery._software_change_model_cross_origin_budget_case(journey, root)
+    mixed_failed = mixed_review_recovery_case(journey, root, "software-mixed-failed", cancel=False)
+    mixed_cancelled = mixed_review_recovery_case(journey, root, "software-mixed-cancelled", cancel=True)
 
     proof = {
         "status": "passed",
@@ -883,6 +1141,8 @@ def recovery_case(journey) -> None:
         "configured_model_recovery": model_recovery,
         "model_budget_negatives": model_budget_negatives,
         "model_cross_origin_budget": model_cross_origin_budget,
+        "software_mixed_failed": mixed_failed,
+        "software_mixed_cancelled": mixed_cancelled,
     }
     _json(root / "sol-recovery-proof.json", proof)
     print("sol-recovery passed: scripted and configured-model explicit-prose FAIL retained as derived evidence; model identity/bounds/usage, repeated-budget refusal, and checked-gate denials verified")

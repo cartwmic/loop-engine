@@ -110,29 +110,45 @@ def _write_provider(root: Path) -> Path:
     return provider
 
 
-def _write_task_worker(root: Path, counter: Path) -> Path:
+def _write_task_worker(root: Path, counter: Path, *, software: bool = False) -> Path:
     worker = root / "graph-worker.py"
+    report_line = (
+        " report={'revision':'report-'+cap,'author':{'name':'fixture-summarizer','kind':'agent'},"
+        "'plan_revision':plan['revision'],'coverage':{'commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),"
+        "'documents':[{'path':'.github/workflows/test.yml','revision':plan['revision']}]},"
+        "'summary':'Scripted graph completion for the current plan and selected repository tree.',"
+        "'changed_surface':['effect-alpha.txt','behavior.py','.github/workflows/test.yml'],"
+        "'validation':[{'criterion_id':'AC-1','proof':'The named captured check observes the current effect and workflow command.'}]}\n"
+        if software else
+        " report={'revision':'report-'+cap,'author':{'name':'fixture-summarizer','kind':'script'},"
+        "'plan_revision':plan['revision'],'coverage':{'commit':'fixture','documents':[]},"
+        "'summary':'fixture report from the bound graph summarizer',"
+        "'changed_surface':sorted(p.name for p in Path.cwd().iterdir()),"
+        "'validation':[{'proof':'public bound graph fixture'}]}\n"
+    )
+    effect_line = (
+        " effect=Path.cwd()/('effect-'+task_id+'.txt')\n"
+        " if not (task_id=='alpha' and effect.exists() and effect.read_text()=='narrow driver correction\\n'): effect.write_text('effect for '+task_id+'\\n')\n"
+        if software else
+        " effect=Path.cwd()/('effect-'+task_id+'.txt'); effect.write_text('effect for '+task_id+'\\n')\n"
+    )
     worker.write_text(
-        "import json,sys,time\n"
+        "import json,sys,time,subprocess\n"
         "from pathlib import Path\n"
         "counter=Path(sys.argv[1]); raw=sys.stdin.buffer.read().decode()\n"
         "location,body=raw.split('\\n---\\n\\n',1); loc=json.loads(location)\n"
         "if body.startswith('Write artifact_root/implementation-report.json'):\n"
         " plan=json.loads((Path(loc['artifact_root'])/'plan.json').read_text())\n"
         " cap=Path(loc['capture_dir']).name\n"
-        " report={'revision':'report-'+cap,'author':{'name':'fixture-summarizer','kind':'script'},"
-        "'plan_revision':plan['revision'],'coverage':{'commit':'fixture','documents':[]},"
-        "'summary':'fixture report from the bound graph summarizer',"
-        "'changed_surface':sorted(p.name for p in Path.cwd().iterdir()),"
-        "'validation':[{'proof':'public bound graph fixture'}]}\n"
-        " (Path(loc['artifact_root'])/'implementation-report.json').write_text(json.dumps(report)+'\\n')\n"
+        + report_line
+        + " (Path(loc['artifact_root'])/'implementation-report.json').write_text(json.dumps(report)+'\\n')\n"
         "else:\n"
         " task=json.loads(body); task_id=task['id']\n"
         " with counter.open('a') as stream: stream.write(task_id+'\\n')\n"
         " marker=counter.with_suffix('.alpha-delay-used')\n"
         " if task_id=='alpha' and not marker.exists(): time.sleep(1.5); marker.write_text('used')\n"
-        " effect=Path.cwd()/('effect-'+task_id+'.txt'); effect.write_text('effect for '+task_id+'\\n')\n"
-        " print(json.dumps({'task':task_id,'repository_effect':{'files':[effect.name],"
+        + effect_line
+        + " print(json.dumps({'task':task_id,'repository_effect':{'files':[effect.name],"
         "'dependencies':task.get('dependencies',[])}}))\n",
         encoding="utf-8",
     )
@@ -295,6 +311,444 @@ def _capture_error_text(capture_root: Path) -> str:
         except OSError:
             continue
     return "\n".join(parts)
+
+
+def _software_change_completion(journey, root: Path) -> dict[str, Any]:
+    """Compose real revised-plan reuse, direct correction and fresh checked review."""
+    import dogfood_evidence
+    import dogfood_recovery
+    import importlib.util
+
+    case = root / "software-change-completion"
+    case.mkdir()
+    checkout = case / "checkout"
+    checkout.mkdir()
+    _git(checkout, "init", "-q")
+    _git(checkout, "config", "user.name", "Reuse Fixture")
+    _git(checkout, "config", "user.email", "reuse@example.invalid")
+    workflow = checkout / ".github/workflows/test.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text("run: false\n", encoding="utf-8")
+    (checkout / "tracked.txt").write_text("fixture\n", encoding="utf-8")
+    behavior = checkout / "behavior.py"
+    behavior.write_text(
+        "def alpha_effect():\n"
+        "    return 'changed upstream effect\\n'\n"
+        "\n"
+        "if __name__ == '__main__':\n"
+        "    print(alpha_effect(), end='')\n",
+        encoding="utf-8",
+    )
+    (checkout / "proof.py").write_text(
+        "from pathlib import Path\n"
+        "from behavior import alpha_effect\n"
+        "assert alpha_effect() == 'narrow driver correction\\n'\n"
+        "assert Path('effect-alpha.txt').read_text() == alpha_effect()\n"
+        "assert Path('effect-merged-new.txt').is_file()\n"
+        "print('assertion: corrected code effect and revised dependant are current')\n",
+        encoding="utf-8",
+    )
+    (checkout / ".gitignore").write_text("commands/\n", encoding="utf-8")
+    _git(checkout, "add", ".")
+    _git(checkout, "commit", "-q", "-m", "fixture baseline")
+    artifacts = case / "artifacts"
+    artifacts.mkdir()
+    fixtures = journey.data_root / "crates/software-change-provider/data/calibration/fixtures"
+    intent = json.loads((fixtures / "intent-good.json").read_text())
+    intent.update(revision="intent-r1", author={"name":"fixture-intent-author","kind":"agent"},
+                  problem="The operator needs to retain applicable work after revising a plan.",
+                  outcome="A revised plan completes with a selected code and workflow correction, current proof, and fresh review.",
+                  acceptance=[{"id":"AC-1", "statement":"The operator sees the revised selected tasks, corrected code and workflow command in a captured current check and reviewed terminal state."}],
+                  constraints=["Preserve old captures and do not treat a scripted judgment as semantic approval."],
+                  non_goals=["No cross-run reuse or migration of the frozen main run."])
+    intent["operating_context"]["outside_obligations"] = [{
+        "source":"Fixture checkout and the selected production software-change graph",
+        "obligation":"Keep selected result lineage, captured checks, and independent review current."}]
+    design = json.loads((fixtures / "design-good.json").read_text())
+    design.update(revision="design-r1", intent_revision="intent-r1",
+                  author={"name":"fixture-design-author","kind":"agent"},
+                  approach="Reuse only explicitly mapped applicable task effects; refresh affected graph, report, checkpoint, captured proof and independent review.",
+                  coverage=[{"criterion_id":"AC-1","acceptance":intent["acceptance"][0]["statement"],
+                             "delivered_by":"The bound graph verifies mapped standing tasks and reruns changed effects; fixture workflow command and code are checked through retained proof."}])
+    for name, document in (("intent", intent), ("design", design)):
+        _write_json(artifacts / f"{name}.json", document)
+    check = (
+        "from pathlib import Path; import shlex,subprocess; "
+        f"root=Path({str(checkout)!r}); "
+        "lines=(root/'.github/workflows/test.yml').read_text().splitlines(); "
+        "assert len(lines)==1 and lines[0].startswith('run: '),lines; "
+        "argv=shlex.split(lines[0][5:]); "
+        "p=subprocess.run(argv,cwd=root,capture_output=True,text=True); "
+        "assert p.returncode==0 and 'assertion: corrected code effect' in p.stdout,(argv,p.stdout,p.stderr); "
+        "print('assertion: revised alpha/dependant and corrected workflow command run successfully: '+repr(argv))"
+    )
+    proof_command = {"id":"selected-reuse-check","command":sys.executable,"args":["-c",check],
+                     "owner":"fixture-driver","obligation":"Assert revised task effect and corrected workflow command on the final repository tree."}
+
+    def plan(revision: str, *, reshaped: bool = False, design_revision: str = "design-r1") -> None:
+        graph = _fixture_plan(revision, reshaped=reshaped)
+        tasks = [{"id":item["id"], "objective":item["title"],
+                  "dependencies":item["dependencies"],
+                  "source_of_truth":["intent.json#/acceptance/0", "design.json#/coverage/0"],
+                  "deliverables":["A selected fixture effect on the current checkout"],
+                  "out_of_scope":["No external repository or human semantic approval"],
+                  "validation":["selected-reuse-check asserts current code and workflow effects"],
+                  "handoff":"Retain the actual task result and its repository-effect/dependency dimensions.",
+                  "criterion_ids":["AC-1"], "proof_command_ids":["selected-reuse-check"]}
+                 for item in graph["tasks"]]
+        _write_json(artifacts / "plan.json", {"revision":revision,
+            "author":{"name":"fixture-plan-author","kind":"agent"},
+            "design_revision":design_revision,
+            "objective":"Complete only affected task roots after explicit same-run standing mappings.",
+            "tasks":tasks,"dependency_graph":graph["dependency_graph"],
+            "proof_commands":[proof_command]})
+
+    plan("plan-r1")
+    counter = case / "task-launches.txt"
+    worker = _write_task_worker(case, counter, software=True)
+    review_counter = case / "review-launches.txt"
+    reviewer = case / "scripted-reviewer.py"
+    reviewer.write_text(
+        "import hashlib,json,pathlib,sys\n"
+        "gate,subject,axes,counter=sys.argv[1],sys.argv[2],json.loads(sys.argv[3]),pathlib.Path(sys.argv[4])\n"
+        "raw=sys.stdin.buffer.read().decode(); location=json.loads(raw.split('\\n---\\n\\n',1)[0].splitlines()[-1])\n"
+        "path=pathlib.Path(location['artifact_root'])/subject; doc=json.loads(path.read_text()); digest='sha256:'+hashlib.sha256(path.read_bytes()).hexdigest()\n"
+        "with counter.open('a') as stream: stream.write(gate+':'+doc['revision']+'\\n')\n"
+        "judgments=[{'axis':axis,'result':'pass','findings':'','grounds':{'reason':'Scripted reviewer inspected the selected current artifact; semantic quality is not claimed.','evidence':[{'locator':subject+'#/revision','sha256':digest}]}} for axis in axes]\n"
+        "print(json.dumps({'review_contract_version':2,'review_stage':'aggregate','author':{'name':'fixture-'+gate,'kind':'script'},'judgments':judgments}))\n",
+        encoding="utf-8",
+    )
+    profile = json.loads((journey.data_root / "crates/software-change-provider/data/configs/minimal.json").read_text())
+    bindings = {}
+    for gate, policies in profile["review_policies"].items():
+        if not policies:
+            continue
+        subject = dogfood_advice_subject(gate)
+        axes = [row["id"] for row in policies]
+        author = {"name":f"fixture-{gate}","kind":"script"}
+        nested = {"command":sys.executable,
+                  "args":[str(reviewer),gate,subject,json.dumps(axes),str(review_counter)],
+                  "title":f"Fresh scripted {gate} review", "role":"reviewer",
+                  "full_output_schema":dogfood_evidence._review_schema(axes,author=author)}
+        bindings[gate] = dogfood_recovery._fanout_binding(journey.engine,[nested],max_active=1)
+    bindings["implement"] = {"command":str(journey.provider),
+        "args":["run-plan-graph","--working-directory",str(checkout),"--max-active","1",
+                "--task-worker",json.dumps({"command":sys.executable,"args":[str(worker),str(counter)]},separators=(",",":"))]}
+    profile.update(artifact_root=str(artifacts),work_slot_bindings=bindings,driver_act_slots=["implement"])
+    profile_path = case / "profile.json"
+    _write_json(profile_path,profile)
+    config = case / "providers.toml"
+    config.write_text("[providers.software-change]\n"
+        f"command = {json.dumps(str(journey.provider))}\nargs = []\n",encoding="utf-8")
+    database = case / "loop.sqlite"
+    run_id = "sol-reuse-software-completed"
+    # Provider evaluation resolves checkpoint Git identity from engine CWD.
+    # Keep command captures ignored inside this disposable checkout.
+    original_case_root = journey._dogfood_case_root
+    journey._dogfood_case_root = checkout
+    _checked(dogfood_observation._engine(
+        journey,database,"--config",str(config),"start","--id",run_id,
+        "software-change","@"+str(profile_path))[0],"production software-change start")
+
+    def event(name: str, expected: str) -> dict[str, Any]:
+        response, _, _ = _event(journey,database,run_id,name)
+        result = _checked(response,name)
+        if result.get("run",{}).get("current_state") != expected:
+            raise ValueError(f"production {name} did not enter {expected}: {response}")
+        return result
+
+    terminal_denial: dict[str, Any] | None = None
+
+    def review(gate: str, target: str, *, terminal_missing_axis: str | None = None) -> str:
+        nonlocal terminal_denial
+        invoked = _start_review(journey,database,run_id,gate)
+        row = _wait_invocation(journey,database,run_id,invoked)
+        if row["status"] != "succeeded":
+            raise ValueError(f"scripted {gate} worker did not complete: {row}")
+        full, _, _ = dogfood_observation._engine(journey,database,"show","--view","full",run_id)
+        document = dogfood_evidence._candidate_doc(journey,case,checkout,full)
+        ready = [item for item in document["records"] if item.get("status") == "ready"
+                 and item.get("gate") == gate and item.get("origin",{}).get("id") == invoked]
+        axes = [policy["id"] for policy in profile["review_policies"][gate]]
+        if len(ready) != len(axes) or {item["axis"] for item in ready} != set(axes):
+            raise ValueError(f"real {gate} review lacked exact fresh captured axes: {document}")
+        if terminal_missing_axis is not None and (gate != "validation-adversarial-review"
+                or terminal_missing_axis not in axes):
+            raise ValueError("terminal deficit must name a configured validation-adversarial axis")
+        for item in ready:
+            if item["axis"] == terminal_missing_axis:
+                continue
+            dogfood_observation._engine(journey,database,"show","--view","action",run_id)
+            _checked(dogfood_observation._engine(journey,database,"append","--record-id",item["record_id"],
+                run_id,item["kind"],json.dumps(item["data"],separators=(",",":")))[0],"review append")
+        subject = dogfood_advice_subject(gate)
+        revision = json.loads((artifacts / subject).read_text())["revision"]
+        ledger = {"schema_version":"1","gate":gate,"subject":subject,
+                  "subject_revision":revision,"author":{"name":"fixture-driver","kind":"agent"},
+                  "findings":[]}
+        dogfood_observation._engine(journey,database,"show","--view","action",run_id)
+        _checked(dogfood_observation._engine(journey,database,"append","--record-id",
+            f"ledger-{gate}-{invoked}",run_id,"finding-ledger",
+            json.dumps(ledger,separators=(",",":")))[0],"driver ledger append")
+        if terminal_missing_axis is not None:
+            # All command, criterion, goal and ledger prerequisites are already
+            # present. Refuse the actual final edge for just this missing axis.
+            denied, _, _ = _event(journey,database,run_id,"passed",expect="any")
+            detail = json.dumps(denied)
+            state = _checked(dogfood_observation._engine(
+                journey,database,"show","--view","action",run_id)[0],"terminal denial show")
+            if (denied.get("status") != "rejected"
+                    or denied.get("code") != "software-change-review-incomplete"
+                    or terminal_missing_axis not in detail
+                    or state.get("current_state") != gate):
+                raise ValueError(f"missing configured terminal review axis did not cause a specific unchanged-state refusal: {denied}")
+            terminal_denial = denied
+            _write_json(case / "terminal-missing-axis-denial.json",denied)
+            missing = next(item for item in ready if item["axis"] == terminal_missing_axis)
+            _checked(dogfood_observation._engine(journey,database,"append","--record-id",missing["record_id"],
+                run_id,missing["kind"],json.dumps(missing["data"],separators=(",",":")))[0],"missing terminal review repair")
+        event("approved" if gate != "validation-adversarial-review" else "passed",target)
+        return invoked
+
+    def early_reviews() -> None:
+        event("intent-ready","intent-review")
+        review("intent-review","intent-adversarial-review")
+        review("intent-adversarial-review","design")
+        event("design-ready","design-review")
+        review("design-review","design-adversarial-review")
+        review("design-adversarial-review","plan")
+        event("plan-ready","plan-review")
+        review("plan-review","plan-adversarial-review")
+        review("plan-adversarial-review","implement")
+
+    def reconciliation(revision: str, *, corrected: bool = False, write: bool = True) -> None:
+        document = {
+            "revision":revision,"author":{"name":"fixture-driver","kind":"script"},
+            "mode":"bookends-disabled","branch":"change-specific-proof",
+            "document_observations":[{"path":".github/workflows/test.yml","status":"unrelated",
+                "observation":"The fixture workflow command is change-specific; no normative PRD edit is claimed."}],
+            "behavior_observations":[{"status":"change-specific",
+                "observation":("The corrected code effect and repository workflow command are now named in the selected public check."
+                               if corrected else "Selected graph effects and captured workflow command have an operator-visible check.")}],
+            "action":"no-document-change","action_reason":(
+                "Corrected the prior fixture reconciliation explanation to name the actual code and workflow checks; no enduring requirement changed."
+                if corrected else "The fixture adds no enduring requirement."),
+            "authorization":"not-required","application":"not-required","commit":"not-required",
+            "traceability":{"status":"not-applicable","references":[]},
+            "proof_references":["selected-reuse-check"],"blockers":[],"decision":"complete"}
+        if write:
+            _write_json(artifacts / "reconciliation.json",document)
+        elif json.loads((artifacts / "reconciliation.json").read_text()) != document:
+            raise ValueError("driver-corrected reconciliation artifact changed before its checked decision")
+        event("reconciliation-ready","implementation-review")
+
+    early_reviews()
+    first = _invoke(journey,database,run_id)
+    old_capture = Path(first["capture_dir"])
+    old_source = _assert_capture_source(old_capture,["alpha","beta","gamma","merge"])
+    old_bytes = (old_capture / "summary.json").read_bytes()
+    sources = _row_sources(artifacts / "plan-task-results.json")
+    event("implementation-ready","reconciliation")
+    reconciliation("recon-r1")
+    initial_impl_review = review("implementation-review","implementation-adversarial-review")
+    event("revise-intent","explore")
+    intent["revision"] = "intent-r2"
+    design.update(revision="design-r2",intent_revision="intent-r2")
+    _write_json(artifacts / "intent.json",intent)
+    _write_json(artifacts / "design.json",design)
+    plan("plan-r2",reshaped=True,design_revision="design-r2")
+    early_reviews()
+    (checkout / "effect-alpha.txt").write_text("changed upstream effect\n",encoding="utf-8")
+    mappings = [
+        {**sources["beta"],"current_obligations":["beta-renamed","beta-split","beta-merge"],
+         "reason":"Checked matching beta result effects and retained split/rename obligations."},
+        {**sources["gamma"],"current_obligations":["beta-merge"],
+         "reason":"Checked matching gamma result as one part of merged obligations."},
+        {**sources["alpha"],"current_obligations":["alpha"],
+         "reason":"Test changed upstream effect; this mapping must stay pending."},
+        {**sources["merge"],"current_obligations":["merged-new"],
+         "reason":"Check changed dependency dimension against the new upstream task."},
+    ]
+    revised = _invoke(journey,database,run_id,invocation_input={
+        "plan_revision":"plan-r2","task_roots":["alpha","upstream-new"],
+        "standing_results":mappings})
+    revised_capture = Path(revised["capture_dir"])
+    _assert_capture_source(revised_capture,["alpha","upstream-new","merged-new"])
+    selection = json.loads((revised_capture / "selection.json").read_text())
+    if {row["task_id"] for row in selection["standing_results"]} != {"beta-renamed","beta-split","beta-merge"}:
+        raise ValueError("production revised graph lost mapped standing obligations")
+    pending = {row["task_id"] for row in selection["pending_mappings"]}
+    if pending != {"alpha","merged-new"} or (old_capture / "summary.json").read_bytes() != old_bytes:
+        raise ValueError(f"revised graph relabeled changed effects/dependencies or rewrote original: {pending}")
+    event("implementation-ready","reconciliation")
+    reconciliation("recon-r2")
+    event("revise","implement")
+    # Run the defective executable itself before changing either its code or
+    # the workflow. The proof's expected alpha value stays fixed throughout.
+    defective_argv = [sys.executable, "behavior.py"]
+    defective = subprocess.run(defective_argv,cwd=checkout,capture_output=True,check=False)
+    (case / "before-code.stdout").write_bytes(defective.stdout)
+    (case / "before-code.stderr").write_bytes(defective.stderr)
+    _write_json(case / "before-code.command.json",{
+        "argv":defective_argv,"cwd":str(checkout),"exit_code":defective.returncode,
+        "stdout_sha256":"sha256:"+hashlib.sha256(defective.stdout).hexdigest()})
+    if defective.returncode != 0 or defective.stdout != b"changed upstream effect\n":
+        raise ValueError("defective executable did not exhibit its wrong alpha behavior")
+    oracle_argv = [sys.executable, "-B", "proof.py"]
+    oracle_failure = subprocess.run(oracle_argv,cwd=checkout,capture_output=True,check=False)
+    (case / "before-oracle.stdout").write_bytes(oracle_failure.stdout)
+    (case / "before-oracle.stderr").write_bytes(oracle_failure.stderr)
+    _write_json(case / "before-oracle.command.json",{
+        "argv":oracle_argv,"cwd":str(checkout),"exit_code":oracle_failure.returncode,
+        "stderr_sha256":"sha256:"+hashlib.sha256(oracle_failure.stderr).hexdigest()})
+    if oracle_failure.returncode == 0 or b"AssertionError" not in oracle_failure.stderr:
+        raise ValueError("defective executable did not fail the unchanged code oracle")
+    negative_argv = [sys.executable,"-c",check]
+    negative = subprocess.run(negative_argv,cwd=checkout,capture_output=True,check=False)
+    (case / "before-correction.stdout").write_bytes(negative.stdout)
+    (case / "before-correction.stderr").write_bytes(negative.stderr)
+    _write_json(case / "before-correction.command.json",{
+        "argv":negative_argv,"cwd":str(checkout),"exit_code":negative.returncode})
+    if negative.returncode == 0:
+        raise ValueError("uncorrected code/workflow unexpectedly passed the selected final proof")
+    # The plan/decomposition and proof oracle stay fixed. Correct the actual
+    # executable, effect and workflow command in this disposable checkout.
+    behavior.write_text(behavior.read_text().replace(
+        "return 'changed upstream effect\\n'", "return 'narrow driver correction\\n'"),encoding="utf-8")
+    (checkout / "effect-alpha.txt").write_text("narrow driver correction\n",encoding="utf-8")
+    workflow.write_text("run: python3 -B proof.py\n",encoding="utf-8")
+    # This is the driver-owned Loop reconciliation artifact (not merely CI
+    # configuration). The prior checked r2 decision stays in engine history;
+    # the new r3 decision will be checked on the re-entered reconciliation visit.
+    corrected_reconciliation = artifacts / "reconciliation.json"
+    previous_reconciliation = corrected_reconciliation.read_bytes()
+    (case / "reconciliation-before-driver-act.json").write_bytes(previous_reconciliation)
+    revised_decision = json.loads(previous_reconciliation)
+    revised_decision.update(revision="recon-r3",
+        behavior_observations=[{"status":"change-specific",
+            "observation":"The corrected code effect and repository workflow command are now named in the selected public check."}],
+        action_reason="Corrected the prior fixture reconciliation explanation to name the actual code and workflow checks; no enduring requirement changed.")
+    _write_json(corrected_reconciliation,revised_decision)
+    (case / "reconciliation-after-driver-act.json").write_bytes(corrected_reconciliation.read_bytes())
+    if corrected_reconciliation.read_bytes() == previous_reconciliation:
+        raise ValueError("driver act did not correct the actual Loop reconciliation artifact")
+    corrected = _invoke(journey,database,run_id,invocation_input={
+        "plan_revision":"plan-r2","task_roots":["alpha"]})
+    _assert_capture_source(Path(corrected["capture_dir"]),["alpha","merged-new"])
+    launch_bytes = counter.read_bytes()
+    act = _driver_act(intent="intent-r2",design="design-r2",plan="plan-r2")
+    act["changed_artifacts"] = ["behavior.py", "effect-alpha.txt", ".github/workflows/test.yml", "reconciliation.json"]
+    act["reason"] = "Correct the executable alpha behavior, its effect and the driver-owned Loop reconciliation decision plus the fixture workflow command, without altering accepted intent, design, or task decomposition."
+    intent_path = artifacts / "intent.json"
+    accepted_intent = intent_path.read_bytes()
+    changed_intent = dict(intent, revision="intent-r3")
+    _write_json(intent_path,changed_intent)
+    stale_act, _, _ = _event(journey,database,run_id,"implementation-ready","--driver-act",
+                                json.dumps(act,separators=(",",":")),expect="any")
+    intent_path.write_bytes(accepted_intent)
+    if (stale_act.get("status") != "rejected"
+            or stale_act.get("code") != "software-change-driver-act-invalid"
+            or "intent.json revision changed" not in json.dumps(stale_act)):
+        raise ValueError(f"production provider did not refuse stale accepted intent on driver act: {stale_act}")
+    direct, _, _ = _event(journey,database,run_id,"implementation-ready","--driver-act",
+                          json.dumps(act,separators=(",",":")),expect="any")
+    direct_history = _checked(direct,"production driver-act implementation-ready").get("history",{}).get("action",{}).get("outcome",{})
+    if (direct_history.get("outcome") != "driver-act" or counter.read_bytes() != launch_bytes
+            or intent_path.read_bytes() != accepted_intent):
+        raise ValueError("production driver act was not distinct from a bound task execution on unchanged documents")
+    reconciliation("recon-r3",corrected=True,write=False)
+    review("implementation-review","implementation-adversarial-review")
+    review("implementation-adversarial-review","validation")
+    (checkout / "fixture-docs.md").write_text("Authorized fixture documentation refresh\n",encoding="utf-8")
+    _git(checkout,"add","fixture-docs.md")
+    _git(checkout,"commit","-q","-m","fixture documentation refresh")
+    current_head = _git(checkout,"rev-parse","HEAD")
+    event("revise-implementation","implement")
+    before_report = (artifacts / "implementation-report.json").read_bytes()
+    before_results = (artifacts / "plan-task-results.json").read_bytes()
+    before_launches = counter.read_bytes()
+    report_only = _invoke(journey,database,run_id,invocation_input={
+        "plan_revision":"plan-r2","report_only":True})
+    report_capture = Path(report_only["capture_dir"])
+    report_summary = json.loads((report_capture / "summary.json").read_text())
+    if (report_summary["workers"] != [] or report_summary["expected_assignment_ids"] != ["summarizer"]
+            or counter.read_bytes() != before_launches
+            or (artifacts / "plan-task-results.json").read_bytes() != before_results
+            or (artifacts / "implementation-report.json").read_bytes() == before_report):
+        raise ValueError("real post-reconciliation report-only path replayed tasks or did not refresh proof")
+    checkpoint = json.loads((artifacts / "implementation-checkpoint.json").read_text())
+    if checkpoint["repository"]["head"] != current_head:
+        raise ValueError("real report-only checkpoint omitted current fixture Git identity")
+    event("implementation-ready","reconciliation")
+    reconciliation("recon-r4",corrected=True)
+    final_impl_review = review("implementation-review","implementation-adversarial-review")
+    review("implementation-adversarial-review","validation")
+    # The fixture helper executes the plan's real selected command through
+    # common capture, then supplies a fixed index and scripted independent
+    # criterion/goal records. No semantic verdict is inferred from that shape.
+    helper = Path(__file__).resolve().parents[1] / "tests/fixtures/prepare-validation.py"
+    spec = importlib.util.spec_from_file_location("reuse_validation_fixture", helper)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    full, _, _ = dogfood_observation._engine(journey,database,"show","--view","full",run_id)
+    prepared = module.prepare(journey.provider,journey.engine,checkout,full,"reuse-validation-r2")
+    for item in prepared["records"]:
+        dogfood_observation._engine(journey,database,"show","--view","action",run_id)
+        _checked(dogfood_observation._engine(journey,database,"append","--record-id",item["record_id"],
+            run_id,item["kind"],json.dumps(item["data"],separators=(",",":")))[0],"validation record append")
+    event("validation-ready","validation-review")
+    review("validation-review","validation-adversarial-review")
+    missing_terminal_axis = profile["review_policies"]["validation-adversarial-review"][-1]["id"]
+    review("validation-adversarial-review","end",terminal_missing_axis=missing_terminal_axis)
+    completed, _, _ = dogfood_observation._engine(journey,database,"show","--view","full",run_id)
+    if _checked(completed,"production terminal show").get("lifecycle") != "final":
+        raise ValueError("production revised plan did not reach normal reviewed completion")
+    if (old_capture / "summary.json").read_bytes() != old_bytes:
+        raise ValueError("production completion changed the original task evidence")
+    proof = {"status":"completed-scripted-production-software-change","run_id":run_id,
+        "database":str(database),"artifact_root":str(artifacts),
+        "original_capture":str(old_capture),"original_capture_summary_sha256":old_source["summary_sha256"],
+        "revised_invocation":revised["invocation_id"],"corrected_invocation":corrected["invocation_id"],
+        "report_only_invocation":report_only["invocation_id"],"initial_implementation_review":initial_impl_review,
+        "fresh_implementation_review":final_impl_review,"review_launches":review_counter.read_text().splitlines(),
+        "mapped_standing_tasks":["beta-renamed","beta-split","beta-merge"],
+        "pending_effect_and_dependency_tasks":sorted(pending),
+        "direct_act":direct_history,
+        "reconciliation_before":str(case / "reconciliation-before-driver-act.json"),
+        "reconciliation_after":str(case / "reconciliation-after-driver-act.json"),
+        "previous_reconciliation_sha256":"sha256:"+hashlib.sha256(previous_reconciliation).hexdigest(),
+        "stale_intent_driver_act_refusal":stale_act.get("code"),
+        "before_code_command":str(case / "before-code.command.json"),
+        "before_oracle_command":str(case / "before-oracle.command.json"),
+        "before_correction_command":str(case / "before-correction.command.json"),
+        "final_report_revision":json.loads((artifacts / "implementation-report.json").read_text())["revision"],
+        "final_head":current_head,"validation_capture_index":prepared["capture_index"],
+        "terminal_missing_validation_axis":missing_terminal_axis,
+        "terminal_denial":str(case / "terminal-missing-axis-denial.json"),
+        "terminal_denial_code":terminal_denial["code"] if terminal_denial else None,
+        "terminal_state":"end","semantic_review":"scripted mechanics only; no independent human judgment"}
+    _write_json(case / "completed-software-proof.json",proof)
+    journey._dogfood_case_root = original_case_root
+    return proof
+
+
+def dogfood_advice_subject(gate: str) -> str:
+    if gate.startswith("intent-"):
+        return "intent.json"
+    if gate.startswith("design-"):
+        return "design.json"
+    if gate.startswith("plan-"):
+        return "plan.json"
+    if gate.startswith("implementation-"):
+        return "implementation-report.json"
+    return "validation-report.json"
+
+
+def _start_review(journey, database: Path, run_id: str, gate: str) -> str:
+    dogfood_observation._engine(journey,database,"show","--view","action",run_id)
+    started, _, _ = dogfood_observation._engine(journey,database,"--timeout-ms","120000","invoke",run_id,gate)
+    return _checked(started,"invoke scripted independent review")["invocation_id"]
 
 
 def reuse_case(journey) -> None:
@@ -573,5 +1027,6 @@ def reuse_case(journey) -> None:
         "reshaped_capture_summary_sha256":reshaped_source["summary_sha256"],
         "semantic_review":"not simulated; current independent review and final semantic AC-6/AC-9 judgment remain driver-owned",
     }
+    outcome["production_software_change"] = _software_change_completion(journey,root)
     _write_json(root / "outcome.json",outcome)
-    print("sol-reuse public mapped reuse, driver act, and post-reconciliation report-only paths passed")
+    print("sol-reuse public mapped reuse, production revised-plan reviewed completion, driver act, and post-reconciliation report-only paths passed")

@@ -669,7 +669,7 @@ pub(crate) fn preview_recovery(show_json: &str, origin_id: &str) -> Result<Value
         .join("work-slot-captures")
         .join(slot_id)
         .join(origin_id);
-    if PathBuf::from(capture_dir) != expected_capture {
+    if Path::new(capture_dir) != expected_capture {
         return Err(
             "origin capture is not the engine-allocated capture for this run and slot".to_owned(),
         );
@@ -749,7 +749,7 @@ pub(crate) fn preview_recovery(show_json: &str, origin_id: &str) -> Result<Value
                     json!({"attempt":attempt,"sha256":digest,"path":path,"available":raw_valid}),
                 );
             }
-            let contract = declared_contract(&configured);
+            let contract = declared_contract(configured);
             let contract_matches = row.get("declared_output_contract") == contract.as_ref();
             let selected = row
                 .get("selected_output_sha256")
@@ -765,7 +765,7 @@ pub(crate) fn preview_recovery(show_json: &str, origin_id: &str) -> Result<Value
                     );
                     bytes
                         .ok()
-                        .is_some_and(|bytes| validate_recovered_output(&configured, &bytes).is_ok())
+                        .is_some_and(|bytes| validate_recovered_output(configured, &bytes).is_ok())
                 }
                 None => false,
             };
@@ -814,7 +814,7 @@ pub(crate) fn preview_recovery(show_json: &str, origin_id: &str) -> Result<Value
             "exit_code":inner_by_id.get(&id).and_then(|row|row.get("exit_code")).cloned(),
             "conformance_status":inner_by_id.get(&id).and_then(|row|row.get("conformance_status")).cloned(),
             "conformance_error":inner_by_id.get(&id).and_then(|row|row.get("conformance_error")).cloned(),
-            "declared_output_contract":inner_by_id.get(&id).and_then(|row|row.get("declared_output_contract")).cloned().or_else(||declared_contract(&configured)),
+            "declared_output_contract":inner_by_id.get(&id).and_then(|row|row.get("declared_output_contract")).cloned().or_else(||declared_contract(configured)),
             "raw_output":raw_output,"attempt_manifest":attempt_manifest,"selected_source":source,
         }));
     }
@@ -1231,7 +1231,6 @@ pub(crate) fn recover_output(request_json: &str) -> Result<Value, String> {
     validate_recovered_contract(&derived_bytes, full_schema, legacy_schema)
         .map_err(|error| format!("derived output does not satisfy the frozen contract: {error}"))?;
     let derived_digest = fan_out::sha256_digest(&derived_bytes);
-    let root_path = PathBuf::from(root);
     let path_key = fan_out::sha256_digest(
         format!(
             "{}:{}",
@@ -1243,7 +1242,7 @@ pub(crate) fn recover_output(request_json: &str) -> Result<Value, String> {
         )
         .as_bytes(),
     );
-    let derived_dir = root_path
+    let derived_dir = root
         .join("recovery-derived")
         .join(&path_key[7..])
         .join(&derived_digest[7..]);
@@ -1339,6 +1338,10 @@ fn acquire_model_budget_lock(directory: &Path) -> Result<ModelBudgetLock, String
     Ok(ModelBudgetLock { path })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "budget history verifies each run, slot, visit, binding, assignment and model identity"
+)]
 fn load_model_budget_usage(
     root: &Path,
     directory: &Path,
@@ -1846,6 +1849,10 @@ fn run_model_adapter(
     Ok((output, usage, capture))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "durable model usage records retain independent limits, accounting and stream digests"
+)]
 fn write_model_usage_capture(
     attempt_dir: &Path,
     adapter: &RepairAdapterConfig,

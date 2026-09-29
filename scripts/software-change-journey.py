@@ -11371,6 +11371,55 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     # configured stages/counts/commands and frozen-floor preview through setup.
                     # bookends:LE-134 — the same public path asserts setup outcomes and
                     # read-only prerequisite/CI collection observations, not token matches.
+                    # bookends:LE-145 — sol-observation compares current-revision assignment counts,
+                    # status and distinct older failures against captured attempts.
+                    # bookends:LE-146 — sol-observation bounds unavailable/locked status reads
+                    # under two seconds while retaining separate full evidence.
+                    # bookends:LE-147 — sol-terminal drives real PTY navigation/reflow over
+                    # software and non-software graphs; actual Fold7 use remains external.
+                    # bookends:LE-148 — sol-observation checks actionable locators and exact
+                    # paged original streams plus uncertainty, not just compact output size.
+                    # bookends:LE-149 — sol-review-context compares blind, confirmation and
+                    # challenge packets, source hashes and small-window refusal; real smaller-model quality remains pending.
+                    # bookends:LE-150 — sol-reuse completes a production software-change
+                    # revised-plan mapping with pending effect/dependency reruns, fresh bound reviews,
+                    # captured validation, current report/checkpoint and intact original capture.
+                    # bookends:LE-151 — sol-recovery-core exercises output-only repair and
+                    # immutable raw/derived origins; sol-recovery rejects a formatted FAIL at its gate.
+                    # bookends:LE-152 — sol-recovery-core and sol-recovery admit preserved
+                    # failed/cancelled siblings plus fresh barrier reviewers through real
+                    # software-change candidate, append and checked gate, never only outer exit zero.
+                    # bookends:LE-153 — sol-reuse executes the defective alpha code before
+                    # its correction, runs the command parsed from the corrected fixture workflow,
+                    # corrects the Loop reconciliation explanation, then refreshes affected graph,
+                    # post-decision same-bound summarizer, checkpoint, proof and scripted fresh review.
+                    # bookends:LE-154 — sol-evidence retains fresh rows beside invalid reuse
+                    # diagnostics, while malformed carry cannot make its checked gate pass.
+                    # bookends:LE-155 — sol-review-context verifies cited source identity and
+                    # challenge grounds; mechanically valid false PASS is left for driver judgment.
+                    # bookends:LE-156 — sol-review-context compares qualified owner-source
+                    # changes and exact draft delta without treating a driver paraphrase as approval.
+                    # bookends:LE-158 — sol-evidence previews/explicitly appends exact rows,
+                    # resumes an unchanged ID and refuses conflicting bytes/target drift.
+                    # bookends:LE-159 — sol-proof-index distinguishes selected current command
+                    # assertions from stale, zero-exit-only and historical substitute receipts.
+                    # bookends:LE-160 — sol-profiles exports edited standalone bytes and
+                    # verifies effective stages/counts and immutable started floors.
+                    # bookends:LE-161 — sol-advice-provider retains actual five completed
+                    # Bookends-enabled artifacts and distinct AC/command/verdict links;
+                    # selected sol-evidence proves four high-rigor review refusals/repairs,
+                    # sol-reuse a missing validation-axis terminal refusal/repair, for
+                    # independent semantic inspection. sol-profiles proves off-mode scope.
+                    # bookends:LE-162 — sol-profiles read-only preview names missing live
+                    # wording, config, eligible CI collection and evaluation cwd without running tests.
+                    # bookends:LE-163 — sol-advice-generic validates exact typed command
+                    # answers and captures separately from real primary bound completion.
+                    # bookends:LE-164 — sol-advice-provider prepares all eight decision
+                    # families from selected actual sources; answers grant no review authority.
+                    # bookends:LE-165 — sol-advice-provider verifies equal profile occasions,
+                    # explicit enable/decline and every successful answer's disposition.
+                    # bookends:LE-166 — sol-advice-transition and sol-advice-provider refuse
+                    # checked/check-free departure with missing, invalid or stale due advice.
                     dogfood_cases.dispatch(args.scenario, journey)
                 elif args.scenario == "override":
                     journey._run_recovery_override()
@@ -11391,6 +11440,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 elif args.scenario == "dispositions":
                     # bookends:LE-115 — exact-source discharge/retirement keeps
                     # raw failures and rejects unresolved/missing author coverage.
+                    # bookends:LE-157 — real exact-source disposition blocks an
+                    # unresolved failure despite later passes; override scenario
+                    # separately retains a visible exceptional terminal result.
                     recovery_journey.dispatch(args.scenario, journey)
                 elif args.scenario == "batched-review":
                     # bookends:LE-130 — shipped stage-aware construction drives

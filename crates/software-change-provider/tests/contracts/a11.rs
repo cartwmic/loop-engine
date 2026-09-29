@@ -646,7 +646,9 @@ fn is_historical_entry(entry: &Map<String, Value>) -> bool {
         .any(|suffix| config_version.ends_with(suffix))
 }
 
-fn row_key(entry: &Map<String, Value>) -> (String, String, String, String, String) {
+type CalibrationRowKey = (String, String, String, String, String);
+
+fn row_key(entry: &Map<String, Value>) -> CalibrationRowKey {
     (
         string_field(entry, "config_version").to_owned(),
         string_field(entry, "gate").to_owned(),
@@ -659,9 +661,7 @@ fn row_key(entry: &Map<String, Value>) -> (String, String, String, String, Strin
 /// Derive the successor's full row-key universe from every current shipped
 /// profile axis/stage and the predecessor corpus's selected fixture identities.
 /// Historical verdicts, hashes, models, and attestations are never used here.
-fn required_current_row_keys(
-    entries: &[Value],
-) -> Result<BTreeSet<(String, String, String, String, String)>, String> {
+fn required_current_row_keys(entries: &[Value]) -> Result<BTreeSet<CalibrationRowKey>, String> {
     let mut required = BTreeSet::new();
     for profile in PROFILES {
         let config = support::load_profile(profile);

@@ -434,6 +434,10 @@ pub(super) fn execute(
     render(output, &OperationOutcome::completed(result))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "failure recording needs the distinct capture, request, receipt and command-start facts"
+)]
 fn persist_failure(
     output: OutputFormat,
     persistence: &impl Persistence,
@@ -646,6 +650,10 @@ fn attempt_id_from_root(root: &Path) -> &str {
         .unwrap_or("advice-attempt")
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "persisted advice attempts retain independent command, capture, receipt and typed-result facts"
+)]
 fn attempt_data(
     run_id: &RunId,
     attempt_id: &str,

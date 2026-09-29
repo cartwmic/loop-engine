@@ -1977,6 +1977,11 @@ def recovery_case(journey) -> None:
     prose = _software_change_scripted_review_case(journey, root)
     failed = _generic_recovery_case(journey, root, "failed-two-group", cancel=False)
     cancelled = _generic_recovery_case(journey, root, "cancelled-two-group", cancel=True)
+    # The generic mixed join and a single-source software admission are only
+    # slices. Admit both origins with fresh selected review through the real gate.
+    import dogfood_evidence
+    mixed_failed = dogfood_evidence.mixed_review_recovery_case(journey, root, "software-mixed-failed", cancel=False)
+    mixed_cancelled = dogfood_evidence.mixed_review_recovery_case(journey, root, "software-mixed-cancelled", cancel=True)
     full_show_retention = _assert_full_show_retention(root)
     report = {
         "schema_version": 1,
@@ -1986,6 +1991,8 @@ def recovery_case(journey) -> None:
         "scripted_explicit_review_fail": prose,
         "failed_two_group": failed,
         "cancelled_two_group": cancelled,
+        "software_mixed_failed": mixed_failed,
+        "software_mixed_cancelled": mixed_cancelled,
         "full_show_retention": full_show_retention,
         "semantic_review": "not performed; scripted output proves mechanics only",
         "live_repair_model": "disabled",

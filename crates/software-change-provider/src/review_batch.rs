@@ -423,7 +423,7 @@ mod tests {
         assert_eq!(ambiguous_rows.len(), 2);
         assert_eq!(ambiguous_rows[0]["axis"], "alpha");
         assert!(validate_reuse_row(
-            &ambiguous_rows[1],
+            ambiguous_rows[1],
             &ambiguous_location,
             "implementation-review",
             "beta",

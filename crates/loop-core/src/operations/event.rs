@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
+use std::convert::Infallible;
 use std::path::{Component, Path};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -160,7 +161,7 @@ where
     let driver_act = match request.driver_act.as_ref() {
         Some(act) => match prepare_driver_act(&run, &transition, act, persistence) {
             Ok(evidence) => Some(evidence),
-            Err(outcome) => return outcome,
+            Err(outcome) => return outcome.map(|never| match never {}),
         },
         None => None,
     };
@@ -187,7 +188,7 @@ where
 
     let advice_exception = match enforce_advice_closure(&run, &transition, &request, persistence) {
         Ok(exception) => exception,
-        Err(outcome) => return outcome,
+        Err(outcome) => return outcome.map(|never| match never {}),
     };
 
     if let Some(attestation) = request.override_attestation {
@@ -285,7 +286,7 @@ fn enforce_advice_closure<P>(
     transition: &Transition,
     request: &Request,
     persistence: &P,
-) -> std::result::Result<Option<crate::AdviceExceptionAttestation>, OperationOutcome<Result>>
+) -> std::result::Result<Option<crate::AdviceExceptionAttestation>, OperationOutcome<Infallible>>
 where
     P: Persistence + ?Sized,
 {
@@ -589,7 +590,7 @@ fn prepare_driver_act<P>(
     transition: &Transition,
     request: &crate::DriverActRequest,
     persistence: &P,
-) -> std::result::Result<crate::DriverActEvidence, OperationOutcome<Result>>
+) -> std::result::Result<crate::DriverActEvidence, OperationOutcome<Infallible>>
 where
     P: Persistence + ?Sized,
 {

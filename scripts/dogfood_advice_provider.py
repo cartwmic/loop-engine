@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -1056,6 +1057,261 @@ def _public_setup_and_question_families(journey, root: Path, setup_results: dict
     },indent=2)+"\n",encoding="utf-8")
 
 
+def _prepare_real_phase_coverage(journey, run_root: Path, checkout: Path) -> None:
+    """Explain this completed fixture's *actual* live scope in its phase artifacts.
+
+    The calibration inputs remain untouched. This fixture's accepted AC spine is
+    linked to the committed requirements that its scripted operator paths can
+    actually expose, not the unrelated LE-1/LE-2 placeholder links.
+    """
+    artifacts = run_root / "artifacts"
+    intent_path = artifacts / "intent.json"
+    intent = json.loads(intent_path.read_text())
+    live = {"AC-1":"LE-132", "AC-2":"LE-137", "AC-4":"LE-116"}
+    for criterion in intent["acceptance"]:
+        if criterion["id"] in live:
+            criterion["prd_traceability"] = {"type":"linked-live","live_ids":[live[criterion["id"]]]}
+    intent["operating_context"]["outside_obligations"].extend([
+        {"source":"docs/PRD.md#LE-161",
+         "obligation":"Account for accepted in-scope requirements through intent, design, plan, implementation and validation in each phase's own terms, with named authoritative obligations and real public GREEN."},
+        {"source":"docs/PRD.md#LE-97 and docs/PRD.md#LE-134",
+         "obligation":"Distinguish actual public assertions from schema, ID or exit-only activity; real eligibility and Bookends GREEN are separate."},
+        {"source":"docs/PRD.md#LE-116 and crates/software-change-provider/docs/prd.md#11",
+         "obligation":"Keep the fixed AC-N/goal command index and independent evidence at one current checkpoint."},
+        {"source":"crates/software-change-provider/data/reviewer-protocol.md",
+         "obligation":"Scripted reviewer output is candidate evidence, not semantic approval."},
+    ])
+    _write_json(intent_path,intent)
+
+    design_path = artifacts / "design.json"
+    design = json.loads(design_path.read_text())
+    design["author"] = {"name":"scripted-bookends-design","kind":"script"}
+    design["approach"] = (
+        "Use real public setup, malformed-subject denial, source-linked review and revised-plan "
+        "completion commands for the four accepted fixture criteria. Keep Bookends-enabled phase "
+        "artifacts on their existing AC/command/verdict spine; retain actual bytes for external inspection."
+    )
+    design["elements"] = [{"name":"selected public proof paths",
+        "responsibility":"Deliver distinct captured operator observations for AC-1..AC-4; a scripted verdict is not semantic approval."}]
+    design["decisions"] = [{"choice":"Use named public command captures and the fixed validation index",
+        "rationale":"LE-116 and LE-161 need actual selected sources and phase-appropriate explanations, not a second ID ledger or local phrase classifier."}]
+    design["risks"] = [{"risk":"A schema-valid synthetic PASS could be mistaken for semantic coverage",
+        "mitigation":"Retain exact artifact and command bytes, distinct criterion citations and explicit semantic limits for independent inspection."}]
+    descriptions = {
+        "AC-1":"LE-132: keep selected setup policy and immutable initial_input visible before transitions; the setup and shown frozen bytes, not a describe token, establish the operator observation.",
+        "AC-2":"LE-137: deterministic checked evaluation reports each malformed subject path/rule without letting the script decide semantic sufficiency; the public negative must be inspected separately.",
+        "AC-3":"Change-specific independence and complete configured axes: sol-evidence checks stale, subject-author, duplicate-author and missing-axis real high-rigor gate refusals with a valid ledger, then repairs each before checked progress. No unrelated PRD ID supplies this criterion's meaning.",
+        "AC-4":"LE-116 and LE-161: sol-reuse attempts the terminal edge with one named configured validation-adversarial axis missing and a valid ledger/index, then repairs it and completes; captured commands, independent AC/goal records and the current implementation checkpoint supply the fifth phase's links. docs/PRD.md#LE-97/134 still require public assertion inspection.",
+    }
+    for row, criterion in zip(design["coverage"],intent["acceptance"]):
+        row["criterion_id"] = criterion["id"]
+        row["delivered_by"] = descriptions[criterion["id"]]
+    _write_json(design_path,design)
+
+    plan_path = artifacts / "plan.json"
+    plan = json.loads(plan_path.read_text())
+    plan["author"] = {"name":"scripted-bookends-plan","kind":"script"}
+    plan["objective"] = (
+        "Capture four distinguishing public paths and retain five actual Bookends-enabled phase "
+        "artifacts with the fixed current-criterion and whole-goal validation index."
+    )
+    subjects = {
+        "AC-1":("phase-setup","LE-132","selected copied profile bytes, effective policy and frozen floor"),
+        "AC-2":("phase-schema","LE-137","two required-field denials from a real malformed intent and unchanged state"),
+        "AC-3":("phase-evidence",None,"high-rigor stale, self-authored, duplicate-author and missing-axis checked refusals with valid ledger and repaired gate"),
+        "AC-4":("phase-completion","LE-116","missing configured validation-axis terminal refusal, repair, checked completion and distinct criterion/goal evidence"),
+    }
+    plan["tasks"] = [{
+        "id":task,"objective":f"Exercise the {criterion} operator path through a selected public command.",
+        "dependencies":[],"source_of_truth":["intent.json#/acceptance/"+str(index),
+            "design.json#/coverage/"+str(index),
+            *([f"docs/PRD.md#{requirement}"] if requirement else
+              ["crates/software-change-provider/data/configs/high-rigor.json#/review_policies/intent-review"]),
+            "docs/PRD.md#LE-161","crates/software-change-provider/docs/prd.md#11"],
+        "deliverables":[f"Retained {observation} with actual stdout/stderr and command identity."],
+        "out_of_scope":["Scripted pass and exit zero are not semantic approval; an independent actor inspects exact assertions."],
+        "validation":[f"The selected public command asserts {observation}; expose its negative or an explicit limitation rather than matching an ID."],
+        "handoff":"The current artifact and captured assertion are read by validation; verdicts name only this selected source.",
+        "criterion_ids":[criterion],"proof_command_ids":["phase-"+criterion.lower()],
+    } for index,(criterion,(task,requirement,observation)) in enumerate(subjects.items())]
+    plan["dependency_graph"] = []
+    plan["proof_commands"] = list(plan["proof_commands"])
+    proof_cases = {
+        "AC-1":"sol-profiles", "AC-3":"sol-evidence", "AC-4":"sol-reuse",
+    }
+    for criterion_id, scenario in proof_cases.items():
+        command_id = "phase-" + criterion_id.lower()
+        plan["proof_commands"].append({
+            "id":command_id,"command":sys.executable,
+            "args":[str(checkout / "scripts/software-change-journey.py"),"--mode","source",
+                    "--engine",str(journey.engine),"--provider",str(journey.provider),
+                    "--data-root",str(checkout),"--work-root",str(run_root / f"proof-{criterion_id.lower()}"),
+                    "--profile","crates/software-change-provider/data/configs/high-rigor.json",
+                    "--scenario",scenario],
+            "owner":"fixture-proof-owner",
+            "obligation":f"AC {criterion_id}: execute the {scenario} public CLI path and inspect its retained distinct assertions and negatives.",
+        })
+    denial_script = run_root / "phase-ac2-schema-denial.py"
+    denial_script.write_text(
+        "import json,pathlib,subprocess,sys\n"
+        "engine,provider,profile_path,fixture_path,root=map(pathlib.Path,sys.argv[1:])\n"
+        "root.mkdir(); artifacts=root/'artifacts'; artifacts.mkdir()\n"
+        "profile=json.loads(profile_path.read_text()); profile['artifact_root']=str(artifacts); profile['review_policies']={}\n"
+        "(root/'profile.json').write_text(json.dumps(profile))\n"
+        "(root/'providers.toml').write_text('[providers.software-change]\\ncommand = '+json.dumps(str(provider))+'\\nargs = []\\n')\n"
+        "db=root/'loop.sqlite'; run='phase-ac2-malformed-subject'\n"
+        "def call(*args):\n"
+        " p=subprocess.run([str(engine),'--database',str(db),'--json',*args],cwd=root,capture_output=True,text=True,check=False)\n"
+        " v=json.loads(p.stdout); return p,v\n"
+        "p,v=call('--config',str(root/'providers.toml'),'start','--id',run,'software-change','@'+str(root/'profile.json'))\n"
+        "assert p.returncode==0 and v['status']=='completed',v\n"
+        "intent=json.loads(fixture_path.read_text()); intent.pop('revision'); intent.pop('problem')\n"
+        "(artifacts/'intent.json').write_text(json.dumps(intent))\n"
+        "p,v=call('show','--view','action',run); assert p.returncode==0 and v['status']=='completed',v\n"
+        "p,v=call('event',run,'intent-ready'); violations=v.get('details',{}).get('violations',[])\n"
+        "missing={x['message'] for x in violations if x.get('path')=='' and x.get('rule')=='required'}\n"
+        "assert v.get('status')=='rejected' and v.get('code')=='software-change-schema-invalid' and {'required property `revision` is missing','required property `problem` is missing'}<=missing,v\n"
+        "p,after=call('show','--view','full',run); assert p.returncode==0 and after['result']['current_state']=='explore',after\n"
+        "print('assertion: real malformed intent rejects both absent required fields without transition; '+json.dumps(sorted(missing)))\n",
+        encoding="utf-8",
+    )
+    plan["proof_commands"].append({"id":"phase-ac-2","command":sys.executable,
+        "args":[str(denial_script),str(journey.engine),str(journey.provider),
+                str(checkout / "crates/software-change-provider/data/configs/minimal.json"),
+                str(journey.data_root / "crates/software-change-provider/data/calibration/fixtures/intent-good.json"),
+                str(run_root / "proof-ac2")],
+        "owner":"fixture-proof-owner",
+        "obligation":"AC-2: public start/show/event refuses two malformed intent fields with distinct paths and unchanged state."})
+    for task in plan["tasks"]:
+        for criterion_id in task.get("criterion_ids",[]):
+            proof_id = "phase-" + criterion_id.lower()
+            if proof_id not in task.get("proof_command_ids",[]):
+                task.setdefault("proof_command_ids",[]).append(proof_id)
+    _write_json(plan_path,plan)
+
+    report_path = artifacts / "implementation-report.json"
+    report = json.loads(report_path.read_text())
+    report["author"] = {"name":"scripted-bookends-implementation","kind":"script"}
+    documents = ("docs/PRD.md","crates/software-change-provider/docs/prd.md",
+                 "crates/software-change-provider/data/reviewer-protocol.md",
+                 "scripts/software-change-journey.py")
+    head = subprocess.run(["git","rev-parse","HEAD"],cwd=checkout,capture_output=True,text=True,check=False)
+    if head.returncode != 0:
+        raise ValueError(f"fixture implementation report has no actual Git HEAD: {head.stderr}")
+    report["coverage"] = {"commit":head.stdout.strip(),"documents":[
+        {"path":name,"revision":"sha256:"+hashlib.sha256((checkout/name).read_bytes()).hexdigest()}
+        for name in documents]}
+    report["changed_surface"] = ["scripted external fixture artifacts and captures; no checkout source edit"]
+    report["summary"] = (
+        "Scripted Bookends-enabled fixture, not a claim of implementing the old calibration's fictional repository. "
+        "Its selected live LE-132/137/116 scope uses the existing AC-N spine, actual public command captures, "
+        "and the provider PRD/reviewer protocol obligations under LE-161; semantic coverage and advice quality remain external judgments."
+    )
+    report["validation"] = [
+        {"criterion_id":"AC-1","proof":"phase-ac-1: sol-profiles checks selected bytes/effective policy and frozen floor through setup/start/show (LE-132)."},
+        {"criterion_id":"AC-2","proof":"phase-ac-2: public start/show/event denies two malformed intent fields and retains explore (LE-137)."},
+        {"criterion_id":"AC-3","proof":"phase-ac-3: sol-evidence checks four ledger-present high-rigor independence/axis deficits, their specific checked refusals, repair and approval (change-specific)."},
+        {"criterion_id":"AC-4","proof":"phase-ac-4: sol-reuse requests a real terminal edge missing one configured validation-adversarial axis, retains its denial and then completes after the missing review is appended (LE-116)."},
+    ]
+    _write_json(report_path,report)
+
+
+def _prepare_phase_validation(journey, run_id: str, checkout: Path) -> dict[str, Any]:
+    """Capture actual named public checks, then give each synthetic AC its own source."""
+    helper = Path(__file__).resolve().parents[1] / "tests/fixtures/prepare-validation.py"
+    spec = importlib.util.spec_from_file_location("phase_validation_fixture",helper)
+    if spec is None or spec.loader is None:
+        raise ValueError("validation capture fixture could not be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    shown = journey._engine(["show","--view","full",run_id],state="validation",event="phase-validation-show")
+    journey._expect_status(shown,"completed",event="show",state="validation")
+    prepared = module.prepare(journey.provider,journey.engine,checkout,shown,"p11-validation-r1")
+    evidence = {row["data"]["proof_id"]:row["record_id"] for row in prepared["records"]
+                if row["kind"] == "command-evidence"}
+    for criterion_id in ("AC-1","AC-2","AC-3","AC-4"):
+        if "phase-" + criterion_id.lower() not in evidence:
+            raise ValueError(f"validation capture omitted the distinct {criterion_id} public proof")
+    for row in prepared["records"]:
+        if row["kind"] == "criterion-verdict":
+            criterion = row["data"]["criterion_id"]
+            command_id = "phase-" + criterion.lower()
+            row["data"]["evidence_context_ids"] = [evidence[command_id]]
+            row["data"]["reason"] = (
+                f"Scripted fixture selected the retained {command_id} public command and its "
+                "actual assertion/negative for this AC under LE-161's phase-specific coverage duty; separate independent semantic review remains required."
+            )
+        elif row["kind"] == "goal-verdict":
+            row["data"]["evidence_context_ids"] = [evidence["phase-ac-1"],evidence["phase-ac-2"],
+                                                       evidence["phase-ac-3"],evidence["phase-ac-4"]]
+            row["data"]["reason"] = (
+                "Scripted fixture selected all four distinct captured public paths; "
+                "the final Bookends-enabled goal and LE-161's five-phase semantic sufficiency remain external."
+            )
+        _append_record(journey,run_id,"validation",row["record_id"],row["kind"],row["data"])
+    return prepared
+
+
+def _retain_phase_inspection(journey, run_root: Path, final: dict[str, Any], prd_identity: dict[str, Any]) -> dict[str, Any]:
+    """Retain exact resulting bytes and phase-specific facts for human review."""
+    artifacts = run_root / "artifacts"
+    names = ("intent","design","plan","implementation-report","validation-report")
+    bytes_by_phase = {name:(artifacts / f"{name}.json").read_bytes() for name in names}
+    documents = {name:json.loads(raw) for name,raw in bytes_by_phase.items()}
+    acceptance = {row["id"]:row for row in documents["intent"]["acceptance"]}
+    explanations = {
+        "intent": {"acceptance":documents["intent"]["acceptance"],
+                   "outside_obligations":documents["intent"]["operating_context"]["outside_obligations"]},
+        "design": {"coverage":documents["design"]["coverage"]},
+        "plan": {"tasks":[{"id":row["id"],"criterion_ids":row.get("criterion_ids"),
+                             "source_of_truth":row["source_of_truth"],"validation":row["validation"],
+                             "out_of_scope":row["out_of_scope"]} for row in documents["plan"]["tasks"]],
+                 "proof_commands":documents["plan"]["proof_commands"]},
+        "implementation-report": {"coverage":documents["implementation-report"]["coverage"],
+                                  "summary":documents["implementation-report"]["summary"],
+                                  "validation":documents["implementation-report"]["validation"]},
+        "validation-report": {"fixed_index":documents["validation-report"]},
+    }
+    index = documents["validation-report"]
+    context = {row["id"]:row for row in final["context"]}
+    commands = [context[record_id] for record_id in index["command_evidence_ids"]]
+    verdicts = {row["criterion_id"]:[context[record_id] for record_id in row["verdict_ids"]]
+                for row in index["criteria"]}
+    goals = [context[record_id] for record_id in index["goal_verdict_ids"]]
+    if (set(acceptance) != set(verdicts)
+            or any(record["kind"] != "command-evidence" for record in commands)
+            or any(record["kind"] != "criterion-verdict" for rows in verdicts.values() for record in rows)
+            or any(record["kind"] != "goal-verdict" for record in goals)):
+        raise ValueError("completed five-artifact inspection lost actual AC, command, or goal sources")
+    if {row["criterion_id"] for row in documents["design"]["coverage"]} != set(acceptance):
+        raise ValueError("actual design omitted a current AC coverage relationship")
+    if not all(any(row["criterion_id"] in task.get("criterion_ids",[]) for task in documents["plan"]["tasks"])
+                   for row in index["criteria"]):
+        raise ValueError("actual plan omitted an AC task relationship")
+    if {row["criterion_id"] for row in documents["implementation-report"]["validation"]
+            if "criterion_id" in row} != set(acceptance):
+        raise ValueError("actual implementation report omitted a current AC proof relationship")
+    inspection = {
+        "kind":"completed-five-phase-artifact-inspection-v1", "run_id":final["run_id"],
+        "terminal_state":final["current_state"],"lifecycle":final["lifecycle"],
+        "normative_source":prd_identity,
+        "normative_obligations": ["docs/PRD.md#LE-161","docs/PRD.md#LE-132","docs/PRD.md#LE-137",
+            "docs/PRD.md#LE-116","docs/PRD.md#LE-97","docs/PRD.md#LE-134",
+            "crates/software-change-provider/docs/prd.md#11",
+            "crates/software-change-provider/data/reviewer-protocol.md"],
+        "artifacts":{name:{"path":str(artifacts / f"{name}.json"),
+                           "sha256":"sha256:"+hashlib.sha256(raw).hexdigest(),
+                           "byte_length":len(raw),"phase_explanation":explanations[name]}
+                     for name,raw in bytes_by_phase.items()},
+        "validation_sources":{"command_evidence":commands,"criterion_verdicts":verdicts,"goal_verdicts":goals},
+        "semantic_limit":"Exact real artifact bytes and source relationships are retained for independent judgment; structural relationships and scripted PASS do not prove semantic coverage or advice usefulness. The selected command negatives exercise provider mechanics, not independent semantic quality.",
+    }
+    path = run_root / "phase-coverage-inspection.json"
+    _write_json(path,inspection)
+    return {"path":str(path),"sha256":"sha256:"+hashlib.sha256(path.read_bytes()).hexdigest(),
+            "artifact_sha256":{name:inspection["artifacts"][name]["sha256"] for name in names}}
+
+
 def _completed_bookends_run(
     journey, root: Path, setup_results: dict[str, dict[str, Any]], advice_config: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1140,6 +1396,7 @@ def _completed_bookends_run(
     journey._write_provider_config_at(journey.provider_config)
     journey._write_overlay_artifacts(artifacts, candidate=False, unfulfilled=False)
     journey._assert_overlay_artifacts(artifacts, candidate=False, unfulfilled=False)
+    _prepare_real_phase_coverage(journey, run_root, checkout)
 
     original_expect = journey._expect_allow
 
@@ -1289,10 +1546,7 @@ def _completed_bookends_run(
     _append_ledger(journey,journey.run_id,gate,result["subject"],result["revision"])
     journey._expect_allow("approved","validation")
 
-    validation = journey._create_validation_fixture(
-        lambda ops: journey._engine(ops,state="validation",event=ops[0]),
-        journey.run_id,checkout,"p11-validation-r1"
-    )
+    validation = _prepare_phase_validation(journey,journey.run_id,checkout)
     if not validation.get("report",{}).get("command_evidence_ids") or not validation.get("records"):
         raise ValueError("future-run path omitted real proof captures, criterion records, or goal records")
     journey._expect_allow("validation-ready","validation-review")
@@ -1331,9 +1585,11 @@ def _completed_bookends_run(
         if count!=len(response["typed_result"]["answers"]):
             raise ValueError(f"final response {response_id} has undispositioned or stale-target answers")
         final_disposition_counts[response_id]=count
+    phase_inspection = _retain_phase_inspection(journey,run_root,final,committed_prd_identity)
     journey._expect_allow = original_expect
     proof={"status":"passed","run_id":journey.run_id,"terminal_state":final["current_state"],
            "bookends_enabled":True,"bookends_source_prd":committed_prd_identity,
+           "five_phase_inspection":phase_inspection,
            "review_evidence_count":len(review_rows),"ledger_count":len(ledgers),
            "command_evidence_count":len(command_rows),"criterion_goal_count":len(verdict_rows),
            "reconciliation":str(recon),"validation_capture_count":len(validation["records"]),

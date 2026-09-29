@@ -987,18 +987,16 @@ fn project_review_context(
         if excluded_ids.contains(record.id.as_str()) {
             continue;
         }
-        if own
+        if (own
             && (ledger_refs.contains(record.id.as_str())
                 || applicability_refs.contains(record.id.as_str())
                 || (requested_stage.is_some_and(|stage| evidence_stage(record) == stage)
                     && record.data.get("subject_revision").and_then(Value::as_str)
-                        == Some(revision)))
-        {
-            selected_review_ids.insert(record.id.as_str().to_owned());
-        } else if parent_source
-            && (parent_aggregate_ids.contains(record.id.as_str())
-                || ledger_refs.contains(record.id.as_str())
-                || applicability_refs.contains(record.id.as_str()))
+                        == Some(revision))))
+            || (parent_source
+                && (parent_aggregate_ids.contains(record.id.as_str())
+                    || ledger_refs.contains(record.id.as_str())
+                    || applicability_refs.contains(record.id.as_str())))
         {
             selected_review_ids.insert(record.id.as_str().to_owned());
         }

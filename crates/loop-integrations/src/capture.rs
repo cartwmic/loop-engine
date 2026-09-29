@@ -464,6 +464,10 @@ fn execute_row_with_forwarding(
     execute_row_with_options(row, cwd, attempt, root, stdout_to_stderr, true, None, true)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "capture keeps stdin, stream forwarding and repository identity choices explicit across two public entry points"
+)]
 fn execute_row_with_options(
     row: &Row,
     cwd: &Path,

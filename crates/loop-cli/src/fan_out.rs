@@ -2072,7 +2072,10 @@ fn summary_from_spec(
                     Some(Some(selected.number)),
                     Some(format!("{worker_index}/{ATTEMPTS_FILE}")),
                     Some(selected.sha256),
-                    Some(selected.path),
+                    Some(format!(
+                        "{worker_index}/attempts/{}/stdout",
+                        selected.number
+                    )),
                 ),
                 Err(error) => (
                     Some(ContractStatus::Failed),
@@ -2168,7 +2171,6 @@ fn summary_from_spec(
 struct SelectedOutput {
     number: u32,
     sha256: String,
-    path: String,
 }
 
 struct RawOutputIdentity {
@@ -2390,12 +2392,6 @@ fn evaluate_full_contract(worker: &FanOutSpecWorker) -> Result<SelectedOutput, S
             Ok(SelectedOutput {
                 number,
                 sha256: sha256_digest(&stdout),
-                path: path_to_string(
-                    &worker_dir
-                        .join("attempts")
-                        .join(number.to_string())
-                        .join("stdout"),
-                ),
             })
         }
         (None, true, None) => {

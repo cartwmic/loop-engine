@@ -11,7 +11,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Caller-supplied values needed to invoke a bound work slot.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -260,11 +260,13 @@ where
         match validate_fan_out_recovery(
             recovery,
             &run,
-            &request.slot_id,
-            &binding,
-            &binding_digest,
-            &digest,
-            &subject,
+            RecoveryTarget {
+                slot_id: &request.slot_id,
+                binding: &binding,
+                binding_digest: &binding_digest,
+                instruction_digest: &digest,
+                current_subject: &subject,
+            },
             &invocations,
             process,
         ) {
@@ -572,17 +574,28 @@ fn parse_fan_out_recovery_input(
         .map_err(|error| format!("fan-out recovery input is malformed: {error}"))
 }
 
+struct RecoveryTarget<'a> {
+    slot_id: &'a WorkSlotId,
+    binding: &'a WorkSlotBinding,
+    binding_digest: &'a str,
+    instruction_digest: &'a str,
+    current_subject: &'a str,
+}
+
 fn validate_fan_out_recovery<P: WorkSlotProcess + ?Sized>(
     recovery: &FanOutRecoveryInput,
     run: &crate::Run,
-    slot_id: &WorkSlotId,
-    binding: &WorkSlotBinding,
-    binding_digest: &str,
-    instruction_digest: &str,
-    current_subject: &str,
+    target: RecoveryTarget<'_>,
     invocations: &[WorkSlotInvocation],
     process: &P,
 ) -> std::result::Result<Value, String> {
+    let RecoveryTarget {
+        slot_id,
+        binding,
+        binding_digest,
+        instruction_digest,
+        current_subject,
+    } = target;
     if recovery.protocol != FAN_OUT_RECOVERY_PROTOCOL
         || recovery.run_id != run.id.as_str()
         || recovery.slot_id != slot_id.as_str()
@@ -630,7 +643,7 @@ fn validate_fan_out_recovery<P: WorkSlotProcess + ?Sized>(
     }
     let artifact_root = artifact_root_from_input(&run.initial_input);
     let expected_capture = capture_dir_path(&artifact_root, slot_id, &origin.invocation_id);
-    if PathBuf::from(&origin.capture_dir) != expected_capture {
+    if Path::new(&origin.capture_dir) != expected_capture {
         return Err(
             "recovery origin capture is not the engine-allocated capture for this run and slot"
                 .to_owned(),

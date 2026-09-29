@@ -370,6 +370,10 @@ fn show_result(input: &Value) -> Result<&Map<String, Value>, ProjectionError> {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "assignment projection independently checks captured worker, contract, invocation and run context"
+)]
 fn project_assignment(
     origin: CandidateOrigin,
     worker: &Map<String, Value>,
@@ -570,6 +574,10 @@ fn project_assignment(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "batch projection retains independent captured contract, worker, invocation and context checks"
+)]
 fn project_batch(
     origin: CandidateOrigin,
     contract: &Value,

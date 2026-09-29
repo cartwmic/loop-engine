@@ -60,7 +60,7 @@ pub(crate) struct RunPlanGraphArgs {
     pub(crate) task_selection: Option<Vec<String>>,
 }
 
-/// Bound-worker stdin packet.  The engine's five invoke keys plus the
+/// Bound-worker stdin packet. The engine's invoke keys plus the
 /// optional opaque context selected by the implementation slot.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -70,6 +70,11 @@ pub(crate) struct InvokePacket {
     pub(crate) artifact_root: String,
     pub(crate) instruction_body: String,
     pub(crate) capture_dir: String,
+    /// Engine-owned binding/visit identity; recovery-capable invokes supply it.
+    #[serde(default, rename = "binding_sha256")]
+    pub(crate) _binding_sha256: Option<String>,
+    #[serde(default, rename = "state_visit")]
+    pub(crate) _state_visit: Option<u64>,
     #[serde(default)]
     pub(crate) context: Option<Vec<ContextRecord>>,
     /// Optional provider-owned input for selecting plan-task roots on a bound
@@ -214,7 +219,7 @@ pub(crate) fn parse_worker_cli_json(raw: &str) -> Result<WorkerCli, ParseError> 
 pub(crate) fn parse_invoke_packet(raw: &str) -> Result<InvokePacket, ParseError> {
     let value = serde_json::from_str::<Value>(raw).map_err(|error| {
         ParseError::new(format!(
-            "invoke packet must be a JSON object with exactly `run_id`, `slot_id`, `artifact_root`, `instruction_body`, and `capture_dir`: {error}"
+            "invoke packet requires `run_id`, `slot_id`, `artifact_root`, `instruction_body`, and `capture_dir` with only documented optional engine fields: {error}"
         ))
     })?;
     if value
@@ -228,7 +233,7 @@ pub(crate) fn parse_invoke_packet(raw: &str) -> Result<InvokePacket, ParseError>
     }
     serde_json::from_value(value).map_err(|error| {
         ParseError::new(format!(
-            "invoke packet must be a JSON object with exactly `run_id`, `slot_id`, `artifact_root`, `instruction_body`, and `capture_dir`: {error}"
+            "invoke packet requires `run_id`, `slot_id`, `artifact_root`, `instruction_body`, and `capture_dir` with only documented optional engine fields: {error}"
         ))
     })
 }
@@ -2184,6 +2189,10 @@ fn write_selection_record(
     })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "durable task results bind the plan, selected worker, standing inputs and actual step outcomes"
+)]
 fn write_plan_task_results(
     artifact_root: &Path,
     worker: &WorkerCli,
@@ -4084,6 +4093,29 @@ mod tests {
         assert_eq!(packet.artifact_root, "/tmp/artifacts");
         assert_eq!(packet.instruction_body, "Do the work");
         assert_eq!(packet.capture_dir, "/tmp/captures/inv-1");
+        assert_eq!(packet._binding_sha256, None);
+        assert_eq!(packet._state_visit, None);
+    }
+
+    #[test]
+    fn engine_owned_invoke_identity_is_typed_and_other_fields_stay_closed() {
+        let mut value: Value = serde_json::from_str(valid_packet_json()).expect("fixture packet");
+        value["binding_sha256"] = json!("sha256:fixture-identity");
+        value["state_visit"] = json!(2);
+        let packet = parse_invoke_packet(&value.to_string()).expect("current engine packet");
+        assert_eq!(
+            packet._binding_sha256.as_deref(),
+            Some("sha256:fixture-identity")
+        );
+        assert_eq!(packet._state_visit, Some(2));
+        value["binding_sha256"] = json!(2);
+        assert!(parse_invoke_packet(&value.to_string()).is_err());
+        value["binding_sha256"] = json!("sha256:fixture-identity");
+        value["state_visit"] = json!("2");
+        assert!(parse_invoke_packet(&value.to_string()).is_err());
+        value["state_visit"] = json!(2);
+        value["unrelated"] = json!(true);
+        assert!(parse_invoke_packet(&value.to_string()).is_err());
     }
 
     #[test]
