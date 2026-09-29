@@ -1067,7 +1067,7 @@ def _public_setup_and_question_families(journey, root: Path, setup_results: dict
     _dispositions(journey, journey.run_id, journey.state, wrong_w, status="reject",
                   reason="The actual selected check passed; this confidently wrong advice is rejected without an exception.")
     ad_hoc = {
-        "version":1,"admissibility":{"bounded_judgment":True,"evidence_sufficient":True},"state":{"selected_source":"driver-note/question-driver-observation"},
+        "version":1,"state":{"admissibility":{"bounded_judgment":True,"evidence_sufficient":True},"selected_source":"driver-note/question-driver-observation"},
         "target":{"run_id":journey.run_id,"state":"intent-review","state_visit":full["state_visit"],"source_context_ids":[driver_note_id]},
         "occasion":"ad-hoc:p11-active-operator-question",
         "questions":{"operator-note":{"type":"noul","instructions":"Is this selected note relevant to the operator's current question?",
@@ -1076,7 +1076,7 @@ def _public_setup_and_question_families(journey, root: Path, setup_results: dict
     adhoc_response = _advise(journey, root, journey.run_id, ad_hoc, "correct")
     _dispositions(journey, journey.run_id, journey.state, adhoc_response, status="partial",
                   reason="The driver dispositioned the ad-hoc answer while the run remained ACTIVE.")
-    timeout_request = {**ad_hoc,"occasion":"ad-hoc:p11-timeout","state":{"fixture_response_mode":"timeout","selected_source":"timeout fixture"}}
+    timeout_request = {**ad_hoc,"occasion":"ad-hoc:p11-timeout","state":{**ad_hoc["state"],"fixture_response_mode":"timeout","selected_source":"timeout fixture"}}
     timeout_path = root / "timeout-request.json"
     _write_json(timeout_path, timeout_request)
     timeout_result = journey._engine_for(journey.run_id,["advise",journey.run_id,f"@{timeout_path}"],state=journey.state,event="advise-timeout")
@@ -1478,7 +1478,7 @@ def _completed_bookends_run(
     })
     ad_hoc_show = journey._show_for(journey.run_id, state="explore", event="p11-adhoc-show")
     ad_hoc_request = {
-        "version":1,"admissibility":{"bounded_judgment":True,"evidence_sufficient":True},"state":{"selected_source_id":ad_hoc_source},
+        "version":1,"state":{"admissibility":{"bounded_judgment":True,"evidence_sufficient":True},"selected_source_id":ad_hoc_source},
         "target":{"run_id":journey.run_id,"state":"explore","state_visit":ad_hoc_show["state_visit"],
                   "source_context_ids":[ad_hoc_source]},
         "occasion":"ad-hoc:p11-active-driver-question",
@@ -1679,7 +1679,7 @@ def _disabled_and_exception_variants(journey, root: Path, setup_results: dict[st
     if advice_guidance.get("enabled") is not False:
         raise ValueError("declined future run did not expose effective advice-disabled state")
     config = json.loads((root / "advice-config.json").read_text())
-    disabled_request = {"version":1,"admissibility":{"bounded_judgment":True,"evidence_sufficient":True},"state":{"fact":"fixture"},"target":{"revision":"r1"},
+    disabled_request = {"version":1,"state":{"admissibility":{"bounded_judgment":True,"evidence_sufficient":True},"fact":"fixture"},"target":{"revision":"r1"},
                         "occasion":"ad-hoc:disabled","questions":{"q":{"type":"noul","instructions":"Judge the supplied fact.","proposition":"The fact is present."}}}
     request_path = run_root / "disabled-request.json"
     _write_json(request_path, disabled_request)
@@ -1726,7 +1726,7 @@ def _disabled_and_exception_variants(journey, root: Path, setup_results: dict[st
                    {"observation":"A selected active-run note supplies this mapped review-candidate question."})
     visit = journey._show_for(journey.run_id,state="intent-review",event="owner-exception-visit")["state_visit"]
     target = {"run_id":journey.run_id,"state":"intent-review","state_visit":visit,"source_context_ids":[source_id]}
-    request = {"version":1,"admissibility":{"bounded_judgment":True,"evidence_sufficient":True},"state":{"selected_source_id":source_id},"target":target,
+    request = {"version":1,"state":{"admissibility":{"bounded_judgment":True,"evidence_sufficient":True},"selected_source_id":source_id},"target":target,
                "occasion":due["occasion_id"],
                "questions":{"selected-note":{"type":"noul","instructions":"Judge the supplied note only.",
                                                 "proposition":"The note records the current observation."}}}

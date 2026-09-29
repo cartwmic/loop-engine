@@ -294,6 +294,7 @@ fn prepare(packet: PreparationPacket) -> Result<Value, String> {
         "selected_invocations": invocations,
         "selected_policies": selected_policies,
         "selected_check_assertions": selected_checks,
+        "admissibility": packet.admissibility,
         "agent_judgments": packet.judgments
     });
 
@@ -320,7 +321,6 @@ fn prepare(packet: PreparationPacket) -> Result<Value, String> {
     }
     let request = AdviceRequest {
         version: loop_core::ADVICE_PROTOCOL_VERSION,
-        admissibility: packet.admissibility,
         state,
         target,
         occasion: packet.occasion_id,

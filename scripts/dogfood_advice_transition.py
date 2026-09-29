@@ -139,8 +139,9 @@ def _map(event: str, occasion_id: str):
 def _request(occasion: str, target: dict[str, Any], *, mode="valid"):
     return {
         "version": 1,
-        "admissibility": {"bounded_judgment": True, "evidence_sufficient": True},
-        "state": {"mode": mode, "evidence": ["Observed: the label was clipped after resizing. Expected: the label remains readable. Proposed check: resize and inspect the label."]},
+        "state": {"mode": mode,
+                  "admissibility": {"bounded_judgment": True, "evidence_sufficient": True},
+                  "evidence": ["Observed: the label was clipped after resizing. Expected: the label remains readable. Proposed check: resize and inspect the label."]},
         "target": target,
         "occasion": occasion,
         "questions": {

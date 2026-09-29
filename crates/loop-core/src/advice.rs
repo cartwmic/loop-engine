@@ -71,7 +71,6 @@ impl AdviceAdmissibility {
 #[serde(deny_unknown_fields)]
 pub struct AdviceRequest {
     pub version: u32,
-    pub admissibility: AdviceAdmissibility,
     pub state: Value,
     pub target: Value,
     pub occasion: String,
@@ -93,10 +92,17 @@ impl AdviceRequest {
                 "advice request version must be {ADVICE_PROTOCOL_VERSION}"
             ));
         }
-        self.admissibility.validate()?;
         if !self.state.is_object() || !self.target.is_object() {
             return Err("advice state and target must be JSON objects".to_owned());
         }
+        let admissibility: AdviceAdmissibility = serde_json::from_value(
+            self.state
+                .get("admissibility")
+                .cloned()
+                .ok_or("advice state requires the caller's admissibility assessment")?,
+        )
+        .map_err(|error| format!("invalid advice admissibility: {error}"))?;
+        admissibility.validate()?;
         if self.occasion.trim().is_empty() {
             return Err("advice occasion must be a non-empty string".to_owned());
         }
@@ -526,8 +532,7 @@ mod tests {
     fn request() -> AdviceRequest {
         serde_json::from_value(json!({
             "version": 1,
-            "admissibility": {"bounded_judgment":true,"evidence_sufficient":true},
-            "state": {"fact": "present"},
+            "state": {"fact": "present", "admissibility": {"bounded_judgment":true,"evidence_sufficient":true}},
             "target": {"revision": "r1"},
             "occasion": "test",
             "questions": {
@@ -545,11 +550,14 @@ mod tests {
     fn refuses_missing_or_negative_admissibility_before_advice() {
         let original = serde_json::to_value(request()).unwrap();
         let mut missing = original.clone();
-        missing.as_object_mut().unwrap().remove("admissibility");
+        missing["state"]
+            .as_object_mut()
+            .unwrap()
+            .remove("admissibility");
         assert!(AdviceRequest::parse(&serde_json::to_vec(&missing).unwrap()).is_err());
         for field in ["bounded_judgment", "evidence_sufficient"] {
             let mut value = original.clone();
-            value["admissibility"][field] = json!(false);
+            value["state"]["admissibility"][field] = json!(false);
             assert!(AdviceRequest::parse(&serde_json::to_vec(&value).unwrap()).is_err());
         }
     }

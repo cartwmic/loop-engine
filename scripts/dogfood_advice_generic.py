@@ -61,8 +61,10 @@ def _engine(journey, root: Path, database: Path, *args: str, expect: str = "comp
 def _request(occasion: str) -> dict[str, Any]:
     return {
         "version": 1,
-        "admissibility": {"bounded_judgment": True, "evidence_sufficient": True},
-        "state": {"evidence": "The selected observation says: the task finished and its output was inspected."},
+        "state": {
+            "admissibility": {"bounded_judgment": True, "evidence_sufficient": True},
+            "evidence": "The selected observation says: the task finished and its output was inspected.",
+        },
         "target": {"revision": "fixture-r1", "evidence_ids": ["evidence-1"]},
         "occasion": occasion,
         "questions": {
@@ -183,6 +185,8 @@ def advice_case(journey) -> None:
                     "start", "--id", "generic-advice-run", "fixture", json.dumps(initial)])
 
     valid_request = _request("valid")
+    if set(valid_request) != {"version", "state", "target", "occasion", "questions"}:
+        raise ValueError("advice changed the approved five-field request envelope")
     valid_path = root / "request-valid.json"
     valid_bytes = json.dumps(valid_request, separators=(",", ":")).encode()
     valid_path.write_bytes(valid_bytes)
@@ -239,12 +243,14 @@ def advice_case(journey) -> None:
     retained_attempts = [result["attempt_id"]]
     # Public admission refuses before spawning any configured backend. The
     # declaration is the driver's assessment, not a semantic engine classifier.
-    for field in ("missing", "bounded_judgment", "evidence_sufficient"):
+    for field in ("root-field", "missing", "bounded_judgment", "evidence_sufficient"):
         inadmissible = _request("inadmissible-" + field)
-        if field == "missing":
-            del inadmissible["admissibility"]
+        if field == "root-field":
+            inadmissible["admissibility"] = inadmissible["state"]["admissibility"]
+        elif field == "missing":
+            del inadmissible["state"]["admissibility"]
         else:
-            inadmissible["admissibility"][field] = False
+            inadmissible["state"]["admissibility"][field] = False
         path = root / f"request-inadmissible-{field}.json"
         path.write_text(json.dumps(inadmissible), encoding="utf-8")
         before_count = counter.read_text()
