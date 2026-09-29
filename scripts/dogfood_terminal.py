@@ -163,7 +163,8 @@ def _write_fixture_provider(path: Path, request_log: Path) -> None:
         "{'id':'graph-head','title':'Graph head','instructions':'Not current.','final':False},"
         "{'id':'current','title':'Current fixture state','instructions':'Observe only.','final':False},"
         "{'id':'done','title':'Done','instructions':'Finished.','final':True}],"
-        "'transitions':[{'source':'current','event':'demonstrate','target':'current','kind':'check-free'},"
+        "'transitions':[{'source':'graph-head','event':'advance','target':'done','kind':'checked'},"
+        "{'source':'current','event':'demonstrate','target':'current','kind':'check-free'},"
         "{'source':'current','event':'advance','target':'done','kind':'checked'}],"
         "'work_slots':[{'id':'fixture-work','state':'current','event':'demonstrate'}]}))\n"
         "elif request.get('operation')=='evaluate':\n"
@@ -295,7 +296,14 @@ def _pty_navigation(journey, root: Path, database: Path, run_id: str, show: dict
         _send_and_wait(master, transcript, b"g", _selection_marker(expected_keys[0]))
         for index, expected_key in enumerate(expected_keys[1:], 1):
             key = b"\x1b[B" if index % 2 else b"j"
+            before = len(transcript)
             _send_and_wait(master, transcript, key, _selection_marker(expected_key))
+            if expected_key.startswith("state:") and expected_key != f"state:{current}":
+                frame_start = transcript.index(_selection_marker(expected_key).encode(), before)
+                _read_until(master, transcript, frame_start, "detail-offset=0 |")
+                frame = bytes(transcript[frame_start:]).split(b"\x1b[?25l\x1b[H\x1b[2J", 1)[0]
+                if "requestable now" in " ".join(frame.decode(errors="replace").split()):
+                    raise ValueError(f"noncurrent state {expected_key} marks an edge requestable now")
         _send_and_wait(master, transcript, b"G", _selection_marker(expected_keys[-1]))
 
         worker_count_before = counter.read_text(encoding="utf-8")
@@ -319,6 +327,8 @@ def _pty_navigation(journey, root: Path, database: Path, run_id: str, show: dict
         if slave >= 0:
             os.close(slave)
         os.close(master)
+        # Retain the actual PTY bytes even when an assertion fails.
+        (root / "terminal-transcript.bin").write_bytes(transcript)
 
     transcript_path = root / "terminal-transcript.bin"
     transcript_path.write_bytes(transcript)

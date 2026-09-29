@@ -102,6 +102,7 @@ struct SuccessfulAdvice {
 
 #[derive(Clone, Debug)]
 struct ValidDisposition {
+    state_visit: u64,
     response_id: String,
     answer_id: String,
     occasion_id: String,
@@ -201,8 +202,22 @@ pub(crate) fn unanswered_due_occasions(
             continue;
         }
 
+        // A driver may explicitly disposition fresh advice after an immutable
+        // occasion recorded a failed attempt. Reuse that existing declaration;
+        // do not rewrite the occasion or infer a response from unrelated history.
+        let mut response_ids: Vec<_> = occasion.response_ids.iter().map(String::as_str).collect();
+        for disposition in dispositions.iter().filter(|disposition| {
+            disposition.state_visit == state_visit
+                && disposition.occasion_id == expected.occasion_id
+                && disposition.target == occasion.target
+        }) {
+            let response_id = disposition.response_id.as_str();
+            if !response_ids.contains(&response_id) {
+                response_ids.push(response_id);
+            }
+        }
         let mut answered_here = false;
-        for response_id in &occasion.response_ids {
+        for response_id in response_ids {
             let Some(context_response) = context.iter().find(|row| row.id.as_str() == response_id)
             else {
                 return Err(format!(
@@ -231,7 +246,7 @@ pub(crate) fn unanswered_due_occasions(
             let app_id = applicability
                 .iter()
                 .find(|app| {
-                    app.response_id == *response_id
+                    app.response_id == response_id
                         && app.occasion_id == expected.occasion_id
                         && app.target == occasion.target
                 })
@@ -242,7 +257,7 @@ pub(crate) fn unanswered_due_occasions(
 
             let all_answers_disposed_for_target = answer.answer_ids.iter().all(|answer_id| {
                 dispositions.iter().any(|disposition| {
-                    disposition.response_id == *response_id
+                    disposition.response_id == response_id
                         && disposition.answer_id == *answer_id
                         && disposition.occasion_id == expected.occasion_id
                         && disposition.target == occasion.target
@@ -564,6 +579,7 @@ fn load_dispositions(
                 return None;
             }
             Some(ValidDisposition {
+                state_visit: disposition.state_visit,
                 response_id: disposition.response_id,
                 answer_id: disposition.answer_id,
                 occasion_id: disposition.occasion_id,

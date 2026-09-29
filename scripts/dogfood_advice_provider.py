@@ -237,10 +237,15 @@ def _fixture_judgments(show, occasion_id, source_ids):
         intent = json.loads((Path(show["initial_input"]["artifact_root"]) / "intent.json").read_text())
         ids = [f"criterion.{r['id']}.{axis}" for r in intent["acceptance"] for axis in ("fulfillment", "checks-could-miss")]
         ids += ["goal.fulfillment", "goal.checks-could-miss"]
-    claim = "The selected excerpt describes an actual observation rather than a future plan."
     if family == "review-candidates":
-        claim = "The selected finding's cited revision alone does not describe an observable failure."
-    elif family == "evidence-applicability":
+        dimensions = {
+            "support": "The supplied finding cites an observed failure of an explicit accepted obligation.",
+            "materiality": "The finding describes a consequence that prevents an explicit accepted outcome, not merely a stylistic preference.",
+            "scope": "The reported behavior falls within the supplied accepted scope and operating boundary.",
+        }
+        return {id: dimensions[id.rsplit(".", 1)[-1]] for id in ids}
+    claim = "The selected excerpt describes an actual observation rather than a future plan."
+    if family == "evidence-applicability":
         claim = "The supplied before and after assertions describe the same observable behavior."
     return {id: claim for id in ids}
 
@@ -1010,6 +1015,14 @@ def _public_setup_and_question_families(journey, root: Path, setup_results: dict
         {key.rsplit(".",1)[-1] for key in requests["review-candidates"]["questions"]}
     ):
         raise ValueError("finding advice did not keep support/materiality/scope separate")
+    finding_questions = requests["review-candidates"]["questions"]
+    by_finding = {}
+    for key, question in finding_questions.items():
+        prefix, dimension = key.rsplit(".", 1)
+        by_finding.setdefault(prefix, {})[dimension] = question["instructions"]
+    for dimensions in by_finding.values():
+        if len(set(dimensions.values())) != 3:
+            raise ValueError("finding support/materiality/scope repeated the same question meaning")
     for prepared in requests.values():
         if set(prepared["questions"]) != set(prepared["state"]["agent_judgments"]):
             raise ValueError("provider added unrequested broad questions")

@@ -348,10 +348,10 @@ impl ExplorerModel {
             lines.push("No outgoing transitions are stored.".to_owned());
         }
         for transition in outgoing {
-            let requestable = self
-                .requestable_events
-                .iter()
-                .any(|event| event.event == transition.event && event.target == transition.target);
+            let requestable = current
+                && self.requestable_events.iter().any(|event| {
+                    event.event == transition.event && event.target == transition.target
+                });
             let mut route = format!(
                 "event {} -> {} [{}; {}]",
                 transition.event,

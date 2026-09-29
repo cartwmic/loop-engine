@@ -383,6 +383,30 @@ def advice_transition_case(journey) -> None:
         refused = _engine(journey, root, failed_db, "event", run_id, "revise", expect="error")[0]
         if "unanswered due advice occasions" not in refused.get("message", ""):
             raise ValueError(f"{mode} attempt incorrectly satisfied advice closure: {refused!r}")
+        # A fresh answer at another target is not recovery. Explicitly disposed
+        # current-target advice must recover without rewriting the failed record
+        # or manufacturing a second occasion declaration.
+        wrong_target = {**target, "revision": "unrelated-recovery-target"}
+        wrong = _advise(journey, root, failed_db, run_id, _request(occasion_id, wrong_target))
+        _dispositions(journey, root, failed_db, run_id, wrong["result"]["attempt_id"],
+                      occasion_id, wrong_target)
+        _show(journey, root, failed_db, run_id)
+        still_due = _engine(journey, root, failed_db, "event", run_id, "revise", expect="error")[0]
+        if "unanswered due advice occasions" not in still_due.get("message", ""):
+            raise ValueError(f"{mode} recovery admitted the wrong target: {still_due!r}")
+        recovered = _advise(journey, root, failed_db, run_id, _request(occasion_id, target))
+        _dispositions(journey, root, failed_db, run_id, recovered["result"]["attempt_id"],
+                      occasion_id, target)
+        _show(journey, root, failed_db, run_id)
+        normal = _engine(journey, root, failed_db, "event", run_id, "revise")[0]
+        if normal["result"]["run"]["has_overrides"]:
+            raise ValueError(f"{mode} recovery needed an exceptional departure")
+        retained = _show(journey, root, failed_db, run_id, "full")[0]["result"]["context"]
+        if not any(row["id"] == failed_attempt for row in retained):
+            raise ValueError(f"{mode} recovery lost its original failed attempt")
+        occasions = [row for row in retained if row["kind"] == "advice-occasion"]
+        if len(occasions) != 1 or occasions[0]["data"]["response_ids"] != [failed_attempt]:
+            raise ValueError(f"{mode} recovery rewrote its original occasion")
 
     # Advice does not interlock ordinary observation, invocation, cancellation
     # or verified cleanup. Departure still refuses afterwards until closure.
@@ -434,6 +458,8 @@ def advice_transition_case(journey) -> None:
             "ad-hoc-and-superseded-answer-dispositions",
             "changed-target-freshness",
             "scoped-owner-exception-and-independent-checked-gate",
+            "invalid-timeout-fresh-response-recovery-with-original-history",
+            "wrong-target-recovery-refusal",
             "invalid-timeout-cancellation-cleanup-and-disabled-mode",
         ],
         "public_command_captures": len(list((root / "commands").glob("*.argv.json"))),
