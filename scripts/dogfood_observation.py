@@ -158,11 +158,20 @@ def _assert_native_boot_session_identity(
     if not live_row or live_row["execution"]["state"] != "running":
         raise ValueError(f"public status did not retain the live bound invocation: {live_row}")
 
-    progress, elapsed, _ = _engine(journey, database, "invocation-progress", run_id, invocation_id)
-    if elapsed > 2000:
-        raise ValueError(f"live invocation progress exceeded two seconds: {elapsed:.1f}ms")
-    result = progress["result"]
-    ownership = result.get("ownership") or {}
+    # Running includes the waiter startup window, before it publishes worker
+    # ownership. Wait only for absence; malformed published identities still
+    # fail the exact UUID, PID/start and liveness assertions below.
+    while True:
+        progress, elapsed, _ = _engine(journey, database, "invocation-progress", run_id, invocation_id)
+        if elapsed > 2000:
+            raise ValueError(f"live invocation progress exceeded two seconds: {elapsed:.1f}ms")
+        result = progress["result"]
+        if result.get("ownership") is not None:
+            break
+        if time.monotonic() >= deadline:
+            raise ValueError("live invocation ownership did not publish within five seconds")
+        time.sleep(.05)
+    ownership = result["ownership"] or {}
     execution = ownership.get("execution") or {}
     identity = execution.get("root_identity") or {}
     if identity.get("boot_id", "").lower() != native_boot_id:

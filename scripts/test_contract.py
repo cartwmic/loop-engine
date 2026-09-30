@@ -295,6 +295,58 @@ def topology_errors(
     return errors
 
 
+class NativeBootIdentityReadinessTests(unittest.TestCase):
+    @staticmethod
+    def published(boot_id: str = "fixture-boot") -> dict[str, Any]:
+        return {
+            "ownership": {
+                "execution": {"root_pid": 123, "root_identity": {
+                    "pid": 123, "boot_id": boot_id, "start_time": 1,
+                }},
+                "live_owned_work": True,
+            },
+            "visibility": {"execution": {"state": "running"}},
+        }
+
+    def probe(self, results, *, expired: bool = False):
+        import dogfood_observation as observation
+        from unittest.mock import patch
+        status = {"result": {"invocations": {"items": [{
+            "invocation_id": "fixture-invocation", "execution": {"state": "running"},
+        }]}}}
+        progress = [({"result": result}, 1, None) for result in results]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch.object(observation.sys, "platform", "darwin"), \
+                    patch.object(observation.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, b"fixture-boot\n", b"")), \
+                    patch.object(observation, "_show_status", return_value=(status, 1, None)), \
+                    patch.object(observation, "_engine", side_effect=progress) as read, \
+                    patch.object(observation.time, "sleep"), \
+                    patch.object(observation.time, "monotonic", side_effect=[0, 0, 6] if expired else None, return_value=0):
+                value = observation._assert_native_boot_session_identity(
+                    None, root / "loop.sqlite", "fixture-run", "fixture-invocation", root,
+                )
+                return value, read.call_count
+
+    def test_running_status_waits_for_ownership_publication(self):
+        value, reads = self.probe([{"ownership": None}, self.published()])
+        self.assertEqual(reads, 2)
+        self.assertEqual(value["boot_session_uuid"], "fixture-boot")
+        self.assertTrue(value["live_owned_work"])
+
+    def test_missing_ownership_publication_fails_at_deadline(self):
+        with self.assertRaisesRegex(ValueError, "ownership did not publish"):
+            self.probe([{"ownership": None}], expired=True)
+
+    def test_published_wrong_boot_identity_still_fails(self):
+        with self.assertRaisesRegex(ValueError, "boot identity differs"):
+            self.probe([self.published("wrong-boot")])
+
+    def test_published_empty_ownership_is_not_startup(self):
+        with self.assertRaisesRegex(ValueError, "boot identity differs"):
+            self.probe([{"ownership": {}}])
+
+
 class CalibrationPacketCliTests(unittest.TestCase):
     """Exercise calibration preparation and capture verification via their CLIs."""
 
