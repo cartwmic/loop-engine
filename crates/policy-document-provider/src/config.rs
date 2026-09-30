@@ -183,8 +183,8 @@ mod tests {
     #[test]
     fn shipped_profiles_have_frozen_policy_sets() {
         for (name, version, target, count, semantic) in [
-            ("readme", "readme-2", "README.md", 9, 7),
-            ("agents", "agents-2", "AGENTS.md", 6, 9),
+            ("readme", "readme-3", "README.md", 9, 7),
+            ("agents", "agents-3", "AGENTS.md", 6, 9),
         ] {
             let raw = if name == "readme" {
                 include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/readme.json"))

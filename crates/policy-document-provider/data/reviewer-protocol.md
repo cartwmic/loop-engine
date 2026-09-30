@@ -13,7 +13,7 @@ Semantic judgment stays external. A bound review worker is read-only and returns
     "author": {"name": "reviewer", "kind": "agent"},
     "target_id": "README.md",
     "target_sha256": "<64 lowercase hexadecimal SHA-256 of exact target bytes>",
-    "profile_version": "readme-2"
+    "profile_version": "readme-3"
   }
 }
 ```

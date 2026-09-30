@@ -131,7 +131,7 @@ Required CI also runs the gate. Only explicit `BOOKENDS_BYPASS=<class>:<reason>`
 
 ## Document and Git safety
 
-- Draft or revise README.md/AGENTS.md through policy-document using a copied `readme-2`/`agents-2` profile with `mode: "draft"`. Use `mode: "audit"` for assessment. Preserve `target.id` and `profile_version` unless intentionally authoring a custom profile. Local links resolve under the target's directory; `..` is rejected, so crate docs cannot markdown-link outside the crate.
+- Draft or revise README.md/AGENTS.md through policy-document using a copied `readme-3`/`agents-3` profile with `mode: "draft"`. Use `mode: "audit"` for assessment. Preserve `target.id` and `profile_version` unless intentionally authoring a custom profile. Local links resolve under the target's directory; `..` is rejected, so crate docs cannot markdown-link outside the crate.
 - After implementation triage, obtain the explicit human Git checkpoint decision before pre-review proof. A repository checkpoint does not create a commit. Workers never stage or commit independently. Authorized Git identity changes require fresh applicable proof; do not relabel receipts.
 - Ask before committing, pushing, destructive actions or worktree lifecycle changes. Before a commit, inspect `git diff --cached --name-status` and `git diff --cached`; this checkout has no tracked secret/runtime-artifact detection hook. Never commit secrets, machine-local provider TOML, run databases or captures.
 - Never hand-edit `.github/workflows/release.yml`. Change dist metadata and regenerate. Direct pushes to main run read-only preflight. Publication uses the separately authorized sequence below. Do not force-push main.

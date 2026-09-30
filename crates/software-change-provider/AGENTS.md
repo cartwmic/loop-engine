@@ -120,7 +120,7 @@ Reviewers return judgments and consume retained proof. Drivers own deterministic
 
 ### Document authoring and reconciliation
 
-- Author or assess this crate's `README.md` and `AGENTS.md` through target-specific `policy-document` runs: use the shipped `readme-2` or `agents-2` profile, preserve target ID/profile version, use `mode: draft` for authoring and `mode: audit` for assessment, and obtain digest-bound evidence for every semantic axis. A policy-document journey is mechanics proof, not a substitute for the actual target run.
+- Author or assess this crate's `README.md` and `AGENTS.md` through target-specific `policy-document` runs: use the shipped `readme-3` or `agents-3` profile, preserve target ID/profile version, use `mode: draft` for authoring and `mode: audit` for assessment, and obtain digest-bound evidence for every semantic axis. A policy-document journey is mechanics proof, not a substitute for the actual target run.
 - Before starting or progressing a document workflow, load repository `crates/policy-document-provider/skills/using-policy-document-provider/SKILL.md` and its engine companion `skills/using-loop-engine/SKILL.md`, not the software-change skill as a substitute. The driver performs deterministic checks, target hashing, evidence triage, `show`, `append`, `event`, and final-envelope inspection; a worker exit 0 is not approval.
 - For software-change document decisions, load [reconciliation and document integration](README.md#reconciliation-and-document-integration) and the skill's owning procedure before acting. Do not transplant the new state into an existing frozen run.
 

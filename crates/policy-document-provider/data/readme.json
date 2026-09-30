@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "profile_version": "readme-2",
+  "profile_version": "readme-3",
   "mode": "audit",
   "target": {"id": "README.md", "path": "/abs/path/to/README.md"},
   "deterministic_policies": [
@@ -16,7 +16,7 @@
   ],
   "semantic_policies": [
     {"id":"product-fidelity","description":"README accurately represents product purpose and behavior.","example_prompt":"Review product fidelity against supplied project evidence."},
-    {"id":"onboarding-sufficiency","description":"A new operator can complete onboarding.","example_prompt":"Review onboarding sufficiency and prerequisites."},
+    {"id":"onboarding-sufficiency","description":"A new operator can reach a first useful result with the stated prerequisites, including any compatible external service needed for real use.","example_prompt":"Trace stated prerequisites through the first useful result, not just a successful build or help output. Check linked guidance. If a required external service is unexplained or its URL/model is only a placeholder, flag the missing compatible-service setup route or bring-your-own contract. An explicit bring-your-own prerequisite with linked protocol and model-selection guidance is sufficient; require no bundled server, particular provider, live credentials, or verbose tutorial. Distinguish static evidence from executed verification."},
     {"id":"audience-navigation","description":"README helps intended audiences find relevant paths and does not impersonate AGENTS.md. Humans get product purpose and install; operator traps and agent runbooks are linked, not copied.","example_prompt":"Review audience navigation against the repository. Confirm humans, operators, and agents are sent to the right document. README may overlap AGENTS.md on one-line purpose but must not contradict it or dump the agent runbook. Deep procedure lives in skills or AGENTS.md and is linked, not copied. Use the tree and sibling AGENTS.md or skills as evidence."},
     {"id":"clarity-scope","description":"README is clear, scoped, and non-contradictory.","example_prompt":"Review clarity, scope, and contradictions."},
     {"id":"honest-fitness","description":"README states what the product is, who it is for, and when not to use it. Limitations that would change a user's decision are named, including frozen versus living surface and public versus internal API when those would change the decision. If none exist, that conclusion is explicit and grounded in the repository tree.","example_prompt":"Compare this README to the repository. Name limitations, non-goals, and fitness boundaries that would change a user's decision to adopt or depend on the product, including none-known only if the tree supports that. Fail omitted decision-changing limitations, or a none-known claim that the tree contradicts. Architecture tours do not satisfy. Use the tree as evidence, not the document alone."},
