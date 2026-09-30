@@ -545,6 +545,10 @@ mod native {
     use std::io;
     use std::path::Path;
 
+    fn process_stat_vanished(error: &io::Error) -> bool {
+        error.kind() == io::ErrorKind::NotFound || error.raw_os_error() == Some(libc::ESRCH)
+    }
+
     fn boot_id() -> io::Result<String> {
         let value = fs::read_to_string("/proc/sys/kernel/random/boot_id")?;
         let value = value.trim().to_owned();
@@ -561,7 +565,9 @@ mod native {
         let path = Path::new("/proc").join(pid.to_string()).join("stat");
         let raw = match fs::read_to_string(path) {
             Ok(raw) => raw,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            // A /proc entry can disappear between enumeration and reading.
+            // Linux may report ESRCH as well as ENOENT for that exit race.
+            Err(error) if process_stat_vanished(&error) => return Ok(None),
             Err(error) => return Err(error),
         };
         let close = raw.rfind(')').ok_or_else(|| {
@@ -642,6 +648,25 @@ mod native {
         }
         processes.sort_by_key(|process| process.identity.pid);
         Ok(processes)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn process_stat_exit_errors_are_absence_not_inspection_failure() {
+            for code in [libc::ENOENT, libc::ESRCH] {
+                assert!(process_stat_vanished(&io::Error::from_raw_os_error(code)));
+            }
+            for code in [libc::EPERM, libc::EACCES, libc::EIO, libc::EINVAL] {
+                assert!(!process_stat_vanished(&io::Error::from_raw_os_error(code)));
+            }
+            assert!(!process_stat_vanished(&io::Error::new(
+                io::ErrorKind::InvalidData,
+                "malformed process stat",
+            )));
+        }
     }
 }
 
