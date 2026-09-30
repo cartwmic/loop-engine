@@ -29,6 +29,10 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+      - name: Install pinned Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14.6"
       - name: Assert the release plan matrix
         shell: bash
         run: |

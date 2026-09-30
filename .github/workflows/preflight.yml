@@ -43,6 +43,10 @@ jobs:
         run: |
           set -euo pipefail
           printf 'PREFLIGHT_STARTED_AT=%s\n' "$(date +%s)" >> "$GITHUB_ENV"
+      - name: Install pinned Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14.6"
       - name: Install dist
         shell: bash
         run: |
