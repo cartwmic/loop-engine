@@ -102,6 +102,7 @@ def _binding(engine: Path, worker_script: Path, counter: Path, worker_names: lis
 def _write_worker(path: Path) -> None:
     path.write_text(
         "import json,pathlib,sys\n"
+        "sys.stdin.buffer.read()\n"
         "counter=pathlib.Path(sys.argv[1]); name=sys.argv[2]\n"
         "count=int(counter.read_text() or '0') if counter.exists() else 0\n"
         "counter.write_text(str(count+1))\n"
