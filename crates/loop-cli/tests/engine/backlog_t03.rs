@@ -833,7 +833,8 @@ mod terminal_explorer_regression {
                 "fan-out".to_owned(),
                 "--worker".to_owned(),
                 json!({
-                    "command":"/bin/true","args":[],"title":"Configured task","role":"implementer"
+                    "command":"/bin/true","args":[],"title":"Configured task","role":"implementer",
+                    "preamble": "Fixture prose must be opened before testing overflow scrolling. ".repeat(40)
                 })
                 .to_string(),
             ],
@@ -941,8 +942,25 @@ mod terminal_explorer_regression {
             assert!(String::from_utf8_lossy(&output[start..])
                 .contains("selected_assignment_id=worker-0 slot=tasks"));
         }
+        // Collapsed details fit: scrolling must not create blank overflow.
+        key(&mut master, &mut output, b"]", "detail-offset=0");
+        key(&mut master, &mut output, b"\t", "DETAILS [focused]");
+        key(&mut master, &mut output, b"l", "v Stored data:");
+        for path in [
+            "/args",
+            "/command",
+            "/full_output_schema",
+            "/output_schema",
+            "/preamble",
+        ] {
+            key(&mut master, &mut output, b"j", &format!("tree-node={path}"));
+        }
+        key(&mut master, &mut output, b"l", "v preamble:");
+        // The actual opened prose now overflows the viewport. Keep the original
+        // distinguishing scroll assertions instead of just matching a footer.
         key(&mut master, &mut output, b"]", "detail-offset=3");
         key(&mut master, &mut output, b"[", "detail-offset=0");
+        key(&mut master, &mut output, b"\t", "DETAILS [Tab to focus]");
 
         let items = [
             "state:graph-head",
@@ -960,7 +978,7 @@ mod terminal_explorer_regression {
             key(&mut master, &mut output, navigation, &marker(item));
         }
         key(&mut master, &mut output, b"G", &marker(items[3]));
-        master.write_all(b"aei\r").expect("send inert keys");
+        master.write_all(b"aei\r").expect("send browse-only keys");
         master.write_all(b"q").expect("quit explorer");
         let deadline = Instant::now() + Duration::from_secs(4);
         loop {
@@ -969,6 +987,18 @@ mod terminal_explorer_regression {
                 break;
             }
             assert!(Instant::now() < deadline, "explorer did not exit on q");
+            // Enter repaints a branch. Consume queued PTY frames while waiting
+            // so the reader itself cannot block stdout before q is processed.
+            let mut bytes = [0u8; 8192];
+            match master.read(&mut bytes) {
+                Ok(count) => output.extend_from_slice(&bytes[..count]),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) || error.raw_os_error() == Some(libc::EIO) => {}
+                Err(error) => panic!("PTY quit drain failed: {error}"),
+            }
             thread::sleep(Duration::from_millis(10));
         }
 
