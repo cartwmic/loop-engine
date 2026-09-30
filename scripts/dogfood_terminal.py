@@ -527,6 +527,8 @@ def _wait_for_invocation(journey, root: Path, database: Path, run_id: str, invoc
 
 
 def _exercise_fixture(journey, root: Path, database: Path, provider_config: Path, alias: str, run_id: str, initial_input: dict[str, Any], current_event: str, provider_log: Path, counter: Path) -> dict[str, Any]:
+    profile_input = root / "initial-input.json"
+    profile_input.write_text(json.dumps(initial_input, separators=(",", ":")), encoding="utf-8")
     packet = _engine(
         journey,
         root,
@@ -537,7 +539,7 @@ def _exercise_fixture(journey, root: Path, database: Path, provider_config: Path
         "--id",
         run_id,
         alias,
-        json.dumps(initial_input, separators=(",", ":")),
+        "@" + str(profile_input.resolve()),
     )
     if packet["result"]["run"]["id"] != run_id:
         raise ValueError("public start returned a different fixture run")
