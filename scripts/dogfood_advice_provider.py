@@ -244,10 +244,31 @@ def _fixture_judgments(show, occasion_id, source_ids):
             "scope": "The reported behavior falls within the supplied accepted scope and operating boundary.",
         }
         return {id: dimensions[id.rsplit(".", 1)[-1]] for id in ids}
-    claim = "The selected excerpt describes an actual observation rather than a future plan."
-    if family == "evidence-applicability":
-        claim = "The supplied before and after assertions describe the same observable behavior."
-    return {id: claim for id in ids}
+    claims = {
+        "accepted-defect": "The selected accepted finding attributes the violated obligation to implementation work under unchanged accepted requirements.",
+        "implementation-correction": "The supplied frozen task definition explicitly covers the correction described in the selected finding.",
+        "execution-or-authority-issue": "The selected prerequisite command failed with a nonzero exit code rather than completing successfully.",
+        "evidence-applicability": "The supplied before and after assertions describe the same observable behavior.",
+        "requirements-reconciliation": "The supplied authoritative wording covers the observed enduring outcome, not merely a related requirement identifier.",
+        "review-round-departure": "The supplied consecutive review ledgers retain the same accepted unresolved finding.",
+    }
+    if family == "final-completion":
+        result = {}
+        for id in ids:
+            if id.startswith("criterion."):
+                _, criterion_id, dimension = id.split(".")
+                if dimension == "fulfillment":
+                    result[id] = f"The selected assertion directly exercises the operator outcome stated in {criterion_id}, not merely the criterion's presence in a document."
+                else:
+                    result[id] = f"The selected assertion could pass while the operator outcome stated in {criterion_id} is absent."
+            elif id == "goal.fulfillment":
+                result[id] = "The selected public-path capture records its completed outcome with primary work and required checks, rather than only a declared goal."
+            else:
+                result[id] = "The selected check only verifies an artifact or identifier's presence and does not exercise the stated operator outcome."
+        return result
+    if family not in claims:
+        raise ValueError(f"no explicit bounded fixture claim for occasion {family!r}")
+    return {id: claims[family] for id in ids}
 
 
 def _provider_request(
@@ -1024,6 +1045,8 @@ def _public_setup_and_question_families(journey, root: Path, setup_results: dict
         if len(set(dimensions.values())) != 3:
             raise ValueError("finding support/materiality/scope repeated the same question meaning")
     for prepared in requests.values():
+        if "actual observation rather than a future plan" in json.dumps(prepared["questions"]):
+            raise ValueError("advice decision family used the generic observation-versus-plan placeholder")
         if set(prepared["questions"]) != set(prepared["state"]["agent_judgments"]):
             raise ValueError("provider added unrequested broad questions")
         if not prepared["state"]["selected_evidence"]:

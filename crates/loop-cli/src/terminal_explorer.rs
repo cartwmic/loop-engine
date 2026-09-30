@@ -28,6 +28,21 @@ struct ExplorerAssignment {
     execution: String,
     conformance: String,
     dependencies: Option<Vec<String>>,
+    stored_data: serde_json::Value,
+}
+
+#[cfg(unix)]
+fn worker_definition(binding: &loop_core::WorkSlotBinding, id: &str) -> serde_json::Value {
+    if binding.args.first().map(String::as_str) == Some("fan-out") {
+        if let Ok(parsed) = fan_out::parse_fan_out_args(binding.args.iter().skip(1)) {
+            for (index, worker) in parsed.workers.iter().enumerate() {
+                if fan_out::assignment_id(index) == id {
+                    return serde_json::to_value(worker).unwrap_or_default();
+                }
+            }
+        }
+    }
+    serde_json::json!({"command": binding.command, "args": binding.args})
 }
 
 #[cfg(unix)]
@@ -78,12 +93,8 @@ impl ListItem {
                 )
             }
             Self::Assignment(assignment) => format!(
-                "assignment:{} slot={} title={} role={} execution={}",
-                assignment.label.assignment_id,
-                assignment.slot_id,
-                assignment.label.title,
-                assignment.label.role,
-                assignment.execution
+                "assignment:{} {} [{}]",
+                assignment.label.assignment_id, assignment.label.title, assignment.execution
             ),
         }
     }
@@ -160,10 +171,11 @@ impl ExplorerModel {
                     ExplorerAssignment {
                         slot_id: slot_id.clone(),
                         state_id: slot_states.get(slot_id).cloned(),
-                        label,
+                        label: label.clone(),
                         execution: "configured".to_owned(),
                         conformance: "unknown".to_owned(),
                         dependencies: None,
+                        stored_data: worker_definition(binding, &label.assignment_id),
                     },
                 );
             }
@@ -224,10 +236,17 @@ impl ExplorerModel {
                     ExplorerAssignment {
                         slot_id: invocation.slot_id.to_string(),
                         state_id: slot_states.get(invocation.slot_id.as_str()).cloned(),
-                        label,
+                        label: label.clone(),
                         execution: assignment_execution,
                         conformance,
                         dependencies: worker.and_then(|worker| worker.dependencies.clone()),
+                        stored_data: serde_json::json!({
+                            "worker_definition": worker_definition(&invocation.binding, &label.assignment_id),
+                            "invocation_id": invocation.invocation_id,
+                            "capture_dir": invocation.capture_dir,
+                            "subject": invocation.subject,
+                            "note": "Stored CLI definition, not a claim about the delivered stdin. Original packet is retained at the capture directory."
+                        }),
                     },
                 );
             }
@@ -392,13 +411,18 @@ impl ExplorerModel {
             lines.push(route);
         }
         lines.push(format!("instructions: {}", state.instructions));
-        if let Some(guidance) = &state.action_guidance {
-            lines.push(format!(
-                "stored action guidance: {}",
-                serde_json::to_string(guidance).unwrap_or_else(|_| "unavailable".to_owned())
-            ));
-        }
         lines
+    }
+
+    fn stored_data(&self, item: Option<&ListItem>) -> serde_json::Value {
+        match item {
+            Some(ListItem::State(state)) => serde_json::json!({
+                "state": state.id, "instructions": state.instructions,
+                "action_guidance": state.action_guidance
+            }),
+            Some(ListItem::Assignment(assignment)) => assignment.stored_data.clone(),
+            None => serde_json::Value::Null,
+        }
     }
 
     fn assignment_detail(&self, assignment: &ExplorerAssignment) -> Vec<String> {
@@ -453,8 +477,187 @@ enum Key {
     DetailDown,
     PageUp,
     PageDown,
+    Focus,
+    Toggle,
+    Open,
+    Close,
     Quit,
     Other,
+}
+
+#[cfg(unix)]
+#[derive(Default)]
+struct DetailTree {
+    expanded: BTreeSet<String>,
+    cursor: String,
+    offset: usize,
+}
+
+#[cfg(unix)]
+struct TreeRow {
+    path: String,
+    text: String,
+    branch: bool,
+}
+
+#[cfg(unix)]
+fn tree_rows(value: &serde_json::Value, tree: &DetailTree) -> Vec<TreeRow> {
+    fn visit(
+        value: &serde_json::Value,
+        path: String,
+        label: &str,
+        depth: usize,
+        tree: &DetailTree,
+        rows: &mut Vec<TreeRow>,
+    ) {
+        // Long prose is folded too: opening a JSON object should not flood the view.
+        let prose = value.as_str().filter(|s| s.chars().count() > 160);
+        let branch = value.is_object() || value.is_array() || prose.is_some();
+        let open = tree.expanded.contains(&path);
+        let description = if let Some(v) = value.as_object() {
+            format!("{} fields", v.len())
+        } else if let Some(v) = value.as_array() {
+            format!("{} items", v.len())
+        } else if let Some(v) = prose {
+            format!("{} characters", v.chars().count())
+        } else {
+            value.to_string()
+        };
+        rows.push(TreeRow {
+            path: path.clone(),
+            text: format!(
+                "{}{} {label}: {description}",
+                "  ".repeat(depth),
+                if branch {
+                    if open {
+                        "v"
+                    } else {
+                        ">"
+                    }
+                } else {
+                    " "
+                }
+            ),
+            branch,
+        });
+        if open {
+            if let Some(v) = value.as_object() {
+                for (key, child) in v {
+                    let escaped = key.replace('~', "~0").replace('/', "~1");
+                    visit(
+                        child,
+                        format!("{path}/{escaped}"),
+                        key,
+                        depth + 1,
+                        tree,
+                        rows,
+                    );
+                }
+            } else if let Some(v) = value.as_array() {
+                for (index, child) in v.iter().enumerate() {
+                    visit(
+                        child,
+                        format!("{path}/{index}"),
+                        &index.to_string(),
+                        depth + 1,
+                        tree,
+                        rows,
+                    );
+                }
+            } else if let Some(v) = prose {
+                rows.push(TreeRow {
+                    path: format!("{path}/text"),
+                    text: v.to_owned(),
+                    branch: false,
+                });
+            }
+        }
+    }
+    let mut rows = Vec::new();
+    visit(value, String::new(), "Stored data", 0, tree, &mut rows);
+    rows
+}
+
+#[cfg(unix)]
+struct ExplorerView {
+    selected: String,
+    detail_focus: bool,
+    details: BTreeMap<String, DetailTree>,
+    follow_cursor: bool,
+}
+
+#[cfg(unix)]
+impl ExplorerView {
+    fn new(selected: String) -> Self {
+        Self {
+            selected,
+            detail_focus: false,
+            details: BTreeMap::new(),
+            follow_cursor: false,
+        }
+    }
+
+    fn key(&mut self, model: &ExplorerModel, key: Key) {
+        let index = model.selected_index(&self.selected).unwrap_or(0);
+        let item = model.items.get(index);
+        let tree = self.details.entry(self.selected.clone()).or_default();
+        match key {
+            Key::Focus => {
+                self.detail_focus = !self.detail_focus;
+                self.follow_cursor = self.detail_focus;
+            }
+            Key::DetailUp | Key::PageUp => tree.offset = tree.offset.saturating_sub(3),
+            Key::DetailDown | Key::PageDown => tree.offset = tree.offset.saturating_add(3),
+            Key::Up | Key::Down if self.detail_focus => {
+                let nodes = tree_rows(&model.stored_data(item), tree);
+                let at = nodes
+                    .iter()
+                    .position(|node| node.path == tree.cursor)
+                    .unwrap_or(0);
+                let next = if key == Key::Down {
+                    (at + 1).min(nodes.len() - 1)
+                } else {
+                    at.saturating_sub(1)
+                };
+                tree.cursor = nodes[next].path.clone();
+                self.follow_cursor = true;
+            }
+            Key::Toggle | Key::Open | Key::Close => {
+                if !self.detail_focus {
+                    self.detail_focus = true;
+                }
+                let nodes = tree_rows(&model.stored_data(item), tree);
+                if let Some(node) = nodes.iter().find(|node| node.path == tree.cursor) {
+                    if key == Key::Close {
+                        if !tree.expanded.remove(&node.path) {
+                            tree.cursor = node
+                                .path
+                                .rsplit_once('/')
+                                .map(|(parent, _)| parent.to_owned())
+                                .unwrap_or_default();
+                        }
+                    } else if node.branch
+                        && (key != Key::Toggle || !tree.expanded.remove(&node.path))
+                    {
+                        tree.expanded.insert(node.path.clone());
+                    }
+                }
+                self.follow_cursor = true;
+            }
+            Key::Up | Key::Down | Key::First | Key::Last if !self.detail_focus => {
+                let next = match key {
+                    Key::Up => index.saturating_sub(1),
+                    Key::Down => (index + 1).min(model.items.len().saturating_sub(1)),
+                    Key::First => 0,
+                    _ => model.items.len().saturating_sub(1),
+                };
+                if let Some(item) = model.items.get(next) {
+                    self.selected = item.key();
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 pub(crate) fn run(projection: &ShowProjection, history: &[HistoryEntry]) -> Execution {
@@ -483,10 +686,11 @@ fn failed(message: &str) -> Execution {
 #[cfg(unix)]
 fn run_unix(projection: &ShowProjection, history: &[HistoryEntry]) -> Execution {
     let model = ExplorerModel::from_projection(projection, history);
-    let mut selected = model
-        .initial_selection()
-        .unwrap_or_else(|| "work-list".to_owned());
-    let mut detail_offset = 0usize;
+    let mut view = ExplorerView::new(
+        model
+            .initial_selection()
+            .unwrap_or_else(|| "work-list".to_owned()),
+    );
     let mut frame = 0u64;
     let mut last_size = None;
     let mut dirty = true;
@@ -503,11 +707,12 @@ fn run_unix(projection: &ShowProjection, history: &[HistoryEntry]) -> Execution 
         };
         if last_size != Some(size) {
             last_size = Some(size);
+            view.follow_cursor = view.detail_focus;
             dirty = true;
         }
         if dirty {
             frame = frame.saturating_add(1);
-            let rendered = render_frame(&model, &selected, detail_offset, size, frame);
+            let rendered = render_view(&model, &mut view, size, frame);
             if let Err(error) = output
                 .write_all(rendered.as_bytes())
                 .and_then(|_| output.flush())
@@ -522,51 +727,11 @@ fn run_unix(projection: &ShowProjection, history: &[HistoryEntry]) -> Execution 
             Ok(None) => continue,
             Err(error) => return failed(&format!("could not read terminal input: {error}")),
         };
-        match key {
-            Key::Quit => break,
-            Key::Up => {
-                if let Some(index) = model.selected_index(&selected) {
-                    if index > 0 {
-                        selected = model.items[index - 1].key();
-                        detail_offset = 0;
-                        dirty = true;
-                    }
-                }
-            }
-            Key::Down => {
-                if let Some(index) = model.selected_index(&selected) {
-                    if index + 1 < model.items.len() {
-                        selected = model.items[index + 1].key();
-                        detail_offset = 0;
-                        dirty = true;
-                    }
-                }
-            }
-            Key::First => {
-                if let Some(item) = model.items.first() {
-                    selected = item.key();
-                    detail_offset = 0;
-                    dirty = true;
-                }
-            }
-            Key::Last => {
-                if let Some(item) = model.items.last() {
-                    selected = item.key();
-                    detail_offset = 0;
-                    dirty = true;
-                }
-            }
-            Key::DetailUp | Key::PageUp => {
-                let next = detail_offset.saturating_sub(3);
-                dirty |= next != detail_offset;
-                detail_offset = next;
-            }
-            Key::DetailDown | Key::PageDown => {
-                detail_offset = detail_offset.saturating_add(3);
-                dirty = true;
-            }
-            Key::Other => {}
+        if key == Key::Quit {
+            break;
         }
+        view.key(&model, key);
+        dirty = key != Key::Other;
     }
     let _ = output.write_all(b"\x1b[0m\x1b[?25h\r\n");
     let _ = output.flush();
@@ -577,7 +742,7 @@ fn run_unix(projection: &ShowProjection, history: &[HistoryEntry]) -> Execution 
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 fn render_frame(
     model: &ExplorerModel,
     selected: &str,
@@ -585,66 +750,172 @@ fn render_frame(
     size: TerminalSize,
     frame: u64,
 ) -> String {
-    let columns = size.columns.max(1);
+    let mut view = ExplorerView::new(selected.to_owned());
+    view.details.entry(selected.to_owned()).or_default().offset = detail_offset;
+    render_view(model, &mut view, size, frame)
+}
+
+#[cfg(unix)]
+fn render_view(
+    model: &ExplorerModel,
+    view: &mut ExplorerView,
+    size: TerminalSize,
+    frame: u64,
+) -> String {
+    let columns = size.columns.saturating_sub(1).max(1);
     let rows = size.rows.max(8);
-    let selected_item = model.items.iter().find(|item| item.key() == selected);
+    let selected = &view.selected;
+    let selected_item = model.items.iter().find(|item| item.key() == *selected);
     let selection = match selected_item {
         Some(ListItem::State(state)) => format!("selected=state:{}", state.id),
-        Some(ListItem::Assignment(assignment)) => format!(
+        Some(ListItem::Assignment(a)) => format!(
             "selected_assignment_id={} slot={}",
-            assignment.label.assignment_id, assignment.slot_id
+            a.label.assignment_id, a.slot_id
         ),
         None => "selected=work-list".to_owned(),
     };
+    // Colors use the terminal palette and default background, never RGB literals.
+    let heading = "\x1b[1;36m";
+    let muted = "\x1b[2m";
+    let warning = "\x1b[33m";
+    let highlight = "\x1b[1;36;7m";
     let mut lines = vec![
-        "Loop Engine — read-only workflow navigator".to_owned(),
-        format!(
-            "run={} current={} lifecycle={:?}",
-            model.run_id, model.current_state, model.lifecycle
+        (
+            "Loop Engine — read-only workflow navigator".to_owned(),
+            heading,
         ),
-        format!("terminal-size={}x{} frame={frame}", size.rows, size.columns),
-        selection,
-        if model.workflow.is_some() {
-            format!("Workflow graph — {} items", model.items.len())
-        } else {
+        (
             format!(
-                "Work list — no stored workflow graph; {} items",
-                model.items.len()
-            )
-        },
+                "run={} current={} | {:?}",
+                model.run_id, model.current_state, model.lifecycle
+            ),
+            heading,
+        ),
+        (
+            format!("terminal-size={}x{} frame={frame}", size.rows, size.columns),
+            muted,
+        ),
+        (selection, muted),
+        (
+            if model.workflow.is_some() {
+                format!("Workflow graph — {} items", model.items.len())
+            } else {
+                format!(
+                    "Work list — no stored workflow graph; {} items",
+                    model.items.len()
+                )
+            },
+            heading,
+        ),
     ];
-    let list_rows = (rows / 4).clamp(2, 8).min(rows.saturating_sub(7));
-    let item_rows = list_rows.max(1);
-    let selected_index = model.selected_index(selected).unwrap_or(0);
-    let list_start = selected_index.saturating_add(1).saturating_sub(item_rows);
-    for index in list_start..(list_start + item_rows).min(model.items.len()) {
-        let item = &model.items[index];
-        let marker = if item.key() == selected { ">" } else { " " };
-        lines.push(format!("{marker} {}", item.short_label(model)));
+    let item_rows = (rows / 5).clamp(2, 6);
+    let index = model.selected_index(selected).unwrap_or(0);
+    let start = index
+        .saturating_sub(item_rows / 2)
+        .min(model.items.len().saturating_sub(item_rows));
+    for at in start..(start + item_rows).min(model.items.len()) {
+        let item = &model.items[at];
+        let text = item.short_label(model);
+        let style = if at == index { highlight } else { muted };
+        lines.push((
+            format!("{} {text}", if at == index { ">" } else { " " }),
+            style,
+        ));
     }
     if model.items.is_empty() {
-        lines.push("  (no configured work items)".to_owned());
+        lines.push(("  (no configured work items)".to_owned(), muted));
     }
-
-    lines.push(format!("Detail — {}", selected));
-    let detail_rows = rows.saturating_sub(lines.len() + 1).max(1);
-    let wrapped = model
+    lines.push((
+        format!(
+            "DETAILS [{}]",
+            if view.detail_focus {
+                "focused"
+            } else {
+                "Tab to focus"
+            }
+        ),
+        heading,
+    ));
+    let visible = rows.saturating_sub(lines.len() + 2).max(1);
+    let tree = view.details.entry(selected.clone()).or_default();
+    let mut details: Vec<(String, &str)> = model
         .detail(selected_item)
         .into_iter()
-        .flat_map(|line| wrap_line(&line, columns.saturating_sub(2).max(1)))
-        .collect::<Vec<_>>();
-    for line in wrapped.iter().skip(detail_offset).take(detail_rows) {
-        lines.push(format!("  {line}"));
+        .flat_map(|line| {
+            let style = if line.starts_with("acceptance:")
+                || line.starts_with("visited:")
+                || line.contains("checked-not-allowed")
+            {
+                warning
+            } else {
+                ""
+            };
+            wrap_line(&line, columns.saturating_sub(2).max(1))
+                .into_iter()
+                .map(move |s| (format!("  {s}"), style))
+        })
+        .collect();
+    let mut cursor_line = details.len();
+    for node in tree_rows(&model.stored_data(selected_item), tree) {
+        if node.path == tree.cursor {
+            cursor_line = details.len();
+        }
+        let active = view.detail_focus && node.path == tree.cursor;
+        let style = if active {
+            highlight
+        } else if node.branch {
+            heading
+        } else {
+            ""
+        };
+        let indent = (node.text.len() - node.text.trim_start().len()).min(columns / 2);
+        for (part, line) in wrap_line(
+            node.text.trim_start(),
+            columns.saturating_sub(indent + 2).max(1),
+        )
+        .into_iter()
+        .enumerate()
+        {
+            details.push((
+                format!(
+                    "{}{}{line}",
+                    if active && part == 0 { "> " } else { "  " },
+                    " ".repeat(indent)
+                ),
+                style,
+            ));
+        }
     }
-    lines.push(format!(
-        "detail-offset={detail_offset} | ↑/↓ j/k list · [/] detail · g/G · q quit"
+    if view.follow_cursor {
+        if cursor_line < tree.offset {
+            tree.offset = cursor_line;
+        } else if cursor_line >= tree.offset + visible {
+            tree.offset = cursor_line + 1 - visible;
+        }
+        view.follow_cursor = false;
+    }
+    tree.offset = tree.offset.min(details.len().saturating_sub(visible));
+    lines.extend(details.into_iter().skip(tree.offset).take(visible));
+    while lines.len() < rows.saturating_sub(2) {
+        lines.push((String::new(), ""));
+    }
+    lines.push((
+        format!(
+            "detail-offset={} | tree-node={} | Tab jk q",
+            tree.offset, tree.cursor
+        ),
+        muted,
+    ));
+    lines.push((
+        "Enter/Space toggle · h/l fold/open · [/] scroll".to_owned(),
+        muted,
     ));
     lines.truncate(rows);
     format!(
         "\x1b[?25l\x1b[H\x1b[2J{}\r\n",
         lines
             .iter()
-            .map(|line| clip_line(&sanitize(line), columns))
+            .map(|(text, style)| format!("{style}{}\x1b[0m", clip_line(&sanitize(text), columns)))
             .collect::<Vec<_>>()
             .join("\r\n")
     )
@@ -813,7 +1084,20 @@ fn read_key(timeout_ms: i32) -> io::Result<Option<Key>> {
             length += 1;
             if matches!(
                 &sequence[..length],
-                b"[A" | b"[B" | b"[H" | b"[F" | b"OA" | b"OB" | b"OH" | b"OF" | b"[5~" | b"[6~"
+                b"[A"
+                    | b"[B"
+                    | b"[C"
+                    | b"[D"
+                    | b"[H"
+                    | b"[F"
+                    | b"OA"
+                    | b"OB"
+                    | b"OC"
+                    | b"OD"
+                    | b"OH"
+                    | b"OF"
+                    | b"[5~"
+                    | b"[6~"
             ) {
                 break;
             }
@@ -821,6 +1105,8 @@ fn read_key(timeout_ms: i32) -> io::Result<Option<Key>> {
         return Ok(Some(match &sequence[..length] {
             b"[A" | b"OA" => Key::Up,
             b"[B" | b"OB" => Key::Down,
+            b"[C" | b"OC" => Key::Open,
+            b"[D" | b"OD" => Key::Close,
             b"[H" | b"OH" => Key::First,
             b"[F" | b"OF" => Key::Last,
             b"[5~" => Key::PageUp,
@@ -835,6 +1121,10 @@ fn read_key(timeout_ms: i32) -> io::Result<Option<Key>> {
         b'G' => Key::Last,
         b'[' => Key::DetailUp,
         b']' => Key::DetailDown,
+        b'\t' => Key::Focus,
+        b' ' | b'\r' | b'\n' => Key::Toggle,
+        b'l' => Key::Open,
+        b'h' => Key::Close,
         b'q' | b'Q' | 0x03 => Key::Quit,
         _ => Key::Other,
     }))

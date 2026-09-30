@@ -92,6 +92,8 @@ def _binding(engine: Path, worker_script: Path, counter: Path, worker_names: lis
             "args": [str(worker_script), str(counter), name],
             "title": f"{name} task",
             "role": "fixture worker",
+            "preamble": "Run only the assigned scripted fixture task. This is a supplied duty, not a semantic approval.",
+            "full_output_schema": {"type": "object", "properties": {"result": {"type": "string", "enum": [name]}}, "required": ["result"]},
         }
         args.extend(["--worker", json.dumps(worker, separators=(",", ":"))])
     return {"command": str(engine), "args": args}
@@ -205,6 +207,23 @@ def _send_and_wait(master: int, transcript: bytearray, key: bytes, marker: str) 
     _read_until(master, transcript, start, marker)
 
 
+def _quit_and_drain(master: int, process, transcript: bytearray) -> int:
+    # Enter now expands a tree and repaints. A PTY consumer must keep reading
+    # while awaiting q; otherwise queued frames fill the PTY and block stdout.
+    deadline = time.monotonic() + 5
+    while process.poll() is None:
+        if time.monotonic() >= deadline:
+            raise ValueError("terminal navigator did not quit on q while its output was drained")
+        readable, _, _ = select.select([master], [], [], 0.1)
+        if readable:
+            try:
+                transcript.extend(os.read(master, 8192))
+            except OSError as error:
+                if error.errno not in (5, 11):
+                    raise
+    return process.wait(timeout=1)
+
+
 def _selection_marker(key: str) -> str:
     if key.startswith("assignment:"):
         _, slot_id, assignment_id = key.split(":", 2)
@@ -283,16 +302,29 @@ def _pty_navigation(journey, root: Path, database: Path, run_id: str, show: dict
         if _selection_marker(assignment_key) not in transcript.decode(errors="replace"):
             raise ValueError("selected assignment ID was not reachable by basic letter navigation")
 
+        if b"\x1b[1;36m" not in transcript or b"\x1b[1;36;7m" not in transcript:
+            raise ValueError("production viewer omitted terminal-palette hierarchy/selection colors")
+        _send_and_wait(master, transcript, b"\t", "DETAILS [focused]")
+        _send_and_wait(master, transcript, b"l", "v Stored data:")
+        for _ in range(5):
+            _send_and_wait(master, transcript, b"j", "detail-offset=")
+        _send_and_wait(master, transcript, b"l", "v worker_definition:")
+        _read_until(master, transcript, 0, "command:")
+        # Cursor identity and branch openness survive both phone geometries.
         for dimensions in (UNFOLDED, FOLDED):
             before = len(transcript)
             _geometry(master, *dimensions)
             _read_until(master, transcript, before, f"terminal-size={dimensions[0]}x{dimensions[1]}")
+            _read_until(master, transcript, before, "tree-node=/worker_definition")
+            _read_until(master, transcript, before, "v worker_definition:")
             resized = transcript[before:].decode(errors="replace")
             if _selection_marker(assignment_key) not in resized:
                 raise ValueError(f"selection changed during terminal reflow to {dimensions}: {resized[-2000:]}")
-
-        _send_and_wait(master, transcript, b"]", "detail-offset=3")
-        _send_and_wait(master, transcript, b"[", "detail-offset=0")
+        _send_and_wait(master, transcript, b"h", "> worker_definition:")
+        _send_and_wait(master, transcript, b"l", "v worker_definition:")
+        _send_and_wait(master, transcript, b"]", "detail-offset=")
+        _send_and_wait(master, transcript, b"[", "detail-offset=")
+        _send_and_wait(master, transcript, b"\t", "DETAILS [Tab to focus]")
         _send_and_wait(master, transcript, b"g", _selection_marker(expected_keys[0]))
         for index, expected_key in enumerate(expected_keys[1:], 1):
             key = b"\x1b[B" if index % 2 else b"j"
@@ -300,7 +332,7 @@ def _pty_navigation(journey, root: Path, database: Path, run_id: str, show: dict
             _send_and_wait(master, transcript, key, _selection_marker(expected_key))
             if expected_key.startswith("state:") and expected_key != f"state:{current}":
                 frame_start = transcript.index(_selection_marker(expected_key).encode(), before)
-                _read_until(master, transcript, frame_start, "detail-offset=0 |")
+                _read_until(master, transcript, frame_start, "detail-offset=")
                 frame = bytes(transcript[frame_start:]).split(b"\x1b[?25l\x1b[H\x1b[2J", 1)[0]
                 if "requestable now" in " ".join(frame.decode(errors="replace").split()):
                     raise ValueError(f"noncurrent state {expected_key} marks an edge requestable now")
@@ -310,10 +342,7 @@ def _pty_navigation(journey, root: Path, database: Path, run_id: str, show: dict
         provider_log_before = provider_log.read_bytes()
         os.write(master, b"aei\r")
         os.write(master, b"q")
-        try:
-            return_code = process.wait(timeout=5)
-        except subprocess.TimeoutExpired as error:
-            raise ValueError("terminal navigator did not quit on q") from error
+        return_code = _quit_and_drain(master, process, transcript)
         if return_code != 0:
             raise ValueError(f"terminal navigator exited {return_code}: {transcript[-4000:]!r}")
         if counter.read_text(encoding="utf-8") != worker_count_before:
@@ -339,6 +368,8 @@ def _pty_navigation(journey, root: Path, database: Path, run_id: str, show: dict
         "assignment_selection": assignment_key,
         "reachable_items": expected_keys,
         "read_only_keys": "aei\r",
+        "production_palette": True,
+        "tree_expand_collapse_and_cursor_reflow": True,
         "transcript": str(transcript_path),
     }
 
@@ -401,10 +432,7 @@ def _public_graphless_worklist(journey, root: Path, worker: Path) -> dict[str, A
             raise ValueError("graphless work list fabricated an edge or invocation barrier")
         os.write(master, b"aei\r")
         os.write(master, b"q")
-        try:
-            return_code = process.wait(timeout=5)
-        except subprocess.TimeoutExpired as error:
-            raise ValueError("graphless terminal work list did not quit on q") from error
+        return_code = _quit_and_drain(master, process, transcript)
         if return_code != 0:
             raise ValueError(f"graphless navigator exited {return_code}: {transcript[-3000:]!r}")
     finally:

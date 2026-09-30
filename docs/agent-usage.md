@@ -78,10 +78,16 @@ explicitly use `--view full`.
 `loop-engine explore RUN_ID` is the interactive, provider-free terminal
 navigator. It reads the same frozen graph plus durable transition history
 without arming the visit. The one-column list starts at the stored current
-state; `j`/`k` or arrow keys navigate states and every available assignment,
-`g`/`G` jump to the ends, `[`/`]` or PageUp/PageDown scroll the detail, and `q`
-quits. Selection is keyed by state ID or slot plus assignment ID, so terminal
-resize does not change the selected assignment. State visitation is shown
+state. With list focus, `j`/`k` or arrow keys navigate states and every available
+assignment; `g`/`G` jump to the ends. `Tab` switches list/detail focus. In detail,
+`j`/`k` or arrows select JSON nodes, `Enter`/Space toggle a branch, and `h`/`l`
+or left/right arrows fold/open it. `[`/`]` or PageUp/PageDown scroll details;
+`q` quits from either focus. Terminal-palette colors and the terminal's default
+background separate headings, selection and warnings. Long prose is folded
+until opened. The tree shows stored guidance and worker CLI definitions, not
+an inferred delivered stdin; original packet locators remain at the capture
+directory. Assignment, node and expansion identities survive terminal resizing
+and browsing to another item. Browsing never infers acceptance. State visitation is shown
 separately from current state and never means passed. A checked denial is shown
 as not allowed even when the event remains requestable; requestability is not
 permission. When an older show projection has no graph, the navigator lists
