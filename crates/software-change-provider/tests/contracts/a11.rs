@@ -731,12 +731,11 @@ fn parse_retained_return(output: &str) -> Result<Value, String> {
         let mut decoder = serde_json::Deserializer::from_str(&output[start..]).into_iter::<Value>();
         if let Some(Ok(value)) = decoder.next() {
             offset = start + decoder.byte_offset();
-            if value.get("kind").and_then(Value::as_str) == Some("review-evidence")
-                || (value.get("result").is_some() && value.get("gate").is_some())
+            if (value.get("kind").and_then(Value::as_str) == Some("review-evidence")
+                || (value.get("result").is_some() && value.get("gate").is_some()))
+                && !values.contains(&value)
             {
-                if !values.contains(&value) {
-                    values.push(value);
-                }
+                values.push(value);
             }
         } else {
             offset = start + 1;
