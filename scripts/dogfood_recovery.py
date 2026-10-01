@@ -309,8 +309,8 @@ def _setup_review_run(
         if value == "--worker"
     ]
     if len(workers) != 1 or not isinstance(workers[0].get("full_output_schema"), dict):
-        raise ValueError("public setup did not generate one full-schema-v2 reviewer")
-    if workers[0]["full_output_schema"].get("x-loop-engine-output-recovery") != "repair-first-v1":
+        raise ValueError("public setup did not generate one full-schema-v3 reviewer")
+    if workers[0]["full_output_schema"].get("x-loop-engine-output-recovery") != "repair-first-v2":
         raise ValueError("new setup did not freeze repair-first output recovery")
     _json(run_root / "generated-review-worker.json", workers[0])
 
@@ -346,7 +346,7 @@ def _fanout_binding(engine: Path, workers: list[dict[str, Any]], *, max_active: 
 
 def _worker(path: Path, mode: str) -> None:
     path.write_text(
-        "import hashlib,json,pathlib,sys,time\n"
+        "import json,pathlib,sys,time\n"
         "mode=sys.argv[1]; counter=pathlib.Path(sys.argv[2]); extra=pathlib.Path(sys.argv[3]) if len(sys.argv)>3 else None\n"
         "raw=sys.stdin.buffer.read(); separator=bytes([45,45,45,10,10]); payload=raw.split(separator,1)[0] if separator in raw else raw; packet=json.loads(payload.splitlines()[-1] if payload != raw else raw)\n"
         "if not isinstance(packet,dict) or not isinstance(packet.get('artifact_root'),str) or not set(packet).issubset({'artifact_root','context'}): raise SystemExit('bad compact location packet')\n"
@@ -357,15 +357,14 @@ def _worker(path: Path, mode: str) -> None:
         " checkout=pathlib.Path(sys.argv[3]); target=checkout/'tracked.txt'; before=target.read_bytes(); target.write_bytes(b'after\\n')\n"
         " print(json.dumps({'implementation_result':'performed exactly one fixture edit','effect':{'path':'tracked.txt','before':before.decode(),'after':target.read_text()}}))\n"
         "elif mode=='raw-review':\n"
-        " subject=pathlib.Path(packet['artifact_root'])/'intent.json'; locator=sys.argv[3]; digest='sha256:'+hashlib.sha256(subject.read_bytes()).hexdigest()\n"
+        " subject=pathlib.Path(packet['artifact_root'])/'intent.json'; locator=sys.argv[3]; json.loads(subject.read_bytes())\n"
         " print('FAIL: the selected fallback is not observable by an operator.')\n"
         " print('Finding: the fallback branch has no observable completion signal.')\n"
         " print('Reason: the selected fallback exposes no completion signal to the operator.')\n"
         " print('Evidence locator: '+locator)\n"
-        " print('Evidence SHA: '+digest)\n"
         "elif mode=='full-schema-missing-constants':\n"
-        " subject=pathlib.Path(packet['artifact_root'])/'intent.json'; locator=sys.argv[3]; digest='sha256:'+hashlib.sha256(subject.read_bytes()).hexdigest()\n"
-        " judgment={'axis':'solution-agnostic','result':'fail','findings':'the fallback branch has no observable completion signal.','grounds':{'reason':'the selected fallback exposes no completion signal to the operator.','evidence':[{'locator':locator,'sha256':digest}]}}\n"
+        " subject=pathlib.Path(packet['artifact_root'])/'intent.json'; locator=sys.argv[3]; json.loads(subject.read_bytes())\n"
+        " judgment={'axis':'solution-agnostic','result':'fail','findings':'the fallback branch has no observable completion signal.','grounds':{'reason':'the selected fallback exposes no completion signal to the operator.','evidence':[{'locator':locator}]}}\n"
         " print(json.dumps({'judgments':[judgment]}))\n"
         "elif mode=='group-a':\n"
         " print(json.dumps({'result':'group-a-complete'}))\n"
@@ -394,9 +393,9 @@ def _adapter(path: Path) -> None:
         "fields={line.split(': ',1)[0]:line.split(': ',1)[1] for line in raw.splitlines() if ': ' in line}\n"
         "schema=request['full_output_schema']; properties=schema['properties']; review=properties['judgments']['items']['oneOf'][0]\n"
         "axis=review['properties']['axis']['enum'][0]; author=properties['author']['const']; stage=properties['review_stage']['const']; version=properties['review_contract_version']['const']\n"
-        "finding=fields['Finding']; reason=fields['Reason']; locator=fields['Evidence locator']; source_sha=fields['Evidence SHA']\n"
+        "finding=fields['Finding']; reason=fields['Reason']; locator=fields['Evidence locator']\n"
         "if mode=='changed': finding='changed meaning: fallback is observable'\n"
-        "judgment={'axis':axis,'result':'fail','findings':finding,'grounds':{'reason':reason,'evidence':[{'locator':locator,'sha256':source_sha}]}}\n"
+        "judgment={'axis':axis,'result':'fail','findings':finding,'grounds':{'reason':reason,'evidence':[{'locator':locator}]}}\n"
         "if mode=='missing': judgment.pop('grounds')\n"
         "output={'review_contract_version':version,'review_stage':stage,'author':author,'judgments':[judgment]}\n"
         "if mode=='unmetered': print(json.dumps({'output':json.dumps(output)})); raise SystemExit(0)\n"
@@ -420,9 +419,9 @@ def _model_adapter(path: Path) -> None:
         "if behavior.get('pid_path'): pathlib.Path(behavior['pid_path']).write_text(str(os.getpid()))\n"
         "if behavior.get('sleep_ms'): time.sleep(behavior['sleep_ms']/1000)\n"
         "raw=bytes.fromhex(request['raw_output_hex']).decode(); fields={line.split(': ',1)[0]:line.split(': ',1)[1] for line in raw.splitlines() if ': ' in line}\n"
-        "if 'FAIL:' not in raw or not all(k in fields for k in ('Finding','Reason','Evidence locator','Evidence SHA')): raise SystemExit('raw prose did not contain explicit FAIL grounds')\n"
+        "if 'FAIL:' not in raw or not all(k in fields for k in ('Finding','Reason','Evidence locator')): raise SystemExit('raw prose did not contain explicit FAIL grounds')\n"
         "schema=request['full_output_schema']; properties=schema['properties']; review=properties['judgments']['items']['oneOf'][0]\n"
-        "judgment={'axis':review['properties']['axis']['enum'][0],'result':'fail','findings':fields['Finding'],'grounds':{'reason':fields['Reason'],'evidence':[{'locator':fields['Evidence locator'],'sha256':fields['Evidence SHA']}]}}\n"
+        "judgment={'axis':review['properties']['axis']['enum'][0],'result':'fail','findings':fields['Finding'],'grounds':{'reason':fields['Reason'],'evidence':[{'locator':fields['Evidence locator']}]}}\n"
         "output={'review_contract_version':properties['review_contract_version']['const'],'review_stage':properties['review_stage']['const'],'author':properties['author']['const'],'judgments':[judgment]}\n"
         "response={'output':json.dumps(output,separators=(',',':'))}\n"
         "if behavior.get('usage') is not None: response['usage']=behavior['usage']\n"
@@ -884,7 +883,7 @@ def _software_change_full_schema_mechanical_case(journey, root: Path) -> dict[st
     output_path = Path(derived["selected"]["path"])
     output = json.loads(output_path.read_text(encoding="utf-8"))
     if (
-        output.get("review_contract_version") != 2
+        output.get("review_contract_version") != 3
         or output.get("review_stage") != "aggregate"
         or output.get("author") != {"name": "fixture-reviewer", "kind": "agent"}
         or output.get("judgments") != raw_value["judgments"]
@@ -1590,7 +1589,7 @@ def _software_change_scripted_review_case(journey, root: Path) -> dict[str, Any]
     derived = json.loads(Path(faithful["selected"]["path"]).read_text(encoding="utf-8"))
     derived_judgment = derived.get("judgments", [{}])[0]
     if (
-        derived.get("review_contract_version") != 2
+        derived.get("review_contract_version") != 3
         or derived.get("review_stage") != "aggregate"
         or derived.get("author") != {"name": "fixture-reviewer", "kind": "agent"}
         or derived_judgment.get("axis") != "solution-agnostic"
