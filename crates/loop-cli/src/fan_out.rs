@@ -25,7 +25,6 @@ const JOIN_COMPLETE_FILE: &str = "join-complete";
 const ATTEMPTS_FILE: &str = "attempts.json";
 const MAX_FULL_SCHEMA_ATTEMPTS: u32 = 2;
 const REPAIR_FIRST_SCHEMA_ANNOTATION: &str = "x-loop-engine-output-recovery";
-const REPAIR_FIRST_SCHEMA_VALUE: &str = "repair-first-v1";
 const RETRY_PROMPT: &str = "\n\n---\n\nSCHEMA-CONFORMANCE RETRY\nReturn only a schema-conforming reconsideration of the same frozen assignment. Do not add commentary or change the semantic review authority.\n\nFIRST_OUTPUT_BEGIN\n";
 const RETRY_PROMPT_ERRORS: &str = "\nFIRST_OUTPUT_END\n\nEXACT_VALIDATION_ERRORS\n";
 const RETRY_PROMPT_END: &str = "\n\nReturn only the schema-conforming reconsideration.\n";
@@ -424,9 +423,9 @@ fn validate_full_output_recovery_annotation(schema: &Value) -> Result<(), ParseE
         .as_object()
         .and_then(|object| object.get(REPAIR_FIRST_SCHEMA_ANNOTATION))
     {
-        if value.as_str() != Some(REPAIR_FIRST_SCHEMA_VALUE) {
+        if !matches!(value.as_str(), Some("repair-first-v1" | "repair-first-v2")) {
             return Err(ParseError::new(format!(
-                "worker full_output_schema `{REPAIR_FIRST_SCHEMA_ANNOTATION}` must be `{REPAIR_FIRST_SCHEMA_VALUE}`"
+                "worker full_output_schema `{REPAIR_FIRST_SCHEMA_ANNOTATION}` must be `repair-first-v1` or `repair-first-v2`"
             )));
         }
     }
@@ -438,7 +437,7 @@ pub(crate) fn uses_repair_first_output_recovery(schema: &Value) -> bool {
         .as_object()
         .and_then(|object| object.get(REPAIR_FIRST_SCHEMA_ANNOTATION))
         .and_then(Value::as_str)
-        == Some(REPAIR_FIRST_SCHEMA_VALUE)
+        .is_some_and(|value| matches!(value, "repair-first-v1" | "repair-first-v2"))
 }
 
 fn validate_output_schema(schema: &OutputSchema) -> Result<(), ParseError> {
@@ -1170,6 +1169,27 @@ fn retry_assignment(original_assignment: &[u8], first_stdout: &[u8], errors: &[S
     assignment
 }
 
+fn collect_schema_errors(error: &jsonschema::ValidationError<'_>, errors: &mut Vec<String>) {
+    errors.push(format!(
+        "instance {}: {} [{}] (schema {})",
+        error.instance_path(),
+        error,
+        error.kind().keyword(),
+        error.schema_path()
+    ));
+    match error.kind() {
+        jsonschema::error::ValidationErrorKind::AnyOf { context }
+        | jsonschema::error::ValidationErrorKind::OneOfNotValid { context } => {
+            for branch in context {
+                for leaf in branch {
+                    collect_schema_errors(leaf, errors);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 pub(crate) fn complete_schema_validation_errors(
     stdout: &[u8],
     schema: &Value,
@@ -1183,17 +1203,10 @@ pub(crate) fn complete_schema_validation_errors(
         Ok(validator) => validator,
         Err(error) => return vec![format!("full_output_schema is invalid: {error}")],
     };
-    let mut errors = validator
-        .iter_errors(&value)
-        .map(|error| {
-            format!(
-                "instance {}: {} (schema {})",
-                error.instance_path(),
-                error,
-                error.schema_path()
-            )
-        })
-        .collect::<Vec<_>>();
+    let mut errors = Vec::new();
+    for error in validator.iter_errors(&value) {
+        collect_schema_errors(&error, &mut errors);
+    }
     if let Some(legacy_schema) = legacy_schema {
         match value.as_object() {
             Some(object) => {
@@ -2660,6 +2673,47 @@ mod tests {
                 "accepted invalid full review output: {invalid}"
             );
         }
+    }
+
+    #[test]
+    fn nested_alternatives_report_actual_leaf_keyword_and_paths() {
+        let schema = json!({"oneOf":[{"type":"object","properties":{"judgments":{"type":"array","items":{"anyOf":[{"type":"object","properties":{"reason":{"type":"string","minLength":1}},"required":["reason"]}]}}},"required":["judgments"]}]});
+        let errors =
+            complete_schema_validation_errors(br#"{"judgments":[{"reason":""}]}"#, &schema, None);
+        assert!(
+            errors.iter().any(|e| e.contains("/judgments/0/reason")
+                && e.contains("minLength")
+                && e.contains(
+                    "/oneOf/0/properties/judgments/items/anyOf/0/properties/reason/minLength"
+                )),
+            "{errors:?}"
+        );
+        assert!(
+            complete_schema_validation_errors(b"judgments: []", &schema, None)
+                .iter()
+                .any(|e| e.contains("JSON"))
+        );
+    }
+
+    #[test]
+    fn parsed_raw_representation_correction_cannot_change_judgment() {
+        let raw = json!({"review_stage":"aggregate","author":{"name":"reviewer","kind":"agent"},"judgments":[{"axis":"scope","result":"fail","findings":"explicit defect","grounds":{"reason":"inspected","evidence":[{"locator":"intent.json#/outcome"}]}}]});
+        assert!(loop_core::check_known_output_conflicts(&raw, &raw).is_ok());
+        for pointer in [
+            "/author/name",
+            "/judgments/0/result",
+            "/judgments/0/findings",
+            "/judgments/0/grounds/reason",
+        ] {
+            let mut changed = raw.clone();
+            *changed.pointer_mut(pointer).unwrap() = json!("changed");
+            assert!(
+                loop_core::check_known_output_conflicts(&raw, &changed).is_err(),
+                "{pointer}"
+            );
+        }
+        let missing = json!({"axis":"scope","result":"pass","findings":""});
+        assert!(loop_core::check_known_output_conflicts(&missing, &missing).is_err());
     }
 
     #[test]

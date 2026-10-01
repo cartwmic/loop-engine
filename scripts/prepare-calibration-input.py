@@ -374,7 +374,8 @@ def make_case(
     companion_path: Path | None = None,
     coverage_case: str | None = None,
     coverage_gate: str | None = None,
-) -> Path:
+    hash_only: bool = False,
+) -> Path | str:
     profile_basename = profile_name(profile_path)
     config_version = identity["config_version"]
     gate = identity["gate"]
@@ -496,6 +497,9 @@ def make_case(
     if b"Canonical digest framing" not in procedure or b"Fresh external review input" not in procedure:
         die("procedure does not contain the shipped supplied-material contract")
 
+    if hash_only:
+        return input_hash
+
     case_dir = output_root / case_name
     if case_dir.exists():
         die(f"refusing to replace existing calibration case directory: {case_dir}")
@@ -556,11 +560,44 @@ def make_case(
     return case_dir
 
 
+def prepare_successor_manifest(repository: Path, manifest: list, procedure: bytes) -> list:
+    """Derive complete successor identities, never observations/applicability."""
+    output = [row for row in manifest if not row["config_version"].endswith("-13")]
+    existing = {tuple(row[k] for k in ("config_version", "gate", "axis", "review_stage", "fixture_id")): row
+                for row in manifest if row["config_version"].endswith("-13")}
+    for name in PROFILE_NAMES:
+        path = repository / f"crates/software-change-provider/data/configs/{name}.json"
+        profile = read_json(path, "successor profile")
+        if profile["config_version"] != name + "-13": die("successor preparation requires v13 profiles")
+        for gate, policies in profile["review_policies"].items():
+            for policy in policies:
+                sources = [row for row in manifest if row["config_version"] == name + "-12"
+                           and row["gate"] == gate and row["axis"] == policy["id"]
+                           and row["review_stage"] == policy["review_stage"]]
+                if not sources: die(f"missing predecessor fixtures for {name}/{gate}/{policy['id']}")
+                for source in sources:
+                    row = {k: source[k] for k in ("fixture_id", "gate", "axis", "review_stage", "expected")}
+                    row.update(config_version=profile["config_version"], observed="pending", model="",
+                               attested_by="", invocation="Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.")
+                    key = "|".join(row[k] for k in ("config_version", "gate", "axis", "review_stage", "fixture_id"))
+                    row["input_sha256"] = make_case(repository=repository, procedure=procedure, manifest=[row],
+                        profile_path=path, profile=profile, output_root=repository, identity=parse_row_key(key), hash_only=True)
+                    prior = existing.get(tuple(key.split("|")))
+                    if prior and prior["observed"] != "pending":
+                        if prior["input_sha256"] != row["input_sha256"]: die(f"attested current row has changed inputs: {key}")
+                        row = prior
+                    output.append(row)
+    if not output or len({tuple(row[k] for k in ("config_version", "gate", "axis", "review_stage", "fixture_id")) for row in output}) != len(output):
+        die("empty or duplicate calibration universe")
+    return output
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--procedure", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
-    parser.add_argument("--profile", type=Path, required=True)
+    parser.add_argument("--profile", type=Path)
+    parser.add_argument("--prepare-successor-manifest", action="store_true")
     parser.add_argument("--repository", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--row-key", action="append", default=[])
@@ -577,6 +614,14 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
     try:
+        if args.prepare_successor_manifest:
+            if args.row_key or args.coverage_case or args.profile: die("successor manifest preparation takes no row/coverage/profile selection")
+            rows = prepare_successor_manifest(args.repository.resolve(), read_json(args.manifest, "manifest"), read_bytes(args.procedure, "procedure"))
+            args.output_root.mkdir(parents=True, exist_ok=False)
+            (args.output_root / "manifest.json").write_text(json.dumps(rows, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            print(f"prepared complete successor manifest with pending uncovered rows: {args.output_root / 'manifest.json'}")
+            return 0
+        if args.profile is None: die("packet preparation requires --profile")
         if not args.row_key and not args.coverage_case:
             die("supply at least one --row-key or --coverage-case")
         if args.row_key and args.coverage_case:

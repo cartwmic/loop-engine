@@ -250,6 +250,29 @@ pub(crate) fn run_recovery_collector(
                 let selected_bytes =
                     read_artifact_stream(&packet.artifact_root, selected_path, selected_digest)?;
                 validate_recovered_output(current, &selected_bytes)?;
+                if source
+                    .derivation
+                    .as_ref()
+                    .is_some_and(|d| d.kind == "driver")
+                {
+                    if current
+                        .full_output_schema
+                        .as_ref()
+                        .and_then(|schema| schema.get("x-loop-engine-output-recovery"))
+                        .and_then(Value::as_str)
+                        != Some("repair-first-v2")
+                    {
+                        return Err(CollectorError::Invalid(
+                            "driver derivation requires repair-first-v2".into(),
+                        ));
+                    }
+                    let derived = fan_out::locate_stdout_value(&selected_bytes)
+                        .map_err(CollectorError::Invalid)?;
+                    if let Ok(raw) = fan_out::locate_stdout_value(&_raw_bytes) {
+                        loop_core::check_known_output_conflicts(&raw, &derived)
+                            .map_err(CollectorError::Invalid)?;
+                    }
+                }
                 (selected_bytes, selected_digest.to_owned())
             }
             class => {
@@ -852,6 +875,22 @@ struct RecoverOutputRequest {
     assignment_id: String,
     #[serde(default, alias = "scripted_adapter")]
     adapter: Option<RepairAdapterConfig>,
+    #[serde(default)]
+    corrected_output: Option<CorrectedOutput>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CorrectedOutput {
+    path: String,
+    formatter_author: FormatterAuthor,
+}
+
+#[derive(Clone, Debug, Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct FormatterAuthor {
+    name: String,
+    kind: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -901,6 +940,9 @@ pub(crate) fn recover_output(request_json: &str) -> Result<Value, String> {
         .map_err(|error| format!("repair request is malformed: {error}"))?;
     if request.version != 1 {
         return Err("repair request version must be 1".to_owned());
+    }
+    if request.corrected_output.is_some() && request.adapter.is_some() {
+        return Err("corrected_output and adapter are mutually exclusive".to_owned());
     }
     let preview = &request.preview;
     if preview.get("ready").and_then(Value::as_bool) != Some(true) {
@@ -1032,149 +1074,193 @@ pub(crate) fn recover_output(request_json: &str) -> Result<Value, String> {
             Err("frozen output contract is unavailable".to_owned())
         }
     });
-    let (derived_bytes, method, difference, adapter_evidence, adapter_capture) = match mechanical {
-        Ok((bytes, difference)) => (bytes, "mechanical".to_owned(), difference, None, None),
-        Err(mechanical_decline) => {
-            let adapter = request.adapter.as_ref().ok_or_else(|| {
+    let (derived_bytes, method, difference, adapter_evidence, adapter_capture) = if let Some(
+        corrected,
+    ) =
+        &request.corrected_output
+    {
+        if full_schema
+            .and_then(|schema| schema.get("x-loop-engine-output-recovery"))
+            .and_then(Value::as_str)
+            != Some("repair-first-v2")
+        {
+            return Err("direct corrected_output requires repair-first-v2; historical recovery is unchanged".to_owned());
+        }
+        if corrected.formatter_author.name.trim().is_empty()
+            || !matches!(
+                corrected.formatter_author.kind.as_str(),
+                "human" | "agent" | "script"
+            )
+        {
+            return Err("corrected_output requires an attributed formatter_author".to_owned());
+        }
+        let path = Path::new(&corrected.path);
+        if !path.is_absolute() {
+            return Err("corrected_output.path must be absolute".to_owned());
+        }
+        let bytes =
+            fs::read(path).map_err(|error| format!("corrected_output is unavailable: {error}"))?;
+        validate_recovered_contract(&bytes, full_schema, legacy_schema)?;
+        let derived = fan_out::locate_stdout_value(&bytes)?;
+        if let Ok(raw) = fan_out::locate_stdout_value(&raw_bytes) {
+            loop_core::check_known_output_conflicts(&raw, &derived)?;
+        }
+        if derived.pointer("/author/name").and_then(Value::as_str)
+            == Some(corrected.formatter_author.name.as_str())
+        {
+            return Err("formatter must be attributed separately from the reviewer".to_owned());
+        }
+        (
+            bytes,
+            "driver".to_owned(),
+            json!({"kind":"representation-only", "formatter_author":corrected.formatter_author}),
+            None,
+            None,
+        )
+    } else {
+        match mechanical {
+            Ok((bytes, difference)) => (bytes, "mechanical".to_owned(), difference, None, None),
+            Err(mechanical_decline) => {
+                let adapter = request.adapter.as_ref().ok_or_else(|| {
                 format!("mechanical normalizer declined ({mechanical_decline}); no output-only adapter is configured")
             })?;
-            if adapter.command.trim().is_empty()
-                || adapter.max_calls == 0
-                || adapter.max_time_ms == 0
-                || adapter.max_cost_micros == 0
-            {
-                return Err(
-                    "output-only adapter requires positive call, time, and metered-cost caps"
-                        .to_owned(),
-                );
-            }
-            match adapter.kind.as_str() {
-                "model" => {
-                    if !full_schema.is_some_and(fan_out::uses_repair_first_output_recovery) {
-                        return Err("configured model repair requires a repair-first-v1 output contract; legacy contracts remain unchanged".to_owned());
-                    }
-                    let model_id = adapter
-                        .model_id
-                        .as_deref()
-                        .filter(|model_id| !model_id.trim().is_empty())
-                        .ok_or("model adapter requires an explicit non-empty model_id")?;
-                    let (output, usage, capture) = run_model_adapter(
-                        &root,
-                        preview,
-                        origin,
-                        &request.assignment_id,
-                        raw_path,
-                        raw_attempt,
-                        raw_digest,
-                        &raw_bytes,
-                        full_schema,
-                        legacy_schema,
-                        adapter,
-                        model_id,
-                    )?;
-                    validate_recovered_contract(&output, full_schema, legacy_schema).map_err(
+                if adapter.command.trim().is_empty()
+                    || adapter.max_calls == 0
+                    || adapter.max_time_ms == 0
+                    || adapter.max_cost_micros == 0
+                {
+                    return Err(
+                        "output-only adapter requires positive call, time, and metered-cost caps"
+                            .to_owned(),
+                    );
+                }
+                match adapter.kind.as_str() {
+                    "model" => {
+                        if !full_schema.is_some_and(fan_out::uses_repair_first_output_recovery) {
+                            return Err("configured model repair requires a repair-first output contract; legacy contracts remain unchanged".to_owned());
+                        }
+                        let model_id = adapter
+                            .model_id
+                            .as_deref()
+                            .filter(|model_id| !model_id.trim().is_empty())
+                            .ok_or("model adapter requires an explicit non-empty model_id")?;
+                        let (output, usage, capture) = run_model_adapter(
+                            &root,
+                            preview,
+                            origin,
+                            &request.assignment_id,
+                            raw_path,
+                            raw_attempt,
+                            raw_digest,
+                            &raw_bytes,
+                            full_schema,
+                            legacy_schema,
+                            adapter,
+                            model_id,
+                        )?;
+                        validate_recovered_contract(&output, full_schema, legacy_schema).map_err(
                         |error| format!(
                             "model adapter output does not satisfy the frozen contract: {error}; retained capture: {}",
                             capture.get("directory").and_then(Value::as_str).unwrap_or("unknown")
                         ),
                     )?;
-                    let diff = json!({
-                        "kind":"representation-only",
-                        "mechanical_decline":mechanical_decline,
-                        "raw_sha256":raw_digest,
-                        "derived_sha256":fan_out::sha256_digest(&output),
-                        "raw_bytes":raw_bytes.len(),
-                        "derived_bytes":output.len(),
-                        "raw_text":String::from_utf8_lossy(&raw_bytes),
-                        "derived_text":String::from_utf8_lossy(&output),
-                    });
-                    (output, "model".to_owned(), diff, Some(usage), Some(capture))
-                }
-                "scripted" => {
-                    if adapter.model_id.is_some() {
-                        return Err("scripted adapter must not claim a model_id".to_owned());
+                        let diff = json!({
+                            "kind":"representation-only",
+                            "mechanical_decline":mechanical_decline,
+                            "raw_sha256":raw_digest,
+                            "derived_sha256":fan_out::sha256_digest(&output),
+                            "raw_bytes":raw_bytes.len(),
+                            "derived_bytes":output.len(),
+                            "raw_text":String::from_utf8_lossy(&raw_bytes),
+                            "derived_text":String::from_utf8_lossy(&output),
+                        });
+                        (output, "model".to_owned(), diff, Some(usage), Some(capture))
                     }
-                    let request_packet = json!({
-                        "version":1,
-                        "representation_only":true,
-                        "assignment_id":request.assignment_id,
-                        "raw_output_hex":hex_encode(&raw_bytes),
-                        "raw_output_sha256":raw_digest,
-                        "required_keys":legacy_schema.map(|schema| schema.required.clone()).or_else(|| {
-                            full_schema
-                                .and_then(|schema| schema.get("required"))
-                                .and_then(Value::as_array)
-                                .map(|required| required.iter().filter_map(Value::as_str).map(str::to_owned).collect())
-                        }),
-                        "full_output_schema":full_schema,
-                    });
-                    let packet_bytes =
-                        serde_json::to_vec(&request_packet).map_err(|error| error.to_string())?;
-                    if packet_bytes.len() > MAX_ADAPTER_PACKET_BYTES {
-                        return Err("scripted adapter packet exceeds its bound".to_owned());
-                    }
-                    let run = run_repair_adapter(
-                        &adapter.command,
-                        &adapter.args,
-                        &packet_bytes,
-                        adapter.max_time_ms,
-                    )?;
-                    let attempt_key = fan_out::sha256_digest(
-                        format!(
-                            "{}:{}:{}:{}",
-                            origin
-                                .get("invocation_id")
-                                .and_then(Value::as_str)
-                                .unwrap_or(""),
-                            request.assignment_id,
-                            std::process::id(),
-                            SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_nanos(),
-                        )
-                        .as_bytes(),
-                    );
-                    let adapter_dir = root
-                        .join("recovery-adapter-attempts")
-                        .join(&attempt_key[7..]);
-                    fs::create_dir_all(&adapter_dir).map_err(|error| {
-                        format!("could not create adapter attempt capture: {error}")
-                    })?;
-                    write_immutable(&adapter_dir.join("request.json"), &packet_bytes)?;
-                    write_immutable(&adapter_dir.join("stdout"), &run.stdout)?;
-                    write_immutable(&adapter_dir.join("stderr"), &run.stderr)?;
-                    write_immutable(
-                        &adapter_dir.join("configuration.json"),
-                        &serde_json::to_vec(&json!({
-                            "kind":adapter.kind,"command":adapter.command,"args":adapter.args,
-                            "max_calls":adapter.max_calls,"max_time_ms":adapter.max_time_ms,
-                            "max_cost_micros":adapter.max_cost_micros,
-                        }))
-                        .map_err(|error| error.to_string())?,
-                    )?;
-                    if run.timed_out {
-                        return Err(format!(
+                    "scripted" => {
+                        if adapter.model_id.is_some() {
+                            return Err("scripted adapter must not claim a model_id".to_owned());
+                        }
+                        let request_packet = json!({
+                            "version":1,
+                            "representation_only":true,
+                            "assignment_id":request.assignment_id,
+                            "raw_output_hex":hex_encode(&raw_bytes),
+                            "raw_output_sha256":raw_digest,
+                            "required_keys":legacy_schema.map(|schema| schema.required.clone()).or_else(|| {
+                                full_schema
+                                    .and_then(|schema| schema.get("required"))
+                                    .and_then(Value::as_array)
+                                    .map(|required| required.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+                            }),
+                            "full_output_schema":full_schema,
+                        });
+                        let packet_bytes = serde_json::to_vec(&request_packet)
+                            .map_err(|error| error.to_string())?;
+                        if packet_bytes.len() > MAX_ADAPTER_PACKET_BYTES {
+                            return Err("scripted adapter packet exceeds its bound".to_owned());
+                        }
+                        let run = run_repair_adapter(
+                            &adapter.command,
+                            &adapter.args,
+                            &packet_bytes,
+                            adapter.max_time_ms,
+                        )?;
+                        let attempt_key = fan_out::sha256_digest(
+                            format!(
+                                "{}:{}:{}:{}",
+                                origin
+                                    .get("invocation_id")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or(""),
+                                request.assignment_id,
+                                std::process::id(),
+                                SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_nanos(),
+                            )
+                            .as_bytes(),
+                        );
+                        let adapter_dir = root
+                            .join("recovery-adapter-attempts")
+                            .join(&attempt_key[7..]);
+                        fs::create_dir_all(&adapter_dir).map_err(|error| {
+                            format!("could not create adapter attempt capture: {error}")
+                        })?;
+                        write_immutable(&adapter_dir.join("request.json"), &packet_bytes)?;
+                        write_immutable(&adapter_dir.join("stdout"), &run.stdout)?;
+                        write_immutable(&adapter_dir.join("stderr"), &run.stderr)?;
+                        write_immutable(
+                            &adapter_dir.join("configuration.json"),
+                            &serde_json::to_vec(&json!({
+                                "kind":adapter.kind,"command":adapter.command,"args":adapter.args,
+                                "max_calls":adapter.max_calls,"max_time_ms":adapter.max_time_ms,
+                                "max_cost_micros":adapter.max_cost_micros,
+                            }))
+                            .map_err(|error| error.to_string())?,
+                        )?;
+                        if run.timed_out {
+                            return Err(format!(
                             "scripted adapter exceeded its positive time cap; retained capture: {}",
                             adapter_dir.display()
                         ));
-                    }
-                    if !run.status_success {
-                        return Err(format!(
+                        }
+                        if !run.status_success {
+                            return Err(format!(
                             "configured scripted adapter exited unsuccessfully; retained capture: {}",
                             adapter_dir.display()
                         ));
-                    }
-                    if run.elapsed_ms > adapter.max_time_ms {
-                        return Err(format!(
+                        }
+                        if run.elapsed_ms > adapter.max_time_ms {
+                            return Err(format!(
                             "scripted adapter exceeded its positive time cap; retained capture: {}",
                             adapter_dir.display()
                         ));
-                    }
-                    let response: RepairAdapterResponse = serde_json::from_slice(&run.stdout)
+                        }
+                        let response: RepairAdapterResponse = serde_json::from_slice(&run.stdout)
                         .map_err(|error|format!("scripted adapter usage/response is missing or malformed; retained capture {}: {error}",adapter_dir.display()))?;
-                    let output = response.output.into_bytes();
-                    write_immutable(
+                        let output = response.output.into_bytes();
+                        write_immutable(
                         &adapter_dir.join("usage.json"),
                         &serde_json::to_vec(&json!({
                             "usage_accounted":true,"calls":response.usage.calls,"elapsed_ms":run.elapsed_ms,
@@ -1184,47 +1270,48 @@ pub(crate) fn recover_output(request_json: &str) -> Result<Value, String> {
                         }))
                         .map_err(|error| error.to_string())?,
                     )?;
-                    if response.usage.calls != 1 || response.usage.calls > adapter.max_calls {
-                        return Err(format!(
+                        if response.usage.calls != 1 || response.usage.calls > adapter.max_calls {
+                            return Err(format!(
                             "scripted adapter exceeded or omitted its positive call cap; retained capture: {}",
                             adapter_dir.display()
                         ));
-                    }
-                    if response.usage.metered_cost_micros > adapter.max_cost_micros {
-                        return Err(format!(
+                        }
+                        if response.usage.metered_cost_micros > adapter.max_cost_micros {
+                            return Err(format!(
                             "scripted adapter exceeded its positive metered-cost cap; retained capture: {}",
                             adapter_dir.display()
                         ));
-                    }
-                    validate_recovered_contract(&output, full_schema, legacy_schema)
+                        }
+                        validate_recovered_contract(&output, full_schema, legacy_schema)
                         .map_err(|error| format!("scripted adapter output does not satisfy the frozen contract: {error}; retained capture: {}",adapter_dir.display()))?;
-                    let diff = json!({
-                        "kind":"representation-only",
-                        "mechanical_decline":mechanical_decline,
-                        "raw_sha256":raw_digest,
-                        "derived_sha256":fan_out::sha256_digest(&output),
-                        "raw_bytes":raw_bytes.len(),
-                        "derived_bytes":output.len(),
-                        "raw_text":String::from_utf8_lossy(&raw_bytes),
-                        "derived_text":String::from_utf8_lossy(&output),
-                    });
-                    let usage = json!({
-                        "command":adapter.command,"args":adapter.args,
-                        "usage_accounted":true,"calls":response.usage.calls,"elapsed_ms":run.elapsed_ms,
-                        "metered_cost_micros":response.usage.metered_cost_micros,
-                        "max_calls":adapter.max_calls,"max_time_ms":adapter.max_time_ms,
-                        "max_cost_micros":adapter.max_cost_micros,
-                    });
-                    let capture = json!({"directory":adapter_dir,"stdout_sha256":fan_out::sha256_digest(&run.stdout),"stderr_sha256":fan_out::sha256_digest(&run.stderr),"request_sha256":fan_out::sha256_digest(&packet_bytes)});
-                    (
-                        output,
-                        "scripted".to_owned(),
-                        diff,
-                        Some(usage),
-                        Some(capture),
-                    )
+                        let diff = json!({
+                            "kind":"representation-only",
+                            "mechanical_decline":mechanical_decline,
+                            "raw_sha256":raw_digest,
+                            "derived_sha256":fan_out::sha256_digest(&output),
+                            "raw_bytes":raw_bytes.len(),
+                            "derived_bytes":output.len(),
+                            "raw_text":String::from_utf8_lossy(&raw_bytes),
+                            "derived_text":String::from_utf8_lossy(&output),
+                        });
+                        let usage = json!({
+                            "command":adapter.command,"args":adapter.args,
+                            "usage_accounted":true,"calls":response.usage.calls,"elapsed_ms":run.elapsed_ms,
+                            "metered_cost_micros":response.usage.metered_cost_micros,
+                            "max_calls":adapter.max_calls,"max_time_ms":adapter.max_time_ms,
+                            "max_cost_micros":adapter.max_cost_micros,
+                        });
+                        let capture = json!({"directory":adapter_dir,"stdout_sha256":fan_out::sha256_digest(&run.stdout),"stderr_sha256":fan_out::sha256_digest(&run.stderr),"request_sha256":fan_out::sha256_digest(&packet_bytes)});
+                        (
+                            output,
+                            "scripted".to_owned(),
+                            diff,
+                            Some(usage),
+                            Some(capture),
+                        )
+                    }
+                    other => return Err(format!("unsupported output-only adapter kind `{other}`")),
                 }
-                other => return Err(format!("unsupported output-only adapter kind `{other}`")),
             }
         }
     };

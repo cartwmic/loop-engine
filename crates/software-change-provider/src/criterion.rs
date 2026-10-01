@@ -42,41 +42,70 @@ impl CriterionViolation {
 /// Mechanically resolve reviewer-supplied evidence citations against exact source bytes.
 /// This verifies references only; it does not decide whether a source supports a judgment.
 pub(crate) fn validate_grounding(grounds: &Value, artifact_root: &Path) -> Result<(), String> {
+    validate_grounding_version(grounds, artifact_root, Some(2))
+}
+
+pub(crate) fn validate_grounding_version(
+    grounds: &Value,
+    artifact_root: &Path,
+    version: Option<u32>,
+) -> Result<(), String> {
+    if version == Some(3)
+        && grounds.as_object().is_none_or(|object| {
+            object.len() != 2 || !object.contains_key("reason") || !object.contains_key("evidence")
+        })
+    {
+        return Err("v3 grounds require exactly reason and evidence".to_owned());
+    }
     let reason = grounds
         .get("reason")
         .and_then(Value::as_str)
         .filter(|reason| !reason.trim().is_empty())
         .ok_or("grounds.reason must be a non-empty reviewer rationale")?;
-    if reason.len() > 1200 {
+    if version == Some(2) && reason.len() > 1200 {
         return Err("grounds.reason exceeds 1200 bytes".to_owned());
     }
     let evidence = grounds
         .get("evidence")
         .and_then(Value::as_array)
-        .filter(|evidence| !evidence.is_empty() && evidence.len() <= 8)
-        .ok_or("grounds.evidence must contain 1 to 8 source references")?;
+        .filter(|evidence| !evidence.is_empty() && (version != Some(2) || evidence.len() <= 8))
+        .ok_or("grounds.evidence must contain source references")?;
     let root = fs::canonicalize(artifact_root).map_err(|error| error.to_string())?;
     let cwd = fs::canonicalize(std::env::current_dir().map_err(|error| error.to_string())?)
         .map_err(|error| error.to_string())?;
     let mut seen = BTreeSet::new();
     for reference in evidence {
+        if version == Some(3)
+            && reference
+                .as_object()
+                .is_none_or(|object| object.len() != 1 || !object.contains_key("locator"))
+        {
+            return Err("v3 evidence reference must contain only locator".to_owned());
+        }
         let locator = reference
             .get("locator")
             .and_then(Value::as_str)
             .filter(|locator| !locator.trim().is_empty())
             .ok_or("evidence locator must be a non-empty repository-relative path and selector")?;
-        let digest = reference
-            .get("sha256")
-            .and_then(Value::as_str)
-            .filter(|digest| digest.starts_with("sha256:") && digest.len() == 71)
-            .ok_or("evidence sha256 must be `sha256:` plus 64 lowercase hex digits")?;
-        if !digest[7..]
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-            || !seen.insert(locator)
-        {
-            return Err("evidence digest is malformed or locator is duplicated".to_owned());
+        if !seen.insert(locator) {
+            return Err("evidence locator is duplicated".to_owned());
         }
+        let digest = if version == Some(2) {
+            let digest = reference
+                .get("sha256")
+                .and_then(Value::as_str)
+                .filter(|digest| digest.starts_with("sha256:") && digest.len() == 71)
+                .ok_or("evidence sha256 must be `sha256:` plus 64 lowercase hex digits")?;
+            if !digest[7..]
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            {
+                return Err("evidence digest is malformed or locator is duplicated".to_owned());
+            }
+            Some(digest)
+        } else {
+            None
+        };
         let (file, selector) = locator.split_once('#').ok_or_else(|| {
             format!("evidence locator `{locator}` needs a JSON Pointer or line selector")
         })?;
@@ -97,7 +126,7 @@ pub(crate) fn validate_grounding(grounds: &Value, artifact_root: &Path) -> Resul
         let path = resolve_evidence_file(&root, &cwd, relative)?;
         let bytes = fs::read(&path)
             .map_err(|error| format!("evidence source `{locator}` is unreadable: {error}"))?;
-        if format!("sha256:{:x}", Sha256::digest(&bytes)) != digest {
+        if digest.is_some_and(|digest| format!("sha256:{:x}", Sha256::digest(&bytes)) != digest) {
             return Err(format!(
                 "evidence digest does not match exact source bytes for `{file}`"
             ));
@@ -120,38 +149,66 @@ pub(crate) fn validate_grounding(grounds: &Value, artifact_root: &Path) -> Resul
 /// Check retained citation structure without rebinding a historical digest to
 /// a changed current file. Current-source citations use `validate_grounding`.
 pub(crate) fn validate_grounding_shape(grounds: &Value) -> Result<(), String> {
+    validate_grounding_shape_version(grounds, Some(2))
+}
+
+pub(crate) fn validate_grounding_shape_version(
+    grounds: &Value,
+    version: Option<u32>,
+) -> Result<(), String> {
+    if version == Some(3)
+        && grounds.as_object().is_none_or(|object| {
+            object.len() != 2 || !object.contains_key("reason") || !object.contains_key("evidence")
+        })
+    {
+        return Err("v3 grounds require exactly reason and evidence".to_owned());
+    }
     let reason = grounds
         .get("reason")
         .and_then(Value::as_str)
         .filter(|reason| !reason.trim().is_empty())
         .ok_or("grounds.reason must be a non-empty reviewer rationale")?;
-    if reason.len() > 1200 {
+    if version == Some(2) && reason.len() > 1200 {
         return Err("grounds.reason exceeds 1200 bytes".to_owned());
     }
     let evidence = grounds
         .get("evidence")
         .and_then(Value::as_array)
-        .filter(|evidence| !evidence.is_empty() && evidence.len() <= 8)
-        .ok_or("grounds.evidence must contain 1 to 8 source references")?;
+        .filter(|evidence| !evidence.is_empty() && (version != Some(2) || evidence.len() <= 8))
+        .ok_or("grounds.evidence must contain source references")?;
     let mut seen = BTreeSet::new();
     for reference in evidence {
+        if version == Some(3)
+            && reference
+                .as_object()
+                .is_none_or(|object| object.len() != 1 || !object.contains_key("locator"))
+        {
+            return Err("v3 evidence reference must contain only locator".to_owned());
+        }
         let locator = reference
             .get("locator")
             .and_then(Value::as_str)
             .filter(|locator| !locator.trim().is_empty())
             .ok_or("evidence locator must be a non-empty repository-relative path and selector")?;
-        let digest = reference
-            .get("sha256")
-            .and_then(Value::as_str)
-            .filter(|digest| digest.starts_with("sha256:") && digest.len() == 71)
-            .ok_or("evidence sha256 must be `sha256:` plus 64 lowercase hex digits")?;
-        if !digest[7..]
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-            || !seen.insert(locator)
-        {
-            return Err("evidence digest is malformed or locator is duplicated".to_owned());
+        if !seen.insert(locator) {
+            return Err("evidence locator is duplicated".to_owned());
         }
+        let _digest = if version == Some(2) {
+            let digest = reference
+                .get("sha256")
+                .and_then(Value::as_str)
+                .filter(|digest| digest.starts_with("sha256:") && digest.len() == 71)
+                .ok_or("evidence sha256 must be `sha256:` plus 64 lowercase hex digits")?;
+            if !digest[7..]
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            {
+                return Err("evidence digest is malformed or locator is duplicated".to_owned());
+            }
+            Some(digest)
+        } else {
+            None
+        };
         let (file, selector) = locator
             .split_once('#')
             .ok_or_else(|| format!("evidence locator `{locator}` needs a selector"))?;
@@ -670,6 +727,26 @@ mod tests {
         assert!(violations
             .iter()
             .any(|violation| violation.message.contains("not present")));
+    }
+
+    #[test]
+    fn locator_only_grounding_has_no_reason_or_reference_quota() {
+        let root = std::env::temp_dir().join(format!("locator-v3-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let subject = serde_json::json!({"items": (0..12).collect::<Vec<_>>()});
+        fs::write(
+            root.join("intent.json"),
+            serde_json::to_vec(&subject).unwrap(),
+        )
+        .unwrap();
+        let grounds = serde_json::json!({"reason":"根拠".repeat(1500), "evidence":(0..12).map(|i| serde_json::json!({"locator":format!("intent.json#/items/{i}")})).collect::<Vec<_>>()});
+        assert!(validate_grounding_version(&grounds, &root, Some(3)).is_ok());
+        assert!(validate_grounding_version(&grounds, &root, Some(2)).is_err());
+        let missing = serde_json::json!({"reason":"inspected", "evidence":[{"locator":"intent.json#/missing"}]});
+        assert!(validate_grounding_version(&missing, &root, Some(3))
+            .unwrap_err()
+            .contains("does not resolve"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

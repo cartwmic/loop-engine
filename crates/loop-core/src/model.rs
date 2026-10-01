@@ -472,6 +472,73 @@ pub struct AssignmentLabel {
     pub role: String,
 }
 
+/// Reject cheap, known contradictions in a parsed explicit judgment. This is
+/// representation checking, not semantic interpretation of unparseable output.
+pub fn check_known_output_conflicts(raw: &Value, selected: &Value) -> Result<(), String> {
+    if raw.get("author").is_none() {
+        return Err("parsed raw judgment has no explicit reviewer identity".to_owned());
+    }
+    for field in ["author", "review_stage", "validation_verdicts"] {
+        if let Some(value) = raw.get(field) {
+            if selected.get(field) != Some(value) {
+                return Err(format!("corrected output changes parsed raw `{field}`"));
+            }
+        }
+    }
+    let raw_rows = raw
+        .get("judgments")
+        .and_then(Value::as_array)
+        .map(|v| v.iter().collect::<Vec<_>>())
+        .unwrap_or_else(|| vec![raw]);
+    let selected_rows = selected
+        .get("judgments")
+        .and_then(Value::as_array)
+        .map_or(1, Vec::len);
+    if selected_rows != raw_rows.len() {
+        return Err("corrected output invents or drops parsed raw judgments".to_owned());
+    }
+    if raw.get("judgments").is_some() {
+        for field in ["result", "findings", "grounds", "reason", "evidence"] {
+            if raw
+                .get(field)
+                .is_some_and(|value| selected.get(field) != Some(value))
+            {
+                return Err(format!("corrected output changes parsed raw `{field}`"));
+            }
+        }
+    }
+    for row in raw_rows {
+        let selected_row = if let Some(axis) = row.get("axis") {
+            match selected.get("judgments").and_then(Value::as_array) {
+                Some(rows) => rows
+                    .iter()
+                    .find(|r| r.get("axis") == Some(axis))
+                    .ok_or("corrected output drops parsed raw axis")?,
+                None => selected,
+            }
+        } else {
+            selected
+        };
+        for field in [
+            "axis", "result", "findings", "grounds", "reason", "evidence", "reuse",
+        ] {
+            if let Some(value) = row.get(field) {
+                if selected_row.get(field) != Some(value) {
+                    return Err(format!("corrected output changes parsed raw `{field}`"));
+                }
+            }
+        }
+        if row.get("reuse").is_none()
+            && ["result", "findings", "grounds"]
+                .iter()
+                .any(|field| row.get(field).is_none())
+        {
+            return Err("parsed raw judgment is substantively incomplete; direct correction cannot invent a verdict, findings or rationale".to_owned());
+        }
+    }
+    Ok(())
+}
+
 /// One captured execution attempt. Errors are actual mechanical diagnostics,
 /// not semantic judgments.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

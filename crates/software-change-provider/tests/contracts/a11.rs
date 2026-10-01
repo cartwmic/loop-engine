@@ -12,20 +12,20 @@ const PROFILES: &[&str] = &["minimal", "standard", "high-rigor"];
 const CURRENT_INVOCATION: &str = "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.";
 const PENDING_INVOCATION: &str = "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.";
 const NEUTRAL_REVISION: &str = "r15";
-const HISTORICAL_CONFIG_SUFFIXES: &[&str] = &["-10", "-11"];
-const PREDECESSOR_CONFIG_SUFFIX: &str = "-11";
-const CURRENT_CONFIG_SUFFIX: &str = "-12";
+const HISTORICAL_CONFIG_SUFFIXES: &[&str] = &["-10", "-11", "-12"];
+const PREDECESSOR_CONFIG_SUFFIX: &str = "-12";
+const CURRENT_CONFIG_SUFFIX: &str = "-13";
 const HISTORICAL_V10_ROW_COUNT: usize = 368;
 const HISTORICAL_V11_ROW_COUNT: usize = 396;
-const HISTORICAL_ROW_COUNT: usize = HISTORICAL_V10_ROW_COUNT + HISTORICAL_V11_ROW_COUNT;
+const HISTORICAL_ROW_COUNT: usize = HISTORICAL_V10_ROW_COUNT + HISTORICAL_V11_ROW_COUNT + 396;
 const CURRENT_ROW_COUNT: usize = 396;
 const HISTORICAL_V10_AXIS_KEYS: usize = 184;
 const HISTORICAL_V11_AXIS_KEYS: usize = 196;
-const HISTORICAL_AXIS_KEYS: usize = HISTORICAL_V10_AXIS_KEYS + HISTORICAL_V11_AXIS_KEYS;
+const HISTORICAL_AXIS_KEYS: usize = HISTORICAL_V10_AXIS_KEYS + HISTORICAL_V11_AXIS_KEYS + 196;
 const CURRENT_AXIS_KEYS: usize = 196;
 const EXPECTED_AXIS_KEYS: usize = HISTORICAL_AXIS_KEYS + CURRENT_AXIS_KEYS;
 const HISTORICAL_MANIFEST_CANONICAL_SHA256: &str =
-    "3dfec5fc891c3bd191c30e6108fd49fc03d034644c59c5fdd4740d9a3eba80b6";
+    "aff902d43d9301c533496edf50d76dc793c7ec22020425bbf3eca21719cf784d";
 const IMPLEMENTATION_COMPANION_LABEL: &str =
     "companion:fictional-repo/implementation-evidence/repository-state.txt";
 const REQUIREMENT_PROOF_SCRIPT_DATA_PATH: &str =
@@ -49,9 +49,9 @@ fn read_data(relative: &str) -> Vec<u8> {
 
 fn profile_name(config_version: &str) -> &'static str {
     match config_version {
-        "minimal-12" => "minimal",
-        "standard-12" => "standard",
-        "high-rigor-12" => "high-rigor",
+        "minimal-13" => "minimal",
+        "standard-13" => "standard",
+        "high-rigor-13" => "high-rigor",
         other => panic!("current calibration source records do not accept {other}"),
     }
 }
@@ -670,7 +670,7 @@ fn required_current_row_keys(entries: &[Value]) -> Result<BTreeSet<CalibrationRo
             .ok_or_else(|| format!("{profile} profile has no config_version"))?;
         let Some(base) = version.strip_suffix(CURRENT_CONFIG_SUFFIX) else {
             return Err(format!(
-                "{profile} profile is not a v12 successor: {version}"
+                "{profile} profile is not a v13 successor: {version}"
             ));
         };
         let predecessor = format!("{base}{PREDECESSOR_CONFIG_SUFFIX}");
@@ -722,6 +722,163 @@ fn required_current_row_keys(entries: &[Value]) -> Result<BTreeSet<CalibrationRo
     Ok(required)
 }
 
+const APPLICABILITY_INVOCATION: &str = "Explicit owner/owner-delegated driver applicability: genuine retained source judgment selected for unchanged judging behavior; not a fresh current-packet review.";
+
+fn parse_retained_return(output: &str) -> Result<Value, String> {
+    let mut values = Vec::new();
+    let mut offset = 0;
+    while let Some(start) = output[offset..].find('{').map(|i| i + offset) {
+        let mut decoder = serde_json::Deserializer::from_str(&output[start..]).into_iter::<Value>();
+        if let Some(Ok(value)) = decoder.next() {
+            offset = start + decoder.byte_offset();
+            if value.get("kind").and_then(Value::as_str) == Some("review-evidence")
+                || (value.get("result").is_some() && value.get("gate").is_some())
+            {
+                if !values.contains(&value) {
+                    values.push(value);
+                }
+            }
+        } else {
+            offset = start + 1;
+        }
+    }
+    if values.len() != 1 {
+        return Err("prior raw return has missing or ambiguous judgments".into());
+    }
+    Ok(values.remove(0))
+}
+
+fn validate_applicability(entry: &Map<String, Value>, entries: &[Value]) -> Result<(), String> {
+    let claim = entry
+        .get("applicability")
+        .and_then(Value::as_object)
+        .ok_or("missing explicit applicability")?;
+    if claim.len() != 3
+        || ["source_row", "result_ref", "reason"].iter().any(|field| {
+            claim
+                .get(*field)
+                .and_then(Value::as_str)
+                .is_none_or(|v| v.trim().is_empty())
+        })
+    {
+        return Err(
+            "applicability must contain exactly nonempty source_row, result_ref and reason".into(),
+        );
+    }
+    let key = claim["source_row"].as_str().unwrap();
+    let sources: Vec<_> = entries
+        .iter()
+        .filter_map(Value::as_object)
+        .filter(|row| {
+            let k = row_key(row);
+            format!("{}|{}|{}|{}|{}", k.0, k.1, k.2, k.3, k.4) == key
+        })
+        .collect();
+    if sources.len() != 1 {
+        return Err("applicability source_row must resolve exactly once".into());
+    }
+    let source = sources[0];
+    let family = |version: &str| version.rsplit_once('-').map(|v| v.0.to_owned());
+    if !is_historical_entry(source)
+        || source.contains_key("applicability")
+        || string_field(source, "observed") == "pending"
+        || string_field(source, "attested_by").trim().is_empty()
+        || string_field(source, "invocation") != CURRENT_INVOCATION
+        || family(string_field(source, "config_version"))
+            != family(string_field(entry, "config_version"))
+        || [
+            "gate",
+            "axis",
+            "review_stage",
+            "fixture_id",
+            "observed",
+            "model",
+            "expected",
+        ]
+        .iter()
+        .any(|f| source.get(*f) != entry.get(*f))
+    {
+        return Err(
+            "applicability source identity/result/model is missing, pending, chained or mismatched"
+                .into(),
+        );
+    }
+    let repository = provider_root()
+        .parent()
+        .and_then(Path::parent)
+        .unwrap()
+        .to_path_buf();
+    let reference = claim["result_ref"].as_str().unwrap();
+    let (file, pointer) = reference
+        .split_once('#')
+        .ok_or("result_ref requires a JSON Pointer")?;
+    let reference = Path::new(file);
+    if reference.is_absolute()
+        || reference
+            .components()
+            .any(|c| !matches!(c, Component::Normal(_)))
+    {
+        return Err("result_ref must be a repository-relative retained JSON return".into());
+    }
+    let path = fs::canonicalize(repository.join(reference))
+        .map_err(|e| format!("prior returned source is unavailable: {e}"))?;
+    if !path.starts_with(fs::canonicalize(&repository).unwrap()) {
+        return Err("result_ref escapes repository".into());
+    }
+    let retained: Value = serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("prior returned source is not JSON: {e}"))?;
+    let selected = retained
+        .pointer(pointer)
+        .ok_or("prior return selector does not resolve")?;
+    if selected["model"] != source["model"] {
+        return Err("prior returned model disagrees with source row".into());
+    }
+    let output = selected["output"]
+        .as_str()
+        .ok_or("prior return raw output is unavailable")?;
+    let returned = parse_retained_return(output)?;
+    let data = returned.get("data").unwrap_or(&returned);
+    for (field, source_field) in [
+        ("result", "observed"),
+        ("gate", "gate"),
+        ("policy_id", "axis"),
+        ("review_stage", "review_stage"),
+        ("config_version", "config_version"),
+    ] {
+        if data.get(field) != source.get(source_field) {
+            return Err(format!("prior return {field} disagrees with source row"));
+        }
+    }
+    if data["subject"] != subject_for_gate(string_field(source, "gate"))
+        || data["subject_revision"] != NEUTRAL_REVISION
+        || data["author"]["name"]
+            .as_str()
+            .is_none_or(|n| n.trim().is_empty())
+        || !matches!(
+            data["author"]["kind"].as_str(),
+            Some("human" | "agent" | "script")
+        )
+        || data["findings"].as_str().is_none_or(|f| {
+            (data["result"] == "fail" && f.trim().is_empty())
+                || (data["result"] == "pass" && !f.is_empty())
+        })
+    {
+        return Err(
+            "prior return is substantively incomplete or has wrong subject identity".into(),
+        );
+    }
+    for field in ["model", "input_sha256", "fixture_id"] {
+        if returned
+            .get(field)
+            .or_else(|| data.get(field))
+            .is_some_and(|v| Some(v) != source.get(field))
+        {
+            return Err(format!("prior returned {field} identity mismatch"));
+        }
+    }
+    Ok(())
+}
+
 fn validate_current_corpus(entries: &[Value]) -> Result<(), String> {
     let required = required_current_row_keys(entries)?;
     let current_versions: BTreeSet<_> = PROFILES
@@ -751,8 +908,16 @@ fn validate_current_corpus(entries: &[Value]) -> Result<(), String> {
         if !matches!(expected, "pass" | "fail") || observed != expected {
             return Err(format!("current calibration judgment is missing or disagrees with its manual oracle: {key:?}"));
         }
+        if string_field(entry, "invocation") == APPLICABILITY_INVOCATION {
+            validate_applicability(entry, entries)?;
+        } else if entry.contains_key("applicability") {
+            return Err("applicability must use its distinct invocation literal".into());
+        }
         if string_field(entry, "attested_by").trim().is_empty()
-            || string_field(entry, "invocation") != CURRENT_INVOCATION
+            || !matches!(
+                string_field(entry, "invocation"),
+                CURRENT_INVOCATION | APPLICABILITY_INVOCATION
+            )
             || string_field(entry, "model").trim().is_empty()
         {
             return Err(format!(
@@ -870,7 +1035,9 @@ fn calibration_manifest_binds_exact_source_record_stream_and_covers_profile_axes
         let attested_by = string_field(entry, "attested_by");
         let invocation = string_field(entry, "invocation");
         assert!(
-            (observed == expected && !attested_by.is_empty() && invocation == CURRENT_INVOCATION)
+            (observed == expected
+                && !attested_by.is_empty()
+                && matches!(invocation, CURRENT_INVOCATION | APPLICABILITY_INVOCATION))
                 || (observed == "pending"
                     && attested_by.is_empty()
                     && invocation == PENDING_INVOCATION),
@@ -953,7 +1120,7 @@ fn calibration_manifest_binds_exact_source_record_stream_and_covers_profile_axes
 }
 
 #[test]
-fn historic_v10_v11_rows_remain_unchanged_and_v12_packets_use_fresh_keys() {
+fn historic_v10_v11_v12_rows_remain_unchanged_and_v13_packets_use_fresh_keys() {
     let entries = manifest();
     let historical: Vec<Value> = entries
         .iter()
@@ -1043,7 +1210,7 @@ fn historic_v10_v11_rows_remain_unchanged_and_v12_packets_use_fresh_keys() {
         .to_path_buf();
     let temporary = support::TestDir::new("calibration-history");
     let output_root = temporary.path().join("packets");
-    let row_key = "minimal-12|intent-review|solution-agnostic|aggregate|intent-good";
+    let row_key = "minimal-13|intent-review|solution-agnostic|aggregate|intent-good";
     let mut prepare = Command::new("python3");
     prepare
         .current_dir(&repository)
@@ -1074,7 +1241,7 @@ fn historic_v10_v11_rows_remain_unchanged_and_v12_packets_use_fresh_keys() {
         &fs::read(case_dir.join("preparation.json")).expect("preparation metadata"),
     )
     .expect("preparation JSON");
-    assert_eq!(preparation["config_version"], "minimal-12");
+    assert_eq!(preparation["config_version"], "minimal-13");
     assert_eq!(preparation["row_key"], row_key);
     for forbidden in ["expected", "observed", "attested_by", "oracle"] {
         assert!(
@@ -1084,7 +1251,7 @@ fn historic_v10_v11_rows_remain_unchanged_and_v12_packets_use_fresh_keys() {
     }
     let current_row = current
         .iter()
-        .find(|entry| entry["config_version"] == "minimal-12")
+        .find(|entry| entry["config_version"] == "minimal-13")
         .and_then(|entry| {
             (entry["gate"] == "intent-review"
                 && entry["axis"] == "solution-agnostic"
@@ -1156,7 +1323,7 @@ print('nested calibration receipt: positive and five refusals passed')
         String::from_utf8_lossy(&checked.stderr)
     );
 
-    for legacy_version in ["minimal-10", "minimal-11"] {
+    for legacy_version in ["minimal-10", "minimal-11", "minimal-12"] {
         let refused = Command::new("python3")
             .current_dir(&repository)
             .arg(repository.join("scripts/prepare-calibration-input.py"))
@@ -1275,7 +1442,7 @@ fn counterpart_keys_have_good_fail_pairs_and_good_fixtures_pass_adversarial() {
         );
     }
     assert_eq!(
-        counterpart_keys, 288,
+        counterpart_keys, 386,
         "all three v3 profiles carry ordinary/challenge counterpart keys"
     );
 }
@@ -1346,12 +1513,12 @@ fn implementation_rows_have_total_commit_mapped_companion_coverage() {
             );
         }
     }
-    assert_eq!(implementation_rows, 144);
+    assert_eq!(implementation_rows, 192);
     assert_eq!(
         commits,
         BTreeMap::from([
-            ("repo-state-2026-08-12".to_owned(), 72usize),
-            ("repo-state-2026-08-13".to_owned(), 72usize),
+            ("repo-state-2026-08-12".to_owned(), 96usize),
+            ("repo-state-2026-08-13".to_owned(), 96usize),
         ])
     );
 }
@@ -1418,7 +1585,7 @@ fn implementation_companion_mutation_changes_digest() {
         .find(|entry| {
             entry["gate"] == "implementation-review"
                 && entry["fixture_id"] == "implementation-report-good"
-                && entry["config_version"] == "standard-12"
+                && entry["config_version"] == "standard-13"
         })
         .expect("current implementation row");
     let input = source_records_for_entry(entry.as_object().expect("manifest row object"));
@@ -1720,8 +1887,8 @@ fn validation_docs_coverage_has_exact_mapped_companion_bytes() {
         }
     }
     assert_eq!(
-        docs_rows, 48,
-        "expected v10/v11 history and v12 good/defective docs rows on parent and adversarial validation gates"
+        docs_rows, 64,
+        "expected v10/v11/v12 history and v13 good/defective docs rows on parent and adversarial validation gates"
     );
 }
 
@@ -1778,8 +1945,8 @@ fn validation_intent_delivered_has_inspectable_repository_state_companion() {
         }
     }
     assert_eq!(
-        intent_delivered_rows, 48,
-        "expected v10/v11 history and v12 good/defective intent-delivered rows across shipped validation gates"
+        intent_delivered_rows, 64,
+        "expected v10/v11/v12 history and v13 good/defective intent-delivered rows across shipped validation gates"
     );
 }
 
@@ -1840,8 +2007,8 @@ fn validation_requirement_proof_mapping_has_inspectable_public_proof_companions(
         }
     }
     assert_eq!(
-        rows, 48,
-        "expected v10/v11 history and v12 parent/adversarial good/defective proof rows"
+        rows, 64,
+        "expected v10/v11/v12 history and v13 parent/adversarial good/defective proof rows"
     );
 }
 
@@ -2263,7 +2430,7 @@ fn canonical_source_records_have_exact_order_and_labels() {
             entry["gate"] == "validation-review"
                 && entry["axis"] == "docs-integrated"
                 && entry["expected"] == "pass"
-                && entry["config_version"] == "standard-12"
+                && entry["config_version"] == "standard-13"
         })
         .expect("docs-integrated current row");
     let entry = entry.as_object().expect("manifest row object");
@@ -2327,7 +2494,7 @@ fn every_supplied_source_record_mutation_changes_digest() {
             entry["gate"] == "validation-review"
                 && entry["axis"] == "docs-integrated"
                 && entry["expected"] == "pass"
-                && entry["config_version"] == "standard-12"
+                && entry["config_version"] == "standard-13"
         })
         .expect("docs-integrated current row");
     let entry = entry.as_object().expect("manifest row object");
@@ -2371,7 +2538,66 @@ fn every_supplied_source_record_mutation_changes_digest() {
 }
 
 #[test]
-fn current_calibration_gate_requires_complete_fresh_attested_nonempty_v12_corpus() {
+fn explicit_applicability_checks_real_retained_returns_without_relabeling_history() {
+    let entries = manifest();
+    let source = entries
+        .iter()
+        .find(|row| {
+            row["config_version"] == "minimal-12"
+                && row["gate"] == "intent-review"
+                && row["axis"] == "solution-agnostic"
+                && row["fixture_id"] == "intent-good"
+        })
+        .unwrap();
+    let mut current = entries
+        .iter()
+        .find(|row| {
+            row["config_version"] == "minimal-13"
+                && row["gate"] == source["gate"]
+                && row["axis"] == source["axis"]
+                && row["fixture_id"] == source["fixture_id"]
+        })
+        .unwrap()
+        .clone();
+    let key = row_key(source.as_object().unwrap());
+    let key = format!("{}|{}|{}|{}|{}", key.0, key.1, key.2, key.3, key.4);
+    current["observed"] = source["observed"].clone();
+    current["model"] = source["model"].clone();
+    current["invocation"] = json!(APPLICABILITY_INVOCATION);
+    current["attested_by"] =
+        json!("test-only driver applicability fixture, not delivery authorization");
+    current["applicability"] = json!({"source_row":key,"result_ref":format!("crates/software-change-provider/data/calibration/returned-v12.json#/returns/{}",key.replace('~',"~0").replace('/',"~1")),"reason":"Test-only explicit applicability of unchanged judging behavior."});
+    assert!(validate_applicability(current.as_object().unwrap(), &entries).is_ok());
+    for (pointer, replacement) in [
+        ("/applicability/reason",json!("")),
+        ("/applicability/source_row",json!("unknown-source")),
+        ("/applicability/result_ref",json!("crates/software-change-provider/data/calibration/returned-v12.json#/returns/missing")),
+        ("/model",json!("invented-model")),
+        ("/observed",json!("fail")),
+        ("/fixture_id",json!("intent-defective")),
+    ] {
+        let mut changed = current.clone(); *changed.pointer_mut(pointer).unwrap() = replacement;
+        assert!(validate_applicability(changed.as_object().unwrap(), &entries).is_err(), "{pointer}");
+    }
+    let mut pending_source = entries.clone();
+    *pending_source
+        .iter_mut()
+        .find(|row| **row == *source)
+        .unwrap() = {
+        let mut row = source.clone();
+        row["observed"] = json!("pending");
+        row
+    };
+    assert!(validate_applicability(current.as_object().unwrap(), &pending_source).is_err());
+    assert_eq!(
+        entries,
+        manifest(),
+        "test checks never mutate historical/current delivery rows"
+    );
+}
+
+#[test]
+fn current_calibration_gate_requires_complete_attested_nonempty_v13_corpus() {
     let entries = manifest();
     let mut fully_attested_fixture = entries.clone();
     for entry in fully_attested_fixture.iter_mut().filter(|entry| {
@@ -2379,6 +2605,7 @@ fn current_calibration_gate_requires_complete_fresh_attested_nonempty_v12_corpus
             .as_str()
             .is_some_and(|version| version.ends_with(CURRENT_CONFIG_SUFFIX))
     }) {
+        entry.as_object_mut().unwrap().remove("applicability");
         entry["observed"] = entry["expected"].clone();
         entry["attested_by"] = Value::String("test-only owner attestation fixture".to_owned());
         entry["invocation"] = Value::String(CURRENT_INVOCATION.to_owned());
@@ -2447,7 +2674,7 @@ fn current_calibration_gate_requires_complete_fresh_attested_nonempty_v12_corpus
 }
 
 #[test]
-#[ignore = "final attestation gate; all current successor rows require fresh owner review"]
+#[ignore = "final complete-coverage gate; every current row requires fresh or explicitly applicable genuine owner-attested judgment"]
 fn calibration_manifest_has_no_pending_rows_for_final_validation() {
     let entries = manifest();
     validate_current_corpus(&entries).unwrap_or_else(|error| {

@@ -4,7 +4,7 @@
     "required_authors": 1,
     "goal_required_authors": 1
   },
-  "config_version": "minimal-12",
+  "config_version": "minimal-13",
   "review_policies": {
     "intent-review": [
       {

@@ -426,12 +426,12 @@ def profiles_case(journey) -> None:
         if profile.get("extra", {}).get("advice", {}).get("occasion_map") != OCCASIONS:
             raise ValueError(f"exported {name} profile has a different advisory occasion map")
     expected_versions = {
-        "minimal": "minimal-12",
-        "standard": "standard-12",
-        "high-rigor": "high-rigor-12",
+        "minimal": "minimal-13",
+        "standard": "standard-13",
+        "high-rigor": "high-rigor-13",
     }
     if {name: profile["config_version"] for name, profile in profiles.items()} != expected_versions:
-        raise ValueError("exported profiles do not use the selected v12 successor identities")
+        raise ValueError("exported profiles do not use the selected v13 successor identities")
 
     selected = copy.deepcopy(profiles["minimal"])
     selected["artifact_schemas"]["design.json"]["properties"]["approach"]["minLength"] = 7

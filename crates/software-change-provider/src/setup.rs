@@ -35,24 +35,16 @@ const LEGACY_SHIPPED_PROFILE_VERSIONS: &[&str] = &[
     "minimal-11",
     "standard-11",
     "high-rigor-11",
+    "minimal-12",
+    "standard-12",
+    "high-rigor-12",
 ];
 const PREAMBLE_PATH: &str = "crates/software-change-provider/data/review-worker-preamble.txt";
 const OUTPUT_SCHEMA_PATH: &str =
-    "crates/software-change-provider/data/review-worker-output-schema-v2.json";
+    "crates/software-change-provider/data/review-worker-output-schema-v3.json";
 const REVIEW_CONCURRENCY: &str = "2";
 const IMPLEMENTATION_CONCURRENCY: &str = "1";
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
-#[serde(deny_unknown_fields)]
-struct ReviewTokenBudget {
-    model_id: String,
-    context_window_tokens: u64,
-    system_tokens: u64,
-    framing_tokens: u64,
-    output_reserve_tokens: u64,
-    reasoning_reserve_tokens: u64,
-}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -60,7 +52,8 @@ struct ReviewRosterEntry {
     author: String,
     command: String,
     args: Vec<String>,
-    token_budget: ReviewTokenBudget,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    token_budget: Option<Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -556,24 +549,6 @@ fn read_roster(path: &Path) -> Result<Vec<ReviewRosterEntry>, String> {
                 "roster entry {index} argument {argument_index} cannot contain a line break or NUL"
             ));
         }
-        let budget = &entry.token_budget;
-        if budget.model_id.trim().is_empty()
-            || budget.context_window_tokens == 0
-            || budget.system_tokens == 0
-            || budget.framing_tokens == 0
-            || budget.output_reserve_tokens == 0
-            || budget.reasoning_reserve_tokens == 0
-            || budget
-                .system_tokens
-                .saturating_add(budget.framing_tokens)
-                .saturating_add(budget.output_reserve_tokens)
-                .saturating_add(budget.reasoning_reserve_tokens)
-                >= budget.context_window_tokens
-        {
-            return Err(format!(
-                "roster entry {index} needs a real model ID/window and positive system, framing, output, and reasoning reserves that leave input capacity"
-            ));
-        }
     }
     Ok(roster)
 }
@@ -915,32 +890,6 @@ fn build_bindings(
             continue;
         }
         let workers = review_workers(profile, gate, entries, roster, preamble, output_schema)?;
-        let used_authors: std::collections::BTreeSet<_> = workers
-            .iter()
-            .filter_map(|worker| worker["preamble"].as_str())
-            .filter_map(|worker_preamble| {
-                worker_preamble
-                    .lines()
-                    .find_map(|line| line.strip_prefix("required_author_claim: "))
-            })
-            .collect();
-        let call_budgets: Vec<_> = roster
-            .iter()
-            .filter(|entry| used_authors.contains(entry.author.as_str()))
-            .map(|entry| {
-                json!({
-                    "author": entry.author,
-                    "model_id": entry.token_budget.model_id,
-                    "context_window_tokens": entry.token_budget.context_window_tokens,
-                    "system_tokens": entry.token_budget.system_tokens,
-                    "framing_tokens": entry.token_budget.framing_tokens,
-                    "output_reserve_tokens": entry.token_budget.output_reserve_tokens,
-                    "reasoning_reserve_tokens": entry.token_budget.reasoning_reserve_tokens
-                })
-            })
-            .collect();
-        let call_budgets = serde_json::to_string(&call_budgets)
-            .map_err(|error| format!("could not encode reviewer token budgets: {error}"))?;
         let mut args = vec![
             "fan-out".to_owned(),
             "--max-active".to_owned(),
@@ -969,7 +918,7 @@ fn build_bindings(
             json!({
                 "command": engine,
                 "args": args,
-                "context_filter": {"command": provider, "args": ["commission", "--call-budgets", call_budgets]}
+                "context_filter": {"command": provider, "args": ["commission"]}
             }),
         );
     }
@@ -1118,10 +1067,10 @@ fn review_workers(
                     contract_version,
                     gate,
                 )?;
-                worker_schema["x-loop-engine-output-recovery"] = json!("repair-first-v1");
+                worker_schema["x-loop-engine-output-recovery"] = json!("repair-first-v2");
                 let mut worker_preamble = String::from(preamble);
                 worker_preamble.push_str("FROZEN REVIEW ASSIGNMENT\n");
-                worker_preamble.push_str("review_contract_version: 2\n");
+                worker_preamble.push_str("review_contract_version: 3\n");
                 worker_preamble.push_str("provider: software-change\n");
                 worker_preamble.push_str("subject: ");
                 worker_preamble.push_str(review_subject(gate));
@@ -1149,26 +1098,7 @@ fn review_workers(
                 );
                 worker_preamble.push_str("\nrequired_author_claim: ");
                 worker_preamble.push_str(&roster_entry.author);
-                worker_preamble.push_str("\nPER-CALL TOKEN WINDOW: model_id=");
-                worker_preamble.push_str(&roster_entry.token_budget.model_id);
-                worker_preamble.push_str(" window=");
-                worker_preamble
-                    .push_str(&roster_entry.token_budget.context_window_tokens.to_string());
-                worker_preamble.push_str(" system_reserve=");
-                worker_preamble.push_str(&roster_entry.token_budget.system_tokens.to_string());
-                worker_preamble.push_str(" framing_reserve=");
-                worker_preamble.push_str(&roster_entry.token_budget.framing_tokens.to_string());
-                worker_preamble.push_str(" output_reserve=");
-                worker_preamble
-                    .push_str(&roster_entry.token_budget.output_reserve_tokens.to_string());
-                worker_preamble.push_str(" reasoning_reserve=");
-                worker_preamble.push_str(
-                    &roster_entry
-                        .token_budget
-                        .reasoning_reserve_tokens
-                        .to_string(),
-                );
-                worker_preamble.push_str(". This exact model and reserve is frozen; do not substitute or split duties.\n");
+                worker_preamble.push('\n');
                 if profile["contract_version"] == 3
                     && gate == "validation-review"
                     && stage == "aggregate"
@@ -1188,7 +1118,6 @@ fn review_workers(
                 if gate.starts_with("intent-") {
                     worker_preamble.push_str("OWNER-SOURCE COMPARISON\nCompare the full current intent with retained qualified owner-source statements and their supersession. Distinguish exact owner-authored source records from driver inference or summaries; a driver paraphrase is not an owner instruction. Identify material lost qualifications and unresolved meaning without deciding for the owner.\n");
                 }
-                worker_preamble.push_str("GROUNDED OUTPUT\nReturn review_contract_version 2. Every fresh judgment includes grounds.reason and one or more grounds.evidence references using a repository-relative file#JSON-Pointer or file#Lx-Ly locator and the exact source file SHA-256. Do not invent citations. For validation criterion/goal passes, include a concise reason and retained evidence_context_ids that you actually inspected.\n");
                 workers.push(json!({
                     "command": roster_entry.command,
                     "args": roster_entry.args,
@@ -1278,7 +1207,7 @@ fn configure_worker_schema(
                         "type":"object",
                         "required":["reason","evidence_context_ids"],
                         "properties":{
-                            "reason":{"type":"string","minLength":1,"maxLength":1200},
+                            "reason":{"type":"string","minLength":1},
                             "evidence_context_ids":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}
                         }
                     }
@@ -1543,6 +1472,19 @@ mod tests {
         assert!(parse_args(&with_both)
             .unwrap_err()
             .contains("choose exactly one"));
+    }
+
+    #[test]
+    fn successor_roster_does_not_require_capacity_metadata() {
+        let path =
+            std::env::temp_dir().join(format!("quota-free-roster-{}.json", std::process::id()));
+        fs::write(
+            &path,
+            br#"[{"author":"reviewer","command":"worker","args":[]}]"#,
+        )
+        .unwrap();
+        assert!(read_roster(&path).is_ok());
+        fs::remove_file(path).unwrap();
     }
 
     #[test]

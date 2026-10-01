@@ -34,7 +34,6 @@ slot=line("slot_id: "); stage=line("review_stage: "); author=line("required_auth
 policies=json.loads(line("assigned_policies: ","[]")); axes=[item["id"] for item in policies]
 subject={"intent-review":"intent.json","intent-adversarial-review":"intent.json"}[slot]
 source_bytes=(artifact_root/subject).read_bytes(); source=json.loads(source_bytes)
-source_hash="sha256:"+hashlib.sha256(source_bytes).hexdigest()
 locator=subject+"#/acceptance/0"
 owner_records=[row for row in location.get("context",[]) if row.get("kind")=="user-steering"]
 baseline_revisions=[row.get("data",{}).get("intent_baseline",{}).get("revision") for row in owner_records]
@@ -44,7 +43,7 @@ lost_owner_qualification=material_later and owner_qualification and "owner" not 
 owner_source_check={"material_later_revision":material_later,"owner_qualification_present":owner_qualification,"qualification_missing_from_current_outcome":lost_owner_qualification,"source_ids":[row.get("id") for row in owner_records]}
 if citation_mode=="false-pass" and lost_owner_qualification:
     locator=subject+"#/outcome"
-if citation_mode=="bad-citation": source_hash="sha256:"+"0"*64
+if citation_mode=="bad-citation": locator=subject+"#/missing-inspected-source"
 retrieved_root.mkdir(parents=True,exist_ok=True)
 retrieved=retrieved_root/(str(time.time_ns())+"-"+author+"-"+stage+"-"+"-".join(axes)+".json")
 retrieved.write_bytes(source_bytes)
@@ -52,7 +51,7 @@ entry={"author":author,"stage":stage,"slot":slot,"axes":axes,"stdin":text,"stdin
        "owner_source_check":owner_source_check,
        "retrieved":{"locator":subject,"sha256":"sha256:"+hashlib.sha256(source_bytes).hexdigest(),"bytes":len(source_bytes),"capture":str(retrieved)}}
 with log_path.open("a",encoding="utf-8") as stream: stream.write(json.dumps(entry)+"\n")
-output={"review_contract_version":2,"review_stage":stage,"author":{"name":author,"kind":"agent"},"judgments":[]}
+output={"review_contract_version":3,"review_stage":stage,"author":{"name":author,"kind":"agent"},"judgments":[]}
 for policy in policies:
     result="pass"; findings=""; reason="The scripted fixture inspected the current assigned subject."
     if policy["id"]=="owner-comprehensible" and lost_owner_qualification:
@@ -63,21 +62,25 @@ for policy in policies:
         else:
             result="fail"; findings="The later intent outcome drops the qualified owner distinction present in the retained source."
             reason="The exact retained owner statement requires the reviewer/driver/owner distinction, while intent.json#/outcome no longer says owner."
+    evidence=[{"locator":locator}]
+    if len(source_bytes)>262144:
+        reason += "\n" + "判断根拠: inspect the retained qualification and do not substitute owner approval. "*70
+        evidence += [{"locator":subject+"#/operating_context/environment/"+str(i)} for i in range(12)]
+        evidence += [{"locator":subject+"#L"+"0"*1100+"1"}]
     output["judgments"].append({"axis":policy["id"],"result":result,"findings":findings,
-      "grounds":{"reason":reason,"evidence":[{"locator":locator,"sha256":source_hash}]}})
-print(json.dumps(output,separators=(",",":")))
+      "grounds":{"reason":reason,"evidence":evidence}})
+if citation_mode=="parsed-conflict" and stage=="individual" and axes==["solution-agnostic"]:
+    output["representation_note"]="extra field invalidates only representation"
+    print(json.dumps(output,separators=(",",":")))
+elif citation_mode=="yaml" and source.get("revision")=="r15" and stage=="individual" and axes==["solution-agnostic"]:
+    print("review_contract_version: 3")
+    print("review_stage: " + stage)
+    print("author: " + json.dumps(output["author"]))
+    print("judgments:")
+    for row in output["judgments"]: print("  - " + json.dumps(row))
+else:
+    print(json.dumps(output,separators=(",",":")))
 '''
-
-
-def _token_budget(model_id: str) -> dict[str, Any]:
-    return {
-        "model_id": model_id,
-        "context_window_tokens": 272000,
-        "system_tokens": 4000,
-        "framing_tokens": 4000,
-        "output_reserve_tokens": 4000,
-        "reasoning_reserve_tokens": 16000,
-    }
 
 
 def _append(journey, root: Path, database: Path, run_id: str, record_id: str, kind: str, data: dict[str, Any]) -> None:
@@ -137,7 +140,7 @@ def _seed_initial_history(
             "result": "fail", "findings": text,
             "author": {"name": author, "kind": "agent"},
             "subject": "intent.json", "subject_revision": intent["revision"],
-            "config_version": "high-rigor-12",
+            "config_version": "high-rigor-13",
         })
     findings = []
     for record_id, author, finding_id, statement in [
@@ -172,14 +175,14 @@ def _seed_initial_history(
                 "result": "fail", "findings": f"unrelated accumulated history {index}: " + "z" * 1800,
                 "author": {"name": "historical-reviewer", "kind": "agent"},
                 "subject": "plan.json", "subject_revision": f"old-{index}",
-                "config_version": "high-rigor-12",
+                "config_version": "high-rigor-13",
             })
     else:
         seeded_ids.append("seed-finding-ledger")
     return seeded_ids
 
 
-def _start_run(journey, root: Path, label: str, citation_modes: tuple[str, str], *, mature: bool) -> dict[str, Any]:
+def _start_run(journey, root: Path, label: str, citation_modes: tuple[str, str], *, mature: bool, direct: bool = False) -> dict[str, Any]:
     run_root = root / label
     run_root.mkdir(parents=True)
     reviewer = run_root / "reviewer.py"
@@ -190,11 +193,9 @@ def _start_run(journey, root: Path, label: str, citation_modes: tuple[str, str],
     roster = run_root / "roster.json"
     _json(roster, [
         {"author": "reviewer-a", "command": sys.executable,
-         "args": [str(reviewer), str(log_a), str(retrieved), citation_modes[0]],
-         "token_budget": _token_budget("fixture/reviewer-a")},
+         "args": [str(reviewer), str(log_a), str(retrieved), citation_modes[0]]},
         {"author": "reviewer-b", "command": sys.executable,
-         "args": [str(reviewer), str(log_b), str(retrieved), citation_modes[1]],
-         "token_budget": _token_budget("fixture/reviewer-b")},
+         "args": [str(reviewer), str(log_b), str(retrieved), citation_modes[1]]},
     ])
     profile = run_root / "profile.json"
     setup_argv = [str(journey.provider), "setup", "--rigor", "high", "--roster", str(roster),
@@ -214,8 +215,18 @@ def _start_run(journey, root: Path, label: str, citation_modes: tuple[str, str],
     artifact_root = run_root / "artifacts"
     profile_value = json.loads(profile.read_text(encoding="utf-8"))
     profile_value["artifact_root"] = str(artifact_root)
+    if direct:
+        profile_value["work_slot_bindings"] = {"intent-review": profile_value["work_slot_bindings"]["intent-review"]}
     initial_path = run_root / "initial-input.json"
     _json(initial_path, profile_value)
+    # Fixture isolation and optional sparse bindings are caller choices made
+    # before start. Re-preview the exact final file; never relabel setup's hash
+    # as covering an edited profile or an active binding amendment.
+    preview, _, preview_process = dogfood_observation._capture(root, [str(journey.engine), "preview-bindings", "@"+str(initial_path)], expect="preview", timeout=30)
+    if preview_process.returncode != 0: raise ValueError("final selected fixture profile did not preview")
+    frozen_hash = hashlib.sha256(initial_path.read_bytes()).hexdigest()
+    _json(run_root / "final-profile-identity.json", {"sha256":frozen_hash,"profile":str(initial_path),"preview":preview,"authority":"scripted fixture policy only; not human semantic approval"})
+    if hashlib.sha256(initial_path.read_bytes()).hexdigest() != frozen_hash: raise ValueError("selected fixture profile changed before start")
     started, _, _ = dogfood_observation._engine(
         journey, database, "--config", str(provider_config), "start", "--id", run_id,
         "software-change", "@" + str(initial_path),
@@ -233,6 +244,13 @@ def _start_run(journey, root: Path, label: str, citation_modes: tuple[str, str],
     fixture = Path(journey.data_root) / "crates/software-change-provider/data/calibration/fixtures/intent-good.json"
     intent_bytes = fixture.read_bytes()
     intent = json.loads(intent_bytes)
+    if label in ("intent-delta", "direct-correction"):
+        intent["operating_context"]["environment"].extend([
+            f"Fixture operation {i}: preserve reviewer judgment, driver inference, and owner approval independently when evaluating sample endpoint /operations/{i}; retained proof must report its exact completion condition, source and unresolved qualification."
+            for i in range(1500)
+        ])
+        intent_bytes = (json.dumps(intent, indent=2) + "\n").encode()
+        if len(intent_bytes) <= 262144: raise ValueError("detailed fixture does not distinguish former total ceiling")
     artifact_root.mkdir(parents=True, exist_ok=True)
     (artifact_root / "intent.json").write_bytes(intent_bytes)
     shown, _, _ = dogfood_observation._engine(journey, database, "show", "--view", "full", run_id)
@@ -251,6 +269,10 @@ def _start_run(journey, root: Path, label: str, citation_modes: tuple[str, str],
         raise ValueError(f"bound public intent commission failed to start: {started_invocation}")
     invocation_id = started_invocation["result"]["invocation_id"]
     shown, invocation = _wait_invocation(journey, root, database, run_id, invocation_id)
+    if direct:
+        shown, invocation = _direct_yaml_recovery(journey, root, database, run_id, shown, invocation, log_a, log_b)
+        invocation_id = invocation["invocation_id"]
+
     if invocation.get("status") != "succeeded":
         raise ValueError(f"scripted review invocation did not complete: {invocation}")
     candidates = _review_candidates(journey, root, shown)
@@ -354,11 +376,9 @@ def _inspect_captured_workers(capture: Path, logs: list[Path], hidden_ids: list[
 
 def _inspect_owner_view(journey, root: Path, database: Path, run_id: str, roster: Path) -> dict[str, Any]:
     shown, _, _ = dogfood_observation._engine(journey, database, "show", "--view", "full", run_id)
-    budgets = json.loads(roster.read_text(encoding="utf-8"))
-    call_budgets = [{"author": row["author"], **row["token_budget"]} for row in budgets]
     command = subprocess.run(
         [str(journey.provider), "commission", "--slot", "intent-review", "--stage", "aggregate",
-         "--call-budgets", json.dumps(call_budgets, separators=(",", ":"))],
+],
         cwd=root, input=json.dumps(shown, separators=(",", ":")).encode(),
         capture_output=True, timeout=30, check=False,
     )
@@ -369,7 +389,7 @@ def _inspect_owner_view(journey, root: Path, database: Path, run_id: str, roster
     return json.loads(command.stdout)
 
 
-def _append_review_candidates(journey, root: Path, database: Path, run_id: str, candidates: dict[str, Any], invocation_id: str, revision: str) -> list[str]:
+def _append_review_candidates(journey, root: Path, database: Path, run_id: str, candidates: dict[str, Any], invocation_id: str, revision: str, prefix: str = "fixture-review") -> list[str]:
     record_ids = []
     index = 0
     for row in candidates.get("candidates", []):
@@ -380,9 +400,9 @@ def _append_review_candidates(journey, root: Path, database: Path, run_id: str, 
             "result": row["result"], "findings": row["findings"],
             "review_contract_version": row["review_contract_version"], "grounds": row["grounds"],
             "author": row["author"], "subject": "intent.json", "subject_revision": revision,
-            "config_version": "high-rigor-12", "origin": row["origin"],
+            "config_version": "high-rigor-13", "origin": row["origin"],
         }
-        record_id = f"fixture-review-{index:03d}"
+        record_id = f"{prefix}-{index:03d}"
         _append(journey, root, database, run_id, record_id, "review-evidence", data)
         record_ids.append(record_id)
         index += 1
@@ -393,7 +413,7 @@ def _record_missing_source_negative(journey, root: Path, database: Path, run_id:
     _append(journey, root, database, run_id, "confirmation-anchor", "review-evidence", {
         "gate": "intent-review", "policy_id": "solution-agnostic", "review_stage": "aggregate",
         "result": "pass", "findings": "", "author": {"name": "reviewer-a", "kind": "agent"},
-        "subject": "intent.json", "subject_revision": intent["revision"], "config_version": "high-rigor-12",
+        "subject": "intent.json", "subject_revision": intent["revision"], "config_version": "high-rigor-13",
     })
     _append(journey, root, database, run_id, "missing-confirmation-ledger", "finding-ledger", {
         "schema_version": "1", "gate": "intent-review", "subject": "intent.json",
@@ -477,11 +497,9 @@ def _inspect_owner_delta(journey, root: Path, run: dict[str, Any]) -> dict[str, 
     })
     _call(journey, root, run["database"], "show", "--view", "action", run["run_id"])
     show, _, _ = dogfood_observation._engine(journey, run["database"], "show", "--view", "full", run["run_id"])
-    roster = json.loads(run["roster"].read_text(encoding="utf-8"))
-    budgets = [{"author": item["author"], **item["token_budget"]} for item in roster]
     result = subprocess.run(
         [str(journey.provider), "commission", "--slot", "intent-review", "--stage", "aggregate",
-         "--call-budgets", json.dumps(budgets, separators=(",", ":"))],
+],
         cwd=root, input=json.dumps(show, separators=(",", ":")).encode(), capture_output=True, timeout=30, check=False,
     )
     (root / "owner-delta-commission.stdout").write_bytes(result.stdout)
@@ -589,8 +607,7 @@ def _run_later_intent_revision(journey, root: Path, run: dict[str, Any]) -> str:
     if not false_pass or false_pass.get("status") != "ready" or false_pass.get("result") != "pass":
         raise ValueError(f"mechanically valid but intentionally false pass was not retained as a candidate: {false_pass}")
     evidence = false_pass.get("grounds", {}).get("evidence", [])
-    expected_hash = "sha256:" + hashlib.sha256((run["artifact_root"] / "intent.json").read_bytes()).hexdigest()
-    if not any(item.get("locator") == "intent.json#/outcome" and item.get("sha256") == expected_hash for item in evidence):
+    if not any(item.get("locator") == "intent.json#/outcome" for item in evidence):
         raise ValueError(f"false-pass candidate did not retain its exact, mechanically valid source citation: {false_pass}")
     logs = [run["log_a"], run["log_b"]]
     checks = [json.loads(line) for path in logs for line in path.read_text(encoding="utf-8").splitlines()]
@@ -615,11 +632,9 @@ def _test_missing_intent_baseline_refusal(journey, root: Path, run: dict[str, An
     changed["revision"] = "r16"
     artifact.write_text(json.dumps(changed, indent=2) + "\n", encoding="utf-8")
     shown, _, _ = dogfood_observation._engine(journey, run["database"], "show", "--view", "full", run["run_id"])
-    roster = json.loads(run["roster"].read_text(encoding="utf-8"))
-    budgets = [{"author": item["author"], **item["token_budget"]} for item in roster]
     result = subprocess.run(
         [str(journey.provider), "commission", "--slot", "intent-review", "--stage", "aggregate",
-         "--call-budgets", json.dumps(budgets, separators=(",", ":"))],
+],
         cwd=root, input=json.dumps(shown, separators=(",", ":")).encode(),
         capture_output=True, timeout=30, check=False,
     )
@@ -628,21 +643,6 @@ def _test_missing_intent_baseline_refusal(journey, root: Path, run: dict[str, An
     artifact.write_bytes(original)
     if result.returncode == 0 or "intent_baseline" not in result.stderr.decode(errors="replace"):
         raise ValueError("material later intent commission did not refuse absent exact owner baseline")
-
-
-def _test_budget_refusal(journey, root: Path, run: dict[str, Any]) -> None:
-    shown, _, _ = dogfood_observation._engine(journey, run["database"], "show", "--view", "full", run["run_id"])
-    tiny = [{"author":"reviewer-a","model_id":"fixture/tiny","context_window_tokens":5000,
-             "system_tokens":1000,"framing_tokens":1000,"output_reserve_tokens":1000,"reasoning_reserve_tokens":1000}]
-    result = subprocess.run(
-        [str(journey.provider), "commission", "--slot", "intent-review", "--stage", "aggregate",
-         "--call-budgets", json.dumps(tiny, separators=(",", ":"))],
-        cwd=root, input=json.dumps(shown, separators=(",", ":")).encode(), capture_output=True, timeout=30, check=False,
-    )
-    (root / "tiny-budget.stdout").write_bytes(result.stdout)
-    (root / "tiny-budget.stderr").write_bytes(result.stderr)
-    if result.returncode == 0 or "intent.json" not in result.stderr.decode(errors="replace") or "fixture/tiny" not in result.stderr.decode(errors="replace"):
-        raise ValueError("oversized mandatory source did not refuse with its original locator and model identity")
 
 
 def review_context_case(journey) -> None:
@@ -656,26 +656,8 @@ def review_context_case(journey) -> None:
         _candidate_reference_cases(journey, root, label, run)
         if run["raw_context_bytes"] < 32_768 and label == "mature":
             raise ValueError("mature fixture did not contain enough unrelated accumulated history")
-        if max(row["stdin_bytes"] for row in run["observations"]) >= 32_768:
-            raise ValueError(f"{label} compact review stdin exceeded the starting limit")
-        budget = run["owner_view"].get("review_budget", {})
-        context_bytes = budget.get("context_bytes")
-        original_bytes = budget.get("retrieved_original_bytes")
-        if context_bytes is None or original_bytes is None:
-            raise ValueError(f"{label} commission omitted actual byte accounting: {budget}")
-        if budget.get("initial_evidence_bytes") != context_bytes + original_bytes:
-            raise ValueError(f"{label} initial byte bound did not include mandatory originals: {budget}")
-        calls = {row.get("author"): row for row in budget.get("calls", [])}
-        roster = json.loads(run["roster"].read_text(encoding="utf-8"))
-        if set(calls) != {row["author"] for row in roster}:
-            raise ValueError(f"{label} budget did not account for each commissioned reviewer: {calls}")
-        for entry in roster:
-            call = calls[entry["author"]]
-            for field in ("model_id", "context_window_tokens", "system_tokens", "framing_tokens", "output_reserve_tokens", "reasoning_reserve_tokens"):
-                if call.get(field) != entry["token_budget"][field]:
-                    raise ValueError(f"{label} per-call {field} was not preserved: {call}")
-            if budget.get("total_evidence_bytes", 0) > call.get("available_input_tokens", 0):
-                raise ValueError(f"{label} evidence did not fit after per-call reserves: {call}")
+        if run["owner_view"].get("review_contract_version") != 3:
+            raise ValueError("successor commission did not expose locator-only contract")
 
     small_bytes = max(row["stdin_bytes"] for row in small["observations"])
     mature_bytes = max(row["stdin_bytes"] for row in mature["observations"])
@@ -685,12 +667,18 @@ def review_context_case(journey) -> None:
     if len(source_lengths) != 1:
         raise ValueError("same small/mature target did not retain identical original-source byte counts")
 
-    _test_budget_refusal(journey, root, mature)
     _test_missing_intent_baseline_refusal(journey, root, mature)
 
     delta = _start_run(journey, root, "intent-delta", ("false-pass", "good"), mature=False)
     owner_view = _inspect_owner_delta(journey, root, delta)
     owner_revision_invocation, false_pass_probe = _run_later_intent_revision(journey, root, delta)
+    # bookends:LE-149 bookends:LE-155 — source-linked public setup/invoke/candidates have no reviewer digests or content ceilings.
+    assert all("sha256" not in ref for run in (small, mature, delta) for row in run["candidates"]["candidates"] if row.get("status") == "ready" for ref in row["grounds"]["evidence"])
+    assert len(delta["intent_bytes"]) > 262144
+    assert len(false_pass_probe["grounds"]["reason"].encode()) > 1200
+    assert len(false_pass_probe["grounds"]["evidence"]) > 8
+    print("dogfood AC-1 locator-only no-sidecar admission passed")
+    print("dogfood AC-2 detailed material revision without quotas passed")
     delta_intent = json.loads((delta["artifact_root"] / "intent.json").read_text(encoding="utf-8"))
     _record_missing_source_negative(journey, root, delta["database"], delta["run_id"], delta_intent)
 
@@ -752,7 +740,7 @@ def review_context_case(journey) -> None:
     bad_parent = {
         "gate":"intent-review","policy_id":"solution-agnostic","review_stage":"aggregate",
         "result":"pass","findings":"","author":{"name":"reviewer-a","kind":"agent"},
-        "subject":"intent.json","subject_revision":small["intent"]["revision"],"config_version":"high-rigor-12",
+        "subject":"intent.json","subject_revision":small["intent"]["revision"],"config_version":"high-rigor-13",
     }
     _append(journey,root,small["database"],small["run_id"],"parent-ground-missing","review-evidence",bad_parent)
     _call(journey,root,small["database"],"show","--view","action",small["run_id"])
@@ -791,3 +779,160 @@ def review_context_case(journey) -> None:
         "semantic_status": "scripted transport/mechanical assertions only; no model judgment or owner approval",
     }
     _json(root / "outcome.json", result)
+
+
+def _direct_yaml_recovery(journey, root, database, run_id, shown, failed, log_a, log_b):
+    import copy
+    import dogfood_recovery as recovery
+    if failed["status"] != "failed": raise ValueError("YAML representation did not fail original conformance")
+    capture = Path(failed["capture_dir"])
+    preserved = recovery._capture_manifest(capture)
+    preview = recovery._preview(journey, root, journey.engine, failed["invocation_id"], shown)
+    invalid = [r for r in preview["assignments"] if r["classification"] == "invalid"]
+    if len(invalid) != 1: raise ValueError(f"expected one invalid YAML assignment: {invalid}")
+    raw = invalid[0]["raw_output"]
+    path = Path(raw["path"])
+    if not path.is_absolute(): path = capture / path
+    raw_bytes = path.read_bytes()
+    # Driver-only deterministic conversion of this explicit YAML specimen.
+    # Values come only from the captured original, never the frozen expected schema.
+    parsed = raw_bytes.lstrip().startswith(b"{")
+    if parsed:
+        fields = json.loads(raw_bytes); fields.pop("representation_note")
+    else:
+        fields = {}; rows = []
+        for line in raw_bytes.decode().splitlines():
+            if line.startswith("  - "): rows.append(json.loads(line[4:])); continue
+            key, value = line.split(":", 1)
+            if key == "judgments": continue
+            value = value.strip()
+            fields[key] = json.loads(value) if key != "review_stage" else value
+        fields["judgments"] = rows
+    corrected = root / "driver-corrected.json"; _json(corrected, fields)
+    request = {"version":1,"preview":preview,"assignment_id":invalid[0]["assignment_id"],
+               "corrected_output":{"path":str(corrected),"formatter_author":{"name":"fixture-driver","kind":"human"}}}
+    if parsed:
+        for label in ("verdict-findings", "rationale", "author"):
+            changed = copy.deepcopy(fields)
+            if label == "verdict-findings": changed["judgments"][0].update(result="fail", findings="invented defect")
+            elif label == "rationale": changed["judgments"][0]["grounds"]["reason"] = "invented rationale"
+            else: changed["author"]["name"] = "another-reviewer"
+            _json(corrected, changed)
+            refused = recovery._repair(journey, root, journey.engine, request, root / f"parsed-conflict-{label}.json", ok=False)
+            if "changes parsed raw" not in refused["refused"] and "const" not in refused["refused"]:
+                raise ValueError(f"known parsed-raw {label} conflict was not specifically refused: {refused}")
+    bad = copy.deepcopy(fields); bad["judgments"][0]["grounds"]["reason"] = ""
+    _json(corrected, bad)
+    refused = recovery._repair(journey, root, journey.engine, request, root / "missing-rationale-request.json", ok=False)
+    if "/judgments/0/grounds/reason" not in refused["refused"] or "minLength" not in refused["refused"]:
+        raise ValueError(f"nested diagnostics did not identify rationale leaf: {refused}")
+    # bookends:LE-93 bookends:LE-151 — actual parser/leaf diagnostics, no semantic auto-admission.
+    _json(corrected, fields)
+    repaired = recovery._repair(journey, root, journey.engine, request, root / "direct-correction-request.json")
+    selected = Path(repaired["selected"]["path"]).read_bytes()
+    if json.loads(selected) != fields or repaired["derivation"]["kind"] != "driver" or repaired["derivation"].get("adapter") is not None:
+        raise ValueError("direct correction changed the explicit judgment or claimed an adapter")
+    selection = recovery._attach_derived(preview, repaired)
+    count = len(shown["result"]["work_slot_invocations"])
+    missing_fidelity = copy.deepcopy(selection); missing_fidelity["sources"][-1].pop("fidelity_approval")
+    recovery._reject_recovery(journey, root, database, run_id, "intent-review", missing_fidelity, "fidelity approval", count)
+    before_log = {p: p.read_bytes() for p in (log_a,log_b)}
+    launched = recovery._invoke_started(journey, root, database, run_id, "intent-review", selection)
+    joined_show, joined = _wait_invocation(journey, root, database, run_id, launched["invocation_id"])
+    if joined["status"] != "succeeded": raise ValueError(f"direct corrected join failed: {joined}")
+    if recovery._capture_manifest(capture) != preserved: raise ValueError("direct join changed original capture")
+    firstgroup_before = [json.loads(line) for raw in before_log.values() for line in raw.decode().splitlines() if json.loads(line)["stage"] == "individual"]
+    firstgroup_after = [json.loads(line) for p in (log_a,log_b) for line in p.read_text().splitlines() if json.loads(line)["stage"] == "individual"]
+    if firstgroup_before != firstgroup_after: raise ValueError("direct correction reran an original reviewer or valid sibling")
+    if any(r["started"] for r in failed["inner_workers"] if r.get("assignment_id") in preview["recovery_input"]["pending_assignment_ids"] and r.get("conformance_status") == "not-started"):
+        raise ValueError("downstream barrier started a blocked aggregate")
+    (root / "direct-failed-show.json").write_text(json.dumps(shown, indent=2)+"\n")
+    (root / "direct-joined-show.json").write_text(json.dumps(joined_show, indent=2)+"\n")
+    # bookends:LE-99 bookends:LE-105 bookends:LE-152 — unchanged raw and selected-derived bytes, siblings and separately attributed fidelity.
+    print("dogfood AC-3 direct correction faithful attributed admission passed")
+    print("dogfood AC-4 nested diagnostics and preserved siblings passed")
+    return joined_show, joined
+
+
+def teething_case(journey):
+    root = dogfood_observation._fresh_root(journey, "sol-review-teething")
+    _start_run(journey, root, "parsed-conflicts", ("parsed-conflict", "good"), mature=False, direct=True)
+    run = _start_run(journey, root, "direct-correction", ("yaml", "good"), mature=False, direct=True)
+    _finish_fixture_findings(journey, root, run["database"], run["run_id"], run["intent"])
+    ids = _append_review_candidates(journey, root, run["database"], run["run_id"], run["candidates"], run["invocation"]["invocation_id"], run["intent"]["revision"])
+    if not ids: raise ValueError("direct correction produced no source-linked evidence")
+    # Material revision of this very same source-reviewed intent, with its exact
+    # accessible pre-revision baseline rather than a driver paraphrase.
+    old_bytes = (run["artifact_root"] / "intent.json").read_bytes()
+    revised = json.loads(old_bytes); revised["revision"] = "r16"
+    revised["outcome"] += " Owner approval remains separate from reviewer judgment and driver inference after a materially revised intent."
+    _call(journey, root, run["database"], "show", "--view", "action", run["run_id"])
+    _call(journey, root, run["database"], "event", run["run_id"], "revise")
+    _json(run["artifact_root"] / "intent.json", revised)
+    _append(journey, root, run["database"], run["run_id"], "completed-owner-baseline", "user-steering", {
+        "target":{"kind":"all"},"instruction":"Preserve reviewer judgment, driver inference, and owner approval independently during this material revision.",
+        "intent_baseline":{"revision":"r15","locator":"intent.json before material revision","sha256":"sha256:"+hashlib.sha256(old_bytes).hexdigest(),"json_bytes":old_bytes.decode()}})
+    owner = _inspect_owner_view(journey, root, run["database"], run["run_id"], run["roster"])
+    if owner["owner_approval_view"]["exact_substantive_wording_delta"]["status"] != "available" or len(old_bytes) <= 262144:
+        raise ValueError("completed material revision lacks exact accessible large baseline")
+    _call(journey, root, run["database"], "show", "--view", "action", run["run_id"])
+    _call(journey, root, run["database"], "event", run["run_id"], "intent-ready")
+    _call(journey, root, run["database"], "show", "--view", "action", run["run_id"])
+    launched,_,_ = _call(journey, root, run["database"], "--timeout-ms", "120000", "invoke", run["run_id"], "intent-review")
+    revised_show,revised_invocation = _wait_invocation(journey, root, run["database"], run["run_id"], launched["result"]["invocation_id"])
+    if revised_invocation["status"] != "succeeded": raise ValueError("large revised intent did not complete fresh review")
+    revised_candidates = _review_candidates(journey, root, revised_show)
+    ids += _append_review_candidates(journey, root, run["database"], run["run_id"], revised_candidates, revised_invocation["invocation_id"], "r16", prefix="revised-review")
+    ready = [r for r in revised_candidates["candidates"] if r.get("status")=="ready" and r.get("origin",{}).get("id")==revised_invocation["invocation_id"]]
+    if not any(len(e["locator"]) > 1024 for r in ready for e in r["grounds"]["evidence"]): raise ValueError("long actual locator was not admitted")
+    if not ready or any(r["result"]!="pass" or len(r["grounds"]["reason"])<=1200 or len(r["grounds"]["reason"].encode())<=1200 or len(r["grounds"]["evidence"])<=8 or any("sha256" in e for e in r["grounds"]["evidence"]) for r in ready):
+        raise ValueError("revised admission failed distinguishing quota-free locator assertions")
+    print("dogfood AC-1 locator-only no-sidecar admission passed")
+    print("dogfood AC-2 detailed material revision without quotas passed")
+    ledger = next(r["data"] for r in reversed(revised_show["result"]["context"]) if r["kind"] == "finding-ledger")
+    ledger = json.loads(json.dumps(ledger)); ledger["subject_revision"] = "r16"
+    _append(journey, root, run["database"], run["run_id"], "revised-fixture-ledger", "finding-ledger", ledger)
+    run["intent"] = revised
+
+    # Continue this same production run. Other phase slots were frozen unbound;
+    # the driver uses the existing fixture proof/index machinery, not overrides.
+    journey.run_dir = run["root"]; journey.database = run["database"]; journey.run_id = run["run_id"]
+    journey.provider_config = run["root"] / "providers.toml"; journey.artifact_root = run["artifact_root"]
+    journey.profile_path = run["root"] / "initial-input.json"; journey.profile = json.loads(journey.profile_path.read_text())
+    journey.fixture_root = Path(journey.data_root) / "crates/software-change-provider/data/calibration/fixtures"
+    journey.state = "intent-review"; journey.command_env = {}; journey.command_cwd = None
+    journey._prepare_real_repository()
+    for subject, fixture in [("design.json","design-good.json"),("plan.json","plan-good.json"),("implementation-report.json","implementation-report-good.json")]:
+        value = json.loads((journey.fixture_root / fixture).read_text())
+        if subject == "design.json": value["intent_revision"] = "r16"
+        if subject == "plan.json":
+            value["proof_commands"] = [{"id":"fixture-operator-completion","command":sys.executable,"args":["-c","from pathlib import Path; assert Path('tracked.txt').read_text() == 'tracked baseline\\n'; print('fixture operator completed')"],"owner":"driver","obligation":"Complete the scripted repository operator check."}]
+        _json(run["artifact_root"] / subject, value)
+    journey._expect_allow("approved", "intent-adversarial-review")
+    journey._pass_review("intent-adversarial-review", "approved", "design", subject_revision="r16")
+    journey._expect_allow("design-ready", "design-review")
+    journey._pass_review("design-review", "approved", "design-adversarial-review")
+    journey._pass_review("design-adversarial-review", "approved", "plan")
+    journey._expect_allow("plan-ready", "plan-review")
+    journey._pass_review("plan-review", "approved", "plan-adversarial-review")
+    journey._pass_review("plan-adversarial-review", "approved", "implement")
+    journey._write_no_change_reconciliation("teething-reconciliation")
+    journey._expect_allow("implementation-ready", "reconciliation")
+    journey._expect_allow("reconciliation-ready", "implementation-review")
+    journey._create_checkpoint("implementation")
+    journey._pass_review("implementation-review", "approved", "implementation-adversarial-review")
+    journey._pass_review("implementation-adversarial-review", "approved", "validation")
+    journey._create_checkpoint("validation")
+    journey._expect_allow("validation-ready", "validation-review")
+    journey._pass_review("validation-review", "approved", "validation-adversarial-review")
+    journey._pass_review("validation-adversarial-review", "passed", "end")
+    final = journey._assert_show("end", "teething-completed")
+    if final["lifecycle"] != "final" or final["completion_mode"] != "completed" or final["has_overrides"]:
+        raise ValueError("operator path did not reach ordinary checked completion")
+    history = journey._engine(["history", journey.run_id], state="end", event="history")
+    transitions = [r["action"] for r in history["result"] if r["action"]["kind"] == "transition"]
+    if not transitions or any(r.get("outcome",{}).get("outcome") == "overridden" for r in transitions):
+        raise ValueError("operator completion history is incomplete or overridden")
+    _json(root / "outcome.json", {"case":"sol-review-teething","status":"passed-scripted-assertions","final":final,"history":history,"direct_source_records":ids,"semantic_approval":"not-established"})
+    # bookends:LE-97 bookends:LE-116 bookends:LE-159 — actual completed public run plus retained command/index/evidence and checked history.
+    print("dogfood AC-5 checked completed operator path passed")

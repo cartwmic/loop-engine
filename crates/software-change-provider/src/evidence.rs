@@ -1108,14 +1108,16 @@ fn parse_conforming_with_stage(
     let author = parse_author(data.get("author"), &mut reasons);
     let review_contract_version = match data.get("review_contract_version") {
         None => None,
-        Some(Value::Number(number)) if number.as_u64() == Some(2) => Some(2),
+        Some(Value::Number(number)) if matches!(number.as_u64(), Some(2 | 3)) => {
+            number.as_u64().map(|v| v as u32)
+        }
         Some(_) => {
-            reasons.push("`review_contract_version` must be 2 when present".to_owned());
+            reasons.push("`review_contract_version` must be 2 or 3 when present".to_owned());
             None
         }
     };
     let grounds = data.get("grounds").cloned();
-    if review_contract_version == Some(2) {
+    if matches!(review_contract_version, Some(2 | 3)) {
         match grounds.as_ref() {
             Some(grounds) => {
                 let root = artifact_root.and_then(Value::as_str).map(Path::new);
@@ -1134,9 +1136,16 @@ fn parse_conforming_with_stage(
                             if data.get("subject_revision").and_then(Value::as_str)
                                 == Some(current) =>
                         {
-                            crate::criterion::validate_grounding(grounds, root)
+                            crate::criterion::validate_grounding_version(
+                                grounds,
+                                root,
+                                review_contract_version,
+                            )
                         }
-                        Some(_) => crate::criterion::validate_grounding_shape(grounds),
+                        Some(_) => crate::criterion::validate_grounding_shape_version(
+                            grounds,
+                            review_contract_version,
+                        ),
                         None => Err(format!(
                             "cannot resolve current `{expected_subject}` revision for grounding"
                         )),
@@ -1148,10 +1157,10 @@ fn parse_conforming_with_stage(
                     reasons.push("grounded review evidence requires artifact_root to verify source references".to_owned());
                 }
             }
-            None => reasons.push("version-2 review evidence requires grounds".to_owned()),
+            None => reasons.push("grounded review evidence requires grounds".to_owned()),
         }
     } else if grounds.is_some() {
-        reasons.push("grounds require review_contract_version 2".to_owned());
+        reasons.push("grounds require review_contract_version 2 or 3".to_owned());
     }
     let subject = non_empty_string(data, "subject", &mut reasons);
     let subject_revision = non_empty_string(data, "subject_revision", &mut reasons);
@@ -1808,8 +1817,8 @@ fn verify_engine_selected_output(
         return Err("judgment findings disagree with review-evidence findings".to_owned());
     }
     match raw_contract_version {
-        Some(2) => {
-            if data.get("review_contract_version").and_then(Value::as_u64) != Some(2)
+        Some(version @ (2 | 3)) => {
+            if data.get("review_contract_version").and_then(Value::as_u64) != Some(version)
                 || object.get("grounds") != data.get("grounds")
             {
                 return Err(
@@ -2019,6 +2028,35 @@ pub(crate) fn verify_recovery_source(
             }
             match derivation.get("kind").and_then(Value::as_str) {
                 Some("mechanical") if derivation.get("adapter").is_none_or(Value::is_null) => {}
+                Some("driver") if derivation.get("adapter").is_none_or(Value::is_null) => {
+                    if schema
+                        .get("x-loop-engine-output-recovery")
+                        .and_then(Value::as_str)
+                        != Some("repair-first-v2")
+                    {
+                        return Err("driver derivation requires repair-first-v2".into());
+                    }
+                    let formatter = difference
+                        .pointer("/formatter_author/name")
+                        .and_then(Value::as_str)
+                        .filter(|name| !name.trim().is_empty())
+                        .ok_or("driver derivation lacks formatter attribution")?;
+                    if !matches!(
+                        difference
+                            .pointer("/formatter_author/kind")
+                            .and_then(Value::as_str),
+                        Some("human" | "agent" | "script")
+                    ) {
+                        return Err("driver formatter kind is invalid".into());
+                    }
+                    let derived = parse_originating_judgment(&selected)?;
+                    if derived.pointer("/author/name").and_then(Value::as_str) == Some(formatter) {
+                        return Err("formatter is not a separate reviewer attribution".into());
+                    }
+                    if let Ok(raw) = parse_originating_judgment(&raw) {
+                        loop_core::check_known_output_conflicts(&raw, &derived)?;
+                    }
+                }
                 Some("scripted") => {
                     let adapter = derivation
                         .get("adapter")

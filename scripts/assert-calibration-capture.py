@@ -148,7 +148,7 @@ def expected_specs(args: argparse.Namespace) -> list[dict[str, str]]:
     specs = [parse_row_key(value) for value in args.row_key]
     for case in args.coverage_case:
         for gate in COVERAGE_GATES:
-            config = "high-rigor-12"
+            config = "high-rigor-13"
             fixture = f"requirement-coverage-{case}"
             specs.append(
                 {

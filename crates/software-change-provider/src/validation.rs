@@ -746,14 +746,12 @@ fn source_with_verified_commands(
     if let Some(reason) = data.get("reason") {
         if reason
             .as_str()
-            .is_none_or(|reason| reason.trim().is_empty() || reason.len() > 1200)
+            .is_none_or(|reason| reason.trim().is_empty())
         {
-            return Err(
-                "verdict reason must be a non-empty string of at most 1200 bytes when present"
-                    .into(),
-            );
+            return Err("verdict reason must be a non-empty string when present".into());
         }
     }
+
     if (data["result"] == "pass" && !findings.is_empty())
         || (data["result"] == "fail"
             && (findings.is_empty() || findings.iter().any(|s| s.trim().is_empty())))
@@ -837,15 +835,21 @@ fn verify_verdict_origin(data: &Value, kind: &str) -> Result<Option<String>, Str
         _ => return Err("verdict has no verifiable selected raw or derived source".into()),
     }
     let raw: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-    if raw.get("review_contract_version").and_then(Value::as_u64) == Some(2)
-        && (data
-            .get("reason")
-            .and_then(Value::as_str)
-            .is_none_or(|reason| reason.trim().is_empty() || reason.len() > 1200)
-            || ids(&data["evidence_context_ids"])?.is_empty())
+    if matches!(
+        raw.get("review_contract_version").and_then(Value::as_u64),
+        Some(2 | 3)
+    ) && (data
+        .get("reason")
+        .and_then(Value::as_str)
+        .is_none_or(|reason| {
+            reason.trim().is_empty()
+                || (raw.get("review_contract_version").and_then(Value::as_u64) == Some(2)
+                    && reason.len() > 1200)
+        })
+        || ids(&data["evidence_context_ids"])?.is_empty())
     {
         return Err(
-            "version-2 criterion/goal source needs a concise reason and inspected evidence".into(),
+            "grounded criterion/goal source needs a nonempty reason and inspected evidence".into(),
         );
     }
     if raw.get("review_stage").and_then(Value::as_str) != Some("aggregate") {
@@ -1211,8 +1215,7 @@ mod tests {
             Path::new("/unused"),
             Some(&retained)
         )
-        .unwrap_err()
-        .contains("1200 bytes"));
+        .is_ok());
     }
 
     #[test]

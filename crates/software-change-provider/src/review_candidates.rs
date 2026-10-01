@@ -527,18 +527,19 @@ fn project_assignment(
     };
     match normalize_review_output(candidate_contract, &value) {
         Ok(judgment) => {
-            if judgment.review_contract_version == Some(2) {
+            if matches!(judgment.review_contract_version, Some(2 | 3)) {
                 let Some(root) = initial_input.get("artifact_root").and_then(Value::as_str) else {
                     return vec![ReviewCandidate::Malformed {
                         origin,
                         diagnostic:
-                            "version-2 review candidate has no artifact_root for grounding checks"
+                            "grounded review candidate has no artifact_root for source checks"
                                 .into(),
                     }];
                 };
-                if let Err(diagnostic) = crate::criterion::validate_grounding(
+                if let Err(diagnostic) = crate::criterion::validate_grounding_version(
                     judgment.grounds.as_ref().unwrap_or(&Value::Null),
                     Path::new(root),
+                    judgment.review_contract_version,
                 ) {
                     return vec![ReviewCandidate::Malformed { origin, diagnostic }];
                 }
@@ -703,12 +704,13 @@ fn project_batch(
             }
 
             let grounds = row.get("grounds").cloned();
-            if review_contract_version == Some(2) {
-                if let Err(diagnostic) = crate::criterion::validate_grounding(
+            if matches!(review_contract_version, Some(2 | 3)) {
+                if let Err(diagnostic) = crate::criterion::validate_grounding_version(
                     grounds
                         .as_ref()
-                        .ok_or("version-2 review row is missing grounds")?,
+                        .ok_or("grounded review row is missing grounds")?,
                     Path::new(root),
+                    review_contract_version,
                 ) {
                     candidates.push(ReviewCandidate::Malformed {
                         origin: origin.clone(),
@@ -798,14 +800,17 @@ fn project_batch(
                         "unassigned, duplicate, wrong-author or stale criterion verdict".into(),
                     );
                 }
-                if review_contract_version == Some(2)
+                if matches!(review_contract_version, Some(2 | 3))
                     && data
                         .get("reason")
                         .and_then(Value::as_str)
-                        .is_none_or(|reason| reason.trim().is_empty() || reason.len() > 1200)
+                        .is_none_or(|reason| {
+                            reason.trim().is_empty()
+                                || (review_contract_version == Some(2) && reason.len() > 1200)
+                        })
                 {
                     return Err(
-                        "version-2 criterion/goal verdict needs a concise reason of at most 1200 bytes".to_owned()
+                        "criterion/goal verdict needs a nonempty reason (historical v2 retains its original bound)".to_owned()
                     );
                 }
                 let mut candidate_data = data.clone();
@@ -1289,13 +1294,13 @@ fn normalize_review_output(contract: &Value, value: &Value) -> Result<Normalized
     if object
         .get("review_contract_version")
         .and_then(Value::as_u64)
-        .is_some_and(|version| version != 2)
+        .is_some_and(|version| !matches!(version, 2 | 3))
     {
-        violations.push("review_contract_version must be 2 when present".to_owned());
+        violations.push("review_contract_version must be 2 or 3 when present".to_owned());
     }
     let grounds = object.get("grounds").cloned();
-    if review_contract_version == Some(2) && grounds.is_none() {
-        violations.push("version-2 review judgment is missing grounds".to_owned());
+    if matches!(review_contract_version, Some(2 | 3)) && grounds.is_none() {
+        violations.push("grounded review judgment is missing grounds".to_owned());
     }
     let review_stage = match contract
         .pointer("/properties/review_stage/const")

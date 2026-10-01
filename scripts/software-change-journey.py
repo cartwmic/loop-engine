@@ -916,8 +916,8 @@ class Journey:
             raise JourneyFailure(f"compact setup did not return JSON: {setup.stdout}") from error
         _write_json(self.work_root / "setup-report.json", setup_report)
         setup_profile = self._read_json(self.profile_path, "generated compact setup profile")
-        if setup_profile.get("config_version") != "high-rigor-12":
-            raise JourneyFailure("compact setup did not preserve the high-rigor-12 profile version")
+        if setup_profile.get("config_version") != "high-rigor-13":
+            raise JourneyFailure("compact setup did not preserve the high-rigor-13 profile version")
         if setup_profile.get("criterion_policy") != {"required_authors": 2, "goal_required_authors": 2}:
             raise JourneyFailure("compact setup changed the high-rigor criterion/goal floors")
         for gate in ("intent-review", "intent-adversarial-review"):
@@ -2567,9 +2567,9 @@ class Journey:
             raise JourneyFailure(
                 f"journey requires contract_version 3, got {profile.get('contract_version')!r}"
             )
-        if profile.get("config_version") != "high-rigor-12":
+        if profile.get("config_version") != "high-rigor-13":
             raise JourneyFailure(
-                f"journey requires high-rigor-12, got {profile.get('config_version')!r}"
+                f"journey requires high-rigor-13, got {profile.get('config_version')!r}"
             )
         criterion_policy = profile.get("criterion_policy")
         if criterion_policy != {"required_authors": 2, "goal_required_authors": 2}:
@@ -6347,6 +6347,18 @@ class Journey:
                 "assertion_capture": str(capture_path),
                 "assertion_capture_sha256": digest,
             })
+            if name == "sol-review-teething":
+                required = (
+                    "dogfood AC-1 locator-only no-sidecar admission passed",
+                    "dogfood AC-2 detailed material revision without quotas passed",
+                    "dogfood AC-3 direct correction faithful attributed admission passed",
+                    "dogfood AC-4 nested diagnostics and preserved siblings passed",
+                    "dogfood AC-5 checked completed operator path passed",
+                )
+                for assertion in required:
+                    if assertion not in stdout:
+                        raise JourneyFailure(f"teething scenario omitted distinguishing assertion: {assertion}")
+                    print(assertion)
             print(f"{marker} {capture_path}")
         (self.run_dir / "dogfood-inventory-pool-report.json").write_text(
             json.dumps({
@@ -9155,7 +9167,7 @@ else:
                 )
             if (
                 secondary_workflow.get("id") != "software-change"
-                or secondary_input.get("config_version") != "minimal-12"
+                or secondary_input.get("config_version") != "minimal-13"
                 or secondary_input.get("review_policies") == primary_input.get("review_policies")
                 or secondary_input.get("criterion_policy") == primary_input.get("criterion_policy")
             ):
@@ -10131,7 +10143,7 @@ def assert_worker_data_skill_and_root_policy(
         repository / "crates/software-change-provider/data/review-worker-preamble.txt"
     )
     sc_schema_path = (
-        repository / "crates/software-change-provider/data/review-worker-output-schema-v2.json"
+        repository / "crates/software-change-provider/data/review-worker-output-schema-v3.json"
     )
     pd_preamble_path = (
         repository / "crates/policy-document-provider/data/semantic-review-worker-preamble.md"
@@ -10205,9 +10217,9 @@ def assert_worker_data_skill_and_root_policy(
     sc_schema = _load_json(sc_schema_path)
     pd_schema = _load_json(pd_schema_path)
     research_schema = _load_json(research_schema_path)
-    if (sc_schema.get("properties", {}).get("review_contract_version", {}).get("const") != 2
+    if (sc_schema.get("properties", {}).get("review_contract_version", {}).get("const") != 3
             or "grounds" not in sc_schema.get("definitions", {})):
-        raise JourneyFailure("software-change reviewer output contract v2 is missing versioned grounds")
+        raise JourneyFailure("software-change reviewer output contract v3 is missing locator-only grounds")
     if pd_schema != schema_required or research_schema != schema_required:
         raise JourneyFailure("provider output_schema bytes do not require axis/author/result/findings")
 
@@ -10274,16 +10286,8 @@ def assert_worker_data_skill_and_root_policy(
             raise JourneyFailure(
                 f"software-change setup {gate} worker count {len(workers)} != {len(expected)}"
             )
-        filter_args = binding.get("context_filter", {}).get("args", [])
-        used_authors = {entry["author"] for _policies, entry in expected}
-        expected_budgets = [
-            {"author": entry["author"], **entry["token_budget"]}
-            for entry in roster_entries if entry["author"] in used_authors
-        ]
-        if (binding.get("context_filter", {}).get("command") != str(software_change_binary)
-                or filter_args[:2] != ["commission", "--call-budgets"]
-                or json.loads(filter_args[2]) != expected_budgets):
-            raise JourneyFailure(f"software-change setup {gate} lost per-call commission budgets")
+        if binding.get("context_filter") != {"command": str(software_change_binary), "args": ["commission"]}:
+            raise JourneyFailure(f"software-change setup {gate} did not use quota-free commission")
         args = binding.get("args") or []
         if args[:3] != ["fan-out", "--max-active", "2"]:
             raise JourneyFailure(f"software-change setup {gate} lost review concurrency: {args}")
@@ -10295,7 +10299,7 @@ def assert_worker_data_skill_and_root_policy(
             expected_schema = _batch_schema(
                 sc_schema, policies, {"name": entry["author"], "kind": "agent"}
             )
-            expected_schema["x-loop-engine-output-recovery"] = "repair-first-v1"
+            expected_schema["x-loop-engine-output-recovery"] = "repair-first-v2"
             if (
                 gate == "validation-review"
                 and expected_schema["properties"]["review_stage"].get("const") == "aggregate"
@@ -10306,7 +10310,7 @@ def assert_worker_data_skill_and_root_policy(
                         "record_id": {"type": "string", "minLength": 1},
                         "kind": {"type": "string", "enum": ["criterion-verdict", "goal-verdict"]},
                         "data": {"type": "object", "required": ["reason", "evidence_context_ids"],
-                                 "properties": {"reason": {"type": "string", "minLength": 1, "maxLength": 1200},
+                                 "properties": {"reason": {"type": "string", "minLength": 1},
                                                 "evidence_context_ids": {"type": "array", "minItems": 1,
                                                                           "items": {"type": "string", "minLength": 1}}}}}}}
             if worker.get("full_output_schema") != expected_schema:
@@ -10433,10 +10437,8 @@ def assert_worker_data_skill_and_root_policy(
         roster_json = json.dumps(roster, separators=(",", ":"))
 
         setup_roster = [
-            {"author": "reviewer-a", "command": "/tmp/software-change-worker-a", "args": ["--worker", "a"],
-             "token_budget": {"model_id":"fixture/model-a","context_window_tokens":200000,"system_tokens":4000,"framing_tokens":4000,"output_reserve_tokens":4000,"reasoning_reserve_tokens":16000}},
-            {"author": "reviewer-b", "command": "/tmp/software-change-worker-b", "args": ["--worker", "b"],
-             "token_budget": {"model_id":"fixture/model-b","context_window_tokens":200000,"system_tokens":4000,"framing_tokens":4000,"output_reserve_tokens":4000,"reasoning_reserve_tokens":16000}},
+            {"author": "reviewer-a", "command": "/tmp/software-change-worker-a", "args": ["--worker", "a"]},
+            {"author": "reviewer-b", "command": "/tmp/software-change-worker-b", "args": ["--worker", "b"]},
         ]
         setup_roster_path = root / "software-change-roster.json"
         _write_json(setup_roster_path, setup_roster)
@@ -10480,8 +10482,7 @@ def assert_worker_data_skill_and_root_policy(
         duplicate_roster_path = root / "software-change-duplicate-roster.json"
         _write_json(
             duplicate_roster_path,
-            [setup_roster[0], {"author": setup_roster[0]["author"], "command": "/tmp/other", "args": [],
-                                "token_budget": setup_roster[0]["token_budget"]}],
+            [setup_roster[0], {"author": setup_roster[0]["author"], "command": "/tmp/other", "args": []}],
         )
         _expect_constructor_closed(
             lambda: run_sc(root / "software-change-duplicate.json", duplicate_roster_path),
@@ -10786,9 +10787,9 @@ def assert_reconciliation_documents_and_profiles() -> None:
             if clause.lower() not in text.lower():
                 raise JourneyFailure(f"{label} omitted reconciliation contract clause {clause!r}")
     expected = {
-        "minimal.json": ("minimal-12", 1, 1),
-        "standard.json": ("standard-12", 2, 2),
-        "high-rigor.json": ("high-rigor-12", 2, 2),
+        "minimal.json": ("minimal-13", 1, 1),
+        "standard.json": ("standard-13", 2, 2),
+        "high-rigor.json": ("high-rigor-13", 2, 2),
     }
     for name, (version, criterion_floor, goal_floor) in expected.items():
         profile = _load_json(repository / "crates/software-change-provider/data/configs" / name)
@@ -10952,9 +10953,9 @@ def assert_operator_contract_surfaces() -> None:
     # worktree to HEAD: a source journey must run against the same bytes it
     # proves.
     expected_versions = {
-        "minimal.json": "minimal-12",
-        "standard.json": "standard-12",
-        "high-rigor.json": "high-rigor-12",
+        "minimal.json": "minimal-13",
+        "standard.json": "standard-13",
+        "high-rigor.json": "high-rigor-13",
     }
     for name, expected_version in expected_versions.items():
         profile = _load_json(repository / "crates/software-change-provider/data/configs" / name)
@@ -11395,7 +11396,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     # bookends:LE-148 — sol-observation checks actionable locators and exact
                     # paged original streams plus uncertainty, not just compact output size.
                     # bookends:LE-149 — sol-review-context compares blind, confirmation and
-                    # challenge packets, source hashes and small-window refusal; real smaller-model quality remains pending.
+                    # challenge packets, locator-only evidence, detailed baselines and quota-free admission; model quality remains external.
+                    # bookends:LE-93 bookends:LE-99 bookends:LE-105 — sol-review-teething
+                    # checks actual nested rationale diagnostics, immutable raw/derived identity,
+                    # faithful driver correction and source-linked candidate/append admission.
+                    # bookends:LE-97 bookends:LE-116 bookends:LE-149 bookends:LE-151 bookends:LE-152 bookends:LE-155 bookends:LE-159 —
+                    # that collected production run reviews a >256KiB intent and exact material
+                    # baseline with long multibyte grounds/many locators, preserves valid siblings,
+                    # corrects explicit YAML without reviewer/adapter rerun, and reaches checked
+                    # completed with real retained command/index/evidence plumbing, no overrides.
                     # bookends:LE-150 — sol-reuse completes a production software-change
                     # revised-plan mapping with pending effect/dependency reruns, fresh bound reviews,
                     # captured validation, current report/checkpoint and intact original capture.

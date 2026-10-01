@@ -34,15 +34,16 @@ pub use execution_contract::{
 };
 pub use invocation::{instruction_digest, project_invocation_status, work_slot_binding_digest};
 pub use model::{
-    AllowResponse, AssignmentLabel, CompletionMode, ContextAppendEffect, ContextRecord,
-    ContextRecordId, ControlRevision, DurableEvaluation, DurableEvaluationResult,
-    EvaluationFeedback, EvaluationRequest, EvaluationResult, EventId, FanOutRecoveryAdapterUsage,
-    FanOutRecoveryApproval, FanOutRecoveryDerivation, FanOutRecoveryInput, FanOutRecoverySource,
-    HistoryAction, HistoryEntry, InnerWorker, InvocationId, JsonValue, Lifecycle, OverrideSummary,
-    PriorEvaluation, ProjectedInvocationStatus, ProviderAssociation, ProviderSelector, Run, RunId,
-    SemanticSequence, SkippedBoundCheck, SkippedProviderEvaluation, State, StateId, Timestamp,
-    Transition, TransitionHistoryOutcome, TransitionKind, TransitionOverride, WaiterWrittenStatus,
-    WorkSlot, WorkSlotBinding, WorkSlotId, WorkSlotInvocation, WorkerAttempt, Workflow, WorkflowId,
+    check_known_output_conflicts, AllowResponse, AssignmentLabel, CompletionMode,
+    ContextAppendEffect, ContextRecord, ContextRecordId, ControlRevision, DurableEvaluation,
+    DurableEvaluationResult, EvaluationFeedback, EvaluationRequest, EvaluationResult, EventId,
+    FanOutRecoveryAdapterUsage, FanOutRecoveryApproval, FanOutRecoveryDerivation,
+    FanOutRecoveryInput, FanOutRecoverySource, HistoryAction, HistoryEntry, InnerWorker,
+    InvocationId, JsonValue, Lifecycle, OverrideSummary, PriorEvaluation,
+    ProjectedInvocationStatus, ProviderAssociation, ProviderSelector, Run, RunId, SemanticSequence,
+    SkippedBoundCheck, SkippedProviderEvaluation, State, StateId, Timestamp, Transition,
+    TransitionHistoryOutcome, TransitionKind, TransitionOverride, WaiterWrittenStatus, WorkSlot,
+    WorkSlotBinding, WorkSlotId, WorkSlotInvocation, WorkerAttempt, Workflow, WorkflowId,
 };
 pub use operations::{
     execute_append, execute_event, execute_history, execute_invoke, execute_list, execute_show,

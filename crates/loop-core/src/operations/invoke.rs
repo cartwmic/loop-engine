@@ -822,6 +822,23 @@ fn validate_recovery_derivation(
     }
     match derivation.kind.as_str() {
         "mechanical" if derivation.adapter.is_none() => Ok(()),
+        "driver"
+            if derivation.adapter.is_none()
+                && derivation
+                    .difference
+                    .pointer("/formatter_author/name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|name| !name.trim().is_empty())
+                && matches!(
+                    derivation
+                        .difference
+                        .pointer("/formatter_author/kind")
+                        .and_then(Value::as_str),
+                    Some("human" | "agent" | "script")
+                ) =>
+        {
+            Ok(())
+        }
         "scripted" => {
             let adapter = derivation
                 .adapter

@@ -76,32 +76,6 @@ pub struct IntentBaseline {
     pub json_bytes: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct CallBudget {
-    author: String,
-    model_id: String,
-    context_window_tokens: u64,
-    system_tokens: u64,
-    framing_tokens: u64,
-    output_reserve_tokens: u64,
-    reasoning_reserve_tokens: u64,
-}
-
-impl CallBudget {
-    fn reserve_tokens(&self) -> u64 {
-        self.system_tokens
-            .saturating_add(self.framing_tokens)
-            .saturating_add(self.output_reserve_tokens)
-            .saturating_add(self.reasoning_reserve_tokens)
-    }
-
-    fn input_capacity(&self) -> u64 {
-        self.context_window_tokens
-            .saturating_sub(self.reserve_tokens())
-    }
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProofUpdate {
@@ -539,9 +513,6 @@ pub fn inspect_with_stage(
     inspect_with_budgets(input, requested_slot, task, requested_stage, None)
 }
 
-const INITIAL_CONTEXT_BYTES: usize = 32 * 1024;
-const TOTAL_COMMISSION_BYTES: usize = 256 * 1024;
-
 #[derive(Clone)]
 struct ReviewSource {
     locator: String,
@@ -896,18 +867,23 @@ fn project_review_context(
                 .data
                 .get("review_contract_version")
                 .and_then(Value::as_u64)
-                != Some(2)
+                .is_none_or(|v| !matches!(v, 2 | 3))
             {
                 return Err(format!(
-                    "challenge parent `{}` has no version-2 grounds; inspect its selected output",
+                    "challenge parent `{}` has no supported versioned grounds; inspect its selected output",
                     record.id
                 ));
             }
-            crate::criterion::validate_grounding(
+            crate::criterion::validate_grounding_version(
                 record.data.get("grounds").ok_or_else(|| {
                     format!("challenge parent `{}` is missing grounds", record.id)
                 })?,
                 root,
+                record
+                    .data
+                    .get("review_contract_version")
+                    .and_then(Value::as_u64)
+                    .map(|v| v as u32),
             )
             .map_err(|error| {
                 format!(
@@ -1192,41 +1168,11 @@ fn project_review_context(
     Ok(selected)
 }
 
-fn validate_call_budgets(budgets: &[CallBudget]) -> Result<(), String> {
-    if budgets.is_empty() {
-        return Err(
-            "review commission requires per-call model window and reserve metadata".to_owned(),
-        );
-    }
-    let mut authors = BTreeSet::new();
-    for budget in budgets {
-        if budget.author.trim().is_empty()
-            || budget.model_id.trim().is_empty()
-            || !authors.insert(budget.author.as_str())
-            || budget.context_window_tokens == 0
-            || budget.system_tokens == 0
-            || budget.framing_tokens == 0
-            || budget.output_reserve_tokens == 0
-            || budget.reasoning_reserve_tokens == 0
-            || budget.input_capacity() == 0
-        {
-            return Err("per-call review budget has missing/duplicate author, model, window, or reserve values".to_owned());
-        }
-    }
-    Ok(())
-}
-
-fn check_commission_budget(
+fn commission_size_info(
     records: &[ContextRecord],
     sources: &[ReviewSource],
-    budgets: &[CallBudget],
-    initial: bool,
     artifact_root: &str,
 ) -> Result<Value, String> {
-    validate_call_budgets(budgets)?;
-    // Bound-worker stdin drops only the engine-owned top-level origin field;
-    // byte accounting must use that exact delivery projection, while the full
-    // routed snapshot remains retained for independent provider verification.
     let delivered: Vec<_> = records
         .iter()
         .cloned()
@@ -1237,69 +1183,18 @@ fn check_commission_budget(
             record
         })
         .collect();
-    let location_context = json!({"artifact_root":artifact_root,"context":delivered});
-    let context_bytes = serde_json::to_vec(&location_context)
-        .map_err(|error| format!("could not measure delivered review context: {error}"))?
-        .len();
+    let context_bytes =
+        serde_json::to_vec(&json!({"artifact_root":artifact_root,"context":delivered}))
+            .map_err(|error| error.to_string())?
+            .len();
     let original_bytes = sources
         .iter()
         .map(|source| source.bytes.len())
         .sum::<usize>();
-    let total_bytes = context_bytes.saturating_add(original_bytes);
-    let initial_limit = if initial {
-        INITIAL_CONTEXT_BYTES
-    } else {
-        TOTAL_COMMISSION_BYTES
-    };
-    let locators = sources
-        .iter()
-        .map(|source| source.locator.as_str())
-        .collect::<Vec<_>>();
-    if (initial && total_bytes > INITIAL_CONTEXT_BYTES) || total_bytes > TOTAL_COMMISSION_BYTES {
-        return Err(format!(
-            "mandatory review sources do not fit the starting byte bounds (context={context_bytes}, originals={original_bytes}, supplied_total={total_bytes}, initial_limit={initial_limit}, total_limit={TOTAL_COMMISSION_BYTES}); no source was truncated; inspect: {}",
-            locators.join(", ")
-        ));
-    }
-    for budget in budgets {
-        // UTF-8 byte length is used as a conservative token upper bound. The
-        // driver still measures actual per-call model usage on the real path.
-        if total_bytes as u64 > budget.input_capacity() {
-            return Err(format!(
-                "mandatory sources exceed `{}` call capacity for `{}`: conservative_input_upper_bound={total_bytes}, window={}, reserved(system={}, framing={}, output={}, reasoning={}); inspect: {}",
-                budget.model_id,
-                budget.author,
-                budget.context_window_tokens,
-                budget.system_tokens,
-                budget.framing_tokens,
-                budget.output_reserve_tokens,
-                budget.reasoning_reserve_tokens,
-                locators.join(", ")
-            ));
-        }
-    }
-    Ok(json!({
-        "status":"fits-conservative-upper-bound",
-        "context_bytes":context_bytes,
-        "retrieved_original_bytes":original_bytes,
-        "initial_evidence_bytes":if initial {json!(total_bytes)} else {Value::Null},
-        "total_evidence_bytes":total_bytes,
-        "initial_limit_bytes":INITIAL_CONTEXT_BYTES,
-        "total_limit_bytes":TOTAL_COMMISSION_BYTES,
-        "token_count_method":"UTF-8 byte upper bound; model windows and system/framing/output/reasoning reserves are caller-verified per call",
-        "calls":budgets.iter().map(|budget|json!({
-            "author":budget.author,
-            "model_id":budget.model_id,
-            "context_window_tokens":budget.context_window_tokens,
-            "system_tokens":budget.system_tokens,
-            "framing_tokens":budget.framing_tokens,
-            "output_reserve_tokens":budget.output_reserve_tokens,
-            "reasoning_reserve_tokens":budget.reasoning_reserve_tokens,
-            "reserved_tokens":budget.reserve_tokens(),
-            "available_input_tokens":budget.input_capacity()
-        })).collect::<Vec<_>>(),
-        "sources":sources.iter().map(|source|json!({"locator":source.locator,"sha256":source.sha256,"bytes":source.bytes.len()})).collect::<Vec<_>>()
-    }))
+    Ok(
+        json!({"status":"informational only; driver selects relevant context; no content quota",
+        "context_bytes":context_bytes,"retrieved_original_bytes":original_bytes,"total_evidence_bytes":context_bytes.saturating_add(original_bytes)}),
+    )
 }
 
 fn inspect_with_budgets(
@@ -1307,7 +1202,7 @@ fn inspect_with_budgets(
     requested_slot: Option<&str>,
     task: Option<&str>,
     requested_stage: Option<&str>,
-    budgets: Option<&[CallBudget]>,
+    _legacy_budget_info: Option<&Value>,
 ) -> Result<Value, String> {
     let show = input.get("result");
     let packet = show.unwrap_or(input);
@@ -1380,9 +1275,6 @@ fn inspect_with_budgets(
             ));
         }
     }
-    let initial = parent_gate(slot_id).is_none()
-        && !has_current_aggregate(&records, slot_id, subject.unwrap(), &revision)
-        && !has_material_confirmation_sources(&records, slot_id, subject.unwrap(), &revision);
     records = project_review_context(
         &records,
         slot_id,
@@ -1453,29 +1345,14 @@ fn inspect_with_budgets(
         })
         .cloned()
         .collect();
-    let is_filter_packet =
-        show.is_none() && packet.get("slot_id").is_some() && packet.get("work_slots").is_some();
-    let budget_summary = match budgets {
-        Some(budgets) => Some(check_commission_budget(
-            &selected_records,
-            &sources,
-            budgets,
-            initial,
-            root,
-        )?),
-        None if is_filter_packet => {
-            return Err("review context filter lacks required per-call token budgets".to_owned())
-        }
-        None => None,
-    };
+    let size_info = commission_size_info(&selected_records, &sources, root)?;
     if output.get("record_ids").is_some() {
         return Ok(output);
     }
-    output["review_contract_version"] = json!(2);
+    output["review_contract_version"] = json!(3);
     output["review_target"] = json!({"subject":subject,"revision":revision});
     output["review_sources"] = json!(sources.iter().map(|source|json!({"locator":source.locator,"sha256":source.sha256,"bytes":source.bytes.len()})).collect::<Vec<_>>());
-    output["review_budget"] = budget_summary
-        .unwrap_or_else(|| json!({"status":"inspection-only; token budget not supplied"}));
+    output["review_budget"] = size_info;
     if subject == Some("intent.json") {
         let intent = sources
             .iter()
@@ -1646,7 +1523,7 @@ pub fn run_from_stdin(args: &[String]) -> i32 {
     let mut slot = None;
     let mut task = None;
     let mut stage = None;
-    let mut budgets: Option<Vec<CallBudget>> = None;
+    let mut budgets: Option<Value> = None;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         if arg == "--call-budgets" {
@@ -1688,7 +1565,7 @@ pub fn run_from_stdin(args: &[String]) -> i32 {
     }
     let result = serde_json::from_reader(std::io::stdin())
         .map_err(|e| e.to_string())
-        .and_then(|input| inspect_with_budgets(&input, slot, task, stage, budgets.as_deref()));
+        .and_then(|input| inspect_with_budgets(&input, slot, task, stage, budgets.as_ref()));
     match result {
         Ok(value) => {
             println!("{value}");
@@ -2331,7 +2208,7 @@ mod tests {
             Path::new("/unused-for-design"),
         )
         .unwrap_err();
-        assert!(error.contains("version-2 grounds"));
+        assert!(error.contains("supported versioned grounds"));
     }
 
     #[test]
@@ -2398,70 +2275,20 @@ mod tests {
     }
 
     #[test]
-    fn budget_refuses_missing_sources_instead_of_truncating_or_exceeding_model_window() {
-        let source_bytes = vec![b'x'; 9000];
-        let sources = vec![ReviewSource {
-            locator: "design.json".to_owned(),
-            sha256: "sha256:fixture".to_owned(),
-            bytes: source_bytes,
-            value: json!({}),
-        }];
-        let budget = CallBudget {
-            author: "reviewer".to_owned(),
-            model_id: "small/model".to_owned(),
-            context_window_tokens: 10000,
-            system_tokens: 1000,
-            framing_tokens: 1000,
-            output_reserve_tokens: 1000,
-            reasoning_reserve_tokens: 1000,
-        };
-        let error =
-            check_commission_budget(&[], &sources, &[budget], true, "/fixture/root").unwrap_err();
-        assert!(error.contains("small/model"));
-        assert!(error.contains("design.json"));
-        assert!(error.contains("inspect: design.json"));
-    }
-
-    #[test]
-    fn initial_byte_bound_counts_mandatory_originals_but_later_stage_can_use_total_bound() {
-        let source_bytes = vec![b'x'; INITIAL_CONTEXT_BYTES + 1];
+    fn successor_size_information_never_refuses_large_sources() {
         let sources = vec![ReviewSource {
             locator: "intent.json".to_owned(),
             sha256: "sha256:fixture".to_owned(),
-            bytes: source_bytes,
+            bytes: vec![b'x'; 300_000],
             value: json!({}),
         }];
-        let budget = CallBudget {
-            author: "reviewer".to_owned(),
-            model_id: "measured/model".to_owned(),
-            context_window_tokens: 128 * 1024,
-            system_tokens: 4000,
-            framing_tokens: 4000,
-            output_reserve_tokens: 4000,
-            reasoning_reserve_tokens: 16000,
-        };
-        let initial_error = check_commission_budget(
-            &[],
-            &sources,
-            std::slice::from_ref(&budget),
-            true,
-            "/fixture/root",
-        )
-        .unwrap_err();
-        assert!(initial_error.contains("initial_limit=32768"));
-        assert!(initial_error.contains("intent.json"));
-
-        let later =
-            check_commission_budget(&[], &sources, &[budget], false, "/fixture/root").unwrap();
-        assert_eq!(later["initial_evidence_bytes"], Value::Null);
-        let location_bytes =
-            serde_json::to_vec(&json!({"artifact_root":"/fixture/root","context":[]}))
-                .unwrap()
-                .len();
-        assert_eq!(
-            later["total_evidence_bytes"],
-            INITIAL_CONTEXT_BYTES + 1 + location_bytes
-        );
-        assert_eq!(later["calls"][0]["available_input_tokens"], 103_072);
+        let info = commission_size_info(&[], &sources, "/fixture/root").unwrap();
+        assert_eq!(info["retrieved_original_bytes"], 300_000);
+        assert!(info["status"]
+            .as_str()
+            .unwrap()
+            .contains("no content quota"));
+        assert!(info.get("initial_limit_bytes").is_none());
+        assert!(info.get("calls").is_none());
     }
 }

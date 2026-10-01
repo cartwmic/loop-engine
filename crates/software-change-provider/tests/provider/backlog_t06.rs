@@ -66,7 +66,6 @@ subject = {
 raw_source = (Path(location["artifact_root"]) / subject).read_bytes()
 source = json.loads(raw_source)
 locator = subject + "#/revision"
-source_sha256 = "sha256:" + hashlib.sha256(raw_source).hexdigest()
 log = Path(sys.argv[1])
 with log.open("a", encoding="utf-8") as stream:
     stream.write(json.dumps({
@@ -78,13 +77,13 @@ with log.open("a", encoding="utf-8") as stream:
         "stdin": packet,
     }) + "\n")
 print(json.dumps({
-    "review_contract_version": 2,
+    "review_contract_version": 3,
     "review_stage": stage,
     "author": {"name": author, "kind": "agent"},
     "judgments": [
         {"axis": policy["id"], "result": "pass", "findings": "",
          "grounds": {"reason": "Fixture inspected the assigned subject.",
-                     "evidence": [{"locator": locator, "sha256": source_sha256}]}}
+                     "evidence": [{"locator": locator}]}}
         for policy in policies
     ],
 }))
@@ -299,7 +298,7 @@ fn assert_setup_output(
     assert_eq!(profile["contract_version"], 3);
     assert_eq!(
         profile["config_version"],
-        format!("{rigor}-12").replace("high-12", "high-rigor-12")
+        format!("{rigor}-13").replace("high-13", "high-rigor-13")
     );
     assert_eq!(
         profile["work_slot_bindings"].as_object().unwrap().len(),
@@ -332,31 +331,7 @@ fn assert_setup_output(
             binding["context_filter"]["command"],
             provider_binary.to_string_lossy().as_ref()
         );
-        assert_eq!(binding["context_filter"]["args"][0], "commission");
-        assert_eq!(binding["context_filter"]["args"][1], "--call-budgets");
-        let call_budgets: Vec<Value> = serde_json::from_str(
-            binding["context_filter"]["args"][2]
-                .as_str()
-                .expect("budget JSON"),
-        )
-        .expect("per-call budget vector");
-        let required_authors = report["effective_policy"]["review_policies"][gate]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|policy| policy["required_authors"].as_u64())
-            .max()
-            .unwrap_or(0) as usize;
-        let roster_used = report["roster"].as_array().unwrap();
-        assert_eq!(call_budgets.len(), required_authors.min(roster_used.len()));
-        for (budget, roster_entry) in call_budgets.iter().zip(roster_used.iter()) {
-            assert_eq!(budget["author"], roster_entry["author"]);
-            assert_eq!(budget["model_id"], roster_entry["token_budget"]["model_id"]);
-            assert_eq!(
-                budget["context_window_tokens"],
-                roster_entry["token_budget"]["context_window_tokens"]
-            );
-        }
+        assert_eq!(binding["context_filter"]["args"], json!(["commission"]));
         let args = binding["args"].as_array().expect("fan-out args");
         assert_eq!(args[0], "fan-out");
         assert_eq!(args[1], "--max-active");
@@ -676,10 +651,7 @@ fn backlog_t06_relocated_embedded_setup_executes_distinct_scripted_workers() {
         context_filter["command"],
         relocated_provider.to_string_lossy().as_ref()
     );
-    assert_eq!(context_filter["args"][0], "commission");
-    assert_eq!(context_filter["args"][1], "--call-budgets");
-    let budgets: Value = serde_json::from_str(context_filter["args"][2].as_str().unwrap()).unwrap();
-    assert_eq!(budgets.as_array().unwrap().len(), 2);
+    assert_eq!(context_filter["args"], json!(["commission"]));
     for worker in worker_values(&profile["work_slot_bindings"]["intent-review"]) {
         assert!(
             worker["command"] == worker_a.to_string_lossy().as_ref()
