@@ -571,6 +571,7 @@ fn report_ledger_derives_current_checkpoint_instead_of_copying_state() {
         checkpoint.stderr
     );
     let config = config_artifact_root(load_profile("minimal"), &root);
+    let config_version = config["config_version"].as_str().unwrap().to_owned();
     let mut request = base_request(
         config,
         checked(
@@ -599,7 +600,7 @@ fn report_ledger_derives_current_checkpoint_instead_of_copying_state() {
                 "agent",
                 "implementation-report.json",
                 "r15",
-                "minimal-12",
+                &config_version,
             ),
             (sequence + 1) as u64,
         ));
