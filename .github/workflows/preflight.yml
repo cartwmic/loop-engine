@@ -102,17 +102,40 @@ jobs:
           "$SCCACHE_PATH" --start-server
           "$SCCACHE_PATH" --zero-stats
           "$SCCACHE_PATH" --show-stats --stats-format=json
+      - name: Restore Cargo build outputs
+        id: cargo_build_cache
+        uses: swatinem/rust-cache@v2
+        with:
+          shared-key: loop-engine-preflight-v1
+          cache-workspace-crates: "true"
+          cache-bin: "false"
+      - name: Restore pinned Cargo tools
+        id: cargo_tools_cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/loop-engine-cargo-tools
+          key: loop-engine-tools-v1-${{ runner.os }}-${{ runner.arch }}-nextest-0.9.143-machete-0.9.2-${{ hashFiles('rust-toolchain.toml') }}
+      - name: Activate pinned Cargo tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'CI_TOOL_ROOT=%s\n' "$RUNNER_TEMP/loop-engine-cargo-tools" >> "$GITHUB_ENV"
+          printf '%s\n' "$RUNNER_TEMP/loop-engine-cargo-tools/bin" >> "$GITHUB_PATH"
+          printf 'cargo_tools_cache_hit=%s\n' '${{ steps.cargo_tools_cache.outputs.cache-hit }}'
+          printf 'cargo_build_cache_hit=%s\n' '${{ steps.cargo_build_cache.outputs.cache-hit }}'
       - name: Install pinned cargo-nextest
         shell: bash
         run: |
           set -euo pipefail
-          cargo install cargo-nextest --version 0.9.143 --locked
+          cargo install cargo-nextest --version 0.9.143 --locked --root "$CI_TOOL_ROOT"
+          test -x "$CI_TOOL_ROOT/bin/cargo-nextest"
           python3 scripts/assert-nextest.py
       - name: Install pinned cargo-machete
         shell: bash
         run: |
           set -euo pipefail
-          cargo install cargo-machete --version 0.9.2 --locked
+          cargo install cargo-machete --version 0.9.2 --locked --root "$CI_TOOL_ROOT"
+          test -x "$CI_TOOL_ROOT/bin/cargo-machete"
           test "$(cargo machete --version)" = "0.9.2"
       - name: Validate repository test tooling
         shell: bash

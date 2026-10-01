@@ -115,8 +115,24 @@ def validate_preflight(preflight: str) -> None:
         '"$SCCACHE_PATH" --start-server',
         '"$SCCACHE_PATH" --zero-stats',
         '"$SCCACHE_PATH" --show-stats --stats-format=json',
-        "cargo install cargo-nextest --version 0.9.143 --locked",
-        "cargo install cargo-machete --version 0.9.2 --locked",
+        # Exact tools live in an isolated cached install root, not the runner's
+        # ambient Cargo bin directory. Installs and version checks still run.
+        "name: Restore pinned Cargo tools",
+        "uses: actions/cache@v5",
+        "path: ${{ runner.temp }}/loop-engine-cargo-tools",
+        "key: loop-engine-tools-v1-${{ runner.os }}-${{ runner.arch }}-nextest-0.9.143-machete-0.9.2-${{ hashFiles('rust-toolchain.toml') }}",
+        "name: Activate pinned Cargo tools",
+        '"$RUNNER_TEMP/loop-engine-cargo-tools" >> "$GITHUB_ENV"',
+        '"$RUNNER_TEMP/loop-engine-cargo-tools/bin" >> "$GITHUB_PATH"',
+        'cargo install cargo-nextest --version 0.9.143 --locked --root "$CI_TOOL_ROOT"',
+        'test -x "$CI_TOOL_ROOT/bin/cargo-nextest"',
+        'cargo install cargo-machete --version 0.9.2 --locked --root "$CI_TOOL_ROOT"',
+        'test -x "$CI_TOOL_ROOT/bin/cargo-machete"',
+        "name: Restore Cargo build outputs",
+        "uses: swatinem/rust-cache@v2",
+        "shared-key: loop-engine-preflight-v1",
+        'cache-workspace-crates: "true"',
+        'cache-bin: "false"',
         'test "$(cargo machete --version)" = "0.9.2"',
         # Tool, timeout, structure, inventory, and dependency assertions.
         "python3 scripts/assert-nextest.py --self-test",
@@ -240,6 +256,15 @@ def validate_preflight(preflight: str) -> None:
     dagu_at = position(preflight, "Install operator-provided dagu")
     runtime_export = position(preflight, "name: Export GitHub Actions cache runtime variables")
     cache_start = position(preflight, '"$SCCACHE_PATH" --start-server')
+    build_cache = position(preflight, "Restore Cargo build outputs")
+    tool_cache = position(preflight, "Restore pinned Cargo tools")
+    tool_activation = position(preflight, "Activate pinned Cargo tools")
+    require(
+        cache_start < build_cache < tool_cache < tool_activation,
+        "compiler cache startup and cache restoration must precede pinned-tool activation",
+    )
+    tool_cache_step = preflight.split("- name: Restore pinned Cargo tools", 1)[1].split("- name:", 1)[0]
+    require("restore-keys:" not in tool_cache_step, "pinned tool cache must not fall back to a different tool set")
     nextest_install = position(preflight, "Install pinned cargo-nextest")
     nextest_install_command = position(preflight, "cargo install cargo-nextest --version 0.9.143 --locked")
     nextest_version_check = preflight.find("python3 scripts/assert-nextest.py", nextest_install_command)
@@ -248,7 +273,7 @@ def validate_preflight(preflight: str) -> None:
     require(runtime_export < cache_start, "GHA cache runtime variables must be exported before sccache startup")
     require(nextest_version_check >= 0, "pinned cargo-nextest install must run the canonical version check")
     require(
-        cache_start
+        tool_activation
         < nextest_install
         < nextest_install_command
         < nextest_version_check
@@ -339,6 +364,14 @@ def self_test(dispatcher: str, preflight: str) -> int:
         ("sccache version", 'test "$("$SCCACHE_PATH" --version)" = "sccache 0.17.0"', "sccache version check"),
         ("cache runtime export", "core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');", "GHA cache runtime export"),
         ("cache startup", '"$SCCACHE_PATH" --start-server', "sccache startup"),
+        ("tool cache", "uses: actions/cache@v5", "pinned-tool cache"),
+        ("tool cache identity", "loop-engine-tools-v1-${{ runner.os }}-${{ runner.arch }}-nextest-0.9.143-machete-0.9.2", "tool-cache platform and pin identity"),
+        ("tool path activation", '"$RUNNER_TEMP/loop-engine-cargo-tools/bin" >> "$GITHUB_PATH"', "pinned-tool path activation"),
+        ("nextest executable", 'test -x "$CI_TOOL_ROOT/bin/cargo-nextest"', "restored nextest executable check"),
+        ("machete executable", 'test -x "$CI_TOOL_ROOT/bin/cargo-machete"', "restored machete executable check"),
+        ("Cargo output cache", "uses: swatinem/rust-cache@v2", "Cargo output cache"),
+        ("workspace output cache", 'cache-workspace-crates: "true"', "workspace output caching"),
+        ("ambient bin exclusion", 'cache-bin: "false"', "isolated tool-cache boundary"),
         ("nextest install", "cargo install cargo-nextest --version 0.9.143 --locked", "pinned cargo-nextest install"),
         ("nextest version", "python3 scripts/assert-nextest.py", "canonical cargo-nextest version check"),
         ("machete install", "cargo install cargo-machete --version 0.9.2 --locked", "pinned cargo-machete install"),
@@ -424,9 +457,26 @@ def self_test(dispatcher: str, preflight: str) -> int:
     else:
         raise PreflightError("self-test accepted a Cargo invocation before cache startup")
 
+    # A broad restore prefix could select a different pinned tool set; moving
+    # activation ahead of restoration could silently choose ambient binaries.
+    cache_path = "path: ${{ runner.temp }}/loop-engine-cargo-tools"
+    fallback = preflight.replace(cache_path, cache_path + "\n          restore-keys: loop-engine-tools-", 1)
+    restore_name = "name: Restore pinned Cargo tools"
+    activate_name = "name: Activate pinned Cargo tools"
+    activation_first = preflight.replace(restore_name, "name: CACHE_ORDER_SWAP", 1).replace(
+        activate_name, restore_name, 1,
+    ).replace("name: CACHE_ORDER_SWAP", activate_name, 1)
+    for label, broken in (("tool fallback key", fallback), ("activation before restore", activation_first)):
+        try:
+            validate(dispatcher, broken)
+        except PreflightError:
+            continue
+        raise PreflightError(f"self-test accepted {label}")
+
     print(
         "push-main preflight assertion self-test passed: real workflow valid; "
-        "tool, ordering, inventory, stock, cache, and audit removals rejected"
+        "tool, ordering, inventory, stock, cache, and audit removals rejected; "
+        "tool fallback and activation-order regressions rejected"
     )
     return 0
 
