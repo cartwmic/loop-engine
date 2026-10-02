@@ -139,6 +139,9 @@ const OVERLAY_MEANING_OVERRUN: &str =
 
 fn overlay_meaning(status: ProjectedInvocationStatus) -> &'static str {
     match status {
+        ProjectedInvocationStatus::Unknown => {
+            "Historical execution is unsampled; external execution is unknown."
+        }
         ProjectedInvocationStatus::Succeeded => OVERLAY_MEANING_SUCCEEDED,
         ProjectedInvocationStatus::Failed => OVERLAY_MEANING_FAILED,
         ProjectedInvocationStatus::Running => OVERLAY_MEANING_RUNNING,
@@ -1082,6 +1085,69 @@ where
         &current_subjects,
     ) {
         Ok(projection) => OperationOutcome::completed(projection),
+        Err(error) => OperationOutcome::error(error.code(), error.to_string()),
+    }
+}
+
+/// Read the complete durable projection without sampling or owning execution.
+pub fn execute_passive<P: Persistence + ?Sized>(
+    request: Request,
+    persistence: &P,
+    now: Timestamp,
+    arm: bool,
+) -> OperationOutcome<ShowProjection> {
+    let data = match if arm {
+        persistence.load_show_data(&request.run_id)
+    } else {
+        persistence.load_status_data(&request.run_id)
+    } {
+        Ok(data) => data,
+        Err(error) => return persistence_error(error),
+    };
+    let instructions = data
+        .run
+        .workflow
+        .states
+        .iter()
+        .find(|state| state.id == data.run.current_state)
+        .map(|state| state.instructions.clone());
+    let invocations = match persistence.load_work_slot_invocations(&request.run_id) {
+        Ok(rows) => rows,
+        Err(error) => return persistence_error(error),
+    };
+    let mut subjects = BTreeMap::new();
+    for slot in &data.run.workflow.work_slots {
+        match persistence.get_current_slot_subject(&request.run_id, &slot.id) {
+            Ok(Some(subject)) => {
+                subjects.insert(slot.id.clone(), subject);
+            }
+            Ok(None) => {}
+            Err(error) => return persistence_error(error),
+        }
+    }
+    match project_with_invocations_and_subjects_by_identity(
+        data,
+        &invocations,
+        now,
+        |_| false,
+        &subjects,
+    ) {
+        Ok(mut projection) => {
+            if let Some(instructions) = instructions {
+                projection.current_state_instructions = instructions;
+            }
+            for (view, record) in projection
+                .work_slot_invocations
+                .iter_mut()
+                .zip(&invocations)
+            {
+                if record.status.is_none() {
+                    view.status = ProjectedInvocationStatus::Unknown;
+                    view.overlay_meaning = overlay_meaning(view.status).to_owned();
+                }
+            }
+            OperationOutcome::completed(projection)
+        }
         Err(error) => OperationOutcome::error(error.code(), error.to_string()),
     }
 }

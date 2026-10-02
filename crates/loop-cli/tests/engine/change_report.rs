@@ -372,3 +372,51 @@ fn show_projects_durable_change_report_without_capture_files() {
             .expect("repeated empty invocation")["change_report"]["dimensions"]
     );
 }
+
+#[test]
+fn external_work_full_show_keeps_pending_history_unsampled() {
+    let directory = tempdir().expect("tempdir");
+    let database = directory.path().join("loop.sqlite");
+    let persistence = SqlitePersistence::open(&database).expect("sqlite");
+    persistence
+        .create_run(CreateRunRequest::new(
+            "report-run",
+            None,
+            workflow(),
+            ProviderAssociation::new(json!({"identity":"provider-v1"})),
+            json!({}),
+            "start",
+            Lifecycle::Active,
+            Timestamp::from_unix_millis(1),
+            "provider-v1",
+            None,
+        ))
+        .expect("run");
+    persistence
+        .load_show_data(&"report-run".into())
+        .expect("observe");
+    persistence
+        .create_work_slot_invocation(CreateWorkSlotInvocationRequest::new(
+            "report-run",
+            "pending",
+            "review",
+            loop_core::WorkSlotBinding::new("external-driver", vec!["opaque".to_owned()]),
+            "digest",
+            "subject",
+            0,
+            Timestamp::from_unix_millis(2),
+            1000,
+            directory.path().join("missing-capture").to_string_lossy(),
+        ))
+        .expect("historical pending row");
+    let result = show(&database);
+    let row = &result["result"]["work_slot_invocations"][0];
+    assert_eq!(row["invocation_id"], "pending");
+    assert_eq!(row["status"], "unknown");
+    assert_eq!(row["binding"]["command"], "external-driver");
+    assert!(row["overlay_meaning"]
+        .as_str()
+        .unwrap()
+        .contains("unsampled"));
+    assert_eq!(result["result"]["current_state_instructions"], "review");
+}

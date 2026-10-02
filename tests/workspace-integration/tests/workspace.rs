@@ -13,12 +13,8 @@ mod bookends_check_backlog_t09_public;
 mod bookends_check_cli;
 #[path = "../../../crates/bookends-check/tests/graph.rs"]
 mod bookends_check_graph;
-#[path = "../../../crates/loop-cli/tests/dagu.rs"]
-mod loop_cli_dagu;
 #[path = "../../../crates/loop-cli/tests/engine.rs"]
 mod loop_cli_engine;
-#[path = "../../../crates/loop-cli/tests/workers.rs"]
-mod loop_cli_workers;
 #[path = "../../../crates/loop-integrations/tests/concurrency.rs"]
 mod loop_integrations_concurrency;
 #[path = "../../../crates/loop-integrations/tests/provider_gateway.rs"]

@@ -560,6 +560,7 @@ fn current_timestamp() -> Timestamp {
 
 fn overlay_status_label(status: ProjectedInvocationStatus) -> &'static str {
     match status {
+        ProjectedInvocationStatus::Unknown => "unknown",
         ProjectedInvocationStatus::Running => "running",
         ProjectedInvocationStatus::Succeeded => "succeeded",
         ProjectedInvocationStatus::Failed => "failed",

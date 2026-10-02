@@ -458,6 +458,8 @@ pub enum WaiterWrittenStatus {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProjectedInvocationStatus {
+    /// Historical pending execution; no liveness sample was taken.
+    Unknown,
     Running,
     Succeeded,
     Failed,

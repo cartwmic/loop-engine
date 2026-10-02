@@ -4,6 +4,7 @@
 //! provider.  The provider records the bytes it receives, while the test-owned
 //! SQLite trigger is the only fault injection used here.
 
+use super::bounded_process::CommandExt;
 use loop_core::{State, Transition, WorkSlot, Workflow};
 use rusqlite::Connection;
 use serde_json::{json, Value};
@@ -1246,4 +1247,30 @@ fn external_work_supplied_typed_advice_closes_departure_public_binary() {
         show_full(&fixture, "advice-external")["result"]["current_state"],
         "done"
     );
+}
+
+#[test]
+fn external_work_retired_commands_are_unknown_public_binary() {
+    let binary = workspace_integration::binary("loop-engine");
+    let help = Command::new(&binary)
+        .arg("--help")
+        .bounded_output("external work help")
+        .expect("help process");
+    assert!(help.status.success());
+    let help = String::from_utf8(help.stdout).expect("help text");
+    for command in ["invoke", "fan-out", "capture-command", "preview-bindings"] {
+        assert!(
+            !help.contains(command),
+            "retired command in help: {command}"
+        );
+        let output = Command::new(&binary)
+            .arg(command)
+            .bounded_output("external retired command")
+            .expect("command process");
+        assert_eq!(output.status.code(), Some(2), "{command}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("unknown operation"),
+            "{command}"
+        );
+    }
 }

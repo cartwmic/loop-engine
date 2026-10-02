@@ -957,9 +957,8 @@ fn public_monitor_projects_accepted_observation_and_stays_unknown_without_it() {
         .is_some_and(|text| text.starts_with("observation:"))));
     assert!(locators.iter().any(|value| value == &json!(locator)));
     assert_eq!(accepted["acceptance"]["uncertainty"]["state"], "present");
-    // Machine execution completion and the accepted result remain separate
-    // lanes of the same snapshot.
-    assert_eq!(accepted["execution"]["state"], "succeeded");
+    // External execution is not sampled; attributed acceptance stays separate.
+    assert_eq!(accepted["execution"]["state"], "unknown");
     assert_ne!(accepted["acceptance"], accepted["execution"]);
 
     let without = monitor_snapshot(&database, "monitor-run", None);

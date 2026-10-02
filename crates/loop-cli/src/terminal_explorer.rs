@@ -8,7 +8,7 @@ use loop_core::{HistoryEntry, ShowProjection};
 use std::io::{self, IsTerminal};
 
 #[cfg(unix)]
-use crate::{fan_out, EXIT_COMPLETED};
+use crate::EXIT_COMPLETED;
 #[cfg(unix)]
 use loop_core::{
     DurableEvaluationResult, HistoryAction, Lifecycle, ProjectedInvocationStatus,
@@ -32,16 +32,7 @@ struct ExplorerAssignment {
 }
 
 #[cfg(unix)]
-fn worker_definition(binding: &loop_core::WorkSlotBinding, id: &str) -> serde_json::Value {
-    if binding.args.first().map(String::as_str) == Some("fan-out") {
-        if let Ok(parsed) = fan_out::parse_fan_out_args(binding.args.iter().skip(1)) {
-            for (index, worker) in parsed.workers.iter().enumerate() {
-                if fan_out::assignment_id(index) == id {
-                    return serde_json::to_value(worker).unwrap_or_default();
-                }
-            }
-        }
-    }
+fn worker_definition(binding: &loop_core::WorkSlotBinding, _id: &str) -> serde_json::Value {
     serde_json::json!({"command": binding.command, "args": binding.args})
 }
 
@@ -61,14 +52,6 @@ impl ListItem {
                 "assignment:{}:{}",
                 assignment.slot_id, assignment.label.assignment_id
             ),
-        }
-    }
-
-    #[cfg(test)]
-    fn assignment_id(&self) -> Option<&str> {
-        match self {
-            Self::State(_) => None,
-            Self::Assignment(assignment) => Some(&assignment.label.assignment_id),
         }
     }
 
@@ -150,36 +133,6 @@ impl ExplorerModel {
             .map(|slot| (slot.id.to_string(), slot.state.to_string()))
             .collect::<BTreeMap<_, _>>();
         let mut assignment_map = BTreeMap::<(String, String), ExplorerAssignment>::new();
-
-        // Frozen direct fan-out bindings declare opaque display descriptors
-        // before any worker output exists. They are a work list, not evidence
-        // that an invocation ran.
-        let engine_binary = std::env::current_exe().ok();
-        for (slot_id, binding) in &projection.effective_bindings {
-            let is_engine_fan_out = engine_binary.as_deref().is_some_and(|engine| {
-                crate::same_executable_file(engine, std::path::Path::new(&binding.command))
-            });
-            if !is_engine_fan_out {
-                continue;
-            }
-            let Some(labels) = fan_out::enumerate_bound_assignment_labels(binding) else {
-                continue;
-            };
-            for label in labels {
-                assignment_map.insert(
-                    (slot_id.clone(), label.assignment_id.clone()),
-                    ExplorerAssignment {
-                        slot_id: slot_id.clone(),
-                        state_id: slot_states.get(slot_id).cloned(),
-                        label: label.clone(),
-                        execution: "configured".to_owned(),
-                        conformance: "unknown".to_owned(),
-                        dependencies: None,
-                        stored_data: worker_definition(binding, &label.assignment_id),
-                    },
-                );
-            }
-        }
 
         let mut invocations = projection.work_slot_invocations.iter().collect::<Vec<_>>();
         invocations.sort_by_key(|invocation| invocation.started_at);
@@ -451,6 +404,7 @@ impl ExplorerModel {
 #[cfg(unix)]
 fn invocation_status(status: ProjectedInvocationStatus) -> String {
     match status {
+        ProjectedInvocationStatus::Unknown => "unknown",
         ProjectedInvocationStatus::Running => "running",
         ProjectedInvocationStatus::Succeeded => "succeeded",
         ProjectedInvocationStatus::Failed => "failed",
@@ -740,19 +694,6 @@ fn run_unix(projection: &ShowProjection, history: &[HistoryEntry]) -> Execution 
         stdout: String::new(),
         stderr: String::new(),
     }
-}
-
-#[cfg(all(test, unix))]
-fn render_frame(
-    model: &ExplorerModel,
-    selected: &str,
-    detail_offset: usize,
-    size: TerminalSize,
-    frame: u64,
-) -> String {
-    let mut view = ExplorerView::new(selected.to_owned());
-    view.details.entry(selected.to_owned()).or_default().offset = detail_offset;
-    render_view(model, &mut view, size, frame)
 }
 
 #[cfg(unix)]
@@ -1133,9 +1074,7 @@ fn read_key(timeout_ms: i32) -> io::Result<Option<Key>> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use loop_core::{
-        RequestableEvent, State, Transition, TransitionKind, WorkSlot, Workflow, WorkflowId,
-    };
+    use loop_core::{RequestableEvent, State, Transition, TransitionKind, Workflow, WorkflowId};
     use serde_json::json;
 
     fn empty_projection(workflow: Option<Workflow>) -> ShowProjection {
@@ -1203,47 +1142,6 @@ mod tests {
     }
 
     #[test]
-    fn graphless_projection_is_a_work_list_without_fabricated_barriers() {
-        let mut projection = empty_projection(None);
-        projection.work_slots = vec![WorkSlot::new("tasks", "middle", "inspect")];
-        projection.effective_bindings.insert(
-            "tasks".to_owned(),
-            loop_core::WorkSlotBinding::new(
-                std::env::current_exe()
-                    .unwrap()
-                    .to_string_lossy()
-                    .into_owned(),
-                vec![
-                    "fan-out".to_owned(),
-                    "--worker".to_owned(),
-                    serde_json::to_string(&json!({
-                        "command":"true","args":[],"title":"Task one","role":"worker"
-                    }))
-                    .unwrap(),
-                ],
-            ),
-        );
-        let model = ExplorerModel::from_projection(&projection, &[]);
-        assert_eq!(
-            model.initial_selection().as_deref(),
-            Some("assignment:tasks:worker-0")
-        );
-        let frame = render_frame(
-            &model,
-            &model.initial_selection().unwrap(),
-            0,
-            TerminalSize {
-                rows: 24,
-                columns: 80,
-            },
-            1,
-        );
-        assert!(frame.contains("Work list — no stored workflow graph"));
-        assert!(frame.contains("assignment:worker-0"));
-        assert!(!frame.to_ascii_lowercase().contains("barrier"));
-    }
-
-    #[test]
     fn checked_denial_stays_distinct_from_requestability_and_visitation() {
         let transition = Transition::new("middle", "advance", "end", TransitionKind::Checked);
         let mut projection = empty_projection(Some(Workflow::new(
@@ -1276,44 +1174,5 @@ mod tests {
         assert!(joined.contains("checked-not-allowed"));
         assert!(joined.contains("visited: false"));
         assert!(joined.contains("visited does not mean passed"));
-    }
-
-    #[test]
-    fn stable_assignment_identity_includes_its_frozen_slot() {
-        let mut projection = empty_projection(Some(
-            Workflow::new(
-                "workflow",
-                "middle",
-                vec![State::new("middle", "Middle", "", false)],
-                vec![Transition::check_free("middle", "inspect", "middle")],
-            )
-            .with_work_slots(vec![WorkSlot::new("tasks", "middle", "inspect")]),
-        ));
-        projection.work_slots = projection
-            .workflow_graph
-            .as_ref()
-            .unwrap()
-            .work_slots
-            .clone();
-        projection.effective_bindings.insert(
-            "tasks".to_owned(),
-            loop_core::WorkSlotBinding::new(
-                std::env::current_exe()
-                    .unwrap()
-                    .to_string_lossy()
-                    .into_owned(),
-                vec![
-                    "fan-out".to_owned(),
-                    "--worker".to_owned(),
-                    serde_json::to_string(&json!({
-                        "command":"true","args":[],"title":"Task one","role":"worker"
-                    }))
-                    .unwrap(),
-                ],
-            ),
-        );
-        let model = ExplorerModel::from_projection(&projection, &[]);
-        assert_eq!(model.items[1].key(), "assignment:tasks:worker-0");
-        assert_eq!(model.items[1].assignment_id(), Some("worker-0"));
     }
 }

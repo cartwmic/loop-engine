@@ -5,42 +5,25 @@
 //! core operation outcome.  Workflow and provider policy remain in the core
 //! and integration crates respectively.
 
-mod advice;
-mod cancel_invocation;
-mod dagu;
-mod fan_out;
-mod fan_out_recovery;
-mod invocation_progress;
-mod preview_bindings;
+pub mod monitor;
 mod targeted_read;
 mod terminal_explorer;
 mod visibility;
 
-pub use dagu::{names_for_capture_root, resolve_dagu, write_locator, DaguError, DaguLocator};
-#[cfg(unix)]
-pub mod capture;
-pub mod monitor;
-pub use fan_out::FanOutArgs;
-
 use loop_core::{
-    self as core, AppendContextRequest, CompleteWorkSlotInvocationRequest, EventRequest,
-    HistoryRequest, InnerWorker, InvocationId, InvokeRequest, OperationOutcome, Persistence,
-    ProcessError, ProviderResolutionError, RunId, ShowRequest, StartRequest, StartedWaiter,
-    TerminateRunRequest, Timestamp, WaiterSpawnArgs, WaiterWrittenStatus, WorkSlotProcess,
-    WorkerAttempt,
+    self as core, AppendContextRequest, EventRequest, HistoryRequest, OperationOutcome,
+    Persistence, ProviderResolutionError, RunId, StartRequest, TerminateRunRequest, Timestamp,
 };
 use loop_integrations::{
     ConfiguredProviderResolver, ProviderConfiguration, SqlitePersistence, SubprocessProviderGateway,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
-use std::io::{self, IsTerminal, Read, Write};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::{self, Command, Stdio};
+use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -53,23 +36,6 @@ pub const EXIT_REJECTED: i32 = 10;
 pub const EXIT_ERROR: i32 = 20;
 /// Exit status for malformed CLI syntax or input.
 pub const EXIT_INVALID_INVOCATION: i32 = 2;
-
-/// Exit mode for the hidden `stdin-exec` helper.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum StdinExecExitMode {
-    Sidecar,
-    Propagate,
-}
-
-/// Parsed values for hidden `loop-engine stdin-exec`.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StdinExecArgs {
-    pub stdin_file: PathBuf,
-    pub exit_mode: StdinExecExitMode,
-    pub sidecar_file: Option<PathBuf>,
-    pub command: String,
-    pub args: Vec<String>,
-}
 
 const DEFAULT_PROVIDER_TIMEOUT: Duration = Duration::from_secs(30);
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -107,8 +73,12 @@ impl Default for CliOptions {
     }
 }
 
-/// The eight primary CLI operations.
+/// The primary CLI operations.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "preserve the public parsed operation payload shape"
+)]
 pub enum PrimaryCommand {
     Start(StartArgs),
     List,
@@ -122,24 +92,7 @@ pub enum PrimaryCommand {
         driver_act: Option<core::DriverActRequest>,
     },
     History(RunId),
-    AmendBinding {
-        run_id: RunId,
-        slot_id: String,
-        request: core::operations::amend_binding::Request,
-    },
     Terminate(RunId),
-    CancelInvocation {
-        run_id: RunId,
-        invocation_id: InvocationId,
-    },
-    Invoke {
-        run_id: RunId,
-        slot_id: String,
-        assignment_selection: Option<Vec<String>>,
-        invocation_input: Option<Value>,
-        controls: core::InvocationControls,
-        preview: bool,
-    },
 }
 
 impl PrimaryCommand {
@@ -151,10 +104,7 @@ impl PrimaryCommand {
             Self::Append(_) => "append",
             Self::Event { .. } => "event",
             Self::History(_) => "history",
-            Self::AmendBinding { .. } => "amend-binding",
             Self::Terminate(_) => "terminate",
-            Self::CancelInvocation { .. } => "cancel-invocation",
-            Self::Invoke { .. } => "invoke",
         }
     }
 }
@@ -193,52 +143,9 @@ pub enum ParsedRequest {
         options: CliOptions,
         command: PrimaryCommand,
     },
-    WaitInvocation {
-        options: CliOptions,
-        run_id: RunId,
-        invocation_id: InvocationId,
-    },
-    StdinExec {
-        args: StdinExecArgs,
-    },
-    FanOut {
-        options: CliOptions,
-        args: FanOutArgs,
-    },
-    FanOutJoin {
-        capture_dir: PathBuf,
-    },
-    FanOutBarrier {
-        capture_dir: PathBuf,
-    },
-    FanOutWorker {
-        capture_dir: PathBuf,
-        worker_index: usize,
-    },
-    PreviewBindings {
-        options: CliOptions,
-        operand: Option<String>,
-    },
-    InvocationProgress {
-        options: CliOptions,
-        run_id: RunId,
-        invocation_id: Option<InvocationId>,
-    },
-    Advice {
-        options: CliOptions,
-        run_id: RunId,
-        request_source: String,
-    },
     TerminalExplore {
         options: CliOptions,
         run_id: RunId,
-    },
-    RecoveryPreview {
-        origin_invocation_id: String,
-        source: Option<String>,
-    },
-    RecoverOutput {
-        source: String,
     },
 }
 
@@ -307,23 +214,11 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
     let mut data = None;
     let mut record_id = None;
     let mut event = None;
-    let mut fan_out_tokens = Vec::new();
-    let mut stdin_file = None;
-    let mut exit_mode = None;
-    let mut sidecar_file = None;
-    let mut capture_dir = None;
-    let mut worker_index = None;
     let mut compact = false;
     let mut show_view_seen = false;
-    let mut assignment_selection: Option<Vec<String>> = None;
-    let mut invoke_controls = None;
     let mut event_override = None;
     let mut event_advice_exception = None;
     let mut event_driver_act = None;
-    let mut invoke_preview = false;
-    let mut assignment_flags_seen = false;
-    let mut assignments_option_seen = false;
-
     let mut index = 0;
     while index < args.len() {
         let token = &args[index];
@@ -657,132 +552,6 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
                     index += 1;
                     continue;
                 }
-                "--worker" => {
-                    let value = next_option_value(args, &mut index, token)?;
-                    fan_out_tokens.push("--worker".to_owned());
-                    fan_out_tokens.push(value);
-                    continue;
-                }
-                "--then" => {
-                    fan_out_tokens.push("--then".to_owned());
-                    index += 1;
-                    continue;
-                }
-                value if value.starts_with("--worker=") => {
-                    fan_out_tokens.push("--worker".to_owned());
-                    fan_out_tokens.push(
-                        value
-                            .strip_prefix("--worker=")
-                            .expect("checked prefix")
-                            .to_owned(),
-                    );
-                    index += 1;
-                    continue;
-                }
-                "--instructions" => {
-                    let value = next_option_value(args, &mut index, token)?;
-                    fan_out_tokens.push("--instructions".to_owned());
-                    fan_out_tokens.push(value);
-                    continue;
-                }
-                value if value.starts_with("--instructions=") => {
-                    fan_out_tokens.push("--instructions".to_owned());
-                    fan_out_tokens.push(
-                        value
-                            .strip_prefix("--instructions=")
-                            .expect("checked prefix")
-                            .to_owned(),
-                    );
-                    index += 1;
-                    continue;
-                }
-                "--max-active" => {
-                    let value = next_option_value(args, &mut index, token)?;
-                    fan_out_tokens.push("--max-active".to_owned());
-                    fan_out_tokens.push(value);
-                    continue;
-                }
-                value if value.starts_with("--max-active=") => {
-                    fan_out_tokens.push("--max-active".to_owned());
-                    fan_out_tokens.push(
-                        value
-                            .strip_prefix("--max-active=")
-                            .expect("checked prefix")
-                            .to_owned(),
-                    );
-                    index += 1;
-                    continue;
-                }
-                "--stdin-file" => {
-                    stdin_file = Some(next_option_value(args, &mut index, token)?);
-                    continue;
-                }
-                value if value.starts_with("--stdin-file=") => {
-                    stdin_file = Some(
-                        value
-                            .strip_prefix("--stdin-file=")
-                            .expect("checked prefix")
-                            .to_owned(),
-                    );
-                    index += 1;
-                    continue;
-                }
-                "--exit-mode" => {
-                    exit_mode = Some(next_option_value(args, &mut index, token)?);
-                    continue;
-                }
-                value if value.starts_with("--exit-mode=") => {
-                    exit_mode = Some(
-                        value
-                            .strip_prefix("--exit-mode=")
-                            .expect("checked prefix")
-                            .to_owned(),
-                    );
-                    index += 1;
-                    continue;
-                }
-                "--sidecar-file" => {
-                    sidecar_file = Some(next_option_value(args, &mut index, token)?);
-                    continue;
-                }
-                value if value.starts_with("--sidecar-file=") => {
-                    sidecar_file = Some(
-                        value
-                            .strip_prefix("--sidecar-file=")
-                            .expect("checked prefix")
-                            .to_owned(),
-                    );
-                    index += 1;
-                    continue;
-                }
-                "--capture-dir" => {
-                    capture_dir = Some(next_option_value(args, &mut index, token)?);
-                    continue;
-                }
-                value if value.starts_with("--capture-dir=") => {
-                    capture_dir = Some(
-                        value
-                            .strip_prefix("--capture-dir=")
-                            .expect("checked prefix")
-                            .to_owned(),
-                    );
-                    index += 1;
-                    continue;
-                }
-                "--worker-index" => {
-                    worker_index = Some(next_option_value(args, &mut index, token)?);
-                    continue;
-                }
-                value if value.starts_with("--worker-index=") => {
-                    worker_index = Some(
-                        value
-                            .strip_prefix("--worker-index=")
-                            .expect("checked prefix")
-                            .to_owned(),
-                    );
-                    index += 1;
-                    continue;
-                }
                 value
                     if value == "--advice-exception"
                         || value.starts_with("--advice-exception=") =>
@@ -853,93 +622,6 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
                     );
                     continue;
                 }
-                "--preview" => {
-                    invoke_preview = true;
-                    index += 1;
-                    continue;
-                }
-                value if value == "--controls" || value.starts_with("--controls=") => {
-                    if invoke_controls.is_some() {
-                        return Err(CliError::new(
-                            "invalid-invocation",
-                            "--controls may be supplied once",
-                        ));
-                    }
-                    let raw = if let Some(raw) = value.strip_prefix("--controls=") {
-                        index += 1;
-                        raw.to_owned()
-                    } else {
-                        next_option_value(args, &mut index, token)?
-                    };
-                    invoke_controls = Some(
-                        serde_json::from_value::<core::InvocationControls>(parse_json_source(
-                            &raw,
-                            "invocation controls",
-                        )?)
-                        .map_err(|error| {
-                            CliError::new("invalid-invocation-controls", error.to_string())
-                        })?,
-                    );
-                    continue;
-                }
-                "--assignment" => {
-                    if assignments_option_seen {
-                        return Err(CliError::new(
-                            "invalid-invocation",
-                            "`--assignment` may not be combined with `--assignments`",
-                        ));
-                    }
-                    assignment_flags_seen = true;
-                    assignment_selection
-                        .get_or_insert_with(Vec::new)
-                        .push(next_option_value(args, &mut index, token)?);
-                    continue;
-                }
-                value if value.starts_with("--assignment=") => {
-                    if assignments_option_seen {
-                        return Err(CliError::new(
-                            "invalid-invocation",
-                            "`--assignment` may not be combined with `--assignments`",
-                        ));
-                    }
-                    assignment_flags_seen = true;
-                    assignment_selection.get_or_insert_with(Vec::new).push(
-                        value
-                            .strip_prefix("--assignment=")
-                            .expect("checked prefix")
-                            .to_owned(),
-                    );
-                    index += 1;
-                    continue;
-                }
-                "--assignments" => {
-                    if assignment_flags_seen || assignments_option_seen {
-                        return Err(CliError::new(
-                            "invalid-invocation",
-                            "`--assignments` may be supplied at most once and may not be combined with `--assignment`",
-                        ));
-                    }
-                    assignments_option_seen = true;
-                    let raw = next_option_value(args, &mut index, token)?;
-                    assignment_selection = Some(parse_assignment_selection_value(&raw)?);
-                    continue;
-                }
-                value if value.starts_with("--assignments=") => {
-                    if assignment_flags_seen || assignments_option_seen {
-                        return Err(CliError::new(
-                            "invalid-invocation",
-                            "`--assignments` may be supplied at most once and may not be combined with `--assignment`",
-                        ));
-                    }
-                    assignments_option_seen = true;
-                    assignment_selection = Some(parse_assignment_selection_value(
-                        value
-                            .strip_prefix("--assignments=")
-                            .expect("checked prefix"),
-                    )?);
-                    index += 1;
-                    continue;
-                }
                 value if value.starts_with('-') => {
                     return Err(CliError::new(
                         "invalid-invocation",
@@ -958,6 +640,17 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
         index += 1;
     }
 
+    if let Some(name) = command_name.as_deref() {
+        if !matches!(
+            name,
+            "start" | "list" | "show" | "append" | "event" | "history" | "terminate" | "explore"
+        ) {
+            return Err(CliError::new(
+                "invalid-operation",
+                format!("unknown operation `{name}`"),
+            ));
+        }
+    }
     if version {
         return Ok(ParsedRequest::Version);
     }
@@ -970,7 +663,7 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
     let command_name = command_name.ok_or_else(|| {
         CliError::new(
             "invalid-invocation",
-            "a primary operation is required (start, list, show, append, event, history, terminate, or invoke)",
+            "a primary operation is required (start, list, show, append, event, history, terminate)",
         )
     })?;
 
@@ -1028,253 +721,7 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
             "--override and --advice-exception cannot be combined",
         ));
     }
-    if command_name != "invoke" && (invoke_controls.is_some() || invoke_preview) {
-        return Err(CliError::new(
-            "invalid-invocation",
-            "--controls and --preview require invoke",
-        ));
-    }
-    if command_name != "invoke" && assignment_selection.is_some() {
-        return Err(CliError::new(
-            "invalid-invocation",
-            "assignment selection is only valid for invoke",
-        ));
-    }
-
-    if command_name == "wait-invocation" {
-        if let Some(option) = fan_out_tokens.first() {
-            return Err(CliError::new(
-                "invalid-invocation",
-                format!("unknown option `{option}`"),
-            ));
-        }
-        reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
-        reject_capture_dir_option(&capture_dir)?;
-        reject_worker_index_option(&worker_index)?;
-        return parse_wait_invocation(options, positionals);
-    }
-
-    if command_name == "stdin-exec" {
-        if let Some(option) = fan_out_tokens.first() {
-            return Err(CliError::new(
-                "invalid-invocation",
-                format!("unknown option `{option}`"),
-            ));
-        }
-        reject_capture_dir_option(&capture_dir)?;
-        reject_worker_index_option(&worker_index)?;
-        return parse_stdin_exec(stdin_file, exit_mode, sidecar_file, positionals);
-    }
-
-    if command_name == "fan-out-join" {
-        if let Some(option) = fan_out_tokens.first() {
-            return Err(CliError::new(
-                "invalid-invocation",
-                format!("unknown option `{option}`"),
-            ));
-        }
-        reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
-        reject_worker_index_option(&worker_index)?;
-        return parse_fan_out_join(capture_dir, positionals);
-    }
-
-    if command_name == "fan-out-worker" {
-        if let Some(option) = fan_out_tokens.first() {
-            return Err(CliError::new(
-                "invalid-invocation",
-                format!("unknown option `{option}`"),
-            ));
-        }
-        reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
-        return parse_fan_out_worker(capture_dir, worker_index, positionals);
-    }
-
-    if command_name == "fan-out-barrier" {
-        if let Some(option) = fan_out_tokens.first() {
-            return Err(CliError::new(
-                "invalid-invocation",
-                format!("unknown option `{option}`"),
-            ));
-        }
-        reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
-        reject_worker_index_option(&worker_index)?;
-        return parse_fan_out_barrier(capture_dir, positionals);
-    }
-
-    if command_name == "fan-out" {
-        reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
-        reject_capture_dir_option(&capture_dir)?;
-        reject_worker_index_option(&worker_index)?;
-        fan_out_tokens.extend(positionals);
-        return parse_fan_out_request(options, fan_out_tokens);
-    }
-
-    if command_name == "recovery-preview" {
-        reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
-        reject_capture_dir_option(&capture_dir)?;
-        reject_worker_index_option(&worker_index)?;
-        reject_unrelated_options(
-            "recovery-preview",
-            provider,
-            input,
-            label,
-            start_id,
-            kind,
-            data,
-            record_id,
-            event,
-        )?;
-        if run_id.is_some()
-            || options.database.is_some()
-            || options.provider_config.is_some()
-            || options.provider_timeout.is_some()
-        {
-            return Err(CliError::new(
-                "invalid-invocation",
-                "recovery-preview consumes a full show document and is provider/catalog free",
-            ));
-        }
-        if positionals.is_empty() || positionals.len() > 2 {
-            return Err(CliError::new(
-                "invalid-invocation",
-                "recovery-preview requires ORIGIN_INVOCATION_ID and optional @SHOW_FILE",
-            ));
-        }
-        let origin_invocation_id = positionals.remove(0);
-        let source = positionals.pop();
-        return Ok(ParsedRequest::RecoveryPreview {
-            origin_invocation_id,
-            source,
-        });
-    }
-
-    if command_name == "recover-output" {
-        reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
-        reject_capture_dir_option(&capture_dir)?;
-        reject_worker_index_option(&worker_index)?;
-        reject_unrelated_options(
-            "recover-output",
-            provider,
-            input,
-            label,
-            start_id,
-            kind,
-            data,
-            record_id,
-            event,
-        )?;
-        if run_id.is_some()
-            || options.database.is_some()
-            || options.provider_config.is_some()
-            || options.provider_timeout.is_some()
-        {
-            return Err(CliError::new(
-                "invalid-invocation",
-                "recover-output is a captured-file helper and does not open the run catalog",
-            ));
-        }
-        if positionals.len() != 1 {
-            return Err(CliError::new(
-                "invalid-invocation",
-                "recover-output requires @REQUEST_FILE",
-            ));
-        }
-        let source = positionals.remove(0);
-        if !source.starts_with('@') || source.len() == 1 {
-            return Err(CliError::new(
-                "invalid-invocation",
-                "recover-output request must be supplied as @REQUEST_FILE",
-            ));
-        }
-        return Ok(ParsedRequest::RecoverOutput { source });
-    }
-
-    if command_name == "preview-bindings" {
-        if let Some(option) = fan_out_tokens.first() {
-            return Err(CliError::new(
-                "invalid-invocation",
-                format!("unknown option `{option}`"),
-            ));
-        }
-        reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
-        reject_capture_dir_option(&capture_dir)?;
-        reject_worker_index_option(&worker_index)?;
-        reject_unrelated_options(
-            "preview-bindings",
-            provider,
-            input,
-            label,
-            start_id,
-            kind,
-            data,
-            record_id,
-            event,
-        )?;
-        if run_id.is_some() {
-            return Err(CliError::new(
-                "invalid-invocation",
-                "preview-bindings does not accept a run ID",
-            ));
-        }
-        return parse_preview_bindings_request(options, positionals);
-    }
-
-    if command_name == "advise" {
-        if let Some(option) = fan_out_tokens.first() {
-            return Err(CliError::new(
-                "invalid-invocation",
-                format!("unknown option `{option}`"),
-            ));
-        }
-        reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
-        reject_capture_dir_option(&capture_dir)?;
-        reject_worker_index_option(&worker_index)?;
-        reject_unrelated_options(
-            "advise", provider, input, label, start_id, kind, data, record_id, event,
-        )?;
-        if run_id.is_some() {
-            return Err(CliError::new(
-                "invalid-invocation",
-                "advise takes RUN_ID as a positional argument",
-            ));
-        }
-        if options.provider_config.is_some() || options.provider_timeout.is_some() {
-            return Err(CliError::new(
-                "invalid-invocation",
-                "advise uses only its frozen per-run command and bounds; --config and --timeout-ms do not apply",
-            ));
-        }
-        if positionals.len() != 2 {
-            return Err(CliError::new(
-                "invalid-invocation",
-                "advise requires RUN_ID and @REQUEST_FILE",
-            ));
-        }
-        let run_id = RunId::new(positionals.remove(0));
-        let request_source = positionals.remove(0);
-        if !request_source.starts_with('@') || request_source.len() == 1 {
-            return Err(CliError::new(
-                "invalid-invocation",
-                "advice request must be supplied as @REQUEST_FILE",
-            ));
-        }
-        return Ok(ParsedRequest::Advice {
-            options,
-            run_id,
-            request_source,
-        });
-    }
-
     if command_name == "explore" {
-        if let Some(option) = fan_out_tokens.first() {
-            return Err(CliError::new(
-                "invalid-invocation",
-                format!("unknown option `{option}`"),
-            ));
-        }
-        reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
-        reject_capture_dir_option(&capture_dir)?;
-        reject_worker_index_option(&worker_index)?;
         reject_unrelated_options(
             "explore", provider, input, label, start_id, kind, data, record_id, event,
         )?;
@@ -1296,46 +743,6 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
         return Ok(ParsedRequest::TerminalExplore { options, run_id });
     }
 
-    if command_name == "invocation-progress" {
-        if let Some(option) = fan_out_tokens.first() {
-            return Err(CliError::new(
-                "invalid-invocation",
-                format!("unknown option `{option}`"),
-            ));
-        }
-        reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
-        reject_capture_dir_option(&capture_dir)?;
-        reject_worker_index_option(&worker_index)?;
-        reject_unrelated_options(
-            "invocation-progress",
-            provider,
-            input,
-            label,
-            start_id,
-            kind,
-            data,
-            record_id,
-            event,
-        )?;
-        if run_id.is_some() {
-            return Err(CliError::new(
-                "invalid-invocation",
-                "invocation-progress takes RUN_ID as a positional argument",
-            ));
-        }
-        return parse_invocation_progress_request(options, positionals);
-    }
-
-    if let Some(option) = fan_out_tokens.first() {
-        return Err(CliError::new(
-            "invalid-invocation",
-            format!("unknown option `{option}`"),
-        ));
-    }
-    reject_stdin_exec_options(&stdin_file, &exit_mode, &sidecar_file)?;
-    reject_capture_dir_option(&capture_dir)?;
-    reject_worker_index_option(&worker_index)?;
-
     let mut command = parse_primary_command(
         &command_name,
         positionals,
@@ -1348,7 +755,6 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
         data,
         record_id,
         event,
-        assignment_selection,
     )?;
 
     if let PrimaryCommand::Event {
@@ -1361,13 +767,6 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
         *override_attestation = event_override;
         *advice_exception = event_advice_exception;
         *driver_act = event_driver_act;
-    }
-    if let PrimaryCommand::Invoke {
-        controls, preview, ..
-    } = &mut command
-    {
-        *controls = invoke_controls.unwrap_or_default();
-        *preview = invoke_preview;
     }
     Ok(ParsedRequest::Operation { options, command })
 }
@@ -1401,18 +800,6 @@ fn parse_output_format(value: &str) -> Result<OutputFormat, CliError> {
     }
 }
 
-fn parse_assignment_selection_value(raw: &str) -> Result<Vec<String>, CliError> {
-    if raw.trim_start().starts_with('[') {
-        return serde_json::from_str::<Vec<String>>(raw).map_err(|error| {
-            CliError::new(
-                "invalid-invocation",
-                format!("`--assignments` must be comma-separated or a JSON string array: {error}"),
-            )
-        });
-    }
-    Ok(raw.split(',').map(str::to_owned).collect())
-}
-
 fn parse_timeout(value: &str) -> Result<Duration, CliError> {
     let milliseconds = value.parse::<u64>().map_err(|_| {
         CliError::new(
@@ -1436,7 +823,6 @@ fn parse_primary_command(
     data: Option<String>,
     record_id: Option<String>,
     event: Option<String>,
-    assignment_selection: Option<Vec<String>>,
 ) -> Result<PrimaryCommand, CliError> {
     match name {
         "start" => {
@@ -1592,62 +978,10 @@ fn parse_primary_command(
             )?;
             Ok(PrimaryCommand::Terminate(run.into()))
         }
-        "cancel-invocation" => {
-            let run = required(run_id.or_else(|| take_positional(&mut positionals)), "run ID")?;
-            let id = required(take_positional(&mut positionals), "invocation ID")?;
-            ensure_no_positionals(&positionals, name)?;
-            reject_unrelated_options(name, provider, input, label, start_id, kind, data, record_id, event)?;
-            Ok(PrimaryCommand::CancelInvocation { run_id:run.into(), invocation_id:id.into() })
-        }
-        "amend-binding" => {
-            let run = required(run_id.or_else(|| take_positional(&mut positionals)), "run ID")?;
-            let slot_id = required(take_positional(&mut positionals), "slot ID")?;
-            let raw = required(take_positional(&mut positionals), "amendment JSON")?;
-            ensure_no_positionals(&positionals, name)?;
-            reject_unrelated_options(name, provider, input, label, start_id, kind, data, record_id, event)?;
-            let request = serde_json::from_value(parse_json_source(&raw, "binding amendment")?)
-                .map_err(|error| CliError::new("invalid-binding-amendment", error.to_string()))?;
-            Ok(PrimaryCommand::AmendBinding { run_id: run.into(), slot_id, request })
-        }
-        "invoke" => {
-            let run = run_id.or_else(|| take_positional(&mut positionals));
-            let run = required(run, "run ID")?;
-            let slot = take_positional(&mut positionals);
-            let slot = required(slot, "slot ID")?;
-            ensure_no_positionals(&positionals, name)?;
-            if input.is_some() && assignment_selection.is_some() {
-                return Err(CliError::new(
-                    "invalid-invocation",
-                    "`--input` may not be combined with `--assignment` or `--assignments`",
-                ));
-            }
-            let invocation_input = input
-                .map(|raw| parse_json_source(&raw, "invocation input"))
-                .transpose()?;
-            reject_unrelated_options(
-                name,
-                provider,
-                None,
-                label,
-                start_id,
-                kind,
-                data,
-                record_id,
-                event,
-            )?;
-            Ok(PrimaryCommand::Invoke {
-                run_id: run.into(),
-                slot_id: slot,
-                assignment_selection,
-                invocation_input,
-                controls: core::InvocationControls::default(),
-                preview: false,
-            })
-        }
         _ => Err(CliError::new(
             "invalid-operation",
             format!(
-                "unknown operation `{name}`; expected start, list, show, append, event, history, terminate, or invoke"
+                "unknown operation `{name}`; expected start, list, show, append, event, history, terminate"
             ),
         )),
     }
@@ -1709,53 +1043,6 @@ fn reject_unrelated_options(
     Ok(())
 }
 
-fn reject_capture_dir_option(capture_dir: &Option<String>) -> Result<(), CliError> {
-    if capture_dir.is_some() {
-        return Err(CliError::new(
-            "invalid-invocation",
-            "unknown option `--capture-dir`",
-        ));
-    }
-    Ok(())
-}
-
-fn reject_worker_index_option(worker_index: &Option<String>) -> Result<(), CliError> {
-    if worker_index.is_some() {
-        return Err(CliError::new(
-            "invalid-invocation",
-            "unknown option `--worker-index`",
-        ));
-    }
-    Ok(())
-}
-
-fn reject_stdin_exec_options(
-    stdin_file: &Option<String>,
-    exit_mode: &Option<String>,
-    sidecar_file: &Option<String>,
-) -> Result<(), CliError> {
-    if stdin_file.is_some() {
-        return Err(CliError::new(
-            "invalid-invocation",
-            "unknown option `--stdin-file`",
-        ));
-    }
-    if exit_mode.is_some() {
-        return Err(CliError::new(
-            "invalid-invocation",
-            "unknown option `--exit-mode`",
-        ));
-    }
-    if sidecar_file.is_some() {
-        return Err(CliError::new(
-            "invalid-invocation",
-            "unknown option `--sidecar-file`",
-        ));
-    }
-    Ok(())
-}
-
-/// Execute one parsed or raw CLI invocation and capture its rendered output.
 pub fn execute<I, S>(args: I) -> Execution
 where
     I: IntoIterator<Item = S>,
@@ -1803,1286 +1090,9 @@ where
         ParsedRequest::Operation { options, command } => {
             execute_operation(options, command, operation_started_at)
         }
-        ParsedRequest::WaitInvocation {
-            options,
-            run_id,
-            invocation_id,
-        } => execute_wait_invocation(options, run_id, invocation_id),
-        ParsedRequest::StdinExec { args } => execute_stdin_exec(args),
-        ParsedRequest::FanOut { options, args } => execute_fan_out(options, args),
-        ParsedRequest::FanOutJoin { capture_dir } => execute_fan_out_join(capture_dir),
-        ParsedRequest::FanOutBarrier { capture_dir } => execute_fan_out_barrier(capture_dir),
-        ParsedRequest::FanOutWorker {
-            capture_dir,
-            worker_index,
-        } => execute_fan_out_worker(capture_dir, worker_index),
-        ParsedRequest::PreviewBindings { options, operand } => {
-            execute_preview_bindings(options, operand)
-        }
-        ParsedRequest::InvocationProgress {
-            options,
-            run_id,
-            invocation_id,
-        } => invocation_progress::execute_invocation_progress(options, run_id, invocation_id),
-        ParsedRequest::Advice {
-            options,
-            run_id,
-            request_source,
-        } => advice::execute(options, run_id, request_source, operation_started_at),
         ParsedRequest::TerminalExplore { options, run_id } => {
             execute_terminal_explorer(options, run_id)
         }
-        ParsedRequest::RecoveryPreview {
-            origin_invocation_id,
-            source,
-        } => {
-            let mut stdin = io::stdin().lock();
-            match preview_bindings::load_source(source.as_deref(), &mut stdin)
-                .map_err(|error| error.message)
-                .and_then(|show| fan_out_recovery::preview_recovery(&show, &origin_invocation_id))
-            {
-                Ok(value) => json_command_result(value),
-                Err(message) => Execution {
-                    exit_code: EXIT_INVALID_INVOCATION,
-                    stdout: String::new(),
-                    stderr: format!("recovery-preview: {message}\n"),
-                },
-            }
-        }
-        ParsedRequest::RecoverOutput { source } => {
-            let mut stdin = io::stdin().lock();
-            match preview_bindings::load_source(Some(&source), &mut stdin)
-                .map_err(|error| error.message)
-                .and_then(|request| fan_out_recovery::recover_output(&request))
-            {
-                Ok(value) => json_command_result(value),
-                Err(message) => Execution {
-                    exit_code: EXIT_INVALID_INVOCATION,
-                    stdout: String::new(),
-                    stderr: format!("recover-output: {message}\n"),
-                },
-            }
-        }
-    }
-}
-
-fn json_command_result(value: Value) -> Execution {
-    match serde_json::to_string_pretty(&value) {
-        Ok(mut output) => {
-            output.push('\n');
-            Execution {
-                exit_code: EXIT_COMPLETED,
-                stdout: output,
-                stderr: String::new(),
-            }
-        }
-        Err(error) => Execution {
-            exit_code: EXIT_ERROR,
-            stdout: String::new(),
-            stderr: format!("could not serialize recovery result: {error}\n"),
-        },
-    }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct WaiterEnvelope {
-    command: String,
-    args: Vec<String>,
-    worker_packet: Value,
-}
-
-fn parse_fan_out_join(
-    capture_dir: Option<String>,
-    positionals: Vec<String>,
-) -> Result<ParsedRequest, CliError> {
-    let capture_dir = required(capture_dir, "--capture-dir path")?;
-    ensure_no_positionals(&positionals, "fan-out-join")?;
-    Ok(ParsedRequest::FanOutJoin {
-        capture_dir: PathBuf::from(capture_dir),
-    })
-}
-
-fn parse_fan_out_worker(
-    capture_dir: Option<String>,
-    worker_index: Option<String>,
-    positionals: Vec<String>,
-) -> Result<ParsedRequest, CliError> {
-    let capture_dir = required(capture_dir, "--capture-dir path")?;
-    let worker_index = required(worker_index, "--worker-index")?;
-    let worker_index = worker_index.parse::<usize>().map_err(|_| {
-        CliError::new(
-            "invalid-invocation",
-            format!("--worker-index must be a non-negative integer, got `{worker_index}`"),
-        )
-    })?;
-    ensure_no_positionals(&positionals, "fan-out-worker")?;
-    Ok(ParsedRequest::FanOutWorker {
-        capture_dir: PathBuf::from(capture_dir),
-        worker_index,
-    })
-}
-
-fn execute_fan_out_join(capture_dir: PathBuf) -> Execution {
-    match fan_out::run_fan_out_join(&capture_dir) {
-        Ok(()) => Execution {
-            exit_code: EXIT_COMPLETED,
-            stdout: String::new(),
-            stderr: String::new(),
-        },
-        Err(fan_out::CollectorError::Invalid(message)) => Execution {
-            exit_code: EXIT_INVALID_INVOCATION,
-            stdout: String::new(),
-            stderr: format!("fan-out-join error: {message}\n"),
-        },
-        Err(fan_out::CollectorError::Failed(message)) => Execution {
-            exit_code: EXIT_ERROR,
-            stdout: String::new(),
-            stderr: format!("fan-out-join error: {message}\n"),
-        },
-    }
-}
-
-fn execute_fan_out_worker(capture_dir: PathBuf, worker_index: usize) -> Execution {
-    match fan_out::run_fan_out_worker(&capture_dir, worker_index) {
-        Ok(()) => Execution {
-            exit_code: EXIT_COMPLETED,
-            stdout: String::new(),
-            stderr: String::new(),
-        },
-        Err(fan_out::CollectorError::Invalid(message)) => Execution {
-            exit_code: EXIT_INVALID_INVOCATION,
-            stdout: String::new(),
-            stderr: format!("fan-out-worker error: {message}\n"),
-        },
-        Err(fan_out::CollectorError::Failed(message)) => Execution {
-            exit_code: EXIT_ERROR,
-            stdout: String::new(),
-            stderr: format!("fan-out-worker error: {message}\n"),
-        },
-    }
-}
-
-fn parse_fan_out_barrier(
-    capture_dir: Option<String>,
-    positionals: Vec<String>,
-) -> Result<ParsedRequest, CliError> {
-    let capture_dir = required(capture_dir, "--capture-dir path")?;
-    ensure_no_positionals(&positionals, "fan-out-barrier")?;
-    Ok(ParsedRequest::FanOutBarrier {
-        capture_dir: PathBuf::from(capture_dir),
-    })
-}
-
-fn execute_fan_out_barrier(capture_dir: PathBuf) -> Execution {
-    match fan_out::run_fan_out_barrier(&capture_dir) {
-        Ok(()) => Execution {
-            exit_code: EXIT_COMPLETED,
-            stdout: String::new(),
-            stderr: String::new(),
-        },
-        Err(fan_out::CollectorError::Invalid(message)) => Execution {
-            exit_code: EXIT_INVALID_INVOCATION,
-            stdout: String::new(),
-            stderr: format!("fan-out-barrier error: {message}\n"),
-        },
-        Err(fan_out::CollectorError::Failed(message)) => Execution {
-            exit_code: EXIT_ERROR,
-            stdout: String::new(),
-            stderr: format!("fan-out-barrier error: {message}\n"),
-        },
-    }
-}
-
-fn parse_fan_out_request(
-    options: CliOptions,
-    tokens: Vec<String>,
-) -> Result<ParsedRequest, CliError> {
-    let args = fan_out::parse_fan_out_args(&tokens)
-        .map_err(|error| CliError::new("invalid-invocation", error.to_string()))?;
-    Ok(ParsedRequest::FanOut { options, args })
-}
-
-fn execute_fan_out(options: CliOptions, args: FanOutArgs) -> Execution {
-    let output = options.output;
-    let stdin_bytes = if fan_out::drain_stdin(io::stdin().is_terminal()) {
-        let mut stdin_bytes = Vec::new();
-        if let Err(error) = io::stdin().read_to_end(&mut stdin_bytes) {
-            return fan_out_failed(format!("could not read stdin: {error}"));
-        }
-        stdin_bytes
-    } else {
-        Vec::new()
-    };
-    let cwd = match std::env::current_dir() {
-        Ok(cwd) => cwd,
-        Err(error) => {
-            return fan_out_failed(format!("could not determine current directory: {error}"))
-        }
-    };
-    match fan_out::run_collector(args, &stdin_bytes, &cwd) {
-        Ok(summary) => match serde_json::to_string(&summary) {
-            Ok(stdout) => Execution {
-                exit_code: EXIT_COMPLETED,
-                stdout: format!("{stdout}\n"),
-                stderr: String::new(),
-            },
-            Err(error) => fan_out_failed(format!("could not serialize fan-out summary: {error}")),
-        },
-        Err(fan_out::CollectorError::Invalid(message)) => render_invalid_invocation_with_format(
-            CliError::new("invalid-invocation", message),
-            output,
-        ),
-        Err(fan_out::CollectorError::Failed(message)) => fan_out_failed(message),
-    }
-}
-
-fn fan_out_failed(message: String) -> Execution {
-    Execution {
-        exit_code: EXIT_ERROR,
-        stdout: String::new(),
-        stderr: format!("fan-out error: {message}\n"),
-    }
-}
-
-fn parse_preview_bindings_request(
-    options: CliOptions,
-    mut positionals: Vec<String>,
-) -> Result<ParsedRequest, CliError> {
-    let operand = take_positional(&mut positionals);
-    ensure_no_positionals(&positionals, "preview-bindings")?;
-    Ok(ParsedRequest::PreviewBindings { options, operand })
-}
-
-fn parse_invocation_progress_request(
-    options: CliOptions,
-    mut positionals: Vec<String>,
-) -> Result<ParsedRequest, CliError> {
-    let run_id = required(take_positional(&mut positionals), "run ID")?;
-    let invocation_id = take_positional(&mut positionals);
-    ensure_no_positionals(&positionals, "invocation-progress")?;
-    Ok(ParsedRequest::InvocationProgress {
-        options,
-        run_id: run_id.into(),
-        invocation_id: invocation_id.map(InvocationId::from),
-    })
-}
-
-fn execute_preview_bindings(options: CliOptions, operand: Option<String>) -> Execution {
-    let warn_default_timeout = options.provider_timeout.is_none();
-    let source = match preview_bindings::load_from_stdin_or_operand(operand.as_deref()) {
-        Ok(source) => source,
-        Err(error) => {
-            return render_invalid_invocation_with_format(
-                CliError::new("invalid-invocation", error.message),
-                options.output,
-            );
-        }
-    };
-    match preview_bindings::preview(&source, warn_default_timeout) {
-        Ok(report) => {
-            let exit_code = if report.errors.is_empty() {
-                EXIT_COMPLETED
-            } else {
-                EXIT_INVALID_INVOCATION
-            };
-            match serde_json::to_string(&report) {
-                Ok(stdout) => Execution {
-                    exit_code,
-                    stdout: format!("{stdout}\n"),
-                    stderr: String::new(),
-                },
-                Err(error) => Execution {
-                    exit_code: EXIT_ERROR,
-                    stdout: String::new(),
-                    stderr: format!("preview-bindings error: {error}\n"),
-                },
-            }
-        }
-        Err(error) => render_invalid_invocation_with_format(
-            CliError::new("invalid-invocation", error.message),
-            options.output,
-        ),
-    }
-}
-
-fn parse_stdin_exec(
-    stdin_file: Option<String>,
-    exit_mode: Option<String>,
-    sidecar_file: Option<String>,
-    mut positionals: Vec<String>,
-) -> Result<ParsedRequest, CliError> {
-    let stdin_file = required(stdin_file, "--stdin-file path")?;
-    let exit_mode_raw = required(exit_mode, "--exit-mode")?;
-    let exit_mode = match exit_mode_raw.as_str() {
-        "sidecar" => StdinExecExitMode::Sidecar,
-        "propagate" => StdinExecExitMode::Propagate,
-        other => {
-            return Err(CliError::new(
-                "invalid-invocation",
-                format!("unknown --exit-mode `{other}`; expected sidecar or propagate"),
-            ))
-        }
-    };
-    match exit_mode {
-        StdinExecExitMode::Sidecar => {
-            if sidecar_file.is_none() {
-                return Err(CliError::new(
-                    "invalid-invocation",
-                    "sidecar mode requires --sidecar-file",
-                ));
-            }
-        }
-        StdinExecExitMode::Propagate => {
-            if sidecar_file.is_some() {
-                return Err(CliError::new(
-                    "invalid-invocation",
-                    "--sidecar-file is rejected in propagate mode",
-                ));
-            }
-        }
-    }
-    let command = required(take_positional(&mut positionals), "COMMAND")?;
-    Ok(ParsedRequest::StdinExec {
-        args: StdinExecArgs {
-            stdin_file: PathBuf::from(stdin_file),
-            exit_mode,
-            sidecar_file: sidecar_file.map(PathBuf::from),
-            command,
-            args: positionals,
-        },
-    })
-}
-
-const PI_CODING_AGENT_SESSION_DIR: &str = "PI_CODING_AGENT_SESSION_DIR";
-
-/// When `PI_CODING_AGENT_SESSION_DIR` is already present in the inherited
-/// environment, leave it unchanged. Otherwise, if `--stdin-file` has a non-empty
-/// parent, create `<parent>/sessions` and return that absolute path for the child.
-fn prepare_child_session_dir(stdin_file: &Path) -> Result<Option<PathBuf>, String> {
-    if std::env::var_os(PI_CODING_AGENT_SESSION_DIR).is_some() {
-        return Ok(None);
-    }
-    let Some(parent) = stdin_file.parent() else {
-        return Ok(None);
-    };
-    if parent.as_os_str().is_empty() {
-        return Ok(None);
-    }
-    let sessions = parent.join("sessions");
-    fs::create_dir_all(&sessions).map_err(|error| {
-        format!(
-            "could not create sessions directory {}: {error}",
-            sessions.display()
-        )
-    })?;
-    if sessions.is_absolute() {
-        return Ok(Some(sessions));
-    }
-    let cwd = std::env::current_dir().map_err(|error| {
-        format!("could not resolve current directory for sessions path: {error}")
-    })?;
-    Ok(Some(cwd.join(sessions)))
-}
-
-fn execute_stdin_exec(args: StdinExecArgs) -> Execution {
-    let stdin = match fs::File::open(&args.stdin_file) {
-        Ok(file) => file,
-        Err(error) => {
-            return stdin_exec_failed(
-                format!(
-                    "could not open --stdin-file {}: {error}",
-                    args.stdin_file.display()
-                ),
-                EXIT_ERROR,
-            )
-        }
-    };
-    let session_dir = match prepare_child_session_dir(&args.stdin_file) {
-        Ok(path) => path,
-        Err(message) => return stdin_exec_failed(message, EXIT_ERROR),
-    };
-    let mut command = Command::new(&args.command);
-    command
-        .args(&args.args)
-        .stdin(Stdio::from(stdin))
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
-    if let Some(session_dir) = session_dir.as_ref() {
-        command.env(PI_CODING_AGENT_SESSION_DIR, session_dir);
-    }
-    let mut child = match loop_integrations::ownership::spawn_admitted(&mut command) {
-        Ok(child) => child,
-        Err(error) => {
-            return stdin_exec_failed(
-                format!("could not spawn `{}`: {error}", args.command),
-                EXIT_ERROR,
-            )
-        }
-    };
-    let status = match child.wait() {
-        Ok(status) => status,
-        Err(error) => {
-            return stdin_exec_failed(
-                format!("could not wait for `{}`: {error}", args.command),
-                EXIT_ERROR,
-            )
-        }
-    };
-    let exit_code = inner_waitpid_as_i32(status);
-    match args.exit_mode {
-        StdinExecExitMode::Sidecar => {
-            let Some(sidecar_file) = args.sidecar_file.as_ref() else {
-                return stdin_exec_failed(
-                    "sidecar mode requires --sidecar-file".to_owned(),
-                    EXIT_INVALID_INVOCATION,
-                );
-            };
-            if let Some(parent) = sidecar_file.parent() {
-                if !parent.as_os_str().is_empty() {
-                    if let Err(error) = fs::create_dir_all(parent) {
-                        return stdin_exec_failed(
-                            format!(
-                                "could not create sidecar directory {}: {error}",
-                                parent.display()
-                            ),
-                            EXIT_ERROR,
-                        );
-                    }
-                }
-            }
-            let body = match serde_json::to_vec(&json!({ "exit_code": exit_code })) {
-                Ok(body) => body,
-                Err(error) => {
-                    return stdin_exec_failed(
-                        format!("could not serialize sidecar JSON: {error}"),
-                        EXIT_ERROR,
-                    )
-                }
-            };
-            if let Err(error) = fs::write(sidecar_file, body) {
-                return stdin_exec_failed(
-                    format!(
-                        "could not write sidecar {}: {error}",
-                        sidecar_file.display()
-                    ),
-                    EXIT_ERROR,
-                );
-            }
-            Execution {
-                exit_code: EXIT_COMPLETED,
-                stdout: String::new(),
-                stderr: String::new(),
-            }
-        }
-        StdinExecExitMode::Propagate => Execution {
-            exit_code,
-            stdout: String::new(),
-            stderr: String::new(),
-        },
-    }
-}
-
-fn inner_waitpid_as_i32(status: process::ExitStatus) -> i32 {
-    if let Some(code) = status.code() {
-        return code;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::ExitStatusExt;
-        if let Some(signal) = status.signal() {
-            return signal;
-        }
-    }
-    1
-}
-
-fn stdin_exec_failed(message: String, exit_code: i32) -> Execution {
-    Execution {
-        exit_code,
-        stdout: String::new(),
-        stderr: format!("stdin-exec error: {message}\n"),
-    }
-}
-
-fn parse_wait_invocation(
-    options: CliOptions,
-    mut positionals: Vec<String>,
-) -> Result<ParsedRequest, CliError> {
-    let run_id = required(take_positional(&mut positionals), "run ID")?;
-    let invocation_id = required(take_positional(&mut positionals), "invocation ID")?;
-    ensure_no_positionals(&positionals, "wait-invocation")?;
-    Ok(ParsedRequest::WaitInvocation {
-        options,
-        run_id: run_id.into(),
-        invocation_id: invocation_id.into(),
-    })
-}
-
-fn execute_wait_invocation(
-    options: CliOptions,
-    run_id: RunId,
-    invocation_id: InvocationId,
-) -> Execution {
-    let output = options.output;
-    let paths = match resolve_paths(&options) {
-        Ok(paths) => paths,
-        Err(error) => return render_operation_error("wait-invocation", output, error),
-    };
-    let persistence = match open_persistence(&paths.database) {
-        Ok(persistence) => persistence,
-        Err(error) => return render_operation_error("wait-invocation", output, error),
-    };
-    let envelope = match read_waiter_envelope() {
-        Ok(envelope) => envelope,
-        Err(error) => return render_invalid_invocation_with_format(error, output),
-    };
-    match wait_for_worker_and_complete(&persistence, run_id, invocation_id, envelope) {
-        Ok(()) => Execution {
-            exit_code: EXIT_COMPLETED,
-            stdout: String::new(),
-            stderr: String::new(),
-        },
-        Err(error) => {
-            if error.code == "invalid-invocation" || error.code == "invalid-json-input" {
-                render_invalid_invocation_with_format(error, output)
-            } else {
-                render_operation_error("wait-invocation", output, error)
-            }
-        }
-    }
-}
-
-fn read_waiter_envelope() -> Result<WaiterEnvelope, CliError> {
-    let mut input = String::new();
-    io::stdin().read_to_string(&mut input).map_err(|error| {
-        CliError::new(
-            "input-read-failed",
-            format!("could not read waiter envelope from stdin: {error}"),
-        )
-    })?;
-    serde_json::from_str(&input).map_err(|error| {
-        CliError::new(
-            "invalid-json-input",
-            format!("waiter envelope is not valid JSON: {error}"),
-        )
-    })
-}
-
-fn wait_for_worker_and_complete(
-    persistence: &SqlitePersistence,
-    run_id: RunId,
-    invocation_id: InvocationId,
-    envelope: WaiterEnvelope,
-) -> Result<(), CliError> {
-    let invocation = persistence
-        .load_work_slot_invocations(&run_id)
-        .map_err(|error| CliError::new(error.code(), error.to_string()))?
-        .into_iter()
-        .find(|row| row.invocation_id == invocation_id)
-        .ok_or_else(|| CliError::new("invocation-not-found", "waiter invocation is absent"))?;
-    let capture_dir = invocation.capture_dir.as_str();
-    if capture_dir.is_empty() {
-        return Err(CliError::new(
-            "ownership-unavailable",
-            "invocation has no capture directory",
-        ));
-    }
-    let directory = loop_integrations::ownership::directory(capture_dir);
-    let ownership_error =
-        |error: io::Error| CliError::new("ownership-publication-failed", error.to_string());
-    let admission =
-        loop_integrations::ownership::Admission::acquire(&directory).map_err(ownership_error)?;
-    if admission.stopped() {
-        return Err(CliError::new(
-            "cancellation-pending",
-            "worker launch inhibited",
-        ));
-    }
-    admission
-        .write("worker-packet.json", &envelope.worker_packet)
-        .map_err(ownership_error)?;
-    let mut command = Command::new(std::env::current_exe().map_err(ownership_error)?);
-    command
-        .args(["stdin-exec", "--stdin-file"])
-        .arg(directory.join("worker-packet.json"))
-        .args(["--exit-mode", "propagate", "--"])
-        .arg(&envelope.command)
-        .args(&envelope.args)
-        .env(loop_integrations::ownership::OWNERSHIP_ENV, &directory)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(
-            fs::File::create(directory.join("stdout")).map_err(ownership_error)?,
-        ))
-        .stderr(Stdio::from(
-            fs::File::create(directory.join("stderr")).map_err(ownership_error)?,
-        ));
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-    let mut child = command.spawn().map_err(ownership_error)?;
-    let root_process = match loop_integrations::ownership::read_process(child.id()) {
-        Ok(process) => process,
-        Err(error) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(ownership_error(error));
-        }
-    };
-    if let Some(root_process) = root_process {
-        let owned = loop_core::OwnedExecution {
-            root_pid: child.id(),
-            process_group_id: root_process.process_group_id,
-            root_identity: Some(root_process.identity),
-            admission_directory: directory.clone(),
-            graph_locator: envelope
-                .args
-                .first()
-                .filter(|arg| matches!(arg.as_str(), "fan-out" | "run-plan-graph"))
-                .map(|_| Path::new(capture_dir).join("dagu-locator.json")),
-        };
-        if let Err(error) = admission.publish(&owned) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(ownership_error(error));
-        }
-    }
-    // The helper cannot admit primary work before this publication is durable.
-    // A child that already exited needs no ownership record; its wait handle
-    // still supplies the authoritative completion result.
-    drop(admission);
-
-    let status = child.wait().map_err(|error| {
-        CliError::new(
-            "worker-wait-failed",
-            format!("could not wait for waiter worker: {error}"),
-        )
-    })?;
-    let exit_code = inner_waitpid_as_i32(status);
-    let written = if status.success() {
-        WaiterWrittenStatus::Succeeded
-    } else {
-        WaiterWrittenStatus::Failed
-    };
-    let inner_workers = inner_workers_after_reap(persistence, &run_id, &invocation_id);
-
-    persistence
-        .complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
-            run_id,
-            invocation_id,
-            written,
-            exit_code,
-            now_timestamp(),
-            inner_workers,
-        ))
-        .map_err(|error| CliError::new(error.code(), error.to_string()))?;
-    Ok(())
-}
-
-fn inner_workers_after_reap(
-    persistence: &SqlitePersistence,
-    run_id: &RunId,
-    invocation_id: &InvocationId,
-) -> Vec<InnerWorker> {
-    let Ok(Some(invocation)) = persistence.load_work_slot_invocation(run_id, invocation_id) else {
-        return Vec::new();
-    };
-    if invocation.capture_dir.is_empty() {
-        return Vec::new();
-    }
-    if let Some(workers) = inner_workers_from_capture_dir(&invocation.capture_dir) {
-        let capture_root = Path::new(&invocation.capture_dir);
-        if !capture_root.join("fan-out-spec.json").is_file()
-            || fan_out::summary_covers_capture(capture_root)
-        {
-            return workers;
-        }
-    }
-    let capture_root = Path::new(&invocation.capture_dir);
-    fan_out::summary_bytes_for_capture(capture_root)
-        .ok()
-        .and_then(|bytes| parse_summary_inner_workers(&bytes, capture_root))
-        .unwrap_or_default()
-}
-
-fn inner_workers_from_capture_dir(capture_dir: &str) -> Option<Vec<InnerWorker>> {
-    if capture_dir.is_empty() {
-        return None;
-    }
-    let root = Path::new(capture_dir);
-    let bytes = fs::read(root.join("summary.json")).ok()?;
-    parse_summary_inner_workers(&bytes, root)
-}
-
-#[derive(Deserialize)]
-struct SummaryFile {
-    workers: Vec<SummaryWorker>,
-}
-
-#[derive(Deserialize)]
-struct SummaryWorker {
-    #[serde(default)]
-    assignment_id: Option<String>,
-    command: String,
-    args: Vec<String>,
-    exit_code: i32,
-    #[serde(default)]
-    started: Option<bool>,
-    #[serde(default)]
-    stdout_path: Option<String>,
-    #[serde(default)]
-    stderr_path: Option<String>,
-    #[serde(default)]
-    attempts_path: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    conformance_error: Option<String>,
-    #[serde(default)]
-    selected_attempt: Option<Option<u32>>,
-    #[serde(default)]
-    selected_output_sha256: Option<String>,
-    #[serde(default)]
-    selected_output_path: Option<String>,
-    #[serde(default)]
-    raw_output_sha256: Option<String>,
-    #[serde(default)]
-    raw_output_path: Option<String>,
-    #[serde(default)]
-    raw_output_attempt: Option<u32>,
-    #[serde(default)]
-    recovery_source: Option<Value>,
-    #[serde(default)]
-    declared_output_contract: Option<Value>,
-    #[serde(default)]
-    routed_inputs: Option<Value>,
-    #[serde(default)]
-    task_definition: Option<Value>,
-    #[serde(default)]
-    task_packet: Option<Value>,
-    #[serde(default)]
-    dependencies: Option<Vec<String>>,
-    #[serde(default)]
-    repository_effect: Option<Value>,
-}
-
-fn safe_capture_relative(path: &str) -> bool {
-    let path = Path::new(path);
-    !path.is_absolute()
-        && path
-            .components()
-            .all(|component| matches!(component, std::path::Component::Normal(_)))
-}
-
-fn sha256_prefixed(bytes: &[u8]) -> String {
-    format!("sha256:{:x}", Sha256::digest(bytes))
-}
-
-fn parse_summary_inner_workers(bytes: &[u8], capture_root: &Path) -> Option<Vec<InnerWorker>> {
-    serde_json::from_slice::<SummaryFile>(bytes)
-        .ok()
-        .and_then(|summary| normalize_summary_inner_workers(summary.workers, capture_root))
-}
-
-fn load_worker_attempts(
-    capture_root: &Path,
-    relative: &str,
-    expected_selected_attempt: Option<u32>,
-) -> Option<Vec<WorkerAttempt>> {
-    let path = Path::new(relative);
-    if path.is_absolute()
-        || path
-            .components()
-            .any(|component| !matches!(component, std::path::Component::Normal(_)))
-    {
-        return None;
-    }
-    let manifest_path = capture_root.join(path);
-    let metadata = fs::metadata(&manifest_path).ok()?;
-    if metadata.len() > 1024 * 1024 {
-        return None;
-    }
-    let manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).ok()?).ok()?;
-    let version = manifest["schema_version"].as_str()?;
-    let rows = manifest["attempts"].as_array()?;
-    match version {
-        "1" if manifest.get("recovery_state").is_none() => {}
-        "2" => {
-            let recovery_state = manifest["recovery_state"].as_str()?;
-            let exhausted = manifest["exhausted"].as_bool()?;
-            let selected = manifest["selected_attempt"]
-                .as_u64()
-                .and_then(|n| u32::try_from(n).ok());
-            if rows.len() != 1 || exhausted {
-                return None;
-            }
-            match recovery_state {
-                "selected"
-                    if selected == expected_selected_attempt
-                        && selected == Some(1)
-                        && rows[0]["validation_errors"].as_array()?.is_empty() => {}
-                "awaiting-output-repair"
-                    if selected.is_none()
-                        && expected_selected_attempt.is_none()
-                        && !rows[0]["validation_errors"].as_array()?.is_empty() => {}
-                _ => return None,
-            }
-        }
-        _ => return None,
-    }
-    let worker_directory = manifest_path.parent()?;
-    let relative_worker_directory = worker_directory.strip_prefix(capture_root).ok()?;
-    if rows.len() > 64 {
-        return None;
-    }
-    rows.iter()
-        .map(|row| {
-            let number = u32::try_from(row["number"].as_u64()?).ok()?;
-            let errors = row["validation_errors"]
-                .as_array()?
-                .iter()
-                .map(|error| error.as_str().map(str::to_owned))
-                .collect::<Option<Vec<_>>>()?;
-            let attempt_root = relative_worker_directory
-                .join("attempts")
-                .join(number.to_string());
-            Some(WorkerAttempt {
-                number,
-                failed: !errors.is_empty(),
-                errors,
-                stdout_path: Some(attempt_root.join("stdout").to_string_lossy().into_owned()),
-                stderr_path: Some(attempt_root.join("stderr").to_string_lossy().into_owned()),
-            })
-        })
-        .collect()
-}
-
-fn normalize_summary_inner_workers(
-    workers: Vec<SummaryWorker>,
-    capture_root: &Path,
-) -> Option<Vec<InnerWorker>> {
-    let any_assignment_ids = workers.iter().any(|worker| {
-        worker
-            .assignment_id
-            .as_deref()
-            .is_some_and(|id| !id.is_empty())
-    });
-    let mut assignment_ids = BTreeSet::new();
-    let mut normalized = Vec::with_capacity(workers.len());
-    for worker in workers {
-        // A summary produced by the current fan-out and plan-graph paths has
-        // an identity for every worker. Preserve the legacy all-omitted shape,
-        // but never persist a partial or colliding provider-supplied set.
-        let assignment_id = worker.assignment_id.unwrap_or_default();
-        if any_assignment_ids
-            && (assignment_id.is_empty() || !assignment_ids.insert(assignment_id.clone()))
-        {
-            return None;
-        }
-
-        let selected_attempt = worker.selected_attempt.flatten();
-        let has_digest = worker.selected_output_sha256.is_some();
-        let has_path = worker.selected_output_path.is_some();
-        let recovered = worker.recovery_source.is_some();
-        // Reused outputs deliberately have no new selected attempt. Their
-        // separately attributed source tuple is the selected identity.
-        if has_digest != has_path
-            || (!recovered && selected_attempt.is_some() != has_digest)
-            || (recovered && (selected_attempt.is_some() || !has_digest || !has_path))
-        {
-            return None;
-        }
-        let has_raw_digest = worker.raw_output_sha256.is_some();
-        let has_raw_path = worker.raw_output_path.is_some();
-        if has_raw_digest != has_raw_path || has_raw_digest != worker.raw_output_attempt.is_some() {
-            return None;
-        }
-        if let (Some(digest), Some(path), Some(attempt)) = (
-            worker.raw_output_sha256.as_deref(),
-            worker.raw_output_path.as_deref(),
-            worker.raw_output_attempt,
-        ) {
-            if attempt == 0 || !safe_capture_relative(path) {
-                return None;
-            }
-            let bytes = fs::read(capture_root.join(path)).ok()?;
-            if sha256_prefixed(&bytes) != digest {
-                return None;
-            }
-        }
-        if recovered {
-            let path = worker.selected_output_path.as_deref()?;
-            let digest = worker.selected_output_sha256.as_deref()?;
-            let source = worker.recovery_source.as_ref()?;
-            if worker.started == Some(true)
-                || worker.exit_code != 0
-                || worker.status.as_deref() != Some("succeeded")
-                || source.get("protocol").and_then(Value::as_str)
-                    != Some("fan-out-selected-source-v1")
-                || source.get("execution").and_then(Value::as_str) != Some("reused")
-                || !matches!(
-                    source.get("source_class").and_then(Value::as_str),
-                    Some("original-raw" | "eligible-derived")
-                )
-                || !safe_capture_relative(path)
-                || source.get("selected_output_path").and_then(Value::as_str) != Some(path)
-                || source.get("selected_output_sha256").and_then(Value::as_str) != Some(digest)
-            {
-                return None;
-            }
-            let bytes = fs::read(capture_root.join(path)).ok()?;
-            if sha256_prefixed(&bytes) != digest {
-                return None;
-            }
-        }
-        if let (Some(attempt), Some(path)) =
-            (selected_attempt, worker.selected_output_path.as_deref())
-        {
-            // Fan-out retries store selected bytes below attempts/<n>/stdout.
-            // Plan-graph tasks have one provider-owned attempt and retain
-            // their direct task stdout path; task_definition distinguishes
-            // that shape from the compatibility worker-level stdout copy.
-            let mut components = Path::new(path).components().rev();
-            let is_originating_attempt =
-                matches!(
-                    components.next(),
-                    Some(std::path::Component::Normal(name)) if name == "stdout"
-                ) && components.next().and_then(|component| match component {
-                    std::path::Component::Normal(name) => name.to_str()?.parse::<u32>().ok(),
-                    _ => None,
-                }) == Some(attempt)
-                    && matches!(
-                        components.next(),
-                        Some(std::path::Component::Normal(name)) if name == "attempts"
-                    );
-            let single_components = Path::new(path).components().rev().collect::<Vec<_>>();
-            let is_single_attempt_output = attempt == 1
-                && matches!(
-                    single_components.first(),
-                    Some(std::path::Component::Normal(name)) if *name == "stdout"
-                )
-                && matches!(
-                    single_components.get(1),
-                    Some(std::path::Component::Normal(name))
-                        if name.to_str().is_some_and(|value| value.parse::<usize>().is_ok())
-                );
-            let is_plan_task_output = worker.task_definition.is_some();
-            if !is_originating_attempt && !is_single_attempt_output && !is_plan_task_output {
-                return None;
-            }
-        }
-
-        let attempts = if worker.started == Some(false) || recovered {
-            Vec::new()
-        } else {
-            worker
-                .attempts_path
-                .as_deref()
-                .and_then(|relative| load_worker_attempts(capture_root, relative, selected_attempt))
-                .unwrap_or_else(|| {
-                    vec![WorkerAttempt {
-                        number: selected_attempt.unwrap_or(1).max(1),
-                        failed: worker.exit_code != 0 || worker.status.as_deref() == Some("failed"),
-                        errors: worker.conformance_error.iter().cloned().collect(),
-                        stdout_path: worker.stdout_path.clone(),
-                        stderr_path: worker.stderr_path.clone(),
-                    }]
-                })
-        };
-        normalized.push(InnerWorker {
-            assignment_id,
-            command: worker.command,
-            args: worker.args,
-            exit_code: worker.exit_code,
-            started: worker.started,
-            selected_attempt,
-            stdout_path: worker.stdout_path,
-            stderr_path: worker.stderr_path,
-            attempts_path: worker.attempts_path,
-            attempts,
-            conformance_status: worker.status,
-            conformance_error: worker.conformance_error,
-            selected_output_sha256: worker.selected_output_sha256,
-            selected_output_path: worker.selected_output_path,
-            raw_output_sha256: worker.raw_output_sha256,
-            raw_output_path: worker.raw_output_path,
-            raw_output_attempt: worker.raw_output_attempt,
-            recovery_source: worker.recovery_source,
-            declared_output_contract: worker.declared_output_contract,
-            routed_inputs: worker.routed_inputs,
-            task_definition: worker.task_definition,
-            task_packet: worker.task_packet,
-            dependencies: worker.dependencies,
-            repository_effect: worker.repository_effect,
-        });
-    }
-    Some(normalized)
-}
-
-struct CliWorkSlotProcess {
-    binary: PathBuf,
-}
-
-struct CliWaiterHandle {
-    child: process::Child,
-}
-
-fn same_executable_file(left: &Path, right: &Path) -> bool {
-    if let (Ok(left), Ok(right)) = (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
-        if left == right {
-            return true;
-        }
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let Ok(left) = std::fs::metadata(left) else {
-            return false;
-        };
-        let Ok(right) = std::fs::metadata(right) else {
-            return false;
-        };
-        left.dev() == right.dev() && left.ino() == right.ino()
-    }
-    #[cfg(not(unix))]
-    {
-        false
-    }
-}
-
-impl WorkSlotProcess for CliWorkSlotProcess {
-    type Handle = CliWaiterHandle;
-
-    fn waiter_alive(&self, _pid: u32) -> bool {
-        // Numeric PID presence is not an ownership assertion. The identity-
-        // aware override below is the only production liveness path.
-        false
-    }
-
-    fn waiter_alive_for_identity(
-        &self,
-        pid: u32,
-        identity: Option<&loop_core::ProcessIdentity>,
-    ) -> bool {
-        match identity {
-            Some(identity) => {
-                loop_integrations::ownership::process_identity_matches(pid, Some(identity))
-                    .unwrap_or(false)
-            }
-            // Preserve passive reads for old, numeric-only records. Control
-            // paths with recorded ownership handle missing identity as
-            // unavailable and never use this fallback to signal.
-            None => loop_integrations::ownership::read_process(pid)
-                .map(|process| process.is_some())
-                .unwrap_or(false),
-        }
-    }
-
-    fn enumerate_assignments(
-        &self,
-        binding: &loop_core::WorkSlotBinding,
-    ) -> std::result::Result<Option<Vec<String>>, ProcessError> {
-        // Only this executable's bound `fan-out` command is known to consume
-        // and enforce the engine's assignment-selection packet. Argv that
-        // merely resembles fan-out behind another executable is opaque.
-        if !same_executable_file(&self.binary, Path::new(&binding.command)) {
-            return Ok(None);
-        }
-        Ok(fan_out::enumerate_bound_assignments(binding))
-    }
-
-    fn assignment_labels(
-        &self,
-        binding: &loop_core::WorkSlotBinding,
-        _provider: &core::ProviderAssociation,
-    ) -> std::result::Result<Option<Vec<core::AssignmentLabel>>, ProcessError> {
-        if !same_executable_file(&self.binary, Path::new(&binding.command)) {
-            return Ok(None);
-        }
-        Ok(fan_out::enumerate_bound_assignment_labels(binding))
-    }
-
-    fn prepare_facade(
-        &self,
-        binding: &core::WorkSlotBinding,
-        provider: &core::ProviderAssociation,
-        packet: &Value,
-    ) -> std::result::Result<Option<Value>, ProcessError> {
-        if provider
-            .as_json()
-            .get("command")
-            .and_then(Value::as_str)
-            .is_some_and(|command| {
-                same_executable_file(Path::new(command), Path::new(&binding.command))
-            })
-            && binding
-                .args
-                .first()
-                .is_some_and(|arg| arg == "run-plan-graph")
-        {
-            let result = SubprocessProviderGateway::default()
-                .prepare_facade(binding, packet)
-                .map_err(|error| ProcessError::new(error.code(), error.to_string()))?;
-            if result.get("prepared") != Some(&Value::Bool(true)) {
-                return Err(ProcessError::new(
-                    "facade-preparation-failed",
-                    "configured plan-graph facade did not confirm preparation",
-                ));
-            }
-            return Ok(Some(result));
-        }
-        Ok(None)
-    }
-
-    fn prepare_controls(
-        &self,
-        binding: &core::WorkSlotBinding,
-        provider: &core::ProviderAssociation,
-        controls: &core::InvocationControls,
-    ) -> std::result::Result<core::InvocationControls, ProcessError> {
-        let fan_out = same_executable_file(&self.binary, Path::new(&binding.command))
-            && binding.args.first().is_some_and(|arg| arg == "fan-out");
-        let plan_graph = provider
-            .as_json()
-            .get("command")
-            .and_then(Value::as_str)
-            .is_some_and(|command| {
-                same_executable_file(Path::new(command), Path::new(&binding.command))
-            })
-            && binding
-                .args
-                .first()
-                .is_some_and(|arg| arg == "run-plan-graph");
-        if !fan_out && !plan_graph {
-            if controls != &core::InvocationControls::default() {
-                return Err(ProcessError::new("unsupported-invocation-controls", "controls require the actual engine fan-out or configured software-change run-plan-graph facade"));
-            }
-            return Ok(controls.clone());
-        }
-        let mut effective = controls.clone();
-        if fan_out {
-            let parsed = fan_out::parse_fan_out_args(binding.args.iter().skip(1))
-                .map_err(|error| ProcessError::new("invalid-fan-out-binding", error.to_string()))?;
-            if parsed.workers.is_empty() || parsed.instructions_path.is_some() {
-                return Err(ProcessError::new(
-                    "invalid-fan-out-binding",
-                    "bound fan-out requires workers and no ad-hoc instructions file",
-                ));
-            }
-            if effective.max_active.is_none() {
-                effective.max_active = parsed
-                    .max_active
-                    .and_then(|n| std::num::NonZeroUsize::new(n as usize))
-                    .or_else(|| std::num::NonZeroUsize::new(parsed.workers.len()));
-            }
-            if effective
-                .max_active
-                .is_some_and(|n| u32::try_from(n.get()).is_err())
-            {
-                return Err(ProcessError::new(
-                    "invalid-invocation-controls",
-                    "fan-out max_active exceeds supported limit",
-                ));
-            }
-            return Ok(effective);
-        }
-        if effective.max_active.is_none() {
-            let mut args = binding.args.iter();
-            while let Some(arg) = args.next() {
-                let raw = if arg == "--max-active" {
-                    args.next().map(String::as_str)
-                } else {
-                    arg.strip_prefix("--max-active=")
-                };
-                if let Some(raw) = raw {
-                    effective.max_active = Some(raw.parse().map_err(|_| {
-                        ProcessError::new(
-                            "invalid-invocation-controls",
-                            "invalid bound --max-active",
-                        )
-                    })?);
-                }
-            }
-            if plan_graph && effective.max_active.is_none() {
-                effective.max_active = std::num::NonZeroUsize::new(4);
-            }
-        }
-        Ok(effective)
-    }
-
-    fn filter_context(
-        &self,
-        filter: &loop_core::ContextFilter,
-        packet: &Value,
-    ) -> std::result::Result<loop_core::ContextFilterSelection, ProcessError> {
-        SubprocessProviderGateway::default()
-            .filter_context(filter, packet)
-            .map_err(|error| ProcessError::new(error.code(), error.to_string()))
-    }
-
-    fn spawn_wait_invocation(
-        &self,
-        args: WaiterSpawnArgs,
-    ) -> std::result::Result<StartedWaiter<CliWaiterHandle>, ProcessError> {
-        let database = args.database.to_str().ok_or_else(|| {
-            ProcessError::new("invalid-database-path", "database path is not valid UTF-8")
-        })?;
-        let mut child = Command::new(&self.binary)
-            .args([
-                "--database",
-                database,
-                "wait-invocation",
-                args.run_id.as_str(),
-                args.invocation_id.as_str(),
-            ])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|error| {
-                ProcessError::new(
-                    "waiter-spawn-failed",
-                    format!("could not spawn wait-invocation: {error}"),
-                )
-            })?;
-        let identity = match loop_integrations::ownership::read_process_identity(child.id()) {
-            Ok(Some(identity)) => identity,
-            Ok(None) => {
-                let _ = child.wait();
-                return Err(ProcessError::new(
-                    "waiter-identity-unavailable",
-                    "waiter exited before its native identity could be recorded",
-                ));
-            }
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(ProcessError::new(
-                    "waiter-identity-unavailable",
-                    format!("could not read waiter native identity: {error}"),
-                ));
-            }
-        };
-        Ok(StartedWaiter::new(child.id(), CliWaiterHandle { child }).with_identity(identity))
-    }
-
-    fn send_envelope_and_detach(
-        &self,
-        mut waiter: StartedWaiter<CliWaiterHandle>,
-        envelope_json: &[u8],
-    ) -> std::result::Result<(), ProcessError> {
-        if let Some(mut stdin) = waiter.handle.child.stdin.take() {
-            if let Err(error) = stdin.write_all(envelope_json) {
-                if error.kind() != io::ErrorKind::BrokenPipe {
-                    return Err(ProcessError::new(
-                        "waiter-stdin-write-failed",
-                        format!("could not write waiter envelope to stdin: {error}"),
-                    ));
-                }
-            }
-        }
-        Ok(())
     }
 }
 
@@ -3148,30 +1158,16 @@ fn execute_operation(
             render_operation(operation, output, &outcome)
         }
         PrimaryCommand::Show(run_id) => {
-            let binary = match std::env::current_exe() {
-                Ok(binary) => binary,
-                Err(error) => {
-                    return render_operation_error(
-                        operation,
-                        output,
-                        CliError::new(
-                            "current-executable-unavailable",
-                            format!("could not resolve current executable: {error}"),
-                        ),
-                    );
-                }
-            };
             let now = now_timestamp();
-            let outcome = core::operations::show::execute_view(
-                ShowRequest::new(run_id),
+            let outcome = core::operations::show::execute_passive(
+                core::ShowRequest::new(run_id),
                 &persistence,
-                &CliWorkSlotProcess { binary },
                 now,
                 show_view != "status",
             )
             .map(CliShowProjection::from);
             if show_view == "status" && output == OutputFormat::Human {
-                render_show_compact(&persistence, &outcome, timeout, now, &paths.database)
+                render_operation(operation, output, &outcome)
             } else {
                 let outcome = outcome
                     .map(|projection| show_packet(projection, &show_view, now, &paths.database));
@@ -3250,71 +1246,6 @@ fn execute_operation(
                 .map(CliTerminateResult::from);
             render_operation(operation, output, &outcome)
         }
-        PrimaryCommand::CancelInvocation {
-            run_id,
-            invocation_id,
-        } => {
-            let outcome = cancel_invocation::execute(&persistence, run_id, invocation_id);
-            render_operation(operation, output, &outcome)
-        }
-        PrimaryCommand::AmendBinding {
-            run_id,
-            slot_id,
-            request,
-        } => {
-            let outcome = core::operations::amend_binding::execute(
-                &run_id,
-                &slot_id.into(),
-                request,
-                &persistence,
-                now_timestamp(),
-            );
-            render_operation(operation, output, &outcome)
-        }
-        PrimaryCommand::Invoke {
-            run_id,
-            slot_id,
-            assignment_selection,
-            invocation_input,
-            controls,
-            preview,
-        } => {
-            let binary = match std::env::current_exe() {
-                Ok(binary) => binary,
-                Err(error) => {
-                    return render_operation_error(
-                        operation,
-                        output,
-                        CliError::new(
-                            "waiter-spawn-failed",
-                            format!("could not resolve current executable: {error}"),
-                        ),
-                    );
-                }
-            };
-            let process = CliWorkSlotProcess { binary };
-            let allowed_time_ms = timeout.as_millis().min(u64::MAX as u128) as u64;
-            let mut request =
-                InvokeRequest::new(run_id, slot_id, new_invocation_id(), paths.database.clone())
-                    .with_assignment_selection(assignment_selection)
-                    .with_invocation_input(invocation_input);
-            request.controls = controls;
-            request.preview = preview;
-            let outcome = core::execute_invoke(
-                request,
-                &persistence,
-                &process,
-                now_timestamp(),
-                allowed_time_ms,
-            )
-            .map(|result| match result.preview.clone() {
-                Some(preview) => preview,
-                None => {
-                    serde_json::to_value(CliInvokeResult::from(result)).expect("invoke result JSON")
-                }
-            });
-            render_operation(operation, output, &outcome)
-        }
     }
 }
 
@@ -3335,23 +1266,9 @@ fn execute_terminal_explorer(options: CliOptions, run_id: RunId) -> Execution {
                 )
             }
         };
-    let binary = match std::env::current_exe() {
-        Ok(binary) => binary,
-        Err(error) => {
-            return render_operation_error(
-                "explore",
-                OutputFormat::Human,
-                CliError::new(
-                    "current-executable-unavailable",
-                    format!("could not resolve current executable: {error}"),
-                ),
-            )
-        }
-    };
-    let projection = match core::operations::show::execute_view(
-        ShowRequest::new(run_id.clone()),
+    let projection = match core::operations::show::execute_passive(
+        core::ShowRequest::new(run_id.clone()),
         &persistence,
-        &CliWorkSlotProcess { binary },
         now_timestamp(),
         false,
     ) {
@@ -3627,10 +1544,6 @@ fn new_context_id() -> String {
     unique_token("context")
 }
 
-fn new_invocation_id() -> InvocationId {
-    unique_token("invocation").into()
-}
-
 /// Caller-visible run data.  Core's `Run` also carries persistence control
 /// metadata; those fields are deliberately not represented by this CLI DTO.
 #[derive(Clone, Debug, Serialize)]
@@ -3721,27 +1634,6 @@ impl From<core::TerminateResult> for CliTerminateResult {
         Self {
             run: result.run.into(),
             history: result.history,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct CliInvokeResult {
-    invocation_id: core::InvocationId,
-    slot_id: core::WorkSlotId,
-    started_at: core::Timestamp,
-    allowed_time_ms: u64,
-    capture_dir: String,
-}
-
-impl From<core::InvokeResult> for CliInvokeResult {
-    fn from(result: core::InvokeResult) -> Self {
-        Self {
-            invocation_id: result.invocation_id,
-            slot_id: result.slot_id,
-            started_at: result.started_at,
-            allowed_time_ms: result.allowed_time_ms,
-            capture_dir: result.capture_dir,
         }
     }
 }
@@ -3839,7 +1731,7 @@ fn render_bounded_show(
     const READ_BUDGET: Duration = Duration::from_millis(1100);
     let deadline = started_at + READ_BUDGET;
     let arm = view == "action";
-    let mut snapshot = match SqlitePersistence::open_for_observation(database, deadline, arm)
+    let snapshot = match SqlitePersistence::open_for_observation(database, deadline, arm)
         .and_then(|persistence| persistence.read_bounded_observation(run_id, deadline, arm))
     {
         Ok(snapshot) => snapshot,
@@ -3855,7 +1747,6 @@ fn render_bounded_show(
             )
         }
     };
-    enrich_bounded_assignment_progress(&mut snapshot, deadline);
     let packet = bounded_show_packet(snapshot, view, database, deadline);
     if output == OutputFormat::Json {
         return Execution {
@@ -3871,94 +1762,6 @@ fn render_bounded_show(
         exit_code: EXIT_COMPLETED,
         stdout: render_bounded_show_human(&packet, view),
         stderr: String::new(),
-    }
-}
-
-fn enrich_bounded_assignment_progress(snapshot: &mut Value, deadline: std::time::Instant) {
-    let invocations = snapshot["invocations"]["items"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    let assignments = snapshot["assignments"]["items"].as_array_mut();
-    let Some(assignments) = assignments else {
-        return;
-    };
-    let mut pending_samples = 0usize;
-    let mut sampled_invocations = 0usize;
-    let mut unavailable_invocations = 0usize;
-    let mut missing_assignment_samples = 0usize;
-    for invocation in invocations {
-        let outer_state = invocation["execution"]["state"]
-            .as_str()
-            .unwrap_or("unknown");
-        if outer_state == "cancelled" {
-            for assignment in assignments
-                .iter_mut()
-                .filter(|row| row["invocation_id"] == invocation["invocation_id"])
-            {
-                assignment["state"] = json!("cancelled");
-                assignment["execution"]["state"] = json!("cancelled");
-            }
-            continue;
-        }
-        if !matches!(outer_state, "running" | "overrun" | "unknown") {
-            continue;
-        }
-        pending_samples += 1;
-        if std::time::Instant::now() >= deadline {
-            unavailable_invocations += 1;
-            break;
-        }
-        let Some(capture_dir) = invocation["capture_dir"].as_str() else {
-            unavailable_invocations += 1;
-            continue;
-        };
-        let Some(states) =
-            invocation_progress::sample_assignment_states(Path::new(capture_dir), deadline)
-        else {
-            unavailable_invocations += 1;
-            continue;
-        };
-        sampled_invocations += 1;
-        for assignment in assignments
-            .iter_mut()
-            .filter(|row| row["invocation_id"] == invocation["invocation_id"])
-        {
-            let Some(id) = assignment["assignment_id"].as_str() else {
-                missing_assignment_samples += 1;
-                continue;
-            };
-            let Some(state) = states.get(id) else {
-                missing_assignment_samples += 1;
-                continue;
-            };
-            assignment["helper_state"] = json!(state);
-            if assignment["state"] == "unknown" || assignment["state"] == "queued" {
-                assignment["state"] = json!(state);
-                assignment["execution"]["state"] = json!(state);
-                assignment["execution"]["source"] = json!("bounded local Dagu status sample");
-            }
-        }
-    }
-    let progress_state = if pending_samples == 0 {
-        "not-applicable"
-    } else if unavailable_invocations > 0 || missing_assignment_samples > 0 {
-        "partial"
-    } else {
-        "available"
-    };
-    snapshot["assignments"]["progress_sample"] = json!({
-        "state":progress_state,"pending_invocations":pending_samples,
-        "sampled_invocations":sampled_invocations,"unavailable_invocations":unavailable_invocations,
-        "missing_assignment_samples":missing_assignment_samples,
-        "missed_sample":if progress_state == "available" {"unknown"} else {"true"},
-        "meaning":"local helper progress is a bounded sample, not worker conformance or acceptance"
-    });
-    snapshot["completeness"]["helper_progress"] = json!(progress_state);
-    if std::time::Instant::now() >= deadline {
-        snapshot["completeness"]["assignments"] = json!("partial");
-        snapshot["assignments"]["sampling"] =
-            json!("deadline reached; unsampled assignments remain unknown");
     }
 }
 
@@ -4006,10 +1809,10 @@ fn bounded_locators(run_id: &RunId, database: &Path) -> Value {
 }
 
 fn bounded_show_packet(
-    mut snapshot: Value,
+    snapshot: Value,
     view: &str,
     database: &Path,
-    deadline: std::time::Instant,
+    _deadline: std::time::Instant,
 ) -> Value {
     let run_id = snapshot["run"]["run_id"]
         .as_str()
@@ -4025,7 +1828,7 @@ fn bounded_show_packet(
         .as_array()
         .cloned()
         .unwrap_or_default();
-    let mut assignments = snapshot["assignments"]["items"]
+    let assignments = snapshot["assignments"]["items"]
         .as_array()
         .cloned()
         .unwrap_or_default();
@@ -4033,137 +1836,19 @@ fn bounded_show_packet(
         .as_array()
         .cloned()
         .unwrap_or_default();
-    if snapshot["assignments"]["state"] == "available"
-        && snapshot["assignments"]["truncated"] != true
-    {
-        let mut configured_partial = false;
-        if let Ok(engine) = std::env::current_exe() {
-            let mut known = assignments
-                .iter()
-                .filter_map(|item| {
-                    Some((
-                        item["slot_id"].as_str()?.to_owned(),
-                        item["assignment_id"].as_str()?.to_owned(),
-                    ))
-                })
-                .collect::<std::collections::BTreeSet<_>>();
-            let mut configured_total = 0u64;
-            let mut configured = Vec::new();
-            for slot in &slots {
-                if std::time::Instant::now() >= deadline {
-                    configured_partial = true;
-                    break;
-                }
-                let Some(slot_id) = slot["id"].as_str() else {
-                    continue;
-                };
-                let Some(binding_value) = snapshot["run"]["effective_bindings"].get(slot_id) else {
-                    continue;
-                };
-                let Ok(binding) =
-                    serde_json::from_value::<core::WorkSlotBinding>(binding_value.clone())
-                else {
-                    continue;
-                };
-                if !same_executable_file(&engine, Path::new(&binding.command)) {
-                    continue;
-                }
-                if binding.args.iter().map(String::len).sum::<usize>() > 1_048_576 {
-                    configured_partial = true;
-                    continue;
-                }
-                let Some(labels) = fan_out::enumerate_bound_assignment_labels(&binding) else {
-                    continue;
-                };
-                for label in labels {
-                    if !known.insert((slot_id.to_owned(), label.assignment_id.clone())) {
-                        continue;
-                    }
-                    configured_total += 1;
-                    if assignments.len() + configured.len() >= 200 {
-                        continue;
-                    }
-                    configured.push(json!({
-                        "slot_id":slot_id,"assignment_id":label.assignment_id,"title":label.title,"role":label.role,
-                        "state":"configured","state_visit":snapshot["run"]["state_visit"],
-                        "execution":{"state":"unknown","reason":"configured work list; no invocation output exists for this visit"},
-                        "conformance":{"state":"unknown","attempt_count":0,"repeated_failure_count":0},
-                        "acceptance":{"state":"unknown","reason":"configuration is not execution or acceptance"}
-                    }));
-                }
-            }
-            if configured_total > 0 {
-                assignments.extend(configured);
-                let previous_total = snapshot["assignments"]["total"].as_u64().unwrap_or(0);
-                let total = previous_total + configured_total;
-                let configured_only = previous_total == 0;
-                let truncated = total > assignments.len() as u64;
-                let returned = assignments.len();
-                snapshot["assignments"]["items"] = json!(assignments.clone());
-                snapshot["assignments"]["total"] = json!(total);
-                snapshot["assignments"]["returned"] = json!(returned);
-                snapshot["assignments"]["configured_only"] = json!(configured_only);
-                snapshot["assignments"]["truncated"] = json!(truncated);
-                snapshot["assignments"]["state"] = json!(if truncated || configured_partial {
-                    "partial"
-                } else {
-                    "available"
-                });
-                snapshot["completeness"]["assignments"] =
-                    json!(if truncated || configured_partial {
-                        "partial"
-                    } else {
-                        "available"
-                    });
-            } else if configured_partial {
-                snapshot["assignments"]["state"] = json!("partial");
-                snapshot["assignments"]["reason"] =
-                    json!("configured assignment inventory exceeded the observation budget");
-                snapshot["completeness"]["assignments"] = json!("partial");
-            }
-        }
-    }
     let current_slot = slots.iter().find(|slot| slot["state"] == current_state);
     let current_slot_id = current_slot.and_then(|slot| slot["id"].as_str());
-    let current_binding =
-        current_slot_id.and_then(|slot| snapshot["run"]["effective_bindings"].get(slot));
-    let instructions = if let (Some(slot_id), Some(binding)) = (current_slot_id, current_binding) {
-        format!(
-            "Bound work slot `{slot_id}` is configured (command={}). Exact frozen args and filter: full.effective_bindings.{slot_id}. Legal start: loop-engine invoke {} {}. Read the action guidance and assignments below; worker exit/conformance are not provider acceptance.",
-            binding["command"].as_str().unwrap_or("unknown"),
-            run_id, slot_id
-        )
-    } else {
-        state["instructions"]
-            .as_str()
-            .unwrap_or("Current instructions are unavailable.")
-            .to_owned()
-    };
+    let instructions = state["instructions"]
+        .as_str()
+        .unwrap_or("Current instructions are unavailable.")
+        .to_owned();
     let next_action = if matches!(
         snapshot["run"]["lifecycle"].as_str(),
         Some("final" | "terminated")
     ) {
         json!({"kind":"inspect","reason":"the run is terminal and read-only"})
-    } else if invocations.iter().any(|row| {
-        matches!(
-            row.pointer("/execution/state").and_then(Value::as_str),
-            Some("running" | "overrun")
-        )
-    }) {
-        json!({"kind":"wait","reason":"owned execution is sampled running; observation did not change it"})
-    } else if let Some(slot_id) = current_slot_id {
-        if current_binding.is_some() {
-            let prior = invocations.iter().find(|row| row["slot_id"] == slot_id);
-            if let Some(prior) = prior {
-                json!({"kind":"inspect","slot_id":slot_id,"invocation_id":prior["invocation_id"],"capture_dir":prior["capture_dir"],"reason":"inspect this invocation and its assignment/conformance lanes before retry or progression"})
-            } else {
-                json!({"kind":"invoke","slot_id":slot_id,"reason":"start the frozen bound invocation, then inspect captured output and conformance"})
-            }
-        } else {
-            json!({"kind":"perform-current-work","slot_id":slot_id,"reason":"follow current instructions, then append required evidence and request a listed event"})
-        }
     } else {
-        json!({"kind":"inspect","reason":"no current work slot is configured; follow current instructions and listed events"})
+        json!({"kind":"perform-current-work","slot_id":current_slot_id,"reason":"follow current instructions externally, then append required evidence and request a listed event"})
     };
     let execution_lane = if invocations.is_empty() {
         json!({"state":"unknown","reason":"no invocation was sampled"})
@@ -4422,35 +2107,8 @@ fn show_packet(
                     "freshness": "inspect change report and applicability; execution is not approval",
                     "locator": "full.work_slot_invocations"}))
         }).collect();
-        let next = if projection.lifecycle.is_terminal() {
-            "Read-only terminal run; no work or progression is legal."
-        } else if !active.is_empty() {
-            "Inspect active captures or wait. Live ownership/pending cleanup blocks retry and departure; overrun is attention, not permission."
-        } else if !latest.is_empty() {
-            "Inspect latest current-slot execution sources and full change report; triage output/evidence before a shown event or a quiescent retry. Historical execution does not establish current applicability or approval."
-        } else if slots
-            .iter()
-            .any(|slot| projection.effective_bindings.contains_key(slot.id.as_str()))
-        {
-            "Start the bound work with its execution_paths command; do not perform the worker body yourself."
-        } else {
-            "Perform current instructions externally, append the required evidence, then request a shown event."
-        };
-        object.insert("next_action".into(), json!(next));
+        object.insert("next_action".into(), json!(if projection.lifecycle.is_terminal() { "Read-only terminal run; no work or progression is legal." } else { "Perform current instructions externally, append required evidence, then request a shown event." }));
         object.insert("latest_current_slot_execution".into(), json!(latest));
-        if slots
-            .iter()
-            .any(|slot| projection.effective_bindings.contains_key(slot.id.as_str()))
-        {
-            object.insert("current_state_instructions".into(), json!("Use the bound execution_paths commands, not the worker body. Read persisted action_guidance for exact provider obligations. Triages: inspect capture_dir/summary.json and stdout before stderr; exit 0 is execution only, not output validity or provider acceptance. Append required provider-shaped evidence then request a shown event. Live ownership or pending cleanup blocks retry and departure, including overrun: wait or cancel-invocation with recorded ownership, verify quiescence, then read action/full again. Consult full.change_report before reuse; review applicability must explicitly name original evidence, current target, driver and reason. Full retains the exact frozen command/args and original instructions."));
-        }
-        object.insert("execution_paths".into(), json!(slots.iter().map(|slot| {
-            if projection.effective_bindings.contains_key(slot.id.as_str()) {
-                json!({"slot_id": slot.id, "mode": "bound", "command": ["loop-engine", "--database", database, "invoke", projection.run_id, slot.id], "instruction": "Do not perform the bound worker body yourself. Wait for owned work to become quiescent before retry or departure; inspect capture and conformance before event."})
-            } else {
-                json!({"slot_id": slot.id, "mode": "unbound", "instruction": "Perform current_state_instructions externally; append required evidence then request a shown event."})
-            }
-        }).collect::<Vec<_>>()));
         object.insert("guidance_status".into(), json!(if projection.action_guidance.is_some() { "persisted-provider-guidance" } else { "legacy-normalized-obligations-unknown; follow persisted current_state_instructions and frozen work_slots; inspect full for input/context" }));
     }
     insert_visibility_lanes(object, lanes);
@@ -4478,248 +2136,6 @@ fn insert_visibility_lanes(object: &mut serde_json::Map<String, Value>, lanes: V
         if let Some(next_action) = lanes.get("next_action") {
             object.insert("next_action_lane".to_owned(), next_action.clone());
         }
-    }
-}
-
-/// Inner progress is deliberately subordinate to the normal show projection.
-/// A collection failure is rendered as unavailable rather than changing the
-/// durable show outcome or guessing a task state.
-enum CompactInnerProgress {
-    Unavailable { code: String, message: String },
-    Snapshot(Box<invocation_progress::InvocationProgressSnapshot>),
-}
-
-fn select_compact_invocation(
-    projection: &CliShowProjection,
-) -> Option<&core::operations::WorkSlotInvocationView> {
-    let running = projection
-        .work_slot_invocations
-        .iter()
-        .filter(|invocation| invocation.status == core::ProjectedInvocationStatus::Running)
-        .collect::<Vec<_>>();
-    if running.len() == 1 {
-        return running.into_iter().next();
-    }
-    projection
-        .work_slot_invocations
-        .iter()
-        .max_by_key(|invocation| invocation.started_at)
-}
-
-fn render_show_compact(
-    persistence: &SqlitePersistence,
-    outcome: &OperationOutcome<CliShowProjection>,
-    timeout: Duration,
-    now: Timestamp,
-    database: &Path,
-) -> Execution {
-    match outcome {
-        OperationOutcome::Completed(projection) => {
-            let invocation = select_compact_invocation(projection);
-            let progress = match invocation {
-                Some(invocation) => match invocation_progress::collect_snapshot_for_invocation(
-                    persistence,
-                    &projection.run_id,
-                    &invocation.invocation_id,
-                    timeout,
-                    now,
-                ) {
-                    Ok(snapshot) => CompactInnerProgress::Snapshot(Box::new(snapshot)),
-                    Err(error) => CompactInnerProgress::Unavailable {
-                        code: error.code,
-                        message: error.message,
-                    },
-                },
-                None => CompactInnerProgress::Unavailable {
-                    code: "no-invocations".to_owned(),
-                    message: "no work-slot invocation is recorded on this run".to_owned(),
-                },
-            };
-            Execution {
-                exit_code: EXIT_COMPLETED,
-                stdout: format!("{}status details (non-arming; all active ownership; historical checks have unknown freshness): {}\n",
-                    render_compact_show(projection, invocation, progress),
-                    show_packet(projection.clone(), "status", now, database)),
-                stderr: String::new(),
-            }
-        }
-        OperationOutcome::Rejected(_) => Execution {
-            exit_code: EXIT_REJECTED,
-            stdout: render_operation_human("show", outcome),
-            stderr: String::new(),
-        },
-        OperationOutcome::Error(_) => Execution {
-            exit_code: EXIT_ERROR,
-            stdout: render_operation_human("show", outcome),
-            stderr: String::new(),
-        },
-    }
-}
-
-fn render_compact_show(
-    projection: &CliShowProjection,
-    invocation: Option<&core::operations::WorkSlotInvocationView>,
-    progress: CompactInnerProgress,
-) -> String {
-    let run = match projection.label.as_deref() {
-        Some(label) if !label.is_empty() => format!(
-            "run: {} (label: {})",
-            compact_text(projection.run_id.as_str()),
-            compact_text(label)
-        ),
-        _ => format!("run: {}", compact_text(projection.run_id.as_str())),
-    };
-    let events = if projection.requestable_events.is_empty() {
-        "none".to_owned()
-    } else {
-        projection
-            .requestable_events
-            .iter()
-            .map(|event| {
-                format!(
-                    "{} -> {} ({})",
-                    compact_text(event.event.as_str()),
-                    compact_text(event.target.as_str()),
-                    compact_transition_kind(event.kind)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    let checked = compact_latest_evaluation(projection);
-    // `show` also carries observation-time elapsed/remaining counters. Compact
-    // omits them so an unchanged running invocation has stable human output.
-    let invocation_line = invocation
-        .map(|invocation| {
-            let exit_code = invocation
-                .exit_code
-                .map_or_else(|| "pending".to_owned(), |code| code.to_string());
-            format!(
-                "invocation: {} slot={} status={} exit_code={}",
-                compact_text(invocation.invocation_id.as_str()),
-                compact_text(invocation.slot_id.as_str()),
-                compact_invocation_status(invocation.status),
-                exit_code,
-            )
-        })
-        .unwrap_or_else(|| "invocation: none".to_owned());
-
-    [
-        "completed show --compact".to_owned(),
-        run,
-        format!(
-            "lifecycle: {}; has_overrides: {}; override_count: {}; completion_mode: {}",
-            compact_lifecycle(projection.lifecycle),
-            projection.override_summary.has_overrides,
-            projection.override_summary.override_count,
-            match projection.override_summary.completion_mode {
-                Some(core::CompletionMode::Completed) => "completed",
-                Some(core::CompletionMode::CompletedWithOverrides) => "completed-with-overrides",
-                None => "none",
-            }
-        ),
-        format!(
-            "state: {} ({})",
-            compact_text(projection.current_state.as_str()),
-            compact_text(&projection.current_state_title)
-        ),
-        format!("requestable events: {events}"),
-        format!("latest checked result: {checked}"),
-        invocation_line,
-        compact_progress_line(progress),
-    ]
-    .join("\n")
-        + "\n"
-}
-
-fn compact_latest_evaluation(projection: &CliShowProjection) -> String {
-    let Some(evaluation) = projection
-        .latest_evaluations
-        .iter()
-        .max_by_key(|evaluation| evaluation.sequence)
-    else {
-        return "none".to_owned();
-    };
-    let result = if evaluation.is_allow() {
-        "allow"
-    } else {
-        "deny"
-    };
-    let mut summary = format!(
-        "{} event={} target={} kind={} sequence={}",
-        result,
-        compact_text(evaluation.transition.event.as_str()),
-        compact_text(evaluation.transition.target.as_str()),
-        compact_transition_kind(evaluation.transition.kind),
-        evaluation.sequence,
-    );
-    if let Some(feedback) = evaluation.feedback() {
-        summary.push_str(&format!(
-            " code={} message={}",
-            compact_text(&feedback.code),
-            compact_text(&feedback.message)
-        ));
-    }
-    summary
-}
-
-fn compact_progress_line(progress: CompactInnerProgress) -> String {
-    match progress {
-        CompactInnerProgress::Unavailable { code, message } => format!(
-            "inner progress: unavailable [{}] {}",
-            compact_text(&code),
-            compact_text(&message)
-        ),
-        CompactInnerProgress::Snapshot(snapshot) => {
-            let Some(graph) = snapshot.graph else {
-                return "inner progress: unavailable [no-dagu-graph] no Dagu graph locator is available; task state is unknown".to_owned();
-            };
-            let mut not_started = 0;
-            let mut running = 0;
-            let mut reaped = 0;
-            for step in graph.steps {
-                match step.state {
-                    invocation_progress::GraphStepState::NotStarted => not_started += 1,
-                    invocation_progress::GraphStepState::Running => running += 1,
-                    invocation_progress::GraphStepState::Reaped => reaped += 1,
-                }
-            }
-            format!(
-                "inner progress (Dagu helper liveness): steps={} not_started={} running={} reaped={}",
-                not_started + running + reaped,
-                not_started,
-                running,
-                reaped
-            )
-        }
-    }
-}
-
-fn compact_text(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn compact_lifecycle(lifecycle: core::Lifecycle) -> &'static str {
-    match lifecycle {
-        core::Lifecycle::Active => "active",
-        core::Lifecycle::Final => "final",
-        core::Lifecycle::Terminated => "terminated",
-    }
-}
-
-fn compact_invocation_status(status: core::ProjectedInvocationStatus) -> &'static str {
-    match status {
-        core::ProjectedInvocationStatus::Running => "running",
-        core::ProjectedInvocationStatus::Succeeded => "succeeded",
-        core::ProjectedInvocationStatus::Failed => "failed",
-        core::ProjectedInvocationStatus::Overrun => "overrun",
-    }
-}
-
-fn compact_transition_kind(kind: core::TransitionKind) -> &'static str {
-    match kind {
-        core::TransitionKind::Checked => "checked",
-        core::TransitionKind::CheckFree => "check-free",
     }
 }
 
@@ -4937,180 +2353,11 @@ fn usage(command: Option<&str>) -> String {
         }
         Some("history") => "Usage: loop-engine [options] history <run-id>\n".to_owned(),
         Some("explore") => "Usage: loop-engine [--database DB] explore RUN_ID\n\nRead-only interactive workflow navigator. Requires a TTY; arrows or j/k move the one-column list, [ and ] scroll detail, g/G jump, and q exits.\n".to_owned(),
-        Some("advise") => "Usage: loop-engine [options] advise RUN_ID @REQUEST_FILE\n\nRuns the run's explicitly configured provider-neutral advice command with one closed JSON request on stdin. The frozen command, argv, positive per-call timeout, and request/response byte bounds come from initial_input.advice_command. Advice is captured as immutable run context and never completes primary work or advances state. Missing configuration disables advice; there is no default backend. Inspect captures with show --view full.\n".to_owned(),
         Some("terminate") => "Usage: loop-engine [options] terminate <run-id>\n".to_owned(),
-        Some("invoke") => {
-            "Usage: loop-engine [options] invoke <run-id> <slot-id> [--assignment ID ... | --assignments ID,... | --input JSON] [--preview] [--controls JSON]\n\n"
-                .to_owned()
-                + "--preview prepares effective binding, context, selection and controls without an invocation, capture or primary worker.\n"
-                + "--controls accepts positive max_active and boolean force_fresh for the actual engine fan-out or configured software-change plan-graph facade; unsupported controls refuse.\n"
-                + "--timeout-ms retains this attempt's allowance (elapsed allowance does not stop live work). Controls and binding are immutable for the started attempt.\n"
-                + "Force-fresh supplies no standing reuse; a selected plan missing fresh prerequisites requires full execution or a normal standing-aware subset.\n"
-        }
         Some("list") => "Usage: loop-engine [options] list\n".to_owned(),
-        Some("fan-out") => {
-            "Usage: loop-engine [options] fan-out [--worker JSON]... [--then --worker JSON ...] [--instructions FILE] [--max-active N]\n\n"
-                .to_owned()
-                + "Start one process per --worker concurrently as a local Dagu type:graph under\n"
-                + "an isolated home in the capture directory. Per-step progress is dagu status /\n"
-                + "dagu history against capture_dir/dagu-locator.json. A mechanical join writes\n"
-                + "summary.json. This is not a run-state operation and does not open the run\n"
-                + "database. Callers do not supply Dagu YAML.\n\n"
-                + "Options:\n"
-                + "  --worker JSON            Strict nested worker object with command, args, and\n"
-                + "                           optional preamble, legacy output_schema, or full_output_schema; repeatable\n"
-                + "  --then                   One divider between two non-empty worker groups;\n"
-                + "                           the second group waits for first-group completion/conformance\n"
-                + "  --instructions FILE      Required in ad-hoc mode; forbidden with bound invoke stdin.\n"
-                + "                           Bound mode reads the invoke packet from stdin instead.\n"
-                + "  --max-active N           At most N worker steps run at once. Omitted means\n"
-                + "                           uncapped concurrent worker start.\n"
-        }
-        Some("cancel-invocation") => {
-            "Usage: loop-engine [options] cancel-invocation RUN_ID INVOCATION_ID\n\nStop owned local work without advancing the workflow. Ten seconds per acquired/resumed controller attempt, at most three seconds graceful shutdown. An interrupted attempt stays incomplete; retry this command. The stop marker blocks later task/summarizer admission even during an unbounded operator delay. Only verified process disappearance and reaping acknowledges failed cancellation. Captures remain.\n".to_owned()
-        }
-        Some("amend-binding") => {
-            "Usage: loop-engine [options] amend-binding RUN_ID SLOT_ID JSON\n\n"
-                .to_owned()
-                + "Correct a future binding using {state_visit,owner,reason,binding}. Read show\n"
-                + "first for state_visit. Binding is {command,args,context_filter?}. Original\n"
-                + "input and past invocations remain immutable; history retains old/new values.\n"
-                + "This does not amend policy, topology, schemas or author counts.\n"
-        }
-        Some("preview-bindings") => {
-            "Usage: loop-engine [options] preview-bindings [JSON|@FILE]\n\n"
-                .to_owned()
-                + "Inspect work_slot_bindings without starting a run or opening the database.\n"
-                + "Omitted operand reads stdin; @FILE reads that path; otherwise the operand is\n"
-                + "inline JSON. Accepted JSON is a work_slot_bindings map or an object containing\n"
-                + "that key. Reports a dagu PATH check (minimum 2.14.0) as ok with path and\n"
-                + "version, or as a warning; warnings alone still exit 0. This is not a run-state\n"
-                + "operation.\n"
-        }
-        Some("invocation-progress") => {
-            "Usage: loop-engine [options] invocation-progress RUN_ID [INVOCATION_ID]\n\n"
-                .to_owned()
-                + "Open the catalog, select one invocation, and print a JSON progress snapshot of\n"
-                + "that invocation's capture_dir graph liveness and already-associated traces.\n"
-                + "Does not write overlay or invocation status. Show remains the overlay authority.\n\n"
-                + "When INVOCATION_ID is omitted, the unique overlay-running invocation is selected\n"
-                + "if one exists; otherwise the latest invocation by started_at.\n\n"
-                + "Graph state is Dagu step-helper liveness (not_started|running|reaped), not overlay\n"
-                + "success and not inner waitpid. Graph is omitted when capture_dir/dagu-locator.json\n"
-                + "is absent. --timeout-ms bounds helper spawns only, never invocation allowed_time_ms.\n\n"
-                + "Options: --database <path> --json --timeout-ms <milliseconds>\n"
-        }
-        _ => {
-            "Usage: loop-engine [options] <operation> [arguments]\n\n"
-                .to_owned()
-                + "Operations:\n"
-                + "  start\n"
-                + "  list\n"
-                + "  show\n"
-                + "  append\n"
-                + "  event\n"
-                + "  history\n"
-                + "  advise RUN_ID @REQUEST_FILE\n"
-                + "  terminate\n"
-                + "  invoke\n"
-                + "  amend-binding RUN_ID SLOT_ID JSON\n"
-                + "  cancel-invocation RUN_ID INVOCATION_ID\n\n"
-                + "Other commands:\n"
-                + "  monitor                   Passive selected-source JSONL completion/attention stream\n"
-                + "  capture-command           Stream one external command; --help for raw-stream contract\n"
-                + "  capture-matrix            Execute serial rows, stop on failure, explicitly --resume\n"
-                + "  capture-abort             Request and verify owned capture cleanup\n"
-                + "  explore RUN_ID             Read-only interactive workflow navigator\n"
-                + "  invocation-progress RUN_ID [INVOCATION_ID]\n"
-                + "                             Snapshot capture_dir graph liveness and traces\n"
-                + "  read RUN_ID --kind ...    Bounded sequence, assignment, attempt, and original-stream reads\n"
-                + "                             Opens the catalog; graph state is Dagu helper liveness\n"
-                + "                             --timeout-ms bounds helper spawns only\n"
-                + "  fan-out                    Run worker CLIs concurrently via a local Dagu graph\n"
-                + "                             --worker JSON          Nested worker contract; repeatable\n"
-                + "                             --then                 Optional two-group execution barrier\n"
-                + "                             --instructions FILE    Required ad hoc; forbidden with bound stdin\n"
-                + "                             --max-active N         Cap concurrent workers; omitted is uncapped\n"
-                + "  preview-bindings [JSON|@FILE]  Inspect work_slot_bindings without starting a run\n"
-                + "                             Omitted operand reads stdin; @FILE reads that path\n"
-                + "  recovery-preview ID [@SHOW]   Preview failed fan-out sources and pending assignments\n"
-                + "  recover-output @REQUEST_FILE  Repair captured output without rerunning its worker\n\n"
-                + "Global options:\n"
-                + "  --json, -j                 Render machine-readable JSON\n"
-                + "  --database <path>          SQLite database path\n"
-                + "  --config <path>            Provider TOML configuration path\n"
-                + "  --timeout-ms <milliseconds> Provider operation timeout\n"
-                + "  --help, -h                 Show help\n"
-                + "  --version, -V              Show version\n"
-        }
+        _ => "Usage: loop-engine [options] COMMAND\n\nCommands:\n  start PROVIDER JSON [LABEL]\n  list\n  show RUN_ID\n  append RUN_ID KIND JSON\n  event RUN_ID EVENT\n  history RUN_ID\n  terminate RUN_ID\n  read RUN_ID --kind KIND\n  explore RUN_ID\n  monitor --run RUN_ID --database PATH\n\nGlobal options:\n  --json, -j\n  --database PATH\n  --config PATH\n  --timeout-ms MILLISECONDS\n  --help, -h\n  --version, -V\n".to_owned(),
     }
 }
-
-#[cfg(test)]
-#[test]
-fn help_lists_fan_out_and_hides_wait_invocation() {
-    let help = execute(["--help"]);
-    assert_eq!(help.exit_code, EXIT_COMPLETED);
-    assert!(
-        help.stdout.contains("fan-out"),
-        "help must list fan-out: {}",
-        help.stdout
-    );
-    assert!(
-        help.stdout.contains("invocation-progress"),
-        "help must list invocation-progress: {}",
-        help.stdout
-    );
-    assert!(
-        help.stdout.contains("read RUN_ID --kind"),
-        "help must list targeted read under other commands: {}",
-        help.stdout
-    );
-    assert!(
-        help.stdout.contains("advise RUN_ID @REQUEST_FILE"),
-        "help must list the separate generic advice command: {}",
-        help.stdout
-    );
-    assert!(
-        !help.stdout.contains("wait-invocation"),
-        "help must not mention hidden wait-invocation: {}",
-        help.stdout
-    );
-    assert!(
-        !help.stdout.contains("stdin-exec"),
-        "help must not mention hidden stdin-exec: {}",
-        help.stdout
-    );
-    assert!(
-        !help.stdout.contains("fan-out-join"),
-        "help must not mention hidden fan-out-join: {}",
-        help.stdout
-    );
-    let fan_out_help = execute(["fan-out", "--help"]);
-    assert_eq!(fan_out_help.exit_code, EXIT_COMPLETED);
-    assert!(fan_out_help.stdout.contains("fan-out"));
-    assert!(fan_out_help.stdout.contains("--max-active"));
-    assert!(fan_out_help.stdout.contains("uncapped"));
-    assert!(!fan_out_help.stdout.contains("wait-invocation"));
-    assert!(!fan_out_help.stdout.contains("stdin-exec"));
-    assert!(!fan_out_help.stdout.contains("fan-out-join"));
-    let show_help = execute(["show", "--help"]);
-    assert_eq!(show_help.exit_code, EXIT_COMPLETED);
-    assert!(show_help.stdout.contains("show [--compact]"));
-    assert!(show_help.stdout.contains("non-arming status"));
-
-    let progress_help = execute(["invocation-progress", "--help"]);
-    assert_eq!(progress_help.exit_code, EXIT_COMPLETED);
-    assert!(progress_help.stdout.contains("invocation-progress"));
-    assert!(progress_help.stdout.contains("RUN_ID [INVOCATION_ID]"));
-    assert!(progress_help.stdout.contains("catalog"));
-    assert!(progress_help.stdout.contains("--timeout-ms"));
-    assert!(progress_help.stdout.contains("Dagu"));
-    assert!(!progress_help.stdout.contains("wait-invocation"));
-    assert!(!progress_help.stdout.contains("stdin-exec"));
-    assert!(!progress_help.stdout.contains("fan-out-join"));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5175,7 +2422,7 @@ mod tests {
     }
 
     #[test]
-    fn parser_exposes_exactly_the_eight_primary_operations() {
+    fn parser_exposes_exactly_the_seven_primary_operations() {
         let inputs = [
             vec!["start", "provider", "{}"],
             vec!["list"],
@@ -5184,7 +2431,6 @@ mod tests {
             vec!["event", "run-1", "finish"],
             vec!["history", "run-1"],
             vec!["terminate", "run-1"],
-            vec!["invoke", "run-1", "slot-1"],
         ];
 
         let names = inputs
@@ -5203,8 +2449,7 @@ mod tests {
                 "append",
                 "event",
                 "history",
-                "terminate",
-                "invoke"
+                "terminate"
             ]
         );
     }
@@ -5224,10 +2469,6 @@ mod tests {
             "event",
             "history",
             "terminate",
-            "invoke",
-            "fan-out",
-            "preview-bindings",
-            "invocation-progress",
         ] {
             let command_help = execute([command, "--help"]);
             assert_eq!(command_help.exit_code, EXIT_COMPLETED);
@@ -5238,6 +2479,44 @@ mod tests {
                 "help for {command} used the wrong executable name: {}",
                 command_help.stdout
             );
+        }
+    }
+
+    #[test]
+    fn external_work_retired_commands_are_unknown() {
+        let help = execute(["--help"]);
+        for command in [
+            "invoke",
+            "amend-binding",
+            "cancel-invocation",
+            "invocation-progress",
+            "preview-bindings",
+            "wait-invocation",
+            "stdin-exec",
+            "fan-out",
+            "fan-out-join",
+            "fan-out-worker",
+            "fan-out-barrier",
+            "recover-output",
+            "recovery-preview",
+            "advise",
+            "capture-command",
+            "capture-matrix",
+            "capture-abort",
+        ] {
+            assert!(
+                !help.stdout.contains(command),
+                "retired command in help: {command}"
+            );
+            for args in [vec![command], vec![command, "--help"]] {
+                let result = execute(args);
+                assert_eq!(result.exit_code, EXIT_INVALID_INVOCATION, "{command}");
+                assert!(
+                    result.stderr.contains("unknown operation"),
+                    "{command}: {}",
+                    result.stderr
+                );
+            }
         }
     }
 
@@ -5261,440 +2540,6 @@ mod tests {
         assert_eq!(options.database, Some(PathBuf::from("/tmp/loop.db")));
         assert_eq!(options.provider_timeout, Some(Duration::from_millis(17)));
         assert!(matches!(command, PrimaryCommand::Start(_)));
-    }
-
-    #[test]
-    fn recovery_execution_controls_and_preview_parser() {
-        let parsed = parse_args([
-            "invoke",
-            "run",
-            "slot",
-            "--preview",
-            "--controls",
-            r#"{"max_active":2,"force_fresh":true}"#,
-        ])
-        .unwrap();
-        let ParsedRequest::Operation {
-            command: PrimaryCommand::Invoke {
-                controls, preview, ..
-            },
-            ..
-        } = parsed
-        else {
-            panic!("invoke")
-        };
-        assert!(preview && controls.force_fresh);
-        assert_eq!(controls.max_active.unwrap().get(), 2);
-        for raw in [
-            r#"{"max_active":0}"#,
-            r#"{"policy":{}}"#,
-            r#"{"force_fresh":1}"#,
-        ] {
-            assert!(parse_args(["invoke", "run", "slot", "--controls", raw]).is_err());
-        }
-        assert!(parse_args(["show", "run", "--preview"]).is_err());
-        assert!(parse_args(["fan-out", "--preview"]).is_err());
-    }
-
-    #[test]
-    fn invoke_run_slot_parses() {
-        let parsed = parse_args(["invoke", "run-1", "slot-1"]).expect("invoke should parse");
-        let ParsedRequest::Operation {
-            command: PrimaryCommand::Invoke {
-                run_id, slot_id, ..
-            },
-            options,
-        } = parsed
-        else {
-            panic!("expected invoke operation");
-        };
-        assert_eq!(run_id.as_str(), "run-1");
-        assert_eq!(slot_id, "slot-1");
-        assert_eq!(options.output, OutputFormat::Human);
-        assert!(options.database.is_none());
-        assert!(options.provider_timeout.is_none());
-    }
-
-    #[test]
-    fn invoke_assignment_selection_parses_repeated_and_comma_forms() {
-        let parsed = parse_args([
-            "invoke",
-            "run-1",
-            "slot-1",
-            "--assignment",
-            "worker-1",
-            "--assignment=worker-2",
-        ])
-        .expect("repeated assignment selection should parse");
-        let ParsedRequest::Operation {
-            command:
-                PrimaryCommand::Invoke {
-                    assignment_selection,
-                    ..
-                },
-            ..
-        } = parsed
-        else {
-            panic!("expected invoke operation");
-        };
-        assert_eq!(
-            assignment_selection,
-            Some(vec!["worker-1".to_owned(), "worker-2".to_owned()])
-        );
-
-        let parsed = parse_args([
-            "invoke",
-            "run-1",
-            "slot-1",
-            "--assignments=worker-1,worker-2",
-        ])
-        .expect("comma assignment selection should parse");
-        let ParsedRequest::Operation {
-            command:
-                PrimaryCommand::Invoke {
-                    assignment_selection,
-                    ..
-                },
-            ..
-        } = parsed
-        else {
-            panic!("expected invoke operation");
-        };
-        assert_eq!(
-            assignment_selection,
-            Some(vec!["worker-1".to_owned(), "worker-2".to_owned()])
-        );
-
-        let parsed = parse_args(["invoke", "run-1", "slot-1", "--assignments=[]"])
-            .expect("an explicitly empty selection should reach core validation");
-        let ParsedRequest::Operation {
-            command:
-                PrimaryCommand::Invoke {
-                    assignment_selection,
-                    ..
-                },
-            ..
-        } = parsed
-        else {
-            panic!("expected invoke operation");
-        };
-        assert_eq!(assignment_selection, Some(Vec::new()));
-    }
-
-    #[test]
-    fn invoke_missing_args_is_invalid_invocation() {
-        let missing_both = parse_args(["invoke"]).expect_err("invoke requires run and slot");
-        assert_eq!(missing_both.code, "invalid-invocation");
-        let missing_slot = parse_args(["invoke", "run-1"]).expect_err("invoke requires a slot ID");
-        assert_eq!(missing_slot.code, "invalid-invocation");
-        let extra = parse_args(["invoke", "run-1", "slot-1", "extra"])
-            .expect_err("invoke rejects extra positionals");
-        assert_eq!(extra.code, "invalid-invocation");
-    }
-
-    #[test]
-    fn invoke_accepts_global_timeout_database_json_before_operation() {
-        let parsed = parse_args([
-            "--json",
-            "--database",
-            "/tmp/loop.db",
-            "--timeout-ms",
-            "12345",
-            "invoke",
-            "run-1",
-            "slot-1",
-        ])
-        .expect("globals before invoke should parse");
-        let ParsedRequest::Operation {
-            options,
-            command: PrimaryCommand::Invoke {
-                run_id, slot_id, ..
-            },
-        } = parsed
-        else {
-            panic!("expected invoke operation");
-        };
-        assert_eq!(options.output, OutputFormat::Json);
-        assert_eq!(options.database, Some(PathBuf::from("/tmp/loop.db")));
-        assert_eq!(options.provider_timeout, Some(Duration::from_millis(12345)));
-        assert_eq!(run_id.as_str(), "run-1");
-        assert_eq!(slot_id, "slot-1");
-    }
-
-    #[test]
-    fn help_lists_invoke_as_public_operation_and_hides_wait_invocation() {
-        let help = execute(["--help"]);
-        assert_eq!(help.exit_code, EXIT_COMPLETED);
-        assert!(
-            help.stdout.contains("invoke"),
-            "help must list invoke: {}",
-            help.stdout
-        );
-        assert!(
-            help.stdout.contains("fan-out"),
-            "help must list fan-out: {}",
-            help.stdout
-        );
-        assert!(
-            help.stdout.contains("preview-bindings"),
-            "help must list preview-bindings: {}",
-            help.stdout
-        );
-        assert!(
-            help.stdout.contains("invocation-progress"),
-            "help must list invocation-progress: {}",
-            help.stdout
-        );
-        let (operations, other) = help
-            .stdout
-            .split_once("Other commands:")
-            .expect("help must have Other commands");
-        assert!(
-            operations.contains("Operations:"),
-            "help must list the eight operations: {operations}"
-        );
-        assert!(
-            !operations.contains("preview-bindings"),
-            "preview-bindings must not be a ninth primary operation: {operations}"
-        );
-        assert!(
-            !operations.contains("invocation-progress"),
-            "invocation-progress must not be a ninth primary operation: {operations}"
-        );
-        assert!(
-            other.contains("preview-bindings"),
-            "preview-bindings must be under Other commands: {other}"
-        );
-        assert!(
-            other.contains("invocation-progress"),
-            "invocation-progress must be under Other commands: {other}"
-        );
-        assert!(
-            other.contains("fan-out"),
-            "fan-out must be under Other commands: {other}"
-        );
-        assert!(
-            help.stdout.contains("--worker"),
-            "help must document --worker: {}",
-            help.stdout
-        );
-        assert!(
-            help.stdout.contains("--instructions"),
-            "help must document --instructions: {}",
-            help.stdout
-        );
-        assert!(
-            help.stdout.contains("--max-active"),
-            "help must document --max-active: {}",
-            help.stdout
-        );
-        assert!(
-            !help.stdout.contains("wait-invocation"),
-            "help must not mention hidden wait-invocation: {}",
-            help.stdout
-        );
-        assert!(
-            !help.stdout.contains("stdin-exec"),
-            "help must not mention hidden stdin-exec: {}",
-            help.stdout
-        );
-        let invoke_help = execute(["invoke", "--help"]);
-        assert_eq!(invoke_help.exit_code, EXIT_COMPLETED);
-        assert!(invoke_help.stdout.contains("invoke"));
-        assert!(!invoke_help.stdout.contains("wait-invocation"));
-        assert!(!invoke_help.stdout.contains("stdin-exec"));
-        assert!(!invoke_help.stdout.contains("fan-out-join"));
-        let fan_out_help = execute(["fan-out", "--help"]);
-        assert_eq!(fan_out_help.exit_code, EXIT_COMPLETED);
-        assert!(fan_out_help.stdout.contains("fan-out"));
-        assert!(fan_out_help.stdout.contains("--worker JSON"));
-        assert!(fan_out_help.stdout.contains("--instructions FILE"));
-        assert!(fan_out_help.stdout.contains("--max-active N"));
-        assert!(fan_out_help
-            .stdout
-            .contains("uncapped concurrent worker start"));
-        assert!(!fan_out_help.stdout.contains("wait-invocation"));
-        assert!(!fan_out_help.stdout.contains("stdin-exec"));
-        assert!(!fan_out_help.stdout.contains("fan-out-join"));
-        let preview_help = execute(["preview-bindings", "--help"]);
-        assert_eq!(preview_help.exit_code, EXIT_COMPLETED);
-        assert!(preview_help.stdout.contains("preview-bindings"));
-        assert!(preview_help.stdout.contains("[JSON|@FILE]"));
-        assert!(!preview_help.stdout.contains("wait-invocation"));
-        assert!(!preview_help.stdout.contains("stdin-exec"));
-        assert!(!preview_help.stdout.contains("fan-out-join"));
-        let show_help = execute(["show", "--help"]);
-        assert_eq!(show_help.exit_code, EXIT_COMPLETED);
-        assert!(show_help.stdout.contains("show [--compact]"));
-        assert!(show_help.stdout.contains("non-arming status"));
-        let progress_help = execute(["invocation-progress", "--help"]);
-        assert_eq!(progress_help.exit_code, EXIT_COMPLETED);
-        assert!(progress_help.stdout.contains("invocation-progress"));
-        assert!(progress_help.stdout.contains("RUN_ID [INVOCATION_ID]"));
-        assert!(progress_help.stdout.contains("catalog"));
-        assert!(progress_help.stdout.contains("--timeout-ms"));
-        assert!(progress_help.stdout.contains("helper"));
-        assert!(progress_help.stdout.contains("Dagu"));
-        assert!(!progress_help.stdout.contains("wait-invocation"));
-        assert!(!progress_help.stdout.contains("stdin-exec"));
-        assert!(!progress_help.stdout.contains("fan-out-join"));
-    }
-
-    #[test]
-    fn parser_fan_out_is_not_a_primary_command() {
-        let parsed = parse_args(["fan-out"]).expect("fan-out should parse");
-        let ParsedRequest::FanOut { args, .. } = parsed else {
-            panic!("expected ParsedRequest::FanOut, got {parsed:?}");
-        };
-        assert!(args.workers.is_empty());
-        assert!(args.instructions_path.is_none());
-        assert!(args.max_active.is_none());
-
-        let worker = r#"{"command":"echo","args":[]}"#;
-        let parsed = parse_args(["fan-out", "--worker", worker]).expect("fan-out with worker");
-        let ParsedRequest::FanOut { args, options } = parsed else {
-            panic!("expected ParsedRequest::FanOut");
-        };
-        assert_eq!(args.workers.len(), 1);
-        assert_eq!(args.workers[0].command, "echo");
-        assert!(args.max_active.is_none());
-        assert!(options.database.is_none());
-
-        let parsed = parse_args(["fan-out", "--max-active", "2", "--worker", worker])
-            .expect("fan-out with --max-active");
-        let ParsedRequest::FanOut { args, .. } = parsed else {
-            panic!("expected ParsedRequest::FanOut");
-        };
-        assert_eq!(args.max_active, Some(2));
-        assert_eq!(args.workers.len(), 1);
-
-        let unknown = parse_args(["fan-out", "--max-concurrency", "2"])
-            .expect_err("unknown --max-concurrency");
-        assert_eq!(unknown.code, "invalid-invocation");
-        assert!(unknown.message.contains("unknown option"), "{unknown}");
-    }
-
-    #[test]
-    fn parser_preview_bindings_is_not_a_primary_command() {
-        let parsed = parse_args(["preview-bindings"]).expect("preview-bindings should parse");
-        let ParsedRequest::PreviewBindings { operand, options } = parsed else {
-            panic!("expected ParsedRequest::PreviewBindings, got {parsed:?}");
-        };
-        assert!(operand.is_none());
-        assert!(options.database.is_none());
-        assert!(options.provider_timeout.is_none());
-
-        let parsed = parse_args(["preview-bindings", "{}", "--timeout-ms", "60000"])
-            .expect("preview-bindings with timeout");
-        let ParsedRequest::PreviewBindings { operand, options } = parsed else {
-            panic!("expected ParsedRequest::PreviewBindings");
-        };
-        assert_eq!(operand.as_deref(), Some("{}"));
-        assert_eq!(options.provider_timeout, Some(Duration::from_millis(60000)));
-    }
-
-    #[test]
-    fn parser_invocation_progress_is_not_a_primary_command() {
-        let parsed = parse_args(["invocation-progress", "run-1"]).expect("progress should parse");
-        let ParsedRequest::InvocationProgress {
-            run_id,
-            invocation_id,
-            options,
-        } = parsed
-        else {
-            panic!("expected ParsedRequest::InvocationProgress, got {parsed:?}");
-        };
-        assert_eq!(run_id.as_str(), "run-1");
-        assert!(invocation_id.is_none());
-        assert_eq!(options.output, OutputFormat::Human);
-
-        let parsed = parse_args([
-            "--json",
-            "--database",
-            "/tmp/loop.db",
-            "--timeout-ms",
-            "5000",
-            "invocation-progress",
-            "run-1",
-            "inv-1",
-        ])
-        .expect("progress with globals and invocation id");
-        let ParsedRequest::InvocationProgress {
-            run_id,
-            invocation_id,
-            options,
-        } = parsed
-        else {
-            panic!("expected ParsedRequest::InvocationProgress");
-        };
-        assert_eq!(run_id.as_str(), "run-1");
-        assert_eq!(
-            invocation_id.as_ref().map(InvocationId::as_str),
-            Some("inv-1")
-        );
-        assert_eq!(options.output, OutputFormat::Json);
-        assert_eq!(options.database, Some(PathBuf::from("/tmp/loop.db")));
-        assert_eq!(options.provider_timeout, Some(Duration::from_millis(5000)));
-
-        let missing = parse_args(["invocation-progress"]).expect_err("run id required");
-        assert_eq!(missing.code, "invalid-invocation");
-        let extra = parse_args(["invocation-progress", "run-1", "inv-1", "extra"])
-            .expect_err("leftover tokens");
-        assert_eq!(extra.code, "invalid-invocation");
-        let capture = parse_args(["invocation-progress", "run-1", "--capture-dir", "/tmp"])
-            .expect_err("reject capture-dir");
-        assert_eq!(capture.code, "invalid-invocation");
-        let worker = parse_args([
-            "invocation-progress",
-            "run-1",
-            "--worker",
-            r#"{"command":"echo","args":[]}"#,
-        ])
-        .expect_err("reject worker");
-        assert_eq!(worker.code, "invalid-invocation");
-        let stdin = parse_args(["invocation-progress", "run-1", "--stdin-file", "x"])
-            .expect_err("reject stdin-exec flags");
-        assert_eq!(stdin.code, "invalid-invocation");
-    }
-
-    #[test]
-    fn parser_advice_is_separate_and_uses_frozen_per_call_configuration() {
-        let parsed = parse_args([
-            "--database",
-            "/tmp/loop.db",
-            "--json",
-            "advise",
-            "run-1",
-            "@request.json",
-        ])
-        .expect("generic advice command should parse");
-        let ParsedRequest::Advice {
-            options,
-            run_id,
-            request_source,
-        } = parsed
-        else {
-            panic!("expected separate advice command");
-        };
-        assert_eq!(run_id.as_str(), "run-1");
-        assert_eq!(request_source, "@request.json");
-        assert_eq!(options.database, Some(PathBuf::from("/tmp/loop.db")));
-        assert_eq!(options.output, OutputFormat::Json);
-
-        for args in [
-            vec!["advise", "run-1", "{}"],
-            vec!["advise", "run-1", "@request.json", "extra"],
-            vec!["advise", "run-1", "@request.json", "--timeout-ms", "50"],
-            vec![
-                "advise",
-                "run-1",
-                "@request.json",
-                "--config",
-                "providers.toml",
-            ],
-        ] {
-            assert_eq!(parse_args(args).unwrap_err().code, "invalid-invocation");
-        }
     }
 
     #[test]
@@ -5906,131 +2751,6 @@ mod tests {
         let human_output = render_operation_human("show", &outcome);
         assert!(!human_output.contains("control_revision"));
         assert!(!human_output.contains("last_sequence"));
-    }
-
-    #[test]
-    fn compact_renderer_keeps_fixed_order_and_separates_helper_liveness() {
-        let transition = core::Transition::checked("draft", "approve", "done");
-        let evaluation = core::DurableEvaluation::allow(
-            transition.clone(),
-            4_u64.into(),
-            core::Timestamp::from_unix_millis(40),
-        );
-        let invocation = core::operations::WorkSlotInvocationView {
-            invocation_id: "inv-1".into(),
-            slot_id: "slot-1".into(),
-            binding: core::WorkSlotBinding::new("worker", vec!["--flag".to_owned()]),
-            state_visit: 0,
-            routed_inputs: Vec::new(),
-            instruction_digest: "digest".to_owned(),
-            subject: "subject".to_owned(),
-            status: core::ProjectedInvocationStatus::Running,
-            started_at: core::Timestamp::from_unix_millis(10),
-            allowed_time_ms: 1_000,
-            exit_code: None,
-            completed_at: None,
-            overlay_meaning: "overlay remains authoritative".to_owned(),
-            elapsed_ms: 30,
-            remaining_allowed_ms: 970,
-            capture_dir: "/tmp/capture".to_owned(),
-            assignment_labels: Vec::new(),
-            inner_workers: Vec::new(),
-            assignment_selection: None,
-            invocation_input: None,
-            controls: None,
-            ownership: None,
-            change_report: core::operations::show::InvocationChangeReport {
-                identity: "inv-1".into(),
-                standing: false,
-                subject_revision: "subject".to_owned(),
-                dimensions: Value::Null,
-                assignments: Vec::new(),
-                plan_task_results: Vec::new(),
-            },
-        };
-        let projection = CliShowProjection {
-            override_summary: core::OverrideSummary::default(),
-            run_id: "run-1".into(),
-            label: Some("compact test".to_owned()),
-            workflow_id: "workflow".into(),
-            workflow_graph: None,
-            lifecycle: core::Lifecycle::Active,
-            current_state: "draft".into(),
-            current_state_title: "Draft".to_owned(),
-            current_state_instructions: "Do work".to_owned(),
-            initial_input: json!({}),
-            state_visit: 0,
-            binding_amendments: Vec::new(),
-            effective_bindings: Default::default(),
-            context: Vec::new(),
-            requestable_events: vec![core::operations::RequestableEvent::from_transition(
-                &transition,
-            )],
-            latest_evaluations: vec![evaluation],
-            evaluation_history: vec![],
-            action_guidance: None,
-            work_slots: vec![core::WorkSlot::new("slot-1", "draft", "approve")],
-            change_report: core::operations::RunChangeReport {
-                assignments: Vec::new(),
-                plan_task_results: Vec::new(),
-            },
-            work_slot_invocations: vec![invocation],
-        };
-        let progress = CompactInnerProgress::Snapshot(Box::new(
-            invocation_progress::InvocationProgressSnapshot {
-                run_id: "run-1".into(),
-                invocation_id: "inv-1".into(),
-                slot_id: "slot-1".into(),
-                capture_dir: "/tmp/capture".to_owned(),
-                ownership: None,
-                graph: Some(invocation_progress::GraphProgress {
-                    locator: DaguLocator {
-                        dagu_home: "/tmp/dagu".to_owned(),
-                        dag_name: "dag".to_owned(),
-                        run_name: "run".to_owned(),
-                    },
-                    steps: vec![
-                        invocation_progress::GraphStep {
-                            name: "w0".to_owned(),
-                            state: invocation_progress::GraphStepState::Running,
-                        },
-                        invocation_progress::GraphStep {
-                            name: "join".to_owned(),
-                            state: invocation_progress::GraphStepState::Reaped,
-                        },
-                        invocation_progress::GraphStep {
-                            name: "w1".to_owned(),
-                            state: invocation_progress::GraphStepState::NotStarted,
-                        },
-                    ],
-                }),
-                traces: Vec::new(),
-                visibility: json!({}),
-            },
-        ));
-        let output = render_compact_show(
-            &projection,
-            Some(&projection.work_slot_invocations[0]),
-            progress,
-        );
-        let lines = output.lines().collect::<Vec<_>>();
-        assert_eq!(lines[0], "completed show --compact");
-        assert!(lines[1].starts_with("run: run-1"));
-        assert_eq!(
-            lines[2],
-            "lifecycle: active; has_overrides: false; override_count: 0; completion_mode: none"
-        );
-        assert_eq!(lines[3], "state: draft (Draft)");
-        assert_eq!(lines[4], "requestable events: approve -> done (checked)");
-        assert!(lines[5].contains("latest checked result: allow event=approve"));
-        assert_eq!(
-            lines[6],
-            "invocation: inv-1 slot=slot-1 status=running exit_code=pending"
-        );
-        assert_eq!(
-            lines[7],
-            "inner progress (Dagu helper liveness): steps=3 not_started=1 running=1 reaped=1"
-        );
     }
 
     #[test]
@@ -6674,72 +3394,6 @@ printf '%s' '{"id":"cli-fixture","initial_state":"start","states":[{"id":"start"
         );
     }
 
-    #[test]
-    fn summary_worker_linkage_requires_distinct_ids_and_complete_selected_facts() {
-        let valid = serde_json::json!({
-            "workers": [
-                {
-                    "assignment_id": "axis-a",
-                    "command": "worker",
-                    "args": ["--shared"],
-                    "exit_code": 0,
-                    "selected_attempt": 2,
-                    "selected_output_sha256": "sha256:selected",
-                    "selected_output_path": "/capture/axis-a/attempts/2/stdout"
-                },
-                {
-                    "assignment_id": "axis-b",
-                    "command": "worker",
-                    "args": ["--shared"],
-                    "exit_code": 0,
-                    "selected_attempt": null,
-                    "selected_output_sha256": null,
-                    "selected_output_path": null
-                }
-            ]
-        });
-        let workers =
-            parse_summary_inner_workers(&serde_json::to_vec(&valid).unwrap(), Path::new("/tmp"))
-                .expect("valid selected and coverage-gap workers");
-        assert_eq!(workers[0].assignment_id, "axis-a");
-        assert_eq!(workers[0].selected_attempt, Some(2));
-        assert_eq!(
-            workers[0].selected_output_sha256.as_deref(),
-            Some("sha256:selected")
-        );
-        assert_eq!(workers[1].assignment_id, "axis-b");
-        assert_eq!(workers[1].selected_attempt, None);
-        assert!(workers[1].selected_output_sha256.is_none());
-
-        let mut duplicate = valid.clone();
-        duplicate["workers"][1]["assignment_id"] = json!("axis-a");
-        assert!(parse_summary_inner_workers(
-            &serde_json::to_vec(&duplicate).unwrap(),
-            Path::new("/tmp")
-        )
-        .is_none());
-
-        let mut half_linked = valid.clone();
-        half_linked["workers"][0]["selected_output_path"] = Value::Null;
-        assert!(parse_summary_inner_workers(
-            &serde_json::to_vec(&half_linked).unwrap(),
-            Path::new("/tmp")
-        )
-        .is_none());
-
-        let mut worker_level_path = valid;
-        worker_level_path["workers"][0]["selected_output_path"] = json!("/capture/axis-a/stdout");
-        assert!(
-            parse_summary_inner_workers(
-                &serde_json::to_vec(&worker_level_path).unwrap(),
-                Path::new("/tmp")
-            )
-            .is_none(),
-            "selected attempt must not be linked to the worker-level stdout copy"
-        );
-    }
-
-    #[cfg(unix)]
     #[test]
     fn show_json_has_no_top_level_provider_or_artifact_root() {
         let root = TempRoot::new("cli-show-keys");
