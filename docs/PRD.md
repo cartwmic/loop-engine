@@ -9,6 +9,14 @@
 
 > **Backlog amendment scope:** The historical-scope labels and changes to execution description, context-only evaluation, LE-100/102/110/116/119/125, replacements LE-128/129/130/137/138 and additions LE-131–136 are one scoped amendment. They do not accept unrelated recovery-r5 proposals or reinterpret historical runs. LE-135 and LE-136 backfill intended behavior already present in the current product.
 
+## Current external-work successor scope
+
+The external-work amendment is limited to LE-167–LE-183 and the explicit qualifications and tombstones below. It does not accept unrelated marked recovery proposals, the pending LE-107 recovery paragraph or software-change provider Section 10. Original dated history remains history. Existing runs and data are not migrated; availability of historical binaries or detailed execution projections is not required.
+
+For the supported external-only product, the engine owns durable progression and callers own all agents, advice and proof/test commands. Deterministic provider describe/evaluate and necessary metadata checks remain. The seven primary engine operations are start, list, show, append, event, history and terminate. Separate deterministic provider preparation/recording/inspection is not a work executor. Earlier narrative about retired bindings, invoke/waiters, fan-out/plan runners, capture commands, engine summaries and primary execution controls describes historical behavior, not a parallel supported path. Earlier absolute floor/eligibility/freshness language is qualified only by the named new records; immutable initial input and all other semantic policy remain truthful.
+
+These records govern applicable behavior of software-change, policy-document and research. Provider-specific target/phase meaning remains. Policy-document gains explicit configured groups/counts/eligibility and same-run applicable evidence rather than relying on its former fixed one-pass/no-floor rule; its actual target authorship is a declaration, not a Git-committer inference or registry. Research's adversarial question remains contrary-evidence checking, not an invented software-change phase. Actual requests/returns can be prose/YAML/JSON; strict normalized projection belongs to supported driver recording, not a mandatory reviewer output schema.
+
 ## 1. Product
 
 Loop Engine is a small, durable workflow coordination system for work performed by humans, AI agents, scripts, or external systems.
@@ -493,7 +501,7 @@ A terminal `terminate` request is rejected and creates no semantic history.
 
 A terminated run cannot reopen in v0.1.
 
-### 6.8 Invoke
+### 6.8 Historical invocation (retired from the supported product)
 
 Invocation requires current observation and an effective bound slot. It freezes the admitted command, controls, selected inputs and current work identity, and retains execution and capture identities for later inspection. Preview performs preparation without admitting work. Invalid selected work must be refused before it can displace reusable results.
 
@@ -1177,6 +1185,9 @@ active run's stored states, transitions, work-slot catalog, or instructions.
 
 Ordinary `show` provides current action instructions; separate status-only and full inspection views remain available. Status-only observation does not arm mutation. Action and full instruction reads arm the current visit. Optional provider-authored action guidance remains opaque to core; absent legacy guidance means unknown normalized obligations, not zero obligations, and preserves the existing bound-invocation or external-work path and access to frozen policy. Full inspection retains complete configuration, context and invocation/change-report evidence with original identities and ordering. The focused action view exposes current obligations, active work, source-located blockers with explicit freshness or uncertainty, and references for omitted material; unrelated completed invocations and historical context do not enlarge it.
 
+
+**External-work successor qualification:** LE-167/176 retire binding, invocation, waiter, owned-work and mandatory execution-detail projections, not durable provider-free state/input/context/history, observation, one logical mutator or external completion. Historical detail may be explicitly unsupported without deleting or reinterpreting stored data. Frozen normalized counts are identified as base values; supported provider inspection resolves effective counts under LE-178 and is exposed by guidance for fresh continuation under LE-20/21.
+
 ### LE-21: Workflow-specific external work identity required for handoff is durably represented through opaque workflow data or instructions rather than ambient session state.
 - Status: live
 - Coverage: e2e/journey
@@ -1206,6 +1217,9 @@ Full inspection also exposes every durably recorded checked allow/deny evaluatio
 ### LE-25: Run history contains only the semantic actions defined in Section 4.4.
 - Status: live
 - Coverage: e2e/journey
+
+
+**External-work successor qualification:** LE-167/176 retire binding, invocation, waiter, owned-work and mandatory execution-detail projections, not durable provider-free state/input/context/history, observation, one logical mutator or external completion. Historical detail may be explicitly unsupported without deleting or reinterpreting stored data. Frozen normalized counts are identified as base values; supported provider inspection resolves effective counts under LE-178 and is exposed by guidance for fresh continuation under LE-20/21.
 
 ### LE-26: Reads, unavailable events, unsupported evaluations, and operational failures do not pollute semantic history.
 - Status: live
@@ -1379,6 +1393,9 @@ For an LE-166-enabled run, provider unavailability is still not a check-free gat
 - Status: live
 - Coverage: e2e/journey
 
+
+**External-work successor qualification:** LE-167/176 retire binding, invocation, waiter, owned-work and mandatory execution-detail projections, not durable provider-free state/input/context/history, observation, one logical mutator or external completion. Historical detail may be explicitly unsupported without deleting or reinterpreting stored data. Frozen normalized counts are identified as base values; supported provider inspection resolves effective counts under LE-178 and is exposed by guidance for fresh continuation under LE-20/21.
+
 ### LE-65: Topology covers scope, gather, adversarial verify, and synthesize.
 - Status: live
 - Coverage: e2e/journey
@@ -1386,6 +1403,9 @@ For an LE-166-enabled run, provider unavailability is still not a check-free gat
 ### LE-66: Checked transitions refuse until artifacts satisfy declared structure and independent evidence satisfies declared review obligations at verify and synthesize.
 - Status: live
 - Coverage: e2e/journey
+
+
+**External-work successor qualification:** LE-168/171 qualify unconditional subject-author exclusion, singleton commissioning and fresh-only revision handling for explicitly configured eligible self-review, groups/stages and same-run applicability. Research keeps its scope/gather/verify/synthesize and contrary-evidence meaning; it gains no software-change phase or automatic cleared-parent challenge interpretation.
 
 ### LE-67: Local blackbox tests exercise at least one checked denial and a successful completion.
 - Status: live
@@ -1409,6 +1429,9 @@ For an LE-166-enabled run, provider unavailability is still not a check-free gat
 - Status: live
 - Coverage: e2e/journey
 
+
+**External-work successor qualification:** LE-167/176 retire binding, invocation, waiter, owned-work and mandatory execution-detail projections, not durable provider-free state/input/context/history, observation, one logical mutator or external completion. Historical detail may be explicitly unsupported without deleting or reinterpreting stored data. Frozen normalized counts are identified as base values; supported provider inspection resolves effective counts under LE-178 and is exposed by guidance for fresh continuation under LE-20/21.
+
 ### LE-72: The primary caller surface remains eight operations (`start`, `list`, `show`, `append`, `event`, `history`, `terminate`, `invoke`). Visible `invocation-progress`, `fan-out`, and `preview-bindings` are other commands, not a ninth primary. `fan-out` and `preview-bindings` do not open the run database. `invocation-progress` opens the catalog; a query failure does not flip overlay.
 - Status: tombstone
 
@@ -1425,22 +1448,30 @@ For an LE-166-enabled run, provider unavailability is still not a check-free gat
 ### 14.9 Work-Slot Delegation
 
 ### LE-75: A caller can inspect the frozen slot catalog (`work_slots`) and sparse `work_slot_bindings` from `show` / `initial_input` before work proceeds. `preview-bindings` inspects that JSON before `start` without creating a run. It reports a `dagu` PATH check (minimum 2.14.0) as ok with path and version or as a warning; well-formed bindings still exit 0. `fan-out` and `software-change run-plan-graph` execute fail-close on the same missing, unrunnable, or unsupported-version condition before any worker spawn. Isolated home is `capture_dir/dagu-home/` with locator `capture_dir/dagu-locator.json` keys `dagu_home`, `dag_name`, and `run_name` (`fanout-<capture-dir-name>` for fan-out, `plan-graph-<capture-dir-name>` for plan-graph). loop-engine and software-change packages do not contain or vendor `dagu`.
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
+
+
+Retired by LE-167/176 for the external-work successor. The exact original title and earlier accepted/proposed history are retained; this retirement does not adopt a pending proposal or preserve an executor.
 
 ### LE-76: Omitted `work_slot_bindings` and `{}` both mean no bindings; unknown slot IDs, unknown binding fields, and non-object values are rejected at `start`. `start` does not parse `fan-out` or `run-plan-graph` argv. `preview-bindings` exits nonzero on a zero-worker `fan-out` freeze.
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
+
+
+Retired by LE-167/176 for the external-work successor. The exact original title and earlier accepted/proposed history are retained; this retirement does not adopt a pending proposal or preserve an executor.
 
 ### LE-77: When a slot is bound, `current_state_instructions` names the slot ID plus the frozen CLI binding `{command, args}` and that the legal start is `loop-engine invoke RUN_ID SLOT_ID`; it omits the stored work body and states the bound-instruction triage order (overlay succeeded is bound CLI exit 0, not provider acceptance; captures are at the named directory; the driver triages, appends, then requests the shown event; on overrun run `show` immediately before re-invoking; on failed inspect `summary.json` and captured output before stderr).
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
+
+
+Retired by LE-167/176 for the external-work successor. The exact original title and earlier accepted/proposed history are retained; this retirement does not adopt a pending proposal or preserve an executor.
 
 ### LE-78: `invoke` is the only legal start for bound work. On accept it allocates `capture_dir` as `{artifact_root}/work-slot-captures/{slot_id}/{invocation_id}`, creates that directory, stores it, and returns it. The bound worker's stdin is exactly one JSON object with `run_id`, `slot_id`, `artifact_root`, `instruction_body`, and `capture_dir`, plus optional `context` when the slot declared nonempty `stdin_context_kinds` (not argv, environment, or a temp file). Waiter stdin is not the worker packet.
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
 
 For expressly opted-in new non-review draft/implement slots, LE-153 permits a separately recorded driver-authored completion **instead of** worker success at the pre-provider gate; it is not a bound worker start, invocation or reviewer act. Review slots remain invoke-only. The normal checked provider gate still runs. Future invoke packets may include separately identified engine-selected assignment/opaque input, generic labels and transition history needed to verify LE-150/153; they are not driver-authored provenance or a change to the frozen older worker packet.
+
+
+Retired by LE-167/176 for the external-work successor. The exact original title and earlier accepted/proposed history are retained; this retirement does not adopt a pending proposal or preserve an executor.
 
 ### LE-79: Hidden `wait-invocation` is parent of the bound worker, waitpids it, writes terminal `succeeded`/`failed` plus `exit_code`, then exits. After waitpid, a well-formed `capture_dir/summary.json` is copied as `inner_workers` (`command`, `args`, `exit_code` only); overlay remains the bound CLI process exit. It is not a daemon. A vanished waiter with no terminal status is overlay-`failed`.
 - Status: tombstone
@@ -1448,22 +1479,30 @@ For expressly opted-in new non-review draft/implement slots, LE-153 permits a se
 Superseded by LE-129. The original title is retained for continuity and historical interpretation.
 
 ### LE-80: Hidden `stdin-exec` opens a stdin file, attaches it to child stdin, and runs `COMMAND [ARG]...` after `--` with no shell. Duty bytes stay in that file (not argv or environment). Sidecar mode writes `{"exit_code": <inner waitpid as i32>}` then exits 0; propagate mode is the inner waitpid and rejects `--sidecar-file`. Spawn failure exits nonzero without a successful sidecar. `--help` omits it. When `PI_CODING_AGENT_SESSION_DIR` is unset in the inherited environment, stdin-exec colocates Pi sessions under the worker `capture_dir/sessions` via that variable at spawn; frozen argv does not add `--session-dir`. `software-change` duplicates the same helper; plan-graph uses propagate mode only.
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
+
+
+Retired by LE-167/176 for the external-work successor. The exact original title and earlier accepted/proposed history are retained; this retirement does not adopt a pending proposal or preserve an executor.
 
 ### LE-81: Invocation records are engine-authored; `append` cannot write them. History records `invocation started {invocation_id}` and `invocation status changed {invocation_id, status}` for waiter-written `succeeded`/`failed` only.
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
+
+
+Retired by LE-167/176 for the external-work successor. The exact original title and earlier accepted/proposed history are retained; this retirement does not adopt a pending proposal or preserve an executor.
 
 ### LE-82: `work_slot_invocations.status` is the reader overlay `running` | `succeeded` | `failed` | `overrun`. Each view also reports `overlay_meaning`, `elapsed_ms`, `remaining_allowed_ms`, `capture_dir`, and `inner_workers`. Overlay `overrun` is not a history action. `waiter_pid` is not in `show`. `show` does not spawn a provider and does not read capture files. While overlay is `running`, the canonical driver poll is `show` for overlay (`inner_workers` empty) plus `invocation-progress` for inner graph/traces. Graph state is Dagu helper liveness (`reaped` is helper finished, not overlay success and not inner waitpid 0). `dagu status` / `dagu history` remain the underlying surface `invocation-progress` uses, not the driver-facing path.
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
+
+
+Retired by LE-167/176 for the external-work successor. The exact original title and earlier accepted/proposed history are retained; this retirement does not adopt a pending proposal or preserve an executor.
 
 ### LE-83: A bound checked edge is refused unless overlay status is `succeeded` matching slot ID, `instruction_digest`, and the current slot-visit subject. Overlay `running`, `failed`, and `overrun` do not satisfy. Check-free edges are ungated. `evaluate` never waits.
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
 
 LE-153 supplies only a narrow future non-review driver act as an alternative to the matching succeeded-invocation pre-provider check, not to provider `allow`. For new LE-166-enabled runs, normal checked and check-free departures also require due advice closure or a scoped advice exception; check-free still omits bound-success/provider checks. Older/disabled runs retain their rules.
+
+
+Retired by LE-167/176 for the external-work successor. The exact original title and earlier accepted/proposed history are retained; this retirement does not adopt a pending proposal or preserve an executor.
 
 ### LE-84: Overlay `overrun` is terminal for retry: a later `invoke` of the same slot is not already-running, but the driver runs `show` immediately before re-invoking. Failed and overrun records remain inspectable and never count as success. On failure the driver inspects `summary.json` and captured output before stderr. Overlay succeeded remains the bound CLI exiting 0 even when stored `inner_workers` contain a nonzero `exit_code`.
 - Status: tombstone
@@ -1474,13 +1513,21 @@ LE-153 supplies only a narrow future non-review driver act as an alternative to 
 - Status: live
 - Coverage: e2e/journey
 
+
+**External-work successor qualification:** LE-167/176 retire binding, invocation, waiter, owned-work and mandatory execution-detail projections, not durable provider-free state/input/context/history, observation, one logical mutator or external completion. Historical detail may be explicitly unsupported without deleting or reinterpreting stored data. Frozen normalized counts are identified as base values; supported provider inspection resolves effective counts under LE-178 and is exposed by guidance for fresh continuation under LE-20/21.
+
 ### LE-86: Policy-document has no work slot for `prepare` → `ready`. Software-change, policy-document, and research share the same binding, invoke, overlay, and gate contract; each only declares its catalog.
 - Status: live
 - Coverage: e2e/journey
 
+
+**External-work successor qualification:** LE-167/176 retire binding, invocation, waiter, owned-work and mandatory execution-detail projections, not durable provider-free state/input/context/history, observation, one logical mutator or external completion. Historical detail may be explicitly unsupported without deleting or reinterpreting stored data. Frozen normalized counts are identified as base values; supported provider inspection resolves effective counts under LE-178 and is exposed by guidance for fresh continuation under LE-20/21.
+
 ### LE-87: Slot-visit subjects are minted via set-current-subject on entry into a slot state, including `start` when the initial state is a slot. `invoke` snapshots via get-current-subject and does not mint. `instruction_digest` is SHA-256 of the stored instruction body UTF-8 bytes, lowercase hex.
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
+
+
+Retired by LE-167/176 for the external-work successor. The exact original title and earlier accepted/proposed history are retained; this retirement does not adopt a pending proposal or preserve an executor.
 
 ### LE-88: Public-boundary journeys (`scripts/software-change-journey.py`, `scripts/policy-document-journey.py`, `scripts/research-journey.py`) freeze a sparse dummy-worker binding, invoke before the bound checked event, and prove catalog snapshot, instruction redaction, unbound-invoke rejection, pre-evaluate gate, worker-packet stdin, overlay `succeeded`, unbound stored instructions, and invocation history. Software-change journeys also prove unbound shipped profiles, graph-runner and fan-out behavior with dummy inner workers, `preview-bindings` nonzero on zero-worker `fan-out` JSON without creating a run, `preview-bindings` warning when pi has `--no-extensions` and no `-e`, and do not call a live model. `scripts/software-change-journey.py --self-test` executes the three provider skill constructors against software-change high-rigor design-review, policy-document shipped semantic policies/target/mode, and research verify plus synthesize; it compares worker count/order and exact axis/`example_prompt`/author/model/subject metadata to each source profile, asserts required keys/data bytes/preview visibility and fail-closed invalid cases, asserts root AGENTS rules, and prints `worker-data skill/root policy assertions passed` only after all pass. The software-change source full journey binds deterministic stdin-capturing workers that emit conforming JSON or exit-0 refusal text and, through separate public CLI processes, asserts the compact one-key `artifact_root` context precedes the separator/body with no `capture_dir` or duplicate identity in that block, conforming `status` succeeded, refusal `status` failed with `exit_code` 0, summary/captures persist, overlay fails, then prints `contracted fan-out failure`.
 - Status: tombstone
@@ -1511,17 +1558,29 @@ Superseded by LE-138. The original title is retained for continuity and historic
 
 For new LE-151 output-only recovery, an optional identical-worker retry is a **new substantive judgment**, not a prerequisite to safe mechanical or configured bounded representation-only repair of explicit original meaning. Neither kind of correction rewrites original attempts.
 
+
+**External-work successor qualification:** LE-170/177 replace new evidence dependence on same-worker retry, engine invocation/assignment selection and captured packets with actual supplied requests/instructions, original returns and faithful separately attributed driver-confirmed projection. Preserve known identity/content checks, original result/author/findings/rationale, visible gaps and inert candidate previews. Valid siblings survive malformed siblings; missing substantive meaning is not formatting. No engine-executed claim or new work registry is created.
+
 ### LE-94: `implementation-ready` cannot advance from an author-declared implementation report alone. The provider-generated implementation checkpoint independently binds the report and document revisions to the current repository HEAD, index, status, tracked/non-ignored-untracked entries, and content identity, and the public checkpoint command is read-only with respect to Git.
 - Status: live
 - Coverage: e2e/journey
+
+
+**External-work successor qualification:** LE-171/181/183 retain genuine report/checkpoint and accepted proof identity while admitting scope-sensitive applicable retained work and genuine external command proof. Source/command identity and current affected checks remain; multiple declared repositories and their authorities are checked separately. Wrong/stale/missing/failed proof refuses. Historical source identities are never rewritten to current hashes, and primary success cannot satisfy secondary work.
 
 ### LE-95: After implementation or final validation proof is accepted, changing repository HEAD, adding or deleting a tracked or non-ignored untracked entry, renaming an entry, changing status or type, or changing tracked bytes makes the affected checkpoint stale and refuses later checked progression until proof is regenerated. The checked transition that admits implementation to validation records the exact checkpoint under content-addressed `implementation-proof-history/`, whether or not implementation review is configured. Validation requires the sole accepted entry for the current report revision to match the current report, document revisions, and repository state. Appending later context, overwriting history bytes, or replacing both mutable checkpoint files cannot admit bytes that transition did not accept.
 - Status: live
 - Coverage: e2e/journey
 
+
+**External-work successor qualification:** LE-171/181/183 retain genuine report/checkpoint and accepted proof identity while admitting scope-sensitive applicable retained work and genuine external command proof. Source/command identity and current affected checks remain; multiple declared repositories and their authorities are checked separately. Wrong/stale/missing/failed proof refuses. Historical source identities are never rewritten to current hashes, and primary success cannot satisfy secondary work.
+
 ### LE-96: When validation exposes a stale repository checkpoint, the validation draft and review states expose a check-free `revise-implementation` recovery route. Final approval requires regenerated implementation and validation checkpoints for the same current tree plus passing review evidence; validation cannot silently replace implementation proof.
 - Status: live
 - Coverage: e2e/journey
+
+
+**External-work successor qualification:** LE-171/181/183 retain genuine report/checkpoint and accepted proof identity while admitting scope-sensitive applicable retained work and genuine external command proof. Source/command identity and current affected checks remain; multiple declared repositories and their authorities are checked separately. Wrong/stale/missing/failed proof refuses. Historical source identities are never rewritten to current hashes, and primary success cannot satisfy secondary work.
 
 ### LE-97: Plan and validation review require observable user or operator outcomes, pragmatic black-box proof or a concrete impracticality reason, and semantic inspection of every new or changed Bookends citation. A final validation report maps requirements to observable proof, and passing activity or a matching requirement token alone is not treated as completion.
 - Status: live
@@ -1531,11 +1590,17 @@ For new LE-151 output-only recovery, an optional identical-worker retry is a **n
 - Status: live
 - Coverage: e2e/journey
 
+
+**External-work successor qualification:** LE-167/176 retire binding, invocation, waiter, owned-work and mandatory execution-detail projections, not durable provider-free state/input/context/history, observation, one logical mutator or external completion. Historical detail may be explicitly unsupported without deleting or reinterpreting stored data. Frozen normalized counts are identified as base values; supported provider inspection resolves effective counts under LE-178 and is exposed by guidance for fresh continuation under LE-20/21.
+
 ### LE-99: A completed bound invocation durably identifies each enumerable assignment independently, including selected attempt or coverage gap, the digest of selected originating bytes, and their originating-attempt location. A worker-level copy is not the selected-attempt identity, and these facts remain inert until a driver acts on them.
 - Status: live
 - Coverage: e2e/journey
 
 In new LE-151/152 recovery, a selection declares original-raw or eligible-derived. Unchanged originals retain their real selected raw attempt, digest and path. Eligible derived selections retain the true nonconforming raw invocation/assignment/attempt, digest and location **separately** from selected repaired bytes, digest, location and derivation. A recovery join identifies actual new worker executions and retains the original failed/cancelled status; it is not another reviewer judgment or a fabricated successful raw attempt. Fidelity and availability checks plus driver triage are mandatory.
+
+
+**External-work successor qualification:** LE-170/177 replace new evidence dependence on same-worker retry, engine invocation/assignment selection and captured packets with actual supplied requests/instructions, original returns and faithful separately attributed driver-confirmed projection. Preserve known identity/content checks, original result/author/findings/rationale, visible gaps and inert candidate previews. Valid siblings survive malformed siblings; missing substantive meaning is not formatting. No engine-executed claim or new work registry is created.
 
 ### LE-100: Ordinary `show` exposes a deterministic provider-free, fail-closed change report for assignment records and recorded plan-task results. It reports covered subject, assignment/binding, policy/configuration, output-contract, routed-input, task-definition/packet, dependency, worker-binding, and task-recorded repository-effect dimensions; unknown inputs are changed; standing records and results are visible from the durable run without provider execution or capture-file reads.
 - Status: live
@@ -1545,19 +1610,26 @@ In new LE-151/152 recovery, a selection declares original-raw or eligible-derive
 
 For two otherwise present task records, an optional repository effect omitted by both is a known equal absence. A missing required record or dimension remains unknown and changed. This distinction cannot revive a result replaced by a later real failed execution.
 
+
+**External-work successor qualification:** LE-170/177 replace new evidence dependence on same-worker retry, engine invocation/assignment selection and captured packets with actual supplied requests/instructions, original returns and faithful separately attributed driver-confirmed projection. Preserve known identity/content checks, original result/author/findings/rationale, visible gaps and inert candidate previews. Valid siblings survive malformed siblings; missing substantive meaning is not formatting. No engine-executed claim or new work registry is created.
+
 ### LE-101: `invoke` may select only named enumerable assignments using the existing invoke path. Empty, duplicate, unknown, or non-enumerable selections refuse before a worker starts; argv that resembles fan-out behind an executable other than the current engine remains non-enumerable; omitted selection runs the frozen binding in full; the validated selection is durable and never rewrites the frozen binding.
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
 
 Here, selection means engine-owned `--assignment`/`--assignments` selection. A bound invocation may additionally accept one distinct optional opaque JSON value through `invoke --input`; core validates only JSON framing, rejects `--input` together with assignment selection, durably stores and transports the exact value, preserves the frozen command and args, and does not interpret provider semantics. Omitted input remains full execution.
 
+
+Retired by LE-167/176 for the external-work successor. The exact original title and earlier accepted/proposed history are retained; this retirement does not adopt a pending proposal or preserve an executor.
+
 ### LE-102: `software-change run-plan-graph` may select plan-task roots plus their dependants without auto-including missing prerequisites. Invalid selections refuse before Dagu or a task starts; omitted selection remains full execution; every successful invocation still runs the summarizer and repository checkpoint against the resulting working tree, including effects left by unselected tasks.
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
 
 Direct `--task`/`--tasks` selection and bound software-change implement invocations may use their respective selection forms; the existing bound path interprets `invocation_input` exactly as `{plan_revision,task_roots}`. Explicit future LE-150 standing-result mapping may compare original results with revised same-run obligations across plan revisions, but cannot claim standing from names or file equality. Under LE-153 a separate future `{plan_revision,report_only:true}` selection, after checked LE-142 reconciliation and re-entry, verifies all current tasks standing and runs only the same frozen graph summarizer for a fresh report/checkpoint; no task is asserted newly performed. A frozen graph without these selectors has no implied report-only route; use supported selection only for genuine affected task work, otherwise stop and escalate. Existing task-root selection still rejects malformed, empty, duplicate, unknown, stale-plan, missing-prerequisite or ambiguous roots before Dagu, any plan-task worker, summarizer or checkpoint. Roots include transitive dependants; each unselected prerequisite must stand for the current plan revision, either from a same-revision original result or from an explicitly verified LE-150 source-to-current-obligation mapping in a supporting new graph. Report-only requires all current tasks standing and runs no plan task; it cannot be expressed as empty task roots. Omitted direct selection and omitted input remain full execution.
 
 An invalid retry refused before any task starts must preserve previously standing prerequisite results. Successful selected recovery reuses only currently applicable prerequisites and retains the required summarizer/report/checkpoint outcome.
+
+
+Retired by LE-167/176 for the external-work successor. The exact original title and earlier accepted/proposed history are retained; this retirement does not adopt a pending proposal or preserve an executor.
 
 ### LE-103: `unchanged-carry` on the existing append path consults the durable change report and refuses when any covered input changed. A successful carry preserves the originating author's identity and selected-output digest, records the attesting driver and carry act separately, and makes the result distinguishable from a fresh worker judgment. It attests the exact report snapshot it saw; later drift makes the contribution non-standing until another explicit act.
 - Status: tombstone
@@ -1577,6 +1649,9 @@ For unchanged original-raw selection, real selected attempt/digest/path and mech
 
 **Stable-reference delivery note:** The caller now supplies only a same-run invocation/assignment origin reference. Core resolves the selected attempt, digest, path, capture, command, and binding from durable engine state; the provider performs the existing byte and judgment-field checks. This delivery does not add driver-authored provenance duplication under LE-107.
 
+
+**External-work successor qualification:** LE-170/177 replace new evidence dependence on same-worker retry, engine invocation/assignment selection and captured packets with actual supplied requests/instructions, original returns and faithful separately attributed driver-confirmed projection. Preserve known identity/content checks, original result/author/findings/rationale, visible gaps and inert candidate previews. Valid siblings survive malformed siblings; missing substantive meaning is not formatting. No engine-executed claim or new work registry is created.
+
 ### LE-106: Released provider binaries retain sufficient embedded data for `data-dump`, shipped profiles, templates, and reviewer protocol, and a described/evaluated run can use that data without a checkout at runtime.
 - Status: live
 - Coverage: e2e/journey
@@ -1590,40 +1665,51 @@ For unchanged original-raw selection, real selected attempt/digest/path and mech
 > **Proposed LE-107 amendment, recovery r5 — owner acceptance pending:** Simple-first, YAGNI and KISS govern Loop Engine as a whole and every provider it generates, ships or uses. Start with the simplest adequate solution. Added complexity requires a documented meaningful current requirement or observed ordinary-use failure and a brief explanation, in the ordinary design, of why an adequate simpler approach is insufficient. Gold-plating, productionization for its own sake, speculative defense-in-depth and adversarial guards without that basis are not wanted. Current implementation, architecture, communication protocols, schemas, dependencies and internal mechanisms have no presumption of preservation. A simpler replacement or removal is in scope when it meaningfully reduces complexity, scope, footguns or ordinary-use failures; change for novelty and compatibility scaffolding solely to preserve incidental design are not justified. Keep driver-authored provenance small and capture mechanical facts once, while retaining honest failures, findings, exceptions and rich engine history. Trust explicit materiality/applicability declarations except cheap identity mismatches. Review judges the ordinary design and delivered outcomes; no separate justification framework, gate or metadata inventory is required. Policy-document and research gain common simplicity/execution guidance, not software-change-specific finding or criterion features.
 
 ### LE-108: A bound software-change implementation can capture one focused no-task repair without replaying valid plan work.
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
 
 > **Amendment history — accepted for Package 5 through owner-delegated intent, design, and plan review on 2026-08-28.** The observed failure is an accepted current implementation finding for which no frozen plan task honestly owns the correction: before this amendment the driver had to revise an otherwise-correct plan, replay unrelated work, make an uncaptured off-engine correction, or strand the run. On the existing bound `implement` slot, opaque invocation input may therefore be exactly `{"repair_finding_ids":[...]}`, disjoint from omitted full execution and exact `{"plan_revision":"...","task_roots":[...]}` selection. The provider accepts only unique named findings from current engine-forwarded ledger snapshots that are accepted, unresolved, implementation-owned, current for the subject and verified implementation checkpoint, and carry empty `task_ids`; malformed, empty, unknown, stale, wrong-owner/status/disposition, or task-routed requests refuse before Dagu resolution, proof deletion, worker launch, or repository mutation. A valid request uses the unchanged frozen worker and checkout for exactly one captured `ad-hoc-repair` assignment, with the selected finding objects and provider-derived pre-repair proof identity; it runs no plan task or summarizer and does not alter `plan-task-results.json`. The worker must write a schema-valid implementation report linked to the frozen plan whose report revision is unused by both the immediately preceding proof and every accepted implementation-proof-history entry. Only then does the provider create a new implementation checkpoint. The ordinary invocation and summary retain the exact input, frozen binding, selected output, routed findings, and provider-derived pre/post report and repository-state identities; process success is not semantic acceptance, and existing independent implementation review, validation, and terminal gates still apply. Task-owned defects use LE-102 selection, materially wrong decomposition revises the plan, and no direct repair flag, core finding semantics, automatic task-fit judgment, rollback, carry redesign, binding correction, generalized replay, criterion redesign, or progress/status redesign is added.
 
 LE-153 separately qualifies the driver-authored correction and same-graph report-only finalization **only** for supporting opted-in graphs; these are not the dated Package 5 no-task repair mode or permission for arbitrary unbound repair. Graphs without a supported route retain their original limits.
 
+
+Retired by LE-167/176 for the external-work successor. The exact original title and earlier accepted/proposed history are retained; this retirement does not adopt a pending proposal or preserve an executor.
+
 ### LE-109: A completed software-change `show` can be piped to `software-change review-candidates` for a deterministic, provider-owned view of bound review assignments. The view exposes only normalized selected-output judgment fields with a stable invocation/assignment origin, or a mechanical `malformed`, `unavailable`, `missing-selection`, or `exhausted` diagnostic. It does not retry, deduplicate across durable invocations, mutate captures or run state, append evidence, or satisfy a gate; after inspecting and triaging it, the driver must explicitly accept, edit, or reject the candidate and use the ordinary review-evidence and finding-ledger append path before requesting the checked event.
 - Status: live
 - Coverage: e2e/journey
+
+
+**External-work successor qualification:** LE-170/177 replace new evidence dependence on same-worker retry, engine invocation/assignment selection and captured packets with actual supplied requests/instructions, original returns and faithful separately attributed driver-confirmed projection. Preserve known identity/content checks, original result/author/findings/rationale, visible gaps and inert candidate previews. Valid siblings survive malformed siblings; missing substantive meaning is not formatting. No engine-executed claim or new work registry is created.
 
 ### 14.10 Proposed recovery amendments (owner acceptance pending)
 
 The following exact qualifications amend existing live records without renaming their titles: LE-6 and LE-83 describe **normal** checked progression; LE-113 adds the explicit exceptional mode. LE-5 and LE-54 remain provider-free but subject to LE-110's live-work barrier. LE-22 visibility gains the delivered recipient selection in LE-114, not revival of LE-51. LE-46's failed evidence blocks when not discharged by LE-115; a discharged fail is not a pass. LE-75–LE-78 and LE-101 retain initial settings but expose/snapshot effective future settings under LE-111. LE-79 and LE-81 describe ordinary waiter completion; cancellation finalization belongs to LE-112 and missing waiter liveness is not cleanup proof. LE-82 retains its overlay vocabulary, never retry authority. Its no-capture-read clause is qualified: provider-free `show` reads engine-owned ownership/cancellation metadata under `capture_dir`; worker-output interpretation remains the driver's duty. LE-88–LE-90 retain transport and distinct axis obligations while LE-118 changes software-change's default constructor allocation. LE-92 uses exact-source dispositions, not text-set equality. LE-95–LE-97 require normal accepted implementation-proof history and LE-116's final index; override does not fabricate them. LE-98 observation also arms amend-binding and cancellation admission; an outstanding cancellation can be resumed. LE-109 expands grouped selected output into inert per-axis and criterion/goal candidates. Older amendment scope exclusions describe those earlier changes, not a prohibition of this explicit amendment.
 
 ### LE-110: Live invocation-owned work blocks retry and state departure until completion or verified cleanup.
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
 
 Overrun is elapsed allowance, not retry permission. The barrier also blocks termination so an inactive run cannot strand its owned work. Wait or cancel, verify cleanup, then observe again. Inspect failed captures before retry; process success is not provider acceptance. New software-change implement graphs expose check-free revise-plan, revise-design and revise-intent without a report for rejected work. The driver selects the owner; no repository rollback or automatic invalidation occurs. Old stored graphs gain no edges.
 
 For new runs, an unrelated holder of an old process or group number neither blocks progression nor receives cancellation signals. Genuine surviving owned work retains the barrier. Missing ownership evidence does not authorize signaling; historical runs are not migrated.
 
+
+Retired by LE-167/176 for the external-work successor. The exact original title and earlier accepted/proposed history are retained; this retirement does not adopt a pending proposal or preserve an executor.
+
 ### LE-111: Future execution corrections preserve frozen policy and past effective attempts.
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
 
 An observed current visit permits owner-attested amend-binding for one catalog slot using state_visit, owner, reason and a closed replacement binding. It changes future command/args/context_filter only, not initial input, topology, schemas, semantic policy or past attempts; an already-started attempt retains its commission. Show exposes original and effective bindings; invoke preview resolves the same preparation without primary launch. Ordinary max_active, force_fresh, timeout and applicable task/review selection require no amendment. Unsupported controls refuse. Fresh execution creates new captures without implicit standing reuse; selected tasks cannot claim unselected prerequisites ran fresh, and force-fresh review cannot use carried rows. This does not erase an arbitrary worker CLI's private sessions.
 
+
+Retired by LE-167/176 for the external-work successor. The exact original title and earlier accepted/proposed history are retained; this retirement does not adopt a pending proposal or preserve an executor.
+
 ### LE-112: Cancellation stops and verifies cleanup of only the current invocation-owned local process tree.
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
 
 Cancel-invocation validates run, current visit and recorded ownership, not arbitrary caller PIDs. Ownership is published behind a worker-start barrier; a durable stop marker under shared admission locking prevents later task/summarizer launch. The controller directly requests Dagu/direct-worker shutdown, escalates and verifies process disappearance/reaping before acknowledging terminal invocation failure. The run neither advances nor terminates and available captures survive. Each control acquisition/resumption has one monotonic ten-second deadline, at most three seconds graceful shutdown; phases do not reset it. Controller interruption remains incomplete: operator delay is unbounded, already-running work may persist, and later admission remains blocked. Retry resumes the same request with a new recorded ten-second attempt, never relabeling earlier interruption/timeout as success. Unverified cleanup keeps the barrier. Waiter loss does not defeat recorded ownership. Wrong-run/nonrunning targets without outstanding cancellation refuse without mutation; historical missing ownership is unsupported, not cancellable by assumption.
+
+
+Retired by LE-167/176 for the external-work successor. The exact original title and earlier accepted/proposed history are retained; this retirement does not adopt a pending proposal or preserve an executor.
 
 ### LE-113: Owner-attested exceptional progression remains permanently distinct from normal completion.
 - Status: live
@@ -1631,11 +1717,17 @@ Cancel-invocation validates run, current visit and recorded ownership, not arbit
 
 Event --override names the current state_visit, owner, reason and one available edge after observation and quiescence. Stale/malformed/unavailable requests refuse without override history. Durable outcome overridden retains attestation, exact edge, known skipped bound checks and provider evaluation as not performed (not applicable for check-free). It does not invent unseen checks, artifacts, reviewer passes or Bookends GREEN, or rewrite denials and failures. Later edges require their own proof or separate exception. Show/list/history expose permanent has_overrides/count; final lifecycle stays final with completion_mode completed-with-overrides rather than completed.
 
+
+**External-work successor qualification:** LE-167/168/171/178 retire executor-specific skipped-bound checks, owned-work barriers and launched task/summarizer packet requirements, not actual steering, exact-source dispositions, visible exceptional history or unresolved-findings refusal. Count eligible distinct actors under selected policy; explicitly permitted self-review does not override configured independence/cold eligibility. A count amendment neither discharges a failure nor converts an exception into normal completion.
+
 ### LE-114: Applicable durable software-change steering reaches only its named later commissions.
 - Status: live
 - Coverage: e2e/journey
 
 A shared provider selector supports unbound commission inspection, opaque bound context filtering and exact plan-task packets. User-steering names all, slots, or current-plan tasks; explicit whole-record supersession and append order replace inferred merging. Unknown recipients/references refuse, stale task revisions are visible and not applied, and task instructions do not spread to dependants or summarizer. A launched attempt retains its original selection. Execution owner/argv updates name existing proof obligations and a reason without revising unchanged outcomes, decomposition or proof. Unbound incorporation records are testimony, not proof of obedience; public proof must show delivered steering changing work.
+
+
+**External-work successor qualification:** LE-167/168/171/178 retire executor-specific skipped-bound checks, owned-work barriers and launched task/summarizer packet requirements, not actual steering, exact-source dispositions, visible exceptional history or unresolved-findings refusal. Count eligible distinct actors under selected policy; explicitly permitted self-review does not override configured independence/cold eligibility. A count amendment neither discharges a failure nor converts an exception into normal completion.
 
 ### LE-115: Reasoned exact-source finding dispositions discharge failures without rewriting judgments or weakening author floors.
 - Status: live
@@ -1643,17 +1735,26 @@ A shared provider selector supports unbound commission inspection, opaque bound 
 
 Software-change counts distinct current independent non-retired judgments: a pass or a fail explicitly rejected/resolved by its exact evidence identity. Discharged failures are satisfied-by-disposition, not passes. Undispositioned fails and accepted-unresolved findings block with source/author/remedy diagnostics; a revision bump does not resolve the latter. Historical resolved sources/routing remain inspectable without false applicability. Reasoned retired-author disposition requires recorded gate roster change showing departure and replacement coverage; retired authors do not count. Source/capture mismatches remain mechanical denials; semantic disposition belongs to the driver.
 
+
+**External-work successor qualification:** LE-167/168/171/178 retire executor-specific skipped-bound checks, owned-work barriers and launched task/summarizer packet requirements, not actual steering, exact-source dispositions, visible exceptional history or unresolved-findings refusal. Count eligible distinct actors under selected policy; explicitly permitted self-review does not override configured independence/cold eligibility. A count amendment neither discharges a failure nor converts an exception into normal completion.
+
 ### LE-116: Final software-change validation indexes complete independent current-criterion and whole-intent evidence at one checkpoint.
 - Status: live
 - Coverage: e2e/journey
 
 Supporting software-change contracts use current frozen AC-N identities and independent criterion_policy, separate from review-axis author counts. The accepted plan names runnable proof_commands and owners; command captures retain actual argv/cwd, exit, elapsed time, output and repository identity. Failed, missing or incomplete proof cannot pass. The fixed report indexes command evidence, exactly one selected verdict set per criterion and a separate goal judgment; omissions, duplicates, unknown/stale/self-authored/unsupported evidence refuse. Prechosen unused record IDs are only names: checkpoint the index before genuine append --record-id judgments, with no placeholders or reservations. Validation-ready may leave verdicts pending for live review; approval or reviewless draft-to-end requires completeness. Ordinary review uses the retained command collection; challenge consumes the completed criterion/goal collection without recommissioning it. In high ordinary validation, individual-axis workers return axes only, while the aggregate authors alone produce their criterion/goal rows and all-axis judgments together. Pending verdict IDs contain no evidence. Approval requires the actual complete current collection. Minimal/standard retain their ordinary combined-output pattern. After repair name affected criteria and supply fresh verdicts; explicitly carry unaffected original evidence to the current report/checkpoint with driver/reason and visible original author/result. Material repair requires fresh goal judgment; only explained report-index-only correction may carry it. Unresolved criterion failures block under exact-source dispositions. Normal validation retains accepted implementation-proof-history for the same tree. Explicit driver-added `validation-command` records may strengthen the effective command collection using new distinct IDs; they cannot replace frozen required IDs, waive proof or create acceptance criteria. `proof_updates` remains execution correction for existing IDs, not an addition path. The complete index includes declared supplemental commands and their real selected execution evidence; missing, failed, stale or incomplete evidence is not passing proof. Validation preparation is inert: it may reuse applicable retained execution to prepare command-evidence candidates, an index draft and independent criterion/goal commissions, but does not execute proof, append evidence, checkpoint, issue judgments or progress the run. Repository report receipts and native provider/checkpoint identities remain distinct and are checked under their existing contracts. The driver inspects and finalizes/checkpoints the index before commissioning the required independent judgments.
 
+
+**External-work successor qualification:** LE-168/171/178/181/183 qualify engine-capture-only and one-repository command acquisition, unconditional subject/report/implementation-author exclusion, fixed floors and categorical fresh aggregate/whole-goal replay. Retain the complete fixed AC/goal index, actual required command obligations, genuine output/assertions, current report/checkpoint, explicit affected checks and independent defaults. Eligible self counts only where explicitly permitted; floors resolve from authorized amendments. Complete-scope applicable goal/aggregate evidence may stand; materially affected judging meaning requires fresh assessment. Missing, failed, unresolved or wrong-source evidence never passes.
+
 ### LE-117: Focused workers and bounded isolated proof jobs preserve complete final proof without duplicated suite ownership.
 - Status: live
 - Coverage: e2e/journey
 
 Workers run assigned focused checks; one designated proof owner runs the complete serialized final stable-tree matrix and repeats only invalidated checks. Reviewers consume retained results rather than rerunning suites. The public journey uses one explicit jobs budget (default two, serial one) only for independent isolated work, preserves dependent run ordering and full inventory, prebuilds binaries, uses private targets for actual compiling jobs, propagates failure and verifies descendant cleanup. Repeated comparable measurements must show targeted lower wall time, with clippy/source journeys and available launch/retry/token/cost observations reported separately, never an invented baseline or universal speedup. Hosted exact-commit proof and later real dogfood remain pending until observed.
+
+
+**External-work successor qualification:** LE-167/176 retire engine/provider proof jobs, executor cleanup and dispatch prerequisites, not one designated stable-tree proof owner, focused worker checks, retained outcomes, failure visibility or required workspace/public/package proof. This external-work amendment makes no quantitative speedup claim and does not adopt unrelated pending recovery measurement promises. Actual required cache statistics and wall time remain reported; a separately accepted benchmark needs its exact inputs/argv and current results.
 
 ### LE-118: Shipped software-change review construction defaults to one commission per used author per gate with distinct axis verdicts.
 - Status: tombstone
@@ -1666,23 +1767,33 @@ Superseded by LE-130. The original title is retained for continuity and historic
 
 The ten primary operations are start, list, show, append, event, history, terminate, invoke, amend-binding and cancel-invocation. Invocation-progress, fan-out and preview-bindings remain other commands with their existing catalog boundaries. Describe/evaluate remain the provider semantic interface; provider utilities perform no semantic judgment. New supporting software-change profiles declare semantic contract version 3 and the rigor/criterion policies in LE-130. Exact profile-version strings and encodings are maintained with the shipped data. The new provider explicitly refuses older semantic contracts; retain fixed old providers for old execution. Provider-free historical reads preserve original obligations and evidence meaning, with absent ownership/control metadata treated as absent capability. No active-run migration, compatibility scaffold or bootstrap rewrite is required.
 
+
+**External-work successor qualification:** The supported primary engine operations are start, list, show, append, event, history and terminate. LE-167/176 retire primary work launch/control operations; describe/evaluate remain the semantic provider interface. Deterministic provider utilities prepare and inspect, never judge semantic truth or execute primary work. Successor contracts have explicit identities; old data stays unchanged, but no historical runtime availability/selection or executor support is promised. Unsupported historical semantic/detail operations may refuse explicitly; no active-run migration occurs.
+
 ### LE-120: A provider-agnostic Loop Engine monitoring command exposes ongoing run and external-work status and completion/attention notifications without model polling or workflow authority.
 - Status: live
 - Coverage: e2e/journey
 
 Status distinguishes workflow, helper execution, worker outcome, output conformance and semantic judgment or its absence; missing, stale and conflicting evidence stays explicit. The same generic public interface supports different providers, run invocations, bound/unbound graphs and fan-out, and validation commands. A waiting caller can receive machine-consumable completion/attention notifications. Observer restart preserves execution/evidence and observation never approves, advances, retries or cancels work.
 
+
+**External-work successor qualification:** LE-167/168/170/176/177 preserve passive provider-neutral workflow/evidence inspection, bounded truthful context, necessary sources, first-assessment peer isolation and actual challenge grounds. Retire live worker/Dagu/capture-matrix sampling, execution labels and mandatory bound fan-out/graph journey assertions. Externally owned execution/liveness remains unknown unless explicitly observed; observer output has no progression authority. Public proof completes meaningful externally driven workflows and tests changed provider-specific boundaries, not obsolete production executors.
+
 ### LE-121: Drivers can execute and capture serial proof matrices or one command with preserved failures, verified abort cleanup and explicit valid-prefix resume.
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
 
 The executor streams output and retains actual execution evidence, stops later admissions on failure, and never relabels earlier attempts. Resume refuses stale execution identity, missing evidence and unresolved cleanup. Execution success is not semantic approval; existing test commands remain the proof implementations.
 
+
+Retired by LE-167/176 for the external-work successor. The exact original title and earlier accepted/proposed history are retained; this retirement does not adopt a pending proposal or preserve an executor.
+
 ### LE-122: Optional iterative semantic status summaries remain evidence-grounded, cost-bounded and separate from deterministic monitoring and workflow authority.
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
 
 An operator-configured external completion command receives selected evidence/source locators and a fallible previous summary, explains changed evidence, explicitly corrects errors, retains prior outputs and discloses uncertainty and available usage/cost. No model API or harness is hard-coded. Missing, invalid or failed output never counts as a fresh summary; cadence and call limits bound automatic calls. Summary failure or budget exhaustion does not stop deterministic monitoring, work or alter workflow state.
+
+
+Retired by LE-167/176 for the external-work successor. The exact original title and earlier accepted/proposed history are retained; this retirement does not adopt a pending proposal or preserve an executor.
 
 ### LE-123: Software-change driver guidance exposes an explicit human/driver-owned Git checkpoint decision at the existing pre-review boundary.
 - Status: live
@@ -1714,6 +1825,9 @@ Retain invocation time, repository/revision, bypass class/reason and outcome loc
 
 Repeated engine-owned binding, preamble and schema evidence does not overwhelm meaningful bound model-worker context. Preserve original meaningful context IDs, judgments and ordering, current assignments and necessary instructions, full durable history and engine/provider verification evidence. Deterministic and other non-model consumers retain necessary data. Actual bound fan-out proof demonstrates compact delivered input and genuine evidence verification, including invalid-evidence refusal; separate plan-graph regression preserves correct inputs, output and evidence handling.
 
+
+**External-work successor qualification:** LE-167/168/170/176/177 preserve passive provider-neutral workflow/evidence inspection, bounded truthful context, necessary sources, first-assessment peer isolation and actual challenge grounds. Retire live worker/Dagu/capture-matrix sampling, execution labels and mandatory bound fan-out/graph journey assertions. Externally owned execution/liveness remains unknown unless explicitly observed; observer output has no progression authority. Public proof completes meaningful externally driven workflows and tests changed provider-specific boundaries, not obsolete production executors.
+
 ### LE-128: Context-only appends preserve an in-flight evaluation's snapshot and outcome.
 - Status: live
 - Coverage: e2e/journey
@@ -1721,10 +1835,12 @@ Repeated engine-owned binding, preamble and schema evidence does not overwhelm m
 Appending context while a checked evaluation runs does not by itself invalidate its allow or deny. That evaluation uses its original input snapshot. Later evaluations receive the appended records in durable order. A change to the source-state visit or lifecycle still invalidates an evaluation based on the old state. This replaces LE-38's exclusion from the guarantee.
 
 ### LE-129: Bound execution preserves actual worker outcomes, captured output and owned-work cleanup barriers.
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
 
 A completed invocation reports the actual bound command's exit outcome and retains available output and inner-worker results. Process success does not establish output conformance or semantic acceptance. Waiter loss without a durable terminal result is reported as failed or incomplete, and never proves that owned work has stopped. Surviving owned work and pending cleanup block retry and departure. Helper arrangement and direct parentage are implementation choices. The execution support remains invocation-scoped and requires no persistent daemon. This replaces LE-79; the historical topology mismatch remains part of the old audit.
+
+
+Retired by LE-167/176 for the external-work successor. The exact original title and earlier accepted/proposed history are retained; this retirement does not adopt a pending proposal or preserve an executor.
 
 ### LE-130: Software-change rigor levels enforce their declared review coverage and stages.
 - Status: live
@@ -1737,6 +1853,9 @@ High requires two independent authors each to review every axis individually, fo
 Every assigned axis appears exactly once in its commissioned output. Mixed pass/fail output is valid. Missing, duplicate or unknown axes cannot satisfy review. The existing one same-worker conformance correction preserves both raw attempts. Candidate projection retains the real invocation/assignment origin and labels carried references separately. Exact-source dispositions remain subject to LE-115; accepted unresolved findings block across revisions. No stage can satisfy the other stage's obligation.
 
 Final criterion and whole-goal author counts are one for minimal and two for standard/high, independently of axis batching. High's extra stage creates no additional author floor or proof-suite execution. Shipped profiles remain unbound and contain no selected model or machine-local command. Bookends remains off until explicitly enabled for a run. This replaces LE-118's universal single-commission default.
+
+
+**External-work successor qualification:** LE-168/171/173/175/178/182 preserve default phase/axis coverage, independent floors and configured individual/aggregate author relationships, while making groups, permitted self and stages explicit pre-start policy. Add the separate intent-sufficient singleton and broad acceptance-sufficient question at existing reader floors. Counts may change only through the authorized count exception. Actual coupled author sets must match; unequal minima are not inherently inconsistent. Original prose/YAML/JSON need not obey a provider schema or exact call count. A configured combined perspective still needs an actual combined assessment. Applicable complete-scope aggregate/goal judgments need not replay after unaffected corrections. Ordinary group clearance precedes corresponding challenge.
 
 ### LE-131: Each software-change implementation task names the current acceptance criteria it serves.
 - Status: live
@@ -1751,6 +1870,9 @@ New supporting profiles require a nonempty set of current criterion references o
 An operator selects a bundled rigor example **or a copied complete standalone profile file**, and supplies worker commands and arguments, including model and effort arguments where applicable. A deterministic setup utility assembles independent author assignments, review stages and optional implementation binding from the selected file's actual supported contents, not its basename or a substituted embedded default. Any command meeting the worker input/output contract is eligible. Invalid, incomplete or insufficient input fails without reducing review obligations.
 
 The resulting exact effective policy, bindings, selected-file bytes/hash, Bookends/advice enablement and commands are visible for owner confirmation before start; inconsistent coverage or an already wrapped task-worker input refuses. Started policy, stages and author floors stay frozen; amend-binding changes only future execution, and changing a floor requires a new run. Setup does not start a run, select models, adapt incompatible worker CLIs, save implicit preferences, track default updates or manage worktrees. Shipped data works through both source and packaged interfaces. Semantic provider operations retain their existing work and judgment boundary.
+
+
+**External-work successor qualification:** LE-167/168/174/178/180 retire executable-roster/binding construction and the unconditional new-run requirement for count changes. Keep deterministic inspectable preparation, full custom-file authority, actual base/override/effective identity, no model choice/start/judgment or checkout ownership. Common counts/self/groups/axes/stages/advice/Bookends knobs have a small base-derived path; raw schema/prompt replacement may remain full-custom. Future preparation explicitly selects a newer base with visible drift/conflicts; active semantic policy never silently tracks defaults.
 
 ### LE-133: Bookends checks every newly published reachable requirement transition.
 - Status: live
@@ -1786,9 +1908,11 @@ The public interface accepts caller-selected run and context-record IDs. A succe
 
 The provider's describe/evaluate interface preserves the engine-selected transition and validates configured artifacts and durable evidence. It performs no semantic judgment, reviewer launch or primary work. A separate deterministic setup utility may assemble static shipped prompts, schemas and caller-supplied commands into an inspectable execution profile. This qualifies the former unscoped prompt-formatting prohibition in LE-45 without moving review execution or judgment into semantic evaluation.
 
+
+**External-work successor qualification:** LE-167/168/174/178/180 retire executable-roster/binding construction and the unconditional new-run requirement for count changes. Keep deterministic inspectable preparation, full custom-file authority, actual base/override/effective identity, no model choice/start/judgment or checkout ownership. Common counts/self/groups/axes/stages/advice/Bookends knobs have a small base-derived path; raw schema/prompt replacement may remain full-custom. Future preparation explicitly selects a newer base with visible drift/conflicts; active semantic policy never silently tracks defaults.
+
 ### LE-138: Generic fan-out preserves declared ordering, worker contracts and honest captures.
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
 
 Without an explicit barrier, workers remain parallel subject to the caller's concurrency bound. An optional barrier orders two worker groups while preserving stable assignment identities and selected execution. A conforming semantic failure may proceed to the independent later group. Execution and conformance failures remain visible at their respective boundaries. An uncontracted worker's nonzero exit remains recorded even when the facade exits zero; a declared conformance failure fails the facade. The engine interprets ordering and output shape only.
 
@@ -1796,23 +1920,34 @@ Existing compact bound framing, unchanged ad-hoc instruction bytes, declared leg
 
 Fan-out retains its uncapped default when no concurrency bound is supplied. Plan-graph retains its default of four ordinary tasks, an explicit bound when supplied, and its summarizer after selected tasks. Exact argv, packet/framing bytes, scheduler encoding and capture fields belong to the CLI specification. This replaces LE-90's prohibition on inter-worker dependencies; it preserves the existing unbarriered behavior.
 
+
+Retired by LE-167/176 for the external-work successor. The exact original title and earlier accepted/proposed history are retained; this retirement does not adopt a pending proposal or preserve an executor.
+
 ### LE-139: Public-boundary journeys prove workflow and worker contracts without live models.
 - Status: live
 - Coverage: e2e/journey
 
 Public-boundary journeys (`scripts/software-change-journey.py`, `scripts/policy-document-journey.py`, `scripts/research-journey.py`) freeze a sparse dummy-worker binding, invoke before the bound checked event, and prove catalog snapshot, instruction redaction, unbound-invoke rejection, pre-evaluate gate, worker-packet stdin, overlay `succeeded`, unbound stored instructions, and invocation history. Software-change journeys also prove unbound shipped profiles, graph-runner and fan-out behavior with dummy inner workers, `preview-bindings` nonzero on zero-worker `fan-out` JSON without creating a run, `preview-bindings` warning when pi has `--no-extensions` and no `-e`, and do not call a live model. `scripts/software-change-journey.py --self-test` executes the software-change setup utility and two provider skill constructors against software-change high-rigor policy/stage setup, policy-document shipped semantic policies/target/mode, and research verify plus synthesize; it compares worker count/order and exact axis/`example_prompt`/author/model/subject metadata to each source profile, asserts required keys/data bytes/preview visibility and fail-closed invalid cases, asserts root AGENTS rules, and prints `worker-data skill/root policy assertions passed` only after all pass. The software-change source full journey binds deterministic stdin-capturing workers that emit conforming JSON or exit-0 refusal text and, through separate public CLI processes, asserts the compact one-key `artifact_root` context precedes the separator/body with no `capture_dir` or duplicate identity in that block, conforming `status` succeeded, refusal `status` failed with `exit_code` 0, summary/captures persist, overlay fails, then prints `contracted fan-out failure`.
 
+
+**External-work successor qualification:** LE-167/168/170/176/177 preserve passive provider-neutral workflow/evidence inspection, bounded truthful context, necessary sources, first-assessment peer isolation and actual challenge grounds. Retire live worker/Dagu/capture-matrix sampling, execution labels and mandatory bound fan-out/graph journey assertions. Externally owned execution/liveness remains unknown unless explicitly observed; observer output has no progression authority. Public proof completes meaningful externally driven workflows and tests changed provider-specific boundaries, not obsolete production executors.
+
 ### LE-140: Opt-in review bindings use the extensions their selected model providers require.
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
 
 Bound review slots frozen to `fan-out` still require `loop-engine invoke RUN_ID SLOT_ID`. A usable review binding contains provider-constructed assigned `--worker` objects frozen at `start` after `preview-bindings` and lock-in; a review slot with an empty configured policy-axis list is not bound. Shipped profiles omit `work_slot_bindings` so slots stay driver-performed. Opt-in skill templates keep `--no-extensions` and add an existing `-e` path for each extension required by the selected model provider; omitted paths produce no `-e` pair. Default implement inner argv when `--task-worker` is omitted remains `pi --print --no-skills --no-extensions` and must not pass `--no-context-files`. A supplied extension path must be absolute and exist.
+
+
+Retired by LE-167/176 for the external-work successor. The exact original title and earlier accepted/proposed history are retained; this retirement does not adopt a pending proposal or preserve an executor.
 
 ### LE-141: Proposed acceptance-granularity software-change intent-review obligation
 - Status: live
 - Coverage: e2e/journey
 
 For each future new minimal, standard, and high-rigor software-change run, ordinary intent review and the separate challenge review must expose acceptance-granularity as an externally judged question while retaining each profile's declared stages and required number of independent reviewers. The question assesses whether each criterion is a coherent bounded outcome, whether independently varying outcomes are bundled, whether inseparable parts have been split needlessly, and whether evidence can be obtained in practice. A material failure names the exact criteria and its consequence for delivery or acceptance. Word counts, conjunction counts, fixed criterion counts, and review ceremony do not replace judgment. Shipped setup, guidance, policy data, and applicable real end-to-end workflow checks expose the same question. The provider validates evidence shape and does not perform semantic review or claim calibration. Frozen runs keep their original obligations.
+
+
+**External-work successor qualification:** The granularity/comprehensibility judging questions remain unchanged. LE-168/178 qualify unconditional author exclusion and fixed-count wording only for explicit pre-start eligible-self permission and authorized count-only amendments. Independent and cold obligations remain binding, each actor counts once, and no word/length/jargon/count proxy becomes a materiality norm.
 
 ### LE-142: Proposed software-change reconciliation state and semantic coverage
 - Status: live
@@ -1832,11 +1967,17 @@ For active software-change work, the coordinating assistant must read existing p
 
 For future new software-change runs, the single authoritative intent must let its intended owner understand the problem, outcomes, scope boundaries, and acceptance decisions from the intent and its stated background. Necessary specialist terms must be explained when they first matter. Exact technical references and structured metadata remain alongside the plain-English decision content, preserving obligations, uncertainty, qualifications, and precision. Ordinary intent review and the separate challenge review must expose owner-comprehensible as a distinct externally judged question while retaining each profile's existing stages and required number of independent reviewers. The question fails only when specific wording or an unstated dependency materially blocks understanding or evaluation; the finding names the affected obligation and likely misunderstanding. Style preference, sentence length, reading-grade score, and technical terminology alone are insufficient for failure. Shipped drafting guidance, profile data, review prompts, and applicable checks use the same question identity. Frozen runs retain their original obligations.
 
+
+**External-work successor qualification:** The granularity/comprehensibility judging questions remain unchanged. LE-168/178 qualify unconditional author exclusion and fixed-count wording only for explicit pre-start eligible-self permission and authorized count-only amendments. Independent and cold obligations remain binding, each actor counts once, and no word/length/jargon/count proxy becomes a materiality norm.
+
 ### LE-145: Assignment-level honest progress
 - Status: live
 - Coverage: e2e/journey
 
 A provider-neutral local view identifies each review assignment by stable axis and author, and other assignments by stable task ID/title/role, from frozen caller-supplied labels rather than inferred worker text. Human and machine drill-down share the same identity and evidenced queued, running, correcting, conforming, failed/exhausted, cancelled or unknown state. Current-subject-revision attempts, repeated failures and actual errors exclude older failures, which remain inspectable. A quiet worker is not diagnosed dead; process completion/conformance is not semantic approval, and observation never retries or cancels work.
+
+
+**External-work successor qualification:** LE-167/168/170/176/177 preserve passive provider-neutral workflow/evidence inspection, bounded truthful context, necessary sources, first-assessment peer isolation and actual challenge grounds. Retire live worker/Dagu/capture-matrix sampling, execution labels and mandatory bound fan-out/graph journey assertions. Externally owned execution/liveness remains unknown unless explicitly observed; observer output has no progression authority. Public proof completes meaningful externally driven workflows and tests changed provider-specific boundaries, not obsolete production executors.
 
 ### LE-146: Bounded honest local status
 - Status: live
@@ -1850,11 +1991,17 @@ An ordinary on-demand local status read, including a mature mixed run, reaches l
 
 A read-only local terminal view presents the frozen provider-defined graph, current state first, all states and assignments via basic keys and scrolling, and keeps selection through portrait folded/unfolded phone resize. Visited history is distinct from actual requestable routes, and checked requestability is not approval. Depict only real invocation barriers/dependencies; when no graph exists, list the work instead. Rendering stays in the CLI, not core workflow policy. Representative real-device usability requires owner judgment.
 
+
+**External-work successor qualification:** LE-167/168/170/176/177 preserve passive provider-neutral workflow/evidence inspection, bounded truthful context, necessary sources, first-assessment peer isolation and actual challenge grounds. Retire live worker/Dagu/capture-matrix sampling, execution labels and mandatory bound fan-out/graph journey assertions. Externally owned execution/liveness remains unknown unless explicitly observed; observer output has no progression authority. Public proof completes meaningful externally driven workflows and tests changed provider-specific boundaries, not obsolete production executors.
+
 ### LE-148: Focused actionable reads with retained detail
 - Status: live
 - Coverage: e2e/journey
 
 Current-action inspection provides duties, constraints, actual available actions and targeted source/error/capture locators without a whole-run dump. Read-only delta and assignment/error selection expose actual failures and original paged stdout/stderr with explicit offsets, totals and truncation; recent/targeted and full retained history remain available. Measure lower delivered bytes and latency on active mixed-state agent read paths without hiding the fact needed for a correct next action. Version changed views and update supported consumers; observation is not a prove-you-read-it gate.
+
+
+**External-work successor qualification:** LE-167/168/170/176/177 preserve passive provider-neutral workflow/evidence inspection, bounded truthful context, necessary sources, first-assessment peer isolation and actual challenge grounds. Retire live worker/Dagu/capture-matrix sampling, execution labels and mandatory bound fan-out/graph journey assertions. Externally owned execution/liveness remains unknown unless explicitly observed; observer output has no progression authority. Public proof completes meaningful externally driven workflows and tests changed provider-specific boundaries, not obsolete production executors.
 
 ### LE-149: Review-necessary context and driver-owned fit
 - Status: live
@@ -1862,11 +2009,17 @@ Current-action inspection provides duties, constraints, actual available actions
 
 A bound reviewer receives exact duties, target, relevant frozen constraints and current findings/applicability with locators and accessible necessary originals, not unrelated accumulated history. First ordinary/first high-rigor aggregate input excludes competitors' same-target judgments and both individual authors' findings, including indirect ledger/applicability leaks; confirmation includes findings it must check, and challenge includes actual parent grounds. Preambles describe only what was delivered. For new software-change runs, the engine and provider steward compact relevant review material without arbitrary review-content byte/token ceilings or mandatory per-model window/reserve declarations, accounting or capacity refusal. The driver may select or filter material for a particular run while retaining accessible necessary originals, meaningful durable history and truthful capture of what was delivered; filtering cannot silently truncate necessary facts, split a required obligation, substitute a model or waive review. Repeatable public operator-path proof includes representative detailed current and materially revised intents with retained owner sources and exact prior-intent baselines. Real-model checks are additional only where deterministic proof cannot answer the relevant question; no universal model-fit or semantic-quality claim follows. This changes review-content responsibility only, not model-spend, subprocess, cancellation or transport safety limits. Existing frozen runs retain their original obligations and runtime.
 
+
+**External-work successor qualification:** LE-167/168/170/176/177 preserve passive provider-neutral workflow/evidence inspection, bounded truthful context, necessary sources, first-assessment peer isolation and actual challenge grounds. Retire live worker/Dagu/capture-matrix sampling, execution labels and mandatory bound fan-out/graph journey assertions. Externally owned execution/liveness remains unknown unless explicitly observed; observer output has no progression authority. Public proof completes meaningful externally driven workflows and tests changed provider-specific boundaries, not obsolete production executors.
+
 ### LE-150: Applicable work survives same-run plan reshaping
 - Status: live
 - Coverage: e2e/journey
 
 Within one run a driver may explicitly map original fulfilled obligations to revised tasks, including rename/split/merge or changed intent/design, after checking real effects, dependencies, current tree and proof. Reuse only verifiably applicable results and eligible evidence; uncertain, affected or missing prerequisites remain pending and their dependants rerun. Neither matching names nor unchanged files establishes standing. Preserve original records and failed attempts, refresh affected proof and post-reconciliation report/checkpoint on the actual final tree, and obtain required fresh independent review. No cross-run transfer or automatic semantic matcher follows.
+
+
+**External-work successor qualification:** LE-169/170/171/177/181/183 replace dependencies on scheduled dependent reruns, captured-commission delivery, recovery joins, selected raw invocations and repair-model dispatch with supported faithful external-source recording, correction and scope-sensitive applicability. Preserve meaningful task dependencies, exact original judgments/attribution, valid siblings, grounded reasons/accessibility, inert previews and distinguishing criterion assertions. Recording or a valid locator alone is not semantic proof. Current external command results and source scopes retain actual producer/identity; no missing judgment or proof is invented.
 
 ### LE-151: Attributed output-only recovery without new judgments
 - Status: live
@@ -1874,17 +2027,24 @@ Within one run a driver may explicitly map original fulfilled obligations to rev
 
 For a representation/schema-only failure after explicit substantive review or implementation output, a driver may directly supply a meaning-preserving corrected representation through the existing output-only recovery path without another model call or whole-round reviewer rerun. Unambiguous mechanical correction and an optionally configured representation-only repair model remain alternatives, not prerequisites to direct driver correction. A repair restores constants or reformats only explicit original meaning: it never invents rationale, findings or verdict, changes repository bytes, reruns implementation commands or silently substitutes a model. Preserve the original reviewer identity, result, findings and rationale; retain immutable raw attempts/errors alongside separately attributed selected derived bytes, difference, true raw origin and driver fidelity triage. Conformance diagnostics identify the actual defective field and schema location, including the underlying cause of nested alternative failures, or the specific representation error. Missing, contradictory or ambiguous substantive meaning needs original-author clarification or stays unsatisfied. An optional same-author retry is a new substantive judgment, not a formatting label. Only eligible derived output with no conforming selected original raw output can enter source-linked admission under LE-99/105; formatting alone proves no gate. A configured model alternative retains owner-chosen identity and enforceable positive call, elapsed and metered-cost limits; failed, exhausted or unmetered execution refuses without fallback. Direct driver correction does not fabricate adapter usage or another independent reviewer. Supporting new profiles explicitly opt into the changed recovery contract; existing frozen runs retain their original obligations and runtime.
 
+
+**External-work successor qualification:** LE-169/170/171/177/181/183 replace dependencies on scheduled dependent reruns, captured-commission delivery, recovery joins, selected raw invocations and repair-model dispatch with supported faithful external-source recording, correction and scope-sensitive applicability. Preserve meaningful task dependencies, exact original judgments/attribution, valid siblings, grounded reasons/accessibility, inert previews and distinguishing criterion assertions. Recording or a valid locator alone is not semantic proof. Current external command results and source scopes retain actual producer/identity; no missing judgment or proof is invented.
+
 ### LE-152: Explicit partial-invocation recovery
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
 
 After failed or cancelled fan-out, expose stable IDs for verifiably complete siblings, invalid/incomplete members and never-started downstream members. Following verified owned-work quiescence, the driver explicitly selects necessary reruns or a genuine same-binding mechanical recovery join. Joined selected sources retain their failed/cancelled raw origins, source class and original captures while the old invocation stays failed/cancelled; a new succeeded outer invocation is never represented as new reviewer judgment. Real barriers, selected bytes and current applicability still govern checked admission and required fresh review. A substantive reviewer fail is not an execution retry; no automatic whole-gate restart or individual-worker cancellation is required.
 
+
+Retired by LE-167/176 for the external-work successor. The exact original title and earlier accepted/proposed history are retained; this retirement does not adopt a pending proposal or preserve an executor.
+
 ### LE-153: Honest narrow driver-owned correction and same-graph final report
-- Status: live
-- Coverage: e2e/journey
+- Status: tombstone
 
 Only a graph explicitly opting a **non-review draft or implement slot** in may accept a small understood driver-authored code or workflow-artifact correction when accepted intent, design and decomposition are unchanged and no conflicting work owns it. Record current visit, binding, author, changed work and reason as a distinct non-worker pre-evaluation completion act after quiescence; still run the normal checked provider/artifact/evidence/Bookends gate and refresh affected proof and independent reviews. Never fabricate bound success, edit raw attempts, perform reviewer work by driver act or use the general override as ordinary repair. Larger or uncertain changes return to their owner/phase. After an actual LE-142 decision and authorized document changes, a separate future report-only selection on the **same bound plan graph**, if all tasks still stand, runs only its frozen summarizer and generates a fresh current-tree report/checkpoint before re-entry; affected real tasks instead use supported task-root selection. Neither selector migrates an existing frozen run, authorizes Git, or labels a pre-decision report final. Where no supported report path and no genuine affected task work exist, stop and escalate rather than manufacture task work.
+
+
+Retired by LE-167/176 for the external-work successor. The exact original title and earlier accepted/proposed history are retained; this retirement does not adopt a pending proposal or preserve an executor.
 
 ### LE-154: Invalid reuse cannot erase valid fresh siblings
 - Status: live
@@ -1892,11 +2052,17 @@ Only a graph explicitly opting a **non-review draft or implement slot** in may a
 
 A confirmation reuse row must name applicability actually delivered to that assignment and the exact original author, axis, stage, gate and current target. Wrong-kind, wrong-gate, stale or retroactive references receive an early row-specific diagnostic, count neither as a pass nor a carried judgment and leave that obligation/gate unsatisfied. After the whole-batch author, axis set, stage, schema and selected-byte envelope is intact, independent structurally valid fresh sibling rows may still be projected and source-verified/admitted; an invalid reuse row cannot erase them or make the whole gate pass. Ambiguous identity or content is never guessed; raw output is unchanged.
 
+
+**External-work successor qualification:** LE-169/170/171/177/181/183 replace dependencies on scheduled dependent reruns, captured-commission delivery, recovery joins, selected raw invocations and repair-model dispatch with supported faithful external-source recording, correction and scope-sensitive applicability. Preserve meaningful task dependencies, exact original judgments/attribution, valid siblings, grounded reasons/accessibility, inert previews and distinguishing criterion assertions. Recording or a valid locator alone is not semantic proof. Current external command results and source scopes retain actual producer/identity; no missing judgment or proof is invented.
+
 ### LE-155: Grounded passes and challengeable reasons
 - Status: live
 - Coverage: e2e/journey
 
 Each software-change review-axis and independent criterion/whole-goal pass carries a relevant reason and references to actual inspected evidence. New software-change review contracts impose no arbitrary rationale-length or evidence-count/locator-length quotas and do not require reviewers to author source-file hashes when existing durable references, captures, target freshness and driver judgment suffice. Mechanical source checks reject malformed, wrong or unavailable references without asserting semantic support or exact historical arbitrary-file identity. Retain existing engine-owned raw/selected capture integrity and current-subject/checkpoint checks; do not replace the removed reviewer burden with hidden digest sidecars, a new provenance inventory or copied mechanical metadata. The driver investigates weak grounds proportionately and attributes any corroboration, clarification, faithful representation correction or re-review separately. It cannot change an original judgment's meaning or claim another independent reviewer. First peers remain independent; challenge receives the parent's actual grounds. Real good and defective cases, including false but mechanically valid citations, are needed; no compulsory essay or new review axis is added. Existing frozen runs retain their original output contract and evidence meaning.
+
+
+**External-work successor qualification:** LE-169/170/171/177/181/183 replace dependencies on scheduled dependent reruns, captured-commission delivery, recovery joins, selected raw invocations and repair-model dispatch with supported faithful external-source recording, correction and scope-sensitive applicability. Preserve meaningful task dependencies, exact original judgments/attribution, valid siblings, grounded reasons/accessibility, inert previews and distinguishing criterion assertions. Recording or a valid locator alone is not semantic proof. Current external command results and source scopes retain actual producer/identity; no missing judgment or proof is invented.
 
 ### LE-156: Source-faithful intent and truthful approval
 - Status: live
@@ -1916,17 +2082,26 @@ A software-change driver may reject an evidenced factual mistake directly, but a
 
 From selected authoritative source outputs, software-change offers a nonmutating exact current-target preview for review and criterion/goal record candidates: real result/findings, author, gate/stage/configuration, revision/checkpoint and stable origin. A driver explicitly triages and applies them through ordinary observed append; a factual-only optional finding-ledger skeleton copies verbatim source facts and prior IDs/status, not reason, disposition or routing. Interrupted apply skips only an identical earlier ID, bytes, source and target; conflict or drift refuses. Preview never satisfies a gate or creates another ledger.
 
+
+**External-work successor qualification:** LE-169/170/171/177/181/183 replace dependencies on scheduled dependent reruns, captured-commission delivery, recovery joins, selected raw invocations and repair-model dispatch with supported faithful external-source recording, correction and scope-sensitive applicability. Preserve meaningful task dependencies, exact original judgments/attribution, valid siblings, grounded reasons/accessibility, inert previews and distinguishing criterion assertions. Recording or a valid locator alone is not semantic proof. Current external command results and source scopes retain actual producer/identity; no missing judgment or proof is invented.
+
 ### LE-159: Per-criterion distinguishing plan-time proof
 - Status: live
 - Coverage: e2e/journey
 
 **In addition to** LE-97's observable operator path/black-box-or-impracticality rule and LE-116/134's final current-index/public-assertion requirements, before plan approval each current AC-N names the actual operator-path observation and assertion that would differ on failure. Name a runnable current-tree negative or practical before-fix execution with setup, expected discrimination and paired named current proof; execute practical cases and retain genuine historical identity/output separately from the passing current-tree index, or give a case-specific concrete impracticality and nearest feasible substitute. Final current command captures and independent verdicts cite the specific distinguishing assertion for each AC, even when several share one command. Do not add a second criterion ledger, turn old expected failures into current passing evidence, or rerun unaffected suites for ceremony.
 
+
+**External-work successor qualification:** LE-169/170/171/177/181/183 replace dependencies on scheduled dependent reruns, captured-commission delivery, recovery joins, selected raw invocations and repair-model dispatch with supported faithful external-source recording, correction and scope-sensitive applicability. Preserve meaningful task dependencies, exact original judgments/attribution, valid siblings, grounded reasons/accessibility, inert previews and distinguishing criterion assertions. Recording or a valid locator alone is not semantic proof. Current external command results and source scopes retain actual producer/identity; no missing judgment or proof is invented.
+
 ### LE-160: Standalone editable profile examples
 - Status: live
 - Coverage: e2e/journey
 
 Minimal, standard and high examples can be exported and copied as complete standalone files for future setup/launch. The selected file's supported policies, stages, counts, schemas and commands—not its basename or embedded defaults—determine the effective preview and run. Refuse inconsistent coverage and pre-wrapped task-worker input before start; show exact effective bytes, hash and bindings. Started policy and floors remain frozen; binding amendments affect future execution only, while changing frozen floors requires a new run. No inheritance, editor, preference store or automatic default tracking is required.
+
+
+**External-work successor qualification:** LE-167/168/174/178/180 retire executable-roster/binding construction and the unconditional new-run requirement for count changes. Keep deterministic inspectable preparation, full custom-file authority, actual base/override/effective identity, no model choice/start/judgment or checkout ownership. Common counts/self/groups/axes/stages/advice/Bookends knobs have a small base-derived path; raw schema/prompt replacement may remain full-custom. Future preparation explicitly selects a newer base with visible drift/conflicts; active semantic policy never silently tracks defaults.
 
 ### LE-161: Phase-appropriate five-artifact Bookends coverage
 - Status: live
@@ -1952,6 +2127,9 @@ The driver is responsible for deciding whether a question and its evidence meet 
 
 Advice remains fallible and non-authoritative regardless of confidence. The driver accepts, partially accepts, or rejects each actual answer with a reason.
 
+
+**External-work successor qualification:** LE-167/172/176 remove advisor backend command/configuration, invocation and attempt dispatch, not configured substantive typed questions, choice/full probabilities/confidence, score/legend/full probabilities/confidence and Noul probability with optional confidence/rationale. Genuine externally produced answers and actual accept/partial/reject dispositions close configured occasions; a permitted no-admissible-question reason stays explicit. Missing required values cannot be projected into existence. Normal checked/check-free departure closure and visible scoped exception/refusal remain; advice is neither review approval nor proof/route authority.
+
 ### LE-164: Software-change advice for eight evidenced decisions
 - Status: live
 - Coverage: e2e/journey
@@ -1960,11 +2138,17 @@ Software-change supplies provider-owned questions and actual selected evidence f
 
 These occasions identify where bounded judgments can assist the driver; they do not assign the broader decision or synthesis to the advisor. Preserve both agent-supplied claims and tool-resolved selected evidence rather than replacing the latter with an agent paraphrase.
 
+
+**External-work successor qualification:** LE-167/172/176 remove advisor backend command/configuration, invocation and attempt dispatch, not configured substantive typed questions, choice/full probabilities/confidence, score/legend/full probabilities/confidence and Noul probability with optional confidence/rationale. Genuine externally produced answers and actual accept/partial/reject dispositions close configured occasions; a permitted no-admissible-question reason stays explicit. Missing required values cannot be projected into existence. Normal checked/check-free departure closure and visible scoped exception/refusal remain; advice is neither review approval nor proof/route authority.
+
 ### LE-165: Explicit advisory enablement and accountable occasions
 - Status: live
 - Coverage: e2e/journey
 
 All three standalone software-change examples name the same eight occasions, without a default command/backend. Setup makes the choice to configure a conforming command or decline explicit and shows the effective enabled/disabled state before start. On enabled active runs, guidance names due request and disposition at actual review candidates, accepted defects, needed implementation corrections, execution/authority issues, declared evidence reuse, reconciliation, review-round departure and final completion; an ACTIVE driver can also request ad hoc advice. Every successfully returned answer, including superseded and ad hoc answers, receives an individually reasoned accept/partial/reject disposition. Rejecting wrong advice is ordinary, not an exception; there is no extra general draft-readiness checkpoint.
+
+
+**External-work successor qualification:** LE-167/172/176 remove advisor backend command/configuration, invocation and attempt dispatch, not configured substantive typed questions, choice/full probabilities/confidence, score/legend/full probabilities/confidence and Noul probability with optional confidence/rationale. Genuine externally produced answers and actual accept/partial/reject dispositions close configured occasions; a permitted no-admissible-question reason stays explicit. Missing required values cannot be projected into existence. Normal checked/check-free departure closure and visible scoped exception/refusal remain; advice is neither review approval nor proof/route authority.
 
 ### LE-166: Advisory prerequisite at normal workflow departure
 - Status: live
@@ -1973,6 +2157,9 @@ All three standalone software-change examples name the same eight occasions, wit
 When a configured occasion has no admissible advisory question, the driver records why no call is appropriate and continues through the unchanged ordinary checks and authorization rules. This is not a fabricated advisor response or permission to bypass those checks. A failed eligible advice call retains its existing failure and recovery rules.
 
 Only on new runs explicitly enabling a frozen advisory departure map, every relevant normal **checked or check-free workflow transition** requires valid admissible due advice and reasoned dispositions of all successful answers (including ad hoc and superseded). A changed target requires explicit driver applicability or fresh advice. A failed, timed-out or invalid required response is no answer and blocks that prerequisite until valid response or a scoped owner-attested exception for precisely unanswered due occasions. Even an exception cannot waive a successful answer's missing disposition, a provider/reviewer/criterion/Bookends/proof gate or owned-work cleanup; retain exceptional history visibly. A reasoned reject of wrong advice permits ordinary progression. Earlier edit, append and invoke timing is guidance, not an action interlock; cancellation/cleanup do not wait for advice. Disabled graphs and older frozen runs retain their original prerequisites; no existing run is migrated.
+
+
+**External-work successor qualification:** LE-167/172/176 remove advisor backend command/configuration, invocation and attempt dispatch, not configured substantive typed questions, choice/full probabilities/confidence, score/legend/full probabilities/confidence and Noul probability with optional confidence/rationale. Genuine externally produced answers and actual accept/partial/reject dispositions close configured occasions; a permitted no-admissible-question reason stays explicit. Missing required values cannot be projected into existence. Normal checked/check-free departure closure and visible scoped exception/refusal remain; advice is neither review approval nor proof/route authority.
 
 ## 15. Complexity Guardrails
 
@@ -2050,3 +2237,185 @@ When considering additional complexity:
 > **Is this required to durably coordinate externally performed work, or are we beginning to rebuild a general workflow platform?**
 
 Loop Engine remains the primitive coordination kernel until concrete workflows prove that it needs to become more.
+
+## 19. External-work amendment
+
+### LE-167: External execution across all providers
+- Status: live
+- Coverage: e2e/journey
+
+Software-change, policy-document and research can complete their configured workflows with the driver/harness performing or commissioning work, including running proof/test commands. Engine/provider agent launching and primary command-work execution or supervision are not required or supported.
+
+Agent execution bindings, invocation lifecycle, fan-out execution and plan-graph execution are removed from the new path—not recreated as another scheduler or mandatory start/finish protocol. Deterministic provider describe/evaluate calls and necessary deterministic metadata checks remain. The engine records supplied inputs, results, references and metadata; it does not launch proof commands or matrices under a capture-command, capture-matrix or equivalent work-runner surface. Recording supplied output is not proof that the engine executed it. Normal external command-proof fulfillment is specified in LE-183.
+
+### LE-168: Honest, configurable review coverage
+- Status: live
+- Coverage: e2e/journey
+
+Users can configure review assignments containing one or multiple axes, with individual, aggregate and blindness expectations where applicable.
+
+Providers supply editable requests for the configured assignments and check declared coverage, stage and authorship obligations without requiring exact prompts, commands or agent-call counts. Review-group membership, required perspectives, stages and author-eligibility obligations are frozen run policy, not dispatch suggestions. Required review-author counts may change only through the explicit durable amendment in LE-178. During the run, the driver may adapt request wording, relevant context and harness packaging that preserve those obligations, but may not silently regroup axes or weaken a configured review perspective. Other changes to that semantic policy require an explicitly selected new profile/run, not an execution amendment. The author-count exception does not authorize silent regrouping, changed judging questions, stages, independence, blindness or eligibility. Blind reviews receive necessary requirements and evidence without peer conclusions.
+
+Shipped default profiles do not enable self-review for their obligations. They preserve independent review by default. The user can explicitly permit self-review for chosen assignments, acceptance criteria and the whole goal before start through supported guided configuration; no hand-editing of a low-level custom profile is required. An eligible subject/report/implementation author counts toward that obligation's distinct eligible-author floor: for example, an explicitly self-review-permitting two-author obligation can be satisfied by its author plus one other eligible author. Permission does not lower the floor or count one actor twice. An explicitly independent or cold-reader obligation still excludes self-authorship. A one-author self-review-permitting obligation can be satisfied by its author, honestly labeled; a custom self-only configuration must omit any cold axis it cannot fulfill. Normal completion is possible under the selected policy, but results must not falsely claim independence or blindness. Independent requirements remain binding wherever configured. Shipped phase/review variants, author floors and stage-author relationships retain their current meaning by default, except for the explicit grouping, self-review and proportionate-reuse changes described here.
+
+### LE-169: Useful plans without mandatory agent isolation
+- Status: live
+- Coverage: e2e/journey
+
+Plans retain schema-checked tasks, criterion coverage, intended outcomes and meaningful dependencies.
+
+The driver can perform work directly, combine tasks into commissions, split commissions or develop related tasks together. Dispatch changes do not require plan revision; material changes to intended work or dependency meaning do.
+
+Neither one-agent-per-task execution nor a designated graph summarizer is required.
+
+### LE-170: Reliable guided recording and correction
+- Status: live
+- Coverage: e2e/journey
+
+Documented, supported recording paths use known assignment/workflow information to reduce manual metadata work while leaving semantic judgments with the driver. External returns may be free-form prose, YAML or structured/fenced JSON; the reviewer is not required to emit a provider-specific schema. Actual prompt/request and return content may live in evidence-record fields or referenced retained content; no separate-file storage layout is prescribed. The guided path supports faithful driver-confirmed judgment projection and known metadata completion, not automatic semantic understanding of arbitrary prose.
+
+Retain the actual driver-supplied commissioning prompt or request and original return. For direct work or self-review, retain the instructions actually followed and the original resulting judgment; do not invent a separate dispatch or agent response. Faithful representation corrections preserve verdicts, findings, rationale and attribution. They do not invent missing meaning, discard valid siblings or require new model calls solely for formatting.
+
+Diagnostics distinguish recording problems from missing substantive evidence and explain the correction. Supported guidance handles clear grouped multi-axis prose, YAML/fenced JSON, direct/self-review recording, and a malformed sibling alongside valid judgments without bespoke rescue scripts, repeated hand-copying of machine metadata, or formatting-only reviewer calls.
+
+### LE-171: Ordinary, proportionate reuse
+- Status: live
+- Coverage: e2e/journey
+
+Genuine findings, review judgments, implementation work and command proof can remain applicable across revisions and corrections within the same run through an explicit, guided applicability path. Cross-run reuse/import is outside this delivery.
+
+Original identities and results remain truthful. The driver explains applicability and obtains affected checks or judgments. This includes aggregate and whole-goal judgments when their complete scope and judging meaning remain applicable; existing categorical aggregate/goal freshness requirements are replaced by applicability-sensitive requirements. Materially affected judgments require fresh assessment, and stage/author coverage remains binding. Unresolved findings remain visible; reuse cannot silently discharge them or manufacture passing evidence.
+
+### LE-172: External advice with preserved configured obligations
+- Status: live
+- Coverage: e2e/journey
+
+Providers supply proposed advice requests that the driver can inspect and adapt; neither engine nor provider dispatches the advisor.
+
+When advice is enabled, the driver performs the configured external step—or records why no admissible question exists—and dispositions genuine responses before departure. Preserve the existing typed substantive question/answer semantics, including configured choice, score and probability requirements. Requests and original returns may use free-form or structured representations, but a qualitative answer lacking required values cannot fulfill a typed obligation and guided recording cannot invent those values. LE-170's representation flexibility is not permission to redefine the advisor's job. Advice alone is not approval or a substitute for required review and proof.
+
+### LE-173: Intent sufficiently constrains the intended final state
+- Status: live
+- Coverage: e2e/journey
+
+Every shipped software-change profile enables `intent-sufficient` in ordinary intent review as its own singleton aggregate-stage group, separate from the profile's other intent axes. Use the profile's existing configured independent-reader floor; no additional default individual-stage assignment is required. Its informed challenge likewise has its own corresponding group. Existing broad groups keep their combined perspective. Early brief preparation is specified in LE-174. Qualification of early evidence, including independence from unrelated groups, is specified in LE-177. Even when other obligations allow self-review, this enabled cold exercise needs a genuinely unbriefed reader and cannot be labeled blind self-review.
+
+Declare the pre-change implementation baseline for the initial exercise and retain that same source baseline across revisions of this intent. Renewed readers do not implicitly receive partially implemented code as a replacement baseline. The owner may explicitly select a changed baseline, which requires a fresh cold exercise and comparison; the paired challenge uses that same declared baseline. Use existing durable Git/source references or supplied source material, without requiring a new snapshot or worktree manager.
+
+Given only the current intent and that declared pre-change implementation baseline, the cold reader first describes the anticipated final state, then actively searches for other plausible final states permitted by the same intent and baseline. For each material alternative, identify the wording or missing constraint that permits it and explain the difference in behavior, responsibilities or acceptance obligations. Do not manufacture alternatives, exploit strained readings or introduce requirements outside the stated scope.
+
+Before the ordinary intent gate can pass, retain every current qualifying cold reconstruction counted toward the configured independent-reader floor. The owner's or an explicitly owner-authorized disposition must address all those reconstructions and their useful material alternatives; one collective comparison is sufficient, with no separate ceremony per reader. Do not select only the convenient return and ignore a counted reader's alternative. Distinguish acceptable implementation freedom, unwanted but genuinely permitted alternatives, and unsupported reader assumptions. Clarify missing, incorrect or insufficient constraints in the intent rather than treating private comparison comments as a substitute for the written constraints. No new workflow phase is introduced.
+
+Every shipped software-change profile's existing intent challenge review also includes this axis. This variant receives the current intent, baseline code, retained cold reconstruction and recorded comparison, and tries to falsify the accepted alignment by identifying remaining materially unwanted interpretations genuinely permitted by the written intent. It is not blind to the parent result, requires no second cold readback, and requires no duplicate owner comparison for an unchanged intent. New material mismatches use the normal clarification/revision path.
+
+When an edit materially changes which final states the intent permits—including a clarification excluding a previously permitted material alternative—obtain a new unbriefed complete reconstruction and alternatives test before accepting that revision. Focused assessment by an already briefed reviewer does not replace the cold exercise. Formatting-only or genuinely meaning-preserving edits may retain the original exercise through explicit applicability. Preserve every earlier reconstruction and comparison; neither may be relabeled as a new cold return. Clear prose alone does not establish alignment. Neither original reconstructions nor original judgments may be rewritten to manufacture agreement.
+
+The corresponding challenge tests a cleared alignment conclusion under the ordinary-first sequence in LE-182: all counted reconstructions have been compared, required intent clarifications made and affected ordinary fulfillment confirmed, with no accepted material alternative left unresolved. Early preparation and independence from unrelated groups do not turn an open alignment failure into a qualified challenge.
+
+### LE-174: Review briefs can be prepared early without advancing the workflow
+- Status: live
+- Coverage: e2e/journey
+
+Across supported providers, the driver can inspect obligations and prepare inert briefs for a selected configured review state or assignment before entering that state, when the required subject and source inputs exist. Missing inputs are explicit. Preparation does not launch work, append judgments, claim approval or change workflow state.
+
+The driver can prepare an intent-sufficient challenge from its actual accepted axis-level alignment claim and recorded comparison before unrelated ordinary obligations finish. This does not claim that the whole ordinary gate has passed. If a multi-axis assignment still lacks necessary parent claims or other inputs, preparation exposes the available context and the missing inputs; it does not claim that the group has been fulfilled.
+
+Default state order and checked departures remain. This preparation capability introduces no new review phase, agent supervisor, mandatory external-work registration or automatic event routing.
+
+### LE-175: Acceptance criteria require the promised result
+- Status: live
+- Coverage: e2e/journey
+
+Every shipped software-change profile includes `acceptance-sufficient` in ordinary aggregate intent review and its corresponding informed challenge. It joins the existing aggregate review group at the profile's configured author floor; no additional default individual-stage assignment, cold-readback exercise or owner-comparison ceremony is required. The product's inspectable policies, preparation guidance and evidence obligations expose the same ordinary and challenge questions.
+
+The ordinary reviewer identifies each material promised outcome and each specific problem this change claims to remedy, then tests whether a concrete plausible delivery could satisfy all acceptance criteria while leaving that outcome or problem materially unresolved. Assess the named outcomes separately rather than reducing the goal to the selected new capability. Test causal sufficiency as well as visible behavior: the new interaction working does not by itself show that the named cause or burden has been addressed. Explain any concern treated as background rather than a promised remedy.
+
+A failing judgment names the promised outcome, the text-supported counterexample, how it survives every relevant acceptance requirement, and its concrete consequence. Where the intent genuinely leaves mitigation versus elimination unclear, expose that material ambiguity rather than silently assuming the weakest promise. Do not invent goals, require unrelated cleanup or one preferred implementation, demand elimination where only mitigation is promised, or turn legitimate implementation freedom or accepted residuals into defects. An accepted risk cannot waive a stated outcome. No quota or required count of findings applies.
+
+The corresponding challenge consumes the actual ordinary coverage account, verdict, rationale, counterexamples and cited clauses, not a paraphrased or fabricated pass. It attempts to falsify a parent pass with a materially outcome-defeating delivery the criteria still permit, including a named cause that remains outside the new interaction. It also tests whether a dismissed counterexample was genuinely excluded by the current wording, and whether a claimed gap instead invents a goal or ignores a binding criterion. A pass is supported by the relevant clauses ruling out the strongest plausible counterexamples; a fail meets the same outcome/counterexample/consequence burden. This is not a second cold reconstruction, implementation validation, automatic semantic classifier or new workflow phase.
+
+Configured missing or failed evidence remains subject to ordinary finding triage and checked progression; the provider mechanically validates evidence and does not decide causal sufficiency itself. Explicit applicable prior judgments may be retained under the selected policy; new meaningful acceptance constraints require affected review, not relabeled old passes. Shipped examples, operator guidance and required calibration use these exact scoped meanings. Existing A11 genuine fresh/applicable-history rules remain, without treating manual diagnostic returns as complete calibration.
+
+The ordinary-first sequence in LE-182 also governs this axis. Its challenge targets the cleared sufficiency conclusion, not an open ordinary failure. Examining an earlier claimed gap or its dismissal serves the search for a remaining outcome-defeating delivery; it is not a substitute for ordinary triage, correction and confirmation.
+
+### LE-176: Retired agent and proof-command execution machinery no longer imposes a supported maintenance responsibility
+- Status: live
+- Coverage: e2e/journey
+
+The refactor retires agent execution from the supported engine/provider product, not only its ordinary new-run path. Obsolete agent-execution commands and dedicated implementation, configuration/binding controls, dependencies, and execution-only tests and documentation are removed rather than kept behind a bypass, optional executor or actively supported historical path. This covers invocation launch/waiter lifecycle, agent supervision/cancellation/progress controls, fan-out/plan-runner scheduling and joining, agent-output execution recovery, agent-advice dispatch, and proof-command/matrix launch, execution supervision and cleanup/control surfaces wherever their remaining purpose is that retired responsibility.
+
+Shared facilities with an actual remaining supported use in durable workflow/provider evaluation, evidence recording, faithful external-return handling, or deterministic provider/metadata evaluation and recording supplied command-proof results remain. Shared process, timeout, cancellation, schema, persistence and input/output-recording code is not deleted merely because a retired executor also used it; it must have an actual remaining non-work-execution use. Dependency removal is limited to dependencies with no remaining supported use. Minimal inert historical representations may remain where needed to preserve existing records without continuing old agent execution; historical records and captures are not deleted, reset, migrated or silently reinterpreted.
+
+Acceptance distinguishes retirement from a merely functional bypass: public command/help/configuration surfaces, dependency/runtime prerequisites and source/test/documentation inspection agree that the obsolete agent and primary proof-command execution machinery is no longer supported or maintained. Old-history interpretation remains truthful or explicitly unsupported, and retained provider/workflow/evidence/externally-produced-proof paths still work. No automatic dead-code classifier, exhaustive provenance inventory or unrelated repository cleanup is required.
+
+### LE-177: Qualifying early evidence remains usable when progression reaches its review state
+- Status: live
+- Coverage: e2e/journey
+
+Early results can later satisfy the corresponding obligation when they genuinely meet the configured group/purpose, stage, eligible authorship, visibility, subject/revision and applicability requirements. Merely entering the formal review state does not invalidate such evidence or require another model call. An ad hoc diagnostic or differently scoped review is not silently promoted into fulfillment of another configured assignment.
+
+A completed grouped judgment must genuinely consider its configured axes together with the required inputs. Isolated axis results are not silently promoted into that combined judgment. Useful partial work remains retained while necessary claims or inputs are missing and group fulfillment remains pending. No categorical rerun of valid partial work is required merely to serialize a batch; the configured combined assessment remains necessary.
+
+An independently configured singleton group can qualify when its own inputs and required comparison are ready, without waiting for unrelated groups. This includes the default separate intent-sufficient ordinary and challenge groups described in LE-173. The challenge uses the accepted axis-level alignment claim and comparison, not a fabricated whole-gate pass.
+
+### LE-178: Explicit, durable required-author-count amendment
+- Status: live
+- Coverage: e2e/journey
+
+The owner may amend these counts directly or explicitly delegate count-changing authority to a driver. Standing delegation covering the amendment is sufficient; no new owner interaction is required for every change within that authority. General autonomy alone is not silently interpreted as permission to change review rigor. Durably record the applying actor and the authority used, referring to existing owner directions or an explicit good-faith declaration as appropriate; do not require private-session verification or a new permission registry. The same rule covers increases and decreases.
+
+A supported active run can explicitly amend the required number of authors for its current or future configured review, acceptance-criterion and whole-goal judgment obligations without starting a replacement run. The supported path guides the driver, validates known targets and positive counts, records the before/after counts and attributed amendment, and exposes the effective counts in inspection and subsequent checked fulfillment. Original initial input and earlier policy/evidence history remain truthful rather than being overwritten. This is a normal authorized amendment, not an override or bypass.
+
+Only the declared author-count change takes effect. Configured group membership, judging meaning, stage relationships, reviewer eligibility, independence, blindness and self-review permission remain binding. Coupled individual/aggregate author requirements must remain consistent; an amendment cannot silently make those relationships impossible or waive them. Criterion and whole-goal author floors can be explicitly targeted as well; a review-count amendment does not silently change them.
+
+Earlier judgments, actual instructions/returns, findings and completed decisions keep their original identities and history. Lowering a floor does not discard a standing failure or unresolved finding, manufacture a pass, relabel old review work, or erase a previously counted cold reader's material alternative. Existing genuine judgments remain usable where their scope and meaning remain applicable. Raising a count needs additional eligible judgments when existing coverage is insufficient. Completed decisions are not silently rewritten under the new counts.
+
+The driver continues ordinary checked progression under the effective counts. This capability does not retrofit amendments into an unsupported older runtime or migrate its guidance or obligations.
+
+### LE-179: Honest final residual reporting through existing surfaces
+- Status: live
+- Coverage: e2e/journey
+
+Software-change final reporting and its configured criterion/whole-goal and validation review expose the material limitations, accepted residual risks, unresolved findings, unsupported operations and relevant proof uncertainty that remain at the delivered state. Distinguish an intentionally accepted scope/risk boundary from an undelivered stated outcome, missing proof and a separately authorized exception. Identify whose actual decision accepted a residual and retain the relevant original evidence/disposition; do not attribute a driver decision to the owner or rewrite history to imply a clean pass.
+
+A final reader can understand what was delivered, what remains, and whether completion is ordinary or exceptional without reconstructing the previous private conversation. Existing report, review and finding/evidence paths carry this information; no new workflow phase, duplicate residual ledger or automatic whole-run classifier is required. Concise references may preserve detail without repeatedly copying every historical comment. An accepted risk never waives a stated outcome, and an unresolved material defect is not renamed residual to obtain normal approval.
+
+The final report and actual whole-goal judgment agree with retained facts. This is honest reporting and assessment, not a promise to discover every hypothetical future problem or a new backend invocation.
+
+### LE-180: Small profile customization without owning a wholesale fork
+- Status: live
+- Coverage: e2e/journey
+
+The guaranteed small-customization categories are common supported policy knobs: required author counts for reviews, criteria and the whole goal; explicit eligible self-review permissions; review groups/axis membership and individual/aggregate stage selection; and advice and Bookends switches. These can be expressed through the base-derived preparation path without owning the complete base file. Raw artifact-schema or prompt replacement may still use a complete validated custom profile; this criterion does not require a general editor for every possible field. These are pre-start policy choices, not permission to change semantic group/stage/eligibility policy in an active run.
+
+Before starting a supported provider run, an operator can select a shipped base profile and express a small set of intended changes through supported preparation, without hand-maintaining the entire copied default profile. The effective profile is validated and inspectable with its actual stages, groups, author counts, eligibility, advice and other relevant supported obligations. The operator can distinguish their overrides from the base defaults and see the base identity and any drift or divergence; a custom name cannot silently select different semantics.
+
+For future preparation using a newer shipped base, the unoverridden remainder comes from that selected base rather than a stale wholesale copy. Changed defaults, conflicting or no-longer-applicable overrides remain visible rather than being silently accepted. Resolve and confirm the actual effective profile before launch. A started run does not silently track subsequent shipped changes: its original resolved input remains recorded, with only separately supported explicit amendments such as LE-178 changing active counts.
+
+Preserve required independence and self-review rules except choices expressly made through supported pre-start policy. Use the smallest adequate recipe/options/overlay path, not an inheritance framework, preference store, editor, automatic active-run migration or execution binding system.
+
+### LE-181: One workflow can deliver across multiple repositories
+- Status: live
+- Coverage: e2e/journey
+
+A driver can complete a supported software-change run whose intended work spans more than one Git repository, using the ordinary artifacts, externally performed work, evidence and checked progression rather than starting a separate run merely because work crosses a repository boundary. Applicable engine/shared and other-provider evidence/reference paths must not assume every relevant source lives beneath one evaluation cwd; retain each provider's existing target and phase meaning rather than inventing a new multi-target workflow.
+
+The driver declares the relevant repository/source scopes. Artifact coverage, source references, command proof and repository/checkpoint identities unambiguously identify the appropriate repository and revision/state. The same relative filename or local requirement ID in two repositories does not make them interchangeable. Required affected work and proof in a second repository cannot be omitted or passed by reusing an unrelated primary-repository success. Applicable Bookends and other authority obligations are assessed in their correct repository scope; do not silently waive them or merge distinct authorities into one unqualified ID list.
+
+Existing source/evidence may be retained where genuinely applicable under LE-171, with current affected checks and honest identity/history. Keep declarations and mechanical checks proportional; use the existing durable references/captures and driver judgment rather than a mandatory external-work registry, repository manager or automatic semantic-impact classifier. The driver owns checkout/worktree/clone/merge/commit lifecycle and its authorization; the engine/provider gains no such ownership.
+
+### LE-182: Clear ordinary findings before challenging the clean conclusion
+- Status: live
+- Coverage: e2e/journey
+
+For a review group, ordinary review finds issues first. The driver triages them, makes required corrections and obtains affected ordinary confirmation. Repeat that ordinary sequence until no accepted material finding remains unresolved. The corresponding challenge then tries to falsify the cleared conclusion by finding an actual remaining material defect; it does not adjudicate open ordinary failures. It may examine prior findings, corrections and dismissals as evidence against that clean conclusion. Disputed ordinary findings use separate reconsideration during triage. Challenge findings return through the normal triage, correction and affected ordinary-confirmation path before the revised clean conclusion is challenged. Confirmation may focus on affected obligations and regressions; unchanged judging meaning may use the explicit applicability in LE-171 rather than restarting a broad search each time. This ordering governs challenge fulfillment, not inert early preparation in LE-174 or qualification independent of unrelated groups in LE-177.
+
+### LE-183: Externally executed command results fulfill normal proof obligations
+- Status: live
+- Coverage: e2e/journey
+
+Drivers and harnesses run proof/test commands and use supported recording to retain their genuine results, actual command/input settings, output or accessible output references, and relevant repository/source identity and applicability. Known metadata can be completed from the actual request/context, but missing outcomes or substantive evidence are not invented. Results are honestly attributed as externally produced, not engine-executed or engine-captured. Existing genuine historical engine captures remain original history and may be used where applicable; they are not relabeled as new external execution.
+
+Configured normal command-proof obligations have a supported external-result fulfillment path. Sufficient genuine results are not rerun merely to obtain an engine-owned capture, and the new product has no optional proof-command/matrix runner. Mechanical source/target/command/currentness checks and actual semantic proof relevance still govern admission and completion. Exit zero, valid metadata or an all-green summary alone does not establish delivery. Missing, wrong-repository, stale, failed or insufficient results remain pending or fail under the existing rules; correction/reuse cannot fabricate them.
+
+Preserve actual output and original attribution, and distinguish recording acceptance from independent judgment that command assertions prove the intended result. Deterministic provider calls and metadata inspection are not primary work execution. No private-call verification, arbitrary evidence quota or duplicate command-provenance registry is required.
