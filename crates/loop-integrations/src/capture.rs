@@ -4,7 +4,6 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use std::os::unix::{
-    ffi::OsStrExt,
     fs::PermissionsExt,
     process::{CommandExt, ExitStatusExt},
 };
@@ -33,18 +32,7 @@ unsafe extern "C" {
     fn fcntl(fd: i32, command: i32, ...) -> i32;
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Row {
-    pub id: String,
-    pub argv: Vec<String>,
-    #[serde(default)]
-    pub environment: BTreeMap<String, String>,
-    #[serde(default)]
-    pub inherit_environment: Vec<String>,
-    pub timeout_ms: u64,
-    pub obligations: Vec<String>,
-}
+pub use crate::proof_metadata::Row;
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Matrix {
@@ -85,64 +73,8 @@ fn atomic(path: &Path, value: &Value) -> io::Result<()> {
     fs::rename(tmp, path)?;
     File::open(path.parent().unwrap())?.sync_all()
 }
-fn git(repo: &Path, args: &[&str]) -> io::Result<Vec<u8>> {
-    let result = Command::new("git").args(args).current_dir(repo).output()?;
-    if !result.status.success() {
-        return Err(error(String::from_utf8_lossy(&result.stderr)));
-    }
-    Ok(result.stdout)
-}
-/// Byte-for-byte counterpart of scripts/test_contract.py; public fixture checks parity.
-pub fn repository_proof_identity(repo: &Path) -> io::Result<String> {
-    let mut digest = Sha256::new();
-    let mut add = |bytes: &[u8]| {
-        digest.update((bytes.len() as u64).to_be_bytes());
-        digest.update(bytes);
-    };
-    add(&git(repo, &["rev-parse", "HEAD"])?);
-    add(&git(repo, &["ls-files", "--stage", "-z"])?);
-    add(&git(
-        repo,
-        &["status", "--porcelain=v1", "--untracked-files=all", "-z"],
-    )?);
-    let names = git(
-        repo,
-        &[
-            "ls-files",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-            "-z",
-        ],
-    )?;
-    for name in names
-        .split(|b| *b == 0)
-        .filter(|s| !s.is_empty())
-        .collect::<BTreeSet<_>>()
-    {
-        add(name);
-        let path = repo.join(std::ffi::OsStr::from_bytes(name));
-        match fs::symlink_metadata(&path) {
-            Ok(meta) if meta.file_type().is_symlink() => {
-                add(b"symlink");
-                add(fs::read_link(path)?.as_os_str().as_bytes());
-            }
-            Ok(meta) if meta.is_file() => {
-                add((meta.permissions().mode() & 0o777).to_string().as_bytes());
-                add(&fs::read(path)?);
-            }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => add(b"deleted"),
-            Err(e) => return Err(e),
-            _ => {
-                return Err(error(format!(
-                    "unsupported repository proof entry: {}",
-                    path.display()
-                )))
-            }
-        }
-    }
-    Ok(format!("sha256:{:x}", digest.finalize()))
-}
+use crate::proof_metadata::git;
+pub use crate::proof_metadata::repository_proof_identity;
 
 // Hold a kernel-released lock, not a stale PID lock. A lost controller leaves
 // started state unresolved; abort never guesses that its work disappeared.
@@ -670,87 +602,7 @@ fn execute_row_with_options(
     immutable(&attempt.join("receipt.json"), &receipt)?;
     Ok(receipt)
 }
-/// Read a selected immutable receipt without launching, resuming or changing it.
-pub fn verify_selected(index_path: &Path, row: &Row, cwd: &Path) -> io::Result<(PathBuf, Value)> {
-    let index = read_json(index_path)?;
-    let matches: Vec<_> = index["receipts"]
-        .as_array()
-        .ok_or_else(|| error("missing capture selection"))?
-        .iter()
-        .filter(|s| s["id"] == row.id)
-        .collect();
-    if matches.len() != 1 {
-        return Err(error("missing or duplicate selected receipt"));
-    }
-    let root = index_path
-        .parent()
-        .ok_or_else(|| error("missing index parent"))?;
-    let path = root
-        .join(
-            matches[0]["receipt"]
-                .as_str()
-                .ok_or_else(|| error("missing receipt path"))?,
-        )
-        .canonicalize()?;
-    if !path.starts_with(root.canonicalize()?.join("attempts")) {
-        return Err(error("receipt escapes capture attempts"));
-    }
-    let receipt = read_json(&path)?;
-    let schema: Value = serde_json::from_str(include_str!(
-        "../../../docs/operational-ux-capture.schema.json"
-    ))?;
-    if !jsonschema::validator_for(&schema["$defs"]["receipt"])
-        .map_err(|e| error(e.to_string()))?
-        .is_valid(&receipt)
-    {
-        return Err(error("malformed capture receipt"));
-    }
-    let identity = repository_proof_identity(cwd)?;
-    if receipt["id"] != row.id
-        || receipt["argv"] != json!(row.argv)
-        || receipt["cwd"] != json!(cwd)
-        || receipt["settings"] != settings(row)
-        || receipt["obligations"] != json!(row.obligations)
-        || receipt["resolved_executable"] != json!(resolve(row, cwd))
-        || receipt["repository_before"] != identity
-        || receipt["repository_after"] != identity
-        || receipt["finished_at"].as_f64() < receipt["started_at"].as_f64()
-        || !success(&receipt)
-    {
-        return Err(error("stale, mismatched or failed selected capture"));
-    }
-    let attempt = path.parent().unwrap();
-    let started = read_json(&attempt.join("started.json"))?;
-    for key in [
-        "id",
-        "argv",
-        "resolved_executable",
-        "cwd",
-        "settings",
-        "obligations",
-        "repository_before",
-        "started_at",
-    ] {
-        if started.get(key).is_none() || started[key] != receipt[key] {
-            return Err(error("started/finished mismatch"));
-        }
-    }
-    for stream in ["stdout", "stderr"] {
-        let stream_path = attempt
-            .join(
-                receipt[stream]
-                    .as_str()
-                    .ok_or_else(|| error("missing stream"))?,
-            )
-            .canonicalize()?;
-        if !stream_path.starts_with(attempt)
-            || receipt[format!("{stream}_sha256")] != hash(&fs::read(stream_path)?)
-        {
-            return Err(error("capture stream path/digest mismatch"));
-        }
-    }
-    Ok((path, receipt))
-}
+pub use crate::proof_metadata::verify_selected;
 
 fn success(r: &Value) -> bool {
     r["exit_code"] == 0

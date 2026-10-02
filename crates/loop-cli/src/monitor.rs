@@ -1,6 +1,4 @@
-//! Passive deterministic observation with an optional separate advisory subprocess.
-#[path = "monitor_summary.rs"]
-mod monitor_summary;
+//! Passive deterministic observation; external execution remains driver-owned.
 use crate::visibility;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -13,7 +11,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-const HELP: &str = "Usage: loop-engine monitor [--run ID]... [--capture-dir ABS]... [--invocation ID] [--engine ABS] [--database PATH] [--observation ABS]... [--json] [--attention-seconds N] [--poll-seconds N] [--summary-config FILE --output-dir ABS]\nOptional external summaries are advisory; config/call failure never stops observation.\nNative reads use non-arming status. --engine selects released compatibility reads (list/history/invocation-progress only). At least one source is required. --invocation requires exactly one run. JSON mode emits flushed JSONL snapshots and source-identified completion/attention events; inspect workflow_lane, execution, worker, conformance, acceptance, evidence, freshness and uncertainty separately. An explicit attributed observation judgment with result accepted/rejected and evidence locators may populate acceptance; opaque, stale, conflicting, or mismatched judgments remain unknown. owner_update is assistant-owned active-chat guidance, not a notification channel. Human output is stderr. Both follow until interrupted. Attention deadline is observer elapsed time, not ETA. Restart rereads durable evidence; no exactly-once promise. Stopping this observer never cancels work. Unknown judgment is not approval.\n";
+const HELP: &str = "Usage: loop-engine monitor [--run ID]... [--capture-dir ABS]... [--invocation ID] [--engine ABS] [--database PATH] [--observation ABS]... [--json] [--attention-seconds N] [--poll-seconds N]\nNative reads use non-arming status. --engine selects released compatibility reads (list/history/invocation-progress only). At least one source is required. --invocation requires exactly one run. JSON mode emits flushed JSONL snapshots and source-identified completion/attention events; inspect workflow_lane, execution, worker, conformance, acceptance, evidence, freshness and uncertainty separately. An explicit attributed observation judgment with result accepted/rejected and evidence locators may populate acceptance; opaque, stale, conflicting, or mismatched judgments remain unknown. owner_update is assistant-owned active-chat guidance, not a notification channel. Human output is stderr. Both follow until interrupted. Attention deadline is observer elapsed time, not ETA. Restart rereads durable evidence; no exactly-once promise. Stopping this observer never cancels work. Unknown judgment is not approval.\n";
 
 #[derive(Default)]
 struct Options {
@@ -26,8 +24,6 @@ struct Options {
     json: bool,
     attention: Option<f64>,
     poll: f64,
-    summary_config: Option<PathBuf>,
-    output_dir: Option<PathBuf>,
 }
 
 pub fn cli(args: &[String]) -> Option<i32> {
@@ -64,8 +60,6 @@ fn parse(args: &[String]) -> Result<Options, String> {
             .get(i)
             .ok_or_else(|| format!("missing value for {key}"))?;
         match key.as_str() {
-            "--summary-config" => o.summary_config = Some(PathBuf::from(v)),
-            "--output-dir" => o.output_dir = Some(PathBuf::from(v)),
             "--run" => o.runs.push(v.clone()),
             "--capture-dir" => o.captures.push(PathBuf::from(v)),
             "--observation" => o.observations.push(PathBuf::from(v)),
@@ -513,44 +507,11 @@ fn emit(o: &Options, mut p: Value, event: &str) -> Result<(), String> {
     }
     Ok(())
 }
-fn advisory_summary_failure(detail: impl Into<String>, summaries_disabled: bool) -> Value {
-    json!({
-        "source": "advisory-summary",
-        "status": "summary-failed",
-        "detail": detail.into(),
-        "summaries_disabled": summaries_disabled,
-        "evidence": {"state":"unknown","source_locators":[]},
-        "freshness": {"state":"unknown","meaning":"no usable advisory input was retained"},
-        "uncertainty": {"state":"present","reasons":["advisory summary is unavailable; deterministic observation continues"]}
-    })
-}
-
 fn run(o: Options) -> Result<(), String> {
     let start = Instant::now();
     let mut previous = BTreeMap::new();
     let mut deadline_sources = BTreeSet::new();
     let mut boundaries = BTreeMap::new();
-    let mut summary = match (&o.summary_config, &o.output_dir) {
-        (None, _) => None,
-        (Some(config), Some(root)) if root.is_absolute() => {
-            match monitor_summary::Summary::open(config, root) {
-                Ok(s) => Some(s),
-                Err(e) => {
-                    emit(&o, advisory_summary_failure(e, false), "summary")?;
-                    None
-                }
-            }
-        }
-        _ => {
-            emit(
-                &o,
-                advisory_summary_failure("summaries require --output-dir ABS", false),
-                "summary",
-            )?;
-            None
-        }
-    };
-    let mut last_summary = Value::Null;
     loop {
         let packets = o
             .runs
@@ -558,21 +519,6 @@ fn run(o: Options) -> Result<(), String> {
             .map(|r| run_source(&o, r))
             .chain(o.captures.iter().map(|p| capture(p)))
             .collect::<Vec<_>>();
-        if let Some(s) = summary.as_mut() {
-            let status = s.tick(&packets);
-            match status {
-                Ok(p) => {
-                    if p != last_summary {
-                        emit(&o, p.clone(), "summary")?;
-                        last_summary = p;
-                    }
-                }
-                Err(e) => {
-                    emit(&o, advisory_summary_failure(e, true), "summary")?;
-                    summary = None;
-                }
-            }
-        }
         for p in packets {
             let key = p["source"].as_str().unwrap().to_owned();
             let changed = previous.get(&key) != Some(&p);
@@ -612,5 +558,17 @@ fn run(o: Options) -> Result<(), String> {
             }
         }
         std::thread::sleep(Duration::from_secs_f64(o.poll));
+    }
+}
+
+#[cfg(test)]
+mod retirement_tests {
+    use super::*;
+    #[test]
+    fn summary_executor_options_are_unknown() {
+        for option in ["--summary-config", "--output-dir"] {
+            let args = ["--run", "fixture", option, "/tmp/unused"].map(str::to_owned);
+            assert!(parse(&args).err().unwrap().contains("unknown option"));
+        }
     }
 }

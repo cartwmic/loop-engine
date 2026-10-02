@@ -194,8 +194,8 @@ fn timed_command(
 fn capture_row(
     spec: &ProofCommand,
     settings: &Value,
-) -> Result<loop_integrations::capture::Row, String> {
-    Ok(loop_integrations::capture::Row {
+) -> Result<loop_integrations::proof_metadata::Row, String> {
+    Ok(loop_integrations::proof_metadata::Row {
         id: spec.id.clone(),
         argv: std::iter::once(spec.command.clone())
             .chain(spec.args.clone())
@@ -293,7 +293,7 @@ pub(crate) fn prepare(input: &Value) -> Result<Value, String> {
             {
                 continue;
             }
-            match loop_integrations::capture::verify_selected(&path, &row, cwd) {
+            match loop_integrations::proof_metadata::verify_selected(&path, &row, cwd) {
                 Ok(_) => valid.push(path),
                 Err(e) => diagnostics.push(format!("{}: {e}", spec.id)),
             }
@@ -530,7 +530,7 @@ fn command_evidence(
         let index = contained(root, Path::new(text(&data["capture"], "index")?))?;
         let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
         let row = capture_row(spec, &data["execution_settings"])?;
-        let (_, receipt) = loop_integrations::capture::verify_selected(&index, &row, &cwd)
+        let (_, receipt) = loop_integrations::proof_metadata::verify_selected(&index, &row, &cwd)
             .map_err(|e| e.to_string())?;
         if data["proof_id"] != spec.id {
             return Err("common capture proof ID mismatch".into());

@@ -1135,3 +1135,115 @@ fn backlog_t01_default_catalog_and_caller_ids_survive_fresh_processes() {
             && entry["action"]["context_record_id"] == "caller-record-one"
     }));
 }
+
+#[test]
+fn external_work_start_retirement_and_durable_workflow_public_binary() {
+    let fixture = ProviderFixture::new(workflow(
+        vec![
+            State::new("start", "Start", "Do external work", false),
+            State::new("done", "Done", "Finished", true),
+        ],
+        vec![Transition::checked("start", "finish", "done")],
+    ));
+    let (output, refused) = cli_owned(
+        &fixture,
+        &fixture.cwd_a,
+        vec![
+            "start".into(),
+            "fixture".into(),
+            json!({"work_slot_bindings":{"obsolete":{"command":"false","args":[]}}}).to_string(),
+            "--id".into(),
+            "retired".into(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(10));
+    assert_rejected_code(&refused, "work-slot-bindings-retired");
+    assert!(!fixture._root.path().join("runs/retired").exists());
+    start(&fixture, "external", json!({"objective":"external"}));
+    assert_eq!(show_full(&fixture, "external")["status"], "completed");
+    let appended = cli(
+        &fixture,
+        &[
+            "append",
+            "external",
+            "result",
+            "{\"producer\":\"external\",\"outcome\":\"pass\"}",
+            "--record-id",
+            "supplied",
+        ],
+    );
+    assert_eq!(appended["status"], "completed");
+    assert_eq!(show_full(&fixture, "external")["status"], "completed");
+    let progressed = cli(&fixture, &["event", "external", "finish"]);
+    assert_eq!(progressed["status"], "completed", "{progressed}");
+    assert_eq!(history(&fixture, "external")["status"], "completed");
+    let shown = show_full(&fixture, "external");
+    assert_eq!(shown["result"]["current_state"], "done");
+}
+
+#[test]
+fn external_work_supplied_typed_advice_closes_departure_public_binary() {
+    let fixture = ProviderFixture::new(workflow(
+        vec![
+            State::new("start", "Start", "Work", false),
+            State::new("done", "Done", "Finished", true),
+        ],
+        vec![Transition::check_free("start", "finish", "done")],
+    ));
+    start(
+        &fixture,
+        "advice-external",
+        json!({"advice_departures":{"version":1,"occasions":[{"state":"start","event":"finish","occasion_id":"decision"}]}}),
+    );
+    let observed = show_full(&fixture, "advice-external");
+    let visit = observed["result"]["state_visit"].clone();
+    let target = json!({"revision":"r1"});
+    let append = |id: &str, kind: &str, data: Value| {
+        let (_, value) = cli_owned(
+            &fixture,
+            &fixture.cwd_a,
+            vec![
+                "append".into(),
+                "advice-external".into(),
+                kind.into(),
+                data.to_string(),
+                "--record-id".into(),
+                id.into(),
+            ],
+        );
+        assert_eq!(value["status"], "completed", "{value}");
+    };
+    append(
+        "trigger",
+        "external-evidence",
+        json!({"question":"bounded decision"}),
+    );
+    append(
+        "occasion",
+        "advice-occasion",
+        json!({"state_visit":visit,"source_state":"start","event":"finish","occasion_id":"decision","target":target,"triggered":true,"trigger_source_ids":["trigger"],"response_ids":["answer"]}),
+    );
+    append(
+        "answer",
+        "advice-answer",
+        json!({
+            "occasion":"decision",
+            "request":{"version":loop_core::ADVICE_PROTOCOL_VERSION,"state":{"admissibility":{"bounded_judgment":true,"evidence_sufficient":true}},"target":target,"occasion":"decision","questions":{"q":{"type":"noul","instructions":"Assess supplied evidence","proposition":"The proposed choice is adequate"}}},
+            "response":{"answers":{"q":{"type":"noul","noul":0.8,"rationale":"Supplied evidence supports it"}}},
+            "author":{"name":"External advisor","kind":"human"},
+            "original":{"text":"Probability 0.8: supplied evidence supports it"}
+        }),
+    );
+    append(
+        "disposition",
+        "advice-disposition",
+        json!({"response_id":"answer","answer_id":"q","occasion_id":"decision","state_visit":visit,"target":target,"disposition":"accept","reason":"Driver accepts the bounded assessment"}),
+    );
+    show_full(&fixture, "advice-external");
+    let result = cli(&fixture, &["event", "advice-external", "finish"]);
+    assert_eq!(result["status"], "completed", "{result}");
+    assert_eq!(
+        show_full(&fixture, "advice-external")["result"]["current_state"],
+        "done"
+    );
+}

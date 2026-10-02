@@ -21,9 +21,9 @@ pub use advice::{
 };
 pub(crate) use advice_transition::{unanswered_due_occasions, validate_advice_exception};
 pub use advice_transition::{
-    AdviceDeparture, AdviceDepartureMap, AdviceExceptionAttestation,
-    ADVICE_APPLICABILITY_RECORD_KIND, ADVICE_DEPARTURES_INPUT_KEY, ADVICE_DISPOSITION_RECORD_KIND,
-    ADVICE_OCCASION_RECORD_KIND,
+    AdviceAuthor, AdviceDeparture, AdviceDepartureMap, AdviceExceptionAttestation, AdviceOriginal,
+    ExternalAdviceAnswer, ADVICE_ANSWER_RECORD_KIND, ADVICE_APPLICABILITY_RECORD_KIND,
+    ADVICE_DEPARTURES_INPUT_KEY, ADVICE_DISPOSITION_RECORD_KIND, ADVICE_OCCASION_RECORD_KIND,
 };
 pub use execution_contract::{
     effective_binding, invocation_owns_work, resolve_context_filter, BindingAmendment,

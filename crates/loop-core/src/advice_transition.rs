@@ -11,6 +11,61 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
+pub const ADVICE_ANSWER_RECORD_KIND: &str = "advice-answer";
+
+/// Genuine externally supplied typed advice, attributed without execution claims.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalAdviceAnswer {
+    pub occasion: String,
+    pub request: AdviceRequest,
+    pub response: AdviceResponse,
+    pub author: AdviceAuthor,
+    pub original: AdviceOriginal,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdviceAuthor {
+    pub name: String,
+    pub kind: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdviceOriginal {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+}
+
+impl ExternalAdviceAnswer {
+    pub fn validate(&self) -> Result<(), String> {
+        self.request.validate()?;
+        self.request.validate_response(&self.response)?;
+        if self.occasion != self.request.occasion {
+            return Err("supplied advice occasion must match the actual request".into());
+        }
+        if self.author.name.trim().is_empty() || self.author.kind.trim().is_empty() {
+            return Err("supplied advice needs a nonempty author name and kind".into());
+        }
+        if ![
+            self.original.text.as_deref(),
+            self.original.reference.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|value| !value.trim().is_empty())
+        {
+            return Err(
+                "supplied advice needs genuine original text or an accessible reference".into(),
+            );
+        }
+        Ok(())
+    }
+}
+
 pub const ADVICE_DEPARTURES_INPUT_KEY: &str = "advice_departures";
 pub const ADVICE_OCCASION_RECORD_KIND: &str = "advice-occasion";
 pub const ADVICE_DISPOSITION_RECORD_KIND: &str = "advice-disposition";
@@ -225,9 +280,9 @@ pub(crate) fn unanswered_due_occasions(
                     expected.occasion_id
                 ));
             };
-            if context_response.kind != crate::ADVICE_CAPTURE_KIND {
+            if context_response.kind != ADVICE_ANSWER_RECORD_KIND {
                 return Err(format!(
-                    "advice occasion `{}` response `{response_id}` is not a captured advice attempt",
+                    "advice occasion `{}` response `{response_id}` is not externally supplied advice",
                     expected.occasion_id
                 ));
             }
@@ -405,108 +460,24 @@ fn validate_occasion_record(
 }
 
 fn load_successful_advice(
-    run_id: &RunId,
+    _run_id: &RunId,
     context: &[ContextRecord],
 ) -> Result<BTreeMap<String, SuccessfulAdvice>, String> {
     let mut successful = BTreeMap::new();
     for record in context
         .iter()
-        .filter(|record| record.kind == crate::ADVICE_CAPTURE_KIND)
+        .filter(|record| record.kind == ADVICE_ANSWER_RECORD_KIND)
     {
-        let data = record
-            .data
-            .as_object()
-            .ok_or_else(|| format!("advice capture `{}` is not an object", record.id))?;
-        let attempt_id = data.get("attempt_id").and_then(Value::as_str);
-        if attempt_id != Some(record.id.as_str()) {
-            return Err(format!(
-                "advice capture `{}` has a mismatched attempt ID",
-                record.id
-            ));
-        }
-        let origin = data
-            .get("origin")
-            .and_then(Value::as_object)
-            .ok_or_else(|| format!("advice capture `{}` has no origin", record.id))?;
-        if origin.get("kind").and_then(Value::as_str) != Some(crate::ADVICE_CAPTURE_KIND)
-            || origin.get("run_id").and_then(Value::as_str) != Some(run_id.as_str())
-            || origin.get("attempt_id").and_then(Value::as_str) != Some(record.id.as_str())
-            || origin.get("context_record_id").and_then(Value::as_str) != Some(record.id.as_str())
-        {
-            return Err(format!(
-                "advice capture `{}` has a mismatched run-owned origin",
-                record.id
-            ));
-        }
-        let status = data.get("status").and_then(Value::as_str);
-        if status == Some("failed") {
-            if !data.get("typed_result_origin").is_none_or(Value::is_null)
-                || !data.get("typed_result").is_none_or(Value::is_null)
-            {
-                return Err(format!(
-                    "failed advice capture `{}` claims a typed result",
-                    record.id
-                ));
-            }
-            continue;
-        }
-        if status != Some("completed") {
-            return Err(format!(
-                "advice capture `{}` has an unknown status",
-                record.id
-            ));
-        }
-        if data.get("typed_result_origin") != data.get("origin") {
-            return Err(format!(
-                "successful advice capture `{}` has a mismatched typed-result origin",
-                record.id
-            ));
-        }
-        let request_value = data
-            .get("request")
-            .filter(|value| !value.is_null())
-            .ok_or_else(|| format!("successful advice capture `{}` has no request", record.id))?;
-        let request =
-            serde_json::from_value::<AdviceRequest>(request_value.clone()).map_err(|error| {
-                format!(
-                    "successful advice capture `{}` request is invalid: {error}",
-                    record.id
-                )
-            })?;
-        request.validate().map_err(|error| {
-            format!(
-                "successful advice capture `{}` request is invalid: {error}",
-                record.id
-            )
-        })?;
-        let typed_result = data
-            .get("typed_result")
-            .filter(|value| !value.is_null())
-            .ok_or_else(|| {
-                format!(
-                    "successful advice capture `{}` has no typed result",
-                    record.id
-                )
-            })?;
-        let response =
-            serde_json::from_value::<AdviceResponse>(typed_result.clone()).map_err(|error| {
-                format!(
-                    "successful advice capture `{}` response is invalid: {error}",
-                    record.id
-                )
-            })?;
-        request.validate_response(&response).map_err(|error| {
-            format!(
-                "successful advice capture `{}` response is invalid: {error}",
-                record.id
-            )
-        })?;
-        let answer_ids = response.answers.keys().cloned().collect();
+        let supplied = serde_json::from_value::<ExternalAdviceAnswer>(record.data.clone())
+            .map_err(|error| format!("supplied advice `{}` is invalid: {error}", record.id))?;
+        supplied
+            .validate()
+            .map_err(|error| format!("supplied advice `{}` is invalid: {error}", record.id))?;
         successful.insert(
             record.id.to_string(),
             SuccessfulAdvice {
-                request,
-                answer_ids,
+                answer_ids: supplied.response.answers.keys().cloned().collect(),
+                request: supplied.request,
             },
         );
     }
@@ -638,6 +609,33 @@ mod tests {
                 Transition::checked("work", "finish", "done"),
             ],
         )
+    }
+
+    #[test]
+    fn supplied_answer_requires_typed_values_and_retained_original() {
+        let value = json!({
+            "occasion":"review",
+            "request":{"version":crate::ADVICE_PROTOCOL_VERSION,"state":{"admissibility":{"bounded_judgment":true,"evidence_sufficient":true}},"target":{"revision":"r1"},"occasion":"review","questions":{"q":{"type":"noul","instructions":"Assess evidence","proposition":"Adequate"}}},
+            "response":{"answers":{"q":{"type":"noul","noul":0.7}}},
+            "author":{"name":"Advisor","kind":"human"},
+            "original":{"text":"Probability 0.7"}
+        });
+        let supplied: ExternalAdviceAnswer = serde_json::from_value(value.clone()).unwrap();
+        assert!(supplied.validate().is_ok());
+        let mut missing = value.clone();
+        missing["response"]["answers"]["q"]
+            .as_object_mut()
+            .unwrap()
+            .remove("noul");
+        assert!(serde_json::from_value::<ExternalAdviceAnswer>(missing).is_err());
+        let mut missing_original = value;
+        missing_original["original"] = json!({});
+        assert!(
+            serde_json::from_value::<ExternalAdviceAnswer>(missing_original)
+                .unwrap()
+                .validate()
+                .is_err()
+        );
     }
 
     #[test]

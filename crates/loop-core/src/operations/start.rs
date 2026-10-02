@@ -3,7 +3,7 @@
 use super::{persistence_error, provider_error, provider_resolution_error, workflow_error};
 use crate::{
     CreateRunRequest, CreateRunResult, Lifecycle, OperationOutcome, ProviderGateway,
-    ProviderResolver, ProviderSelector, Timestamp, WorkSlot, WorkSlotBinding, WorkSlotId,
+    ProviderResolver, ProviderSelector, Timestamp, WorkSlotId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -69,24 +69,8 @@ impl Request {
 /// Successful `start` data returned by the persistence boundary.
 pub type Result = CreateRunResult;
 
-/// Execute `start` through the provider and persistence ports.
-///
-/// Provider resolution and description happen before validation and before
-/// persistence is called.  Start always forwards the caller `initial_input`
-/// to `describe` and snapshots the returned workflow unchanged; core does
-/// not interpret provider-specific keys such as `review_policies`.  After a
-/// valid workflow, start validates reserved `work_slot_bindings` on object
-/// initial_input against the described `work_slots` catalog, then allocates
-/// the engine-owned per-run directory and composes reserved `artifact_root`
-/// into stored object input.  The persistence adapter owns the atomic run
-/// plus creation-history write.
-///
-/// Frozen initial_input key is `work_slot_bindings`: object map slot_id → {command, args}.
-/// Slot identity is a string slot_id. Use the existing `string_identifier!` newtype pattern: `WorkSlotId`.
-/// Catalog entry type `WorkSlot` with `id`, `state`, `event`, and optional `stdin_context_kinds`. No instruction body.
-/// Binding value type with exactly `{command, args}`. `command: String`. `args: Vec<String>` — the same argv list type loop-integrations already uses for process argument lists (`ProviderDefinition.args` / `ProviderInvocation.args`). `#[serde(deny_unknown_fields)]`.
-/// Omit the key OR `{}` both mean no bindings. Start must succeed in both cases (existing start tests omit the key and MUST keep passing).
-/// Start rejects: unknown slot id (not in the provider catalog snapshot for this workflow), unknown fields on a binding object, non-object values (the map itself or a binding value).
+/// Execute `start` through deterministic provider and atomic persistence ports.
+/// Execution bindings are retired; omitted or empty bindings remain harmless.
 pub fn execute<R, G, P>(
     request: Request,
     resolver: &R,
@@ -112,9 +96,7 @@ where
         return workflow_error(error);
     }
 
-    if let Some(rejected) =
-        work_slot_bindings_rejection(&request.initial_input, &workflow.work_slots)
-    {
+    if let Some(rejected) = work_slot_bindings_rejection(&request.initial_input) {
         return rejected;
     }
 
@@ -182,60 +164,18 @@ where
     execute(request, resolver, gateway, persistence)
 }
 
-/// Frozen initial_input key is `work_slot_bindings`: object map slot_id → {command, args}.
-///
-/// Slot identity is a string slot_id. Use the existing `string_identifier!` newtype pattern: `WorkSlotId`.
-/// Catalog entry type `WorkSlot` with `id`, `state`, `event`, and optional `stdin_context_kinds`. No instruction body.
-/// Binding value type with exactly `{command, args}`. `command: String`. `args: Vec<String>` — the same argv list type loop-integrations already uses for process argument lists (`ProviderDefinition.args` / `ProviderInvocation.args`). `#[serde(deny_unknown_fields)]`.
-/// Omit the key OR `{}` both mean no bindings. Start must succeed in both cases (existing start tests omit the key and MUST keep passing).
-/// Start rejects: unknown slot id (not in the provider catalog snapshot for this workflow), unknown fields on a binding object, non-object values (the map itself or a binding value).
-///
-/// Missing key or `{}` → no bindings; continue; leave the JSON as the caller
-/// sent it (do not inject `{}`). Persist by leaving `work_slot_bindings` in
-/// the frozen `initial_input` already stored on CreateRunRequest.
-const WORK_SLOT_BINDINGS_KEY: &str = "work_slot_bindings";
-
-fn work_slot_bindings_rejection(
-    initial_input: &Value,
-    work_slots: &[WorkSlot],
-) -> Option<OperationOutcome<Result>> {
-    let Value::Object(map) = initial_input else {
-        return None;
-    };
-    let bindings_value = map.get(WORK_SLOT_BINDINGS_KEY)?;
-    let Value::Object(bindings) = bindings_value else {
-        return Some(OperationOutcome::rejected(
-            "work-slot-bindings-not-object",
-            "work_slot_bindings must be an object map of slot_id to {command, args}",
-        ));
-    };
-    if bindings.is_empty() {
+fn work_slot_bindings_rejection(initial_input: &Value) -> Option<OperationOutcome<Result>> {
+    let bindings = initial_input.as_object()?.get("work_slot_bindings")?;
+    if bindings
+        .as_object()
+        .is_some_and(|bindings| bindings.is_empty())
+    {
         return None;
     }
-
-    let known: std::collections::BTreeSet<&str> =
-        work_slots.iter().map(|slot| slot.id.as_str()).collect();
-
-    for (slot_id, binding) in bindings {
-        if let Err(error) = serde_json::from_value::<WorkSlotBinding>(binding.clone()) {
-            return Some(OperationOutcome::rejected(
-                "invalid-work-slot-binding",
-                format!(
-                    "work_slot_bindings[{slot_id}] must be an object with {{command, args, context_filter?}}: {error}"
-                ),
-            ));
-        }
-        if !known.contains(slot_id.as_str()) {
-            return Some(OperationOutcome::rejected(
-                "unknown-work-slot",
-                format!(
-                    "work_slot_bindings slot id `{slot_id}` is not in the provider catalog snapshot for this workflow"
-                ),
-            ));
-        }
-    }
-
-    None
+    Some(OperationOutcome::rejected(
+        "work-slot-bindings-retired",
+        "work_slot_bindings execution is retired; perform work externally and record supplied results",
+    ))
 }
 
 fn allocate_run_directory(
@@ -342,6 +282,7 @@ fn slot_subjects_for_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::WorkSlot;
     use crate::{
         AppendContextRequest, AppendContextResult, CheckedEvaluationSnapshot,
         CheckedEvaluationSnapshotRequest, CommitTransitionRequest, CommitTransitionResult,
