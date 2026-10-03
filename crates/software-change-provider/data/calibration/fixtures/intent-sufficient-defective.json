@@ -1,0 +1,49 @@
+{
+  "revision": "r15",
+  "author": {
+    "name": "change-owner",
+    "kind": "human"
+  },
+  "operating_context": {
+    "operators": [
+      "trusted repository maintainer",
+      "approval operator"
+    ],
+    "environment": [
+      "fictional-repo approval service and external dispatcher"
+    ],
+    "threat_boundary": {
+      "in_scope": [
+        "ordinary approval recording and mail outages"
+      ],
+      "excluded": [
+        "hostile users",
+        "multi-tenant authorization"
+      ]
+    },
+    "accepted_risks": [],
+    "outside_obligations": []
+  },
+  "problem": "In fictional-repo, receipt delivery currently runs inside the approval transaction. A mail outage rolls back approvals, preventing operators from recording and inspecting them.",
+  "outcome": "Improve approval and receipt handling so operators can record approvals and retry receipt delivery. Delivery responsibility may remain in the state store or move to the dispatcher.",
+  "acceptance": [
+    {
+      "id": "AC-1",
+      "statement": "Operators can record an approval and inspect its receipt status when email delivery is available."
+    },
+    {
+      "id": "AC-2",
+      "statement": "Receipt delivery can be retried after a delivery error."
+    }
+  ],
+  "constraints": [
+    "Existing approval identifiers and receipt contents stay unchanged."
+  ],
+  "non_goals": [
+    "Changing reminder scheduling or email providers."
+  ],
+  "baseline": {
+    "kind": "git",
+    "commit": "repo-state-2026-08-12"
+  }
+}

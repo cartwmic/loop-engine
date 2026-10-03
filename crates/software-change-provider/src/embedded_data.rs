@@ -21,6 +21,13 @@ pub struct EmbeddedFile {
 /// data file requires adding its include here, and the drift-guard test catches
 /// omissions or stale bytes.
 pub static FILES: &[EmbeddedFile] = &[
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/acceptance-sufficient-good.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/acceptance-sufficient-good.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/intent-sufficient-good.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/intent-sufficient-good.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/intent-sufficient-defective.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/intent-sufficient-defective.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/acceptance-sufficient-defective.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/acceptance-sufficient-defective.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/companions/fictional-repo/implementation-evidence/acceptance-sufficient-coverage.md", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/companions/fictional-repo/implementation-evidence/acceptance-sufficient-coverage.md")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/companions/fictional-repo/implementation-evidence/intent-sufficient-comparison.md", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/companions/fictional-repo/implementation-evidence/intent-sufficient-comparison.md")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/companions/fictional-repo/implementation-evidence/baseline-2026-08-12.txt", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/companions/fictional-repo/implementation-evidence/baseline-2026-08-12.txt")) },
     EmbeddedFile {
         path: "crates/software-change-provider/data/calibration/fixtures/validation-evidence-2026-08-12.json",
         bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/validation-evidence-2026-08-12.json")),

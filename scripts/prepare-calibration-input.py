@@ -358,6 +358,15 @@ def calibration_companions(
         for label in REQUIREMENT_PROOF_COMPANIONS:
             relative = f"crates/software-change-provider/data/calibration/companions/{label}"
             records.append((f"companion:{label}", read_bytes(safe_join(repository, relative, "requirement-proof companion"), "requirement-proof companion")))
+    if family == "intent" and axis in ("intent-sufficient", "acceptance-sufficient"):
+        labels = []
+        if axis == "intent-sufficient":
+            labels.append("baseline-2026-08-12.txt")
+        if gate == "intent-adversarial-review":
+            labels.append("intent-sufficient-comparison.md" if axis == "intent-sufficient" else "acceptance-sufficient-coverage.md")
+        for name in labels:
+            label = f"fictional-repo/implementation-evidence/{name}"
+            records.append((f"companion:{label}", read_bytes(repository / f"crates/software-change-provider/data/calibration/companions/{label}", "sufficiency companion")))
     return records
 
 
@@ -562,18 +571,20 @@ def make_case(
 
 def prepare_successor_manifest(repository: Path, manifest: list, procedure: bytes) -> list:
     """Derive complete successor identities, never observations/applicability."""
-    output = [row for row in manifest if not row["config_version"].endswith("-13")]
+    output = [row for row in manifest if not row["config_version"].endswith("-14")]
     existing = {tuple(row[k] for k in ("config_version", "gate", "axis", "review_stage", "fixture_id")): row
-                for row in manifest if row["config_version"].endswith("-13")}
+                for row in manifest if row["config_version"].endswith("-14")}
     for name in PROFILE_NAMES:
         path = repository / f"crates/software-change-provider/data/configs/{name}.json"
         profile = read_json(path, "successor profile")
-        if profile["config_version"] != name + "-13": die("successor preparation requires v13 profiles")
+        if profile["config_version"] != name + "-14": die("successor preparation requires v14 profiles")
         for gate, policies in profile["review_policies"].items():
             for policy in policies:
-                sources = [row for row in manifest if row["config_version"] == name + "-12"
+                sources = [row for row in manifest if row["config_version"] == name + "-13"
                            and row["gate"] == gate and row["axis"] == policy["id"]
                            and row["review_stage"] == policy["review_stage"]]
+                if policy["id"] in ("intent-sufficient", "acceptance-sufficient"):
+                    sources = [dict(fixture_id=policy["id"] + "-" + quality, gate=gate, axis=policy["id"], review_stage=policy["review_stage"], expected=result) for quality, result in (("good", "pass"), ("defective", "fail"))]
                 if not sources: die(f"missing predecessor fixtures for {name}/{gate}/{policy['id']}")
                 for source in sources:
                     row = {k: source[k] for k in ("fixture_id", "gate", "axis", "review_stage", "expected")}

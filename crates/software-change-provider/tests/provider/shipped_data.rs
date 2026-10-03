@@ -737,7 +737,15 @@ fn every_axis_prompt_references_subject_template_schema_and_all_antipedantry_gua
                         "{profile}/{gate}/{id} adversarial prompt must be falsifier stance"
                     );
                     assert!(
-                        prompt.contains("pass claim against that named obligation"),
+                        if id == "intent-sufficient" {
+                            prompt.contains("Attack the accepted alignment conclusion")
+                                && prompt.contains("only after the ordinary group has cleared")
+                        } else if id == "acceptance-sufficient" {
+                            prompt.contains("Consume the actual ordinary coverage account")
+                                && prompt.contains("only after ordinary clearance")
+                        } else {
+                            prompt.contains("pass claim against that named obligation")
+                        },
                         "{profile}/{gate}/{id} adversarial prompt must attack the named parent obligation"
                     );
                     let expected_floor = if *profile == "minimal" { 1 } else { 2 };

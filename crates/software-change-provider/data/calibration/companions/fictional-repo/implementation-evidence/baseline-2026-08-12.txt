@@ -1,0 +1,3 @@
+Repository: fictional-repo
+Commit: repo-state-2026-08-12
+The approval state store records approvals and synchronously sends receipt email. If email delivery raises an error, the approval transaction rolls back. The external dispatcher currently handles only scheduled reminder email. Operators need approval recording and inspection during mail outages.

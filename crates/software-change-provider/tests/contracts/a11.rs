@@ -12,20 +12,20 @@ const PROFILES: &[&str] = &["minimal", "standard", "high-rigor"];
 const CURRENT_INVOCATION: &str = "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.";
 const PENDING_INVOCATION: &str = "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.";
 const NEUTRAL_REVISION: &str = "r15";
-const HISTORICAL_CONFIG_SUFFIXES: &[&str] = &["-10", "-11", "-12"];
-const PREDECESSOR_CONFIG_SUFFIX: &str = "-12";
-const CURRENT_CONFIG_SUFFIX: &str = "-13";
+const HISTORICAL_CONFIG_SUFFIXES: &[&str] = &["-10", "-11", "-12", "-13"];
+const PREDECESSOR_CONFIG_SUFFIX: &str = "-13";
+const CURRENT_CONFIG_SUFFIX: &str = "-14";
 const HISTORICAL_V10_ROW_COUNT: usize = 368;
 const HISTORICAL_V11_ROW_COUNT: usize = 396;
-const HISTORICAL_ROW_COUNT: usize = HISTORICAL_V10_ROW_COUNT + HISTORICAL_V11_ROW_COUNT + 396;
-const CURRENT_ROW_COUNT: usize = 396;
+const HISTORICAL_ROW_COUNT: usize = HISTORICAL_V10_ROW_COUNT + HISTORICAL_V11_ROW_COUNT + 396 + 396;
+const CURRENT_ROW_COUNT: usize = 420;
 const HISTORICAL_V10_AXIS_KEYS: usize = 184;
 const HISTORICAL_V11_AXIS_KEYS: usize = 196;
-const HISTORICAL_AXIS_KEYS: usize = HISTORICAL_V10_AXIS_KEYS + HISTORICAL_V11_AXIS_KEYS + 196;
-const CURRENT_AXIS_KEYS: usize = 196;
+const HISTORICAL_AXIS_KEYS: usize = HISTORICAL_V10_AXIS_KEYS + HISTORICAL_V11_AXIS_KEYS + 196 + 196;
+const CURRENT_AXIS_KEYS: usize = 208;
 const EXPECTED_AXIS_KEYS: usize = HISTORICAL_AXIS_KEYS + CURRENT_AXIS_KEYS;
 const HISTORICAL_MANIFEST_CANONICAL_SHA256: &str =
-    "aff902d43d9301c533496edf50d76dc793c7ec22020425bbf3eca21719cf784d";
+    "6ec6b03ff04fe76407f9e7b575814e049c67581fff41d6ff863228a3862006b3";
 const IMPLEMENTATION_COMPANION_LABEL: &str =
     "companion:fictional-repo/implementation-evidence/repository-state.txt";
 const REQUIREMENT_PROOF_SCRIPT_DATA_PATH: &str =
@@ -49,9 +49,9 @@ fn read_data(relative: &str) -> Vec<u8> {
 
 fn profile_name(config_version: &str) -> &'static str {
     match config_version {
-        "minimal-13" => "minimal",
-        "standard-13" => "standard",
-        "high-rigor-13" => "high-rigor",
+        "minimal-14" => "minimal",
+        "standard-14" => "standard",
+        "high-rigor-14" => "high-rigor",
         other => panic!("current calibration source records do not accept {other}"),
     }
 }
@@ -453,6 +453,28 @@ fn companion_records(subject: &Value, gate: &str, axis: &str) -> Vec<Record> {
             )),
         });
     }
+    if gate_family(gate) == "intent"
+        && matches!(axis, "intent-sufficient" | "acceptance-sufficient")
+    {
+        let mut names = Vec::new();
+        if axis == "intent-sufficient" {
+            names.push("baseline-2026-08-12.txt");
+        }
+        if is_adversarial_gate(gate) {
+            names.push(if axis == "intent-sufficient" {
+                "intent-sufficient-comparison.md"
+            } else {
+                "acceptance-sufficient-coverage.md"
+            });
+        }
+        for name in names {
+            let label = format!("fictional-repo/implementation-evidence/{name}");
+            records.push(Record {
+                label: format!("companion:{label}"),
+                content: read_data(&format!("calibration/companions/{label}")),
+            });
+        }
+    }
     records.extend(repository_state_companion_records(subject, gate, axis));
     records.extend(docs_companion_records(subject, gate, axis));
     records.extend(requirement_proof_companion_records(gate, axis));
@@ -670,7 +692,7 @@ fn required_current_row_keys(entries: &[Value]) -> Result<BTreeSet<CalibrationRo
             .ok_or_else(|| format!("{profile} profile has no config_version"))?;
         let Some(base) = version.strip_suffix(CURRENT_CONFIG_SUFFIX) else {
             return Err(format!(
-                "{profile} profile is not a v13 successor: {version}"
+                "{profile} profile is not a v14 successor: {version}"
             ));
         };
         let predecessor = format!("{base}{PREDECESSOR_CONFIG_SUFFIX}");
@@ -688,7 +710,7 @@ fn required_current_row_keys(entries: &[Value]) -> Result<BTreeSet<CalibrationRo
                 let stage = axis["review_stage"]
                     .as_str()
                     .ok_or_else(|| format!("{profile} {gate}/{axis_id} has no review_stage"))?;
-                let fixtures: BTreeSet<_> = entries
+                let mut fixtures: BTreeSet<_> = entries
                     .iter()
                     .filter_map(Value::as_object)
                     .filter(|entry| {
@@ -699,6 +721,10 @@ fn required_current_row_keys(entries: &[Value]) -> Result<BTreeSet<CalibrationRo
                     })
                     .map(|entry| string_field(entry, "fixture_id").to_owned())
                     .collect();
+                if matches!(axis_id, "intent-sufficient" | "acceptance-sufficient") {
+                    fixtures =
+                        BTreeSet::from([format!("{axis_id}-good"), format!("{axis_id}-defective")]);
+                }
                 if fixtures.is_empty() {
                     return Err(format!(
                         "no predecessor fixture pairing exists for successor {version}/{gate}/{axis_id}/{stage}"
@@ -1119,7 +1145,7 @@ fn calibration_manifest_binds_exact_source_record_stream_and_covers_profile_axes
 }
 
 #[test]
-fn historic_v10_v11_v12_rows_remain_unchanged_and_v13_packets_use_fresh_keys() {
+fn historic_v10_v11_v12_v13_rows_remain_unchanged_and_v14_packets_use_fresh_keys() {
     let entries = manifest();
     let historical: Vec<Value> = entries
         .iter()
@@ -1209,7 +1235,7 @@ fn historic_v10_v11_v12_rows_remain_unchanged_and_v13_packets_use_fresh_keys() {
         .to_path_buf();
     let temporary = support::TestDir::new("calibration-history");
     let output_root = temporary.path().join("packets");
-    let row_key = "minimal-13|intent-review|solution-agnostic|aggregate|intent-good";
+    let row_key = "minimal-14|intent-review|solution-agnostic|aggregate|intent-good";
     let mut prepare = Command::new("python3");
     prepare
         .current_dir(&repository)
@@ -1240,7 +1266,7 @@ fn historic_v10_v11_v12_rows_remain_unchanged_and_v13_packets_use_fresh_keys() {
         &fs::read(case_dir.join("preparation.json")).expect("preparation metadata"),
     )
     .expect("preparation JSON");
-    assert_eq!(preparation["config_version"], "minimal-13");
+    assert_eq!(preparation["config_version"], "minimal-14");
     assert_eq!(preparation["row_key"], row_key);
     for forbidden in ["expected", "observed", "attested_by", "oracle"] {
         assert!(
@@ -1250,7 +1276,7 @@ fn historic_v10_v11_v12_rows_remain_unchanged_and_v13_packets_use_fresh_keys() {
     }
     let current_row = current
         .iter()
-        .find(|entry| entry["config_version"] == "minimal-13")
+        .find(|entry| entry["config_version"] == "minimal-14")
         .and_then(|entry| {
             (entry["gate"] == "intent-review"
                 && entry["axis"] == "solution-agnostic"
@@ -1441,7 +1467,7 @@ fn counterpart_keys_have_good_fail_pairs_and_good_fixtures_pass_adversarial() {
         );
     }
     assert_eq!(
-        counterpart_keys, 386,
+        counterpart_keys, 490,
         "all three v3 profiles carry ordinary/challenge counterpart keys"
     );
 }
@@ -1512,12 +1538,12 @@ fn implementation_rows_have_total_commit_mapped_companion_coverage() {
             );
         }
     }
-    assert_eq!(implementation_rows, 192);
+    assert_eq!(implementation_rows, 240);
     assert_eq!(
         commits,
         BTreeMap::from([
-            ("repo-state-2026-08-12".to_owned(), 96usize),
-            ("repo-state-2026-08-13".to_owned(), 96usize),
+            ("repo-state-2026-08-12".to_owned(), 120usize),
+            ("repo-state-2026-08-13".to_owned(), 120usize),
         ])
     );
 }
@@ -1584,7 +1610,7 @@ fn implementation_companion_mutation_changes_digest() {
         .find(|entry| {
             entry["gate"] == "implementation-review"
                 && entry["fixture_id"] == "implementation-report-good"
-                && entry["config_version"] == "standard-13"
+                && entry["config_version"] == "standard-14"
         })
         .expect("current implementation row");
     let input = source_records_for_entry(entry.as_object().expect("manifest row object"));
@@ -1886,8 +1912,8 @@ fn validation_docs_coverage_has_exact_mapped_companion_bytes() {
         }
     }
     assert_eq!(
-        docs_rows, 64,
-        "expected v10/v11/v12 history and v13 good/defective docs rows on parent and adversarial validation gates"
+        docs_rows, 80,
+        "expected v10/v11/v12 history and v14 good/defective docs rows on parent and adversarial validation gates"
     );
 }
 
@@ -1944,8 +1970,8 @@ fn validation_intent_delivered_has_inspectable_repository_state_companion() {
         }
     }
     assert_eq!(
-        intent_delivered_rows, 64,
-        "expected v10/v11/v12 history and v13 good/defective intent-delivered rows across shipped validation gates"
+        intent_delivered_rows, 80,
+        "expected v10/v11/v12 history and v14 good/defective intent-delivered rows across shipped validation gates"
     );
 }
 
@@ -2006,8 +2032,8 @@ fn validation_requirement_proof_mapping_has_inspectable_public_proof_companions(
         }
     }
     assert_eq!(
-        rows, 64,
-        "expected v10/v11/v12 history and v13 parent/adversarial good/defective proof rows"
+        rows, 80,
+        "expected v10/v11/v12 history and v14 parent/adversarial good/defective proof rows"
     );
 }
 
@@ -2429,7 +2455,7 @@ fn canonical_source_records_have_exact_order_and_labels() {
             entry["gate"] == "validation-review"
                 && entry["axis"] == "docs-integrated"
                 && entry["expected"] == "pass"
-                && entry["config_version"] == "standard-13"
+                && entry["config_version"] == "standard-14"
         })
         .expect("docs-integrated current row");
     let entry = entry.as_object().expect("manifest row object");
@@ -2493,7 +2519,7 @@ fn every_supplied_source_record_mutation_changes_digest() {
             entry["gate"] == "validation-review"
                 && entry["axis"] == "docs-integrated"
                 && entry["expected"] == "pass"
-                && entry["config_version"] == "standard-13"
+                && entry["config_version"] == "standard-14"
         })
         .expect("docs-integrated current row");
     let entry = entry.as_object().expect("manifest row object");
@@ -2551,7 +2577,7 @@ fn explicit_applicability_checks_real_retained_returns_without_relabeling_histor
     let mut current = entries
         .iter()
         .find(|row| {
-            row["config_version"] == "minimal-13"
+            row["config_version"] == "minimal-14"
                 && row["gate"] == source["gate"]
                 && row["axis"] == source["axis"]
                 && row["fixture_id"] == source["fixture_id"]
@@ -2596,7 +2622,7 @@ fn explicit_applicability_checks_real_retained_returns_without_relabeling_histor
 }
 
 #[test]
-fn current_calibration_gate_requires_complete_attested_nonempty_v13_corpus() {
+fn current_calibration_gate_requires_complete_attested_nonempty_v14_corpus() {
     let entries = manifest();
     let mut fully_attested_fixture = entries.clone();
     for entry in fully_attested_fixture.iter_mut().filter(|entry| {
@@ -2679,4 +2705,92 @@ fn calibration_manifest_has_no_pending_rows_for_final_validation() {
     validate_current_corpus(&entries).unwrap_or_else(|error| {
         panic!("current calibration corpus is not complete and fully owner-attested: {error}")
     });
+}
+
+#[test]
+fn sufficiency_packets_supply_neutral_subjects_and_stage_specific_companions() {
+    let entries = manifest();
+    let repository = workspace_integration::repository_root();
+    let temporary = support::TestDir::new("sufficiency-calibration-packets");
+    let mut count = 0;
+    for entry in entries.iter().filter(|entry| {
+        entry["config_version"]
+            .as_str()
+            .unwrap()
+            .ends_with(CURRENT_CONFIG_SUFFIX)
+            && matches!(
+                entry["axis"].as_str(),
+                Some("intent-sufficient" | "acceptance-sufficient")
+            )
+    }) {
+        count += 1;
+        let row = entry.as_object().unwrap();
+        assert_eq!(entry["observed"], "pending");
+        assert_eq!(entry["attested_by"], "");
+        assert!(entry.get("applicability").is_none());
+        let identity = row_key(row);
+        let key = format!(
+            "{}|{}|{}|{}|{}",
+            identity.0, identity.1, identity.2, identity.3, identity.4
+        );
+        let profile = profile_name(&identity.0);
+        let output = Command::new("python3")
+            .arg(repository.join("scripts/prepare-calibration-input.py"))
+            .arg("--repository")
+            .arg(&repository)
+            .arg("--procedure")
+            .arg(data_path("calibration/PROCEDURE.md"))
+            .arg("--manifest")
+            .arg(data_path("calibration/manifest.json"))
+            .arg("--profile")
+            .arg(data_path(&format!("configs/{profile}.json")))
+            .arg("--output-root")
+            .arg(temporary.path())
+            .arg("--row-key")
+            .arg(&key)
+            .bounded_output("prepare sufficiency calibration packet")
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let packet = temporary.path().join(key);
+        let prepared: Value =
+            serde_json::from_slice(&fs::read(packet.join("preparation.json")).unwrap()).unwrap();
+        assert_eq!(prepared["input_sha256"], entry["input_sha256"]);
+        let labels: Vec<_> = prepared["source_records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|record| record["label"].as_str())
+            .filter(|label| label.starts_with("companion:"))
+            .collect();
+        let mut expected = Vec::new();
+        if identity.2 == "intent-sufficient" {
+            assert_eq!(
+                fixture_value(&identity.4)["baseline"]["commit"],
+                "repo-state-2026-08-12"
+            );
+            expected
+                .push("companion:fictional-repo/implementation-evidence/baseline-2026-08-12.txt");
+        }
+        if is_adversarial_gate(&identity.1) {
+            expected.push(if identity.2 == "intent-sufficient" {
+                "companion:fictional-repo/implementation-evidence/intent-sufficient-comparison.md"
+            } else {
+                "companion:fictional-repo/implementation-evidence/acceptance-sufficient-coverage.md"
+            });
+        }
+        assert_eq!(labels, expected);
+        let instructions = fs::read(packet.join("instructions.txt")).unwrap();
+        assert_no_reviewer_visible_leak(&instructions, "sufficiency instructions");
+        let text = std::str::from_utf8(&instructions).unwrap();
+        assert!(
+            !text.contains(&identity.4),
+            "fixture metadata leaked to reviewer"
+        );
+        assert!(text.contains("=== supplied material: canonical request JSON ==="));
+    }
+    assert_eq!(count, 24);
 }
