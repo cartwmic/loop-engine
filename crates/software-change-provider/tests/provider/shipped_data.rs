@@ -974,118 +974,38 @@ fn reviewer_protocol_defines_convergence_contract() {
 }
 
 #[test]
-fn authoritative_docs_integrate_convergence_contract_and_routes() {
-    let provider_prd = shipped_text("docs/prd.md");
-    let provider_readme = shipped_text("README.md");
-    let engine_prd = shipped_text("../../docs/PRD.md");
-    let skill = shipped_text("skills/using-software-change-provider/SKILL.md");
-    let linked_guidance = format!("{skill}\n{}", shipped_text("data/reviewer-protocol.md"));
-    // The README routes readers to procedure instead of duplicating it.
-    for link in [
-        "](skills/using-software-change-provider/SKILL.md#per-gate-loop)",
-        "](skills/using-software-change-provider/SKILL.md#proportional-late-finding-guide)",
-        "](data/reviewer-protocol.md)",
+fn authoritative_docs_integrate_external_driver_contract() {
+    for path in [
+        "README.md",
+        "AGENTS.md",
+        "skills/using-software-change-provider/SKILL.md",
     ] {
-        assert!(
-            provider_readme.contains(link),
-            "README missing route: {link}"
-        );
-    }
-    for (name, text) in [
-        ("provider PRD", provider_prd.as_str()),
-        ("README-linked guidance", linked_guidance.as_str()),
-        ("engine PRD", engine_prd.as_str()),
-    ] {
-        let normalized = text.to_ascii_lowercase().replace("**", "");
+        let text = shipped_text(path);
         for clause in [
-            "revise-intent",
-            "revise-design",
-            "revise-plan",
-            "focused independent reconsideration",
-            "validation gap",
-            "previously overlooked",
-            "validation-report-local",
-            "retry the next checked hop",
-            "revise-implementation",
-            "quiet, progress, and thrash",
-            "intent-draft",
-            "validation-draft",
+            "never executes agents, advisors or proof commands",
+            "review-candidates",
+            "prepare-validation",
+            "advice-answer",
+            "Preserve review groups",
+            "Declare evidence applicability explicitly",
+            "check ordinary review clearance before challenge review",
         ] {
             assert!(
-                normalized.contains(clause),
-                "{name} missing convergence clause: {clause}"
+                text.contains(clause),
+                "{path} missing external-driver contract: {clause}"
             );
         }
-    }
-    for (name, text) in [
-        ("provider README", provider_readme.as_str()),
-        ("engine PRD", engine_prd.as_str()),
-    ] {
-        for forbidden in ["three-round", "circuit breaker", "verdict cap"] {
+        for retired in [
+            "loop-engine invoke",
+            "loop-engine fan-out",
+            "work_slot_bindings",
+        ] {
             assert!(
-                !text.to_ascii_lowercase().contains(forbidden),
-                "{name} retained breaker-as-verdict language: {forbidden}"
+                !text.contains(retired),
+                "{path} retained executor contract: {retired}"
             );
         }
     }
-    let agents = shipped_text("AGENTS.md");
-    assert!(
-        !agents.contains(
-            "explore → design → design-review → plan → plan-review → implement → implementation-review → validation → end"
-        ),
-        "AGENTS.md retained the retired nine-state topology"
-    );
-    let agents_lower = agents.to_ascii_lowercase();
-    for clause in [
-        "fifteen slots",
-        "sixteen states",
-        "preserve each older run's original runtime",
-        "candidate source does not grant migration",
-        "reviewers return judgments and consume retained proof",
-        "complete calibration when its procedure applies",
-    ] {
-        assert!(
-            agents_lower.contains(clause),
-            "AGENTS.md missing required graph or scope clause: {clause}"
-        );
-    }
-    assert!(agents.contains(
-        "](skills/using-software-change-provider/SKILL.md#work-slot-policy-confirm-before-start)"
-    ));
-    let work_slot_policy = skill
-        .split_once("## Work-slot policy (confirm before start)\n")
-        .expect("AGENTS-linked work-slot policy heading must exist")
-        .1
-        .split("\n## ")
-        .next()
-        .expect("linked work-slot policy section");
-    for slot in [
-        "`intent-draft`",
-        "`intent-review`",
-        "`validation-draft`",
-        "`validation-review`",
-    ] {
-        assert!(
-            work_slot_policy.contains(slot),
-            "AGENTS-linked work-slot policy missing required slot literal: {slot}"
-        );
-    }
-    // AGENTS routes drivers to the owning procedure instead of duplicating it.
-    assert!(agents.contains(
-        "](skills/using-software-change-provider/SKILL.md#proportional-late-finding-guide)"
-    ));
-    let late_finding_guide = skill
-        .split_once("## Proportional late-finding guide\n")
-        .expect("linked late-finding heading must exist")
-        .1
-        .split("\n## ")
-        .next()
-        .expect("late-finding section");
-    assert!(late_finding_guide.contains("revise-implementation"));
-    assert!(agents.contains("](data/reviewer-protocol.md)"));
-    assert!(shipped_text("data/reviewer-protocol.md")
-        .to_ascii_lowercase()
-        .contains("quiet, progress, and thrash"));
 }
 
 #[test]
@@ -1181,9 +1101,11 @@ fn review_worker_preamble_carries_yagni_bar_and_confirmation_stdin_rule() {
 #[test]
 fn setup_replaces_the_inline_skill_constructor() {
     let skill = shipped_text("skills/using-software-change-provider/SKILL.md");
-    assert!(skill.contains("software-change setup"));
-    assert!(skill.contains("--max-active 2"));
-    assert!(skill.contains("--max-active 1"));
+    assert!(skill.contains("`setup` edits policy only"));
+    assert!(skill.contains("--set"));
+    assert!(skill.contains("--add-axis"));
+    assert!(skill.contains("--remove-axis"));
+    assert!(skill.contains("Tools prepare or evaluate data, not external execution"));
     assert!(!skill.contains("--slurpfile roster \"$ROSTER\""));
     assert!(!skill.contains("SEPARATE_AXES_REASON"));
 }

@@ -28,6 +28,7 @@ fn recovery_dispatch_unknown_scenario_fails_before_work() {
         .output()
         .expect("run public Python journey selector");
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("unknown recovery scenario"));
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("unrecognized arguments: --scenario unknown-scenario"));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("passed"));
 }
