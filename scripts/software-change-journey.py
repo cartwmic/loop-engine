@@ -62,6 +62,11 @@ def run(args, profile_source, root, *, configure=None, exercise=None):
     implementation = json.loads((artifacts / 'implementation-report.json').read_text())
     implementation['validation'] = [{'proof':'External helper-test is required before normal completion.'}]
     (artifacts / 'implementation-report.json').write_text(json.dumps(implementation))
+    intent_path = artifacts / 'intent.json'
+    intent = json.loads(intent_path.read_text())
+    intent['baseline'] = {'kind':'git','repository_scope':'primary',
+                          'commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=repository,text=True).strip()}
+    intent_path.write_text(json.dumps(intent))
     if configure:
         configure(profile, repository, artifacts)
     selected.write_text(json.dumps(profile))
@@ -125,6 +130,16 @@ def run(args, profile_source, root, *, configure=None, exercise=None):
                     for candidate in intake['records']:
                         appended = call('append',run_id,'review-evidence',json.dumps(candidate['data']))
                         assert appended['result']['context']['data'] == candidate['data'], appended
+            if state == 'intent-review' and any(p['id'] == 'intent-sufficient' for p in profile['review_policies'][state]):
+                cold = [r for r in show()['result']['context'] if r['kind'] == 'review-evidence'
+                        and r['data'].get('gate') == state and r['data'].get('policy_id') == 'intent-sufficient'
+                        and r['data'].get('subject_revision') == revision]
+                call('append',run_id,'intent-comparison',json.dumps({
+                    'subject_revision':revision,'baseline':json.loads((artifacts / subject).read_text())['baseline'],
+                    'reconstruction_ids':[r['id'] for r in cold],
+                    'actor':{'name':'fixture-owner','kind':'human'},'authority':'owner',
+                    'dispositions':[{'reconstruction_id':r['id'],'alternative':'Scripted fixture reconstruction; no material alternative supplied.',
+                                     'disposition':'implementation-freedom','note':'Scripted mechanical comparison only, not semantic judgment.'} for r in cold]}))
             ledger = {'schema_version':'1','gate':state,'subject':subject,'subject_revision':revision,
                       'author':{'name':'external-driver','kind':'agent'},'findings':[]}
             call('append',run_id,'finding-ledger',json.dumps(ledger))

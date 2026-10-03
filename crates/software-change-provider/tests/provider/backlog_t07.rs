@@ -134,6 +134,16 @@ fn create_run(label: &str, axis: &str, required_authors: u64) -> RunFixture {
         "commit",
     );
 
+    let mut intent: Value =
+        serde_json::from_slice(&fs::read(artifacts.join("intent.json")).unwrap()).unwrap();
+    let head = Command::new("git")
+        .current_dir(&repository)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    intent["baseline"] = json!({"kind":"git","repository_scope":"primary","commit":String::from_utf8(head.stdout).unwrap().trim()});
+    write_json(&artifacts.join("intent.json"), &intent);
+
     let mut profile: Value = serde_json::from_str(
         &fs::read_to_string(
             workspace_integration::package_root("software-change-provider")
@@ -760,15 +770,25 @@ fn external_intake_early_commission_and_ordinary_first_public_path() {
         }
         prepare(&run, &["review-candidates"], &input)
     };
-    let direct = intake(
+    let self_review = intake(
         "intent-review",
         intent["author"].clone(),
+        json!({"text":"cold reconstruction"}),
+        true,
+    );
+    assert!(self_review["records"].as_array().unwrap().is_empty());
+    assert!(self_review["items"][0]["diagnostics"]
+        .to_string()
+        .contains("cannot be self-review"));
+    let direct = intake(
+        "intent-review",
+        json!({"name":"unbriefed-reader","kind":"agent"}),
         json!({"text":"reconstruct the final state"}),
         true,
     );
     assert_eq!(
         direct["records"][0]["data"]["external_review"]["direct"],
-        true
+        false
     );
     assert_eq!(direct["records"].as_array().unwrap().len(), 1);
     assert!(direct["items"][1]["candidate"].is_null());
@@ -832,6 +852,17 @@ fn external_intake_early_commission_and_ordinary_first_public_path() {
             intent["revision"].as_str().unwrap(),
         ),
         "ordinary ledger",
+    );
+    append(
+        &run,
+        "intent-comparison",
+        "owner-comparison",
+        json!({
+            "subject_revision":intent["revision"],"baseline":intent["baseline"],"reconstruction_ids":["early-direct"],
+            "actor":{"name":"fixture-owner","kind":"human"},"authority":"owner",
+            "dispositions":[{"reconstruction_id":"early-direct","alternative":"Fixture implementation freedom","disposition":"implementation-freedom","note":"Mechanics-only comparison."}]
+        }),
+        "compare cold return",
     );
     assert_eq!(
         event(&run, "intent-ready", "enter ordinary")["status"],
@@ -939,7 +970,7 @@ fn singleton_challenge_clears_independently_of_open_broad_group() {
         axis("intent-sufficient", "intent-review.intent-sufficient"),
         axis("broad", "intent-review.aggregate")
     ]);
-    let evidence = |gate: &str, id: &str, group: &str, result: &str, findings: &str| json!({"gate":gate,"policy_id":id,"review_stage":"aggregate","group":group,"result":result,"findings":findings,"author":{"name":"reviewer","kind":"agent"},"subject":"intent.json","subject_revision":intent["revision"],"config_version":run.config_version,"review_contract_version":3,"grounds":{"reason":"inspected current intent","evidence":[{"locator":"intent.json#/revision"}]}});
+    let evidence = |gate: &str, id: &str, group: &str, result: &str, findings: &str| json!({"gate":gate,"policy_id":id,"review_stage":"aggregate","group":group,"result":result,"findings":findings,"author":{"name":"reviewer","kind":"agent"},"subject":"intent.json","subject_revision":intent["revision"],"config_version":run.config_version,"baseline":intent["baseline"],"review_contract_version":3,"grounds":{"reason":"inspected current intent","evidence":[{"locator":"intent.json#/revision"}]}});
     let record = |id: &str, kind: &str, data: Value, seq: u64| json!({"id":id,"kind":kind,"data":data,"sequence":seq,"created_at":seq});
     let mut ordinary_ledger = ledger(
         "intent-review",
@@ -962,6 +993,14 @@ fn singleton_challenge_clears_independently_of_open_broad_group() {
             &json!({"operation":"describe","initial_input":profile}),
         );
         let context = json!([
+            record(
+                "owner-comparison",
+                "intent-comparison",
+                json!({"subject_revision":intent["revision"],"baseline":intent["baseline"],
+                "reconstruction_ids":["singleton-pass"],"actor":{"name":"fixture-owner","kind":"human"},"authority":"owner",
+                "dispositions":[{"reconstruction_id":"singleton-pass","alternative":"Fixture freedom","disposition":"implementation-freedom","note":"Mechanics only."}]}),
+                6
+            ),
             record(
                 "singleton-pass",
                 "review-evidence",

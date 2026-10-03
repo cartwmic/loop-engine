@@ -34,7 +34,8 @@ fn standard_run_progresses_schema_deny_then_evidence_deny_then_allow() {
     assert_eq!(schema_issue.code, "software-change-schema-invalid");
     assert_eq!(engine.current_state("a1").as_str(), "explore");
 
-    let intent = load_fixture("intent-good.json");
+    let mut intent = load_fixture("intent-good.json");
+    intent["baseline"] = json!({"kind":"git","repository_scope":"primary","commit":"0123456789012345678901234567890123456789"});
     artifacts.write_json("intent.json", &intent);
     let ready = engine.event("a1", "intent-ready");
     assert!(
@@ -109,6 +110,7 @@ fn standard_run_progresses_schema_deny_then_evidence_deny_then_allow() {
         json!([]),
     );
 
+    engine.append_intent_comparison("a1");
     let allowed = engine.event("a1", "approved");
     assert!(matches!(allowed, OperationOutcome::Completed(_)));
     assert_eq!(

@@ -194,7 +194,6 @@ pub(crate) fn rows_for_stage_with_options<'a>(
 /// Validate one structurally valid reuse row independently. Callers retain
 /// fresh siblings when this reference is invalid; the row itself contributes
 /// no judgment or carry until this check succeeds.
-#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn validate_reuse_row(
     row: &Value,

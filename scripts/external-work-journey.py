@@ -93,7 +93,7 @@ def retirement(args, root):
     print('external-work retirement passed')
 
 
-# bookends:LE-168 bookends:LE-170 bookends:LE-172 bookends:LE-174 bookends:LE-177 bookends:LE-178 bookends:LE-182 — grouped external returns, typed external advice closure, early commissions/evidence, explicit counts and ordinary-first challenges.
+# bookends:LE-168 bookends:LE-170 bookends:LE-172 bookends:LE-177 bookends:LE-178 bookends:LE-182 — grouped external returns, typed external advice closure, early commissions/evidence, explicit counts and ordinary-first challenges.
 def intake_counts_advice(args, root):
     software = software_module()
     state = {'early':False,'post':False,'answered':False}
@@ -588,7 +588,7 @@ def paired_and_command_proof(args, root):
 
 
 # bookends:LE-171 — retained suite and whole-goal judgments remain applicable after affected lint checks.
-# bookends:LE-107 bookends:LE-150 bookends:LE-154 — explicit affected checks preserve applicable original siblings, authors and command results without ceremonial suite replay.
+# bookends:LE-107 — explicit affected checks preserve applicable original siblings, authors and command results without ceremonial suite replay.
 def lint_only_reuse(args, root):
     state = {'reused':False}
     # Match a11.rs::parse_retained_return: recognize review returns, then exclude duplicates.
@@ -746,6 +746,212 @@ if __name__ == '__main__':
             assert terminal['lifecycle'] == 'final' and not terminal['has_overrides'], terminal
             print('external-work lint-only applicability normal completion passed')
             return True
+    return software_module().run(SimpleNamespace(engine=args.engine,provider=args.software,data_root=str(ROOT),mode='source'),
+                                 ROOT / 'crates/software-change-provider/data/configs/high-rigor.json',root,
+                                 configure=configure,exercise=hook)
+
+
+# bookends:LE-154 — invalid confirmation reuse is row-local; a fresh sibling survives and the corrected carry completes the gate.
+def invalid_reuse_fresh_sibling(args, root):
+    state = {'done':False}
+    def configure(profile, repository, artifacts):
+        axes = copy.deepcopy([p for p in profile['review_policies']['intent-review'] if p['review_stage'] == 'aggregate'][:2])
+        assert len(axes) == 2
+        for gate in profile['review_policies']:
+            profile['review_policies'][gate] = []
+        for axis in axes:
+            axis.update(group='confirmation-pair',required_authors=1,self_review=True)
+        profile['review_policies']['intent-review'] = axes
+    def hook(phase, ctx):
+        if phase != 'intent-review' or state['done']:
+            return
+        state['done'] = True
+        axes = ctx['profile']['review_policies'][phase]
+        revision = json.loads((ctx['artifacts'] / 'intent.json').read_text())['revision']
+        assignment = {'gate':phase,'stage':'aggregate','group':'confirmation-pair',
+                      'author':{'name':'confirmation-author','kind':'agent'},
+                      'subject':'intent.json','subject_revision':revision}
+        def intake(rows):
+            return provider(ctx,['review-candidates'],{'show':ctx['show'](),'assignment':assignment,
+                'request':{'text':'Confirm applicable prior intent judgment and independently inspect its sibling.'},
+                'original':{'text':json.dumps({'assessment_id':'confirmation-assessment','judgments':rows})}})
+        def fresh(axis):
+            return {'axis':axis,'result':'pass','findings':'','grounds':{
+                'reason':'Inspected the current intent acceptance and operating boundary.',
+                'evidence':[{'locator':'intent.json#/acceptance'}]}}
+        historical_assignment = dict(assignment,subject_revision='prior-intent')
+        original = provider(ctx,['review-candidates'],{'show':ctx['show'](),'assignment':historical_assignment,
+            'request':{'text':'Inspect the original intent before confirmation.'},
+            'original':{'text':json.dumps({'assessment_id':'confirmation-assessment','judgments':[fresh(axes[0]['id'])]})}})['records'][0]
+        # The exact attributed original remains stale until explicitly mapped.
+        append(ctx,'review-evidence',original['data'],'prior-confirmation')
+        carry = {'origin':{'kind':'context-record','id':'prior-confirmation'},
+                 'target':{'subject':'intent.json','revision':revision,'checkpoint':None},
+                 'attesting_driver':{'name':'confirmation-driver','kind':'agent'},
+                 'reason':'The complete original intent axis scope is unchanged; current acceptance and operating context were inspected.'}
+        negative_show = ctx['show']()
+        rows = [{'axis':axes[0]['id'],'reuse':'wrong-origin'},fresh(axes[1]['id'])]
+        packet = {'show':negative_show,'assignment':assignment,'request':{'text':'Confirm both axes.'},
+                  'original':{'text':json.dumps({'assessment_id':'confirmation-assessment','judgments':rows})}}
+        admitted = provider(ctx,['review-candidates'],packet)
+        assert len(admitted['records']) == 1 and admitted['records'][0]['data']['axis'] == axes[1]['id'], admitted
+        assert admitted['items'][0]['candidate'] is None, admitted
+        assert 'wrong-origin' in json.dumps(admitted['items'][0]['diagnostics']), admitted
+        for candidate in admitted['records']:
+            append(ctx,candidate['kind'],candidate['data'],'fresh-confirmation-sibling')
+        ledger(ctx,phase,'intent.json',revision)
+        denied = evaluate(ctx,phase,'approved','design')
+        assert denied['result'] == 'deny', denied
+        assert axes[0]['id'] in json.dumps(denied), denied
+        sibling_diagnostics = next(d for d in denied['feedback']['details']['diagnostics'] if d['axis'] == axes[1]['id'])
+        assert all(d['category'] == 'independence' for d in sibling_diagnostics['diagnostics']), denied
+        append(ctx,'evidence-applicability',carry,'valid-confirmation')
+        fixed = intake([{'axis':axes[0]['id'],'reuse':'valid-confirmation'}])
+        assert len(fixed['records']) == 1 and fixed['records'][0]['kind'] == 'evidence-applicability', fixed
+        assert fixed['records'][0]['reuse_record_id'] == 'valid-confirmation', fixed
+        assert fixed['records'][0]['data'] == carry, fixed
+        for candidate in fixed['records']:
+            append(ctx,candidate['kind'],candidate['data'])
+        ctx['event']('approved')
+        retained = ctx['show']()['result']['context']
+        assert next(r for r in retained if r['id'] == 'fresh-confirmation-sibling')['data'] == admitted['records'][0]['data']
+        return True
+    return software_module().run(SimpleNamespace(engine=args.engine,provider=args.software,data_root=str(ROOT),mode='source'),
+                                 ROOT / 'crates/software-change-provider/data/configs/high-rigor.json',root,
+                                 configure=configure,exercise=hook)
+
+
+# bookends:LE-150 — real plan rename/split maps original fulfilled obligations explicitly; an unmapped obligation denies until freshly fulfilled.
+def reshaped_plan_applicability(args, root):
+    state = {'reshaped':False}
+    def configure(profile, repository, artifacts):
+        for gate in profile['review_policies']:
+            profile['review_policies'][gate] = []
+        # Keep a review state available for the plan-owned re-entry.
+        axis = json.loads((ROOT / 'crates/software-change-provider/data/configs/high-rigor.json').read_text())['review_policies']['validation-review']
+        profile['review_policies']['validation-review'] = [copy.deepcopy(next(p for p in axis if p['review_stage'] == 'aggregate'))]
+        profile['review_policies']['validation-review'][0]['required_authors'] = 1
+    def hook(phase, ctx):
+        if phase == 'validation-review' and not state['reshaped']:
+            state['reshaped'] = True
+            state['originals'] = copy.deepcopy(ctx['show']()['result']['context'])
+            state['report'] = json.loads((ctx['artifacts'] / 'validation-report.json').read_text())
+            plan_path = ctx['artifacts'] / 'plan.json'
+            plan = json.loads(plan_path.read_text())
+            state['prior_plan'] = copy.deepcopy(plan)
+            ctx['event']('revise-plan')
+            first = plan['tasks'][0]
+            old_id = first['id']
+            first['id'] = 'renamed-contract'
+            split = copy.deepcopy(first)
+            split.update(id='split-contract-proof',dependencies=['renamed-contract'])
+            split['objective'] = 'Independently confirm the original contract proof after plan reshaping.'
+            plan['tasks'].append(split)
+            for task in plan['tasks']:
+                task['dependencies'] = ['renamed-contract' if d == old_id else d for d in task['dependencies']]
+            plan['revision'] = 'reshaped-plan-v2'
+            plan_path.write_text(json.dumps(plan))
+            implementation_path = ctx['artifacts'] / 'implementation-report.json'
+            implementation = json.loads(implementation_path.read_text())
+            implementation.update(revision='reshaped-implementation-v2',plan_revision=plan['revision'])
+            implementation['summary'] += ' Original contract effects now satisfy renamed-contract and split-contract-proof; remaining task dependencies are preserved.'
+            implementation_path.write_text(json.dumps(implementation))
+            state['mapping'] = [
+                {'original_task':task['id'],
+                 'revised_tasks':['renamed-contract','split-contract-proof'] if task['id'] == old_id else [task['id']],
+                 'criterion_ids':task['criterion_ids']}
+                for task in state['prior_plan']['tasks']
+            ]
+            return True
+        if phase == 'validation' and state['reshaped']:
+            results = []
+            plan = json.loads((ctx['artifacts'] / 'plan.json').read_text())
+            for spec in plan['proof_commands']:
+                identity = provider(ctx,['source-identity','--working-directory',str(ctx['repository'])],{})
+                outcome = raw([spec['command'],*spec['args']],cwd=ctx['repository'])
+                assert outcome.returncode == 0, outcome.stderr
+                results.append({'id':spec['id'],'command':spec['command'],'args':spec['args'],
+                    'cwd':str(ctx['repository']),'exit_code':outcome.returncode,'stdout':outcome.stdout,'stderr':outcome.stderr,
+                    'producer':{'name':'reshape-proof-driver','kind':'script'},'source':identity})
+            prepared = provider(ctx,['prepare-validation'],{'show':ctx['show'](),'working_directory':str(ctx['repository']),
+                'revision':'reshaped-validation-v2','author':{'name':'reshape-proof-owner','kind':'script'},'command_results':results})
+            report = prepared['report_draft']
+            (ctx['artifacts'] / 'validation-report.json').write_text(json.dumps(report))
+            ctx['checkpoint']('validation')
+            for candidate in prepared['command_candidates']:
+                append(ctx,candidate['kind'],candidate['data'],candidate['record_id'])
+            for index, batch in enumerate(prepared['judgment_batches']):
+                verdict = {'subject':'validation-report.json','subject_revision':report['revision'],
+                    'checkpoint':'validation-checkpoint.json','author':{'name':f'reshape-independent-{index}','kind':'agent'},
+                    'result':'pass','findings':[],'reason':'Fresh inspection of current helper command result.',
+                    'evidence_context_ids':report['command_evidence_ids']}
+                if batch['kind'] == 'criterion-verdict':
+                    verdict['criterion_id'] = batch['criterion_id']
+                append(ctx,batch['kind'],verdict,batch['record_id'])
+            hook('validation-prepared',dict(ctx,report=report))
+            ctx['event']('validation-ready')
+            return True
+        if phase == 'validation-prepared' and state['reshaped']:
+            report = ctx['report']
+            report['revision'] = 'reshaped-validation-v2'
+            current = copy.deepcopy(ctx['show']()['result']['context'])
+            pending = report['criteria'][-1]
+            fresh_ids = pending['verdict_ids'][:]
+            for criterion in report['criteria'][:-1]:
+                original_ids = next(c for c in state['report']['criteria'] if c['criterion_id'] == criterion['criterion_id'])['verdict_ids']
+                mapped_ids = []
+                for original_id in original_ids:
+                    carry_id = 'reshaped-'+original_id
+                    reason = ('Explicit task mapping ' + json.dumps(state['mapping']) +
+                              ': inspected actual helper(7)==7 effect, current tree, preserved dependencies and fresh helper-test proof; original ' +
+                              criterion['criterion_id'] + ' judgment scope and meaning are unchanged. No standing is inferred from names or file equality.')
+                    append(ctx,'evidence-applicability',{'origin':{'kind':'context-record','id':original_id},
+                        'target':{'subject':'validation-report.json','subject_revision':report['revision'],
+                                  'checkpoint':{'phase':'validation','report_revision':report['revision']}},
+                        'attesting_driver':{'name':'plan-reshape-driver','kind':'agent'},'reason':reason},carry_id)
+                    mapped_ids.append(carry_id)
+                criterion['verdict_ids'] = mapped_ids
+            pending['verdict_ids'] = ['unmapped-plan-obligation']
+            # Whole-goal judgment is freshly supplied on the post-reshape tree.
+            for source_id in report['goal_verdict_ids']:
+                original = next(r for r in current if r['id'] == source_id)
+                data = copy.deepcopy(original['data'])
+                data['subject_revision'] = report['revision']
+                append(ctx,'goal-verdict',data,'reshaped-'+source_id)
+            report['goal_verdict_ids'] = ['reshaped-'+i for i in report['goal_verdict_ids']]
+            (ctx['artifacts'] / 'validation-report.json').write_text(json.dumps(report))
+            ctx['checkpoint']('validation')
+            ledger(ctx,'validation-review','validation-report.json',report['revision'])
+            policy = ctx['profile']['review_policies']['validation-review'][0]
+            packet = {'show':ctx['show'](),'assignment':{'gate':'validation-review','stage':'aggregate','group':policy['group'],
+                'author':{'name':'reshape-reviewer','kind':'agent'},'subject':'validation-report.json','subject_revision':report['revision']},
+                'request':{'text':'Inspect the revised task mapping and current proof.'},
+                'original':{'text':json.dumps({'judgments':[{'axis':policy['id'],'result':'pass','findings':'',
+                    'grounds':{'reason':'Inspected explicit original-to-revised task scopes and the fresh helper proof.',
+                              'evidence':[{'locator':'plan.json#/tasks'},{'locator':'validation-report.json#/criteria'}]}}]})}}
+            for candidate in provider(ctx,['review-candidates'],packet)['records']:
+                append(ctx,candidate['kind'],candidate['data'])
+            denied = evaluate(ctx,'validation-review','passed','end')
+            assert denied['result'] == 'deny' and 'unmapped-plan-obligation' in json.dumps(denied), denied
+            fulfilled_ids = []
+            for fresh_id in fresh_ids:
+                fresh = next(r for r in current if r['id'] == fresh_id)
+                data = copy.deepcopy(fresh['data'])
+                data['subject_revision'] = report['revision']
+                data['reason'] = 'Fresh independent inspection of the unmapped obligation and current helper-test result after plan reshaping.'
+                append(ctx,'criterion-verdict',data,'fresh-reshaped-'+fresh_id)
+                fulfilled_ids.append('fresh-reshaped-'+fresh_id)
+            pending['verdict_ids'] = fulfilled_ids
+            (ctx['artifacts'] / 'validation-report.json').write_text(json.dumps(report))
+            ctx['checkpoint']('validation')
+            allowed = evaluate(ctx,'validation-review','passed','end')
+            assert allowed['result'] == 'allow', allowed
+            retained = ctx['show']()['result']['context']
+            for criterion in report['criteria'][:-1]:
+                mapping = next(r for r in retained if r['id'] == criterion['verdict_ids'][0])
+                assert json.dumps(state['mapping']) in mapping['data']['reason'], mapping
+                origin = next(r for r in state['originals'] if r['id'] == mapping['data']['origin']['id'])
+                assert next(r for r in retained if r['id'] == origin['id']) == origin
     return software_module().run(SimpleNamespace(engine=args.engine,provider=args.software,data_root=str(ROOT),mode='source'),
                                  ROOT / 'crates/software-change-provider/data/configs/high-rigor.json',root,
                                  configure=configure,exercise=hook)
@@ -1142,7 +1348,7 @@ def profile_preparation(args, root):
         assert 'cancel-invocation' not in implement['instructions']
         plan = next(state for state in workflow['states'] if state['id'] == 'plan')
         assert 'group and execute work freely' in plan['instructions']
-        # bookends:LE-141 bookends:LE-144 bookends:LE-173 bookends:LE-175 — each shipped ordinary/challenge profile retains distinct externally judged granularity, comprehension, final-state and promised-outcome questions, not mechanical proxies.
+        # bookends:LE-141 bookends:LE-144 bookends:LE-175 — each shipped ordinary/challenge profile retains distinct externally judged granularity, comprehension, final-state and promised-outcome questions, not mechanical proxies.
         for gate in ['intent-review','intent-adversarial-review']:
             axes = {a['id']:a for a in profile['review_policies'][gate]}
             assert {'acceptance-granularity','owner-comprehensible','intent-sufficient','acceptance-sufficient'} <= axes.keys(), axes
@@ -1241,7 +1447,7 @@ def findings_and_steering(args, root):
         if phase == 'explore':
             baseline = (ctx['artifacts'] / 'intent.json').read_text()
             revision = json.loads(baseline)['revision']
-            # bookends:LE-156 — the actual prior intent bytes and digest remain alongside driver instructions, not a paraphrased owner approval.
+            # The actual prior intent bytes and digest remain alongside driver instructions.
             append(ctx,'user-steering',{'target':{'kind':'slots','ids':['design-draft']},
                    'instruction':'Include the externally requested design marker: owner-directed-observation.',
                    'intent_baseline':{'revision':revision,'locator':str(ctx['artifacts'] / 'intent.json'),
@@ -1519,6 +1725,111 @@ def bookends_outcome_spine(args, root):
                                  ROOT / 'crates/software-change-provider/data/configs/minimal.json',root,configure=configure,exercise=hook)
 
 
+# bookends:LE-174 — real early briefs expose partial parent claims and missing provider inputs without changing state or evidence.
+def early_review_briefs(args, root):
+    from external_work_driver import engine_call, declare_target_authorship
+    def durable(show):
+        result = copy.deepcopy(show['result'])
+        # Read timestamps are observation metadata, not workflow state or evidence.
+        def strip(value):
+            if isinstance(value, dict):
+                value.pop('observed_at', None)
+                value.pop('sampled_at_ms', None)
+                for child in value.values():
+                    strip(child)
+            elif isinstance(value, list):
+                for child in value:
+                    strip(child)
+        strip(result)
+        return result
+    def configure(profile, repository, artifacts):
+        axes = copy.deepcopy([p for p in profile['review_policies']['intent-review'] if p['review_stage'] == 'aggregate'][:2])
+        for gate in profile['review_policies']:
+            profile['review_policies'][gate] = []
+        for gate in ['intent-review', 'intent-adversarial-review']:
+            profile['review_policies'][gate] = copy.deepcopy(axes)
+            for axis in profile['review_policies'][gate]:
+                axis.update(group=gate+'.aggregate', required_authors=1)
+    def hook(phase, ctx):
+        if phase != 'explore':
+            return
+        subject = json.loads((ctx['artifacts'] / 'intent.json').read_text())
+        axes = ctx['profile']['review_policies']['intent-review']
+        reason = 'The supplied intent names the observable outcome and acceptance observations.'
+        packet = {'show':ctx['show'](), 'assignment':{'gate':'intent-review','stage':'aggregate',
+                  'group':axes[0]['group'],'author':{'name':'early-parent','kind':'agent'},
+                  'subject':'intent.json','subject_revision':subject['revision']},
+                  'request':{'text':'Review the supplied intent axes.'},'original':{'text':json.dumps({'judgments':[
+                  {'axis':a['id'],'result':'pass','findings':'','grounds':{'reason':reason,
+                   'evidence':[{'locator':'intent.json#/acceptance'}]}} for a in axes]})}}
+        candidates = provider(ctx,['review-candidates'],packet)['records']
+        first = next(c for c in candidates if c['data']['axis'] == axes[0]['id'])
+        append(ctx,first['kind'],first['data'])
+        before = ctx['show']()
+        assert before['result']['current_state'] == 'explore'
+        brief = provider(ctx,['commission','--slot','intent-adversarial-review','--stage','aggregate'],before)
+        assert any(axes[1]['id'] in missing for missing in brief['missing_inputs']), brief
+        assert not any('claim `'+axes[0]['id']+'`' in missing for missing in brief['missing_inputs']), brief
+        assert any(row['data'] == first['data'] for row in brief['context']), brief
+        assert reason in json.dumps(brief), brief
+        assert durable(ctx['show']()) == durable(before), 'Early software preparation mutated the run.'
+    software_module().run(SimpleNamespace(engine=args.engine,provider=args.software,data_root=str(ROOT),mode='source'),
+                          ROOT / 'crates/software-change-provider/data/configs/minimal.json',root,
+                          configure=configure,exercise=hook)
+    for kind, binary in [('policy-document',args.policy),('research',args.research)]:
+        work = root / ('early-'+kind)
+        work.mkdir()
+        artifacts = work / 'artifacts'
+        artifacts.mkdir()
+        if kind == 'policy-document':
+            spec = importlib.util.spec_from_file_location('early_policy_fixture', ROOT / 'scripts/policy-document-journey.py')
+            fixture = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(fixture)
+            profile = json.loads((ROOT / 'crates/policy-document-provider/data/readme.json').read_text())
+            target = work / 'README.md'
+            target.write_text(fixture.document())
+            profile.update(mode='audit')
+            profile['target']['path'] = str(target)
+            command = ['commission',json.dumps(profile)]
+            review_state = 'semantic-review'
+        else:
+            spec = importlib.util.spec_from_file_location('early_research_fixture', ROOT / 'scripts/research-journey.py')
+            fixture = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(fixture)
+            profile = json.loads((ROOT / 'crates/research-provider/data/configs/standard.json').read_text())
+            for name, make in [('brief.json',fixture.brief),('sources.json',fixture.sources),
+                               ('verification.json',fixture.verification),('report.json',fixture.report)]:
+                (artifacts / name).write_text(json.dumps(make()))
+            target = artifacts / 'verification.json'
+            command = ['commission','verify']
+            review_state = 'verify'
+        profile['artifact_root'] = str(artifacts)
+        selected = work / 'profile.json'
+        selected.write_text(json.dumps(profile))
+        config = work / 'providers.toml'
+        config.write_text(f'[providers.{kind}]\ncommand = {json.dumps(binary)}\nargs = []\n')
+        def call(*argv):
+            return engine_call(args.engine,work / 'run.sqlite',config,list(argv))
+        run_id = 'early-'+kind
+        call('start','--id',run_id,kind,'@'+str(selected),'Early preparation public proof')
+        if kind == 'policy-document':
+            declare_target_authorship(Path(args.engine),work / 'run.sqlite',config,run_id,target,
+                                      {'name':'owner','kind':'human'},'early-target-author')
+        before = call('show','--view','full',run_id)
+        assert before['result']['current_state'] != review_state, before
+        complete = process([binary,*command],before)
+        assert complete['missing_inputs'] == [], complete
+        assert durable(call('show','--view','full',run_id)) == durable(before)
+        saved = target.read_bytes()
+        target.unlink()
+        missing = process([binary,*command],before)
+        assert any(row['input'] == ('target' if kind == 'policy-document' else 'verification.json')
+                   for row in missing['missing_inputs']), missing
+        assert durable(call('show','--view','full',run_id)) == durable(before)
+        target.write_bytes(saved)
+    print('external-work early review briefs and partial-parent public proof passed')
+
+
 def self_test():
     import ast
     for filename in ['external-work-journey.py','external_work_driver.py','software-change-journey.py',
@@ -1537,6 +1848,122 @@ def self_test():
     assert 'invoke' in RETIRED_ENGINE and 'run-validation' in RETIRED_PROVIDER
     assert software_module().SUBJECTS['plan.json'] == 'plan-good.json'
     print('external-work journey self-test passed')
+
+
+
+def qualified_intent_revision(args, root):
+    def configure(profile, repository, artifacts):
+        axis = copy.deepcopy(profile['review_policies']['intent-review'][0])
+        axis['required_authors'] = 1
+        for gate in profile['review_policies']:
+            profile['review_policies'][gate] = []
+        profile['review_policies']['intent-review'] = [axis]
+    def hook(phase, ctx):
+        if phase != 'explore':
+            return
+        path = ctx['artifacts'] / 'intent.json'
+        baseline = path.read_text()
+        prior = json.loads(baseline)
+        append(ctx,'review-evidence',{'gate':'intent-review','subject':'intent.json',
+               'subject_revision':prior['revision'],'author':{'name':'prior-reviewer','kind':'agent'}},'prior-intent-review')
+        revised = copy.deepcopy(prior)
+        revised['revision'] = prior['revision'] + '-qualified'
+        revised['outcome'] += ' Preserve status inspection during ordinary delivery outages.'
+        path.write_text(json.dumps(revised))
+        for artifact in ctx['artifacts'].glob('*.json'):
+            if artifact == path:
+                continue
+            value = json.loads(artifact.read_text())
+            if value.get('intent_revision') == prior['revision']:
+                value['intent_revision'] = revised['revision']
+                artifact.write_text(json.dumps(value))
+        # bookends:LE-156 — a materially revised approval without qualified exact prior bytes is refused.
+        refused([args.software,'commission','--slot','intent-review'],ctx['show'](),needle='exact owner baseline')
+        instruction = 'Owner qualification: status inspection must remain available during ordinary delivery outages; delivery retry is separate.'
+        append(ctx,'user-steering',{'target':{'kind':'all'},'instruction':instruction,
+               'intent_baseline':{'revision':prior['revision'],'locator':str(path)+'@prior',
+                                  'sha256':'sha256:'+hashlib.sha256(baseline.encode()).hexdigest(),
+                                  'json_bytes':baseline}},'qualified-owner-source')
+        brief = provider(ctx,['commission','--slot','intent-review'],ctx['show']())
+        view = brief['owner_approval_view']
+        # bookends:LE-156 — exact owner qualification, full current wording, exact delta and independent approval actor reach the public commission.
+        assert view['current_intent']['value'] == revised
+        assert any(source['record_id'] == 'qualified-owner-source' and source['instruction'] == instruction for source in view['owner_sources'])
+        delta = view['exact_substantive_wording_delta']
+        assert delta['status'] == 'available' and delta['from_revision'] == prior['revision']
+        assert delta['baseline_source']['sha256'] == 'sha256:'+hashlib.sha256(baseline.encode()).hexdigest()
+        assert {'pointer':'/outcome','change':'replace','before':prior['outcome'],'after':revised['outcome']} in delta['changes']
+        assert view['actors']['draft_author'] == revised['author']
+        assert view['actors']['owner_approval'] == {'kind':'human','status':'not-performed'}
+        assert 'prior-reviewer' in view['actors']['reviewers']
+    return software_module().run(SimpleNamespace(engine=args.engine,provider=args.software,mode='source',data_root=None),
+                                 ROOT / 'crates/software-change-provider/data/configs/minimal.json',root,configure=configure,exercise=hook)
+
+
+def intent_sufficient_comparison(args, root):
+    def configure(profile, repository, artifacts):
+        for gate in profile['review_policies']:
+            axes = [copy.deepcopy(p) for p in profile['review_policies'][gate] if p['id'] == 'intent-sufficient'] if gate.startswith('intent') else []
+            for axis in axes:
+                axis['required_authors'] = 2
+            profile['review_policies'][gate] = axes
+    def hook(phase, ctx):
+        if phase != 'intent-review':
+            return
+        intent = json.loads((ctx['artifacts'] / 'intent.json').read_text())
+        policy = ctx['profile']['review_policies'][phase][0]
+        ids = []
+        for index in range(2):
+            reason = ('Anticipated final state: approvals are durably recorded and inspectable during delivery outages; delivery retries are separate. '
+                      'Alternative tested: varying internal retry queues does not change the stated operator outcome; this is implementation freedom, not an unwanted permitted state.')
+            packet = {'show':ctx['show'](),'assignment':{'gate':phase,'stage':'aggregate','group':policy['group'],
+                      'author':{'name':f'cold-reader-{index}','kind':'agent'},'subject':'intent.json','subject_revision':intent['revision']},
+                      'request':{'text':'Cold reconstruction using only current intent and declared baseline; then search for material alternatives.'},
+                      'original':{'text':json.dumps({'judgments':[{'axis':'intent-sufficient','result':'pass','findings':'',
+                                  'grounds':{'reason':reason,'evidence':[{'locator':'intent.json#/baseline'},{'locator':'intent.json#/outcome'}]}}]})}}
+            candidate = provider(ctx,['review-candidates'],packet)['records'][0]
+            assert candidate['data']['baseline'] == intent['baseline']
+            rid = f'cold-reconstruction-{index}'
+            append(ctx,candidate['kind'],candidate['data'],rid)
+            ids.append(rid)
+        ledger(ctx,phase,'intent.json',intent['revision'])
+        # bookends:LE-173 — cold returns alone cannot clear alignment; missing and incomplete owner comparisons deny public progression.
+        missing = evaluate(ctx,phase,'approved','intent-adversarial-review')
+        assert missing['result'] == 'deny' and 'missing current intent-comparison' in json.dumps(missing), missing
+        challenge = provider(ctx,['commission','--slot','intent-adversarial-review','--stage','aggregate'],ctx['show']())
+        assert 'intent-comparison' in json.dumps(challenge['missing_inputs'])
+        comparison = {'subject_revision':intent['revision'],'baseline':intent['baseline'],'reconstruction_ids':ids,
+                      'actor':{'name':'owner-authorized-driver','kind':'agent'},'authority':'owner authorization: fixture comparison instruction',
+                      'dispositions':[{'reconstruction_id':rid,'alternative':'Internal retry queue variation',
+                                       'disposition':'implementation-freedom','note':'Both counted reconstructions preserve the named outcome.'} for rid in ids]}
+        partial = copy.deepcopy(comparison)
+        partial['reconstruction_ids'] = ids[:1]
+        partial['dispositions'] = partial['dispositions'][:1]
+        append(ctx,'intent-comparison',partial)
+        denied = evaluate(ctx,phase,'approved','intent-adversarial-review')
+        assert denied['result'] == 'deny' and 'every counted reconstruction' in json.dumps(denied)
+        append(ctx,'intent-comparison',comparison,'complete-owner-comparison')
+        # bookends:LE-173 — all counted cold returns and their owner-authorized comparison clear the axis before informed challenge preparation.
+        assert evaluate(ctx,phase,'approved','intent-adversarial-review')['result'] == 'allow'
+        challenge = provider(ctx,['commission','--slot','intent-adversarial-review','--stage','aggregate'],ctx['show']())
+        assert not challenge['missing_inputs'], challenge
+        assert challenge['intent_comparisons'][-1]['data'] == comparison
+        delivered = {r['id']:r for r in challenge['context']}
+        assert set(ids) <= delivered.keys()
+        assert all(delivered[rid]['data']['baseline'] == intent['baseline'] for rid in ids)
+        path = ctx['artifacts'] / 'intent.json'
+        saved = path.read_bytes()
+        changed = copy.deepcopy(intent)
+        changed['baseline']['commit'] = '0' * 40
+        path.write_text(json.dumps(changed))
+        # bookends:LE-173 — changed source baseline cannot reuse the recorded reconstruction or comparison.
+        denied = evaluate(ctx,phase,'approved','intent-adversarial-review')
+        assert denied['result'] == 'deny' and 'baseline changed' in json.dumps(denied)
+        path.write_bytes(saved)
+        ctx['event']('approved')
+        return True
+    return software_module().run(SimpleNamespace(engine=args.engine,provider=args.software,mode='source',data_root=None),
+                                 ROOT / 'crates/software-change-provider/data/configs/minimal.json',root,configure=configure,exercise=hook)
 
 
 def main():
@@ -1569,8 +1996,13 @@ def main():
     retirement(args,retirement_root)
     delivery_proof(args,root)
     profile_preparation(args,root)
+    qualified_intent_revision(args,root)
+    intent_sufficient_comparison(args,root)
     software_runs = [bookends_outcome_spine(args,root),findings_and_steering(args,root),revision_and_observation(args,root),intake_counts_advice(args,root),paired_and_command_proof(args,root),lint_only_reuse(args,root)]
+    software_runs.append(reshaped_plan_applicability(args,root))
+    software_runs.append(invalid_reuse_fresh_sibling(args,root))
     provider_specific(args,root)
+    early_review_briefs(args,root)
     generated = raw([sys.executable,ROOT / 'scripts/generate-prd-journey.py','--mode','source',
                      '--engine',args.engine,'--provider',args.research,'--checker',args.checker,
                      '--profile',ROOT / 'crates/research-provider/data/configs/generate-prd.json',

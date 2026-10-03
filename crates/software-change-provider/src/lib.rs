@@ -13,6 +13,7 @@ pub mod advice;
 pub mod author_counts;
 pub mod commission;
 pub mod embedded_data;
+pub mod intent_comparison;
 pub mod setup;
 
 /// Validate one shipped initial-input template with production config rules.

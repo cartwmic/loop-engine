@@ -102,8 +102,31 @@ pub fn project(input: &Value) -> Result<Value, String> {
             if axis_policy["group"] != group {
                 return Err("axis does not belong to assignment group".into());
             }
+            if direct && axis == "intent-sufficient" && gate == "intent-review" {
+                return Err("cold intent-sufficient reconstruction cannot be self-review".into());
+            }
             if direct && axis_policy["self_review"] != true {
                 return Err("self review is not allowed for this axis".into());
+            }
+            if data.get("reuse").is_some() {
+                if data.as_object().is_none_or(|row| {
+                    row.keys().any(|key| {
+                        !known.as_object().unwrap().contains_key(key)
+                            && key != "axis"
+                            && key != "reuse"
+                    })
+                }) {
+                    return Err("reuse row must contain only axis and reuse".into());
+                }
+                let mut location = show["result"].clone();
+                location["artifact_root"] = json!(root);
+                if let Some(controls) = input.get("controls") {
+                    location["controls"] = controls.clone();
+                }
+                return crate::review_batch::validate_reuse_row(
+                    &data, &location, gate, axis, author, config, subject, revision, stage, true,
+                    false,
+                );
             }
             if !["pass", "fail"].contains(&text(&data, "result")?) {
                 return Err("result must be pass or fail".into());
@@ -134,8 +157,28 @@ pub fn project(input: &Value) -> Result<Value, String> {
             item.diagnostics.push(error);
             continue;
         }
+        if let Some(id) = data.get("reuse").and_then(Value::as_str) {
+            let source = show["result"]["context"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|record| record["id"] == id)
+                .unwrap();
+            let candidate =
+                json!({"kind":"evidence-applicability","data":source["data"],"reuse_record_id":id});
+            records.push(candidate.clone());
+            item.candidate = Some(candidate);
+            continue;
+        }
         let axis = data["axis"].clone();
         data["policy_id"] = axis;
+        if data["policy_id"] == "intent-sufficient" {
+            data["baseline"] = subject_value
+                .as_ref()
+                .and_then(|v| v.get("baseline"))
+                .cloned()
+                .unwrap_or(Value::Null);
+        }
         if let Some(id) = &assessment {
             if id.as_str().is_none_or(|s| s.trim().is_empty()) {
                 item.diagnostics
@@ -200,6 +243,95 @@ mod tests {
         );
         assert!(output["items"][1]["candidate"].is_null());
         assert!(output["items"][2]["candidate"].is_null());
+    }
+    #[test]
+    fn invalid_reuse_preserves_fresh_sibling() {
+        let mut input = input();
+        input["projection"]["judgments"][1] = json!({"axis":"intent-sufficient","reuse":"missing"});
+        let output = project(&input).unwrap();
+        assert_eq!(output["records"].as_array().unwrap().len(), 1);
+        assert!(output["items"][1]["candidate"].is_null());
+        assert!(output["items"][1]["diagnostics"]
+            .to_string()
+            .contains("not an authorized captured applicability record"));
+    }
+    #[test]
+    fn valid_reuse_projects_applicability_without_new_judgment() {
+        use loop_core::{ContextRecord, SemanticSequence, Timestamp};
+        let mut input = input();
+        let artifacts = std::env::temp_dir().join(format!(
+            "review-candidates-reuse-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&artifacts).unwrap();
+        std::fs::write(
+            artifacts.join("intent.json"),
+            r#"{"revision":"1","goal":"Inspected goal"}"#,
+        )
+        .unwrap();
+        input["show"]["result"]["initial_input"]["artifact_root"] = json!(artifacts);
+        input["projection"]["judgments"][0]["grounds"]["evidence"][0]["locator"] =
+            json!("intent.json#/goal");
+        let original = project(&input).unwrap()["records"][0]["data"].clone();
+        let carry = json!({"origin":{"kind":"context-record","id":"original"},
+            "target":{"subject":"intent.json","revision":"1","checkpoint":null},
+            "attesting_driver":{"name":"driver","kind":"agent"},"reason":"Inspected unchanged scope"});
+        let record = |id, kind, sequence, data| {
+            ContextRecord::new(
+                id,
+                kind,
+                data,
+                SemanticSequence::new(sequence),
+                Timestamp::from_unix_millis(0),
+            )
+        };
+        input["show"]["result"]["context"] = json!([
+            record("original", "review-evidence", 1, original),
+            record("carry", "evidence-applicability", 2, carry.clone())
+        ]);
+        input["projection"]["judgments"] = json!([{"axis":"intent-sufficient","reuse":"carry"}]);
+        let output = project(&input).unwrap();
+        assert_eq!(output["records"].as_array().unwrap().len(), 1, "{output}");
+        assert_eq!(output["records"][0]["kind"], "evidence-applicability");
+        assert_eq!(output["records"][0]["reuse_record_id"], "carry");
+        assert_eq!(output["records"][0]["data"], carry);
+        for (field, value) in [
+            ("/show/result/context/1/kind", json!("review-evidence")),
+            ("/show/result/context/1/data/origin/id", json!("missing")),
+            (
+                "/show/result/context/1/data/target/revision",
+                json!("stale"),
+            ),
+            ("/show/result/context/0/data/gate", json!("design-review")),
+            (
+                "/show/result/context/0/data/author/name",
+                json!("wrong-author"),
+            ),
+            ("/show/result/context/0/sequence", json!(3)),
+        ] {
+            let mut invalid = input.clone();
+            *invalid.pointer_mut(field).unwrap() = value;
+            let refused = project(&invalid).unwrap();
+            assert!(
+                refused["records"].as_array().unwrap().is_empty(),
+                "{field}: {refused}"
+            );
+            assert!(!refused["items"][0]["diagnostics"]
+                .as_array()
+                .unwrap()
+                .is_empty());
+        }
+        input["controls"] = json!({"force_fresh":true});
+        let refused = project(&input).unwrap();
+        assert!(refused["records"].as_array().unwrap().is_empty());
+        assert!(refused["items"][0]["diagnostics"]
+            .to_string()
+            .contains("force-fresh"));
+        std::fs::remove_dir_all(artifacts).unwrap();
     }
     #[test]
     fn fenced_json_derives_projection() {

@@ -588,6 +588,14 @@ impl Engine {
             config_version,
         );
         record.data["review_stage"] = json!(review_stage);
+        if policy_id == "intent-sufficient" {
+            let input = self.authoritative(run_id).initial_input;
+            let root = input["artifact_root"].as_str().expect("artifact root");
+            let intent: Value =
+                serde_json::from_slice(&fs::read(Path::new(root).join("intent.json")).unwrap())
+                    .unwrap();
+            record.data["baseline"] = intent["baseline"].clone();
+        }
         if config_version.ends_with("-14") {
             record.data["group"] = json!(format!(
                 "{gate}.{}",
@@ -604,6 +612,33 @@ impl Engine {
             ));
         }
         self.append(run_id, record);
+    }
+
+    pub fn append_intent_comparison(&self, run_id: &str) {
+        let input = self.authoritative(run_id).initial_input;
+        let root = input["artifact_root"].as_str().expect("artifact root");
+        let intent: Value =
+            serde_json::from_slice(&fs::read(Path::new(root).join("intent.json")).unwrap())
+                .unwrap();
+        let records = self
+            .persistence()
+            .load_context_records(&run_id.into())
+            .unwrap();
+        let ids: Vec<_> = records
+            .iter()
+            .filter(|r| {
+                r.kind == "review-evidence"
+                    && r.data["gate"] == "intent-review"
+                    && r.data["policy_id"] == "intent-sufficient"
+                    && r.data["subject_revision"] == intent["revision"]
+            })
+            .map(|r| r.id.as_str())
+            .collect();
+        self.append(run_id, ContextRecord::new("fixture-intent-comparison", "intent-comparison",
+            json!({"subject_revision":intent["revision"],"baseline":intent["baseline"],"reconstruction_ids":ids,
+                "actor":{"name":"fixture-owner","kind":"human"},"authority":"owner",
+                "dispositions":ids.iter().map(|id| json!({"reconstruction_id":id,"alternative":"Scripted fixture freedom", "disposition":"implementation-freedom", "note":"Mechanical fixture comparison, not semantic proof."})).collect::<Vec<_>>()}),
+            0_u64.into(), Timestamp::from_unix_millis(0)));
     }
 
     pub fn append_finding_ledger(

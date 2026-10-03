@@ -512,7 +512,16 @@ pub fn inspect_with_stage(
 ) -> Result<Value, String> {
     match inspect_with_budgets(input, requested_slot, task, requested_stage, None) {
         Ok(mut output) => {
-            output["missing_inputs"] = json!(missing_parent_claims(input, requested_slot)?);
+            let mut missing = output["missing_inputs"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            missing.extend(
+                missing_parent_claims(input, requested_slot)?
+                    .into_iter()
+                    .map(Value::String),
+            );
+            output["missing_inputs"] = json!(missing);
             Ok(output)
         }
         Err(error)
@@ -1281,7 +1290,8 @@ fn inspect_with_budgets(
         serde_json::from_value(packet.get("context").cloned().ok_or("missing context")?)
             .map_err(|error| error.to_string())?;
     records.retain(|record| slot.stdin_context_kinds.contains(&record.kind));
-    let full_context_records = records.clone();
+    let full_context_records: Vec<ContextRecord> =
+        serde_json::from_value(packet["context"].clone()).map_err(|e| e.to_string())?;
     let root = packet
         .get("artifact_root")
         .or_else(|| {
@@ -1333,6 +1343,29 @@ fn inspect_with_budgets(
         requested_stage,
         Path::new(root),
     )?;
+    let alignment_required = slot_id == "intent-adversarial-review"
+        && packet["initial_input"]["review_policies"][slot_id]
+            .as_array()
+            .is_some_and(|axes| axes.iter().any(|axis| axis["id"] == "intent-sufficient"));
+    let alignment_diagnostic = if alignment_required {
+        let intent = &sources
+            .iter()
+            .find(|source| source.locator == "intent.json")
+            .expect("intent source")
+            .value;
+        records.extend(
+            full_context_records
+                .iter()
+                .filter(|r| {
+                    r.kind == "intent-comparison"
+                        && r.data["subject_revision"] == intent["revision"]
+                })
+                .cloned(),
+        );
+        crate::intent_comparison::validate(&full_context_records, intent).err()
+    } else {
+        None
+    };
     let mut projected = input.clone();
     let context_value = serde_json::to_value(&records).map_err(|error| error.to_string())?;
     if show.is_some() {
@@ -1398,6 +1431,22 @@ fn inspect_with_budgets(
     let size_info = commission_size_info(&selected_records, &sources, root)?;
     if output.get("record_ids").is_some() {
         return Ok(output);
+    }
+    if let Some(diagnostic) = alignment_diagnostic {
+        if !output["missing_inputs"].is_array() {
+            output["missing_inputs"] = json!([]);
+        }
+        output["missing_inputs"]
+            .as_array_mut()
+            .expect("array")
+            .push(json!({"kind":"intent-comparison","diagnostic":diagnostic}));
+    }
+    if alignment_required {
+        let comparisons: Vec<_> = records
+            .iter()
+            .filter(|r| r.kind == "intent-comparison")
+            .collect();
+        output["intent_comparisons"] = json!(comparisons);
     }
     output["review_contract_version"] = json!(3);
     output["review_target"] = json!({"subject":subject,"revision":revision});

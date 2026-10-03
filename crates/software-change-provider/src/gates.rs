@@ -521,6 +521,27 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
         }
     }
 
+    if matches!(gate, Some("intent-review" | "intent-adversarial-review"))
+        && staged_axes.is_some_and(|stages| {
+            stages
+                .values()
+                .any(|axes| axes.contains_key("intent-sufficient"))
+        })
+    {
+        if let Some(intent) = document.as_ref() {
+            if let Err(diagnostic) = software_change_provider::intent_comparison::validate(
+                &request.context,
+                intent.value(),
+            ) {
+                return EvaluationOutcome::Response(deny_response(
+                    "software-change-intent-comparison-invalid",
+                    "intent-sufficient comparison incomplete",
+                    Some(json!({"diagnostic":diagnostic})),
+                ));
+            }
+        }
+    }
+
     if subject == "implementation-report.json" && request.transition.target.as_str() == "validation"
     {
         let Some(root) = config.artifact_root().and_then(Value::as_str) else {

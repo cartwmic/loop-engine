@@ -60,6 +60,20 @@ Use --bookends only for an explicit opt-in. Read the resulting exact config/cont
 versions; do not apply current contracts to historical runs or silently migrate them.
 Register the absolute provider command under exact alias software-change.
 
+## Cold reconstruction comparison
+
+For enabled `intent-sufficient`, declare the pre-change `intent.baseline` and retain
+it across revisions unless the owner explicitly selects a new baseline. Commission
+unbriefed readers with only current intent and that source baseline. Retain every
+counted reconstruction via `review-candidates`; intake snapshots the baseline.
+Before ordinary approval, append the owner or explicitly owner-authorized
+`intent-comparison` described in the reviewer protocol, addressing every counted
+return and useful alternative. Clarify unwanted permitted alternatives in intent
+and obtain a fresh cold exercise; private comparison comments are not constraints.
+Prepare informed challenge only after this alignment clearance. Missing comparison,
+partial coverage and changed reconstruction baseline block clearance. Scripted
+journey declarations prove these mechanics only, never genuine semantic alignment.
+
 ## Frozen intent and operating boundary
 
 Read current intent.json before authoring, commissioning, triaging or validating.

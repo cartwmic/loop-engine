@@ -10,7 +10,9 @@ use support::{config_artifact_root, load_fixture, load_profile, provider_binary,
 const PROFILES: &[&str] = &["minimal", "standard", "high-rigor"];
 
 fn write_good_artifacts(root: &TestDir) {
-    root.write_json("intent.json", &load_fixture("intent-good.json"));
+    let mut intent = load_fixture("intent-good.json");
+    intent["baseline"] = json!({"kind":"git","repository_scope":"primary","commit":"0123456789012345678901234567890123456789"});
+    root.write_json("intent.json", &intent);
     root.write_json("design.json", &load_fixture("design-good.json"));
     root.write_json("plan.json", &support::executable_fixture_plan());
     root.write_json(
@@ -81,6 +83,9 @@ fn pass_gate(
         "r15",
         json!([]),
     );
+    if gate == "intent-review" {
+        engine.append_intent_comparison(run_id);
+    }
     let event = if last { "passed" } else { "approved" };
     let outcome = engine.event(run_id, event);
     assert!(
