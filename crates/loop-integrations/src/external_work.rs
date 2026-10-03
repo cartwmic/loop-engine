@@ -104,33 +104,63 @@ pub fn assemble_items(items: &[Value], known: &Map<String, Value>) -> Vec<ItemDi
 
 /// Reject substantive outcome changes while allowing mechanical locator corrections.
 pub fn check_projection(original: &Value, projection: &Value, field: &str) -> Result<(), String> {
+    fn check_author(before: &Value, after: &Value) -> Result<(), String> {
+        for key in ["name", "kind"] {
+            if before["author"]
+                .get(key)
+                .is_some_and(|value| after["author"].get(key) != Some(value))
+            {
+                return Err("projection contradicts decoded author".into());
+            }
+        }
+        Ok(())
+    }
+    check_author(original, projection)?;
     let Some(items) = original[field].as_array() else {
         return Ok(());
     };
     let projected = projection[field]
         .as_array()
         .ok_or("projection omits decoded outcomes")?;
-    if items.len() != projected.len() {
-        return Err("projection changes decoded outcomes".into());
-    }
-    for (before, after) in items.iter().zip(projected) {
-        for key in ["result", "verdict"] {
+    let identity = |item: &Value| {
+        item.get("axis")
+            .or_else(|| item.get("policy_id"))
+            .cloned()
+            .unwrap_or(Value::Null)
+            .to_string()
+    };
+    let mut remaining: Vec<_> = projected.iter().collect();
+    for before in items {
+        let index = remaining
+            .iter()
+            .position(|after| identity(before) == identity(after))
+            .ok_or("projection changes decoded axes")?;
+        let after = remaining.remove(index);
+        for key in ["axis", "policy_id", "result", "verdict"] {
             if before.get(key).is_some_and(|v| after.get(key) != Some(v)) {
                 return Err(format!("projection contradicts decoded {key}"));
             }
         }
-        let nonempty = |v: &Value| match v {
-            Value::String(s) => !s.trim().is_empty(),
-            Value::Array(a) => !a.is_empty(),
-            Value::Null => false,
-            _ => true,
+        let mut attributed = after.clone();
+        if attributed.get("author").is_none() && attributed.is_object() {
+            attributed["author"] = projection["author"].clone();
+        }
+        check_author(before, &attributed)?;
+        let normalize = |value: &Value| match value {
+            Value::String(text) => {
+                Value::String(text.split_whitespace().collect::<Vec<_>>().join(" "))
+            }
+            other => other.clone(),
         };
         if before
             .get("findings")
-            .is_some_and(|v| nonempty(v) != after.get("findings").is_some_and(nonempty))
+            .is_some_and(|value| after.get("findings").map(normalize) != Some(normalize(value)))
         {
             return Err("projection contradicts decoded findings".into());
         }
+    }
+    if !remaining.is_empty() {
+        return Err("projection changes decoded axes".into());
     }
     Ok(())
 }
@@ -149,6 +179,35 @@ mod tests {
         projection["items"][0]["result"] = serde_json::json!("fail");
         projection["items"][0]["findings"] = serde_json::json!("");
         assert!(super::check_projection(&original, &projection, "items").is_err());
+    }
+
+    #[test]
+    fn projection_preserves_named_axes_authors_and_finding_text() {
+        for field in ["items", "judgments"] {
+            let original = serde_json::json!({"author":{"name":"Alice","kind":"agent"},
+                field:[{"axis":"A","result":"fail","findings":"first defect\nsecond defect"},
+                       {"axis":"B","result":"pass","findings":""}]});
+            let mut projection = original.clone();
+            projection[field].as_array_mut().unwrap().reverse();
+            assert!(super::check_projection(&original, &projection, field).is_ok());
+            projection[field][0]["axis"] = serde_json::json!("A");
+            projection[field][1]["axis"] = serde_json::json!("B");
+            assert!(super::check_projection(&original, &projection, field).is_err());
+            for (key, value) in [("name", "Bob"), ("kind", "human")] {
+                let mut projection = original.clone();
+                projection["author"][key] = serde_json::json!(value);
+                assert!(super::check_projection(&original, &projection, field).is_err());
+            }
+            for findings in ["different defect", "first defect", ""] {
+                let mut projection = original.clone();
+                projection[field][0]["findings"] = serde_json::json!(findings);
+                assert!(super::check_projection(&original, &projection, field).is_err());
+            }
+            let mut projection = original.clone();
+            projection[field][0]["findings"] = serde_json::json!(" first   defect second defect ");
+            projection[field][0]["locator"] = serde_json::json!("corrected");
+            assert!(super::check_projection(&original, &projection, field).is_ok());
+        }
     }
 
     use super::*;

@@ -47,9 +47,13 @@ pub fn project(input: &Value) -> Result<Value, String> {
     let original = content(&input["original"])?;
     let request = content(&input["request"])?;
     let projection = input.get("projection").unwrap_or(&original["structured"]);
+    let mut attributed_projection = projection.clone();
+    if attributed_projection.get("author").is_none() && attributed_projection.is_object() {
+        attributed_projection["author"] = author.clone();
+    }
     loop_integrations::external_work::check_projection(
         &original["structured"],
-        projection,
+        &attributed_projection,
         "judgments",
     )?;
     let judgments = projection["judgments"]

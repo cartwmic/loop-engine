@@ -183,6 +183,15 @@ def intake_counts_advice(args, root):
                     corrected['projection']['judgments'][0]['result'] = 'pass'
                     corrected['projection']['judgments'][0]['findings'] = 'new substantive finding'
                     refused([args.software,'review-candidates'],corrected,needle='contradicts decoded findings')
+                    swapped = copy.deepcopy(packet)
+                    decoded = copy.deepcopy(batch)
+                    decoded['judgments'][0]['result'] = 'fail'
+                    decoded['judgments'][0]['findings'] = 'axis-specific defect'
+                    swapped['original'] = {'text':json.dumps(decoded)}
+                    swapped['projection'] = copy.deepcopy(decoded)
+                    swapped['projection']['judgments'][0]['axis'], swapped['projection']['judgments'][1]['axis'] = (
+                        decoded['judgments'][1]['axis'], decoded['judgments'][0]['axis'])
+                    refused([args.software,'review-candidates'],swapped,needle='contradicts decoded result')
                 before_intake = ctx['show']()['result']['context']
                 intake = provider(ctx,['review-candidates'],packet)
                 assert ctx['show']()['result']['context'] == before_intake
@@ -475,20 +484,94 @@ def paired_and_command_proof(args, root):
             ctx['checkpoint']('validation')
             refused([ctx['engine'],'--database',ctx['database'],'--config',ctx['config'],'--json',
                      'event',ctx['run_id'],'validation-ready'],cwd=ctx['repository'],needle='goal')
-            judgment.update(result='pass',findings=[],reason=state['residual'] +
-                            ' This fixture establishes recording mechanics only; the gap is disclosed, not waived by the AC-1 exception.')
-            append(ctx,'goal-verdict',judgment,'residual-goal-judged')
-            original['goal_verdict_ids'] = ['residual-goal-judged', original['goal_verdict_ids'][1]]
+            print('external-work visible residual and outcome-scoped exception refusal passed')
+            # The driver supplies the missing AC-2 proof before any passing reassessment.
+            shown = ctx['show']()
+            workflow = provider(ctx,[],{'operation':'describe','initial_input':shown['result']['initial_input']})
+            packet = {'operation':'evaluate','workflow':workflow,
+                      'initial_input':shown['result']['initial_input'],'context':shown['result']['context'],
+                      'transition':{'source':'explore','event':'intent-ready','target':'intent-review','kind':'checked'},
+                      'prior_evaluations':[]}
+            packet_path = ctx['work'] / 'malformed-proof-request.json'
+            packet_path.write_text(json.dumps(packet))
+            proof_code = '\n'.join([
+                'import json, pathlib, subprocess',
+                'path = pathlib.Path(' + repr(str(ctx['artifacts'] / 'intent.json')) + ')',
+                'saved = path.read_bytes()',
+                'try:',
+                '    artifact = json.loads(saved); artifact.pop("revision")',
+                '    path.write_text(json.dumps(artifact))',
+                '    result = subprocess.run([' + repr(str(ctx['provider'])) + '], input=pathlib.Path(' + repr(str(packet_path)) + ').read_text(), text=True, capture_output=True, check=True)',
+                '    response = json.loads(result.stdout)',
+                '    assert response["result"] == "deny", response',
+                '    assert "revision" in json.dumps(response), response',
+                '    print("AC-2 malformed intent denied: missing revision rule named")',
+                'finally:',
+                '    path.write_bytes(saved)',
+            ])
+            spec = {'id':'malformed-artifact-refusal','command':sys.executable,
+                    'args':['-B','-c',proof_code],'owner':'driver',
+                    'obligation':'AC-2: deny a malformed subject and name its missing revision rule.'}
+            plan = json.loads(plan_path.read_text())
+            plan['proof_commands'].append(spec)
+            plan_path.write_text(json.dumps(plan))
+            identity = provider(ctx,['source-identity','--working-directory',str(ctx['repository'])],{})
+            outcome = raw([spec['command'],*spec['args']],cwd=ctx['repository'])
+            assert outcome.returncode == 0, outcome.stdout + outcome.stderr
+            results = [dict(row['data']['external_result'],id=row['data']['proof_id'])
+                       for row in ctx['show']()['result']['context'] if row['id'] in original['command_evidence_ids']]
+            results.append({'id':spec['id'],'command':spec['command'],'args':spec['args'],
+                            'cwd':str(ctx['repository']),'exit_code':outcome.returncode,
+                            'stdout':outcome.stdout,'stderr':outcome.stderr,
+                            'producer':{'name':'external-driver','kind':'script'},'source':identity})
+            prepared = provider(ctx,['prepare-validation'],{'show':ctx['show'](),
+                                'working_directory':str(ctx['repository']),
+                                'revision':original['revision']+'-resolved',
+                                'author':{'name':'external-proof-owner','kind':'script'},'command_results':results})
+            assert prepared['commands_complete'], prepared
+            original = prepared['report_draft']
+            intent = json.loads((ctx['artifacts'] / 'intent.json').read_text())
+            state['accepted_limitation'] = intent['operating_context']['accepted_risks'][0]['risk']
+            original['residuals'] = [{'kind':'accepted-boundary','statement':state['accepted_limitation'],
+                                     'references':['intent.json#/operating_context/accepted_risks/0']}]
+            append(ctx,'criterion-revalidation',{'subject_revision':original['revision'],
+                   'affected_criteria':['AC-2'],'change_kind':'material',
+                   'reason':'The missing malformed-artifact refusal command now succeeds.'})
+            for candidate in prepared['command_candidates']:
+                append(ctx,candidate['kind'],candidate['data'],candidate['record_id'])
+            proof_id = next(candidate['record_id'] for candidate in prepared['command_candidates']
+                            if candidate['data']['proof_id'] == spec['id'])
+            for index, batch in enumerate(prepared['judgment_batches']):
+                fresh = {'subject':'validation-report.json','subject_revision':original['revision'],
+                         'checkpoint':'validation-checkpoint.json',
+                         'author':{'name':f'residual-revalidation-{index}','kind':'agent'},
+                         'result':'pass','findings':[],
+                         'reason':'Actual AC-2 malformed-artifact refusal proof succeeded; the remaining accepted limitation does not waive any outcome.',
+                         'evidence_context_ids':original['command_evidence_ids']}
+                if batch['kind'] == 'criterion-verdict':
+                    fresh['criterion_id'] = batch['criterion_id']
+                assert proof_id in fresh['evidence_context_ids']
+                append(ctx,batch['kind'],fresh,batch['record_id'])
             report_path.write_text(json.dumps(original))
             ctx['checkpoint']('validation')
-            print('external-work visible residual and outcome-scoped exception refusal passed')
+            final_goals = [row for row in ctx['show']()['result']['context'] if row['id'] in original['goal_verdict_ids']]
+            assert final_goals and all(row['data']['result'] == 'pass' and
+                                       proof_id in row['data']['evidence_context_ids'] for row in final_goals)
+            assert state['residual'] not in json.dumps(original['residuals'])
+            assert original['residuals'][0]['kind'] == 'accepted-boundary'
+            assert original['residuals'][0]['statement'] in [risk['risk'] for risk in intent['operating_context']['accepted_risks']]
+            state['resolved_proof_id'] = proof_id
+            print('external-work residual resolved before completion passed')
         if phase == 'end':
             assert not ctx['show']()['result']['has_overrides']
             final_report = ctx['work'] / 'final-report.md'
             final_report.write_text('# External-work final report\n\nNormal completion, no override.\n\n'
-                                    'Residual risks: ' + state['residual'] + '\n'
+                                    'AC-2 gap resolved by successful command evidence: ' + state['resolved_proof_id'] + '\n'
+                                    'Residual risks (declared accepted limitation): ' + state['accepted_limitation'] + '\n'
                                     'The external driver owns proof commands and source applicability decisions.\n')
-            assert 'Residual risks:' in final_report.read_text()
+            assert state['residual'] not in final_report.read_text()
+            assert state['accepted_limitation'] in final_report.read_text()
+            assert 'declared accepted limitation' in final_report.read_text()
             print('external-work paired-repo and external-command normal completion passed')
             print('external-work residual final-report reporting passed')
     return software_module().run(SimpleNamespace(engine=args.engine,provider=args.software,data_root=str(ROOT),mode='source'),

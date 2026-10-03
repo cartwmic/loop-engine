@@ -104,11 +104,20 @@ pub fn project(
         .get("projection")
         .cloned()
         .or_else(|| original.get("structured").filter(|v| !v.is_null()).cloned());
-    let Some(projection) = projection else {
+    let Some(mut projection) = projection else {
         return Ok(
             json!({"request":request,"original":original,"candidates":[],"diagnostics":[{"diagnostic":"result is not JSON; driver projection required"}]}),
         );
     };
+    if projection
+        .get("author")
+        .is_some_and(|author| author != &input["author"])
+    {
+        return Err("projection author contradicts intake author".into());
+    }
+    if projection.get("author").is_none() && projection.is_object() {
+        projection["author"] = input["author"].clone();
+    }
     crate::external_work::check_projection(&original["structured"], &projection, "items")?;
     let items = projection["items"]
         .as_array()
