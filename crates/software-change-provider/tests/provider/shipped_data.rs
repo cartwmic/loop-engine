@@ -83,6 +83,8 @@ fn high_rigor_axes() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
                 "problem-grounded",
                 "acceptance-granularity",
                 "owner-comprehensible",
+                "intent-sufficient",
+                "acceptance-sufficient",
             ]),
         ),
         (
@@ -635,6 +637,8 @@ fn profiles_carry_exact_shipped_profile_mapping_and_author_counts() {
             let mut expected_individual = stages["aggregate"].clone();
             expected_individual.remove("acceptance-granularity");
             expected_individual.remove("owner-comprehensible");
+            expected_individual.remove("intent-sufficient");
+            expected_individual.remove("acceptance-sufficient");
             assert_eq!(
                 stages["individual"], expected_individual,
                 "{gate} existing stage axes"

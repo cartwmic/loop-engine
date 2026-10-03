@@ -102,6 +102,23 @@
         "review_stage": "aggregate",
         "required_authors": 2,
         "group": "intent-review.aggregate"
+      },
+      {
+        "id": "intent-sufficient",
+        "description": "Given only current intent and its declared pre-change baseline, describe the anticipated final state. Search for materially different plausible final states the intent permits. Name the permitting wording or missing constraint. Fail when a material unwanted alternative is permitted.",
+        "example_prompt": "Given only current intent and its declared pre-change baseline, describe the anticipated final state. Search for materially different plausible final states the intent permits. Name the permitting wording or missing constraint. Fail when a material unwanted alternative is permitted. Template: crates/software-change-provider/data/templates/intent.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/intent.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "review_stage": "aggregate",
+        "required_authors": 2,
+        "group": "intent-review.intent-sufficient",
+        "cold": true
+      },
+      {
+        "id": "acceptance-sufficient",
+        "description": "For each promised outcome or remedied problem, test whether a plausible delivery could satisfy all acceptance criteria while leaving it materially unresolved, causally and not merely visibly. A failure names the outcome, counterexample, why criteria permit it, and consequence. Do not invent goals or quotas.",
+        "example_prompt": "For each promised outcome or remedied problem, test whether a plausible delivery could satisfy all acceptance criteria while leaving it materially unresolved, causally and not merely visibly. A failure names the outcome, counterexample, why criteria permit it, and consequence. Do not invent goals or quotas. Template: crates/software-change-provider/data/templates/intent.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/intent.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "review_stage": "aggregate",
+        "required_authors": 2,
+        "group": "intent-review.aggregate"
       }
     ],
     "intent-adversarial-review": [
@@ -197,6 +214,23 @@
         "id": "owner-comprehensible",
         "description": "Falsify the parent `owner-comprehensible` pass claim against that named obligation: The single intent lets its owner understand the problem, outcomes, scope, and acceptance from the stated background without losing precision.",
         "example_prompt": "Falsify owner-comprehensible only. Attack the parent pass claim against that named obligation: identify specific wording or an unstated dependency that materially prevents the intended owner from understanding or evaluating the problem, outcomes, scope boundaries, or acceptance decisions, and name the affected obligation and likely misunderstanding. Explain necessary specialist terms where they first matter; preserve precision and qualifications. Do not fail for style preference, sentence length, reading-grade score, or technical terminology alone. Template: crates/software-change-provider/data/templates/intent.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/intent.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "review_stage": "aggregate",
+        "required_authors": 2,
+        "group": "intent-adversarial-review.aggregate"
+      },
+      {
+        "id": "intent-sufficient",
+        "description": "Falsify accepted alignment using the retained final-state reconstruction and comparison; identify a materially unwanted alternative permitted by the intent.",
+        "example_prompt": "Falsify intent-sufficient only. Attack the parent pass claim against that named obligation. Falsify accepted alignment using the retained final-state reconstruction and comparison; identify a materially unwanted alternative permitted by the intent. Template: crates/software-change-provider/data/templates/intent.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/intent.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "review_stage": "aggregate",
+        "required_authors": 2,
+        "group": "intent-adversarial-review.intent-sufficient",
+        "cold": false
+      },
+      {
+        "id": "acceptance-sufficient",
+        "description": "Falsify the cleared acceptance-sufficiency pass with a stronger causal counterexample. Name the outcome, delivery, why all criteria permit it, and consequence. Do not invent goals or quotas.",
+        "example_prompt": "Falsify acceptance-sufficient only. Attack the parent pass claim against that named obligation. Falsify the cleared acceptance-sufficiency pass with a stronger causal counterexample. Name the outcome, delivery, why all criteria permit it, and consequence. Do not invent goals or quotas. Template: crates/software-change-provider/data/templates/intent.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/intent.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
         "review_stage": "aggregate",
         "required_authors": 2,
         "group": "intent-adversarial-review.aggregate"
@@ -698,7 +732,7 @@
       {
         "id": "intent-delivered",
         "description": "Validation evidence demonstrates frozen intent outcomes, acceptance boundaries, and outside obligations through observable proof rather than activity.",
-        "example_prompt": "Judge intent-delivered only. Confirm validation report maps intent outcomes and acceptance evidence to observable proof, not merely completed work. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. Reject activity-only evidence such as completed-work lists, internal tests, or passing commands when it does not demonstrate the frozen observable outcome and acceptance boundary. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "example_prompt": "Judge intent-delivered only. Confirm validation report maps intent outcomes and acceptance evidence to observable proof, not merely completed work. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. Reject activity-only evidence such as completed-work lists, internal tests, or passing commands when it does not demonstrate the frozen observable outcome and acceptance boundary. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings. Inspect declared residuals honestly: accepted boundaries never waive outcomes; unresolved defects, proof gaps, unsupported operations and exceptions remain explicit.",
         "required_authors": 2,
         "review_stage": "individual",
         "group": "validation-review.individual.intent-delivered"
@@ -706,7 +740,7 @@
       {
         "id": "docs-integrated",
         "description": "Authoritative repository documents and their observable behavior proof integrate delivered behavior without parallel truth.",
-        "example_prompt": "Judge docs-integrated only. Confirm authoritative repository documents, notably the repo-wide PRD and documents touched by the change, agree with delivered behavior and do not leave a parallel change PRD orphaned. A completed policy-document audit run over affected docs is acceptable evidence; composition happens at orchestration level, not provider coupling. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. Judge observable documented behavior and its proof, not merely a list of changed files, completed audits, or passing commands. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "example_prompt": "Judge docs-integrated only. Confirm authoritative repository documents, notably the repo-wide PRD and documents touched by the change, agree with delivered behavior and do not leave a parallel change PRD orphaned. A completed policy-document audit run over affected docs is acceptable evidence; composition happens at orchestration level, not provider coupling. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. Judge observable documented behavior and its proof, not merely a list of changed files, completed audits, or passing commands. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings. Inspect declared residuals honestly: accepted boundaries never waive outcomes; unresolved defects, proof gaps, unsupported operations and exceptions remain explicit.",
         "required_authors": 2,
         "review_stage": "individual",
         "group": "validation-review.individual.docs-integrated"
@@ -714,7 +748,7 @@
       {
         "id": "requirement-proof-mapping",
         "description": "Validation maps requirements and acceptance criteria to concrete semantic outcome proof, including changed Bookends citations.",
-        "example_prompt": "Judge requirement-proof-mapping only. Confirm every requirement and acceptance criterion names executable or scripted proof and the proof actually covers it; reject unsupported summary claims. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. For each requirement and acceptance criterion, require a public scenario and observable assertion that semantically proves it; a requirement token alone is insufficient. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "example_prompt": "Judge requirement-proof-mapping only. Confirm every requirement and acceptance criterion names executable or scripted proof and the proof actually covers it; reject unsupported summary claims. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. For each requirement and acceptance criterion, require a public scenario and observable assertion that semantically proves it; a requirement token alone is insufficient. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings. Inspect declared residuals honestly: accepted boundaries never waive outcomes; unresolved defects, proof gaps, unsupported operations and exceptions remain explicit.",
         "required_authors": 2,
         "review_stage": "individual",
         "group": "validation-review.individual.requirement-proof-mapping"
@@ -722,7 +756,7 @@
       {
         "id": "intent-delivered",
         "description": "Validation evidence demonstrates frozen intent outcomes, acceptance boundaries, and outside obligations through observable proof rather than activity.",
-        "example_prompt": "Judge intent-delivered only. Confirm validation report maps intent outcomes and acceptance evidence to observable proof, not merely completed work. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. Reject activity-only evidence such as completed-work lists, internal tests, or passing commands when it does not demonstrate the frozen observable outcome and acceptance boundary. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "example_prompt": "Judge intent-delivered only. Confirm validation report maps intent outcomes and acceptance evidence to observable proof, not merely completed work. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. Reject activity-only evidence such as completed-work lists, internal tests, or passing commands when it does not demonstrate the frozen observable outcome and acceptance boundary. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings. Inspect declared residuals honestly: accepted boundaries never waive outcomes; unresolved defects, proof gaps, unsupported operations and exceptions remain explicit.",
         "required_authors": 2,
         "review_stage": "aggregate",
         "group": "validation-review.aggregate"
@@ -730,7 +764,7 @@
       {
         "id": "docs-integrated",
         "description": "Authoritative repository documents and their observable behavior proof integrate delivered behavior without parallel truth.",
-        "example_prompt": "Judge docs-integrated only. Confirm authoritative repository documents, notably the repo-wide PRD and documents touched by the change, agree with delivered behavior and do not leave a parallel change PRD orphaned. A completed policy-document audit run over affected docs is acceptable evidence; composition happens at orchestration level, not provider coupling. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. Judge observable documented behavior and its proof, not merely a list of changed files, completed audits, or passing commands. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "example_prompt": "Judge docs-integrated only. Confirm authoritative repository documents, notably the repo-wide PRD and documents touched by the change, agree with delivered behavior and do not leave a parallel change PRD orphaned. A completed policy-document audit run over affected docs is acceptable evidence; composition happens at orchestration level, not provider coupling. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. Judge observable documented behavior and its proof, not merely a list of changed files, completed audits, or passing commands. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings. Inspect declared residuals honestly: accepted boundaries never waive outcomes; unresolved defects, proof gaps, unsupported operations and exceptions remain explicit.",
         "required_authors": 2,
         "review_stage": "aggregate",
         "group": "validation-review.aggregate"
@@ -738,7 +772,7 @@
       {
         "id": "requirement-proof-mapping",
         "description": "Validation maps requirements and acceptance criteria to concrete semantic outcome proof, including changed Bookends citations.",
-        "example_prompt": "Judge requirement-proof-mapping only. Confirm every requirement and acceptance criterion names executable or scripted proof and the proof actually covers it; reject unsupported summary claims. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. For each requirement and acceptance criterion, require a public scenario and observable assertion that semantically proves it; a requirement token alone is insufficient. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "example_prompt": "Judge requirement-proof-mapping only. Confirm every requirement and acceptance criterion names executable or scripted proof and the proof actually covers it; reject unsupported summary claims. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. For each requirement and acceptance criterion, require a public scenario and observable assertion that semantically proves it; a requirement token alone is insufficient. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings. Inspect declared residuals honestly: accepted boundaries never waive outcomes; unresolved defects, proof gaps, unsupported operations and exceptions remain explicit.",
         "required_authors": 2,
         "review_stage": "aggregate",
         "group": "validation-review.aggregate"
@@ -748,7 +782,7 @@
       {
         "id": "intent-delivered",
         "description": "Falsify the parent `intent-delivered` pass claim against that named obligation: Validation evidence demonstrates intent outcomes and acceptance boundaries were delivered.",
-        "example_prompt": "Falsify intent-delivered only. Attack the parent pass claim against that named obligation: the validation report maps only completed work rather than observable proof of intent outcomes and acceptance boundaries. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. Reject activity-only evidence such as completed-work lists, internal tests, or passing commands when it does not demonstrate the frozen observable outcome and acceptance boundary. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "example_prompt": "Falsify intent-delivered only. Attack the parent pass claim against that named obligation: the validation report maps only completed work rather than observable proof of intent outcomes and acceptance boundaries. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. Reject activity-only evidence such as completed-work lists, internal tests, or passing commands when it does not demonstrate the frozen observable outcome and acceptance boundary. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings. Inspect declared residuals honestly: accepted boundaries never waive outcomes; unresolved defects, proof gaps, unsupported operations and exceptions remain explicit.",
         "required_authors": 2,
         "review_stage": "individual",
         "group": "validation-adversarial-review.individual.intent-delivered"
@@ -756,7 +790,7 @@
       {
         "id": "docs-integrated",
         "description": "Falsify the parent `docs-integrated` pass claim against that named obligation: Authoritative repository documents integrate delivered behavior without parallel truth.",
-        "example_prompt": "Falsify docs-integrated only. Attack the parent pass claim against that named obligation: authoritative repository documents, notably the repo-wide PRD and documents touched by the change, disagree with delivered behavior or leave a parallel change truth. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. Judge observable documented behavior and its proof, not merely a list of changed files, completed audits, or passing commands. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "example_prompt": "Falsify docs-integrated only. Attack the parent pass claim against that named obligation: authoritative repository documents, notably the repo-wide PRD and documents touched by the change, disagree with delivered behavior or leave a parallel change truth. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. Judge observable documented behavior and its proof, not merely a list of changed files, completed audits, or passing commands. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings. Inspect declared residuals honestly: accepted boundaries never waive outcomes; unresolved defects, proof gaps, unsupported operations and exceptions remain explicit.",
         "required_authors": 2,
         "review_stage": "individual",
         "group": "validation-adversarial-review.individual.docs-integrated"
@@ -764,7 +798,7 @@
       {
         "id": "requirement-proof-mapping",
         "description": "Falsify the parent `requirement-proof-mapping` pass claim against that named obligation: Validation maps requirements and acceptance criteria to concrete proof.",
-        "example_prompt": "Falsify requirement-proof-mapping only. Attack the parent pass claim against that named obligation: a requirement or acceptance criterion lacks executable or scripted proof, or the named proof does not actually cover it. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. For each requirement and acceptance criterion, require a public scenario and observable assertion that semantically proves it; a requirement token alone is insufficient. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "example_prompt": "Falsify requirement-proof-mapping only. Attack the parent pass claim against that named obligation: a requirement or acceptance criterion lacks executable or scripted proof, or the named proof does not actually cover it. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. For each requirement and acceptance criterion, require a public scenario and observable assertion that semantically proves it; a requirement token alone is insufficient. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings. Inspect declared residuals honestly: accepted boundaries never waive outcomes; unresolved defects, proof gaps, unsupported operations and exceptions remain explicit.",
         "required_authors": 2,
         "review_stage": "individual",
         "group": "validation-adversarial-review.individual.requirement-proof-mapping"
@@ -772,7 +806,7 @@
       {
         "id": "intent-delivered",
         "description": "Falsify the parent `intent-delivered` pass claim against that named obligation: Validation evidence demonstrates intent outcomes and acceptance boundaries were delivered.",
-        "example_prompt": "Falsify intent-delivered only. Attack the parent pass claim against that named obligation: the validation report maps only completed work rather than observable proof of intent outcomes and acceptance boundaries. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. Reject activity-only evidence such as completed-work lists, internal tests, or passing commands when it does not demonstrate the frozen observable outcome and acceptance boundary. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "example_prompt": "Falsify intent-delivered only. Attack the parent pass claim against that named obligation: the validation report maps only completed work rather than observable proof of intent outcomes and acceptance boundaries. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. Reject activity-only evidence such as completed-work lists, internal tests, or passing commands when it does not demonstrate the frozen observable outcome and acceptance boundary. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings. Inspect declared residuals honestly: accepted boundaries never waive outcomes; unresolved defects, proof gaps, unsupported operations and exceptions remain explicit.",
         "required_authors": 2,
         "review_stage": "aggregate",
         "group": "validation-adversarial-review.aggregate"
@@ -780,7 +814,7 @@
       {
         "id": "docs-integrated",
         "description": "Falsify the parent `docs-integrated` pass claim against that named obligation: Authoritative repository documents integrate delivered behavior without parallel truth.",
-        "example_prompt": "Falsify docs-integrated only. Attack the parent pass claim against that named obligation: authoritative repository documents, notably the repo-wide PRD and documents touched by the change, disagree with delivered behavior or leave a parallel change truth. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. Judge observable documented behavior and its proof, not merely a list of changed files, completed audits, or passing commands. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "example_prompt": "Falsify docs-integrated only. Attack the parent pass claim against that named obligation: authoritative repository documents, notably the repo-wide PRD and documents touched by the change, disagree with delivered behavior or leave a parallel change truth. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. Judge observable documented behavior and its proof, not merely a list of changed files, completed audits, or passing commands. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings. Inspect declared residuals honestly: accepted boundaries never waive outcomes; unresolved defects, proof gaps, unsupported operations and exceptions remain explicit.",
         "required_authors": 2,
         "review_stage": "aggregate",
         "group": "validation-adversarial-review.aggregate"
@@ -788,7 +822,7 @@
       {
         "id": "requirement-proof-mapping",
         "description": "Falsify the parent `requirement-proof-mapping` pass claim against that named obligation: Validation maps requirements and acceptance criteria to concrete proof.",
-        "example_prompt": "Falsify requirement-proof-mapping only. Attack the parent pass claim against that named obligation: a requirement or acceptance criterion lacks executable or scripted proof, or the named proof does not actually cover it. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. For each requirement and acceptance criterion, require a public scenario and observable assertion that semantically proves it; a requirement token alone is insufficient. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "example_prompt": "Falsify requirement-proof-mapping only. Attack the parent pass claim against that named obligation: a requirement or acceptance criterion lacks executable or scripted proof, or the named proof does not actually cover it. For every new or changed Bookends citation, inspect the cited public scenario and its observable assertion semantically; a matching requirement token alone is not proof. For each requirement and acceptance criterion, require a public scenario and observable assertion that semantically proves it; a requirement token alone is insufficient. Reject activity-only evidence; completed-work lists, internal tests, and passing commands do not demonstrate the frozen outcome by themselves. Template: crates/software-change-provider/data/templates/validation-report.md. Schema: crates/software-change-provider/data/configs/high-rigor.json#/artifact_schemas/validation-report.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings. Inspect declared residuals honestly: accepted boundaries never waive outcomes; unresolved defects, proof gaps, unsupported operations and exceptions remain explicit.",
         "required_authors": 2,
         "review_stage": "aggregate",
         "group": "validation-adversarial-review.aggregate"
@@ -979,6 +1013,47 @@
             "minLength": 1
           },
           "minItems": 0
+        },
+        "baseline": {
+          "type": "object",
+          "required": [
+            "kind",
+            "commit"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "git"
+              ]
+            },
+            "repository_scope": {
+              "type": "string",
+              "minLength": 1
+            },
+            "commit": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "source_scopes": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "root"
+            ],
+            "additionalProperties": false
+          }
         }
       },
       "additionalProperties": false
@@ -1441,6 +1516,84 @@
             "additionalProperties": false
           },
           "minItems": 1
+        },
+        "residuals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "kind",
+              "statement",
+              "references"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "accepted-boundary",
+                  "unresolved-defect",
+                  "proof-gap",
+                  "unsupported-operation",
+                  "exception"
+                ]
+              },
+              "statement": {
+                "type": "string",
+                "minLength": 1
+              },
+              "accepted_by": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "kind"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent",
+                      "script"
+                    ]
+                  }
+                }
+              },
+              "references": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        },
+        "source_coverage": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "scope",
+              "commit"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "scope": {
+                "type": "string",
+                "minLength": 1
+              },
+              "commit": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
         }
       },
       "additionalProperties": false
@@ -1527,6 +1680,63 @@
           "items": {
             "type": "string",
             "minLength": 1
+          }
+        },
+        "residuals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "kind",
+              "statement",
+              "references"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "accepted-boundary",
+                  "unresolved-defect",
+                  "proof-gap",
+                  "unsupported-operation",
+                  "exception"
+                ]
+              },
+              "statement": {
+                "type": "string",
+                "minLength": 1
+              },
+              "accepted_by": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "kind"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent",
+                      "script"
+                    ]
+                  }
+                }
+              },
+              "references": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
           }
         }
       }

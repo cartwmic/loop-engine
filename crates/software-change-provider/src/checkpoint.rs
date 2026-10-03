@@ -88,6 +88,8 @@ pub(crate) struct Checkpoint {
     report: ReportIdentity,
     documents: DocumentRevisions,
     repository: RepositoryIdentity,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    repositories: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -505,11 +507,42 @@ fn build(
     let state_bytes = serde_json::to_vec(&state_without)
         .map_err(|error| format!("could not serialize checkpoint state: {error}"))?;
     let state_sha256 = sha256_digest(&state_bytes);
+    let scopes = crate::source_scopes::roots(intent.value.get("source_scopes"), working_directory)?;
+    let mut repositories = BTreeMap::new();
+    if scopes.len() > 1 {
+        for (name, root) in &scopes {
+            let mut identity = crate::source_identity::read(root)?;
+            identity["root"] = serde_json::json!(root);
+            repositories.insert(name.clone(), identity);
+        }
+    }
+    if let Some(coverage) = report.get("source_coverage") {
+        let coverage = coverage
+            .as_array()
+            .ok_or("source_coverage must be an array")?;
+        let mut seen = BTreeSet::new();
+        for item in coverage {
+            let scope = item["scope"]
+                .as_str()
+                .ok_or("source coverage needs scope")?;
+            if !seen.insert(scope) {
+                return Err("duplicate source coverage scope".into());
+            }
+            let root = crate::source_scopes::resolve(&scopes, scope)?;
+            if item["commit"] != crate::source_identity::read(&root)?["head"] {
+                return Err(format!("stale source coverage for scope `{scope}`"));
+            }
+        }
+        if seen.len() != scopes.len() {
+            return Err("source coverage omits a declared scope".into());
+        }
+    }
     let checkpoint = Checkpoint {
         schema_version: SCHEMA_VERSION.to_owned(),
         phase: phase.as_str().to_owned(),
         report: report_identity,
         documents,
+        repositories,
         repository: RepositoryIdentity {
             state_sha256,
             ..repository.identity
@@ -575,6 +608,9 @@ fn compare(
         }
     }
 
+    if stored.repositories != expected.repositories {
+        mismatches.push("source scope repository identities changed".to_owned());
+    }
     let stored_repository = &stored.repository;
     let expected_repository = &expected.repository;
     if stored_repository.head != expected_repository.head {
@@ -657,7 +693,11 @@ fn validate_closed_value(value: &Value, phase: CheckpointPhase, path: &Path) -> 
     let object = value
         .as_object()
         .ok_or_else(|| format!("{} must be a JSON object", path.display()))?;
-    require_exact_fields(object, CHECKPOINT_FIELDS, "checkpoint")?;
+    let mut fields = CHECKPOINT_FIELDS.to_vec();
+    if object.contains_key("repositories") {
+        fields.push("repositories");
+    }
+    require_exact_fields(object, &fields, "checkpoint")?;
     let report = object
         .get("report")
         .and_then(Value::as_object)
@@ -1472,6 +1512,7 @@ mod tests {
 
     fn sample_checkpoint() -> Checkpoint {
         Checkpoint {
+            repositories: BTreeMap::new(),
             schema_version: SCHEMA_VERSION.to_owned(),
             phase: "implementation".to_owned(),
             report: ReportIdentity {

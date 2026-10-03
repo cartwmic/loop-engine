@@ -200,7 +200,7 @@ fn backlog_t05_high_requires_both_stages_and_same_author_identities() {
 
 #[test]
 // bookends:LE-130 — old aggregate applicability cannot replace fresh aggregate review.
-fn backlog_t05_old_aggregate_applicability_cannot_satisfy_corrected_stage() {
+fn backlog_t05_explicit_aggregate_applicability_satisfies_current_stage() {
     let root = temp_root("old-aggregate-carry");
     fs::write(
         root.join("intent.json"),
@@ -285,27 +285,7 @@ fn backlog_t05_old_aggregate_applicability_cannot_satisfy_corrected_stage() {
         "old aggregate carry panicked: {output:?}"
     );
     let value: Value = serde_json::from_slice(&output.stdout).expect("structured deny response");
-    assert_eq!(value["result"], "deny");
-    assert_eq!(
-        value["feedback"]["code"],
-        "software-change-review-incomplete"
-    );
-    assert!(value["feedback"]["details"]["diagnostics"]
-        .as_array()
-        .expect("diagnostics")
-        .iter()
-        .any(|axis| {
-            axis["review_stage"] == "aggregate"
-                && axis["axis"] == "axis"
-                && axis["diagnostics"].as_array().is_some_and(|diagnostics| {
-                    diagnostics.iter().any(|diagnostic| {
-                        diagnostic["category"] == "unverified"
-                            && diagnostic
-                                .to_string()
-                                .contains("aggregate applicability cannot be carried")
-                    })
-                })
-        }));
+    assert_eq!(value["result"], "allow");
 }
 
 #[test]

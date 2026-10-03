@@ -122,7 +122,7 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
     };
 
     let bookends_report = if overlay_on {
-        match load_bookends_report() {
+        match load_bookends_report(request) {
             Ok(report) => Some(report),
             Err(error) => return EvaluationOutcome::EvaluationError(error),
         }
@@ -406,6 +406,85 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
                 FINDING_LEDGER_DENY_MESSAGE,
                 Some(Value::Object(details)),
             ));
+        }
+        if let Some(parent) = gate
+            .strip_suffix("-adversarial-review")
+            .map(|prefix| format!("{prefix}-review"))
+        {
+            if let (Some(challenge_axes), Some(parent_axes)) =
+                (staged_axes, config.staged_axes_for_gate(&parent))
+            {
+                let parent_ledger = evaluate_finding_ledger(
+                    &request.context,
+                    &parent,
+                    subject,
+                    metadata.revision(),
+                    &config,
+                );
+                for axes in challenge_axes.values() {
+                    for policy in axes.values() {
+                        let matching_groups: std::collections::BTreeSet<_> = parent_axes
+                            .values()
+                            .filter_map(|axes| axes.get(policy.id()).and_then(|p| p.group()))
+                            .collect();
+                        let corresponding: std::collections::BTreeMap<_, _> = parent_axes
+                            .iter()
+                            .map(|(stage, axes)| {
+                                (
+                                    stage.clone(),
+                                    axes.iter()
+                                        .filter(|(_, p)| {
+                                            p.id() == policy.id()
+                                                || p.group().is_some_and(|group| {
+                                                    matching_groups.contains(group)
+                                                })
+                                        })
+                                        .map(|(id, p)| (id.clone(), p.clone()))
+                                        .collect(),
+                                )
+                            })
+                            .collect();
+                        let blocked = parent_ledger.current_snapshot().is_none_or(|ledger| {
+                            ledger.accepted_unresolved().any(|finding| {
+                                corresponding.values().any(
+                                    |axes: &std::collections::BTreeMap<
+                                        String,
+                                        crate::config::PolicyAxis,
+                                    >| {
+                                        axes.contains_key(&finding.policy_id)
+                                            || finding
+                                                .review_axes
+                                                .iter()
+                                                .any(|axis| axes.contains_key(axis))
+                                    },
+                                )
+                            })
+                        });
+                        let ordinary = crate::evidence::evaluate_staged_evidence_with_dispositions(
+                            &request.context,
+                            &parent,
+                            subject,
+                            metadata.revision(),
+                            &subject_author,
+                            config.config_version(),
+                            &corresponding,
+                            config.axis_namespace(),
+                            config.artifact_root(),
+                            parent_ledger.current_snapshot(),
+                            config.contract_version() >= 3,
+                        );
+                        if blocked || !ordinary.is_satisfied() {
+                            return EvaluationOutcome::Response(deny_response(
+                                EVIDENCE_DENY_CODE,
+                                "challenge-before-ordinary-clearance",
+                                Some(
+                                    json!({"phase":"evidence","axis":policy.id(),"parent":parent}),
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
         }
         let evidence = staged_axes.map(|axes| {
             crate::evidence::evaluate_staged_evidence_with_dispositions(
@@ -974,6 +1053,16 @@ fn normalized_requirement_id(reference: &str) -> Option<&str> {
     if let Some(id) = reference.strip_prefix("LE-") {
         return valid_requirement_number(id).then_some(reference);
     }
+    if let Some((scope, id)) = reference.split_once(':') {
+        if !scope.is_empty()
+            && scope
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            && id.strip_prefix("LE-").is_some_and(valid_requirement_number)
+        {
+            return Some(reference);
+        }
+    }
     None
 }
 
@@ -1046,7 +1135,7 @@ fn reconciliation_deny(request: &EvaluateRequest, diagnostic: String) -> Value {
     )
 }
 
-fn load_bookends_report() -> Result<bookends_check::CheckReport, String> {
+fn load_bookends_report(request: &EvaluateRequest) -> Result<bookends_check::CheckReport, String> {
     let cwd = std::env::current_dir()
         .map_err(|error| format!("cannot read evaluate process cwd: {error}"))?;
     let bypass = match std::env::var("BOOKENDS_BYPASS") {
@@ -1066,7 +1155,40 @@ fn load_bookends_report() -> Result<bookends_check::CheckReport, String> {
     let bypass = bypass
         .as_ref()
         .map(|(class, reason)| (class.as_str(), reason.as_str()));
-    bookends_check::check_repo(&cwd, bypass).map_err(|error| error.to_string())
+    let scopes = if let Some(declaration) = request.initial_input.get("source_scopes") {
+        crate::source_scopes::roots(Some(declaration), &cwd)?
+    } else if let Some(root) = request.initial_input["artifact_root"].as_str() {
+        crate::source_scopes::from_artifacts(std::path::Path::new(root), &cwd)?
+    } else {
+        crate::source_scopes::roots(None, &cwd)?
+    };
+    let mut combined = None;
+    let mut live_ids = Vec::new();
+    for (name, root) in scopes {
+        if !root.join("bookends.toml").is_file() {
+            continue;
+        }
+        let report =
+            bookends_check::check_repo(&root, bypass).map_err(|error| error.to_string())?;
+        for id in &report.live_ids {
+            live_ids.push(format!("{name}:{id}"));
+            if name == "primary" {
+                live_ids.push(id.clone());
+            }
+        }
+        if !matches!(report.status, CheckStatus::Green) {
+            return Ok(report);
+        }
+        combined = Some(report);
+    }
+    let mut combined = match combined {
+        Some(report) => report,
+        None => bookends_check::check_repo(&cwd, bypass).map_err(|error| error.to_string())?,
+    };
+    if !live_ids.is_empty() {
+        combined.live_ids = live_ids;
+    }
+    Ok(combined)
 }
 
 fn is_passed(request: &EvaluateRequest) -> bool {

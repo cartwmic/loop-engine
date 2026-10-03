@@ -510,7 +510,23 @@ pub fn inspect_with_stage(
     task: Option<&str>,
     requested_stage: Option<&str>,
 ) -> Result<Value, String> {
-    inspect_with_budgets(input, requested_slot, task, requested_stage, None)
+    match inspect_with_budgets(input, requested_slot, task, requested_stage, None) {
+        Ok(mut output) => {
+            output["missing_inputs"] = json!([]);
+            Ok(output)
+        }
+        Err(error)
+            if requested_slot.is_some()
+                && (error.starts_with("mandatory review source")
+                    && error.contains("is unavailable")
+                    || error.contains("missing current parent aggregate grounds")) =>
+        {
+            let mut output = inspect_with_stage_raw(input, requested_slot, task, requested_stage)?;
+            output["missing_inputs"] = json!([error]);
+            Ok(output)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 #[derive(Clone)]
@@ -1523,27 +1539,8 @@ pub fn run_from_stdin(args: &[String]) -> i32 {
     let mut slot = None;
     let mut task = None;
     let mut stage = None;
-    let mut budgets: Option<Value> = None;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
-        if arg == "--call-budgets" {
-            if budgets.is_some() {
-                eprintln!("duplicate {arg}");
-                return 2;
-            }
-            let Some(value) = iter.next() else {
-                eprintln!("missing value for {arg}");
-                return 2;
-            };
-            budgets = match serde_json::from_str(value) {
-                Ok(budgets) => Some(budgets),
-                Err(error) => {
-                    eprintln!("invalid per-call review budgets: {error}");
-                    return 2;
-                }
-            };
-            continue;
-        }
         let target = match arg.as_str() {
             "--slot" => &mut slot,
             "--task" => &mut task,
@@ -1565,7 +1562,7 @@ pub fn run_from_stdin(args: &[String]) -> i32 {
     }
     let result = serde_json::from_reader(std::io::stdin())
         .map_err(|e| e.to_string())
-        .and_then(|input| inspect_with_budgets(&input, slot, task, stage, budgets.as_ref()));
+        .and_then(|input| inspect_with_stage(&input, slot, task, stage));
     match result {
         Ok(value) => {
             println!("{value}");

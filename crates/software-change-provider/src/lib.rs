@@ -5,6 +5,7 @@ mod criterion;
 mod overlay;
 mod recovery_contract;
 mod schema;
+mod source_scopes;
 #[allow(dead_code)]
 mod workflow;
 

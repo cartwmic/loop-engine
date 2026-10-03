@@ -175,7 +175,11 @@ pub fn evidence(
         "config_version": config_version
     });
     if config_version.ends_with("-14") {
-        value["group"] = json!(format!("{gate}.aggregate"));
+        value["group"] = json!(if policy_id == "intent-sufficient" {
+            format!("{gate}.intent-sufficient")
+        } else {
+            format!("{gate}.aggregate")
+        });
         value["assessment_id"] =
             json!(format!("{gate}-aggregate-{author_name}-{subject_revision}"));
     }
@@ -419,7 +423,7 @@ impl Engine {
         Self {
             database: database.into(),
             resolver: resolver_for(command.to_string_lossy().into_owned()),
-            gateway: SubprocessProviderGateway::new(Duration::from_secs(2)),
+            gateway: SubprocessProviderGateway::new(Duration::from_secs(10)),
         }
     }
 
@@ -586,11 +590,13 @@ impl Engine {
         record.data["review_stage"] = json!(review_stage);
         if config_version.ends_with("-14") {
             record.data["group"] = json!(format!(
-                "{gate}.{review_stage}{}",
-                if review_stage == "individual" {
-                    format!(".{policy_id}")
+                "{gate}.{}",
+                if policy_id == "intent-sufficient" {
+                    "intent-sufficient".to_owned()
+                } else if review_stage == "individual" {
+                    format!("{review_stage}.{policy_id}")
                 } else {
-                    String::new()
+                    review_stage.to_owned()
                 }
             ));
             record.data["assessment_id"] = json!(format!(

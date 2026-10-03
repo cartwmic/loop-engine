@@ -701,43 +701,229 @@ fn backlog_t07_same_topology_different_frozen_policies_reject_foreign_evidence()
     assert_eq!(second_final["result"]["lifecycle"], "final");
 }
 
+fn ledger(gate: &str, subject: &str, revision: &str) -> Value {
+    json!({"schema_version":"1","gate":gate,"subject":subject,"subject_revision":revision,"author":{"name":"driver","kind":"agent"},"findings":[]})
+}
+
+fn prepare(run: &RunFixture, arguments: &[&str], input: &Value) -> Value {
+    let mut command = Command::new(&run.provider_path);
+    command.current_dir(&run.repository).args(arguments);
+    let output = super::bounded_process::run_with_stdin(
+        &mut command,
+        "external preparation",
+        &serde_json::to_vec(input).unwrap(),
+    )
+    .unwrap()
+    .output;
+    assert!(output.status.success(), "{output:?}");
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
 #[test]
-fn backlog_t07_policy_document_semantic_failure_is_current_and_corrected_in_both_modes() {
-    let repository = workspace_integration::repository_root();
-    let script = repository.join("scripts/policy-document-journey.py");
-    let engine_path = workspace_integration::binary("loop-engine");
-    let provider_path = workspace_integration::binary("policy-document");
-    let profile = repository.join("crates/policy-document-provider/data/readme.json");
-    for mode in ["draft", "audit"] {
-        let output = Command::new("python3")
-            .current_dir(&repository)
-            .args([
-                script.to_str().expect("journey path"),
-                "--engine",
-                engine_path.to_str().expect("engine path"),
-                "--provider",
-                provider_path.to_str().expect("provider path"),
-                "--profile",
-                profile.to_str().expect("profile path"),
-                "--mode",
-                mode,
-            ])
-            .output()
-            .expect("policy journey");
-        assert!(
-            output.status.success(),
-            "policy {mode} journey failed: stdout={} stderr={}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            stdout.contains("current semantic finding denial with exact findings"),
-            "policy {mode} journey omitted current-failure proof: {stdout}"
-        );
-        assert!(
-            stdout.contains(&format!("\"mode\": \"{mode}\"")),
-            "{stdout}"
+fn external_intake_early_commission_and_ordinary_first_public_path() {
+    let run = create_run("external-intake", "intent-sufficient", 1);
+    let mut profile: Value = serde_json::from_slice(&fs::read(&run.profile).unwrap()).unwrap();
+    for gate in ["intent-review", "intent-adversarial-review"] {
+        profile["review_policies"][gate][0]["group"] = json!(format!("{gate}.intent-sufficient"));
+        profile["review_policies"][gate][0]["self_review"] = json!(true);
+    }
+    write_json(&run.profile, &profile);
+    let started = engine_call(
+        &run,
+        &[
+            "--config".into(),
+            run.providers.to_string_lossy().into_owned(),
+            "start".into(),
+            "--id".into(),
+            run.run_id.clone(),
+            "software-change".into(),
+            format!("@{}", run.profile.display()),
+        ],
+        "start external intake",
+    );
+    assert_eq!(started["status"], "completed", "{started}");
+    let shown = show(&run, "early show");
+    let intent_path = run.artifacts.join("intent.json");
+    let intent: Value = serde_json::from_slice(&fs::read(&intent_path).unwrap()).unwrap();
+    fs::rename(&intent_path, run.artifacts.join("saved-intent.json")).unwrap();
+    let early = prepare(&run, &["commission", "--slot", "intent-review"], &shown);
+    assert!(
+        !early["missing_inputs"].as_array().unwrap().is_empty(),
+        "{early}"
+    );
+    fs::rename(run.artifacts.join("saved-intent.json"), &intent_path).unwrap();
+    let projection = json!({"judgments":[{"axis":"intent-sufficient","result":"pass","findings":"","grounds":{"reason":"current goal permits no unwanted alternative","evidence":[{"locator":"intent.json#/revision"}]}},false,{"axis":"intent-sufficient","result":"pass"}]});
+    let intake = |gate: &str, author: Value, original: Value, explicit: bool| {
+        let mut input = json!({"show":shown,"assignment":{"gate":gate,"stage":"aggregate","group":format!("{gate}.intent-sufficient"),"author":author,"subject":"intent.json","subject_revision":intent["revision"]},"request":{"text":"reconstruct the final state"},"original":original});
+        if explicit {
+            input["projection"] = projection.clone();
+        }
+        prepare(&run, &["review-candidates"], &input)
+    };
+    let direct = intake(
+        "intent-review",
+        intent["author"].clone(),
+        json!({"text":"reconstruct the final state"}),
+        true,
+    );
+    assert_eq!(
+        direct["records"][0]["data"]["external_review"]["direct"],
+        true
+    );
+    assert_eq!(direct["records"].as_array().unwrap().len(), 1);
+    assert!(direct["items"][1]["candidate"].is_null());
+    assert!(direct["items"][2]["candidate"].is_null());
+    let challenge = intake(
+        "intent-adversarial-review",
+        json!({"name":"challenger","kind":"agent"}),
+        json!({"text":format!("```json\n{projection}\n```")}),
+        false,
+    );
+    append(
+        &run,
+        "review-evidence",
+        "early-challenge",
+        challenge["records"][0]["data"].clone(),
+        "early challenge append",
+    );
+    append(
+        &run,
+        "finding-ledger",
+        "challenge-ledger",
+        ledger(
+            "intent-adversarial-review",
+            "intent.json",
+            intent["revision"].as_str().unwrap(),
+        ),
+        "challenge ledger",
+    );
+    let context = show(&run, "challenge evaluation show")["result"]["context"].clone();
+    let workflow = prepare(
+        &run,
+        &[],
+        &json!({"operation":"describe","initial_input":profile}),
+    );
+    let evaluate = |context: Value| {
+        prepare(
+            &run,
+            &[],
+            &json!({"operation":"evaluate","workflow":workflow,"initial_input":profile,"context":context,"transition":{"source":"intent-adversarial-review","event":"approved","target":"design","kind":"checked"},"prior_evaluations":[]}),
+        )
+    };
+    let blocked = evaluate(context);
+    assert_eq!(
+        blocked["feedback"]["message"], "challenge-before-ordinary-clearance",
+        "{blocked}"
+    );
+    append(
+        &run,
+        "review-evidence",
+        "early-direct",
+        direct["records"][0]["data"].clone(),
+        "early ordinary append",
+    );
+    append(
+        &run,
+        "finding-ledger",
+        "ordinary-ledger",
+        ledger(
+            "intent-review",
+            "intent.json",
+            intent["revision"].as_str().unwrap(),
+        ),
+        "ordinary ledger",
+    );
+    assert_eq!(
+        event(&run, "intent-ready", "enter ordinary")["status"],
+        "completed"
+    );
+    assert_eq!(
+        event(&run, "approved", "count early ordinary")["status"],
+        "completed"
+    );
+    let cleared = evaluate(show(&run, "cleared show")["result"]["context"].clone());
+    assert_eq!(cleared["result"], "allow", "{cleared}");
+    assert_eq!(
+        event(&run, "approved", "challenge after ordinary")["status"],
+        "completed"
+    );
+}
+
+#[test]
+fn external_scoped_grounding_and_secondary_checkpoint_staleness() {
+    let run = create_run("source-scopes", "scope-check", 1);
+    let secondary = run.repository.parent().unwrap().join("secondary");
+    let cloned = Command::new("git")
+        .args(["clone", "--quiet"])
+        .arg(&run.repository)
+        .arg(&secondary)
+        .output()
+        .unwrap();
+    assert!(cloned.status.success(), "{cloned:?}");
+    for (root, value) in [
+        (&run.repository, json!({"primary":true})),
+        (&secondary, json!({"secondary":true})),
+    ] {
+        write_json(&root.join("scoped.json"), &value);
+        git(root, &["add", "scoped.json"], "scope add");
+        git(
+            root,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.test",
+                "commit",
+                "-qm",
+                "scope baseline",
+            ],
+            "scope commit",
         );
     }
+    let mut intent: Value =
+        serde_json::from_slice(&fs::read(run.artifacts.join("intent.json")).unwrap()).unwrap();
+    intent["source_scopes"] =
+        json!({"primary":{"root":run.repository},"secondary":{"root":secondary}});
+    write_json(&run.artifacts.join("intent.json"), &intent);
+    let profile: Value = serde_json::from_slice(&fs::read(&run.profile).unwrap()).unwrap();
+    let workflow = prepare(
+        &run,
+        &[],
+        &json!({"operation":"describe","initial_input":profile}),
+    );
+    let mut evidence = json!({"gate":"intent-review","policy_id":"scope-check","review_stage":"aggregate","group":"intent-review.aggregate","result":"pass","findings":"","author":{"name":"scope-reviewer","kind":"agent"},"subject":"intent.json","subject_revision":intent["revision"],"config_version":run.config_version,"review_contract_version":3,"grounds":{"reason":"inspected secondary source","evidence":[{"locator":"secondary:scoped.json#/secondary"}]}});
+    let evaluate_intent = |data: Value| {
+        prepare(
+            &run,
+            &[],
+            &json!({"operation":"evaluate","workflow":workflow,"initial_input":profile,"context":[{"id":"scoped-review","kind":"review-evidence","data":data,"sequence":1,"created_at":1},{"id":"scope-ledger","kind":"finding-ledger","data":ledger("intent-review","intent.json",intent["revision"].as_str().unwrap()),"sequence":2,"created_at":2}],"transition":{"source":"intent-review","event":"approved","target":"intent-adversarial-review","kind":"checked"},"prior_evaluations":[]}),
+        )
+    };
+    assert_eq!(evaluate_intent(evidence.clone())["result"], "allow");
+    evidence["grounds"]["evidence"][0]["locator"] = json!("primary:scoped.json#/secondary");
+    assert_eq!(evaluate_intent(evidence.clone())["result"], "deny");
+    evidence["grounds"]["evidence"][0]["locator"] = json!("unknown:scoped.json#/secondary");
+    assert_eq!(evaluate_intent(evidence)["result"], "deny");
+    checkpoint(&run, "implementation");
+    let evaluate_checkpoint = || {
+        prepare(
+            &run,
+            &[],
+            &json!({"operation":"evaluate","workflow":workflow,"initial_input":profile,"context":[],"transition":{"source":"implementation-review","event":"approved","target":"implementation-adversarial-review","kind":"checked"},"prior_evaluations":[]}),
+        )
+    };
+    let current = evaluate_checkpoint();
+    assert_eq!(
+        current["feedback"]["code"], "software-change-finding-ledger-invalid",
+        "{current}"
+    );
+    write_json(&secondary.join("scoped.json"), &json!({"secondary":false}));
+    let stale = evaluate_checkpoint();
+    assert_eq!(stale["result"], "deny");
+    assert!(
+        stale
+            .to_string()
+            .contains("source scope repository identities changed"),
+        "{stale}"
+    );
 }

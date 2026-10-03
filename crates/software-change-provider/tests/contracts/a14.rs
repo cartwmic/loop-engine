@@ -740,6 +740,16 @@ fn append_review_records(
     config_version: &str,
     axes: &[&str],
 ) {
+    if let Some(prefix) = gate.strip_suffix("-adversarial-review") {
+        append_review_records(
+            context,
+            &format!("{prefix}-review"),
+            subject,
+            revision,
+            config_version,
+            axes,
+        );
+    }
     let start = context.len() + 1;
     for (index, axis) in axes.iter().enumerate() {
         let sequence = start + index;
@@ -751,7 +761,7 @@ fn append_review_records(
                 axis,
                 "pass",
                 "",
-                &format!("validation-cache-reviewer-{gate}-{axis}"),
+                &format!("validation-cache-reviewer-{gate}"),
                 "agent",
                 subject,
                 revision,
@@ -981,4 +991,106 @@ fn validation_rechecks_external_results_and_reference_inputs_on_each_public_call
             "software-change-criterion-incomplete",
         );
     }
+    // A lint-only descendant can retain succeeded proof through explicit applicability.
+    fs::write(&marker, b"lint-only formatting change\n").unwrap();
+    for args in [
+        vec!["add", "marker.txt"],
+        vec![
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.test",
+            "commit",
+            "-qm",
+            "lint only",
+        ],
+    ] {
+        let output = Command::new("git")
+            .current_dir(repository.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+    let mut implementation = support::load_fixture("implementation-report-good.json");
+    implementation["revision"] = json!("r16");
+    artifacts.write_json("implementation-report.json", &implementation);
+    let mut new_implementation = implementation_request.clone();
+    for record in new_implementation["context"].as_array_mut().unwrap() {
+        record["data"]["subject_revision"] = json!("r16");
+    }
+    let create = |phase: &str| {
+        let output = Command::new(provider_binary())
+            .current_dir(repository.path())
+            .args([
+                "checkpoint",
+                "--phase",
+                phase,
+                "--artifact-root",
+                artifacts.path().to_str().unwrap(),
+                "--working-directory",
+                repository.path().to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    };
+    create("implementation");
+    assert_eq!(
+        validation_response(&new_implementation, repository.path())["result"],
+        "allow"
+    );
+    let mut retained = request.clone();
+    let mut next_report = report.clone();
+    next_report["revision"] = json!("r16");
+    next_report["implementation_revision"] = json!("r16");
+    let originals = retained["context"].as_array().unwrap().clone();
+    for original in &originals {
+        let kind = original["kind"].as_str().unwrap();
+        if ![
+            "command-evidence",
+            "criterion-verdict",
+            "goal-verdict",
+            "review-evidence",
+        ]
+        .contains(&kind)
+        {
+            continue;
+        }
+        let source_id = original["id"].as_str().unwrap();
+        let id = format!("carry-{source_id}");
+        let mut target = json!({"subject":"validation-report.json","checkpoint":{"phase":"validation","report_revision":"r16"}});
+        target[if ["criterion-verdict", "goal-verdict"].contains(&kind) {
+            "subject_revision"
+        } else {
+            "revision"
+        }] = json!("r16");
+        let sequence = retained["context"].as_array().unwrap().len() + 1;
+        retained["context"].as_array_mut().unwrap().push(json!({"id":id,"kind":"evidence-applicability","data":{"origin":{"kind":"context-record","id":source_id},"target":target,"attesting_driver":{"name":"driver","kind":"agent"},"reason":"lint-only descendant; this result and judgment still apply"},"sequence":sequence,"created_at":sequence}));
+        for selected in next_report["command_evidence_ids"].as_array_mut().unwrap() {
+            if *selected == source_id {
+                *selected = json!(id);
+            }
+        }
+        for row in next_report["criteria"].as_array_mut().unwrap() {
+            for selected in row["verdict_ids"].as_array_mut().unwrap() {
+                if *selected == source_id {
+                    *selected = json!(id);
+                }
+            }
+        }
+        for selected in next_report["goal_verdict_ids"].as_array_mut().unwrap() {
+            if *selected == source_id {
+                *selected = json!(id);
+            }
+        }
+    }
+    let sequence = retained["context"].as_array().unwrap().len() + 1;
+    retained["context"].as_array_mut().unwrap().push(json!({"id":"r16-ledger","kind":"finding-ledger","data":support::finding_ledger("validation-review","validation-report.json","r16",json!([])),"sequence":sequence,"created_at":sequence}));
+    artifacts.write_json("validation-report.json", &next_report);
+    create("validation");
+    assert_eq!(
+        validation_response(&retained, repository.path()),
+        json!({"result":"allow"})
+    );
 }

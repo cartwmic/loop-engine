@@ -19,6 +19,7 @@ mod review_batch;
 mod review_candidates;
 mod schema;
 mod source_identity;
+mod source_scopes;
 mod validation;
 mod workflow;
 

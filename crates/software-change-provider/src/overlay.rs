@@ -10,7 +10,7 @@
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
-const REQUIREMENT_ID_PATTERN: &str = r"^LE-[1-9][0-9]*$";
+const REQUIREMENT_ID_PATTERN: &str = r"^([A-Za-z0-9_-]+:)?LE-[1-9][0-9]*$";
 const PRD_TRACEABILITY_FIELD: &str = "prd_traceability";
 const LINKED_LIVE: &str = "linked-live";
 const CANDIDATE: &str = "candidate";
@@ -108,6 +108,16 @@ pub(crate) fn apply(initial_input: &Value) -> Value {
 
 /// `^LE-[1-9][0-9]*$`
 pub(crate) fn is_requirement_id(value: &str) -> bool {
+    if let Some((scope, _)) = value.split_once(':') {
+        if scope.is_empty()
+            || !scope
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            return false;
+        }
+    }
+    let value = value.split_once(':').map_or(value, |(_, id)| id);
     let Some(rest) = value.strip_prefix("LE-") else {
         return false;
     };

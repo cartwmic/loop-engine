@@ -8,6 +8,7 @@
     "implementation_revision": {"type": "string", "minLength": 1},
     "command_evidence_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
     "criteria": {"type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["criterion_id", "verdict_ids"], "properties": {"criterion_id": {"type": "string", "pattern": "^AC-[1-9][0-9]*$"}, "verdict_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}}}},
-    "goal_verdict_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+    "goal_verdict_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "residuals": {"type": "array", "items": {"type": "object", "required": ["kind", "statement", "references"], "additionalProperties": false, "properties": {"kind": {"type": "string", "enum": ["accepted-boundary", "unresolved-defect", "proof-gap", "unsupported-operation", "exception"]}, "statement": {"type": "string", "minLength": 1}, "accepted_by": {"type": "object", "required": ["name", "kind"], "additionalProperties": false, "properties": {"name": {"type": "string", "minLength": 1}, "kind": {"type": "string", "enum": ["human", "agent", "script"]}}}, "references": {"type": "array", "items": {"type": "string", "minLength": 1}}}}}
   }
 }

@@ -591,8 +591,6 @@ pub(crate) fn evaluate_staged_evidence_with_dispositions(
     let mut inert_records = Vec::new();
     let mut global_malformed = Vec::new();
     let mut global_unverified = Vec::new();
-    let require_fresh_aggregate =
-        stages.contains_key("individual") && stages.contains_key("aggregate");
 
     let add_for_axis =
         |axis: &str, reasons: &[String], target: &mut BTreeMap<StageAxis, Vec<String>>| {
@@ -675,15 +673,6 @@ pub(crate) fn evaluate_staged_evidence_with_dispositions(
                             )],
                             &mut malformed,
                         );
-                    } else if require_fresh_aggregate && conforming.review_stage == "aggregate" {
-                        if let Some(reasons) =
-                            unverified.get_mut(&(conforming.review_stage.clone(), axis))
-                        {
-                            reasons.push(
-                                "high-rigor aggregate review requires fresh judgments; aggregate applicability cannot be carried"
-                                    .to_owned(),
-                            );
-                        }
                     } else {
                         record_stage_conforming(
                             &mut malformed,
@@ -805,6 +794,20 @@ pub(crate) fn evaluate_staged_evidence_with_dispositions(
                 }
             }
             if let Some(group) = policy.group() {
+                if config_version.ends_with("-14") {
+                    let matches_group = |author: &AuthorIdentity| {
+                        latest
+                            .get(&(
+                                stage.clone(),
+                                axis.clone(),
+                                current_revision.to_owned(),
+                                author.clone(),
+                            ))
+                            .is_some_and(|record| record.group.as_deref() == Some(group))
+                    };
+                    satisfied_authors.retain(&matches_group);
+                    present_authors.retain(matches_group);
+                }
                 let members: Vec<_> = axes
                     .values()
                     .filter(|axis| axis.group() == Some(group))

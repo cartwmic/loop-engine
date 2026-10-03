@@ -109,7 +109,7 @@ pub(crate) fn validate_grounding_version(
         let (file, selector) = locator.split_once('#').ok_or_else(|| {
             format!("evidence locator `{locator}` needs a JSON Pointer or line selector")
         })?;
-        let relative = Path::new(file);
+        let relative = Path::new(file.split_once(':').map_or(file, |(_, path)| path));
         if relative.as_os_str().is_empty()
             || relative.is_absolute()
             || relative.components().any(|component| {
@@ -123,7 +123,15 @@ pub(crate) fn validate_grounding_version(
                 "evidence locator `{locator}` must stay beneath a source root"
             ));
         }
-        let path = resolve_evidence_file(&root, &cwd, relative)?;
+        let path = if let Some((scope, _)) = file.split_once(':') {
+            let roots = crate::source_scopes::from_artifacts(&root, &cwd)?;
+            let scope_root = crate::source_scopes::resolve(&roots, scope)?;
+            resolve_evidence_file(&scope_root, &scope_root, relative)?
+        } else {
+            let roots = crate::source_scopes::from_artifacts(&root, &cwd)?;
+            let primary = roots.get("primary").unwrap_or(&root);
+            resolve_evidence_file(&root, primary, relative)?
+        };
         let bytes = fs::read(&path)
             .map_err(|error| format!("evidence source `{locator}` is unreadable: {error}"))?;
         if digest.is_some_and(|digest| format!("sha256:{:x}", Sha256::digest(&bytes)) != digest) {
@@ -212,7 +220,7 @@ pub(crate) fn validate_grounding_shape_version(
         let (file, selector) = locator
             .split_once('#')
             .ok_or_else(|| format!("evidence locator `{locator}` needs a selector"))?;
-        let relative = Path::new(file);
+        let relative = Path::new(file.split_once(':').map_or(file, |(_, path)| path));
         if relative.as_os_str().is_empty()
             || relative.is_absolute()
             || relative.components().any(|component| {

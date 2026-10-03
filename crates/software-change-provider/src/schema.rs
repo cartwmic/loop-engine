@@ -44,7 +44,7 @@ const STRING_KEYWORDS: &[&str] = &["enum", "minLength", "type"];
 // keyword.  These are the closed identifier fields used by the shipped
 // profiles and the Bookends overlay; accepting the patterns only at their
 // known schema paths keeps the schema language deliberately narrow.
-const REQUIREMENT_ID_PATTERN: &str = r"^LE-[1-9][0-9]*$";
+const REQUIREMENT_ID_PATTERN: &str = r"^([A-Za-z0-9_-]+:)?LE-[1-9][0-9]*$";
 const REQUIREMENT_ID_SCHEMA_PATHS: &[&str] = &[
     "/properties/acceptance/items/properties/prd_traceability/properties/live_ids/items",
     "/properties/acceptance/items/properties/prd_traceability/properties/proposed_id",
@@ -298,6 +298,7 @@ struct SchemaNode {
     properties: BTreeMap<String, SchemaNode>,
     required: Vec<String>,
     additional_properties: bool,
+    additional_schema: Option<Box<SchemaNode>>,
     items: Option<Box<SchemaNode>>,
     min_items: Option<u64>,
     min_length: Option<u64>,
@@ -312,6 +313,7 @@ impl SchemaNode {
             properties: BTreeMap::new(),
             required: Vec::new(),
             additional_properties: true,
+            additional_schema: None,
             items: None,
             min_items: None,
             min_length: None,
@@ -382,7 +384,25 @@ fn compile_node(value: &Value, path: &str, violations: &mut Vec<MetaViolation>) 
 
     let properties = compile_properties(object, path, violations);
     let required = compile_required(object, path, &properties, violations);
-    let additional_properties = compile_additional_properties(object, path, violations);
+    let additional_schema = if path == "/properties/source_scopes" {
+        object
+            .get("additionalProperties")
+            .filter(|v| v.is_object())
+            .map(|v| {
+                Box::new(compile_node(
+                    v,
+                    &child_path(path, "additionalProperties"),
+                    violations,
+                ))
+            })
+    } else {
+        None
+    };
+    let additional_properties = if additional_schema.is_some() {
+        true
+    } else {
+        compile_additional_properties(object, path, violations)
+    };
     let items = compile_items(object, path, violations);
     let min_items = compile_nonnegative_integer(object, path, "minItems", violations);
     let min_length = compile_nonnegative_integer(object, path, "minLength", violations);
@@ -394,6 +414,7 @@ fn compile_node(value: &Value, path: &str, violations: &mut Vec<MetaViolation>) 
         properties,
         required,
         additional_properties,
+        additional_schema,
         items,
         min_items,
         min_length,
@@ -669,6 +690,13 @@ fn evaluate_node(
                 }
             }
 
+            if let Some(additional) = &schema.additional_schema {
+                for (name, value) in object {
+                    if !schema.properties.contains_key(name) {
+                        evaluate_node(additional, value, &child_path(path, name), violations);
+                    }
+                }
+            }
             for (name, property_schema) in &schema.properties {
                 if let Some(value) = object.get(name) {
                     evaluate_node(property_schema, value, &child_path(path, name), violations);
@@ -745,7 +773,16 @@ fn evaluate_node(
 }
 
 fn matches_requirement_id_pattern(value: &str) -> bool {
-    matches_numeric_id(value, "LE-")
+    if let Some((scope, _)) = value.split_once(':') {
+        if scope.is_empty()
+            || !scope
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            return false;
+        }
+    }
+    matches_numeric_id(value.split_once(':').map_or(value, |(_, id)| id), "LE-")
 }
 
 fn matches_criterion_id_pattern(value: &str) -> bool {

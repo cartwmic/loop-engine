@@ -69,6 +69,8 @@ fn standard_run_progresses_schema_deny_then_evidence_deny_then_allow() {
         "problem-grounded",
         "acceptance-granularity",
         "owner-comprehensible",
+        "intent-sufficient",
+        "acceptance-sufficient",
     ];
     for author in ["reviewer-a1", "reviewer-a1-second"] {
         for axis in axes {

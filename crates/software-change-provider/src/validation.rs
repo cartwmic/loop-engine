@@ -284,6 +284,7 @@ fn command_evidence(
     expected: Option<&ProofCommand>,
     current_repository: Option<&Value>,
     require_pass: bool,
+    applicable: bool,
 ) -> Result<Value, String> {
     if let Some(result) = data.get("external_result") {
         let spec: ProofCommand =
@@ -300,13 +301,41 @@ fn command_evidence(
         verify_external_shape(result, &spec)?;
         let cwd = Path::new(text(result, "cwd")?);
         let evaluation_cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-        if checkpoint::repository_identity(cwd)?
-            != checkpoint::repository_identity(&evaluation_cwd)?
+        let scopes = crate::source_scopes::from_artifacts(root, &evaluation_cwd)?;
+        let scope = result["source"]
+            .get("scope")
+            .and_then(Value::as_str)
+            .unwrap_or("primary");
+        let scope_root = crate::source_scopes::resolve(&scopes, scope)?;
+        if !cwd
+            .canonicalize()
+            .map_err(|e| e.to_string())?
+            .starts_with(&scope_root)
         {
+            return Err("external command cwd is outside declared source scope".into());
+        }
+        if checkpoint::repository_identity(cwd)? != checkpoint::repository_identity(&scope_root)? {
             return Err("external result is not from the checkpoint repository".into());
         }
         let identity = crate::source_identity::read(cwd)?;
-        if result["source"]["head"] != identity["head"]
+        if applicable {
+            let status = std::process::Command::new("git")
+                .current_dir(cwd)
+                .args([
+                    "merge-base",
+                    "--is-ancestor",
+                    text(&result["source"], "head")?,
+                    "HEAD",
+                ])
+                .status()
+                .map_err(|e| e.to_string())?;
+            if !status.success() || result["exit_code"] != 0 {
+                return Err(
+                    "applicable external result must succeed and name an ancestor-or-equal source"
+                        .into(),
+                );
+            }
+        } else if result["source"]["head"] != identity["head"]
             || result["source"]["state_sha256"] != identity["state_sha256"]
         {
             return Err("stale-source: external command result identity changed".into());
@@ -444,17 +473,6 @@ pub(crate) fn source(
     source_with_expected_target(data, kind, context, root, None, None)
 }
 
-pub(crate) fn source_for_candidate(
-    data: &Value,
-    kind: &str,
-    context: &[ContextRecord],
-    root: &Path,
-    gate: &str,
-    config_version: &str,
-) -> Result<(), String> {
-    source_with_expected_target(data, kind, context, root, Some(gate), Some(config_version))
-}
-
 fn source_with_expected_target(
     data: &Value,
     kind: &str,
@@ -573,7 +591,14 @@ fn source_with_verified_commands(
             ));
         }
         if !verified_command_evidence_ids.is_some_and(|ids| ids.contains(evidence.id.as_str())) {
-            command_evidence(&evidence.data, root, None, None, data["result"] == "pass")?;
+            command_evidence(
+                &evidence.data,
+                root,
+                None,
+                None,
+                data["result"] == "pass",
+                false,
+            )?;
         }
     }
     Ok(())
@@ -708,6 +733,35 @@ pub(crate) fn evaluate(
     let command_ids = ids(&report["command_evidence_ids"])?;
     for id in &command_ids {
         let r = record(context, id)?;
+        let applicable = r.kind == "evidence-applicability";
+        let r = if applicable {
+            let declaration: loop_core::EvidenceApplicability =
+                serde_json::from_value(r.data.clone()).map_err(|e| e.to_string())?;
+            if declaration.origin.kind != "context-record"
+                || declaration.origin.assignment_id.is_some()
+                || declaration.reason.trim().is_empty()
+            {
+                return Err("invalid command applicability declaration".into());
+            }
+            author_identity(&declaration.attesting_driver)?;
+            let revision = text(report, "revision")?;
+            if declaration.target["subject"] != "validation-report.json"
+                || declaration.target["revision"] != revision
+                || declaration.target["checkpoint"]
+                    != json!({"phase":"validation","report_revision":revision})
+            {
+                return Err("stale command applicability target/checkpoint".into());
+            }
+            let original = record(context, &declaration.origin.id)?;
+            if original.sequence >= r.sequence || original.data.get("external_result").is_none() {
+                return Err(
+                    "command applicability requires earlier external command result".into(),
+                );
+            }
+            original
+        } else {
+            r
+        };
         if r.kind != "command-evidence" {
             return Err("command index references wrong record kind".into());
         }
@@ -719,8 +773,15 @@ pub(crate) fn evaluate(
         if !executed.insert(proof_id.to_owned()) {
             return Err("duplicate command proof ID".into());
         }
-        command_evidence(&r.data, root, Some(spec), Some(&repository), true)?;
-        verified_command_evidence_ids.insert(id.clone());
+        command_evidence(
+            &r.data,
+            root,
+            Some(spec),
+            Some(&repository),
+            true,
+            applicable,
+        )?;
+        verified_command_evidence_ids.insert(r.id.as_str().to_owned());
     }
     if executed.len() != specs.len() {
         return Err("missing required named proof command".into());
@@ -840,12 +901,11 @@ pub(crate) fn evaluate(
                 if original.sequence >= r.sequence {
                     return Err("carry requires original earlier verdict".into());
                 }
-                if repair.is_none()
-                    || criterion.is_some_and(|id| affected.contains(&id.to_owned()))
-                    || (criterion.is_none()
-                        && repair.unwrap().data["change_kind"] != "report-index-only")
-                {
-                    return Err("affected criteria and material goal require fresh verdicts; declare unaffected repair scope".into());
+                if criterion.is_some_and(|id| affected.contains(&id.to_owned())) {
+                    return Err(
+                        "affected criteria require fresh verdicts; declare unaffected repair scope"
+                            .into(),
+                    );
                 }
             }
             if original.kind != kind
@@ -939,6 +999,18 @@ pub(crate) fn evaluate(
         }
     }
     Ok(json!({"rows":projection,"complete":complete}))
+}
+
+#[cfg(test)]
+pub(crate) fn source_for_candidate(
+    data: &Value,
+    kind: &str,
+    context: &[ContextRecord],
+    root: &Path,
+    gate: &str,
+    config_version: &str,
+) -> Result<(), String> {
+    source_with_expected_target(data, kind, context, root, Some(gate), Some(config_version))
 }
 
 #[cfg(test)]
