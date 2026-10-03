@@ -837,3 +837,53 @@ fn overlay_on_greenwash_fails_bypass_not_green() {
     assert_eq!(value["feedback"]["details"]["phase"], "finding-ledger");
     assert_eq!(value["feedback"]["details"]["status"], "missing");
 }
+
+#[test]
+fn scoped_bookends_uses_intent_roots_and_defaults_to_primary() {
+    let primary = Repo::new();
+    enable_green_prd(&primary, live_prd());
+    let secondary = Repo::new();
+    enable_green_prd(&secondary, &live_prd().replace("LE-1", "LE-3"));
+    secondary.write("tests/journey.py", "# bookends:LE-3\nprint('ok')\n");
+    secondary.commit_all("secondary citation");
+    let artifacts = TestDir::new("scoped-bookends");
+    let mut intent = intent_with_live_ids(json!(["secondary:LE-3"]));
+    intent["source_scopes"] =
+        json!({"primary":{"root":primary.path()},"secondary":{"root":secondary.path()}});
+    let config = with_root(enable_overlay(load_profile("high-rigor")), &artifacts);
+    for (id, allowed) in [("secondary:LE-3", true), ("secondary:LE-1", false)] {
+        for criterion in intent["acceptance"].as_array_mut().unwrap() {
+            criterion["prd_traceability"]["live_ids"] = json!([id]);
+        }
+        artifacts.write_json("intent.json", &intent);
+        let result = evaluate_in(
+            primary.path(),
+            config.clone(),
+            support::checked("explore", "intent-ready", "intent-review"),
+            json!([]),
+        );
+        if allowed {
+            assert_eq!(result["result"], "allow", "{result}");
+        } else {
+            assert_eq!(
+                result["feedback"]["code"], "software-change-schema-invalid",
+                "{result}"
+            );
+            assert!(schema_rules(&result)
+                .iter()
+                .any(|r| r == "requirement-ids-live"));
+        }
+    }
+    intent.as_object_mut().unwrap().remove("source_scopes");
+    for criterion in intent["acceptance"].as_array_mut().unwrap() {
+        criterion["prd_traceability"]["live_ids"] = json!(["primary:LE-1"]);
+    }
+    artifacts.write_json("intent.json", &intent);
+    let result = evaluate_in(
+        primary.path(),
+        config,
+        support::checked("explore", "intent-ready", "intent-review"),
+        json!([]),
+    );
+    assert_eq!(result["result"], "allow", "{result}");
+}

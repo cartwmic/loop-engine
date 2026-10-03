@@ -927,3 +927,161 @@ fn external_scoped_grounding_and_secondary_checkpoint_staleness() {
         "{stale}"
     );
 }
+
+#[test]
+fn singleton_challenge_clears_independently_of_open_broad_group() {
+    let run = create_run("singleton-clearance", "intent-sufficient", 1);
+    let mut profile: Value = serde_json::from_slice(&fs::read(&run.profile).unwrap()).unwrap();
+    let intent: Value =
+        serde_json::from_slice(&fs::read(run.artifacts.join("intent.json")).unwrap()).unwrap();
+    let axis = |id: &str, group: &str| json!({"id":id,"description":"test obligation","example_prompt":"judge obligation","review_stage":"aggregate","required_authors":1,"group":group});
+    profile["review_policies"]["intent-review"] = json!([
+        axis("intent-sufficient", "intent-review.intent-sufficient"),
+        axis("broad", "intent-review.aggregate")
+    ]);
+    let evidence = |gate: &str, id: &str, group: &str, result: &str, findings: &str| json!({"gate":gate,"policy_id":id,"review_stage":"aggregate","group":group,"result":result,"findings":findings,"author":{"name":"reviewer","kind":"agent"},"subject":"intent.json","subject_revision":intent["revision"],"config_version":run.config_version,"review_contract_version":3,"grounds":{"reason":"inspected current intent","evidence":[{"locator":"intent.json#/revision"}]}});
+    let record = |id: &str, kind: &str, data: Value, seq: u64| json!({"id":id,"kind":kind,"data":data,"sequence":seq,"created_at":seq});
+    let mut ordinary_ledger = ledger(
+        "intent-review",
+        "intent.json",
+        intent["revision"].as_str().unwrap(),
+    );
+    ordinary_ledger["findings"] = json!([{"id":"F-broad-open","source":{"kind":"context-record","id":"broad-failure"},"policy_id":"broad","statement":"broad obligation remains unmet","disposition":"accepted","reason":"material defect","owner_phase":"intent","task_ids":[],"review_axes":["broad"],"status":"unresolved"}]);
+    for (id, group, allowed) in [
+        (
+            "intent-sufficient",
+            "intent-adversarial-review.intent-sufficient",
+            true,
+        ),
+        ("broad", "intent-adversarial-review.aggregate", false),
+    ] {
+        profile["review_policies"]["intent-adversarial-review"] = json!([axis(id, group)]);
+        let workflow = prepare(
+            &run,
+            &[],
+            &json!({"operation":"describe","initial_input":profile}),
+        );
+        let context = json!([
+            record(
+                "singleton-pass",
+                "review-evidence",
+                evidence(
+                    "intent-review",
+                    "intent-sufficient",
+                    "intent-review.intent-sufficient",
+                    "pass",
+                    ""
+                ),
+                1
+            ),
+            record(
+                "broad-failure",
+                "review-evidence",
+                evidence(
+                    "intent-review",
+                    "broad",
+                    "intent-review.aggregate",
+                    "fail",
+                    "broad obligation remains unmet"
+                ),
+                2
+            ),
+            record(
+                "ordinary-ledger",
+                "finding-ledger",
+                ordinary_ledger.clone(),
+                3
+            ),
+            record(
+                "challenge-pass",
+                "review-evidence",
+                evidence("intent-adversarial-review", id, group, "pass", ""),
+                4
+            ),
+            record(
+                "challenge-ledger",
+                "finding-ledger",
+                ledger(
+                    "intent-adversarial-review",
+                    "intent.json",
+                    intent["revision"].as_str().unwrap()
+                ),
+                5
+            )
+        ]);
+        let result = prepare(
+            &run,
+            &[],
+            &json!({"operation":"evaluate","workflow":workflow,"initial_input":profile,"context":context,"transition":{"source":"intent-adversarial-review","event":"approved","target":"design","kind":"checked"},"prior_evaluations":[]}),
+        );
+        if allowed {
+            assert_eq!(result["result"], "allow", "{result}");
+        } else {
+            assert_eq!(
+                result["feedback"]["message"], "challenge-before-ordinary-clearance",
+                "{result}"
+            );
+        }
+    }
+}
+
+#[test]
+fn baseline_and_residual_schema_negatives_are_refused_publicly() {
+    let run = create_run("schema-negatives", "schema-check", 1);
+    let profile: Value = serde_json::from_slice(&fs::read(&run.profile).unwrap()).unwrap();
+    let workflow = prepare(
+        &run,
+        &[],
+        &json!({"operation":"describe","initial_input":profile}),
+    );
+    for (file, source, event, target, field, value) in [
+        (
+            "intent.json",
+            "explore",
+            "intent-ready",
+            "intent-review",
+            "baseline",
+            json!({"kind":"git","repository_scope":"primary"}),
+        ),
+        (
+            "implementation-report.json",
+            "implementation-review",
+            "approved",
+            "implementation-adversarial-review",
+            "residuals",
+            json!([{"kind":"unknown","statement":"concrete residual","references":[]}]),
+        ),
+        (
+            "validation-report.json",
+            "validation-review",
+            "approved",
+            "validation-adversarial-review",
+            "residuals",
+            json!([{"kind":"unknown","statement":"concrete residual","references":[]}]),
+        ),
+    ] {
+        let path = run.artifacts.join(file);
+        let original: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let mut invalid = original.clone();
+        invalid[field] = value;
+        write_json(&path, &invalid);
+        let result = prepare(
+            &run,
+            &[],
+            &json!({"operation":"evaluate","workflow":workflow,"initial_input":profile,"context":[],"transition":{"source":source,"event":event,"target":target,"kind":"checked"},"prior_evaluations":[]}),
+        );
+        assert_eq!(
+            result["feedback"]["code"], "software-change-schema-invalid",
+            "{result}"
+        );
+        assert!(
+            result["feedback"]["details"]["violations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v["path"].as_str().is_some_and(|p| p.contains(field))),
+            "{result}"
+        );
+        write_json(&path, &original);
+    }
+}

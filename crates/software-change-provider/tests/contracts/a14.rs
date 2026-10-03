@@ -1094,3 +1094,195 @@ fn validation_rechecks_external_results_and_reference_inputs_on_each_public_call
         json!({"result":"allow"})
     );
 }
+
+#[test]
+fn scoped_external_results_verify_secondary_identity() {
+    let artifacts = TestDir::new("validation-cache-artifacts");
+    let repository = TestDir::new("validation-cache-repository");
+    init_validation_repository(repository.path());
+    let repository_path = repository
+        .path()
+        .canonicalize()
+        .expect("canonical repository");
+
+    for (name, fixture) in [
+        ("intent.json", "intent-good.json"),
+        ("design.json", "design-good.json"),
+        (
+            "implementation-report.json",
+            "implementation-report-good.json",
+        ),
+    ] {
+        artifacts.write_json(name, &support::load_fixture(fixture));
+    }
+    let mut plan = support::executable_fixture_plan();
+    let original_commands = plan["proof_commands"]
+        .as_array()
+        .expect("fixture proof commands")
+        .clone();
+    // The current run-local prepare helper requires four named commands. Keep
+    // this test's workload real while giving it four distinct obligations.
+    plan["proof_commands"] = json!((0..4)
+        .map(|index| {
+            let mut command = original_commands[index % original_commands.len()].clone();
+            command["id"] = json!(format!("validation-cache-proof-{index}"));
+            command
+        })
+        .collect::<Vec<_>>());
+    artifacts.write_json("plan.json", &plan);
+
+    let secondary = TestDir::new("scoped-external-secondary");
+    init_validation_repository(secondary.path());
+    fs::write(
+        secondary.path().join("marker.txt"),
+        b"distinct secondary source\n",
+    )
+    .unwrap();
+    for args in [
+        vec!["add", "-A"],
+        vec!["commit", "-qm", "secondary identity"],
+    ] {
+        assert!(Command::new("git")
+            .current_dir(secondary.path())
+            .args(args)
+            .status()
+            .unwrap()
+            .success());
+    }
+    let mut intent = support::load_fixture("intent-good.json");
+    intent["source_scopes"] =
+        json!({"primary":{"root":repository.path()},"secondary":{"root":secondary.path()}});
+    artifacts.write_json("intent.json", &intent);
+
+    let implementation_checkpoint = Command::new(provider_binary())
+        .args([
+            "checkpoint",
+            "--phase",
+            "implementation",
+            "--artifact-root",
+            artifacts.path().to_str().expect("artifact root"),
+            "--working-directory",
+            repository_path.to_str().expect("repository"),
+        ])
+        .current_dir(&repository_path)
+        .output()
+        .expect("implementation checkpoint");
+    assert!(
+        implementation_checkpoint.status.success(),
+        "implementation checkpoint failed: {}",
+        String::from_utf8_lossy(&implementation_checkpoint.stderr)
+    );
+
+    let input = support::config_artifact_root(support::load_profile("minimal"), &artifacts);
+    let config_version = input["config_version"].as_str().expect("config version");
+    let mut implementation_context = Vec::new();
+    append_review_records(
+        &mut implementation_context,
+        "implementation-adversarial-review",
+        "implementation-report.json",
+        "r15",
+        config_version,
+        &[
+            "tasks-actually-done",
+            "no-scope-creep",
+            "design-faithful-final",
+        ],
+    );
+    let implementation_request = support::base_request(
+        input.clone(),
+        support::checked(
+            "implementation-adversarial-review",
+            "approved",
+            "validation",
+        ),
+    );
+    let mut implementation_request = implementation_request;
+    implementation_request["context"] = Value::Array(implementation_context);
+    assert_eq!(
+        validation_response(&implementation_request, &repository_path),
+        json!({"result": "allow"})
+    );
+
+    let records = support::validation_fixture(&input, &repository_path);
+    let mut context: Vec<Value> = records
+        .iter()
+        .enumerate()
+        .map(|(index, record)| {
+            json!({
+                "id": record["record_id"],
+                "kind": record["kind"],
+                "data": record["data"],
+                "sequence": index + 1,
+                "created_at": index + 1
+            })
+        })
+        .collect();
+    append_review_records(
+        &mut context,
+        "validation-review",
+        "validation-report.json",
+        "r15",
+        config_version,
+        &[
+            "intent-delivered",
+            "docs-integrated",
+            "requirement-proof-mapping",
+        ],
+    );
+    let context = Value::Array(context);
+    let mut request = support::base_request(
+        input,
+        support::checked(
+            "validation-review",
+            "approved",
+            "validation-adversarial-review",
+        ),
+    );
+    request["context"] = context;
+
+    assert_eq!(
+        validation_response(&request, repository.path()),
+        json!({"result": "allow"})
+    );
+
+    let output = Command::new(provider_binary())
+        .args([
+            "source-identity",
+            "--working-directory",
+            secondary.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let mut identity: Value = serde_json::from_slice(&output.stdout).unwrap();
+    identity["scope"] = json!("secondary");
+    let command = request["context"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|r| r["kind"] == "command-evidence")
+        .unwrap();
+    let primary_identity = command["data"]["external_result"]["source"].clone();
+    command["data"]["external_result"]["cwd"] = json!(secondary.path());
+    command["data"]["external_result"]["source"] = identity;
+    let result = validation_response(&request, repository.path());
+    assert_eq!(result["result"], "allow", "{result}");
+    for mut wrong in [
+        primary_identity,
+        json!({"head":"stale", "state_sha256":"stale"}),
+    ] {
+        wrong["scope"] = json!("secondary");
+        let mut altered = request.clone();
+        altered["context"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|r| r["kind"] == "command-evidence")
+            .unwrap()["data"]["external_result"]["source"] = wrong;
+        assert_validation_denied(
+            &altered,
+            repository.path(),
+            "software-change-criterion-incomplete",
+        );
+    }
+}

@@ -1155,9 +1155,7 @@ fn load_bookends_report(request: &EvaluateRequest) -> Result<bookends_check::Che
     let bypass = bypass
         .as_ref()
         .map(|(class, reason)| (class.as_str(), reason.as_str()));
-    let scopes = if let Some(declaration) = request.initial_input.get("source_scopes") {
-        crate::source_scopes::roots(Some(declaration), &cwd)?
-    } else if let Some(root) = request.initial_input["artifact_root"].as_str() {
+    let scopes = if let Some(root) = request.initial_input["artifact_root"].as_str() {
         crate::source_scopes::from_artifacts(std::path::Path::new(root), &cwd)?
     } else {
         crate::source_scopes::roots(None, &cwd)?
