@@ -5,25 +5,22 @@
 //! atomicity and backend mechanics; operations only construct the semantic
 //! requests described by the ports.
 
-pub mod amend_binding;
 pub mod append;
 pub mod evaluation;
 pub mod event;
 pub mod history;
-pub mod invoke;
 pub mod list;
 pub mod show;
 pub mod start;
 pub mod terminate;
 
-pub use crate::invocation::{instruction_digest, project_invocation_status};
+pub use crate::invocation::project_invocation_status;
 /// Start-facing catalog and frozen-binding contract types.
 pub use crate::{WorkSlot, WorkSlotBinding, WorkSlotId};
 pub use append::{execute as execute_append, Request as AppendRequest};
 pub use evaluation::{lineage_for_transition, request_from_snapshot};
 pub use event::{execute as execute_event, Request as EventRequest, Result as EventResult};
 pub use history::{execute as execute_history, Request as HistoryRequest};
-pub use invoke::{execute as execute_invoke, Request as InvokeRequest, Result as InvokeResult};
 pub use list::{execute as execute_list, Request as ListRequest};
 pub use show::{
     execute as execute_show, latest_evaluations, project as project_show, ProjectionError,
@@ -37,31 +34,6 @@ use crate::{
     ControlRevision, OperationOutcome, OutcomeIssue, Persistence, PersistenceError, ProviderError,
     ProviderResolutionError, RunId, WorkflowValidationError,
 };
-
-/// Shared quiescence guarantee for state departure (including future override).
-/// It is independent of the selected edge's bound completion requirement.
-pub fn require_quiescent_work<P, T>(
-    run: &crate::Run,
-    persistence: &P,
-) -> Result<(), OperationOutcome<T>>
-where
-    P: Persistence + ?Sized,
-{
-    if run.workflow.work_slots.is_empty() {
-        return Ok(());
-    }
-    let rows = persistence
-        .load_work_slot_invocations(&run.id)
-        .map_err(persistence_error)?;
-    for row in rows {
-        if crate::invocation_owns_work(&row, persistence.invocation_waiter_alive(&row)) {
-            return Err(OperationOutcome::rejected("live-owned-work", format!(
-                "invocation `{}` owns live work or pending cleanup (including overrun); wait or cancel-invocation {} {} before leaving this visit",
-                row.invocation_id, run.id, row.invocation_id)));
-        }
-    }
-    Ok(())
-}
 
 /// Classify a provider-resolution failure as an operation error.
 pub(crate) fn provider_resolution_error<T>(error: ProviderResolutionError) -> OperationOutcome<T> {
@@ -331,35 +303,12 @@ mod tests {
             unavailable()
         }
 
-        fn create_work_slot_invocation(
-            &self,
-            _request: crate::CreateWorkSlotInvocationRequest,
-        ) -> Result<crate::CreateWorkSlotInvocationResult, PersistenceError> {
-            unavailable()
-        }
-
-        fn complete_work_slot_invocation(
-            &self,
-            _request: crate::CompleteWorkSlotInvocationRequest,
-        ) -> Result<crate::CompleteWorkSlotInvocationResult, PersistenceError> {
-            unavailable()
-        }
-
         fn get_current_slot_subject(
             &self,
             _run_id: &RunId,
             _slot_id: &crate::WorkSlotId,
         ) -> Result<Option<String>, PersistenceError> {
             Ok(None)
-        }
-
-        fn set_current_slot_subject(
-            &self,
-            _run_id: &RunId,
-            _slot_id: &crate::WorkSlotId,
-            _subject: String,
-        ) -> Result<(), PersistenceError> {
-            Ok(())
         }
 
         fn load_work_slot_invocations(

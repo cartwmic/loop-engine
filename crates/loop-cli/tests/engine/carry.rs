@@ -1,9 +1,8 @@
 use super::bounded_process::CommandExt;
 use loop_core::{
-    AppendContextRequest, CommitTransitionRequest, CompleteWorkSlotInvocationRequest,
-    CreateRunRequest, CreateWorkSlotInvocationRequest, EvaluationFeedback, InnerWorker, Lifecycle,
-    Persistence, ProviderAssociation, RecordDenialRequest, State, Timestamp, Transition,
-    WaiterWrittenStatus, WorkSlot, WorkSlotBinding, Workflow,
+    AppendContextRequest, CommitTransitionRequest, CreateRunRequest, EvaluationFeedback,
+    InnerWorker, Lifecycle, Persistence, ProviderAssociation, RecordDenialRequest, State,
+    Timestamp, Transition, WorkSlot, Workflow,
 };
 use loop_integrations::SqlitePersistence;
 use serde_json::{json, Value};
@@ -36,12 +35,6 @@ fn selected_worker(assignment: &str, path: &Path) -> InnerWorker {
     worker
 }
 
-fn outputless_worker(assignment: &str) -> InnerWorker {
-    let mut worker = InnerWorker::new("/bin/worker", vec!["--review".to_owned()], 0);
-    worker.assignment_id = assignment.to_owned();
-    worker
-}
-
 fn create_run(persistence: &SqlitePersistence, run_id: &str) {
     persistence
         .create_run(CreateRunRequest::new(
@@ -65,53 +58,19 @@ fn create_run(persistence: &SqlitePersistence, run_id: &str) {
     persistence
         .load_show_data(&run_id.into())
         .expect("observe run");
-    persistence
-        .set_current_slot_subject(&run_id.into(), &"review".into(), "subject-v1".to_owned())
-        .expect("set subject");
 }
 
 fn create_completed_invocation(
-    persistence: &SqlitePersistence,
+    database: &Path,
     run_id: &str,
     invocation_id: &str,
     capture_dir: &Path,
     workers: Vec<InnerWorker>,
 ) {
-    persistence
-        .create_work_slot_invocation(
-            CreateWorkSlotInvocationRequest::new(
-                run_id,
-                invocation_id,
-                "review",
-                WorkSlotBinding::new("/bin/worker", vec!["--review".to_owned()]),
-                "instruction-v1",
-                "subject-v1",
-                0,
-                Timestamp::from_unix_millis(3),
-                1_000,
-                capture_dir.to_string_lossy(),
-            )
-            .with_frozen_run_identity(json!({
-                "provider": {"identity": "provider-v1"},
-                "input": {
-                    "policy": "v1",
-                    "work_slot_bindings": {
-                        "review": {"command": "/bin/worker", "args": ["--review"]}
-                    }
-                }
-            })),
-        )
-        .expect("create invocation");
-    persistence
-        .complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
-            run_id,
-            invocation_id,
-            WaiterWrittenStatus::Succeeded,
-            0,
-            Timestamp::from_unix_millis(4),
-            workers,
-        ))
-        .expect("complete invocation");
+    rusqlite::Connection::open(database).unwrap().execute(
+        r#"INSERT INTO work_slot_invocations (run_id, invocation_id, slot_id, binding_json, instruction_digest, subject, waiter_pid, started_at, allowed_time_ms, status, exit_code, completed_at, capture_dir, inner_workers_json) VALUES (?1, ?2, 'review', '{"command":"/bin/worker","args":["--review"]}', 'instruction-v1', 'subject-v1', 0, 3, 1000, 'succeeded', 0, 4, ?3, ?4)"#,
+        rusqlite::params![run_id, invocation_id, capture_dir.to_string_lossy(), serde_json::to_string(&workers).unwrap()],
+    ).unwrap();
 }
 
 fn cli(database: &Path, args: &[&str]) -> (i32, Value, String) {
@@ -135,142 +94,6 @@ fn show(database: &Path) -> Value {
 }
 
 #[test]
-fn append_resolves_selected_assignment_from_durable_state_only() {
-    let directory = tempdir().expect("tempdir");
-    let database = directory.path().join("loop.sqlite");
-    let capture = directory.path().join("capture");
-    create_run(
-        &SqlitePersistence::open(&database).expect("sqlite"),
-        "stable-run",
-    );
-    let persistence = SqlitePersistence::open(&database).expect("reopen sqlite");
-    create_completed_invocation(
-        &persistence,
-        "stable-run",
-        "invocation-1",
-        &capture,
-        vec![selected_worker(
-            "axis-a",
-            &capture.join("axis-a/attempts/2/stdout"),
-        )],
-    );
-
-    let (_, linked, _) = cli(
-        &database,
-        &[
-            "append",
-            "stable-run",
-            "review-evidence",
-            r#"{"axis":"axis-a","result":"pass","findings":"","origin":{"kind":"selected-assignment-output","id":"invocation-1","assignment_id":"axis-a"}}"#,
-        ],
-    );
-    assert_eq!(linked["status"], "completed");
-    let context = &linked["result"]["context"];
-    assert_eq!(context["data"]["origin"]["id"], "invocation-1");
-    assert_eq!(context["data"]["origin"]["assignment_id"], "axis-a");
-    assert_eq!(
-        context["data"]["loop_engine_origin"],
-        json!({
-            "invocation_id": "invocation-1",
-            "assignment_id": "axis-a",
-            "slot_id": "review",
-            "selected_attempt": 2,
-            "selected_output_sha256": "sha256:selected-output",
-            "selected_output_path": capture.join("axis-a/attempts/2/stdout").to_string_lossy(),
-            "capture_dir": capture.to_string_lossy(),
-            "command": "/bin/worker",
-            "args": ["--review"],
-            "binding": {"command": "/bin/worker", "args": ["--review"]}
-        })
-    );
-}
-
-#[test]
-fn append_rejects_missing_cross_run_unknown_and_outputless_origins() {
-    let directory = tempdir().expect("tempdir");
-    let database = directory.path().join("loop.sqlite");
-    let persistence = SqlitePersistence::open(&database).expect("sqlite");
-    create_run(&persistence, "stable-run");
-    let capture = directory.path().join("capture");
-    create_completed_invocation(
-        &persistence,
-        "stable-run",
-        "invocation-1",
-        &capture,
-        vec![selected_worker(
-            "axis-a",
-            &capture.join("axis-a/attempts/2/stdout"),
-        )],
-    );
-    create_completed_invocation(
-        &persistence,
-        "stable-run",
-        "invocation-empty",
-        &directory.path().join("empty-capture"),
-        vec![outputless_worker("axis-empty")],
-    );
-
-    let cases = [
-        (
-            "missing-assignment",
-            r#"{"origin":{"kind":"selected-assignment-output","id":"invocation-1"}}"#,
-        ),
-        (
-            "unknown-invocation",
-            r#"{"origin":{"kind":"selected-assignment-output","id":"missing","assignment_id":"axis-a"}}"#,
-        ),
-        (
-            "unknown-assignment",
-            r#"{"origin":{"kind":"selected-assignment-output","id":"invocation-1","assignment_id":"missing"}}"#,
-        ),
-        (
-            "outputless",
-            r#"{"origin":{"kind":"selected-assignment-output","id":"invocation-empty","assignment_id":"axis-empty"}}"#,
-        ),
-    ];
-    for (record_id, data) in cases {
-        let (_, result, _) = cli(
-            &database,
-            &[
-                "append",
-                "stable-run",
-                "review-evidence",
-                data,
-                "--record-id",
-                record_id,
-            ],
-        );
-        assert_eq!(result["status"], "rejected", "{record_id}: {result}");
-        assert_eq!(
-            result["code"], "selected-output-linkage-refused",
-            "{result}"
-        );
-    }
-
-    create_run(&persistence, "other-run");
-    create_completed_invocation(
-        &persistence,
-        "other-run",
-        "foreign-invocation",
-        &directory.path().join("foreign-capture"),
-        vec![outputless_worker("foreign")],
-    );
-    let (_, cross_run, _) = cli(
-        &database,
-        &[
-            "append",
-            "stable-run",
-            "review-evidence",
-            r#"{"origin":{"kind":"selected-assignment-output","id":"foreign-invocation","assignment_id":"foreign"}}"#,
-            "--record-id",
-            "cross-run",
-        ],
-    );
-    assert_eq!(cross_run["status"], "rejected");
-    assert_eq!(cross_run["code"], "selected-output-linkage-refused");
-}
-
-#[test]
 fn append_rejects_caller_spoof_and_legacy_new_operations() {
     let directory = tempdir().expect("tempdir");
     let database = directory.path().join("loop.sqlite");
@@ -278,7 +101,7 @@ fn append_rejects_caller_spoof_and_legacy_new_operations() {
     create_run(&persistence, "stable-run");
     let capture = directory.path().join("capture");
     create_completed_invocation(
-        &persistence,
+        &database,
         "stable-run",
         "invocation-1",
         &capture,
@@ -300,7 +123,7 @@ fn append_rejects_caller_spoof_and_legacy_new_operations() {
         ],
     );
     assert_eq!(spoofed["status"], "rejected");
-    assert_eq!(spoofed["code"], "selected-output-linkage-refused");
+    assert_eq!(spoofed["code"], "selected-assignment-output-retired");
 
     for kind in ["unchanged-carry", "override-carry"] {
         let (_, retired, _) = cli(
@@ -398,108 +221,6 @@ fn evidence_applicability_is_concise_same_run_context_and_stays_visible() {
 }
 
 #[test]
-fn detailed_compact_and_history_are_capture_free_and_terminal_history_remains_readable() {
-    let directory = tempdir().expect("tempdir");
-    let database = directory.path().join("loop.sqlite");
-    let persistence = SqlitePersistence::open(&database).expect("sqlite");
-    create_run(&persistence, "stable-run");
-    let capture = directory.path().join("capture");
-    create_completed_invocation(
-        &persistence,
-        "stable-run",
-        "invocation-1",
-        &capture,
-        vec![selected_worker(
-            "axis-a",
-            &capture.join("axis-a/attempts/2/stdout"),
-        )],
-    );
-    // No selected stdout file is created. Neither projection needs to read it.
-    let (_, linked, _) = cli(
-        &database,
-        &[
-            "append",
-            "stable-run",
-            "review-evidence",
-            r#"{"origin":{"kind":"selected-assignment-output","id":"invocation-1","assignment_id":"axis-a"}}"#,
-        ],
-    );
-    assert_eq!(linked["status"], "completed");
-
-    let detailed = show(&database);
-    assert_eq!(detailed["status"], "completed");
-    let worker = &detailed["result"]["work_slot_invocations"][0]["inner_workers"][0];
-    assert_eq!(worker["selected_attempt"], 2);
-    assert_eq!(worker["selected_output_sha256"], "sha256:selected-output");
-    assert_eq!(
-        worker["selected_output_path"],
-        capture
-            .join("axis-a/attempts/2/stdout")
-            .to_string_lossy()
-            .into_owned()
-    );
-    assert_eq!(
-        detailed["result"]["context"][0]["data"]["loop_engine_origin"]["command"],
-        "/bin/worker"
-    );
-
-    let compact = Command::new(workspace_integration::binary("loop-engine"))
-        .args([
-            "--database",
-            database.to_str().expect("database path"),
-            "--compact",
-            "show",
-            "stable-run",
-        ])
-        .bounded_output("loop-engine compact stable references")
-        .expect("compact show");
-    assert!(compact.status.success(), "{compact:?}");
-    assert!(String::from_utf8_lossy(&compact.stdout).contains("completed show --view status"));
-    let (_, status, _) = cli(&database, &["show", "--view", "status", "stable-run"]);
-    assert_eq!(status["status"], "completed");
-    assert_eq!(status["result"]["acceptance"]["state"], "unknown");
-    assert_eq!(
-        status["result"]["locators"]["full"],
-        json!([
-            "loop-engine",
-            "--database",
-            database,
-            "--json",
-            "show",
-            "stable-run",
-            "--view",
-            "full"
-        ])
-    );
-
-    let (_, terminated, _) = cli(&database, &["terminate", "stable-run"]);
-    assert_eq!(terminated["status"], "completed", "{terminated}");
-    let (_, history, _) = cli(&database, &["history", "stable-run"]);
-    assert_eq!(history["status"], "completed");
-    let entries = history["result"].as_array().expect("history entries");
-    assert!(entries
-        .iter()
-        .any(|entry| entry["action"]["kind"] == "context_appended"));
-    assert!(entries
-        .iter()
-        .any(|entry| entry["action"]["kind"] == "terminated"));
-
-    let (_, after_terminal, _) = cli(
-        &database,
-        &[
-            "append",
-            "stable-run",
-            "note",
-            "{}",
-            "--record-id",
-            "after-terminal",
-        ],
-    );
-    assert_eq!(after_terminal["status"], "rejected");
-    assert_eq!(after_terminal["code"], "run-not-active");
-}
-
-#[test]
 fn core_legacy_carry_requests_decode_but_are_not_executed() {
     let request = serde_json::from_value::<AppendContextRequest>(json!({
         "run_id": "run-1",
@@ -556,38 +277,16 @@ fn create_acceptance_run(persistence: &SqlitePersistence, run_id: &str) {
 }
 
 fn create_completed_invocation_without_worker_output(
-    persistence: &SqlitePersistence,
+    database: &Path,
     run_id: &str,
     invocation_id: &str,
     capture_dir: &Path,
 ) {
-    // invocation-progress refuses a missing capture directory, so the seeded
-    // directory exists while its receipt files stay absent (unknown worker).
-    fs::create_dir_all(capture_dir).expect("capture directory");
-    persistence
-        .create_work_slot_invocation(CreateWorkSlotInvocationRequest::new(
-            run_id,
-            invocation_id,
-            "review",
-            WorkSlotBinding::new("/bin/worker", vec!["--review".to_owned()]),
-            "instruction-v1",
-            "subject-v1",
-            0,
-            Timestamp::from_unix_millis(3),
-            1_000,
-            capture_dir.to_string_lossy(),
-        ))
-        .expect("create invocation");
-    persistence
-        .complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
-            run_id,
-            invocation_id,
-            WaiterWrittenStatus::Succeeded,
-            0,
-            Timestamp::from_unix_millis(4),
-            vec![],
-        ))
-        .expect("complete invocation");
+    let workers: Vec<InnerWorker> = Vec::new();
+    rusqlite::Connection::open(database).unwrap().execute(
+        r#"INSERT INTO work_slot_invocations (run_id, invocation_id, slot_id, binding_json, instruction_digest, subject, waiter_pid, started_at, allowed_time_ms, status, exit_code, completed_at, capture_dir, inner_workers_json) VALUES (?1, ?2, 'review', '{"command":"/bin/worker","args":["--review"]}', 'instruction-v1', 'subject-v1', 0, 3, 1000, 'succeeded', 0, 4, ?3, ?4)"#,
+        rusqlite::params![run_id, invocation_id, capture_dir.to_string_lossy(), serde_json::to_string(&workers).unwrap()],
+    ).unwrap();
 }
 
 fn accepted_decision(locator: &str, driver: &str, target: Value) -> Value {
@@ -624,7 +323,7 @@ fn public_show_projects_explicit_accepted_result_separate_from_execution_and_wor
     create_acceptance_run(&persistence, "acceptance-run");
     let capture = directory.path().join("capture");
     create_completed_invocation_without_worker_output(
-        &persistence,
+        &database,
         "acceptance-run",
         "invocation-1",
         &capture,
@@ -702,7 +401,7 @@ fn public_show_acceptance_stays_unknown_for_arbitrary_conflicting_stale_and_mism
     create_acceptance_run(&persistence, "stale-run");
     create_acceptance_run(&persistence, "mismatch-run");
     create_completed_invocation_without_worker_output(
-        &persistence,
+        &database,
         "mismatch-run",
         "invocation-1",
         &directory.path().join("capture"),
@@ -923,7 +622,7 @@ fn public_monitor_projects_accepted_observation_and_stays_unknown_without_it() {
     create_acceptance_run(&persistence, "monitor-run");
     let capture = directory.path().join("capture");
     create_completed_invocation_without_worker_output(
-        &persistence,
+        &database,
         "monitor-run",
         "invocation-1",
         &capture,
@@ -977,7 +676,7 @@ fn public_show_projects_explicit_rejected_decision_and_keeps_lanes_separate() {
     create_acceptance_run(&persistence, "rejected-run");
     let capture = directory.path().join("capture");
     create_completed_invocation_without_worker_output(
-        &persistence,
+        &database,
         "rejected-run",
         "invocation-1",
         &capture,

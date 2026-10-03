@@ -3,14 +3,11 @@
 use super::{persistence_error, provider_error, provider_resolution_error, workflow_error};
 use crate::{
     CreateRunRequest, CreateRunResult, Lifecycle, OperationOutcome, ProviderGateway,
-    ProviderResolver, ProviderSelector, Timestamp, WorkSlotId,
+    ProviderResolver, ProviderSelector, Timestamp,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-
-static VISIT_SUBJECT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Caller-supplied values needed to create a run.
 ///
@@ -127,7 +124,6 @@ where
     let (composed_input, recorded_artifact_root) =
         compose_stored_input(request.initial_input, &allocated);
 
-    let slot_subjects = slot_subjects_for_state(&workflow, &initial_state);
     let create = CreateRunRequest::new(
         request.id,
         request.label,
@@ -139,8 +135,7 @@ where
         request.created_at,
         request.provider.as_str().to_owned(),
         Some(recorded_artifact_root),
-    )
-    .with_slot_subjects(slot_subjects);
+    );
 
     match persistence.create_run(create) {
         Ok(result) => OperationOutcome::completed(result),
@@ -253,44 +248,17 @@ fn compose_stored_input(initial_input: Value, allocated_canonical: &Path) -> (Va
     }
 }
 
-fn current_timestamp() -> Timestamp {
-    let millis = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
-        .unwrap_or(0);
-    Timestamp::from_unix_millis(millis)
-}
-
-fn mint_visit_subject(slot_id: &WorkSlotId) -> String {
-    let millis = current_timestamp().as_unix_millis();
-    let suffix = VISIT_SUBJECT_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("visit-{slot_id}-{millis}-{suffix}")
-}
-
-fn slot_subjects_for_state(
-    workflow: &crate::Workflow,
-    state_id: &crate::StateId,
-) -> Vec<(WorkSlotId, String)> {
-    workflow
-        .work_slots
-        .iter()
-        .filter(|slot| slot.state == *state_id)
-        .map(|slot| (slot.id.clone(), mint_visit_subject(&slot.id)))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::WorkSlot;
+    use crate::WorkSlotId;
     use crate::{
         AppendContextRequest, AppendContextResult, CheckedEvaluationSnapshot,
         CheckedEvaluationSnapshotRequest, CommitTransitionRequest, CommitTransitionResult,
-        CompleteWorkSlotInvocationRequest, CompleteWorkSlotInvocationResult, ContextRecord,
-        CreateRunRequest, DurableEvaluation, HistoryEntry, Persistence, PersistenceError,
-        PersistenceFailure, ProviderAssociation, ProviderError, ProviderResolutionError, Run,
-        RunId, RunSummary, ShowData, State, TerminateRequest, TerminateResult, Transition,
-        WorkSlotInvocation, Workflow,
+        ContextRecord, CreateRunRequest, DurableEvaluation, HistoryEntry, Persistence,
+        PersistenceError, PersistenceFailure, ProviderAssociation, ProviderError,
+        ProviderResolutionError, Run, RunId, RunSummary, ShowData, State, TerminateRequest,
+        TerminateResult, Transition, WorkSlotInvocation, Workflow,
     };
     use serde_json::json;
     use std::cell::RefCell;
@@ -306,10 +274,6 @@ mod tests {
             ],
             vec![Transition::check_free("start", "finish", "done")],
         )
-    }
-
-    fn slotted_workflow() -> Workflow {
-        workflow().with_work_slots(vec![WorkSlot::new("slot-1", "start", "approve")])
     }
 
     fn run_from(request: &CreateRunRequest) -> Run {
@@ -379,7 +343,6 @@ mod tests {
         created: RefCell<Vec<CreateRunRequest>>,
         set_subject_calls: RefCell<Vec<(RunId, WorkSlotId, String)>>,
         subjects: RefCell<std::collections::BTreeMap<String, String>>,
-        set_subject_error: RefCell<Option<PersistenceError>>,
     }
 
     impl Persistence for RecordingPersistence {
@@ -387,28 +350,6 @@ mod tests {
             &self,
             request: CreateRunRequest,
         ) -> std::result::Result<CreateRunResult, PersistenceError> {
-            if let Some(error) = self.set_subject_error.borrow_mut().take() {
-                if !request.slot_subjects.is_empty() {
-                    for (slot_id, subject) in &request.slot_subjects {
-                        self.set_subject_calls.borrow_mut().push((
-                            request.id.clone(),
-                            slot_id.clone(),
-                            subject.clone(),
-                        ));
-                    }
-                    return Err(error);
-                }
-            }
-            for (slot_id, subject) in &request.slot_subjects {
-                self.set_subject_calls.borrow_mut().push((
-                    request.id.clone(),
-                    slot_id.clone(),
-                    subject.clone(),
-                ));
-                self.subjects
-                    .borrow_mut()
-                    .insert(slot_id.as_str().to_owned(), subject.clone());
-            }
             self.created.borrow_mut().push(request.clone());
             Ok(CreateRunResult {
                 run: run_from(&request),
@@ -490,46 +431,12 @@ mod tests {
             failure()
         }
 
-        fn create_work_slot_invocation(
-            &self,
-            _request: crate::CreateWorkSlotInvocationRequest,
-        ) -> std::result::Result<crate::CreateWorkSlotInvocationResult, PersistenceError> {
-            failure()
-        }
-
-        fn complete_work_slot_invocation(
-            &self,
-            _request: CompleteWorkSlotInvocationRequest,
-        ) -> std::result::Result<CompleteWorkSlotInvocationResult, PersistenceError> {
-            failure()
-        }
-
         fn get_current_slot_subject(
             &self,
             _run_id: &RunId,
             slot_id: &WorkSlotId,
         ) -> std::result::Result<Option<String>, PersistenceError> {
             Ok(self.subjects.borrow().get(slot_id.as_str()).cloned())
-        }
-
-        fn set_current_slot_subject(
-            &self,
-            run_id: &RunId,
-            slot_id: &WorkSlotId,
-            subject: String,
-        ) -> std::result::Result<(), PersistenceError> {
-            self.set_subject_calls.borrow_mut().push((
-                run_id.clone(),
-                slot_id.clone(),
-                subject.clone(),
-            ));
-            if let Some(error) = self.set_subject_error.borrow_mut().take() {
-                return Err(error);
-            }
-            self.subjects
-                .borrow_mut()
-                .insert(slot_id.as_str().to_owned(), subject);
-            Ok(())
         }
 
         fn load_work_slot_invocations(
@@ -556,33 +463,6 @@ mod tests {
     }
 
     #[test]
-    fn start_mints_subject_when_initial_state_is_a_slot() {
-        let catalog = temp_catalog();
-        let persistence = RecordingPersistence::default();
-        let outcome = execute(
-            start_request(catalog.path()),
-            &FakeResolver,
-            &FakeGateway::new(slotted_workflow()),
-            &persistence,
-        );
-
-        assert!(outcome.is_completed());
-        let calls = persistence.set_subject_calls.borrow();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0.as_str(), "run-1");
-        assert_eq!(calls[0].1.as_str(), "slot-1");
-        assert!(calls[0].2.starts_with("visit-slot-1-"));
-        assert_eq!(
-            persistence
-                .subjects
-                .borrow()
-                .get("slot-1")
-                .map(String::as_str),
-            Some(calls[0].2.as_str())
-        );
-    }
-
-    #[test]
     fn start_does_not_mint_when_initial_state_is_not_a_slot() {
         let catalog = temp_catalog();
         let persistence = RecordingPersistence::default();
@@ -595,27 +475,5 @@ mod tests {
 
         assert!(outcome.is_completed());
         assert!(persistence.set_subject_calls.borrow().is_empty());
-    }
-
-    #[test]
-    fn start_subject_mint_failure_is_persistence_error() {
-        let catalog = temp_catalog();
-        let persistence = RecordingPersistence {
-            set_subject_error: RefCell::new(Some(PersistenceError::failure(
-                PersistenceFailure::new("fake", "could not store visit subject"),
-            ))),
-            ..RecordingPersistence::default()
-        };
-        let outcome = execute(
-            start_request(catalog.path()),
-            &FakeResolver,
-            &FakeGateway::new(slotted_workflow()),
-            &persistence,
-        );
-
-        assert!(outcome.is_error());
-        assert_eq!(outcome.issue().unwrap().code, "persistence-failure");
-        assert!(persistence.created.borrow().is_empty());
-        assert_eq!(persistence.set_subject_calls.borrow().len(), 1);
     }
 }

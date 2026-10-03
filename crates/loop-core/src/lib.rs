@@ -26,13 +26,11 @@ pub use advice_transition::{
     ADVICE_DEPARTURES_INPUT_KEY, ADVICE_DISPOSITION_RECORD_KIND, ADVICE_OCCASION_RECORD_KIND,
 };
 pub use execution_contract::{
-    effective_binding, invocation_owns_work, resolve_context_filter, BindingAmendment,
-    CancellationAcknowledgment, ContextFilter, ContextFilterSelection, DriverActAuthor,
-    DriverActDocuments, DriverActEvidence, DriverActRequest, EffectiveBinding,
-    ExecutionOwnershipState, InvocationControls, OwnedExecution, ProcessIdentity,
+    BindingAmendment, ContextFilter, DriverActAuthor, DriverActDocuments, DriverActEvidence,
+    DriverActRequest, ExecutionOwnershipState, InvocationControls, OwnedExecution, ProcessIdentity,
     StateVisitAttestation,
 };
-pub use invocation::{instruction_digest, project_invocation_status, work_slot_binding_digest};
+pub use invocation::project_invocation_status;
 pub use model::{
     check_known_output_conflicts, AllowResponse, AssignmentLabel, CompletionMode,
     ContextAppendEffect, ContextRecord, ContextRecordId, ControlRevision, DurableEvaluation,
@@ -46,24 +44,20 @@ pub use model::{
     WorkSlotBinding, WorkSlotId, WorkSlotInvocation, WorkerAttempt, Workflow, WorkflowId,
 };
 pub use operations::{
-    execute_append, execute_event, execute_history, execute_invoke, execute_list, execute_show,
-    execute_start, execute_terminate, lineage_for_transition, project_show, request_from_snapshot,
-    AppendRequest, EventRequest, EventResult, HistoryRequest, InvokeRequest, InvokeResult,
-    ListRequest, ProjectionError, RequestableEvent, ShowProjection, ShowRequest, StartRequest,
-    TerminateRunRequest,
+    execute_append, execute_event, execute_history, execute_list, execute_show, execute_start,
+    execute_terminate, lineage_for_transition, project_show, request_from_snapshot, AppendRequest,
+    EventRequest, EventResult, HistoryRequest, ListRequest, ProjectionError, RequestableEvent,
+    ShowProjection, ShowRequest, StartRequest, TerminateRunRequest,
 };
 pub use outcome::{OperationOutcome, OperationStatus, OutcomeIssue};
 pub use ports::{
     AppendAdviceAttemptRequest, AppendContextRequest, AppendContextResult, CarryAct, CarryRequest,
     CheckedEvaluationSnapshot, CheckedEvaluationSnapshotRequest, CommitTransitionRequest,
-    CommitTransitionResult, CompleteWorkSlotInvocationRequest, CompleteWorkSlotInvocationResult,
-    CreateRunRequest, CreateRunResult, CreateWorkSlotInvocationRequest,
-    CreateWorkSlotInvocationResult, EngineOrigin, EvidenceApplicability, OriginReference,
-    Persistence, PersistenceConflict, PersistenceError, PersistenceFailure, PersistenceRejection,
-    ProcessError, ProviderError, ProviderGateway, ProviderResolutionError, ProviderResolver,
-    RecordDenialRequest, RecordDenialResult, RunSummary, ShowData, StartedWaiter, TerminateRequest,
-    TerminateResult, WaiterSpawnArgs, WorkSlotProcess, ENGINE_ORIGIN_KEY,
-    EVIDENCE_APPLICABILITY_KIND, ORIGIN_KEY,
+    CommitTransitionResult, CreateRunRequest, CreateRunResult, EngineOrigin, EvidenceApplicability,
+    OriginReference, Persistence, PersistenceConflict, PersistenceError, PersistenceFailure,
+    PersistenceRejection, ProviderError, ProviderGateway, ProviderResolutionError,
+    ProviderResolver, RecordDenialRequest, RecordDenialResult, RunSummary, ShowData,
+    TerminateRequest, TerminateResult, ENGINE_ORIGIN_KEY, EVIDENCE_APPLICABILITY_KIND, ORIGIN_KEY,
 };
 pub use workflow::{
     resolve_transition, validate_workflow, workflow_validation_errors, TransitionResolutionError,

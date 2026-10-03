@@ -262,36 +262,12 @@ impl Persistence for FirstReadBarrierPersistence {
         self.inner.load_show_data(run_id)
     }
 
-    fn create_work_slot_invocation(
-        &self,
-        request: loop_core::CreateWorkSlotInvocationRequest,
-    ) -> Result<loop_core::CreateWorkSlotInvocationResult, loop_core::PersistenceError> {
-        self.inner.create_work_slot_invocation(request)
-    }
-
-    fn complete_work_slot_invocation(
-        &self,
-        request: loop_core::CompleteWorkSlotInvocationRequest,
-    ) -> Result<loop_core::CompleteWorkSlotInvocationResult, loop_core::PersistenceError> {
-        self.inner.complete_work_slot_invocation(request)
-    }
-
     fn get_current_slot_subject(
         &self,
         run_id: &loop_core::RunId,
         slot_id: &loop_core::WorkSlotId,
     ) -> Result<Option<String>, loop_core::PersistenceError> {
         self.inner.get_current_slot_subject(run_id, slot_id)
-    }
-
-    fn set_current_slot_subject(
-        &self,
-        run_id: &loop_core::RunId,
-        slot_id: &loop_core::WorkSlotId,
-        subject: String,
-    ) -> Result<(), loop_core::PersistenceError> {
-        self.inner
-            .set_current_slot_subject(run_id, slot_id, subject)
     }
 
     fn load_work_slot_invocations(
@@ -408,36 +384,12 @@ impl Persistence for AuthoritativeReadGatePersistence {
         self.inner.load_show_data(run_id)
     }
 
-    fn create_work_slot_invocation(
-        &self,
-        request: loop_core::CreateWorkSlotInvocationRequest,
-    ) -> Result<loop_core::CreateWorkSlotInvocationResult, loop_core::PersistenceError> {
-        self.inner.create_work_slot_invocation(request)
-    }
-
-    fn complete_work_slot_invocation(
-        &self,
-        request: loop_core::CompleteWorkSlotInvocationRequest,
-    ) -> Result<loop_core::CompleteWorkSlotInvocationResult, loop_core::PersistenceError> {
-        self.inner.complete_work_slot_invocation(request)
-    }
-
     fn get_current_slot_subject(
         &self,
         run_id: &loop_core::RunId,
         slot_id: &loop_core::WorkSlotId,
     ) -> Result<Option<String>, loop_core::PersistenceError> {
         self.inner.get_current_slot_subject(run_id, slot_id)
-    }
-
-    fn set_current_slot_subject(
-        &self,
-        run_id: &loop_core::RunId,
-        slot_id: &loop_core::WorkSlotId,
-        subject: String,
-    ) -> Result<(), loop_core::PersistenceError> {
-        self.inner
-            .set_current_slot_subject(run_id, slot_id, subject)
     }
 
     fn load_work_slot_invocations(

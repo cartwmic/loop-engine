@@ -6,11 +6,10 @@
 //! database transaction or a generic CRUD callback.
 
 use crate::{
-    AssignmentLabel, ContextAppendEffect, ContextRecord, ContextRecordId, ControlRevision,
-    DurableEvaluation, EvaluationFeedback, EvaluationRequest, EvaluationResult, HistoryEntry,
-    InnerWorker, InvocationId, Lifecycle, ProviderAssociation, ProviderSelector, Run, RunId,
-    StateId, Timestamp, Transition, WaiterWrittenStatus, WorkSlotBinding, WorkSlotId,
-    WorkSlotInvocation, Workflow,
+    ContextAppendEffect, ContextRecord, ContextRecordId, ControlRevision, DurableEvaluation,
+    EvaluationFeedback, EvaluationRequest, EvaluationResult, HistoryEntry, InvocationId, Lifecycle,
+    ProviderAssociation, ProviderSelector, Run, RunId, StateId, Timestamp, Transition,
+    WorkSlotBinding, WorkSlotId, WorkSlotInvocation, Workflow,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -199,9 +198,6 @@ pub struct CreateRunRequest {
     /// Recorded path from start composition. `None` only for migrated
     /// historical rows; new creates always pass `Some`.
     pub artifact_root: Option<String>,
-    /// Slot-visit subjects persisted in the same transaction as run creation.
-    /// Empty when the initial state is not a work slot.
-    pub slot_subjects: Vec<(WorkSlotId, String)>,
 }
 
 impl CreateRunRequest {
@@ -229,13 +225,7 @@ impl CreateRunRequest {
             created_at,
             provider: provider.into(),
             artifact_root,
-            slot_subjects: Vec::new(),
         }
-    }
-
-    pub fn with_slot_subjects(mut self, slot_subjects: Vec<(WorkSlotId, String)>) -> Self {
-        self.slot_subjects = slot_subjects;
-        self
     }
 }
 
@@ -554,15 +544,9 @@ pub struct CommitTransitionRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exception: Option<crate::TransitionOverride>,
     /// Scoped advice-only exception. Unlike `exception`, this never skips
-    /// provider evaluation or bound-slot completion.
+    /// provider evaluation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub advice_exception: Option<crate::AdviceExceptionAttestation>,
-    /// Explicit non-worker act, which still requires a provider checked allow.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub driver_act: Option<crate::DriverActEvidence>,
-    /// Slot-visit subjects persisted in the same transaction as the committed
-    /// target state. Empty when the target is not a work slot.
-    pub slot_subjects: Vec<(WorkSlotId, String)>,
 }
 
 impl CommitTransitionRequest {
@@ -582,8 +566,6 @@ impl CommitTransitionRequest {
             context_append: None,
             exception: None,
             advice_exception: None,
-            driver_act: None,
-            slot_subjects: Vec::new(),
         }
     }
 
@@ -597,21 +579,11 @@ impl CommitTransitionRequest {
         self
     }
 
-    pub fn with_slot_subjects(mut self, slot_subjects: Vec<(WorkSlotId, String)>) -> Self {
-        self.slot_subjects = slot_subjects;
-        self
-    }
-
     pub fn with_advice_exception(
         mut self,
         advice_exception: crate::AdviceExceptionAttestation,
     ) -> Self {
         self.advice_exception = Some(advice_exception);
-        self
-    }
-
-    pub fn with_driver_act(mut self, driver_act: crate::DriverActEvidence) -> Self {
-        self.driver_act = Some(driver_act);
         self
     }
 }
@@ -690,182 +662,6 @@ pub struct TerminateResult {
 /// `append_context`. Reject if run missing/not active. Do not change
 /// `control_revision`. `waiter_pid` is internal (on the stored running record,
 /// not a user CLI flag).
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CreateWorkSlotInvocationRequest {
-    pub run_id: RunId,
-    pub invocation_id: InvocationId,
-    pub slot_id: WorkSlotId,
-    pub binding: WorkSlotBinding,
-    pub instruction_digest: String,
-    pub subject: String,
-    #[serde(default)]
-    pub state_visit: u64,
-    pub waiter_pid: u32,
-    /// Native incarnation identity captured when the waiter was spawned.
-    /// Historical requests may omit it; new local adapters provide it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub waiter_identity: Option<crate::ProcessIdentity>,
-    pub started_at: Timestamp,
-    pub allowed_time_ms: u64,
-    pub capture_dir: String,
-    /// Exact context records routed to the worker packet.
-    #[serde(default)]
-    pub routed_inputs: Vec<ContextRecord>,
-    /// Snapshot of the opaque run identity at admission.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub frozen_run_identity: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub controls: Option<crate::InvocationControls>,
-    /// Optional validated assignment subset. `None` preserves full execution.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub assignment_selection: Option<Vec<String>>,
-    /// Generic display labels supplied by the caller/facade before output.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub assignment_labels: Vec<AssignmentLabel>,
-    /// Optional opaque JSON supplied for this bound invocation. Core stores
-    /// and transports it without interpreting provider semantics.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub invocation_input: Option<Value>,
-}
-
-impl CreateWorkSlotInvocationRequest {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        run_id: impl Into<RunId>,
-        invocation_id: impl Into<InvocationId>,
-        slot_id: impl Into<WorkSlotId>,
-        binding: WorkSlotBinding,
-        instruction_digest: impl Into<String>,
-        subject: impl Into<String>,
-        waiter_pid: u32,
-        started_at: Timestamp,
-        allowed_time_ms: u64,
-        capture_dir: impl Into<String>,
-    ) -> Self {
-        Self {
-            run_id: run_id.into(),
-            invocation_id: invocation_id.into(),
-            slot_id: slot_id.into(),
-            binding,
-            instruction_digest: instruction_digest.into(),
-            subject: subject.into(),
-            state_visit: 0,
-            waiter_pid,
-            waiter_identity: None,
-            started_at,
-            allowed_time_ms,
-            capture_dir: capture_dir.into(),
-            routed_inputs: Vec::new(),
-            frozen_run_identity: None,
-            controls: None,
-            assignment_selection: None,
-            assignment_labels: Vec::new(),
-            invocation_input: None,
-        }
-    }
-
-    pub fn with_state_visit(mut self, state_visit: u64) -> Self {
-        self.state_visit = state_visit;
-        self
-    }
-
-    pub fn with_waiter_identity(mut self, identity: crate::ProcessIdentity) -> Self {
-        self.waiter_identity = Some(identity);
-        self
-    }
-
-    pub fn with_waiter_identity_opt(mut self, identity: Option<crate::ProcessIdentity>) -> Self {
-        self.waiter_identity = identity;
-        self
-    }
-
-    pub fn with_controls(mut self, controls: crate::InvocationControls) -> Self {
-        self.controls = Some(controls);
-        self
-    }
-
-    pub fn with_frozen_run_identity(mut self, identity: Value) -> Self {
-        self.frozen_run_identity = Some(identity);
-        self
-    }
-
-    pub fn with_routed_inputs(mut self, routed_inputs: Vec<ContextRecord>) -> Self {
-        self.routed_inputs = routed_inputs;
-        self
-    }
-
-    pub fn with_assignment_selection(mut self, selection: Option<Vec<String>>) -> Self {
-        self.assignment_selection = selection;
-        self
-    }
-
-    pub fn with_assignment_labels(mut self, labels: Vec<AssignmentLabel>) -> Self {
-        self.assignment_labels = labels;
-        self
-    }
-
-    pub fn with_invocation_input(mut self, input: Option<Value>) -> Self {
-        self.invocation_input = input;
-        self
-    }
-}
-
-/// Result of creating a running work-slot invocation record.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CreateWorkSlotInvocationResult {
-    pub invocation: WorkSlotInvocation,
-    pub history: HistoryEntry,
-}
-
-/// Semantic input for a waiter terminal write.
-///
-/// CAS only if stored status is still `None`. Appends
-/// `HistoryAction::InvocationStatusChanged` with waiter-written status
-/// (`succeeded`/`failed` only). Conflict/reject if already terminal. Waiter
-/// does not write `overrun`.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CompleteWorkSlotInvocationRequest {
-    pub run_id: RunId,
-    pub invocation_id: InvocationId,
-    pub status: WaiterWrittenStatus,
-    pub exit_code: i32,
-    pub completed_at: Timestamp,
-    pub inner_workers: Vec<InnerWorker>,
-}
-
-impl CompleteWorkSlotInvocationRequest {
-    pub fn new(
-        run_id: impl Into<RunId>,
-        invocation_id: impl Into<InvocationId>,
-        status: WaiterWrittenStatus,
-        exit_code: i32,
-        completed_at: Timestamp,
-        inner_workers: Vec<InnerWorker>,
-    ) -> Self {
-        Self {
-            run_id: run_id.into(),
-            invocation_id: invocation_id.into(),
-            status,
-            exit_code,
-            completed_at,
-            inner_workers,
-        }
-    }
-}
-
-/// Result of a waiter terminal write.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CompleteWorkSlotInvocationResult {
-    pub invocation: WorkSlotInvocation,
-    pub history: HistoryEntry,
-}
-
-/// Input for a checked-evaluation snapshot.
-///
-/// The transition is the exact edge selected by core from the authoritative
-/// workflow.  Persistence re-verifies, at one consistent read boundary, that
-/// the run is active and that this exact edge is still available.  The
-/// boundary ends before the provider gateway is called.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CheckedEvaluationSnapshotRequest {
     pub run_id: RunId,
@@ -1002,7 +798,7 @@ pub trait Persistence {
     /// Check whether `show` has armed the current control-state visit.
     ///
     /// This is a preflight for operations that must avoid external side
-    /// effects before their atomic mutation boundary (notably `invoke`). The
+    /// effects before their atomic mutation boundary. The
     /// mutation methods enforce the same condition inside their transaction.
     /// Lightweight test and non-SQL adapters may use the default permissive
     /// implementation; durable adapters must override it.
@@ -1018,20 +814,6 @@ pub trait Persistence {
     /// as `PersistenceError::NotFound`, not as an empty successful value.
     fn load_authoritative_run(&self, run_id: &RunId) -> Result<Run, PersistenceError>;
 
-    /// Atomically validate observation/visit and append typed amendment history.
-    fn amend_binding(
-        &self,
-        _run_id: &RunId,
-        _slot_id: &WorkSlotId,
-        _request: crate::operations::amend_binding::Request,
-        _now: Timestamp,
-    ) -> Result<HistoryEntry, PersistenceError> {
-        Err(PersistenceError::failure(PersistenceFailure::new(
-            "binding-amendment-unsupported",
-            "persistence does not support binding amendments",
-        )))
-    }
-
     /// Return stable discovery projections for all runs.
     fn list_runs(&self) -> Result<Vec<RunSummary>, PersistenceError>;
 
@@ -1041,7 +823,7 @@ pub trait Persistence {
     /// Return semantic history in sequence order.
     fn load_history(&self, run_id: &RunId) -> Result<Vec<HistoryEntry>, PersistenceError>;
 
-    /// Optional compact source for bound-worker history-sensitive selectors.
+    /// Optional compact historical transition source.
     /// `None` means the adapter cannot provide an authoritative snapshot.
     fn load_transition_history(
         &self,
@@ -1085,21 +867,6 @@ pub trait Persistence {
         )))
     }
 
-    /// Create a running engine-authored invocation record (stored status
-    /// `None`) and append `HistoryAction::InvocationStarted`.
-    fn create_work_slot_invocation(
-        &self,
-        request: CreateWorkSlotInvocationRequest,
-    ) -> Result<CreateWorkSlotInvocationResult, PersistenceError>;
-
-    /// Waiter CAS write of terminal `succeeded`/`failed` plus `exit_code`.
-    /// Only if no waiter-written status yet. Appends
-    /// `HistoryAction::InvocationStatusChanged`.
-    fn complete_work_slot_invocation(
-        &self,
-        request: CompleteWorkSlotInvocationRequest,
-    ) -> Result<CompleteWorkSlotInvocationResult, PersistenceError>;
-
     /// Load the current engine-minted subject for a slot, if any.
     fn get_current_slot_subject(
         &self,
@@ -1107,51 +874,12 @@ pub trait Persistence {
         slot_id: &WorkSlotId,
     ) -> Result<Option<String>, PersistenceError>;
 
-    /// Replace the current engine-minted subject for a slot.
-    fn set_current_slot_subject(
-        &self,
-        run_id: &RunId,
-        slot_id: &WorkSlotId,
-        subject: String,
-    ) -> Result<(), PersistenceError>;
-
     /// Load engine-authored invocation rows for a run. This is a read, not a
     /// general update.
     fn load_work_slot_invocations(
         &self,
         run_id: &RunId,
     ) -> Result<Vec<WorkSlotInvocation>, PersistenceError>;
-
-    /// Read only the target/candidates needed by `invocation-progress`.
-    /// Lightweight adapters may use the historical full list; indexed stores
-    /// should override this and avoid decoding completed worker payloads.
-    fn load_invocation_progress_candidates(
-        &self,
-        run_id: &RunId,
-        invocation_id: Option<&InvocationId>,
-    ) -> Result<Vec<WorkSlotInvocation>, PersistenceError> {
-        let mut rows = self.load_work_slot_invocations(run_id)?;
-        if let Some(invocation_id) = invocation_id {
-            rows.retain(|row| row.invocation_id == *invocation_id);
-        }
-        rows.sort_by(|left, right| {
-            right
-                .started_at
-                .cmp(&left.started_at)
-                .then_with(|| right.invocation_id.cmp(&left.invocation_id))
-        });
-        if invocation_id.is_none() {
-            rows.truncate(20);
-        }
-        Ok(rows)
-    }
-
-    /// Compare a running invocation's recorded waiter incarnation with the
-    /// current native process table. Adapters without a native process reader
-    /// fail closed; numeric waiter PIDs are never treated as ownership.
-    fn invocation_waiter_alive(&self, _invocation: &WorkSlotInvocation) -> bool {
-        false
-    }
 }
 
 /// A semantic rejection produced while enforcing a persistence precondition.
@@ -1161,17 +889,8 @@ pub trait Persistence {
 /// conditional-write failures use [`PersistenceConflict`] instead.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PersistenceRejection {
-    RunNotActive {
-        run_id: RunId,
-        lifecycle: Lifecycle,
-    },
-    RunNotObserved {
-        run_id: RunId,
-    },
-    LiveOwnedWork {
-        run_id: RunId,
-        invocation_id: InvocationId,
-    },
+    RunNotActive { run_id: RunId, lifecycle: Lifecycle },
+    RunNotObserved { run_id: RunId },
 }
 
 impl PersistenceRejection {
@@ -1179,7 +898,6 @@ impl PersistenceRejection {
         match self {
             Self::RunNotActive { .. } => "run-not-active",
             Self::RunNotObserved { .. } => "run-not-observed",
-            Self::LiveOwnedWork { .. } => "live-owned-work",
         }
     }
 }
@@ -1193,10 +911,6 @@ impl fmt::Display for PersistenceRejection {
             Self::RunNotObserved { run_id } => write!(
                 formatter,
                 "run `{run_id}` must be observed with `show` before it can be mutated"
-            ),
-            Self::LiveOwnedWork { run_id, invocation_id } => write!(
-                formatter,
-                "invocation `{invocation_id}` owns live work or pending cleanup; wait or cancel-invocation {run_id} {invocation_id} before terminating"
             ),
         }
     }
@@ -1369,170 +1083,6 @@ impl fmt::Display for PersistenceError {
 
 impl std::error::Error for PersistenceError {}
 
-/// Arguments needed to exec `loop-engine wait-invocation` without writing stdin yet.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WaiterSpawnArgs {
-    pub database: std::path::PathBuf,
-    pub run_id: RunId,
-    pub invocation_id: InvocationId,
-}
-
-impl WaiterSpawnArgs {
-    pub fn new(
-        database: impl Into<std::path::PathBuf>,
-        run_id: impl Into<RunId>,
-        invocation_id: impl Into<InvocationId>,
-    ) -> Self {
-        Self {
-            database: database.into(),
-            run_id: run_id.into(),
-            invocation_id: invocation_id.into(),
-        }
-    }
-}
-
-/// A spawned waiter that has not yet received its envelope and has not been waited on.
-pub struct StartedWaiter<H> {
-    pub pid: u32,
-    /// Native identity captured before the waiter is handed to the caller.
-    pub identity: Option<crate::ProcessIdentity>,
-    pub handle: H,
-}
-
-impl<H> StartedWaiter<H> {
-    pub fn new(pid: u32, handle: H) -> Self {
-        Self {
-            pid,
-            identity: None,
-            handle,
-        }
-    }
-
-    pub fn with_identity(mut self, identity: crate::ProcessIdentity) -> Self {
-        self.identity = Some(identity);
-        self
-    }
-}
-
-/// Failure while spawning a waiter or writing its envelope.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ProcessError {
-    pub code: String,
-    pub message: String,
-}
-
-impl ProcessError {
-    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            code: code.into(),
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for ProcessError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}: {}", self.code, self.message)
-    }
-}
-
-impl std::error::Error for ProcessError {}
-
-/// Process port for work-slot waiter delegation.
-///
-/// Core must not call `std::process::Command` directly. Callers supply waiter
-/// liveness; spawn must not waitpid or write stdin until `send_envelope_and_detach`.
-pub trait WorkSlotProcess {
-    /// Implementation-owned handle that can receive the waiter envelope.
-    type Handle;
-
-    fn waiter_alive(&self, pid: u32) -> bool;
-
-    /// Identity-aware waiter liveness used by new execution paths. The legacy
-    /// method remains available for lightweight adapters and old tests; a
-    /// native adapter overrides this method and refuses numeric-only probes.
-    fn waiter_alive_for_identity(
-        &self,
-        pid: u32,
-        _identity: Option<&crate::ProcessIdentity>,
-    ) -> bool {
-        self.waiter_alive(pid)
-    }
-
-    /// Enumerate assignment identities for a bound worker when the adapter
-    /// knows how to do so. `None` means the binding is opaque and cannot be
-    /// selected safely. This is only a preflight; it does not start a process.
-    fn enumerate_assignments(
-        &self,
-        _binding: &WorkSlotBinding,
-    ) -> std::result::Result<Option<Vec<String>>, ProcessError> {
-        Ok(None)
-    }
-
-    /// Supply generic frozen display descriptors when the adapter knows the
-    /// caller's pre-output assignment inventory. Unknown inventories stay
-    /// absent; core never parses worker prompts or provider policy.
-    fn assignment_labels(
-        &self,
-        _binding: &WorkSlotBinding,
-        _provider: &ProviderAssociation,
-    ) -> std::result::Result<Option<Vec<AssignmentLabel>>, ProcessError> {
-        Ok(None)
-    }
-
-    /// Bounded facade-specific read-only preparation, shared by preview and launch.
-    fn prepare_facade(
-        &self,
-        _binding: &WorkSlotBinding,
-        _provider: &ProviderAssociation,
-        _packet: &Value,
-    ) -> std::result::Result<Option<Value>, ProcessError> {
-        Ok(None)
-    }
-
-    /// Admit controls only for a known facade; core does not interpret provider argv.
-    fn prepare_controls(
-        &self,
-        _binding: &WorkSlotBinding,
-        _provider: &ProviderAssociation,
-        controls: &crate::InvocationControls,
-    ) -> std::result::Result<crate::InvocationControls, ProcessError> {
-        if controls != &crate::InvocationControls::default() {
-            return Err(ProcessError::new(
-                "unsupported-invocation-controls",
-                "bound executable does not support these controls",
-            ));
-        }
-        Ok(controls.clone())
-    }
-
-    /// Run a bounded, provider-opaque selector before primary work admission.
-    fn filter_context(
-        &self,
-        _filter: &crate::ContextFilter,
-        _packet: &Value,
-    ) -> std::result::Result<crate::ContextFilterSelection, ProcessError> {
-        Err(ProcessError::new(
-            "context-filter-unsupported",
-            "execution adapter does not support context filters",
-        ))
-    }
-
-    /// Spawn `loop-engine wait-invocation RUN_ID INVOCATION_ID` with piped stdin.
-    /// Do not waitpid. Do not write stdin yet.
-    fn spawn_wait_invocation(
-        &self,
-        args: WaiterSpawnArgs,
-    ) -> std::result::Result<StartedWaiter<Self::Handle>, ProcessError>;
-
-    /// Write envelope bytes to waiter stdin and detach (close stdin). Do not waitpid.
-    fn send_envelope_and_detach(
-        &self,
-        waiter: StartedWaiter<Self::Handle>,
-        envelope_json: &[u8],
-    ) -> std::result::Result<(), ProcessError>;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1672,34 +1222,11 @@ mod tests {
             unavailable()
         }
 
-        fn create_work_slot_invocation(
-            &self,
-            _request: CreateWorkSlotInvocationRequest,
-        ) -> Result<CreateWorkSlotInvocationResult, PersistenceError> {
-            unavailable()
-        }
-
-        fn complete_work_slot_invocation(
-            &self,
-            _request: CompleteWorkSlotInvocationRequest,
-        ) -> Result<CompleteWorkSlotInvocationResult, PersistenceError> {
-            unavailable()
-        }
-
         fn get_current_slot_subject(
             &self,
             _run_id: &RunId,
             _slot_id: &crate::WorkSlotId,
         ) -> Result<Option<String>, PersistenceError> {
-            unavailable()
-        }
-
-        fn set_current_slot_subject(
-            &self,
-            _run_id: &RunId,
-            _slot_id: &crate::WorkSlotId,
-            _subject: String,
-        ) -> Result<(), PersistenceError> {
             unavailable()
         }
 

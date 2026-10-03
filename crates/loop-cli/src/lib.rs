@@ -75,10 +75,6 @@ impl Default for CliOptions {
 
 /// The primary CLI operations.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "preserve the public parsed operation payload shape"
-)]
 pub enum PrimaryCommand {
     Start(StartArgs),
     List,
@@ -89,7 +85,6 @@ pub enum PrimaryCommand {
         event: String,
         override_attestation: Option<core::StateVisitAttestation>,
         advice_exception: Option<core::AdviceExceptionAttestation>,
-        driver_act: Option<core::DriverActRequest>,
     },
     History(RunId),
     Terminate(RunId),
@@ -130,10 +125,6 @@ pub struct AppendArgs {
 /// A parsed CLI request, including the two non-operation informational
 /// requests.  `Help` and `Version` do not dispatch a semantic operation.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "boxing the operation payload would change the public parsed-request variant shape"
-)]
 pub enum ParsedRequest {
     Help {
         command: Option<String>,
@@ -218,7 +209,6 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
     let mut show_view_seen = false;
     let mut event_override = None;
     let mut event_advice_exception = None;
-    let mut event_driver_act = None;
     let mut index = 0;
     while index < args.len() {
         let token = &args[index];
@@ -578,28 +568,6 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
                     );
                     continue;
                 }
-                value if value == "--driver-act" || value.starts_with("--driver-act=") => {
-                    if event_driver_act.is_some() {
-                        return Err(CliError::new(
-                            "invalid-invocation",
-                            "--driver-act may be supplied once",
-                        ));
-                    }
-                    let raw = if let Some(raw) = value.strip_prefix("--driver-act=") {
-                        index += 1;
-                        raw.to_owned()
-                    } else {
-                        next_option_value(args, &mut index, token)?
-                    };
-                    event_driver_act = Some(
-                        serde_json::from_value::<core::DriverActRequest>(parse_json_source(
-                            &raw,
-                            "event driver act",
-                        )?)
-                        .map_err(|error| CliError::new("invalid-driver-act", error.to_string()))?,
-                    );
-                    continue;
-                }
                 value if value == "--override" || value.starts_with("--override=") => {
                     if event_override.is_some() {
                         return Err(CliError::new(
@@ -702,19 +670,6 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
             "--advice-exception requires event",
         ));
     }
-    if command_name != "event" && event_driver_act.is_some() {
-        return Err(CliError::new(
-            "invalid-invocation",
-            "--driver-act requires event",
-        ));
-    }
-    if event_driver_act.is_some() && (event_override.is_some() || event_advice_exception.is_some())
-    {
-        return Err(CliError::new(
-            "invalid-invocation",
-            "--driver-act cannot be combined with --override or --advice-exception",
-        ));
-    }
     if event_override.is_some() && event_advice_exception.is_some() {
         return Err(CliError::new(
             "invalid-invocation",
@@ -760,13 +715,11 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
     if let PrimaryCommand::Event {
         override_attestation,
         advice_exception,
-        driver_act,
         ..
     } = &mut command
     {
         *override_attestation = event_override;
         *advice_exception = event_advice_exception;
-        *driver_act = event_driver_act;
     }
     Ok(ParsedRequest::Operation { options, command })
 }
@@ -941,7 +894,6 @@ fn parse_primary_command(
                 event,
                 override_attestation: None,
                 advice_exception: None,
-                driver_act: None,
             })
         }
         "history" => {
@@ -1159,7 +1111,7 @@ fn execute_operation(
         }
         PrimaryCommand::Show(run_id) => {
             let now = now_timestamp();
-            let outcome = core::operations::show::execute_passive(
+            let outcome = core::operations::show::execute(
                 core::ShowRequest::new(run_id),
                 &persistence,
                 now,
@@ -1191,12 +1143,10 @@ fn execute_operation(
             event,
             override_attestation,
             advice_exception,
-            driver_act,
         } => {
             let mut request = EventRequest::new(run_id, event);
             request.override_attestation = override_attestation;
             request.advice_exception = advice_exception;
-            request.driver_act = driver_act;
             let outcome = core::execute_event(request, &gateway, &persistence)
                 .map(CliCommitTransitionResult::from);
             render_operation(operation, output, &outcome)
@@ -1266,7 +1216,7 @@ fn execute_terminal_explorer(options: CliOptions, run_id: RunId) -> Execution {
                 )
             }
         };
-    let projection = match core::operations::show::execute_passive(
+    let projection = match core::operations::show::execute(
         core::ShowRequest::new(run_id.clone()),
         &persistence,
         now_timestamp(),
@@ -1682,7 +1632,6 @@ struct CliShowProjection {
     initial_input: Value,
     state_visit: u64,
     binding_amendments: Vec<core::BindingAmendment>,
-    effective_bindings: std::collections::BTreeMap<String, core::WorkSlotBinding>,
     context: Vec<core::ContextRecord>,
     requestable_events: Vec<core::RequestableEvent>,
     latest_evaluations: Vec<core::DurableEvaluation>,
@@ -1708,7 +1657,6 @@ impl From<core::ShowProjection> for CliShowProjection {
             initial_input: projection.initial_input,
             state_visit: projection.state_visit,
             binding_amendments: projection.binding_amendments,
-            effective_bindings: projection.effective_bindings,
             context: projection.context,
             requestable_events: projection.requestable_events,
             latest_evaluations: projection.latest_evaluations,
@@ -2037,7 +1985,6 @@ fn show_packet(
         "initial_input",
         "context",
         "binding_amendments",
-        "effective_bindings",
         "evaluation_history",
         "change_report",
         "workflow_graph",
@@ -2344,7 +2291,7 @@ fn usage(command: Option<&str>) -> String {
                 + "the engine resolves the selected attempt and capture metadata. Evidence reuse uses\n"
                 + "kind evidence-applicability with {origin,target,attesting_driver,reason}.\n"
         }
-        Some("event") => "Usage: loop-engine [options] event <run-id> <event> [--driver-act JSON | --advice-exception JSON | --override JSON]\n\nA future opted-in driver act records author, reason, changed artifacts, and unchanged intent/design/plan revisions; normal checked provider gates still run. Advice exception only excuses exactly named unanswered due advice occasions. --override remains a separate broader exception.\n".to_owned(),
+        Some("event") => "Usage: loop-engine [options] event <run-id> <event> [--advice-exception JSON | --override JSON]\n\nAdvice exception only excuses exactly named unanswered due advice occasions. --override remains a separate broader exception.\n".to_owned(),
         Some("show") => {
             "Usage: loop-engine [options] show [--compact] <run-id> [--view action|status|full]\n\n".to_owned()
                 + "Default action reveals current instructions and obligations. Full includes all checked evaluations.\n"

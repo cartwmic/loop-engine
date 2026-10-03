@@ -1851,7 +1851,7 @@ pub(crate) fn verify_recovery_source_identity(
         .get("origin")
         .and_then(Value::as_object)
         .ok_or("recovery source has no original raw origin")?;
-    let expected_binding = loop_core::work_slot_binding_digest(binding);
+    let expected_binding = sha256_digest(&serde_json::to_vec(binding).expect("historical binding"));
     if origin.get("assignment_id").and_then(Value::as_str) != Some(assignment_id)
         || origin.get("slot_id").and_then(Value::as_str) != Some(gate)
         || expected_subject
@@ -3589,7 +3589,7 @@ mod tests {
         let source = serde_json::json!({
             "protocol":"fan-out-selected-source-v1","source_class":"eligible-derived","execution":"reused",
             "origin":{"invocation_id":"origin-inv","run_id":"run","slot_id":"intent-review","state_visit":1,
-                "subject":"visit-intent-review-1","binding_sha256":loop_core::work_slot_binding_digest(&binding),"capture_dir":original.to_string_lossy(),
+                "subject":"visit-intent-review-1","binding_sha256":sha256_digest(&serde_json::to_vec(&binding).expect("historical binding")),"capture_dir":original.to_string_lossy(),
                 "assignment_id":"worker-0","exit_code":0,"raw_attempt":1,"raw_stdout_sha256":raw_digest,
                 "raw_stdout_path":"0/stdout","selected_output_sha256":null,"selected_output_path":null,
                 "routed_inputs":[]},

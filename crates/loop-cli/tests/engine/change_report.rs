@@ -1,11 +1,9 @@
 use super::bounded_process::CommandExt;
 use loop_core::{
-    AppendContextRequest, CompleteWorkSlotInvocationRequest, CreateRunRequest,
-    CreateWorkSlotInvocationRequest, InnerWorker, Lifecycle, Persistence, ProviderAssociation,
-    State, Timestamp, Transition, WaiterWrittenStatus, WorkSlot, Workflow,
+    CreateRunRequest, Lifecycle, Persistence, ProviderAssociation, State, Timestamp, Transition,
+    WorkSlot, Workflow,
 };
 use loop_integrations::SqlitePersistence;
-use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::process::Command;
 use tempfile::tempdir;
@@ -19,13 +17,6 @@ fn workflow() -> Workflow {
     )
     .with_work_slots(vec![WorkSlot::new("review", "start", "finish")
         .with_stdin_context_kinds(vec!["routed".to_owned()])])
-}
-
-fn worker(assignment: &str) -> InnerWorker {
-    let mut worker = InnerWorker::new("/bin/worker", vec!["--frozen".to_owned()], 0);
-    worker.assignment_id = assignment.to_owned();
-    worker.declared_output_contract = Some(json!({"required": ["result"]}));
-    worker
 }
 
 fn show(database: &std::path::Path) -> Value {
@@ -50,330 +41,6 @@ fn show(database: &std::path::Path) -> Value {
 }
 
 #[test]
-fn show_projects_durable_change_report_without_capture_files() {
-    let directory = tempdir().expect("tempdir");
-    let database = directory.path().join("loop.sqlite");
-    let persistence = SqlitePersistence::open(&database).expect("sqlite");
-    let run = CreateRunRequest::new(
-        "report-run",
-        Some("report".to_owned()),
-        workflow(),
-        ProviderAssociation::new(json!({"identity": "provider-v1"})),
-        json!({
-            "policy": "policy-v1",
-            "artifact_root": directory.path().join("missing").to_string_lossy()
-        }),
-        "start",
-        Lifecycle::Active,
-        Timestamp::from_unix_millis(1),
-        "provider-v1",
-        None,
-    );
-    persistence.create_run(run).expect("create");
-    persistence
-        .load_show_data(&"report-run".into())
-        .expect("observe");
-    persistence
-        .set_current_slot_subject(
-            &"report-run".into(),
-            &"review".into(),
-            "subject-v1".to_owned(),
-        )
-        .expect("subject");
-    let routed = loop_core::ContextRecord::new(
-        "ctx-1",
-        "routed",
-        json!({"bytes": "input-v1"}),
-        2.into(),
-        Timestamp::from_unix_millis(2),
-    );
-    persistence
-        .append_context(AppendContextRequest::new(
-            "report-run",
-            "ctx-1",
-            "routed",
-            json!({"bytes": "input-v1"}),
-            Timestamp::from_unix_millis(2),
-        ))
-        .expect("append initial routed input");
-
-    let judgment = CreateWorkSlotInvocationRequest::new(
-        "report-run",
-        "inv-judgment",
-        "review",
-        loop_core::WorkSlotBinding::new("/bin/worker", vec!["--review".to_owned()]),
-        "instruction-digest",
-        "subject-v1",
-        0,
-        Timestamp::from_unix_millis(3),
-        1000,
-        directory.path().join("does-not-exist").to_string_lossy(),
-    )
-    .with_routed_inputs(vec![routed.clone()])
-    .with_frozen_run_identity(
-        json!({"provider": {"identity": "provider-v1"}, "input": {"policy": "policy-v1"}}),
-    );
-    persistence
-        .create_work_slot_invocation(judgment)
-        .expect("create judgment");
-    persistence
-        .complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
-            "report-run",
-            "inv-judgment",
-            WaiterWrittenStatus::Succeeded,
-            0,
-            Timestamp::from_unix_millis(4),
-            vec![worker("reviewer-1")],
-        ))
-        .expect("complete judgment");
-
-    let mut task_worker = worker("task-a");
-    task_worker.task_definition = Some(json!({"id": "task-a", "change": "one"}));
-    task_worker.task_packet = Some(json!("artifact-root\n---\npacket"));
-    task_worker.dependencies = Some(vec!["task-parent".to_owned()]);
-    task_worker.routed_inputs = Some(json!([]));
-    task_worker.repository_effect = Some(json!({"recorded": "task-a-only"}));
-    persistence
-        .create_work_slot_invocation(
-            CreateWorkSlotInvocationRequest::new(
-                "report-run", "inv-plan", "review",
-                loop_core::WorkSlotBinding::new("/bin/worker", vec!["--plan".to_owned()]),
-                "instruction-digest", "subject-v1", 0, Timestamp::from_unix_millis(6), 1000,
-                directory.path().join("also-missing").to_string_lossy(),
-            )
-            .with_frozen_run_identity(json!({"provider": {"identity": "provider-v1"}, "input": {"policy": "policy-v1", "artifact_root": directory.path().join("missing").to_string_lossy()}})),
-        )
-        .expect("create plan result");
-    persistence
-        .complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
-            "report-run",
-            "inv-plan",
-            WaiterWrittenStatus::Succeeded,
-            0,
-            Timestamp::from_unix_millis(7),
-            vec![task_worker.clone()],
-        ))
-        .expect("complete plan result");
-
-    let first = show(&database);
-    assert_eq!(
-        first["result"]["change_report"]["assignments"][0]["subject_revision"],
-        "subject-v1"
-    );
-    assert_eq!(
-        first["result"]["work_slot_invocations"][0]["change_report"]["dimensions"]["routed_inputs"]
-            ["changed"],
-        false
-    );
-    assert_eq!(
-        first["result"]["work_slot_invocations"][0]["change_report"]["dimensions"]
-            ["declared_output_contract"]["changed"],
-        false
-    );
-    let plan_report = &first["result"]["change_report"]["plan_task_results"][0]["dimensions"];
-    for dimension in [
-        "task_definition",
-        "task_packet",
-        "dependencies",
-        "routed_inputs",
-        "worker_binding",
-        "repository_effect",
-    ] {
-        assert_eq!(plan_report[dimension]["changed"], false, "{dimension}");
-    }
-    assert!(first["result"]["work_slot_invocations"][0]["capture_dir"]
-        .as_str()
-        .unwrap()
-        .contains("does-not-exist"));
-    let mut repeated = show(&database);
-    assert!(repeated["result"]["observed_at"].as_i64().is_some());
-    repeated["result"]["observed_at"] = first["result"]["observed_at"].clone();
-    assert_eq!(first, repeated);
-
-    // A file left in the shared directory is deliberately not a task result.
-    // The report stays unchanged because it uses only the task's recorded
-    // repository effect, never a checkout scan.
-    let shared_remainder = directory.path().join("shared-working-directory");
-    std::fs::create_dir_all(&shared_remainder).expect("shared directory");
-    std::fs::write(shared_remainder.join("remainder.txt"), b"not task-a").expect("remainder");
-    let mut after_shared_remainder = show(&database);
-    after_shared_remainder["result"]["observed_at"] = first["result"]["observed_at"].clone();
-    assert_eq!(
-        after_shared_remainder["result"]["change_report"]["plan_task_results"][0]["dimensions"]
-            ["repository_effect"]["changed"],
-        false
-    );
-    assert_eq!(after_shared_remainder, first);
-
-    // Direct changes below deliberately exercise a legacy inline completion
-    // snapshot, which keeps the original workers for comparison. A new-format
-    // digest-backed row must reject independent worker-payload mutation.
-    let connection = Connection::open(&database).expect("open mutation database");
-    let mut corrupt = task_worker.clone();
-    corrupt.repository_effect = Some(json!({"recorded": "tampered"}));
-    connection
-        .execute(
-            "UPDATE work_slot_invocations SET inner_workers_json = ?1 WHERE invocation_id = 'inv-plan'",
-            [serde_json::to_string(&vec![corrupt]).expect("corrupt worker JSON")],
-        )
-        .expect("mutate digest-backed worker payload");
-    let denied = Command::new(workspace_integration::binary("loop-engine"))
-        .args([
-            "--database",
-            database.to_str().unwrap(),
-            "--json",
-            "show",
-            "--view",
-            "full",
-            "report-run",
-        ])
-        .bounded_output("loop-engine rejects corrupted completion digest")
-        .expect("corrupt show");
-    assert_eq!(denied.status.code(), Some(20));
-    let error: Value = serde_json::from_slice(&denied.stdout).expect("JSON error on stdout");
-    assert_eq!(error["status"], "error");
-    assert_eq!(error["code"], "persistence-failure");
-    assert!(error["message"]
-        .as_str()
-        .unwrap()
-        .contains("sqlite-completion-snapshot-mismatch"));
-    connection
-        .execute(
-            "UPDATE work_slot_invocations SET inner_workers_json = ?1 WHERE invocation_id = 'inv-plan'",
-            [serde_json::to_string(&vec![task_worker.clone()]).expect("original worker JSON")],
-        )
-        .expect("restore digest-backed worker payload");
-    assert_eq!(show(&database)["status"], "completed");
-    connection
-        .execute(
-            "UPDATE work_slot_invocations SET completion_snapshot_json = ?1 WHERE invocation_id = 'inv-plan'",
-            [serde_json::to_string(&vec![task_worker.clone()]).expect("original snapshot JSON")],
-        )
-        .expect("seed legacy inline snapshot");
-    let mut mutations = Vec::new();
-    let mut changed = task_worker.clone();
-    changed.task_definition = Some(json!({"id": "task-a", "change": "two"}));
-    mutations.push(("task_definition", changed));
-    let mut changed = task_worker.clone();
-    changed.task_packet = Some(json!("different packet"));
-    mutations.push(("task_packet", changed));
-    let mut changed = task_worker.clone();
-    changed.dependencies = Some(vec!["other-parent".to_owned()]);
-    mutations.push(("dependencies", changed));
-    let mut changed = task_worker.clone();
-    changed.routed_inputs = Some(json!([{"new": true}]));
-    mutations.push(("routed_inputs", changed));
-    let mut changed = task_worker.clone();
-    changed.args = vec!["--changed-binding".to_owned()];
-    mutations.push(("worker_binding", changed));
-    let mut changed = task_worker.clone();
-    changed.repository_effect = Some(json!({"recorded": "different-effect"}));
-    mutations.push(("repository_effect", changed));
-    for (dimension, mutated) in mutations {
-        let connection = Connection::open(&database).expect("open mutation database");
-        connection
-            .execute(
-                "UPDATE work_slot_invocations SET inner_workers_json = ?1 WHERE invocation_id = 'inv-plan'",
-                [serde_json::to_string(&vec![mutated]).expect("worker JSON")],
-            )
-            .expect("mutate durable result");
-        let report = show(&database)["result"]["change_report"]["plan_task_results"][0]
-            ["dimensions"]
-            .clone();
-        assert_eq!(report[dimension]["changed"], true, "{dimension}");
-        connection
-            .execute(
-                "UPDATE work_slot_invocations SET inner_workers_json = ?1 WHERE invocation_id = 'inv-plan'",
-                [serde_json::to_string(&vec![task_worker.clone()]).expect("original worker JSON")],
-            )
-            .expect("restore durable result");
-    }
-
-    // A durable subject revision and a new routed record are visible without
-    // touching the missing capture directory or starting the provider.
-    persistence
-        .set_current_slot_subject(
-            &"report-run".into(),
-            &"review".into(),
-            "subject-v2".to_owned(),
-        )
-        .expect("revise subject");
-    persistence
-        .load_show_data(&"report-run".into())
-        .expect("re-observe");
-    persistence
-        .append_context(AppendContextRequest::new(
-            "report-run",
-            "ctx-2",
-            "routed",
-            json!({"bytes": "input-v2"}),
-            Timestamp::from_unix_millis(5),
-        ))
-        .expect("append routed input");
-    let changed = show(&database);
-    let report = &changed["result"]["work_slot_invocations"][0]["change_report"]["dimensions"];
-    assert_eq!(report["subject_bytes"]["changed"], true);
-    assert_eq!(report["routed_inputs"]["changed"], true);
-
-    persistence
-        .create_work_slot_invocation(
-            CreateWorkSlotInvocationRequest::new(
-                "report-run",
-                "inv-empty",
-                "review",
-                loop_core::WorkSlotBinding::new("/bin/worker", vec!["--empty".to_owned()]),
-                "instruction-digest",
-                "subject-v2",
-                0,
-                Timestamp::from_unix_millis(8),
-                1000,
-                directory.path().join("empty").to_string_lossy(),
-            )
-            .with_frozen_run_identity(json!({
-                "provider": {"identity": "provider-v1"},
-                "input": {"policy": "policy-v1"}
-            })),
-        )
-        .expect("create empty result");
-    persistence
-        .complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
-            "report-run",
-            "inv-empty",
-            WaiterWrittenStatus::Succeeded,
-            0,
-            Timestamp::from_unix_millis(9),
-            Vec::new(),
-        ))
-        .expect("complete empty result");
-    let empty = show(&database);
-    let empty_report = &empty["result"]["work_slot_invocations"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|item| item["invocation_id"] == "inv-empty")
-        .expect("empty invocation")["change_report"]["dimensions"];
-    for dimension in [
-        "subject_bytes",
-        "worker_assignment",
-        "frozen_binding",
-        "governing_policy_configuration",
-        "declared_output_contract",
-        "routed_inputs",
-    ] {
-        assert_eq!(empty_report[dimension]["changed"], true, "{dimension}");
-    }
-    assert_eq!(
-        empty_report,
-        &show(&database)["result"]["work_slot_invocations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|item| item["invocation_id"] == "inv-empty")
-            .expect("repeated empty invocation")["change_report"]["dimensions"]
-    );
-}
-
-#[test]
 fn external_work_full_show_keeps_pending_history_unsampled() {
     let directory = tempdir().expect("tempdir");
     let database = directory.path().join("loop.sqlite");
@@ -395,20 +62,10 @@ fn external_work_full_show_keeps_pending_history_unsampled() {
     persistence
         .load_show_data(&"report-run".into())
         .expect("observe");
-    persistence
-        .create_work_slot_invocation(CreateWorkSlotInvocationRequest::new(
-            "report-run",
-            "pending",
-            "review",
-            loop_core::WorkSlotBinding::new("external-driver", vec!["opaque".to_owned()]),
-            "digest",
-            "subject",
-            0,
-            Timestamp::from_unix_millis(2),
-            1000,
-            directory.path().join("missing-capture").to_string_lossy(),
-        ))
-        .expect("historical pending row");
+    rusqlite::Connection::open(&database).unwrap().execute(
+        r#"INSERT INTO work_slot_invocations (run_id, invocation_id, slot_id, binding_json, instruction_digest, subject, waiter_pid, started_at, allowed_time_ms) VALUES ('report-run', 'pending', 'review', '{"command":"external-driver","args":["opaque"]}', 'digest', 'subject', 0, 2, 1000)"#,
+        [],
+    ).unwrap();
     let result = show(&database);
     let row = &result["result"]["work_slot_invocations"][0];
     assert_eq!(row["invocation_id"], "pending");
@@ -419,4 +76,59 @@ fn external_work_full_show_keeps_pending_history_unsampled() {
         .unwrap()
         .contains("unsampled"));
     assert_eq!(result["result"]["current_state_instructions"], "review");
+
+    // Retired origins refuse even when supplied on applicability records.
+    for kind in ["review", "evidence-applicability"] {
+        let output = Command::new(workspace_integration::binary("loop-engine"))
+            .args(["--database", database.to_str().unwrap(), "--json", "append", "report-run",
+                "--kind", kind, "--data", r#"{"origin":{"kind":"selected-assignment-output","id":"pending","assignment_id":"worker"}}"#])
+            .bounded_output("retired origin").unwrap();
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("selected-assignment-output-retired")
+        );
+    }
+    // Historical pending work cannot prevent an externally driven departure.
+    let output = Command::new(workspace_integration::binary("loop-engine"))
+        .args([
+            "--database",
+            database.to_str().unwrap(),
+            "--json",
+            "event",
+            "report-run",
+            "finish",
+        ])
+        .bounded_output("external departure")
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        show(&database)["result"]["work_slot_invocations"][0]["status"],
+        "unknown"
+    );
+    let output = Command::new(workspace_integration::binary("loop-engine"))
+        .args([
+            "--database",
+            database.to_str().unwrap(),
+            "--json",
+            "terminate",
+            "report-run",
+        ])
+        .bounded_output("external termination")
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    drop(persistence);
+    let reopened = show(&database);
+    assert_eq!(reopened["result"]["lifecycle"], "terminated");
+    assert_eq!(
+        reopened["result"]["work_slot_invocations"][0]["invocation_id"],
+        "pending"
+    );
 }

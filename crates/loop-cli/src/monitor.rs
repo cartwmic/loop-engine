@@ -120,7 +120,7 @@ fn read_workflow(o: &Options, id: &str) -> Result<Value, String> {
         false,
     )
     .map_err(|e| e.to_string())?;
-    match loop_core::operations::show::execute_passive(
+    match loop_core::operations::show::execute(
         loop_core::ShowRequest::new(id),
         &persistence,
         crate::now_timestamp(),

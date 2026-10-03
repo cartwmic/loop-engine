@@ -551,7 +551,6 @@ version = "0.23.1"
 dependencies = [
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
 ]
 
@@ -560,7 +559,6 @@ name = "loop-integrations"
 version = "0.23.1"
 dependencies = [
  "jsonschema",
- "libc",
  "loop-core",
  "rusqlite",
  "serde",

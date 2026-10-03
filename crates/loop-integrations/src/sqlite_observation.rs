@@ -1,11 +1,7 @@
 use super::{decode_json, load_required_run, status_read_deadline};
-use loop_core::{
-    InnerWorker, PersistenceError, PersistenceFailure, RunId, WorkSlotInvocation, WorkerAttempt,
-};
-use rusqlite::{params, Connection, Transaction, TransactionBehavior};
-use std::path::Path;
+use loop_core::{PersistenceError, PersistenceFailure, RunId};
+use rusqlite::{params, Connection, TransactionBehavior};
 
-const ERROR_BYTES: usize = 2048;
 const STATUS_INVOCATION_LIMIT: i64 = 20;
 const STATUS_ASSIGNMENT_LIMIT: i64 = 200;
 
@@ -57,14 +53,6 @@ pub(super) fn read_bounded_observation(
                 .map(|edge| json!({"event":edge.event,"target":edge.target,"kind":edge.kind}))
                 .collect::<Vec<_>>()
         };
-        let effective_bindings = slots
-            .iter()
-            .filter_map(|slot| {
-                loop_core::effective_binding(&run, &slot.id)
-                    .and_then(|binding| binding.ok())
-                    .map(|binding| (slot.id.to_string(), json!(binding)))
-            })
-            .collect::<serde_json::Map<String, serde_json::Value>>();
         let state_value = state
             .map(|state| {
                 json!({
@@ -83,7 +71,7 @@ pub(super) fn read_bounded_observation(
                 "lifecycle":run.lifecycle,"current_state":run.current_state,
                 "state_visit":run.control_revision.as_u64(),"state":state_value,
                 "requestable_events":events,"work_slots":slots,
-                "effective_bindings":effective_bindings,
+
                 "override_summary":run.override_summary
             },
             "invocations":{"state":"unavailable","reason":"not sampled","total":null,"limit":STATUS_INVOCATION_LIMIT,"returned":0,"truncated":false,"items":[]},
@@ -211,8 +199,8 @@ fn load_status_invocations(
             invocation_id,
             slot_id,
             subject,
-            waiter_pid,
-            waiter_identity_json,
+            _waiter_pid,
+            _waiter_identity_json,
             started_at,
             allowed_time_ms,
             stored_status,
@@ -221,37 +209,14 @@ fn load_status_invocations(
             capture_dir,
             selection_json,
         ) = row.map_err(sqlite_failure)?;
-        let identity = waiter_identity_json
-            .as_deref()
-            .and_then(|raw| decode_json::<loop_core::ProcessIdentity>(raw, "waiter identity").ok());
-        let alive = u32::try_from(waiter_pid)
-            .ok()
-            .and_then(|pid| {
-                identity.as_ref().map(|identity| {
-                    crate::ownership::process_identity_matches(pid, Some(identity)).unwrap_or(false)
-                })
-            })
-            .unwrap_or(false);
         let elapsed_ms = i64::try_from(sampled_at_ms)
             .unwrap_or(i64::MAX)
             .saturating_sub(started_at)
             .max(0) as u64;
         let state = match stored_status.as_deref() {
             Some("succeeded") => "succeeded",
-            Some("failed")
-                if Path::new(&capture_dir)
-                    .join("ownership/cleanup-acknowledged.json")
-                    .is_file() =>
-            {
-                "cancelled"
-            }
             Some("failed") => "failed",
-            Some(_) => "unknown",
-            None if alive && elapsed_ms >= u64::try_from(allowed_time_ms).unwrap_or(u64::MAX) => {
-                "overrun"
-            }
-            None if alive => "running",
-            None => "unknown",
+            _ => "unknown",
         };
         let allowed_time_ms = u64::try_from(allowed_time_ms).unwrap_or(u64::MAX);
         let remaining_allowed_ms = if state == "running" {
@@ -259,7 +224,7 @@ fn load_status_invocations(
         } else {
             0
         };
-        let reason = if stored_status.is_none() && !alive {
+        let reason = if stored_status.is_none() {
             Some("no terminal waiter acknowledgement; quiet work remains unknown".to_owned())
         } else {
             None
@@ -269,7 +234,7 @@ fn load_status_invocations(
             .and_then(|raw| decode_json::<Vec<String>>(raw, "assignment selection").ok());
         items.push(json!({
             "invocation_id":invocation_id,"slot_id":slot_id,"subject_revision":subject,
-            "execution":{"state":state,"exit_code":exit_code,"source":"waiter record and sampled process identity"},
+            "execution":{"state":state,"exit_code":exit_code,"source":"historical invocation row"},
             "started_at_ms":started_at,"completed_at_ms":completed_at,
             "elapsed_ms":elapsed_ms,"allowed_time_ms":allowed_time_ms,
             "remaining_allowed_ms":remaining_allowed_ms,
@@ -429,164 +394,6 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
         .unwrap_or(0)
-}
-
-pub(super) fn insert_assignment_facts(
-    transaction: &Transaction<'_>,
-    run_id: &RunId,
-    invocation: &WorkSlotInvocation,
-    workers: &[InnerWorker],
-) -> Result<(), PersistenceError> {
-    for worker in workers {
-        if worker.assignment_id.is_empty() {
-            continue;
-        }
-        let label = invocation
-            .assignment_labels
-            .iter()
-            .find(|label| label.assignment_id == worker.assignment_id);
-        let conformance_state = if worker.started == Some(false) {
-            "unknown"
-        } else {
-            match worker.conformance_status.as_deref() {
-                Some("succeeded") => "conforming",
-                Some("failed") => "failed",
-                Some(_) => "unknown",
-                None => "not-checked",
-            }
-        };
-        transaction
-            .execute(
-                "INSERT INTO work_slot_assignment_facts (
-                run_id, invocation_id, slot_id, subject, assignment_id, title, role,
-                execution_state, conformance_state, conformance_error,
-                conformance_error_truncated, facts_complete, attempts_path
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12)
-             ON CONFLICT (run_id, invocation_id, assignment_id) DO UPDATE SET
-                title=COALESCE(excluded.title, work_slot_assignment_facts.title),
-                role=COALESCE(excluded.role, work_slot_assignment_facts.role),
-                execution_state=excluded.execution_state,
-                conformance_state=excluded.conformance_state,
-                conformance_error=excluded.conformance_error,
-                conformance_error_truncated=excluded.conformance_error_truncated,
-                facts_complete=1,
-                attempts_path=excluded.attempts_path",
-                params![
-                    run_id.as_str(),
-                    invocation.invocation_id.as_str(),
-                    invocation.slot_id.as_str(),
-                    invocation.subject,
-                    worker.assignment_id,
-                    label.map(|label| label.title.as_str()),
-                    label.map(|label| label.role.as_str()),
-                    if worker.recovery_source.is_some() {
-                        "reused"
-                    } else if worker.started == Some(false) {
-                        "not-started"
-                    } else if worker.exit_code == 0 {
-                        "succeeded"
-                    } else {
-                        "failed"
-                    },
-                    conformance_state,
-                    worker
-                        .conformance_error
-                        .as_deref()
-                        .map(|error| bounded_text(error).0),
-                    i64::from(
-                        worker
-                            .conformance_error
-                            .as_deref()
-                            .is_some_and(|error| error.len() > ERROR_BYTES)
-                    ),
-                    worker.attempts_path,
-                ],
-            )
-            .map_err(sqlite_failure)?;
-
-        transaction
-            .execute(
-                "DELETE FROM work_slot_assignment_attempts
-             WHERE run_id = ?1 AND invocation_id = ?2 AND assignment_id = ?3",
-                params![
-                    run_id.as_str(),
-                    invocation.invocation_id.as_str(),
-                    worker.assignment_id
-                ],
-            )
-            .map_err(sqlite_failure)?;
-        for attempt in normalized_attempts(worker) {
-            let normalized_errors = attempt
-                .errors
-                .iter()
-                .map(|error| bounded_text(error))
-                .collect::<Vec<_>>();
-            let errors_truncated = normalized_errors.iter().any(|(_, truncated)| *truncated);
-            let errors = normalized_errors
-                .into_iter()
-                .map(|(error, _)| error)
-                .collect::<Vec<_>>();
-            let errors_json = serde_json::to_string(&errors).map_err(|error| {
-                PersistenceError::failure(PersistenceFailure::new(
-                    "sqlite-encode",
-                    error.to_string(),
-                ))
-            })?;
-            transaction
-                .execute(
-                    "INSERT INTO work_slot_assignment_attempts (
-                    run_id, invocation_id, assignment_id, attempt_number, failed,
-                    errors_json, errors_truncated, stdout_path, stderr_path
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                    params![
-                        run_id.as_str(),
-                        invocation.invocation_id.as_str(),
-                        worker.assignment_id,
-                        i64::from(attempt.number.max(1)),
-                        i64::from(attempt.failed || !errors.is_empty()),
-                        errors_json,
-                        i64::from(errors_truncated),
-                        attempt
-                            .stdout_path
-                            .as_deref()
-                            .or(worker.stdout_path.as_deref()),
-                        attempt
-                            .stderr_path
-                            .as_deref()
-                            .or(worker.stderr_path.as_deref()),
-                    ],
-                )
-                .map_err(sqlite_failure)?;
-        }
-    }
-    Ok(())
-}
-
-fn normalized_attempts(worker: &InnerWorker) -> Vec<WorkerAttempt> {
-    if worker.started == Some(false) || worker.recovery_source.is_some() {
-        return Vec::new();
-    }
-    if !worker.attempts.is_empty() {
-        return worker.attempts.clone();
-    }
-    vec![WorkerAttempt {
-        number: worker.selected_attempt.unwrap_or(1).max(1),
-        failed: worker.exit_code != 0 || worker.conformance_status.as_deref() == Some("failed"),
-        errors: worker.conformance_error.iter().cloned().collect(),
-        stdout_path: worker.stdout_path.clone(),
-        stderr_path: worker.stderr_path.clone(),
-    }]
-}
-
-fn bounded_text(value: &str) -> (String, bool) {
-    if value.len() <= ERROR_BYTES {
-        return (value.to_owned(), false);
-    }
-    let mut end = ERROR_BYTES;
-    while !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    (value[..end].to_owned(), true)
 }
 
 fn sqlite_failure(error: impl std::fmt::Display) -> PersistenceError {

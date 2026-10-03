@@ -1,17 +1,14 @@
 use loop_core::{
     operations::event::{execute as execute_event, Request as EventRequest},
     AppendContextRequest, CheckedEvaluationSnapshotRequest, CommitTransitionRequest,
-    CompleteWorkSlotInvocationRequest, ContextAppendEffect, CreateRunRequest,
-    CreateWorkSlotInvocationRequest, EvaluationFeedback, EvaluationRequest, EvaluationResult,
+    ContextAppendEffect, CreateRunRequest, EvaluationFeedback, EvaluationRequest, EvaluationResult,
     HistoryAction, Lifecycle, Persistence, PersistenceConflict, PersistenceError,
     PersistenceRejection, ProviderAssociation, ProviderError, ProviderGateway, RecordDenialRequest,
-    RunSummary, State, TerminateRequest, Timestamp, Transition, TransitionHistoryOutcome,
-    WaiterWrittenStatus, WorkSlotBinding, WorkSlotId, Workflow,
+    RunSummary, State, TerminateRequest, Timestamp, Transition, TransitionHistoryOutcome, Workflow,
 };
 use loop_integrations::SqlitePersistence;
 use rusqlite::Connection;
 use serde_json::json;
-use std::cell::Cell;
 use tempfile::tempdir;
 
 fn workflow() -> Workflow {
@@ -63,198 +60,6 @@ fn append_request(run_id: &str, record_id: &str, created_at: i64) -> AppendConte
         json!({"record": record_id}),
         Timestamp::from_unix_millis(created_at),
     )
-}
-
-fn invocation_create_request(run_id: &str, invocation_id: &str) -> CreateWorkSlotInvocationRequest {
-    CreateWorkSlotInvocationRequest::new(
-        run_id,
-        invocation_id,
-        "slot-1",
-        WorkSlotBinding::new("/bin/sh", vec!["-c".to_owned(), "exit 0".to_owned()]),
-        "digest",
-        "subject-a",
-        1,
-        Timestamp::from_unix_millis(500),
-        1_000,
-        String::new(),
-    )
-}
-
-#[test]
-fn show_refreshes_terminal_commit_between_snapshot_and_waiter_liveness(
-) -> Result<(), Box<dyn std::error::Error>> {
-    struct CompletingWaiter<'a>(&'a SqlitePersistence, Cell<bool>);
-    impl loop_core::WorkSlotProcess for CompletingWaiter<'_> {
-        type Handle = ();
-        fn waiter_alive(&self, _pid: u32) -> bool {
-            if !self.1.replace(true) {
-                self.0
-                    .complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
-                        "race",
-                        "race-invocation",
-                        WaiterWrittenStatus::Succeeded,
-                        0,
-                        Timestamp::from_unix_millis(600),
-                        vec![],
-                    ))
-                    .unwrap();
-            }
-            false // exit observed after the commit, but after show's initial read
-        }
-        fn spawn_wait_invocation(
-            &self,
-            _: loop_core::WaiterSpawnArgs,
-        ) -> Result<loop_core::StartedWaiter<()>, loop_core::ProcessError> {
-            panic!("show spawned work")
-        }
-        fn send_envelope_and_detach(
-            &self,
-            _: loop_core::StartedWaiter<()>,
-            _: &[u8],
-        ) -> Result<(), loop_core::ProcessError> {
-            panic!("show sent work")
-        }
-    }
-    let directory = tempdir()?;
-    let adapter = SqlitePersistence::open(directory.path().join("race.sqlite"))?;
-    create_observed(&adapter, "race")?;
-    adapter.create_work_slot_invocation(invocation_create_request("race", "race-invocation"))?;
-    let result = loop_core::operations::show::execute(
-        loop_core::operations::show::Request::new("race"),
-        &adapter,
-        &CompletingWaiter(&adapter, Cell::new(false)),
-        Timestamp::from_unix_millis(700),
-    );
-    let shown = result.value().expect("completed provider-free show");
-    assert_eq!(
-        shown.work_slot_invocations[0].status,
-        loop_core::ProjectedInvocationStatus::Succeeded
-    );
-    assert_eq!(shown.work_slot_invocations[0].exit_code, Some(0));
-    Ok(())
-}
-
-#[test]
-fn historical_software_change_public_reads_preserve_absent_capabilities_and_refuse_new_evaluation(
-) -> Result<(), Box<dyn std::error::Error>> {
-    let directory = tempdir()?;
-    let path = directory.path().join("historical.sqlite");
-    let adapter = SqlitePersistence::open(&path)?;
-    let historical: Workflow = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/software-change-historical-reviewless.json"
-    ))?;
-    let input = json!({"config_version":"high-rigor-8", "review_policies":{
-        "design-review":[{"id":"correctness","description":"original obligation","required_authors":2}]},
-        "artifact_root":directory.path().to_str().unwrap()});
-    adapter.create_run(CreateRunRequest::new(
-        "historical",
-        None,
-        historical,
-        ProviderAssociation::new(
-            json!({"command":workspace_integration::binary("software-change"),"args":[]}),
-        ),
-        input.clone(),
-        "implement",
-        Lifecycle::Active,
-        Timestamp::from_unix_millis(100),
-        "software-change",
-        Some(directory.path().to_string_lossy().into_owned()),
-    ))?;
-    adapter.load_show_data(&"historical".into())?;
-    let original = json!({"config_version":"high-rigor-8", "subject_revision":"original-3",
-        "result":"fail", "findings":"Original reviewer disagreement", "author":{"name":"original reviewer","kind":"agent"}});
-    adapter.append_context(AppendContextRequest::new(
-        "historical",
-        "old-verdict",
-        "review-evidence",
-        original.clone(),
-        Timestamp::from_unix_millis(200),
-    ))?;
-    let mut invocation = invocation_create_request("historical", "old-invocation");
-    invocation.slot_id = "implement".into();
-    adapter.create_work_slot_invocation(invocation)?;
-    adapter.complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
-        "historical",
-        "old-invocation",
-        WaiterWrittenStatus::Failed,
-        7,
-        Timestamp::from_unix_millis(600),
-        Vec::new(),
-    ))?;
-    let call = |args: &[&str]| -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-        let output = std::process::Command::new(workspace_integration::binary("loop-engine"))
-            .arg("--database")
-            .arg(&path)
-            .arg("--json")
-            .args(args)
-            .output()?;
-        let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-        println!("HISTORICAL_ENVELOPE {} {}", args.join(" "), value);
-        Ok(value)
-    };
-    let shown = call(&["show", "historical", "--view", "full"])?;
-    assert_eq!(shown["status"], "completed");
-    let result = &shown["result"];
-    assert_eq!(result["initial_input"], input);
-    assert_eq!(result["context"][0]["data"], original);
-    assert!(result["initial_input"].get("contract_version").is_none());
-    assert!(result["initial_input"].get("criterion_policy").is_none());
-    let invocation = &result["work_slot_invocations"][0];
-    assert_eq!(invocation["exit_code"], 7);
-    assert_eq!(invocation["status"], "failed");
-    assert!(invocation
-        .get("ownership")
-        .is_none_or(serde_json::Value::is_null));
-    assert!(invocation
-        .get("controls")
-        .is_none_or(serde_json::Value::is_null));
-    assert!(!result["requestable_events"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|e| e["event"] == "revise-plan"));
-    let before = call(&["history", "historical"])?;
-    assert_eq!(before["status"], "completed");
-    let refusal = call(&["event", "historical", "implementation-ready"])?;
-    assert_eq!(refusal["status"], "error");
-    assert!(refusal
-        .to_string()
-        .contains("unsupported software-change semantic contract"));
-    assert!(refusal.to_string().contains("fixed original provider"));
-    assert_eq!(call(&["history", "historical"])?, before);
-    let after = call(&["show", "historical", "--view", "full"])?;
-    assert_eq!(after["result"]["initial_input"], input);
-    assert_eq!(after["result"]["context"], result["context"]);
-    assert_eq!(after["result"]["state_visit"], result["state_visit"]);
-    // A historical live-shaped record has no ownership protocol. The public
-    // controller must refuse before treating its waiter PID as signal authority.
-    let mut running = invocation_create_request("historical", "old-running");
-    running.slot_id = "implement".into();
-    running.waiter_pid = std::process::id();
-    adapter.set_current_slot_subject(
-        &"historical".into(),
-        &"implement".into(),
-        "subject-a".to_owned(),
-    )?;
-    adapter.create_work_slot_invocation(running)?;
-    call(&["show", "historical"])?;
-    let history = call(&["history", "historical"])?;
-    let refused = call(&["cancel-invocation", "historical", "old-running"])?;
-    assert_eq!(refused["status"], "rejected");
-    assert_eq!(refused["code"], "ownership-unavailable");
-    assert!(refused.to_string().contains("unsupported historical"));
-    assert_eq!(call(&["history", "historical"])?, history);
-    Ok(())
-}
-
-fn assert_waiter_written_status_has_no_overrun(status: WaiterWrittenStatus) {
-    match status {
-        WaiterWrittenStatus::Succeeded | WaiterWrittenStatus::Failed => {}
-    }
-    assert!(
-        !format!("{status:?}").contains("Overrun"),
-        "WaiterWrittenStatus must not include Overrun: {status:?}"
-    );
 }
 
 fn checked_start_transition(event: &str, target: &str) -> Transition {
@@ -559,85 +364,6 @@ fn context_effects_are_rejected_for_check_free_commits_without_writing(
     );
     assert!(adapter.load_context_records(&run_id.into())?.is_empty());
     assert_eq!(adapter.load_history(&run_id.into())?.len(), 1);
-    Ok(())
-}
-
-#[test]
-fn unobserved_mutations_refuse_and_self_loop_requires_reobservation(
-) -> Result<(), Box<dyn std::error::Error>> {
-    let adapter = SqlitePersistence::open_in_memory()?;
-    adapter.create_run(create_request("run-observation"))?;
-
-    assert!(!adapter.observation_is_current(&"run-observation".into(), 0_u64.into())?);
-    let passive = adapter.load_status_data(&"run-observation".into())?;
-    assert_eq!(passive.run.id.as_str(), "run-observation");
-    assert!(!adapter.observation_is_current(&"run-observation".into(), 0_u64.into())?);
-    for error in [
-        adapter
-            .append_context(append_request("run-observation", "ctx", 200))
-            .unwrap_err(),
-        adapter
-            .commit_transition(CommitTransitionRequest::new(
-                "run-observation",
-                0_u64.into(),
-                "start",
-                checked_start_transition("retry", "start"),
-                Lifecycle::Active,
-            ))
-            .unwrap_err(),
-        adapter
-            .terminate(TerminateRequest::new("run-observation"))
-            .unwrap_err(),
-        adapter
-            .create_work_slot_invocation(invocation_create_request(
-                "run-observation",
-                "inv-unobserved",
-            ))
-            .unwrap_err(),
-    ] {
-        assert_eq!(error.code(), "run-not-observed");
-    }
-    assert_eq!(adapter.load_history(&"run-observation".into())?.len(), 1);
-    assert_eq!(
-        adapter
-            .load_authoritative_run(&"run-observation".into())?
-            .current_state
-            .as_str(),
-        "start"
-    );
-
-    adapter.load_show_data(&"run-observation".into())?;
-    assert!(adapter.observation_is_current(&"run-observation".into(), 0_u64.into())?);
-    adapter.create_work_slot_invocation(invocation_create_request(
-        "run-observation",
-        "inv-observed",
-    ))?;
-    let self_loop = adapter.commit_transition(CommitTransitionRequest::new(
-        "run-observation",
-        0_u64.into(),
-        "start",
-        checked_start_transition("retry", "start"),
-        Lifecycle::Active,
-    ))?;
-    assert_eq!(self_loop.run.control_revision.as_u64(), 1);
-    assert!(!adapter.observation_is_current(&"run-observation".into(), 1_u64.into())?);
-
-    let stale_append = adapter
-        .append_context(append_request("run-observation", "ctx-after-loop", 300))
-        .unwrap_err();
-    let stale_termination = adapter
-        .terminate(TerminateRequest::new("run-observation"))
-        .unwrap_err();
-    let stale_invocation = adapter
-        .create_work_slot_invocation(invocation_create_request(
-            "run-observation",
-            "inv-after-loop",
-        ))
-        .unwrap_err();
-    assert_eq!(stale_append.code(), "run-not-observed");
-    assert_eq!(stale_termination.code(), "run-not-observed");
-    assert_eq!(stale_invocation.code(), "run-not-observed");
-    assert_eq!(adapter.load_history(&"run-observation".into())?.len(), 3);
     Ok(())
 }
 
@@ -1158,143 +884,6 @@ fn opening_legacy_catalog_adds_nullable_provider_and_artifact_root_columns(
 }
 
 #[test]
-fn create_running_work_slot_invocation_record() -> Result<(), Box<dyn std::error::Error>> {
-    let adapter = SqlitePersistence::open_in_memory()?;
-    create_observed(&adapter, "run-invocation-create")?;
-    let created = adapter.create_work_slot_invocation(invocation_create_request(
-        "run-invocation-create",
-        "inv-running",
-    ))?;
-    assert!(created.invocation.status.is_none());
-    assert!(created.invocation.exit_code.is_none());
-    assert!(created.invocation.completed_at.is_none());
-    assert!(matches!(
-        created.history.action,
-        HistoryAction::InvocationStarted { .. }
-    ));
-
-    let loaded = adapter.load_work_slot_invocations(&"run-invocation-create".into())?;
-    assert_eq!(loaded.len(), 1);
-    assert_eq!(loaded[0].invocation_id.as_str(), "inv-running");
-    assert!(loaded[0].status.is_none());
-    assert!(matches!(
-        created.history.action,
-        HistoryAction::InvocationStarted {
-            ref invocation_id
-        } if invocation_id.as_str() == "inv-running"
-    ));
-    Ok(())
-}
-
-#[test]
-fn waiter_terminal_write_succeeded_invocation() -> Result<(), Box<dyn std::error::Error>> {
-    let adapter = SqlitePersistence::open_in_memory()?;
-    create_observed(&adapter, "run-invocation-succeeded")?;
-    adapter.create_work_slot_invocation(invocation_create_request(
-        "run-invocation-succeeded",
-        "inv-succeeded",
-    ))?;
-    let completed =
-        adapter.complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
-            "run-invocation-succeeded",
-            "inv-succeeded",
-            WaiterWrittenStatus::Succeeded,
-            0,
-            Timestamp::from_unix_millis(900),
-            Vec::new(),
-        ))?;
-    assert_eq!(
-        completed.invocation.status,
-        Some(WaiterWrittenStatus::Succeeded)
-    );
-    assert_eq!(completed.invocation.exit_code, Some(0));
-    assert_eq!(
-        completed.invocation.completed_at,
-        Some(Timestamp::from_unix_millis(900))
-    );
-    assert!(matches!(
-        completed.history.action,
-        HistoryAction::InvocationStatusChanged {
-            status: WaiterWrittenStatus::Succeeded,
-            ..
-        }
-    ));
-    Ok(())
-}
-
-#[test]
-fn waiter_terminal_write_failed_invocation() -> Result<(), Box<dyn std::error::Error>> {
-    let adapter = SqlitePersistence::open_in_memory()?;
-    create_observed(&adapter, "run-invocation-failed")?;
-    adapter.create_work_slot_invocation(invocation_create_request(
-        "run-invocation-failed",
-        "inv-failed",
-    ))?;
-    let completed =
-        adapter.complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
-            "run-invocation-failed",
-            "inv-failed",
-            WaiterWrittenStatus::Failed,
-            7,
-            Timestamp::from_unix_millis(901),
-            Vec::new(),
-        ))?;
-    assert_eq!(
-        completed.invocation.status,
-        Some(WaiterWrittenStatus::Failed)
-    );
-    assert_eq!(completed.invocation.exit_code, Some(7));
-    assert!(matches!(
-        completed.history.action,
-        HistoryAction::InvocationStatusChanged {
-            status: WaiterWrittenStatus::Failed,
-            ..
-        }
-    ));
-    Ok(())
-}
-
-#[test]
-fn second_invocation_terminal_write_conflicts_and_waiter_cannot_write_overrun(
-) -> Result<(), Box<dyn std::error::Error>> {
-    assert_waiter_written_status_has_no_overrun(WaiterWrittenStatus::Succeeded);
-    assert_waiter_written_status_has_no_overrun(WaiterWrittenStatus::Failed);
-
-    let adapter = SqlitePersistence::open_in_memory()?;
-    create_observed(&adapter, "run-invocation-conflict")?;
-    adapter.create_work_slot_invocation(invocation_create_request(
-        "run-invocation-conflict",
-        "inv-conflict",
-    ))?;
-    adapter.complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
-        "run-invocation-conflict",
-        "inv-conflict",
-        WaiterWrittenStatus::Succeeded,
-        0,
-        Timestamp::from_unix_millis(900),
-        Vec::new(),
-    ))?;
-    let error = adapter
-        .complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
-            "run-invocation-conflict",
-            "inv-conflict",
-            WaiterWrittenStatus::Failed,
-            1,
-            Timestamp::from_unix_millis(901),
-            Vec::new(),
-        ))
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        PersistenceError::Conflict(PersistenceConflict::InvocationAlreadyTerminal { .. })
-    ));
-    let loaded = adapter.load_work_slot_invocations(&"run-invocation-conflict".into())?;
-    assert_eq!(loaded[0].status, Some(WaiterWrittenStatus::Succeeded));
-    assert_eq!(loaded[0].exit_code, Some(0));
-    Ok(())
-}
-
-#[test]
 fn append_context_does_not_create_invocation_rows() -> Result<(), Box<dyn std::error::Error>> {
     let adapter = SqlitePersistence::open_in_memory()?;
     create_observed(&adapter, "run-invocation-append")?;
@@ -1305,101 +894,89 @@ fn append_context_does_not_create_invocation_rows() -> Result<(), Box<dyn std::e
 }
 
 #[test]
-fn get_and_set_current_slot_subject_replace_on_set_for_invocation_slot(
+fn historical_software_change_public_reads_preserve_absent_capabilities_and_refuse_new_evaluation(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let adapter = SqlitePersistence::open_in_memory()?;
-    create_observed(&adapter, "run-invocation-subject")?;
-    let slot_id = WorkSlotId::new("slot-1");
-    let run_id = "run-invocation-subject".into();
-    assert_eq!(adapter.get_current_slot_subject(&run_id, &slot_id)?, None);
-    adapter.set_current_slot_subject(&run_id, &slot_id, "first".to_owned())?;
-    assert_eq!(
-        adapter.get_current_slot_subject(&run_id, &slot_id)?,
-        Some("first".to_owned())
-    );
-    adapter.set_current_slot_subject(&run_id, &slot_id, "second".to_owned())?;
-    assert_eq!(
-        adapter.get_current_slot_subject(&run_id, &slot_id)?,
-        Some("second".to_owned())
-    );
-    Ok(())
-}
-
-#[test]
-fn create_run_and_commit_transition_persist_slot_subjects_atomically(
-) -> Result<(), Box<dyn std::error::Error>> {
-    let adapter = SqlitePersistence::open_in_memory()?;
-    let slot_id = WorkSlotId::new("slot-1");
-    let created = adapter.create_run(
-        create_request("run-slot-atomic")
-            .with_slot_subjects(vec![(slot_id.clone(), "visit-start".to_owned())]),
-    )?;
-    adapter.load_show_data(&"run-slot-atomic".into())?;
-    assert_eq!(created.run.id.as_str(), "run-slot-atomic");
-    assert_eq!(
-        adapter.get_current_slot_subject(&created.run.id, &slot_id)?,
-        Some("visit-start".to_owned())
-    );
-
-    let committed = adapter.commit_transition(
-        CommitTransitionRequest::new(
-            created.run.id.clone(),
-            created.run.control_revision,
-            created.run.current_state.clone(),
-            Transition::checked("start", "retry", "start"),
-            Lifecycle::Active,
-        )
-        .with_slot_subjects(vec![(slot_id.clone(), "visit-next".to_owned())]),
-    )?;
-    assert_eq!(committed.run.current_state.as_str(), "start");
-    assert_eq!(
-        adapter.get_current_slot_subject(&created.run.id, &slot_id)?,
-        Some("visit-next".to_owned())
-    );
-    Ok(())
-}
-
-#[test]
-fn load_history_includes_invocation_actions_in_sequence_order(
-) -> Result<(), Box<dyn std::error::Error>> {
-    let adapter = SqlitePersistence::open_in_memory()?;
-    create_observed(&adapter, "run-invocation-history")?;
-    adapter.append_context(append_request("run-invocation-history", "ctx-1", 200))?;
-    adapter.create_work_slot_invocation(invocation_create_request(
-        "run-invocation-history",
-        "inv-history",
+    let directory = tempdir()?;
+    let path = directory.path().join("historical.sqlite");
+    let adapter = SqlitePersistence::open(&path)?;
+    let historical: Workflow = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/software-change-historical-reviewless.json"
     ))?;
-    adapter.complete_work_slot_invocation(CompleteWorkSlotInvocationRequest::new(
-        "run-invocation-history",
-        "inv-history",
-        WaiterWrittenStatus::Succeeded,
-        0,
-        Timestamp::from_unix_millis(900),
-        Vec::new(),
+    let input = json!({"config_version":"high-rigor-8", "review_policies":{
+        "design-review":[{"id":"correctness","description":"original obligation","required_authors":2}]},
+        "artifact_root":directory.path().to_str().unwrap()});
+    adapter.create_run(CreateRunRequest::new(
+        "historical",
+        None,
+        historical,
+        ProviderAssociation::new(
+            json!({"command":workspace_integration::binary("software-change"),"args":[]}),
+        ),
+        input.clone(),
+        "implement",
+        Lifecycle::Active,
+        Timestamp::from_unix_millis(100),
+        "software-change",
+        Some(directory.path().to_string_lossy().into_owned()),
     ))?;
-    let history = adapter.load_history(&"run-invocation-history".into())?;
-    assert_eq!(
-        history
-            .iter()
-            .map(|entry| entry.sequence.as_u64())
-            .collect::<Vec<_>>(),
-        vec![1, 2, 3, 4]
-    );
-    assert!(matches!(history[0].action, HistoryAction::RunCreated));
-    assert!(matches!(
-        history[1].action,
-        HistoryAction::ContextAppended { .. }
-    ));
-    assert!(matches!(
-        history[2].action,
-        HistoryAction::InvocationStarted { .. }
-    ));
-    assert!(matches!(
-        history[3].action,
-        HistoryAction::InvocationStatusChanged {
-            status: WaiterWrittenStatus::Succeeded,
-            ..
-        }
-    ));
+    adapter.load_show_data(&"historical".into())?;
+    let original = json!({"config_version":"high-rigor-8", "subject_revision":"original-3",
+        "result":"fail", "findings":"Original reviewer disagreement", "author":{"name":"original reviewer","kind":"agent"}});
+    adapter.append_context(AppendContextRequest::new(
+        "historical",
+        "old-verdict",
+        "review-evidence",
+        original.clone(),
+        Timestamp::from_unix_millis(200),
+    ))?;
+    Connection::open(&path)?.execute(
+        r#"INSERT INTO work_slot_invocations (run_id, invocation_id, slot_id, binding_json, instruction_digest, subject, waiter_pid, started_at, allowed_time_ms, status, exit_code, completed_at) VALUES ('historical', 'old-invocation', 'implement', '{"command":"old-worker","args":[]}', 'digest', 'subject-a', 0, 500, 1000, 'failed', 7, 600)"#,
+        [],
+    )?;
+    let call = |args: &[&str]| -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+        let output = std::process::Command::new(workspace_integration::binary("loop-engine"))
+            .arg("--database")
+            .arg(&path)
+            .arg("--json")
+            .args(args)
+            .output()?;
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        println!("HISTORICAL_ENVELOPE {} {}", args.join(" "), value);
+        Ok(value)
+    };
+    let shown = call(&["show", "historical", "--view", "full"])?;
+    assert_eq!(shown["status"], "completed");
+    let result = &shown["result"];
+    assert_eq!(result["initial_input"], input);
+    assert_eq!(result["context"][0]["data"], original);
+    assert!(result["initial_input"].get("contract_version").is_none());
+    assert!(result["initial_input"].get("criterion_policy").is_none());
+    let invocation = &result["work_slot_invocations"][0];
+    assert_eq!(invocation["exit_code"], 7);
+    assert_eq!(invocation["status"], "failed");
+    assert!(invocation
+        .get("ownership")
+        .is_none_or(serde_json::Value::is_null));
+    assert!(invocation
+        .get("controls")
+        .is_none_or(serde_json::Value::is_null));
+    assert!(!result["requestable_events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["event"] == "revise-plan"));
+    let before = call(&["history", "historical"])?;
+    assert_eq!(before["status"], "completed");
+    let refusal = call(&["event", "historical", "implementation-ready"])?;
+    assert_eq!(refusal["status"], "error");
+    assert!(refusal
+        .to_string()
+        .contains("unsupported software-change semantic contract"));
+    assert!(refusal.to_string().contains("fixed original provider"));
+    assert_eq!(call(&["history", "historical"])?, before);
+    let after = call(&["show", "historical", "--view", "full"])?;
+    assert_eq!(after["result"]["initial_input"], input);
+    assert_eq!(after["result"]["context"], result["context"]);
+    assert_eq!(after["result"]["state_visit"], result["state_visit"]);
     Ok(())
 }

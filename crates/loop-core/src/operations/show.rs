@@ -10,7 +10,7 @@ use crate::{
     project_invocation_status, DurableEvaluation, EventId, InnerWorker, InvocationId, Lifecycle,
     OperationOutcome, Persistence, ProjectedInvocationStatus, Run, RunId, ShowData, StateId,
     Timestamp, Transition, TransitionKind, WorkSlot, WorkSlotBinding, WorkSlotId,
-    WorkSlotInvocation, WorkSlotProcess, WorkflowId,
+    WorkSlotInvocation, WorkflowId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -240,7 +240,6 @@ pub struct ShowProjection {
     pub initial_input: Value,
     pub state_visit: u64,
     pub binding_amendments: Vec<crate::BindingAmendment>,
-    pub effective_bindings: BTreeMap<String, WorkSlotBinding>,
     pub context: Vec<crate::ContextRecord>,
     pub requestable_events: Vec<RequestableEvent>,
     /// One latest durable allow/deny record for every exact checked
@@ -309,20 +308,6 @@ pub fn latest_evaluations(evaluations: &[DurableEvaluation]) -> Vec<DurableEvalu
     latest
 }
 
-fn bound_slot_for_current_state(run: &Run) -> Option<(&WorkSlot, WorkSlotBinding)> {
-    for slot in &run.workflow.work_slots {
-        if slot.state != run.current_state {
-            continue;
-        }
-        let Some(binding) = crate::effective_binding(run, &slot.id) else {
-            continue;
-        };
-        let binding = binding.unwrap_or_else(|_| WorkSlotBinding::new(String::new(), Vec::new()));
-        return Some((slot, binding));
-    }
-    None
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct InvocationChangeReport {
     pub identity: InvocationId,
@@ -361,10 +346,6 @@ pub struct PlanTaskVisibility {
     pub attesting_driver: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub originating_output_sha256: Option<String>,
-}
-
-fn binding_for_slot(run: &Run, slot_id: &WorkSlotId) -> Option<WorkSlotBinding> {
-    crate::effective_binding(run, slot_id)?.ok()
 }
 
 fn current_routed_inputs(
@@ -622,7 +603,7 @@ pub(crate) fn invocation_change_report(
     // missing snapshot is unknown.
     let contract_known = baseline_known && !record.inner_workers.is_empty();
     let routed_current = current_routed_inputs(run, context, &record.slot_id);
-    let binding_current = binding_for_slot(run, &record.slot_id);
+    let binding_current: Option<WorkSlotBinding> = None;
     let routed_changed = record.frozen_run_identity.is_none()
         || routed_current
             .as_ref()
@@ -817,21 +798,8 @@ pub(crate) fn invocation_change_report(
     }
 }
 
-fn current_state_instructions_for(run: &Run, stored: &str) -> String {
-    match bound_slot_for_current_state(run) {
-        Some((slot, binding)) => {
-            let args = serde_json::to_string(&binding.args).unwrap_or_else(|_| "[]".to_owned());
-            format!(
-                "Bound work slot `{slot_id}` is configured. Frozen worker CLI: command={command} args={args}. Legal start: loop-engine invoke {run_id} {slot_id}. Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work. Captures are at the named capture directory on the invocation view and invoke result. The driver triages worker output, appends provider-shaped records, then requests the shown event. On overrun wait; cancel-invocation requires recorded local ownership and refuses historical invocations without it. Live owned work and pending cleanup block retry and state departure. Run show immediately before reinvoking the same slot. On failed inspect capture_dir/summary.json and captured stdout before stderr. Consult the change report of record before reuse. For review reuse, append one evidence-applicability record referencing the original evidence, current target, attesting driver, and short reason; semantic applicability remains the driver's judgment.",
-                slot_id = slot.id,
-                command = binding.command,
-                run_id = run.id,
-            )
-        }
-        None => format!(
-            "{stored} Consult the change report of record before reuse. For review reuse, append one evidence-applicability record referencing the original evidence, current target, attesting driver, and short reason; semantic applicability remains the driver's judgment."
-        ),
-    }
+fn current_state_instructions_for(_run: &Run, stored: &str) -> String {
+    format!("{stored} Consult the change report of record before reuse. For review reuse, append one evidence-applicability record referencing the original evidence, current target, attesting driver, and short reason; semantic applicability remains the driver's judgment.")
 }
 
 /// Project durable show data into the complete continuation view.
@@ -952,18 +920,6 @@ pub fn project_with_invocations_and_subjects_by_identity(
             .collect(),
     };
 
-    let effective_bindings = data
-        .run
-        .workflow
-        .work_slots
-        .iter()
-        .filter_map(|slot| {
-            Some((
-                slot.id.to_string(),
-                crate::effective_binding(&data.run, &slot.id)?.ok()?,
-            ))
-        })
-        .collect();
     let mut evaluation_history = data.checked_evaluations.clone();
     evaluation_history.sort_by_key(|evaluation| evaluation.sequence);
     Ok(ShowProjection {
@@ -972,7 +928,6 @@ pub fn project_with_invocations_and_subjects_by_identity(
         override_summary: data.run.override_summary.clone(),
         state_visit: data.run.control_revision.as_u64(),
         binding_amendments: data.run.binding_amendments.clone(),
-        effective_bindings,
         run_id: data.run.id,
         label: data.run.label,
         workflow_id: data.run.workflow.id.clone(),
@@ -991,106 +946,8 @@ pub fn project_with_invocations_and_subjects_by_identity(
     })
 }
 
-fn invocation_liveness<Proc: WorkSlotProcess + ?Sized>(
-    invocations: &[WorkSlotInvocation],
-    process: &Proc,
-) -> BTreeMap<InvocationId, bool> {
-    invocations
-        .iter()
-        .map(|row| {
-            (
-                row.invocation_id.clone(),
-                if row.ownership.is_some() && row.waiter_identity.is_none() {
-                    false
-                } else {
-                    process.waiter_alive_for_identity(row.waiter_pid, row.waiter_identity.as_ref())
-                },
-            )
-        })
-        .collect()
-}
-
-/// Execute a provider-free `show` read, overlaying work-slot invocations.
-pub fn execute<P, Proc>(
-    request: Request,
-    persistence: &P,
-    process: &Proc,
-    now: Timestamp,
-) -> OperationOutcome<ShowProjection>
-where
-    P: Persistence + ?Sized,
-    Proc: WorkSlotProcess + ?Sized,
-{
-    execute_view(request, persistence, process, now, true)
-}
-
-/// Provider-free status uses a separate persistence read and never arms mutation.
-pub fn execute_view<P, Proc>(
-    request: Request,
-    persistence: &P,
-    process: &Proc,
-    now: Timestamp,
-    arm: bool,
-) -> OperationOutcome<ShowProjection>
-where
-    P: Persistence + ?Sized,
-    Proc: WorkSlotProcess + ?Sized,
-{
-    let loaded = if arm {
-        persistence.load_show_data(&request.run_id)
-    } else {
-        persistence.load_status_data(&request.run_id)
-    };
-    let data = match loaded {
-        Ok(data) => data,
-        Err(error) => return persistence_error(error),
-    };
-    let mut invocations = match persistence.load_work_slot_invocations(&request.run_id) {
-        Ok(invocations) => invocations,
-        Err(error) => return persistence_error(error),
-    };
-    // A waiter may commit completion and exit after the first database read.
-    // Sample identity-aware liveness once, then refresh dead-waiter rows before
-    // calling them failed. Otherwise a successful completion can flicker
-    // through failure. Key by invocation identity, not a recyclable PID.
-    let mut liveness = invocation_liveness(&invocations, process);
-    if invocations.iter().any(|row| {
-        row.status.is_none() && !liveness.get(&row.invocation_id).copied().unwrap_or(false)
-    }) {
-        invocations = match persistence.load_work_slot_invocations(&request.run_id) {
-            Ok(invocations) => invocations,
-            Err(error) => return persistence_error(error),
-        };
-        liveness = invocation_liveness(&invocations, process);
-    }
-    let mut current_subjects = BTreeMap::new();
-    for slot_id in invocations
-        .iter()
-        .map(|item| item.slot_id.clone())
-        .collect::<std::collections::BTreeSet<_>>()
-    {
-        match persistence.get_current_slot_subject(&request.run_id, &slot_id) {
-            Ok(Some(subject)) => {
-                current_subjects.insert(slot_id, subject);
-            }
-            Ok(None) => {}
-            Err(error) => return persistence_error(error),
-        }
-    }
-    match project_with_invocations_and_subjects_by_identity(
-        data,
-        &invocations,
-        now,
-        |row| liveness.get(&row.invocation_id).copied().unwrap_or(false),
-        &current_subjects,
-    ) {
-        Ok(projection) => OperationOutcome::completed(projection),
-        Err(error) => OperationOutcome::error(error.code(), error.to_string()),
-    }
-}
-
 /// Read the complete durable projection without sampling or owning execution.
-pub fn execute_passive<P: Persistence + ?Sized>(
+pub fn execute<P: Persistence + ?Sized>(
     request: Request,
     persistence: &P,
     now: Timestamp,
@@ -1150,20 +1007,6 @@ pub fn execute_passive<P: Persistence + ?Sized>(
         }
         Err(error) => OperationOutcome::error(error.code(), error.to_string()),
     }
-}
-
-/// Execute `show` with persistence first.
-pub fn execute_with_persistence<P, Proc>(
-    persistence: &P,
-    request: Request,
-    process: &Proc,
-    now: Timestamp,
-) -> OperationOutcome<ShowProjection>
-where
-    P: Persistence + ?Sized,
-    Proc: WorkSlotProcess + ?Sized,
-{
-    execute(request, persistence, process, now)
 }
 
 #[cfg(test)]
@@ -1668,131 +1511,6 @@ mod tests {
     }
 
     #[test]
-    fn work_slot_invocations_status_is_overlay() {
-        let data = ShowData {
-            run: run_custom(
-                "start",
-                Lifecycle::Active,
-                slot_workflow("Do the work"),
-                bound_input(),
-            ),
-            context: vec![],
-            checked_evaluations: vec![],
-        };
-        let invocations = vec![
-            sample_invocation(
-                "inv-succeeded",
-                1,
-                0,
-                1_000,
-                Some(WaiterWrittenStatus::Succeeded),
-                Some(0),
-                Some(10),
-            ),
-            sample_invocation("inv-vanished", 2, 0, 10_000, None, None, None),
-            sample_invocation("inv-overrun", 3, 0, 1_000, None, None, None),
-            sample_invocation("inv-running", 4, 0, 10_000, None, None, None),
-        ];
-        let now = Timestamp::from_unix_millis(5_000);
-        let projection = project_with_invocations(data, &invocations, now, |pid| pid != 2).unwrap();
-
-        assert_eq!(
-            projection.work_slot_invocations[0].status,
-            ProjectedInvocationStatus::Succeeded
-        );
-        assert_eq!(
-            projection.work_slot_invocations[1].status,
-            ProjectedInvocationStatus::Failed
-        );
-        assert_eq!(
-            projection.work_slot_invocations[2].status,
-            ProjectedInvocationStatus::Overrun
-        );
-        assert_eq!(
-            projection.work_slot_invocations[3].status,
-            ProjectedInvocationStatus::Running
-        );
-        assert_eq!(
-            projection.work_slot_invocations[3].overlay_meaning,
-            OVERLAY_MEANING_RUNNING
-        );
-        assert_eq!(projection.work_slot_invocations[3].elapsed_ms, 5_000);
-        assert_eq!(
-            projection.work_slot_invocations[3].remaining_allowed_ms,
-            5_000
-        );
-        assert_eq!(
-            projection.work_slot_invocations[2].overlay_meaning,
-            OVERLAY_MEANING_OVERRUN
-        );
-        assert!(
-            OVERLAY_MEANING_OVERRUN
-                .contains("use cancel-invocation when local ownership is recorded"),
-            "overrun must name the live-work wait/cancel remedy: {OVERLAY_MEANING_OVERRUN}"
-        );
-        assert!(projection.work_slot_invocations[3].inner_workers.is_empty());
-        assert_eq!(projection.work_slot_invocations[0].remaining_allowed_ms, 0);
-        assert_eq!(projection.work_slot_invocations[1].remaining_allowed_ms, 0);
-        assert_eq!(projection.work_slot_invocations[2].remaining_allowed_ms, 0);
-    }
-
-    #[test]
-    fn bound_work_slot_current_state_redacts_body_and_names_invoke_cli() {
-        let data = ShowData {
-            run: run_custom(
-                "start",
-                Lifecycle::Active,
-                slot_workflow("SECRET BODY"),
-                bound_input(),
-            ),
-            context: vec![],
-            checked_evaluations: vec![],
-        };
-        let projection = project(data).unwrap();
-        let instructions = &projection.current_state_instructions;
-
-        assert!(
-            !instructions.contains("SECRET BODY"),
-            "bound slot must omit stored work body, got: {instructions}"
-        );
-        const SUPERSEDED_TRIAGE: &str = concat!(
-            "On overrun invoke the same slot again.",
-            " On failed inspect stderr."
-        );
-        assert!(
-            !instructions.contains(SUPERSEDED_TRIAGE),
-            "superseded retry/failure order must not return: {instructions}"
-        );
-        assert!(instructions.starts_with(
-            "Bound work slot `slot-1` is configured. Frozen worker CLI: command=worker args=[\"--flag\",\"value\"]. Legal start: loop-engine invoke run-1 slot-1."
-        ));
-        assert!(instructions.contains("change report of record"));
-        assert!(instructions.contains("evidence-applicability"));
-        assert!(instructions.contains("attesting driver"));
-        assert!(!instructions.contains("unchanged-carry"));
-        assert!(!instructions.contains("override-carry"));
-        let triage = [
-            "Overlay succeeded means the bound CLI exited 0, not that the provider accepted the work.",
-            "Captures are at the named capture directory on the invocation view and invoke result.",
-            "The driver triages worker output, appends provider-shaped records, then requests the shown event.",
-            "On overrun wait; cancel-invocation requires recorded local ownership and refuses historical invocations without it. Live owned work and pending cleanup block retry and state departure.",
-            "Run show immediately before reinvoking the same slot.",
-            "On failed inspect capture_dir/summary.json and captured stdout before stderr.",
-        ];
-        let mut cursor = 0;
-        for sentence in triage {
-            let found = instructions[cursor..].find(sentence).unwrap_or_else(|| {
-                panic!("missing triage sentence `{sentence}` in `{instructions}`")
-            });
-            cursor += found + sentence.len();
-        }
-        assert!(instructions.contains("slot-1"));
-        assert!(instructions.contains("worker"));
-        assert!(instructions.contains("[\"--flag\",\"value\"]"));
-        assert!(instructions.contains("loop-engine invoke run-1 slot-1"));
-    }
-
-    #[test]
     fn work_slot_unbound_current_state_keeps_stored_instructions_without_invoke_cli() {
         let projection = project(show_data("start", Lifecycle::Active, vec![], vec![])).unwrap();
 
@@ -1902,42 +1620,33 @@ mod tests {
     }
 
     #[test]
-    fn running_invocation_hides_stored_inner_workers_and_counts_remaining_time() {
+    fn external_work_historical_pending_is_unknown_and_instructions_are_unmodified() {
         let data = ShowData {
             run: run_custom(
                 "start",
                 Lifecycle::Active,
-                slot_workflow("Do the work"),
+                slot_workflow("external work"),
                 bound_input(),
             ),
             context: vec![],
             checked_evaluations: vec![],
         };
-        let record = sample_invocation_with_capture(
-            "inv-running",
-            9,
-            1_000,
-            4_000,
-            None,
-            None,
-            None,
-            "/tmp/captures/inv-running",
-            vec![InnerWorker::new("python3", vec!["stale.py".to_owned()], 7)],
-        );
-        let projection =
-            project_with_invocations(data, &[record], Timestamp::from_unix_millis(3_500), |_| {
+        let record = sample_invocation("pending", 42, 0, 1, None, None, None);
+        let shown =
+            project_with_invocations(data, &[record], Timestamp::from_unix_millis(10000), |_| {
                 true
             })
             .unwrap();
-        let view = &projection.work_slot_invocations[0];
-        assert_eq!(view.status, ProjectedInvocationStatus::Running);
-        assert_eq!(view.overlay_meaning, OVERLAY_MEANING_RUNNING);
-        assert_eq!(view.elapsed_ms, 2_500);
-        assert_eq!(view.remaining_allowed_ms, 1_500);
-        assert_eq!(view.capture_dir, "/tmp/captures/inv-running");
-        assert!(
-            view.inner_workers.is_empty(),
-            "running overlay must not project stored inner_workers"
+        assert!(shown
+            .current_state_instructions
+            .starts_with("external work"));
+        assert!(!shown
+            .current_state_instructions
+            .contains("loop-engine invoke"));
+        assert_eq!(
+            shown.work_slot_invocations[0].status,
+            ProjectedInvocationStatus::Unknown
         );
+        assert_eq!(shown.work_slot_invocations[0].remaining_allowed_ms, 0);
     }
 }

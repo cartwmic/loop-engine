@@ -117,30 +117,6 @@ fn run() -> i32 {
                 }
             };
         }
-        Some(command) if command == "run-validation" || command == "validation-command" => {
-            let rest: Vec<String> = args.map(|s| s.to_string_lossy().into_owned()).collect();
-            let result = if command == "validation-command" {
-                validation::capture(&rest)
-            } else {
-                serde_json::from_reader(io::stdin())
-                    .map_err(|e| e.to_string())
-                    .and_then(|show| validation::run(&rest, &show))
-            };
-            return match result {
-                Ok(value) => {
-                    println!("{value}");
-                    if value.get("commands_passed") == Some(&json!(false)) {
-                        1
-                    } else {
-                        0
-                    }
-                }
-                Err(e) => {
-                    eprintln!("{command:?}: {e}");
-                    2
-                }
-            };
-        }
         Some(command) if command == "commission" => {
             let rest = match args
                 .map(|arg| arg.into_string())
@@ -606,7 +582,7 @@ fn execute_stdin_exec(args: StdinExecArgs) -> i32 {
     if let Some(session_dir) = session_dir.as_ref() {
         command.env(PI_CODING_AGENT_SESSION_DIR, session_dir);
     }
-    let mut child = match loop_integrations::ownership::spawn_admitted(&mut command) {
+    let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
             return stdin_exec_failed(

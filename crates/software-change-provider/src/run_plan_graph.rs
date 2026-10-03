@@ -3691,7 +3691,6 @@ fn emit_graph_yaml(
 ) -> String {
     let _ = dag_name;
     let mut yaml = String::from("type: graph\n");
-    yaml.push_str(&loop_integrations::ownership::dagu_environment_yaml());
     yaml.push_str("working_dir: ");
     yaml.push_str(&yaml_double_quoted(&path_to_string(working_directory)));
     yaml.push_str("\nmax_active_steps: ");
@@ -3747,7 +3746,6 @@ fn emit_repair_yaml(
     step: &PreparedStep,
 ) -> String {
     let mut yaml = String::from("type: graph\n");
-    yaml.push_str(&loop_integrations::ownership::dagu_environment_yaml());
     yaml.push_str("working_dir: ");
     yaml.push_str(&yaml_double_quoted(&path_to_string(working_directory)));
     yaml.push_str("\nmax_active_steps: 1\nsteps:\n");
