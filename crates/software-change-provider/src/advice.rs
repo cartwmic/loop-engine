@@ -889,6 +889,82 @@ fn selected_check_assertions(
 }
 
 fn selected_capture_excerpt(data: &Value, artifact_root: &Path) -> Result<Value, String> {
+    if let Some(result) = data.get("external_result") {
+        let spec = serde_json::from_value::<crate::commission::ProofCommand>(
+            data.get("spec")
+                .cloned()
+                .ok_or("external command evidence omitted spec")?,
+        )
+        .map_err(|error| format!("invalid external proof spec: {error}"))?;
+        if result["id"] != spec.id
+            || result["command"] != spec.command
+            || result["args"] != json!(spec.args)
+        {
+            return Err("selected external result differs from its proof spec".into());
+        }
+        let cwd = Path::new(text(result, "cwd")?);
+        if !cwd.is_absolute() || !cwd.is_dir() {
+            return Err("selected external result requires an existing absolute cwd".into());
+        }
+        for field in ["name", "kind"] {
+            if text(&result["producer"], field)?
+                .to_ascii_lowercase()
+                .contains("engine")
+            {
+                return Err("selected external result must not claim engine execution".into());
+            }
+        }
+        text(&result["source"], "head")?;
+        text(&result["source"], "state_sha256")?;
+        if !["stdout", "stderr", "stdout_ref", "stderr_ref"]
+            .iter()
+            .any(|field| result[*field].is_string())
+        {
+            return Err("selected external result requires output text or reference".into());
+        }
+        for field in ["stdout", "stderr", "stdout_ref", "stderr_ref"] {
+            if let Some(value) = result.get(field) {
+                if !value.is_string()
+                    || (field.ends_with("_ref") && value.as_str().unwrap().trim().is_empty())
+                {
+                    return Err(format!("invalid external output {field}"));
+                }
+            }
+        }
+        if result["external"] != true || result["exit_code"].as_i64() != Some(0) {
+            return Err("selected external command did not succeed as external work".into());
+        }
+        let mut streams = Map::new();
+        for stream in ["stdout", "stderr"] {
+            let bytes = if let Some(output) = result.get(stream).and_then(Value::as_str) {
+                output.as_bytes().to_vec()
+            } else if let Some(reference) =
+                result.get(format!("{stream}_ref")).and_then(Value::as_str)
+            {
+                let path = Path::new(reference);
+                let path = if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    Path::new(text(result, "cwd")?).join(path)
+                };
+                fs::read(&path).map_err(|error| {
+                    format!("selected external {stream} reference is unavailable: {error}")
+                })?
+            } else {
+                continue;
+            };
+            let limit = bytes.len().min(8192);
+            streams.insert(stream.to_owned(), json!({
+                "excerpt": String::from_utf8_lossy(&bytes[..limit]),
+                "byte_length": bytes.len(), "sha256": format!("sha256:{:x}", Sha256::digest(&bytes)),
+                "truncated": limit != bytes.len()
+            }));
+        }
+        return Ok(
+            json!({"format":"external-command-result", "producer":result["producer"], "source":result["source"], "streams":streams}),
+        );
+    }
+    // Existing persisted capture records retain their original readable form.
     let capture = data
         .get("capture")
         .filter(|capture| !capture.is_null())
@@ -1622,5 +1698,46 @@ mod tests {
             .unwrap_err()
             .contains("explicit nonempty bounded judgments"));
         let _ = fs::remove_dir_all(root);
+    }
+    #[test]
+    fn external_command_excerpts_preserve_outputs_references_and_failures() {
+        let (_, root) = fixture();
+        let result = json!({"id":"check", "command":"python3", "args":[], "cwd":root.as_path(),
+            "external":true,"exit_code":0,"stdout":"actual stdout","stderr":"actual stderr",
+            "producer":{"name":"driver","kind":"script"},"source":{"head":"head","state_sha256":"sha256:state"}});
+        let data = json!({"proof_id":"check","spec":{"id":"check","command":"python3","args":[],"owner":"driver","obligation":"Inspect the output"},"external_result":result});
+        let excerpt = selected_capture_excerpt(&data, root.as_path()).unwrap();
+        assert_eq!(excerpt["streams"]["stdout"]["excerpt"], "actual stdout");
+        assert_eq!(excerpt["producer"], data["external_result"]["producer"]);
+        let mut reference = data.clone();
+        reference["external_result"]
+            .as_object_mut()
+            .unwrap()
+            .remove("stdout");
+        reference["external_result"]["stdout_ref"] = json!("stdout.txt");
+        fs::write(root.as_path().join("stdout.txt"), "referenced stdout").unwrap();
+        assert_eq!(
+            selected_capture_excerpt(&reference, root.as_path()).unwrap()["streams"]["stdout"]
+                ["excerpt"],
+            "referenced stdout"
+        );
+        fs::remove_file(root.as_path().join("stdout.txt")).unwrap();
+        assert!(selected_capture_excerpt(&reference, root.as_path())
+            .unwrap_err()
+            .contains("reference is unavailable"));
+        for (field, value) in [
+            ("exit_code", json!(1)),
+            ("external", json!(false)),
+            ("command", json!("other")),
+            ("stdout", json!(7)),
+        ] {
+            let mut bad = data.clone();
+            bad["external_result"][field] = value;
+            assert!(
+                selected_capture_excerpt(&bad, root.as_path()).is_err(),
+                "{field}"
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 }

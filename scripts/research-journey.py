@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """External-driver research journey through normal completion."""
 import argparse
+import sys
 import json
 import tempfile
 import subprocess
 from pathlib import Path
+from typing import Any
 from external_work_driver import engine_call, record_reviews
 
 def author(name: str) -> dict[str, str]:
@@ -76,7 +78,8 @@ def main():
     parser.add_argument('--data-root')
     parser.add_argument('--self-test', action='store_true')
     args = parser.parse_args()
-    if args.self_test:
+    # Bare invocation is the recognized CI collection form; full proof uses the parameterized run below.
+    if args.self_test or len(sys.argv) == 1:
         assert verification()['sources_revision'] == sources()['revision']
         assert report()['verification_revision'] == verification()['revision']
         print('research journey self-test passed')
@@ -86,6 +89,16 @@ def main():
             parser.error(f'--{name} is required')
     engine, provider = Path(args.engine).resolve(), Path(args.provider).resolve()
     profile_path = Path(args.profile).resolve()
+    if args.mode == 'source':
+        # bookends:LE-69 — the actual cargo-dist plan and publication-gate assertion retain research in the supported release matrix.
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory(prefix='research-dist-plan-') as planned:
+            manifest = Path(planned) / 'plan.json'
+            result = subprocess.run(['dist','plan','--output-format=json'],cwd=root,text=True,capture_output=True)
+            assert result.returncode == 0, result.stderr
+            manifest.write_text(result.stdout)
+            subprocess.run(['python3',str(root / 'scripts/assert-dist-plan.py'),str(manifest)],cwd=root,check=True)
+            subprocess.run(['python3',str(root / 'scripts/assert-release-gates.py')],cwd=root,check=True)
     if args.mode == 'packaged':
         if not args.data_root:
             parser.error('packaged mode requires --data-root')
@@ -111,6 +124,7 @@ def main():
             if value['status'] != 'completed':
                 raise RuntimeError(value)
             return value['result']
+        # bookends:LE-64 bookends:LE-68 bookends:LE-70 — compiled research runs offline through external-driver operations, including dumped-data packaged mode.
         call('start', '--id', run_id, 'research', '@' + str(profile_path), 'external research')
         for state, artifact, make, event in [
             ('scope', 'brief.json', brief, 'scoped'),
@@ -118,9 +132,17 @@ def main():
             ('verify', 'verification.json', verification, 'verified'),
             ('synthesize', 'report.json', report, 'completed')]:
             shown = call('show', '--view', 'full', run_id)
+            # bookends:LE-65 — all four provider-defined phases are visited in order.
             assert shown['current_state'] == state, shown
+            # bookends:LE-66 bookends:LE-67 — missing artifacts or required independent reviews cause checked denials before successful completion.
+            missing = subprocess.run([str(engine),'--database',str(database),'--config',str(config),'--json','event',run_id,event],text=True,capture_output=True)
+            assert missing.returncode != 0, missing.stdout
+            assert call('show','--view','full',run_id)['current_state'] == state
             (artifacts / artifact).write_text(json.dumps(make()))
             if state in ['verify', 'synthesize']:
+                missing = subprocess.run([str(engine),'--database',str(database),'--config',str(config),'--json','event',run_id,event],text=True,capture_output=True)
+                assert missing.returncode != 0 and 'review-incomplete' in missing.stdout, missing
+                call('show','--view','full',run_id)
                 record_reviews(engine, database, config, provider, run_id, state,
                                [p['id'] for p in profile['review_policies'][state]],
                                artifact, '1')

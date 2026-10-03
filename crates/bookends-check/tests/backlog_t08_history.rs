@@ -506,6 +506,7 @@ fn backlog_t08_multiple_ref_updates_each_get_their_own_range() {
 }
 
 #[test]
+// bookends:LE-125 — the public checker obtains shallow parent history and agrees with the full clone without mutating local checkout identity.
 fn backlog_t08_shallow_and_full_clones_agree_after_fetch_without_local_mutation() {
     let root = tempfile::tempdir().expect("tempdir");
     let source = init_repo(root.path());
@@ -622,6 +623,7 @@ fn backlog_t08_shallow_and_full_clones_agree_after_fetch_without_local_mutation(
 }
 
 #[test]
+// bookends:LE-126 — unavailable history and receipt writes fail closed; explicitly attested bypass has retained receipts and never claims GREEN.
 fn backlog_t08_missing_history_and_limit_are_red_and_bypass_is_recorded() {
     let root = tempfile::tempdir().expect("tempdir");
     let repo = init_repo(root.path());

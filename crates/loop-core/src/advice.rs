@@ -276,6 +276,12 @@ pub enum AdviceAnswer {
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_optional_number"
+        )]
+        confidence: Option<f64>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
             deserialize_with = "deserialize_optional_string"
         )]
         rationale: Option<String>,
@@ -287,6 +293,13 @@ where
     D: Deserializer<'de>,
 {
     String::deserialize(deserializer).map(Some)
+}
+
+fn deserialize_optional_number<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    f64::deserialize(deserializer).map(Some)
 }
 
 fn validate_answer(
@@ -360,11 +373,19 @@ fn validate_answer(
                 ));
             }
         }
-        (AdviceQuestion::Noul { .. }, AdviceAnswer::Noul { noul, .. }) => {
+        (
+            AdviceQuestion::Noul { .. },
+            AdviceAnswer::Noul {
+                noul, confidence, ..
+            },
+        ) => {
             if !noul.is_finite() || !(0.0..=1.0).contains(noul) {
                 return Err(format!(
                     "Noul answer `{id}` probability must be finite and in [0,1]"
                 ));
+            }
+            if let Some(confidence) = confidence {
+                validate_confidence(id, *confidence)?;
             }
         }
         _ => {
@@ -594,6 +615,38 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn noul_confidence_is_optional_preserved_and_validated_when_present() {
+        let request = request();
+        let mut body = serde_json::to_value(response()).unwrap();
+        assert!(body["answers"]["noul"].get("confidence").is_none());
+        body["answers"]["noul"]["confidence"] = json!(0.8);
+        let parsed = AdviceResponse::parse(&serde_json::to_vec(&body).unwrap()).unwrap();
+        request.validate_response(&parsed).unwrap();
+        assert_eq!(
+            serde_json::to_value(parsed).unwrap()["answers"]["noul"]["confidence"],
+            json!(0.8)
+        );
+        for value in [json!(-0.1), json!(1.1)] {
+            body["answers"]["noul"]["confidence"] = value;
+            let parsed = AdviceResponse::parse(&serde_json::to_vec(&body).unwrap()).unwrap();
+            assert!(request
+                .validate_response(&parsed)
+                .unwrap_err()
+                .contains("confidence"));
+        }
+        for value in [Value::Null, json!("0.8"), json!(true)] {
+            body["answers"]["noul"]["confidence"] = value;
+            assert!(AdviceResponse::parse(&serde_json::to_vec(&body).unwrap()).is_err());
+        }
+        body["answers"]["noul"]["confidence"] = json!(0.8);
+        body["answers"]["noul"]
+            .as_object_mut()
+            .unwrap()
+            .remove("noul");
+        assert!(AdviceResponse::parse(&serde_json::to_vec(&body).unwrap()).is_err());
     }
 
     #[test]

@@ -123,7 +123,9 @@ def deny(code):
     }}))
 
 
-if behavior == "atomic-failure":
+if behavior == "target-injection" and not pathlib.Path(marker_path).exists():
+    print(json.dumps({{"result":"allow", "target":"caller-selected-state"}}))
+elif behavior == "atomic-failure":
     allow(effect=True)
 elif behavior == "lineage":
     if source == "start" and event == "approve":
@@ -451,9 +453,17 @@ fn assert_rejected_code(value: &Value, code: &str) {
 }
 
 #[test]
-// bookends:LE-2 — assertions below drive fresh public CLI processes.
+// bookends:LE-2 bookends:LE-13 — malformed graphs, including final outgoing edges, refuse before run creation.
 fn backlog_t01_graph_validation_public_cli_cases() {
     let invalid = [
+        (
+            "final-outgoing",
+            workflow(
+                vec![State::new("start", "Start", "start", true)],
+                vec![Transition::check_free("start", "go", "start")],
+            ),
+            "transition-from-final-state",
+        ),
         (
             "duplicate-state",
             workflow(
@@ -640,6 +650,7 @@ fn backlog_t01_history_failure_public_cli_is_atomic() {
 }
 
 #[test]
+// bookends:LE-6 bookends:LE-23 bookends:LE-27 bookends:LE-33 — denied checked edges do not advance; each evaluation has one ordered history identity, and gates using or ignoring lineage share routing.
 // bookends:LE-12 bookends:LE-24 bookends:LE-29 bookends:LE-30 bookends:LE-31 bookends:LE-32 bookends:LE-34 — assertions below drive fresh public CLI processes.
 fn backlog_t01_exact_transition_lineage_public_cli() {
     let fixture = ProviderFixture::new(lineage_workflow());
@@ -1033,6 +1044,7 @@ fn backlog_t01_frozen_topology_and_work_slot_catalog_survive_provider_change() {
         .any(|event| event["event"] == "approve"));
 }
 
+// bookends:LE-136 — caller run IDs survive fresh processes and working directories.
 // bookends:LE-135 — fresh public CLI processes started from different working
 // directories share the default catalog, allocate distinct artifact roots, and
 // expose those runs through later list/show inspection.
@@ -1278,4 +1290,258 @@ fn external_work_retired_commands_are_unknown_public_binary() {
             "{command}"
         );
     }
+}
+
+// bookends:LE-1 bookends:LE-4 bookends:LE-5 bookends:LE-10 — only available stored events can mutate; fresh processes recover their committed state.
+// bookends:LE-16 bookends:LE-17 bookends:LE-18 bookends:LE-19 bookends:LE-22 — exact opaque input/context survives and reaches evaluate in append order.
+// bookends:LE-20 bookends:LE-21 bookends:LE-25 bookends:LE-28 bookends:LE-35 — provider-free handoff retains external identity and stable semantic history, not evaluation input history.
+// bookends:LE-71 bookends:LE-73 bookends:LE-74 bookends:LE-98 — short-lived describe/evaluate processes suffice; status/history/list do not arm mutation.
+#[test]
+fn backlog_t01_external_driver_durable_handoff() {
+    let fixture = ProviderFixture::new(workflow(
+        vec![
+            State::new(
+                "start",
+                "Start",
+                "Inspect the external subject in initial input",
+                false,
+            ),
+            State::new(
+                "review",
+                "Review",
+                "Review the externally supplied records",
+                false,
+            ),
+            State::new("done", "Done", "Done", true),
+        ],
+        vec![
+            Transition::check_free("start", "ready", "review"),
+            Transition::checked("review", "approve", "done"),
+        ],
+    ));
+    let subject = fixture.cwd_a.join("external-subject");
+    fs::write(&subject, "Retained external work for the next actor").unwrap();
+    let input = json!({"subject": subject, "fixture_behavior":"allow"});
+    let created = start(&fixture, "handoff", input);
+    let frozen = created["result"]["run"]["initial_input"].clone();
+    cli(&fixture, &["list"]);
+    history(&fixture, "handoff");
+    cli(&fixture, &["show", "handoff", "--view", "status"]);
+    let unobserved = cli(&fixture, &["event", "handoff", "ready"]);
+    assert_ne!(
+        unobserved["status"], "completed",
+        "status must not arm mutation"
+    );
+    let before = show_full(&fixture, "handoff");
+    assert_eq!(before["result"]["initial_input"], frozen);
+    let before_history = history(&fixture, "handoff");
+    assert_ne!(
+        cli(&fixture, &["event", "handoff", "unavailable"])["status"],
+        "completed"
+    );
+    assert_eq!(history(&fixture, "handoff"), before_history);
+    let mut extra_state = base_args(&fixture);
+    extra_state.extend(["event", "handoff", "ready", "done"].map(str::to_owned));
+    assert!(!output_for(&fixture, &fixture.cwd_a, extra_state)
+        .status
+        .success());
+    assert_eq!(
+        show_full(&fixture, "handoff")["result"]["current_state"],
+        "start"
+    );
+    for (id, kind, data) in [
+        (
+            "first",
+            "driver-note",
+            "{\"result\":\"fail\",\"approved\":true}",
+        ),
+        (
+            "second",
+            "user-steering",
+            "{\"instruction\":\"Inspect external subject\"}",
+        ),
+    ] {
+        let appended = cli(
+            &fixture,
+            &["append", "handoff", kind, data, "--record-id", id],
+        );
+        assert_eq!(appended["status"], "completed", "{appended}");
+    }
+    assert_eq!(
+        cli(&fixture, &["event", "handoff", "ready"])["status"],
+        "completed"
+    );
+    assert!(
+        evaluation_requests(&fixture).is_empty(),
+        "check-free route evaluated provider"
+    );
+    let shown = cli_at(
+        &fixture,
+        &fixture.cwd_b,
+        &["show", "handoff", "--view", "full"],
+    );
+    assert_eq!(shown["result"]["current_state"], "review");
+    assert_eq!(shown["result"]["initial_input"], frozen);
+    let resumed_subject = shown["result"]["initial_input"]["subject"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(resumed_subject).unwrap(),
+        "Retained external work for the next actor"
+    );
+    assert_eq!(shown["result"]["context"][0]["id"], "first");
+    assert_eq!(shown["result"]["context"][1]["id"], "second");
+    assert_eq!(
+        cli(&fixture, &["event", "handoff", "approve"])["status"],
+        "completed"
+    );
+    let requests = evaluation_requests(&fixture);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["context"], shown["result"]["context"]);
+    assert_eq!(requests[0]["initial_input"], frozen);
+    assert!(requests[0].get("history").is_none());
+    assert!(requests[0].get("run_history").is_none());
+    let final_show = show_full(&fixture, "handoff");
+    assert_eq!(final_show["result"]["current_state"], "done");
+    assert_eq!(final_show["result"]["lifecycle"], "final");
+    let first = history(&fixture, "handoff");
+    assert_eq!(
+        first,
+        cli_at(&fixture, &fixture.cwd_b, &["history", "handoff"])
+    );
+    let actions: Vec<_> = first["result"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["action"]["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        actions,
+        vec![
+            "run_created",
+            "context_appended",
+            "context_appended",
+            "transition",
+            "transition"
+        ]
+    );
+}
+
+// bookends:LE-14 — initially-final creation and fresh inspection agree, with no legal routes.
+#[test]
+fn backlog_t01_initially_final_public_run() {
+    let fixture = ProviderFixture::new(workflow(
+        vec![State::new("start", "Done", "Done", true)],
+        vec![],
+    ));
+    assert_eq!(
+        start(&fixture, "initial-final", json!({}))["result"]["run"]["lifecycle"],
+        "final"
+    );
+    let shown = show_full(&fixture, "initial-final");
+    assert_eq!(shown["result"]["lifecycle"], "final");
+    assert!(shown["result"]["requestable_events"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+// bookends:LE-7 — an injected provider target refuses; a corrected allow commits only the stored target.
+#[test]
+fn backlog_t01_provider_cannot_select_target() {
+    let fixture = ProviderFixture::new(workflow(
+        vec![
+            State::new("start", "Start", "Start", false),
+            State::new("done", "Done", "Done", true),
+        ],
+        vec![Transition::checked("start", "approve", "done")],
+    ));
+    start(
+        &fixture,
+        "target-injection",
+        json!({"fixture_behavior":"target-injection"}),
+    );
+    show_full(&fixture, "target-injection");
+    let before = history(&fixture, "target-injection");
+    assert_ne!(
+        cli(&fixture, &["event", "target-injection", "approve"])["status"],
+        "completed"
+    );
+    assert_eq!(history(&fixture, "target-injection"), before);
+    assert_eq!(
+        show_full(&fixture, "target-injection")["result"]["current_state"],
+        "start"
+    );
+    fs::write(&fixture.marker, "corrected external provider response").unwrap();
+    assert_eq!(
+        cli(&fixture, &["event", "target-injection", "approve"])["status"],
+        "completed"
+    );
+    assert_eq!(
+        show_full(&fixture, "target-injection")["result"]["current_state"],
+        "done"
+    );
+}
+
+// bookends:LE-113 — owner-attested exceptional completion preserves the original denial and is permanently distinct from normal completion.
+#[test]
+fn backlog_t01_external_override_is_not_normal_completion() {
+    let fixture = ProviderFixture::new(workflow(
+        vec![
+            State::new("start", "Start", "Start", false),
+            State::new("done", "Done", "Done", true),
+        ],
+        vec![Transition::checked("start", "approve", "done")],
+    ));
+    start(&fixture, "exception", json!({"fixture_behavior":"deny"}));
+    show_full(&fixture, "exception");
+    assert_ne!(
+        cli(&fixture, &["event", "exception", "approve"])["status"],
+        "completed"
+    );
+    let before = history(&fixture, "exception");
+    let stale =
+        r#"{"state_visit":1,"owner":"fixture-owner","reason":"Scripted owner instruction"}"#;
+    assert_ne!(
+        cli(
+            &fixture,
+            &["event", "exception", "approve", "--override", stale]
+        )["status"],
+        "completed"
+    );
+    assert_eq!(history(&fixture, "exception"), before);
+    show_full(&fixture, "exception");
+    let actual =
+        r#"{"state_visit":0,"owner":"fixture-owner","reason":"Scripted owner instruction"}"#;
+    assert_eq!(
+        cli(
+            &fixture,
+            &["event", "exception", "approve", "--override", actual]
+        )["status"],
+        "completed"
+    );
+    let final_show = show_full(&fixture, "exception");
+    assert_eq!(final_show["result"]["lifecycle"], "final");
+    assert_eq!(
+        final_show["result"]["completion_mode"],
+        "completed-with-overrides"
+    );
+    assert_eq!(final_show["result"]["override_count"], 1);
+    assert_eq!(
+        final_show["result"]["evaluation_history"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        final_show["result"]["evaluation_history"][0]["result"]["result"],
+        "deny"
+    );
+    assert_eq!(cli(&fixture, &["list"])["result"][0]["has_overrides"], true);
+    assert_eq!(
+        evaluation_requests(&fixture).len(),
+        1,
+        "override must not run evaluation"
+    );
 }

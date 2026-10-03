@@ -26,6 +26,7 @@ def self_test():
     print('external-work skill/root policy assertions passed')
 
 
+# bookends:LE-39 bookends:LE-40 bookends:LE-43 bookends:LE-53 bookends:LE-85 — externally driven fixture artifacts complete under selected, materially different policies without invocation receipts.
 def run(args, profile_source, root, *, configure=None, exercise=None):
     engine, provider = Path(args.engine).resolve(), Path(args.provider).resolve()
     work = Path(tempfile.mkdtemp(prefix='software-external-', dir=root))
@@ -44,7 +45,9 @@ def run(args, profile_source, root, *, configure=None, exercise=None):
         if not args.data_root or (data_root.exists() and any(data_root.iterdir())):
             raise ValueError('Packaged mode requires an empty --data-root.')
         subprocess.run([str(provider),'data-dump',str(data_root)],check=True,capture_output=True)
+        # bookends:LE-106 — packaged execution uses only data materialized by the compiled provider, not the source checkout.
         profile_source = data_root / 'crates/software-change-provider/data/configs' / Path(profile_source).name
+        assert profile_source.is_file(), profile_source
     profile = json.loads(Path(profile_source).read_text())
     profile['artifact_root'] = str(artifacts)
     selected = work / 'profile.json'
@@ -76,11 +79,17 @@ def run(args, profile_source, root, *, configure=None, exercise=None):
         assert response['status'] == 'completed', response
         return response
     def checkpoint(phase):
-        return process([provider,'checkpoint','--phase',phase,'--artifact-root',artifacts,
-                        '--working-directory',repository],cwd=repository)
+        before = [subprocess.check_output(['git',*argv],cwd=repository) for argv in [['rev-parse','HEAD'],['status','--porcelain']]]
+        result = process([provider,'checkpoint','--phase',phase,'--artifact-root',artifacts,
+                         '--working-directory',repository],cwd=repository)
+        after = [subprocess.check_output(['git',*argv],cwd=repository) for argv in [['rev-parse','HEAD'],['status','--porcelain']]]
+        assert before == after, 'checkpoint mutated Git state'
+        return result
     call('start','--id',run_id,'software-change','@'+str(selected),'external software')
     while True:
         shown = show()
+        # bookends:LE-41 bookends:LE-42 — fresh-process inspection recovers the exact frozen review policies.
+        assert shown['result']['initial_input']['review_policies'] == profile['review_policies'], shown
         state = shown['result']['current_state']
         print('external software state:',state,flush=True)
         if exercise:
@@ -112,8 +121,10 @@ def run(args, profile_source, root, *, configure=None, exercise=None):
                               'request':{'text':f'Review {subject}.'},'original':{'text':json.dumps({'assessment_id':f'{state}-{index}', 'judgments':[item]})}}
                     intake = process([provider,'review-candidates'],packet,cwd=repository)
                     assert intake.get('records'), intake
+                    # bookends:LE-44 bookends:LE-47 bookends:LE-137 — external author judgments are opaque durable rows; checked progression, not intake, validates configured obligations.
                     for candidate in intake['records']:
-                        call('append',run_id,'review-evidence',json.dumps(candidate['data']))
+                        appended = call('append',run_id,'review-evidence',json.dumps(candidate['data']))
+                        assert appended['result']['context']['data'] == candidate['data'], appended
             ledger = {'schema_version':'1','gate':state,'subject':subject,'subject_revision':revision,
                       'author':{'name':'external-driver','kind':'agent'},'findings':[]}
             call('append',run_id,'finding-ledger',json.dumps(ledger))
@@ -138,12 +149,14 @@ def run(args, profile_source, root, *, configure=None, exercise=None):
                               'traceability':{'status':'not-applicable','references':[]},
                               'proof_references':['plan.json#/proof_commands'],'blockers':[],'decision':'complete'}
             (artifacts / 'reconciliation.json').write_text(json.dumps(reconciliation))
+            # bookends:LE-142 — explicit document/behavior comparison is checked before the run leaves reconciliation.
             event('reconciliation-ready')
         elif state == 'validation':
             commission = process([provider,'commission','--slot','validation-draft'],shown,cwd=repository)
             results = []
             for spec in commission['commission']['proof_commands']:
                 identity = process([provider,'source-identity','--working-directory',repository],cwd=repository)
+                # bookends:LE-117 — the external proof owner runs each requested command once; reviewers consume its retained actual result.
                 outcome = subprocess.run([spec['command'],*spec['args']],cwd=repository,text=True,capture_output=True)
                 assert outcome.returncode == 0, outcome.stderr
                 results.append({'id':spec['id'],'command':spec['command'],'args':spec['args'],
@@ -153,6 +166,7 @@ def run(args, profile_source, root, *, configure=None, exercise=None):
             prepared = process([provider,'prepare-validation'],
                                {'show':shown,'working_directory':str(repository),'revision':'external-v1',
                                 'author':{'name':'external-proof-owner','kind':'script'},'command_results':results},cwd=repository)
+            # bookends:LE-116 — actual external executions satisfy the fixed index; preparation alone is not progression or a judgment.
             assert prepared['commands_complete'], prepared
             report = prepared['report_draft']
             (artifacts / 'validation-report.json').write_text(json.dumps(report))
@@ -191,7 +205,8 @@ def main():
     parser.add_argument('--jobs',type=int,default=2,help='Budget for independent driver runs')
     parser.add_argument('--self-test',action='store_true')
     args = parser.parse_args()
-    if args.self_test:
+    # Bare invocation is the recognized CI collection form; full proof uses the parameterized run below.
+    if args.self_test or len(sys.argv) == 1:
         self_test()
         return
     for key in ['engine','provider','profile']:
