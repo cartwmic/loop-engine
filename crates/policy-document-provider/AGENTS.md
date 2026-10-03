@@ -1,17 +1,53 @@
-# policy-document-provider
+# policy-document-provider agent instructions
 
-## External-driver loop
+## Scope and authority
 
-The engine stores and evaluates workflow state; it never executes agents, advisors or proof commands. The driver may use any agents or harness.
+Root `AGENTS.md` governs checkout operations and authority; this guide adds only crate-local procedure. Do not change frozen provider requirements or protocols without the root owner-acceptance process. Product purpose and install are in [README.md](README.md), not this runbook.
 
-1. Inspect action/full `show` and provider `commission`. Early commissions return `missing_inputs`; supply those inputs before treating a commission as ready.
-2. Do the work externally. Reviewers return judgments; the driver runs deterministic checks and owns progression.
-3. Submit external judgments through `review-candidates`, external `command_results` through `prepare-validation`, and accepted context through engine `append`.
-4. Read action/full `show`, then send the checked `event`; re-read after each transition. A successful process exit alone does not prove the deliverable.
+## Workflow
 
-Preserve review groups, self-review declarations, author counts and amendments. Declare evidence applicability explicitly; check ordinary review clearance before challenge review. Respect declared source scopes and current source identity. Record residual risks honestly and cover every applicable sufficiency axis; zero axes do not require invented reviews. Reuse evidence only while its declared applicability remains true. Typed advice answers are externally authored context of kind `advice-answer`.
-## Provider tools
+When editing or driving this provider, load the [skill](skills/using-policy-document-provider/SKILL.md) for general external-loop concepts; the supported crate-specific command set below overrides its generic tool list; load the [reviewer protocol](data/reviewer-protocol.md) when commissioning judgments.
 
-Use `describe`/`evaluate`, `checkpoint`, `commission`, `review-candidates`, `prepare-validation`, `source-identity`, `author-counts`, and `data-dump`. `setup` edits policy only with `--set`, `--add-axis`, `--remove-axis`; use explain/drift to inspect policy changes. Tools prepare or evaluate data, not external execution. Keep frozen run obligations and original runtime; no active-run migration is authorized.
+This provider supports `commission`, `review-candidates`, `author-counts` and `data-dump`, plus stdin describe/evaluate transport. The skill's generic references to `checkpoint`, `prepare-validation`, `source-identity` and `setup` do not apply here.
 
-Follow the root repository Git and proof rules. Do not stage or commit independently.
+For an executable packet example, use checkout-root `scripts/policy-document-journey.py` and `scripts/external_work_driver.py` (`record_reviews` demonstrates intake shape, but its synthetic judgments are mechanical fixtures, never semantic proof). Draft progression is `ready` from prepare, `passed` from deterministic-review, then `passed` from semantic-review; `revise` returns either review state to prepare.
+
+`commission` takes the frozen profile as inline JSON, not a filename or `@file`; stdin is the completed full show envelope itself (top-level `result`), not a wrapper under `show`; nesting it would silently omit retained context and amendments. For example, after saving that full-show envelope externally:
+
+```sh
+BIN_DIR="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"] + "/debug")')"
+"$BIN_DIR/policy-document" commission "$(cat /absolute/proof/profile.json)" < /absolute/proof/full-show.json
+```
+
+`review-candidates` takes `show`, `assignment`, `author`, `request` and `result`. The assignment declares `gate: "semantic-review"`, `review_stage: "ordinary"`, and one commissioned policy ID per independent group. Both `subject` and `subject_revision` must equal commission's current `target_sha256`. A top-level projection can interpret original text when necessary. Append each accepted candidate's `data` as `review-evidence`. Commission's author counts and frozen policies govern reviewer coverage.
+
+Two provider-local traps require explicit handling: keep target bytes quiescent throughout review because file edits are not atomically locked/versioned with workflow commit; compare the final file SHA-256 with the digest in accepted review evidence after completion, and obtain new evidence if it changed. Load [target guidance](data/target-guidance.md) for this assessment boundary. `data-dump DIR` preserves the `crates/policy-document-provider/data/` prefix under DIR; find exported profiles there, not directly under DIR.
+
+After completion, compare current target bytes with the saved commission binding (replace both paths):
+
+```sh
+python3 - /absolute/target.md /absolute/proof/commission.json <<'PYHASH'
+import hashlib, json, pathlib, sys
+actual = hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest()
+expected = json.loads(pathlib.Path(sys.argv[2]).read_text())["current_target"]["target_sha256"]
+assert actual == expected, "target changed after commissioned review"
+PYHASH
+```
+
+Full show alone does not select prior judgments for reviewer delivery. During revisions, add top-level `selection_data` to the completed full-show envelope with `target_id`, `slot_id: "semantic-review"` and `record_ids` naming the retained original `review-evidence` records. Pass it to commission to prepare a receipt, inspect the returned selection data and append it as `review-context-selection`; then re-read full show and commission again to deliver the selected `context`. If replacing a selection, name its record ID in `supersedes` and obtain a fresh receipt after target changes; never reuse a stale receipt. Selected stale findings are historical context, not current proof.
+
+From the repository root, rebuild before testing changed provider behavior:
+
+```sh
+cargo build --locked -p loop-cli -p policy-document-provider
+cargo test -p policy-document-provider
+python3 scripts/run-central-tests.py --filter policy_document
+```
+
+Crate manifests set `autotests = false`: the Cargo command above runs unit tests, not the integration files under `tests/`. The central runner above is required after provider changes and builds its own fresh binary handoff.
+
+Use the root guide's source journey after provider changes; use its packaged-smoke rule only for packaging changes. Keep `src/embedded_data.rs` inventories current when adding bundled data. Root `AGENTS.md` owns catalog/environment safety, observation rules and Git approval.
+
+## Completion
+
+Follow root completion/handoff and proof gates. Report focused test results, actual catalog/artifact paths, remaining blockers and whether bundled data changed. Preserve failed external judgments; changes to the target require fresh applicable evidence, not relabeled receipts. No staging, commit or push without root authorization.

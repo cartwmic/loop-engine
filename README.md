@@ -1,21 +1,49 @@
 # Loop Engine
 
-Durable workflows with externally executed work.
+## Purpose
 
-## Public surface
+Loop Engine stores durable workflow state and evaluates explicit transitions for external drivers. It is for operators who want retained context, evidence and history while choosing their own agent harness. It never executes agents, advisors or proof commands. It is not an autonomous runner or an agent service; bring your own execution and review tools (and their service credentials, if needed).
 
-Primary commands: `start`, `list`, `show`, `append`, `event`, `history`, `terminate`. Additional commands: targeted `read`, terminal `explore`, passive `monitor`. Monitoring observes durable state, not external execution. Providers use `describe` and `evaluate` transport.
+Software-change delivers code, policy-document drafts or audits documents, and research investigates claims; generate-PRD extracts requirement candidates. Engine requirements are living; provider requirements and protocols are frozen. CLI/provider process transport is the integration boundary, not a promise that internal Rust APIs are stable. Active runs retain frozen workflow/obligation data and the original provider command/args association, not a copy of the executable. Drivers must preserve a compatible executable at that path; no active-run migration is supplied. Each run assumes one logical mutating driver: serialize mutations rather than running independent concurrent mutators against the same run.
 
-Use an explicit catalog `--config`, inspect unintended LOOP/XDG/home redirects, and keep artifacts outside the checkout. Never use a user catalog for tests. Load CLI `--help` for exact arguments. Mutations require a fresh action/full observation; compact/status views do not arm them.
-## External-driver loop
+## Installation
 
-The engine stores and evaluates workflow state; it never executes agents, advisors or proof commands. The driver may use any agents or harness.
+From a source checkout with Rust/Cargo and Python 3 installed:
 
-1. Inspect action/full `show` and provider `commission`. Early commissions return `missing_inputs`; supply those inputs before treating a commission as ready.
-2. Do the work externally. Reviewers return judgments; the driver runs deterministic checks and owns progression.
-3. Submit external judgments through `review-candidates`, external `command_results` through `prepare-validation`, and accepted context through engine `append`.
-4. Read action/full `show`, then send the checked `event`; re-read after each transition. A successful process exit alone does not prove the deliverable.
+```sh
+cargo build --locked --workspace --all-targets
+target/debug/loop-engine --help
+```
 
-Preserve review groups, self-review declarations, author counts and amendments. Declare evidence applicability explicitly; check ordinary review clearance before challenge review. Respect declared source scopes and current source identity. Record residual risks honestly and cover every applicable sufficiency axis; zero axes do not require invented reviews. Reuse evidence only while its declared applicability remains true. Typed advice answers are externally authored context of kind `advice-answer`.
+The executable is `loop-engine`; providers are separate binaries. No bundled model server is required: external drivers own model selection and any compatible service setup. See each provider's reviewer protocol and skill below for the judgment contract.
 
-See [agent usage](docs/agent-usage.md), [repository rules](AGENTS.md) and provider skills for driving procedure. Software-change delivers code, policy-document drafts/audits documents, and research investigates claims; generate-PRD extracts requirement candidates.
+## Usage
+
+For a first durable run, use policy-document to assess this README. Choose a fresh directory outside the checkout for the catalog and artifacts, copy `crates/policy-document-provider/data/readme.json`, preserve `target.id` and `profile_version`, and set `target.path` to this README's absolute path with `mode: "audit"`. Save it as `profile.json` in that directory. Put the absolute path to the built `target/debug/policy-document` in `providers.toml`:
+
+```toml
+[providers.policy-document]
+command = "/absolute/checkout/target/debug/policy-document"
+args = []
+```
+
+After replacing `/absolute/proof` with that directory, these commands create and inspect the run (they do not execute a reviewer or complete the assessment):
+
+```sh
+target/debug/loop-engine --database /absolute/proof/catalog.sqlite --config /absolute/proof/providers.toml --json start --id readme-audit policy-document @/absolute/proof/profile.json "README assessment"
+target/debug/loop-engine --database /absolute/proof/catalog.sqlite --config /absolute/proof/providers.toml --json show --view full readme-audit
+```
+
+Continue with the [policy-document operator guide](crates/policy-document-provider/AGENTS.md), which states the supported commands and provider-specific packet contract, then its [skill](crates/policy-document-provider/skills/using-policy-document-provider/SKILL.md) and [reviewer protocol](crates/policy-document-provider/data/reviewer-protocol.md). Code work starts with the [software-change operator guide](crates/software-change-provider/AGENTS.md) and [skill](crates/software-change-provider/skills/using-software-change-provider/SKILL.md); investigations start with the [research operator guide](crates/research-provider/AGENTS.md) and [skill](crates/research-provider/skills/using-research-provider/SKILL.md). The operator guides own artifact-root preparation (the bundled research/software profiles omit that required machine-local directory) and current packet/tool contracts. These own driving procedure, not this overview.
+
+Primary commands are `start`, `list`, `show`, `append`, `event`, `history`, `terminate`; targeted `read`, terminal `explore` and passive `monitor` expose retained state. Monitoring does not track external execution. Providers implement describe/evaluate transport.
+
+## Validation
+
+A local mechanical smoke check (not semantic product proof):
+
+```sh
+python3 scripts/software-change-journey.py --self-test
+```
+
+Contributors and agents follow [AGENTS.md](AGENTS.md) for build, journey and proof gates. Human CLI operators use [agent usage](docs/agent-usage.md) for argument forms and observation/mutation rules. If a mutation is unarmed, a commission is incomplete, or a catalog unexpectedly changes location, use those operator instructions and the active provider skill; tests must not touch your user catalog. External judgments and commands remain your driver's responsibility; successful transitions alone do not establish deliverable fitness.

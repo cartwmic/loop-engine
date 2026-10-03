@@ -1,25 +1,36 @@
 ---
 name: coordinating-loop-engine
-description: Drive durable workflow state with externally executed work.
+description: Use when delegating independent outcomes to external provider drivers or resuming durable handoffs without controlling peer runs.
 ---
 
-# coordinating-loop-engine
+# Coordinate independent drivers
 
-## External-driver loop
+Outcome: each driver finishes or returns a durable blocker independently of chat history.
 
-The engine stores and evaluates workflow state; it never executes agents, advisors or proof commands. The driver may use any agents or harness.
+1. Confirm outcomes, acceptance boundaries, risks and non-goals. Obtain owner-supplied
+   checkout/write ownership and coordination ownership. Do not invent worktrees,
+   a scheduler or permission to share a writer; stop on consequential ambiguity.
+2. Load the [engine skill](../using-loop-engine/SKILL.md) and the selected provider
+   skill at its crate-local skills directory. Generate-PRD additionally requires
+   using-generate-prd beside the research skill. The coordinator does not replace policy.
+3. Confirm exact profile bytes/hash and separate external role/model commands,
+   budget and proof owner. Verify model availability before each launch; no fallback.
+4. Give each driver a durable handoff: outcome, provider/skill, working directory,
+   source references, write ownership, confirmations, serial dependency budget,
+   escalation owner, catalog/run identity, artifact locators, next observation and
+   return destination. Do not copy test isolation into production without permission.
+5. Observe each run passively with monitor or status show. External execution remains
+   the launching driver's responsibility, not a monitor inference. Post meaningful
+   source-backed changes and needed owner decisions in the active conversation.
+   Observation authorizes no peer append, event, termination or cancellation.
+6. A blocked driver returns completed outcomes, retained failed outputs, unresolved
+   cleanup/ownership, concrete blocker, required decision and resume references.
+   Keep successful peers independent; do not restart them to unblock another.
+7. Resume from current action/full show and actual files, not a chat summary. Budget
+   serial closure, proof and review; escalate before expensive unapproved reruns.
+8. Separate execution facts, conformance and independent judgment in final handoff.
+   Preserve pending calibration, Git authorization and hosted-delivery obligations.
 
-1. Inspect action/full `show` and provider `commission`. Early commissions return `missing_inputs`; supply those inputs before treating a commission as ready.
-2. Do the work externally. Reviewers return judgments; the driver runs deterministic checks and owns progression.
-3. Submit external judgments through `review-candidates`, external `command_results` through `prepare-validation`, and accepted context through engine `append`.
-4. Read action/full `show`, then send the checked `event`; re-read after each transition. A successful process exit alone does not prove the deliverable.
-
-Preserve review groups, self-review declarations, author counts and amendments. Declare evidence applicability explicitly; check ordinary review clearance before challenge review. Respect declared source scopes and current source identity. Record residual risks honestly and cover every applicable sufficiency axis; zero axes do not require invented reviews. Reuse evidence only while its declared applicability remains true. Typed advice answers are externally authored context of kind `advice-answer`.
-## Public surface
-
-Primary commands: `start`, `list`, `show`, `append`, `event`, `history`, `terminate`. Additional commands: targeted `read`, terminal `explore`, passive `monitor`. Monitoring observes durable state, not external execution. Providers use `describe` and `evaluate` transport.
-
-Use an explicit catalog `--config`, inspect unintended LOOP/XDG/home redirects, and keep artifacts outside the checkout. Never use a user catalog for tests. Load CLI `--help` for exact arguments. Mutations require a fresh action/full observation; compact/status views do not arm them.
-## Provider tools
-
-Use `describe`/`evaluate`, `checkpoint`, `commission`, `review-candidates`, `prepare-validation`, `source-identity`, `author-counts`, and `data-dump`. `setup` edits policy only with `--set`, `--add-axis`, `--remove-axis`; use explain/drift to inspect policy changes. Tools prepare or evaluate data, not external execution. Keep frozen run obligations and original runtime; no active-run migration is authorized.
+Example: retain a research driver's missing-source blocker while a document driver
+finishes its own outcome. Return newly supplied evidence only to the blocked driver;
+that driver observes its current run before continuing. Do not advance the peer run.

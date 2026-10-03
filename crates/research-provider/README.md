@@ -1,17 +1,45 @@
 # research-provider
 
-## External-driver loop
+## Purpose
 
-The engine stores and evaluates workflow state; it never executes agents, advisors or proof commands. The driver may use any agents or harness.
+Investigate claims and retain source-bound findings; the generate-PRD profile extracts requirement candidates rather than implementing them. This provider is for external workflow drivers, not autonomous execution. The engine stores and evaluates workflow state; it never executes agents, advisors or proof commands. Bring your own agent/reviewer harness, model selection and any required service credentials. The judgment contract is the [reviewer protocol](data/reviewer-protocol.md).
 
-1. Inspect action/full `show` and provider `commission`. Early commissions return `missing_inputs`; supply those inputs before treating a commission as ready.
-2. Do the work externally. Reviewers return judgments; the driver runs deterministic checks and owns progression.
-3. Submit external judgments through `review-candidates`, external `command_results` through `prepare-validation`, and accepted context through engine `append`.
-4. Read action/full `show`, then send the checked `event`; re-read after each transition. A successful process exit alone does not prove the deliverable.
+Provider requirements/protocols are frozen; use the process boundary rather than depending on internal Rust APIs. Runs retain frozen obligations and the original command/args association, not executable bytes. Drivers must preserve a compatible runtime at the stored path; no active-run migration is authorized. Checked transitions validate obligations, not the truth of reviewers' judgments.
 
-Preserve review groups, self-review declarations, author counts and amendments. Declare evidence applicability explicitly; check ordinary review clearance before challenge review. Respect declared source scopes and current source identity. Record residual risks honestly and cover every applicable sufficiency axis; zero axes do not require invented reviews. Reuse evidence only while its declared applicability remains true. Typed advice answers are externally authored context of kind `advice-answer`.
-## Provider tools
+## Installation
 
-Use `describe`/`evaluate`, `checkpoint`, `commission`, `review-candidates`, `prepare-validation`, `source-identity`, `author-counts`, and `data-dump`. `setup` edits policy only with `--set`, `--add-axis`, `--remove-axis`; use explain/drift to inspect policy changes. Tools prepare or evaluate data, not external execution. Keep frozen run obligations and original runtime; no active-run migration is authorized.
+From the repository root with Rust/Cargo installed:
 
-Follow the root repository Git and proof rules. Do not stage or commit independently.
+```sh
+cargo build --locked -p loop-cli -p research-provider
+```
+
+This builds `target/debug/loop-engine` and `target/debug/research`. Source examples use the [standard profile](data/configs/standard.json); packaged users can export bundled data to a fresh, driver-owned directory outside the checkout:
+
+```sh
+target/debug/research data-dump /absolute/fresh-provider-data
+```
+
+Replace the destination with your chosen fresh directory. This is data export, not model installation or user configuration.
+
+## Usage
+
+For predictable artifact ownership, copy the profile and set `artifact_root` to an existing writable absolute directory outside the checkout. With engine `start`, an omitted root is allocated automatically: inspect full show initial input to find it before authoring artifacts. Direct provider requests need an explicit root; absent, relative or inaccessible roots fail artifact access. See [local operator preparation](AGENTS.md) for the owned procedure.
+
+Start a run with the profile through `loop-engine start`, using a dedicated database and explicit provider TOML whose command is the absolute built provider path. The [local agent guide](AGENTS.md) selects the investigation versus generate-PRD profile and states the supported research commands; the [skill](skills/using-research-provider/SKILL.md) explains general external-loop concepts; load it before driving a run. Early commissions with `missing_inputs` are not ready. External reviewers return judgments and drivers explicitly append accepted evidence and send events after fresh action/full observations.
+
+```sh
+target/debug/loop-engine --help
+```
+
+Use root `README.md` for a first-run catalog example and root `AGENTS.md` for repository operations (paths relative to the checkout root). Follow the [local agent guide](AGENTS.md) when editing this crate.
+
+## Validation
+
+From the repository root:
+
+```sh
+cargo test -p research-provider
+```
+
+These are mechanical tests, not genuine semantic review. The root agent guide owns journey and final-proof requirements. For stalls involving missing inputs, stale evidence, author floors or observation permits, load the [skill](skills/using-research-provider/SKILL.md); do not infer acceptance from process exit. Typed advice answers, where applicable, are externally supplied context of kind `advice-answer`.
