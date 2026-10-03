@@ -746,7 +746,7 @@ if __name__ == '__main__':
 # bookends:LE-167 — external policy/research judgments complete normally without an engine executor.
 def provider_specific(args, root):
     import hashlib
-    from external_work_driver import engine_call, record_reviews
+    from external_work_driver import engine_call, record_reviews, declare_target_authorship
     spec = importlib.util.spec_from_file_location('research_fixture', ROOT / 'scripts/research-journey.py')
     research = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(research)
@@ -763,7 +763,7 @@ def provider_specific(args, root):
             profile = json.loads((ROOT / 'crates/policy-document-provider/data/readme.json').read_text())
             target = work / 'README.md'
             target.write_text(policy_fixture.document())
-            profile.update(mode='audit',target_author=owner)
+            profile.update(mode='audit')
             profile['target']['path'] = str(target)
             profile['semantic_policies'] = profile['semantic_policies'][:2]
             policy = profile['semantic_policies'][0]
@@ -839,6 +839,35 @@ def provider_specific(args, root):
                 assert exchange['request']['original'] == packet['request']['text'], candidate
                 assert exchange['original']['original'] == packet['result']['text'], candidate
             return [c['data'] for c in result['candidates']]
+        if kind == 'policy-document':
+            missing = process([binary, 'commission', json.dumps(profile)], show())
+            assert missing['missing_inputs'][0]['input'] == 'target-authorship', missing
+            # Complete independent reviews cannot bypass a missing authorship declaration.
+            for i, data in enumerate(intake({'name':'external-independent','kind':'agent'})):
+                record('review-evidence', data, 'missing-authorship-'+str(i))
+            show()
+            refused([args.engine,'--database',database,'--config',config,'--json','event',run_id,event],
+                    needle='missing-target-authorship')
+            declare_target_authorship(Path(args.engine), database, config, run_id, target,
+                                      owner, 'authorship-original')
+            commissioned = process([binary, 'commission', json.dumps(profile)], show())
+            assert commissioned['missing_inputs'] == [], commissioned
+            # A different actor rewrites the bytes; the former declaration is now stale.
+            target.write_text(target.read_text()+'\n<!-- authored revision -->\n')
+            revision = hashlib.sha256(target.read_bytes()).hexdigest()
+            owner = {'name':'revision-author','kind':'agent'}
+            for i, data in enumerate(intake(owner)):
+                record('review-evidence', data, 'stale-authorship-'+str(i))
+            show()
+            refused([args.engine,'--database',database,'--config',config,'--json','event',run_id,event],
+                    needle='missing-target-authorship')
+            stale = process([binary, 'commission', json.dumps(profile)], show())
+            assert stale['missing_inputs'][0]['input'] == 'target-authorship', stale
+            declare_target_authorship(Path(args.engine), database, config, run_id, target,
+                                      owner, 'authorship-revision')
+            show()
+            refused([args.engine,'--database',database,'--config',config,'--json','event',run_id,event],
+                    needle='self-excluded')
         for i, data in enumerate(intake(owner)):
             record('review-evidence',data,'self-evidence-'+str(i))
         show()
@@ -864,6 +893,8 @@ def provider_specific(args, root):
         if kind == 'policy-document':
             target.write_text(target.read_text()+'\n<!-- immaterial fixture comment -->\n')
             revision = hashlib.sha256(target.read_bytes()).hexdigest()
+            declare_target_authorship(Path(args.engine), database, config, run_id, target,
+                                      owner, 'authorship-final-revision')
         else:
             value = json.loads(target.read_text())
             value['revision'] = '2'

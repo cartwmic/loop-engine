@@ -48,7 +48,7 @@ fn exercise(binary: &str) {
     )
     .unwrap();
     let mut initial = if policy {
-        json!({"schema_version":1,"profile_version":"test-successor","mode":"audit","target":{"id":"doc","path":target},"target_author":author,"deterministic_policies":[{"id":"title","type":"any-heading","level":1}],"semantic_policies":[{"id":"axis","description":"quality","example_prompt":"review quality"}]})
+        json!({"schema_version":1,"profile_version":"test-successor","mode":"audit","target":{"id":"doc","path":target},"deterministic_policies":[{"id":"title","type":"any-heading","level":1}],"semantic_policies":[{"id":"axis","description":"quality","example_prompt":"review quality"}]})
     } else {
         json!({"config_version":"test-successor","artifact_root":root.path(),"review_policies":{"verify":[{"id":"axis","description":"quality"}]},"artifact_schemas":{"verification.json":schema}})
     };
@@ -71,6 +71,17 @@ fn exercise(binary: &str) {
     } else {
         "r1".into()
     };
+    let declared_context = |mut records: Value, digest: &str| {
+        if policy {
+            records.as_array_mut().unwrap().push(record(
+                "target-authorship",
+                "target-authorship",
+                json!({"target_sha256":digest,"author":author}),
+                0,
+            ));
+        }
+        records
+    };
     let evidence = |name: &str, result: &str| {
         let a = json!({"name":name,"kind":if name == "owner" {"human"} else {"agent"}});
         if policy {
@@ -84,12 +95,15 @@ fn exercise(binary: &str) {
     } else {
         "/review_policies/verify/0"
     };
-    request["context"] = json!([record(
-        "self",
-        "review-evidence",
-        evidence("owner", "pass"),
-        1
-    )]);
+    request["context"] = declared_context(
+        json!([record(
+            "self",
+            "review-evidence",
+            evidence("owner", "pass"),
+            1
+        )]),
+        &revision,
+    );
     assert_eq!(invoke(binary, &[], &request)["result"], "deny");
     initial.pointer_mut(policy_path).unwrap()["self_review"] = json!(true);
     request["initial_input"] = initial.clone();
@@ -97,7 +111,10 @@ fn exercise(binary: &str) {
     initial.pointer_mut(policy_path).unwrap()["self_review"] = json!(false);
     if !policy {
         request["initial_input"] = initial.clone();
-        request["context"] = json!([record("one", "review-evidence", evidence("one", "pass"), 1)]);
+        request["context"] = declared_context(
+            json!([record("one", "review-evidence", evidence("one", "pass"), 1)]),
+            &revision,
+        );
         for artifact in ["brief.json", "sources.json", "report.json"] {
             std::fs::write(
                 root.path().join(artifact),
@@ -113,18 +130,24 @@ fn exercise(binary: &str) {
     }
     initial.pointer_mut(policy_path).unwrap()["required_authors"] = json!(2);
     request["initial_input"] = initial.clone();
-    request["context"] = json!([
-        record("one", "review-evidence", evidence("one", "pass"), 1),
-        record("duplicate", "review-evidence", evidence("one", "pass"), 2)
-    ]);
+    request["context"] = declared_context(
+        json!([
+            record("one", "review-evidence", evidence("one", "pass"), 1),
+            record("duplicate", "review-evidence", evidence("one", "pass"), 2)
+        ]),
+        &revision,
+    );
     assert_eq!(invoke(binary, &[], &request)["result"], "deny");
     request["context"][1] = record("two", "review-evidence", evidence("two", "pass"), 2);
     assert_eq!(invoke(binary, &[], &request)["result"], "allow");
     let amendment = |before: u64, after: u64| json!({"targets":[{"gate":gate,"axis":"axis"}],"before":before,"after":after,"actor":author,"authority":{"kind":"owner","reference":"owner approval"},"reason":"adjust review floor"});
-    request["context"] = json!([
-        record("one", "review-evidence", evidence("one", "pass"), 1),
-        record("decrease", "author-count-amendment", amendment(2, 1), 2)
-    ]);
+    request["context"] = declared_context(
+        json!([
+            record("one", "review-evidence", evidence("one", "pass"), 1),
+            record("decrease", "author-count-amendment", amendment(2, 1), 2)
+        ]),
+        &revision,
+    );
     assert_eq!(invoke(binary, &[], &request)["result"], "allow");
     request["context"].as_array_mut().unwrap().push(record(
         "failure",
@@ -249,6 +272,15 @@ fn exercise(binary: &str) {
     for (id, seq) in [("one", 12), ("second", 13)] {
         request["context"].as_array_mut().unwrap().push(record(&format!("carry-{id}"),"evidence-applicability",json!({"origin":{"kind":"context-record","id":id},"target":{"subject":subject,"revision":new_revision},"attesting_driver":author,"reason":"unchanged judgment scope"}),seq));
     }
+    if policy {
+        assert_eq!(invoke(binary, &[], &request)["result"], "deny");
+        request["context"].as_array_mut().unwrap().push(record(
+            "revised-authorship",
+            "target-authorship",
+            json!({"target_sha256":new_revision,"author":author}),
+            14,
+        ));
+    }
     assert_eq!(invoke(binary, &[], &request)["result"], "allow");
     if policy {
         std::fs::write(&target, "no heading").unwrap();
@@ -302,15 +334,18 @@ fn exercise(binary: &str) {
         "subject_revision"
     }] = json!(new_revision);
     let mut completed_intake = request.clone();
-    completed_intake["context"] = json!([
-        record(
-            "external",
-            "review-evidence",
-            projected["candidates"][0]["data"].clone(),
-            1
-        ),
-        record("other", "review-evidence", current_other, 2)
-    ]);
+    completed_intake["context"] = declared_context(
+        json!([
+            record(
+                "external",
+                "review-evidence",
+                projected["candidates"][0]["data"].clone(),
+                1
+            ),
+            record("other", "review-evidence", current_other, 2)
+        ]),
+        &new_revision,
+    );
     assert_eq!(invoke(binary, &[], &completed_intake)["result"], "allow");
     let mut combined = intake.clone();
     let mut grouped_initial = initial.clone();

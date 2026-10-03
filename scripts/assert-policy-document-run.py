@@ -128,6 +128,14 @@ def verify_evidence(
     profile_version: str,
 ) -> None:
     require(isinstance(context, list), "full show context is not an array")
+    require(any(isinstance(record, dict) and record.get("kind") == "target-authorship"
+                and isinstance(record.get("data"), dict)
+                and record["data"].get("target_sha256") == target_sha256
+                and isinstance(record["data"].get("author"), dict)
+                and isinstance(record["data"]["author"].get("name"), str)
+                and bool(record["data"]["author"]["name"].strip())
+                and record["data"]["author"].get("kind") in ("human", "agent", "script")
+                for record in context), "missing current target-authorship declaration")
     latest: dict[tuple[str, str, str], tuple[tuple[int, int], Mapping[str, Any]]] = {}
     for index, record_value in enumerate(context):
         if not isinstance(record_value, dict) or record_value.get("kind") != "review-evidence":

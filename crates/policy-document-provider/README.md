@@ -24,7 +24,7 @@ Replace the destination with your chosen fresh directory. This is data export, n
 
 ## Usage
 
-Start a run with the profile through `loop-engine start`, using a dedicated database and explicit provider TOML whose command is the absolute built provider path. The [skill](skills/using-policy-document-provider/SKILL.md) owns input preparation, commission, review intake and progression; load it before driving a run. Early commissions with `missing_inputs` are not ready. External reviewers return judgments and drivers explicitly append accepted evidence and send events after fresh action/full observations.
+Start a run with the profile through `loop-engine start`, using a dedicated database and explicit provider TOML whose command is the absolute built provider path. The [skill](skills/using-policy-document-provider/SKILL.md) owns input preparation, commission, review intake and progression; load it before driving a run. Early commissions with `missing_inputs` are not ready. Before semantic review, declare actual target authors using context kind `target-authorship`, data `{"target_sha256":"CURRENT_DIGEST","author":{"name":"ACTUAL_AUTHOR","kind":"agent"}}` (one record per author; kind is human, agent or script). Missing/stale declarations block coverage. Target authors are excluded unless the frozen policy permits self-review, which counts only as labeled self-review; every rewrite needs a declaration bound to its new bytes. `initial_input.target_author` is not supported. External reviewers return judgments and drivers explicitly append accepted evidence and send events after fresh action/full observations.
 
 ```sh
 target/debug/loop-engine --help

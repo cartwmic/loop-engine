@@ -1,4 +1,5 @@
 """Driver-owned public-process and external reviewer recording helpers."""
+import hashlib
 import json
 import subprocess
 
@@ -49,3 +50,15 @@ def record_reviews(engine, database, config, provider, run_id, gate, policies,
             if row['data']['external_review'] != exchange:
                 raise RuntimeError(f'Appended evidence lost commissioning exchange: {row}')
     return shown
+
+
+def declare_target_authorship(engine, database, config, run_id, target, author, record_id):
+    """Declare one actual author of these exact bytes; repeat for coauthors/revisions."""
+    digest = hashlib.sha256(target.read_bytes()).hexdigest()
+    engine_call(engine, database, config, ['show', '--view', 'full', run_id])
+    response = engine_call(engine, database, config,
+                           ['append', '--record-id', record_id, run_id, 'target-authorship',
+                            json.dumps({'target_sha256': digest, 'author': author})])
+    if response.get('status') != 'completed':
+        raise RuntimeError(f'Could not declare target authorship: {response}')
+    return digest

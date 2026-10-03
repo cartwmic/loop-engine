@@ -19,7 +19,7 @@ BIN_DIR="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json
 "$BIN_DIR/policy-document" commission "$(cat /absolute/proof/profile.json)" < /absolute/proof/full-show.json
 ```
 
-When recording reviewer judgments, load the skill’s Run loop section for `review-candidates` intake and evidence append procedure.
+When recording reviewer judgments, load the skill’s Run loop section for `review-candidates` intake and evidence append procedure. Declare all actual target authors through digest-bound `target-authorship` context before semantic coverage; commission `missing_inputs` blocks readiness when that declaration is missing/stale. Refresh it after rewrites. Current target authors count only under explicit frozen self-review permission, labeled as self-review, never independent coverage.
 
 Two provider-local traps require explicit handling: keep target bytes quiescent throughout review because file edits are not atomically locked/versioned with workflow commit; compare the final file SHA-256 with the digest in accepted review evidence after completion, and obtain new evidence if it changed. Load [target guidance](data/target-guidance.md) for this assessment boundary. `data-dump DIR` preserves the `crates/policy-document-provider/data/` prefix under DIR; find exported profiles there, not directly under DIR.
 

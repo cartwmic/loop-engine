@@ -193,8 +193,20 @@ mod tests {
     fn request(
         path: &Path,
         transition: Transition,
-        context: Vec<ContextRecord>,
+        mut context: Vec<ContextRecord>,
     ) -> EvaluateRequest {
+        if let Ok(snapshot) = document::Snapshot::read(&config::Target {
+            id: "doc".into(),
+            path: path.display().to_string(),
+        }) {
+            context.push(ContextRecord::new(
+                "authorship",
+                "target-authorship",
+                json!({"target_sha256":snapshot.sha256,"author":{"name":"drafter","kind":"agent"}}),
+                SemanticSequence::new(0),
+                Timestamp::from_unix_millis(0),
+            ));
+        }
         EvaluateRequest {
             operation: "evaluate".into(),
             workflow: workflow::workflow(),

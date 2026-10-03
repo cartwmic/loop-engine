@@ -28,6 +28,32 @@ struct Author {
     kind: String,
 }
 
+/// All declarations for these exact bytes contribute authors; no identity registry is inferred.
+pub fn target_authorship(context: &[ContextRecord], snapshot: &Snapshot) -> (Value, Value) {
+    let mut authors = HashSet::new();
+    for record in context.iter().filter(|r| r.kind == "target-authorship") {
+        if record.data["target_sha256"] != snapshot.sha256 {
+            continue;
+        }
+        if let Ok(author) = serde_json::from_value::<Author>(record.data["author"].clone()) {
+            if !author.name.trim().is_empty()
+                && ["human", "agent", "script"].contains(&author.kind.as_str())
+            {
+                authors.insert(author);
+            }
+        }
+    }
+    let mut authors: Vec<_> = authors.into_iter().collect();
+    authors.sort_by(|a, b| (&a.name, &a.kind).cmp(&(&b.name, &b.kind)));
+    let missing = if authors.is_empty() {
+        json!([{"input":"target-authorship","target_sha256":snapshot.sha256,
+            "reason":"declare author {name,kind} for the current target bytes; missing, malformed or stale declarations cannot establish eligibility"}])
+    } else {
+        json!([])
+    };
+    (json!(authors), missing)
+}
+
 #[derive(Debug)]
 struct CurrentEvidence {
     assessment_id: Option<String>,
@@ -43,6 +69,14 @@ pub fn evaluate(
     config: &InitialInput,
     snapshot: &Snapshot,
 ) -> (bool, Value) {
+    let (authors, missing_inputs) = target_authorship(context, snapshot);
+    if !missing_inputs.as_array().unwrap().is_empty() {
+        return (
+            false,
+            json!({"diagnostics":[{"kind":"missing-target-authorship"}],
+            "missing_inputs":missing_inputs,"inert_records":[]}),
+        );
+    }
     let raw = json!({"semantic_policies":config.semantic_policies.iter().map(|p| json!({"id":p.id,"required_authors":p.required_authors})).collect::<Vec<_>>()});
     let resolution = crate::external::counts(&raw, &json!(context));
     let carried = loop_integrations::review_intake::carry(
@@ -121,15 +155,18 @@ pub fn evaluate(
             .iter()
             .find(|p| p.id == policy_id)
             .unwrap();
-        if !policy.self_review
-            && config
-                .target_author
-                .as_ref()
-                .is_some_and(|author| author.name == e.author.name && author.kind == e.author.kind)
-        {
-            diagnostics
-                .push(json!({"policy_id":policy_id,"kind":"self-excluded","record_id":record.id}));
-            continue;
+        let is_self = authors
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|author| author["name"] == e.author.name && author["kind"] == e.author.kind);
+        if is_self {
+            diagnostics.push(json!({"policy_id":policy_id,
+                "kind":if policy.self_review { "self-review" } else { "self-excluded" },
+                "record_id":record.id,"author":e.author}));
+            if !policy.self_review {
+                continue;
+            }
         }
         let sequence = record.sequence.as_u64();
         let author = e.author.clone();
@@ -241,7 +278,7 @@ pub fn evaluate(
     }
     (
         !failed,
-        json!({"diagnostics": diagnostics, "inert_records": inert}),
+        json!({"diagnostics": diagnostics, "inert_records": inert, "missing_inputs":[], "target_authors":authors}),
     )
 }
 fn shape_failure_reason(evidence: &Evidence, policy_id: &str) -> Option<String> {
@@ -285,12 +322,67 @@ fn valid_digest(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::evaluate as evaluate_raw;
     use super::*;
     use loop_core::{SemanticSequence, Timestamp};
     use serde_json::json;
     use std::path::PathBuf;
 
     const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    fn authorship(sequence: u64, digest: &str, author: &str) -> ContextRecord {
+        ContextRecord::new(
+            format!("authorship-{sequence}"),
+            "target-authorship",
+            json!({"target_sha256":digest,"author":{"name":author,"kind":"agent"}}),
+            SemanticSequence::new(sequence),
+            Timestamp::from_unix_millis(sequence as i64),
+        )
+    }
+
+    fn evaluate(
+        context: &[ContextRecord],
+        config: &InitialInput,
+        snapshot: &Snapshot,
+    ) -> (bool, serde_json::Value) {
+        let mut context = context.to_vec();
+        context.push(authorship(0, &snapshot.sha256, "drafter"));
+        evaluate_raw(&context, config, snapshot)
+    }
+
+    #[test]
+    fn current_authorship_is_required_and_self_review_is_explicit() {
+        let mut cfg = config();
+        let snap = snapshot();
+        let mut context = vec![
+            record(1, "axis-a", "pass", "one"),
+            record(2, "axis-b", "pass", "one"),
+        ];
+        let (ok, details) = evaluate_raw(&context, &cfg, &snap);
+        assert!(!ok);
+        assert_eq!(details["missing_inputs"][0]["input"], "target-authorship");
+        context.push(authorship(3, &"b".repeat(64), "old-drafter"));
+        assert!(!evaluate_raw(&context, &cfg, &snap).0);
+        context.push(authorship(4, &snap.sha256, "one"));
+        let (ok, details) = evaluate_raw(&context, &cfg, &snap);
+        assert!(!ok);
+        assert_eq!(details["diagnostics"][0]["kind"], "self-excluded");
+        for policy in &mut cfg.semantic_policies {
+            policy.self_review = true;
+        }
+        let (ok, details) = evaluate_raw(&context, &cfg, &snap);
+        assert!(ok);
+        assert_eq!(details["diagnostics"][0]["kind"], "self-review");
+        context.push(authorship(5, &snap.sha256, "coauthor"));
+        assert_eq!(
+            super::target_authorship(&context, &snap)
+                .0
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
 
     fn config() -> InitialInput {
         InitialInput::parse(&json!({

@@ -16,8 +16,6 @@ pub struct InitialInput {
     #[allow(dead_code)]
     #[serde(default)]
     pub artifact_root: Option<String>,
-    #[serde(default)]
-    pub target_author: Option<Author>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -88,13 +86,6 @@ fn default_required_authors() -> u64 {
     1
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct Author {
-    pub name: String,
-    pub kind: String,
-}
-
 impl InitialInput {
     pub fn parse(value: &Value) -> Result<Self, String> {
         let input: Self = serde_json::from_value(value.clone())
@@ -127,12 +118,6 @@ impl InitialInput {
         )?;
         for policy in &input.deterministic_policies {
             validate_deterministic(policy)?;
-        }
-        if let Some(author) = &input.target_author {
-            nonempty("target_author.name", &author.name)?;
-            if !["human", "agent", "script"].contains(&author.kind.as_str()) {
-                return Err("target_author.kind must be human, agent, or script".into());
-            }
         }
         for policy in &input.semantic_policies {
             if policy.required_authors == 0 {

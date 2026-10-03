@@ -2,12 +2,11 @@
 """External-driver policy-document journey; synthetic reviews prove mechanics only."""
 import argparse
 import sys
-import hashlib
 import json
 import tempfile
 import subprocess
 from pathlib import Path
-from external_work_driver import engine_call, record_reviews
+from external_work_driver import engine_call, record_reviews, declare_target_authorship
 
 
 def document(agents=False):
@@ -94,7 +93,9 @@ def main():
         call('show', '--view', 'full', run_id)
         call('event', run_id, 'passed')
         call('show', '--view', 'full', run_id)
-        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        digest = declare_target_authorship(engine, database, config, run_id, target,
+                                           {'name': 'document-drafter', 'kind': 'script'},
+                                           'target-authorship-current')
         record_reviews(engine, database, config, provider, run_id, 'semantic-review',
                        [p['id'] for p in profile['semantic_policies']],
                        digest, digest)

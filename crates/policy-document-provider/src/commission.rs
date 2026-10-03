@@ -59,6 +59,7 @@ pub fn prepare(input: &Value, profile: &Value) -> Result<Value, String> {
     let records: Vec<ContextRecord> =
         serde_json::from_value(packet.get("context").cloned().unwrap_or(json!([])))
             .map_err(|e| format!("context: {e}"))?;
+    let (target_authors, missing_inputs) = crate::evidence::target_authorship(&records, &snapshot);
     let mut selections = Vec::new();
     for record in records
         .iter()
@@ -171,11 +172,11 @@ pub fn prepare(input: &Value, profile: &Value) -> Result<Value, String> {
     );
     if show.is_none() {
         Ok(
-            json!({"record_ids":ids,"current_target":identity,"missing_inputs":[],"review_policies":policies,"author_counts":author_counts}),
+            json!({"record_ids":ids,"current_target":identity,"missing_inputs":missing_inputs,"target_authors":target_authors,"review_policies":policies,"author_counts":author_counts}),
         )
     } else {
         Ok(
-            json!({"record_ids":ids,"context":selected,"current_target":identity,"diagnostics":diagnostics,"missing_inputs":[],"review_policies":policies,"author_counts":author_counts}),
+            json!({"record_ids":ids,"context":selected,"current_target":identity,"diagnostics":diagnostics,"missing_inputs":missing_inputs,"target_authors":target_authors,"review_policies":policies,"author_counts":author_counts}),
         )
     }
 }

@@ -67,6 +67,12 @@ crate-local Markdown cannot link to root guidance.
    violation, use revise to prepare, and repeat ready/passed.
 3. Compute lowercase SHA-256 of exact current target bytes. Keep those bytes stable
    through review/evaluation; the provider cannot lock them through engine commit.
+   Append context kind `target-authorship` with data
+   `{"target_sha256":"CURRENT_DIGEST","author":{"name":"ACTUAL_AUTHOR","kind":"agent"}}`.
+   Declare every actual author (one record per author; kind is human, agent or script).
+   A missing, malformed or stale declaration blocks semantic coverage and appears in
+   commission `missing_inputs`. After any rewrite, declare authorship for the new bytes;
+   `initial_input.target_author` is not supported.
 4. Commission external semantic review using frozen mode, target, policies and project
    evidence. Cover all applicable groups/axes and effective independent author counts.
 5. Intake original returns through `policy-document review-candidates` on stdin.
@@ -83,7 +89,7 @@ For shared intake, a JSON return uses items with policy_id, result and findings.
 Multi-axis assignments must stay within one declared group and provide assessment_id;
 one assessment is not extra independent authors. Non-JSON returns need a driver-confirmed
 projection while retaining original text. Top-level self_review must be truthful and
-explicitly enabled for eligible authors by the frozen profile. Eligible subject authors
+explicitly enabled for eligible authors by the frozen profile. Declared current target authors
 then count once as labeled self-review, not independent or cold review. Required counts
 change only through authorized durable author-count amendment.
 
