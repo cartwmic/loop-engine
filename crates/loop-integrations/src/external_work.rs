@@ -174,6 +174,19 @@ pub fn check_projection(
         {
             return Err("projection contradicts decoded findings".into());
         }
+        for (before_reason, after_reason) in [
+            (
+                before["grounds"].get("reason"),
+                after["grounds"].get("reason"),
+            ),
+            (before.get("reason"), after.get("reason")),
+        ] {
+            if before_reason
+                .is_some_and(|value| after_reason.map(normalize) != Some(normalize(value)))
+            {
+                return Err("projection contradicts decoded reason".into());
+            }
+        }
     }
     if !remaining.is_empty() {
         return Err("projection changes decoded axes".into());
@@ -223,6 +236,50 @@ mod tests {
             projection[field][0]["findings"] = serde_json::json!(" first   defect second defect ");
             projection[field][0]["locator"] = serde_json::json!("corrected");
             assert!(super::check_projection(&original, &projection, field, "review").is_ok());
+        }
+    }
+
+    #[test]
+    fn projection_preserves_axis_rationales() {
+        for field in ["items", "judgments"] {
+            for nested in [false, true] {
+                let mut original = serde_json::json!({field:[
+                    {"axis":"A", "result":"pass", "findings":""},
+                    {"axis":"B", "result":"pass", "findings":""}
+                ]});
+                for (index, reason) in ["first rationale", "second rationale"].iter().enumerate() {
+                    if nested {
+                        original[field][index]["grounds"] = serde_json::json!({
+                            "reason":reason, "evidence":[{"locator":"wrong"}]
+                        });
+                    } else {
+                        original[field][index]["reason"] = serde_json::json!(reason);
+                    }
+                }
+                let path = if nested { "/grounds/reason" } else { "/reason" };
+                let mut swapped = original.clone();
+                *swapped[field][0].pointer_mut(path).unwrap() =
+                    serde_json::json!("second rationale");
+                *swapped[field][1].pointer_mut(path).unwrap() =
+                    serde_json::json!("first rationale");
+                assert!(super::check_projection(&original, &swapped, field, "review").is_err());
+                for replacement in ["invented rationale", ""] {
+                    let mut replaced = original.clone();
+                    *replaced[field][0].pointer_mut(path).unwrap() = serde_json::json!(replacement);
+                    assert!(
+                        super::check_projection(&original, &replaced, field, "review").is_err()
+                    );
+                }
+                let mut corrected = original.clone();
+                *corrected[field][0].pointer_mut(path).unwrap() =
+                    serde_json::json!(" first\n  rationale ");
+                corrected[field][0]["locator"] = serde_json::json!("corrected");
+                if nested {
+                    corrected[field][0]["grounds"]["evidence"][0]["locator"] =
+                        serde_json::json!("corrected");
+                }
+                assert!(super::check_projection(&original, &corrected, field, "review").is_ok());
+            }
         }
     }
 

@@ -192,6 +192,14 @@ def intake_counts_advice(args, root):
                     swapped['projection']['judgments'][0]['axis'], swapped['projection']['judgments'][1]['axis'] = (
                         decoded['judgments'][1]['axis'], decoded['judgments'][0]['axis'])
                     refused([args.software,'review-candidates'],swapped,needle='contradicts decoded result')
+                    rationale_swap = copy.deepcopy(packet)
+                    decoded = copy.deepcopy(batch)
+                    decoded['judgments'][1]['grounds']['reason'] = 'Distinct rationale for the second axis.'
+                    rationale_swap['original'] = {'text':json.dumps(decoded)}
+                    rationale_swap['projection'] = copy.deepcopy(decoded)
+                    rationale_swap['projection']['judgments'][0]['grounds']['reason'], rationale_swap['projection']['judgments'][1]['grounds']['reason'] = (
+                        decoded['judgments'][1]['grounds']['reason'], decoded['judgments'][0]['grounds']['reason'])
+                    refused([args.software,'review-candidates'],rationale_swap,needle='contradicts decoded reason')
                 before_intake = ctx['show']()['result']['context']
                 intake = provider(ctx,['review-candidates'],packet)
                 assert ctx['show']()['result']['context'] == before_intake
