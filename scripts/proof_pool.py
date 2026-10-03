@@ -451,12 +451,8 @@ def worker(packet):
     subprocess.run = captured
     result = {"status": "failed"}
     try:
-        if "command" in spec:  # instrumented self-test jobs use the same process path
-            subprocess.run(spec["command"], check=True)
-            value = []
-        else:
-            import work_slot_journey
-            value = getattr(work_slot_journey, spec["name"])(**{k: Path(v) for k, v in spec["kwargs"].items()})
+        subprocess.run(spec["command"], check=True)
+        value = []
         result.update(status="passed", returned_assertions=value)
     except BaseException:
         result["error"] = traceback.format_exc()

@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-import dogfood_observation
+import time
 from test_contract import repository_proof_identity
 
 
@@ -245,7 +245,8 @@ def _checker_case(
 
 
 def proof_index_case(journey) -> None:
-    root = dogfood_observation._fresh_root(journey, "sol-proof-index")
+    root = journey.work_root / f"sol-proof-index-{time.time_ns()}"
+    root.mkdir(parents=True)
     checkout = root / "checkout"
     scripts = checkout / "scripts"
     scripts.mkdir(parents=True)
