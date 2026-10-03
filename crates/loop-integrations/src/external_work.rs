@@ -103,7 +103,12 @@ pub fn assemble_items(items: &[Value], known: &Map<String, Value>) -> Vec<ItemDi
 }
 
 /// Reject substantive outcome changes while allowing mechanical locator corrections.
-pub fn check_projection(original: &Value, projection: &Value, field: &str) -> Result<(), String> {
+pub fn check_projection(
+    original: &Value,
+    projection: &Value,
+    field: &str,
+    gate: &str,
+) -> Result<(), String> {
     fn check_author(before: &Value, after: &Value) -> Result<(), String> {
         for key in ["name", "kind"] {
             if before["author"]
@@ -122,10 +127,15 @@ pub fn check_projection(original: &Value, projection: &Value, field: &str) -> Re
     let projected = projection[field]
         .as_array()
         .ok_or("projection omits decoded outcomes")?;
+    let prefix = format!("{gate}.");
+    let normalize_axis = |value: &Value| match value.as_str() {
+        Some(axis) => Value::String(axis.strip_prefix(&prefix).unwrap_or(axis).to_owned()),
+        None => value.clone(),
+    };
     let identity = |item: &Value| {
         item.get("axis")
             .or_else(|| item.get("policy_id"))
-            .cloned()
+            .map(normalize_axis)
             .unwrap_or(Value::Null)
             .to_string()
     };
@@ -137,7 +147,13 @@ pub fn check_projection(original: &Value, projection: &Value, field: &str) -> Re
             .ok_or("projection changes decoded axes")?;
         let after = remaining.remove(index);
         for key in ["axis", "policy_id", "result", "verdict"] {
-            if before.get(key).is_some_and(|v| after.get(key) != Some(v)) {
+            if before.get(key).is_some_and(|v| {
+                if matches!(key, "axis" | "policy_id") {
+                    after.get(key).map(normalize_axis) != Some(normalize_axis(v))
+                } else {
+                    after.get(key) != Some(v)
+                }
+            }) {
                 return Err(format!("projection contradicts decoded {key}"));
             }
         }
@@ -173,12 +189,12 @@ mod tests {
             serde_json::json!({"items":[{"result":"fail","findings":"defect","locator":"wrong"}]});
         let mut projection = original.clone();
         projection["items"][0]["locator"] = serde_json::json!("correct");
-        assert!(super::check_projection(&original, &projection, "items").is_ok());
+        assert!(super::check_projection(&original, &projection, "items", "review").is_ok());
         projection["items"][0]["result"] = serde_json::json!("pass");
-        assert!(super::check_projection(&original, &projection, "items").is_err());
+        assert!(super::check_projection(&original, &projection, "items", "review").is_err());
         projection["items"][0]["result"] = serde_json::json!("fail");
         projection["items"][0]["findings"] = serde_json::json!("");
-        assert!(super::check_projection(&original, &projection, "items").is_err());
+        assert!(super::check_projection(&original, &projection, "items", "review").is_err());
     }
 
     #[test]
@@ -189,24 +205,41 @@ mod tests {
                        {"axis":"B","result":"pass","findings":""}]});
             let mut projection = original.clone();
             projection[field].as_array_mut().unwrap().reverse();
-            assert!(super::check_projection(&original, &projection, field).is_ok());
+            assert!(super::check_projection(&original, &projection, field, "review").is_ok());
             projection[field][0]["axis"] = serde_json::json!("A");
             projection[field][1]["axis"] = serde_json::json!("B");
-            assert!(super::check_projection(&original, &projection, field).is_err());
+            assert!(super::check_projection(&original, &projection, field, "review").is_err());
             for (key, value) in [("name", "Bob"), ("kind", "human")] {
                 let mut projection = original.clone();
                 projection["author"][key] = serde_json::json!(value);
-                assert!(super::check_projection(&original, &projection, field).is_err());
+                assert!(super::check_projection(&original, &projection, field, "review").is_err());
             }
             for findings in ["different defect", "first defect", ""] {
                 let mut projection = original.clone();
                 projection[field][0]["findings"] = serde_json::json!(findings);
-                assert!(super::check_projection(&original, &projection, field).is_err());
+                assert!(super::check_projection(&original, &projection, field, "review").is_err());
             }
             let mut projection = original.clone();
             projection[field][0]["findings"] = serde_json::json!(" first   defect second defect ");
             projection[field][0]["locator"] = serde_json::json!("corrected");
-            assert!(super::check_projection(&original, &projection, field).is_ok());
+            assert!(super::check_projection(&original, &projection, field, "review").is_ok());
+        }
+    }
+
+    #[test]
+    fn projection_accepts_only_assignment_gate_prefix() {
+        for (field, key) in [("items", "policy_id"), ("judgments", "axis")] {
+            let original = serde_json::json!({field:[{key:"semantic-review.A", "result":"fail", "findings":"defect"}]});
+            let projection =
+                serde_json::json!({field:[{key:"A", "result":"fail", "findings":"defect"}]});
+            assert!(
+                super::check_projection(&original, &projection, field, "semantic-review").is_ok()
+            );
+            assert!(super::check_projection(&original, &projection, field, "other-gate").is_err());
+            let wrong = serde_json::json!({field:[{key:"other-gate.A", "result":"fail", "findings":"defect"}]});
+            assert!(
+                super::check_projection(&wrong, &projection, field, "semantic-review").is_err()
+            );
         }
     }
 

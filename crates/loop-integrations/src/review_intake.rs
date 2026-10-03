@@ -118,7 +118,7 @@ pub fn project(
     if projection.get("author").is_none() && projection.is_object() {
         projection["author"] = input["author"].clone();
     }
-    crate::external_work::check_projection(&original["structured"], &projection, "items")?;
+    crate::external_work::check_projection(&original["structured"], &projection, "items", gate)?;
     let items = projection["items"]
         .as_array()
         .ok_or("projection.items must be an array")?;

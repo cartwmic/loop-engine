@@ -55,6 +55,7 @@ pub fn project(input: &Value) -> Result<Value, String> {
         &original["structured"],
         &attributed_projection,
         "judgments",
+        gate,
     )?;
     let judgments = projection["judgments"]
         .as_array()

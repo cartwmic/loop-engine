@@ -8,7 +8,7 @@ Root `AGENTS.md` governs checkout operations and authority; this guide adds only
 
 For engine-driven runs, use the allocated `artifact_root` in full show unless the driver must own a specific pre-existing external directory; only then set it explicitly in a copied profile. For direct provider requests, always supply the explicit root. Load [README Usage](README.md#usage) for allocation prerequisites.
 
-When editing or driving this provider, load the [skill](skills/using-software-change-provider/SKILL.md) for input preparation, review intake and phase checkpoint procedure. If consulting the [reviewer protocol](data/reviewer-protocol.md), use the skill's current packet contract rather than the protocol's obsolete plain-show pipe/bound-worker examples. For executable transport examples, load checkout-root `scripts/software-change-journey.py`; its synthetic judgments never establish semantic review.
+When editing or driving this provider, load the [skill](skills/using-software-change-provider/SKILL.md) for input preparation, review intake and phase checkpoint procedure. For the read-only reviewer packet contract, consult the [reviewer protocol](data/reviewer-protocol.md). For executable transport examples, load checkout-root `scripts/software-change-journey.py`; its synthetic judgments never establish semantic review.
 
 For checkpoint operations, align the external driver's cwd and provider launch cwd with the same repository root: verification binds the provider process's current repository, not merely checkpoint's `--working-directory`. Do not move a checkpoint across repositories or recreate it to hide a Git/source change. Root Git approval rules remain separate.
 
