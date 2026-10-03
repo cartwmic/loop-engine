@@ -32,10 +32,10 @@ explicit owner-attested amendments for supported count changes.
 
 ## Setup
 
-Copy data/configs/standard.json into a per-run file. For installed use,
+Prepare with `research setup --rigor standard --output /absolute/profile.json`. For installed use,
 `research data-dump DIR` materializes embedded data into an empty destination.
 Register an absolute research command under alias research in provider TOML.
-Confirm the copied profile; do not retrofit policy into an active run.
+Confirm the resolved profile; do not retrofit policy into an active run.
 
 ```sh
 loop-engine --json --config /absolute/providers.toml start research @/absolute/profile.json "research question"
@@ -94,7 +94,9 @@ For shared intake, a JSON return uses items with policy_id, result and findings.
 Multi-axis assignments must stay within one declared group and provide assessment_id;
 one assessment is not extra independent authors. Non-JSON returns need a driver-confirmed
 projection while retaining original text. Top-level self_review must be truthful and
-allowed by policy; declaring it does not exempt the subject-author exclusion otherwise.
+explicitly enabled for eligible authors by the frozen profile. Eligible subject authors
+then count once as labeled self-review, not independent or cold review. Required counts
+change only through authorized durable author-count amendment.
 
 ## Evidence rules (condensed)
 
@@ -124,3 +126,12 @@ Route upstream defects to their owning phase, then refresh invalidated subjects/
 At end, hand off cited conclusion, source/claim mapping, terminal run observation,
 artifact locators, genuine review decisions, unresolved uncertainty and residuals.
 Synthetic journey passes prove mechanics, not source truth or semantic quality.
+
+Small pre-start overrides use `--set review.GATE.AXIS.required_authors=N`,
+`--set review.GATE.AXIS.self_review=true`, and `--set review.GATE.AXIS.group=NAME`.
+Policy-document uses gate `semantic-review`; research uses `verify` or `synthesize`.
+Use `--add-axis GATE.NEW=GATE.EXISTING` or `--remove-axis GATE.AXIS` for membership.
+Inspect the output and `FILE.explain.json` (base identity, overrides, effective policy).
+To select a newer base, replay the options with `--previous-explain OLD.explain.json`;
+inspect drift and resolve refused missing targets before start. Raw prompt/schema
+replacement remains a full custom file; preparation never launches work or changes a run.

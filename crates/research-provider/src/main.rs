@@ -47,6 +47,23 @@ fn run() -> i32 {
             let rest: Vec<String> = args.map(|arg| arg.to_string_lossy().into_owned()).collect();
             return external::run(&command.to_string_lossy(), &rest);
         }
+        Some(command) if command == "setup" => {
+            let rest: Vec<String> = args.map(|arg| arg.to_string_lossy().into_owned()).collect();
+            return loop_integrations::profile_setup::run(
+                &rest,
+                |name| match name {
+                    "standard" => Some(include_bytes!("../data/configs/standard.json")),
+                    "generate-prd" => Some(include_bytes!("../data/configs/generate-prd.json")),
+                    _ => None,
+                },
+                |profile| {
+                    config::parse_initial_input(profile)
+                        .map(|_| ())
+                        .map_err(|e| e.to_string())
+                },
+                false,
+            );
+        }
         Some(command) if command == "data-dump" => {
             let Some(destination) = args.next() else {
                 return data_dump_usage("missing destination directory");
@@ -105,7 +122,7 @@ fn run_protocol() -> i32 {
 
 fn provider_help() -> i32 {
     println!(
-        "research\n\nUsage:\n  research < stdin\n  research data-dump DIR\n  research commission [verify|synthesize] < full-show.json\n  research review-candidates < packet.json\n  research author-counts [--propose JSON] < full-show.json\n  research --help | -h\n  research --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nData:\n  data-dump  materialize embedded provider data under DIR"
+        "research\n\nUsage:\n  research < stdin\n  research data-dump DIR\n  research setup --help\n  research commission [verify|synthesize] < full-show.json\n  research review-candidates < packet.json\n  research author-counts [--propose JSON] < full-show.json\n  research --help | -h\n  research --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nData:\n  data-dump  materialize embedded provider data under DIR"
     );
     0
 }

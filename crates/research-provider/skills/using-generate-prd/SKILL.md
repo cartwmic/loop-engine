@@ -27,7 +27,7 @@ cargo build -p loop-cli -p research-provider -p bookends-check
 
 Register `target/debug/research` under exact alias `research` (absolute `command` path) in uncommitted machine-local provider TOML, the same way as `skills/using-research-provider/SKILL.md`. There is no generate-prd binary and no extract provider.
 
-Copy `crates/research-provider/data/configs/generate-prd.json` to a run-specific file.
+Prepare with `research setup --rigor generate-prd --output /absolute/profile.json`.
 Confirm exact profile bytes/hash, policies, groups, self-review declarations and author
 counts with the user. Confirm the external role/model manifest, ownership and budget
 separately; rehash unchanged profile immediately before start. No engine executor is
@@ -41,7 +41,7 @@ loop-engine --json --config "$PROVIDER_CONFIG" \
   start research "@/tmp/research-generate-prd.json" "generate PRD candidate"
 ```
 
-For an installed binary, dump into an empty directory first (`research data-dump "$DATA_ROOT"`), then copy `$DATA_ROOT/crates/research-provider/data/configs/generate-prd.json`.
+For an installed binary, dump into an empty directory first (`research data-dump "$DATA_ROOT"`), then select that file with `setup --profile FILE --output /absolute/profile.json` for full-custom preparation.
 
 Subject files under the allocated `artifact_root` stay `brief.json`, `sources.json`, `verification.json`, and `report.json`. Author from `crates/research-provider/data/templates/generate-prd/`. Shipped `config_version` is `research-1`. Extra profile identity is `generate-prd`; `template_root` is `crates/research-provider/data/templates/generate-prd`.
 
@@ -72,3 +72,12 @@ This extract path is not required to start a software-change run.
 ## Gate map
 
 Same research topology as `standard.json`: `scope → gather → verify → synthesize → end`, plus check-free owning-phase `revise*` edges. Checked events, evidence rules, and production-start isolation rules are those in `skills/using-research-provider/SKILL.md`. Do not treat generate-PRD as a software-change workflow (`intent` / `design` / `plan` / `implement` / `validation`) and do not run `scripts/software-change-journey.py` for this path.
+
+Small pre-start overrides use `--set review.GATE.AXIS.required_authors=N`,
+`--set review.GATE.AXIS.self_review=true`, and `--set review.GATE.AXIS.group=NAME`.
+Policy-document uses gate `semantic-review`; research uses `verify` or `synthesize`.
+Use `--add-axis GATE.NEW=GATE.EXISTING` or `--remove-axis GATE.AXIS` for membership.
+Inspect the output and `FILE.explain.json` (base identity, overrides, effective policy).
+To select a newer base, replay the options with `--previous-explain OLD.explain.json`;
+inspect drift and resolve refused missing targets before start. Raw prompt/schema
+replacement remains a full custom file; preparation never launches work or changes a run.

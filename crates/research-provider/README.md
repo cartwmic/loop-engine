@@ -24,7 +24,7 @@ Replace the destination with your chosen fresh directory. This is data export, n
 
 ## Usage
 
-For predictable artifact ownership, copy the profile and set `artifact_root` to an existing writable absolute directory outside the checkout. With engine `start`, an omitted root is allocated automatically: inspect full show initial input to find it before authoring artifacts. Direct provider requests need an explicit root; absent, relative or inaccessible roots fail artifact access. See [local operator preparation](AGENTS.md) for the owned procedure.
+For predictable artifact ownership, prepare a resolved profile with `setup` and set `artifact_root` to an existing writable absolute directory outside the checkout. With engine `start`, an omitted root is allocated automatically: inspect full show initial input to find it before authoring artifacts. Direct provider requests need an explicit root; absent, relative or inaccessible roots fail artifact access. See [local operator preparation](AGENTS.md) for the owned procedure.
 
 Start a run with the profile through `loop-engine start`, using a dedicated database and explicit provider TOML whose command is the absolute built provider path. The [local agent guide](AGENTS.md) selects the investigation versus generate-PRD profile and states the supported research commands; the [skill](skills/using-research-provider/SKILL.md) explains general external-loop concepts; load it before driving a run. Early commissions with `missing_inputs` are not ready. External reviewers return judgments and drivers explicitly append accepted evidence and send events after fresh action/full observations.
 
@@ -43,3 +43,11 @@ cargo test -p research-provider
 ```
 
 These are mechanical tests, not genuine semantic review. The root agent guide owns journey and final-proof requirements. For stalls involving missing inputs, stale evidence, author floors or observation permits, load the [skill](skills/using-research-provider/SKILL.md); do not infer acceptance from process exit. Typed advice answers, where applicable, are externally supplied context of kind `advice-answer`.
+
+## Base-derived profiles
+
+Use `research setup --rigor standard --output /absolute/profile.json`
+(or `--profile FILE` for a selected custom base). `setup --help` lists review
+count, eligible-self, group and axis overrides. Inspect `profile.json.explain.json`
+for base/override/effective identity; replay options with `--previous-explain FILE`
+when selecting a newer base to see drift. No active run follows changed defaults.

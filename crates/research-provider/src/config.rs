@@ -58,6 +58,10 @@ impl PolicyAxis {
         &self.description
     }
 
+    pub(crate) fn group(&self) -> &str {
+        self.group.as_deref().unwrap_or(&self.id)
+    }
+
     pub(crate) fn self_review(&self) -> bool {
         self.self_review
     }

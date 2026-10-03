@@ -173,6 +173,16 @@ def intake_counts_advice(args, root):
                 if form in ['prose','yaml','self']:
                     packet['projection'] = batch
                 # bookends:LE-93 bookends:LE-99 bookends:LE-105 bookends:LE-109 bookends:LE-151 — source-faithful projections retain valid siblings beside malformed members and remain inert until explicit append.
+                if form == 'json':
+                    corrected = copy.deepcopy(packet)
+                    corrected['projection'] = copy.deepcopy(batch)
+                    corrected['projection']['judgments'][0]['grounds']['evidence'][0]['locator'] = 'intent.json#/goal'
+                    assert len(provider(ctx,['review-candidates'],corrected)['records']) == len(axes)
+                    corrected['projection']['judgments'][0]['result'] = 'fail'
+                    refused([args.software,'review-candidates'],corrected,needle='contradicts decoded result')
+                    corrected['projection']['judgments'][0]['result'] = 'pass'
+                    corrected['projection']['judgments'][0]['findings'] = 'new substantive finding'
+                    refused([args.software,'review-candidates'],corrected,needle='contradicts decoded findings')
                 before_intake = ctx['show']()['result']['context']
                 intake = provider(ctx,['review-candidates'],packet)
                 assert ctx['show']()['result']['context'] == before_intake
@@ -304,6 +314,16 @@ def paired_and_command_proof(args, root):
         intent['source_scopes'] = {'primary':{'root':str(repository)},'secondary':{'root':str(secondary)}}
         intent_path.write_text(json.dumps(intent))
         state['secondary'] = secondary
+        state['residual'] = 'Unresolved proof gap: the helper assertion does not test malformed-artifact refusal (AC-2).'
+        intent['operating_context']['accepted_risks'].append({
+            'risk':'AC-1 inspection is demonstrated only by scripted fixture inspection.',
+            'rationale':'This exception is scoped to AC-1 and does not waive AC-2 malformed-artifact refusal.'})
+        intent['acceptance'][3]['statement'] += ' The secondary repository helper returns its input.'
+        intent_path.write_text(json.dumps(intent))
+        implementation_path = artifacts / 'implementation-report.json'
+        implementation = json.loads(implementation_path.read_text())
+        implementation['summary'] += ' ' + state['residual']
+        implementation_path.write_text(json.dumps(implementation))
     def hook(phase, ctx):
         if phase == 'implement':
             # bookends:LE-123 — the public guidance requires the owner Git decision, and checkpoint creation is not a commit.
@@ -334,6 +354,36 @@ def paired_and_command_proof(args, root):
             shown = ctx['show']()
             command = next(r for r in shown['result']['context'] if r['kind'] == 'command-evidence')
             original = copy.deepcopy(ctx['report'])
+            secondary_spec = {'id':'secondary-helper','command':sys.executable,
+                              'args':['-B','-c','from helper import helper; assert helper(7) == 7'],
+                              'owner':'driver','obligation':'Assert the secondary repository helper returns its input.'}
+            plan_path = ctx['artifacts'] / 'plan.json'
+            plan = json.loads(plan_path.read_text())
+            plan['proof_commands'].append(secondary_spec)
+            plan_path.write_text(json.dumps(plan))
+            identity = provider(ctx,['source-identity','--working-directory',str(state['secondary'])],{})
+            identity['scope'] = 'secondary'
+            outcome = raw([secondary_spec['command'],*secondary_spec['args']],cwd=state['secondary'])
+            assert outcome.returncode == 0, outcome.stderr
+            result = {'id':secondary_spec['id'],'command':secondary_spec['command'],'args':secondary_spec['args'],
+                      'cwd':str(state['secondary']),'exit_code':outcome.returncode,'stdout':outcome.stdout,
+                      'stderr':outcome.stderr,'producer':{'name':'external-driver','kind':'script'},'source':identity}
+            prepared = provider(ctx,['prepare-validation'],{'show':ctx['show'](),'working_directory':str(ctx['repository']),
+                                'revision':original['revision']+'-secondary','author':{'name':'external-proof-owner','kind':'script'},
+                                'command_results':[dict(command['data']['external_result'],id=command['data']['proof_id']),result]})
+            assert prepared['commands_complete'], prepared
+            original = prepared['report_draft']
+            for candidate in prepared['command_candidates']:
+                append(ctx,candidate['kind'],candidate['data'],candidate['record_id'])
+            for index, batch in enumerate(prepared['judgment_batches']):
+                append(ctx,batch['kind'],{'subject':'validation-report.json','subject_revision':original['revision'],
+                           'checkpoint':'validation-checkpoint.json','author':{'name':f'secondary-judge-{index}','kind':'agent'},
+                           **({'criterion_id':batch['criterion_id']} if batch['kind'] == 'criterion-verdict' else {}),'result':'pass','findings':[],
+                           'reason':'The secondary-scoped command succeeded in the secondary repository.',
+                           'evidence_context_ids':original['command_evidence_ids']},batch['record_id'])
+            (ctx['artifacts'] / 'validation-report.json').write_text(json.dumps(original))
+            ctx['checkpoint']('validation')
+            print('external-work secondary-scoped successful command accepted passed')
             # bookends:LE-164 — final-completion bounded questions consume actual successor external command outputs and indexed judgments, not retired engine captures.
             report = original
             ids = report['command_evidence_ids'] + report['goal_verdict_ids'] + [id for row in report['criteria'] for id in row['verdict_ids']]
@@ -378,6 +428,15 @@ def paired_and_command_proof(args, root):
             append(ctx,'advice-occasion',{'state_visit':ctx['show']()['result']['state_visit'],'source_state':'validation','event':'validation-ready',
                    'occasion_id':prepared_advice['occasion'],'target':prepared_advice['target'],'triggered':True,
                    'response_ids':['final-advice-answer'],'trigger_source_ids':report['command_evidence_ids']})
+            (ctx['artifacts'] / 'validation-report.json').write_text(json.dumps(reference_report))
+            stdout_file.rename(hidden)
+            ctx['checkpoint']('validation')
+            refusal = refused([ctx['engine'],'--database',ctx['database'],'--config',ctx['config'],'--json',
+                               'event',ctx['run_id'],'validation-ready'],cwd=ctx['repository'],needle='criterion-incomplete')
+            assert 'unreadable stdout_ref' in refusal.stdout, refusal.stdout
+            print('external-work missing external proof output reference refusal passed')
+            hidden.rename(stdout_file)
+            (ctx['artifacts'] / 'validation-report.json').write_bytes(saved_report)
             for label in ['stale','wrong-source']:
                 data = copy.deepcopy(command['data'])
                 if label == 'stale':
@@ -398,11 +457,36 @@ def paired_and_command_proof(args, root):
             (ctx['artifacts'] / 'validation-report.json').write_text(json.dumps(original))
             ctx['checkpoint']('validation')
             print('external-work command proof stale and wrong-source refusal passed')
+            original['residuals'] = [{'kind':'proof-gap','statement':state['residual'],'references':['intent.json#/acceptance/1']}]
+            report_path = ctx['artifacts'] / 'validation-report.json'
+            report_path.write_text(json.dumps(original))
+            ctx['checkpoint']('validation')
+            brief = provider(ctx,['commission','--slot','validation-review'],ctx['show']())
+            sources = {row['locator']:(ctx['artifacts'] / row['locator']).read_text() for row in brief['review_sources']}
+            assert state['residual'] in sources['validation-report.json'], sources
+            goal = next(row for row in ctx['show']()['result']['context']
+                        if row['id'] in original['goal_verdict_ids'])
+            judgment = copy.deepcopy(goal['data'])
+            judgment.update(result='fail',findings=[state['residual']],
+                            reason='The AC-1 exception does not waive the unresolved AC-2 proof gap.')
+            append(ctx,'goal-verdict',judgment,'residual-goal-refusal')
+            original['goal_verdict_ids'] = ['residual-goal-refusal', original['goal_verdict_ids'][1]]
+            report_path.write_text(json.dumps(original))
+            ctx['checkpoint']('validation')
+            refused([ctx['engine'],'--database',ctx['database'],'--config',ctx['config'],'--json',
+                     'event',ctx['run_id'],'validation-ready'],cwd=ctx['repository'],needle='goal')
+            judgment.update(result='pass',findings=[],reason=state['residual'] +
+                            ' This fixture establishes recording mechanics only; the gap is disclosed, not waived by the AC-1 exception.')
+            append(ctx,'goal-verdict',judgment,'residual-goal-judged')
+            original['goal_verdict_ids'] = ['residual-goal-judged', original['goal_verdict_ids'][1]]
+            report_path.write_text(json.dumps(original))
+            ctx['checkpoint']('validation')
+            print('external-work visible residual and outcome-scoped exception refusal passed')
         if phase == 'end':
             assert not ctx['show']()['result']['has_overrides']
             final_report = ctx['work'] / 'final-report.md'
             final_report.write_text('# External-work final report\n\nNormal completion, no override.\n\n'
-                                    'Residual risks: scripted judgments prove recording and qualification mechanics, not semantic review quality.\n'
+                                    'Residual risks: ' + state['residual'] + '\n'
                                     'The external driver owns proof commands and source applicability decisions.\n')
             assert 'Residual risks:' in final_report.read_text()
             print('external-work paired-repo and external-command normal completion passed')
@@ -547,20 +631,22 @@ def provider_specific(args, root):
             target.write_text(policy_fixture.document())
             profile.update(mode='audit',target_author=owner)
             profile['target']['path'] = str(target)
-            profile['semantic_policies'] = [profile['semantic_policies'][0]]
+            profile['semantic_policies'] = profile['semantic_policies'][:2]
             policy = profile['semantic_policies'][0]
             gate, event, subject = 'semantic-review','passed',profile['target']['id']
             revision = hashlib.sha256(target.read_bytes()).hexdigest()
         else:
             profile = json.loads((ROOT / 'crates/research-provider/data/configs/standard.json').read_text())
             for gate in ['verify','synthesize']:
-                profile['review_policies'][gate] = [profile['review_policies'][gate][0]]
+                profile['review_policies'][gate] = profile['review_policies'][gate][:2] if gate == 'verify' else [profile['review_policies'][gate][0]]
             policy = profile['review_policies']['verify'][0]
             gate, event, subject, revision = 'verify','verified','verification.json','1'
             for name, make in [('brief.json',research.brief),('sources.json',research.sources),('verification.json',research.verification)]:
                 (artifacts / name).write_text(json.dumps(make()))
             target = artifacts / 'verification.json'
-        policy.update(required_authors=1,self_review=False)
+        grouped = profile['semantic_policies'] if kind == 'policy-document' else profile['review_policies']['verify']
+        for member in grouped:
+            member.update(required_authors=1,self_review=False,group='combined-public')
         profile['artifact_root'] = str(artifacts)
         selected = work / 'profile.json'
         selected.write_text(json.dumps(profile))
@@ -587,15 +673,43 @@ def provider_specific(args, root):
         def intake(author):
             assignment_subject = revision if kind == 'policy-document' else subject
             packet = {'show':show(),'assignment':{'gate':gate,'review_stage':'ordinary','subject':assignment_subject,
-                      'subject_revision':revision,'policy_ids':[policy['id']]},'author':author,
-                      'request':{'text':'Review the current target.'},'result':{'text':json.dumps({'items':[{'policy_id':policy['id'],'result':'pass','findings':''}]})}}
+                      'subject_revision':revision,'policy_ids':[p['id'] for p in grouped],'assessment_id':'combined-'+author['name']},'author':author,
+                      'request':{'text':'Review the current target.'},'result':{'text':json.dumps({'items':[{'policy_id':p['id'],'result':'pass','findings':''} for p in grouped]})}}
             result = process([binary,'review-candidates'],packet)
-            assert len(result['candidates']) == 1, result
-            return result['candidates'][0]['data']
-        record('review-evidence',intake(owner),'self-evidence')
+            # bookends:LE-168 bookends:LE-170 — public combined assignment refusal and faithful correction.
+            subset = copy.deepcopy(packet)
+            subset['assignment']['policy_ids'] = [policy['id']]
+            refused([binary,'review-candidates'],subset,needle='whole review group')
+            corrected = copy.deepcopy(packet)
+            corrected['projection'] = json.loads(packet['result']['text'])
+            corrected['projection']['items'][0]['locator'] = 'corrected-locator'
+            assert len(process([binary,'review-candidates'],corrected)['candidates']) == len(grouped)
+            corrected['projection']['items'][0]['result'] = 'fail'
+            refused([binary,'review-candidates'],corrected,needle='contradicts decoded result')
+            corrected['projection']['items'][0]['result'] = 'pass'
+            corrected['projection']['items'][0]['findings'] = 'invented finding'
+            refused([binary,'review-candidates'],corrected,needle='contradicts decoded findings')
+            failed_original = copy.deepcopy(packet)
+            decoded = json.loads(failed_original['result']['text'])
+            decoded['items'][0].update(result='fail',findings='material defect')
+            failed_original['result']['text'] = json.dumps(decoded)
+            failed_original['projection'] = json.loads(packet['result']['text'])
+            refused([binary,'review-candidates'],failed_original,needle='contradicts decoded result')
+            assert len(result['candidates']) == len(grouped), result
+            return [c['data'] for c in result['candidates']]
+        for i, data in enumerate(intake(owner)):
+            record('review-evidence',data,'self-evidence-'+str(i))
         show()
         refused([args.engine,'--database',database,'--config',config,'--json','event',run_id,event],needle='review-incomplete')
-        record('review-evidence',intake({'name':'external-independent','kind':'agent'}),'independent-evidence')
+        independent = intake({'name':'external-independent','kind':'agent'})
+        for i, data in enumerate(independent):
+            singleton = copy.deepcopy(data)
+            singleton['assessment_id'] = 'isolated-'+str(i)
+            record('review-evidence',singleton,'isolated-'+str(i))
+        show()
+        refused([args.engine,'--database',database,'--config',config,'--json','event',run_id,event],needle='review-incomplete')
+        for i, data in enumerate(independent):
+            record('review-evidence',data,'independent-evidence-'+str(i))
         def amend(after,id):
             data = {'targets':[{'gate':gate,'axis':policy['id']}],'after':after,
                     'actor':owner,'authority':{'kind':'owner','reference':'scripted instruction'},'reason':'External review budget.'}
@@ -615,9 +729,10 @@ def provider_specific(args, root):
             revision = '2'
         show()
         refused([args.engine,'--database',database,'--config',config,'--json','event',run_id,event],needle='review-incomplete')
-        record('evidence-applicability',{'origin':{'kind':'context-record','id':'independent-evidence'},
-               'target':{'subject':subject,'revision':revision},'attesting_driver':owner,
-               'reason':'Only immaterial fixture metadata changed; judgment scope remains unchanged.'},'carry-independent')
+        for i in range(len(grouped)):
+            record('evidence-applicability',{'origin':{'kind':'context-record','id':'independent-evidence-'+str(i)},
+                   'target':{'subject':subject,'revision':revision},'attesting_driver':owner,
+                   'reason':'Only immaterial fixture metadata changed; judgment scope remains unchanged.'},'carry-independent-'+str(i))
         move(event)
         if kind == 'research':
             value = research.report()
@@ -886,6 +1001,48 @@ def profile_preparation(args, root):
     assert refreshed['review_policies']['design-review'][0]['description'] == 'New selected base default'
     refused([args.software,'setup','--profile',newer,'--output',work / 'bad.json','--decline-advice',
              '--set','review.intent-review.aggregate.no-longer-present.required_authors=1'])
+    for provider, semantic, bases in [(args.policy, True, ['readme','agents']),
+                                       (args.research, False, ['standard','generate-prd'])]:
+        for base_name in bases:
+            prefix = ('policy-' if semantic else 'research-') + base_name
+            selected = work / (prefix+'.json')
+            base = process([provider,'setup','--rigor',base_name,'--output',selected])
+            gate = 'semantic-review' if semantic else 'verify'
+            def rows(profile):
+                return profile['semantic_policies'] if semantic else profile['review_policies'][gate]
+            axis = rows(base)[0]['id']
+            options = ['--set',f'review.{gate}.{axis}.required_authors=2',
+                       '--set',f'review.{gate}.{axis}.self_review=true',
+                       '--set',f'review.{gate}.{axis}.group=custom',
+                       '--add-axis',f'{gate}.added={gate}.{axis}']
+            custom_path = work / (prefix+'-custom.json')
+            custom = process([provider,'setup','--profile',selected,'--output',custom_path,*options])
+            assert custom == json.loads(custom_path.read_text())
+            assert rows(custom)[0]['required_authors'] == 2 and rows(custom)[0]['self_review']
+            assert rows(custom)[0]['group'] == 'custom' and rows(custom)[-1]['id'] == 'added'
+            explain_path = Path(str(custom_path)+'.explain.json')
+            explain = json.loads(explain_path.read_text())
+            assert explain['effective'] == custom
+            assert explain['base']['sha256'] == 'sha256:'+hashlib.sha256(selected.read_bytes()).hexdigest()
+            changed = copy.deepcopy(base)
+            rows(changed)[0]['required_authors'] = 3
+            rows(changed)[1]['description'] = 'New selected base default'
+            newer = work / (prefix+'-newer.json')
+            newer.write_text(json.dumps(changed))
+            refreshed_path = work / (prefix+'-refreshed.json')
+            refreshed = process([provider,'setup','--profile',newer,'--output',refreshed_path,
+                                 '--previous-explain',explain_path,*options])
+            drift = json.loads(Path(str(refreshed_path)+'.explain.json').read_text())['drift']
+            assert any(d['key'].endswith('.required_authors') and d['base_value'] == 3 for d in drift)
+            assert rows(refreshed)[1]['description'] == 'New selected base default'
+            removed = process([provider,'setup','--profile',custom_path,'--output',work/(prefix+'-removed.json'),
+                               '--remove-axis',f'{gate}.added'])
+            assert all(row['id'] != 'added' for row in rows(removed))
+            for setting in ['required_authors=0','self_review=maybe','group=""']:
+                refused([provider,'setup','--profile',selected,'--output',work/(prefix+'-bad.json'),
+                         '--set',f'review.{gate}.{axis}.{setting}'])
+            refused([provider,'setup','--profile',newer,'--output',work/(prefix+'-missing.json'),
+                     '--set',f'review.{gate}.no-longer-present.required_authors=1'])
     print('external-work base-derived profile preparation and drift passed')
 
 

@@ -19,7 +19,7 @@ The executable is `loop-engine`; providers are separate binaries. No bundled mod
 
 ## Usage
 
-For a first durable run, use policy-document to assess this README. Choose a fresh directory outside the checkout for the catalog and artifacts, copy `crates/policy-document-provider/data/readme.json`, preserve `target.id` and `profile_version`, and set `target.path` to this README's absolute path with `mode: "audit"`. Save it as `profile.json` in that directory. Put the absolute path to the built `target/debug/policy-document` in `providers.toml`:
+For a first durable run, use policy-document to assess this README. Choose a fresh directory outside the checkout for the catalog and artifacts, prepare with `target/debug/policy-document setup --rigor readme --output /absolute/profile.json`, preserve `target.id` and `profile_version`, and set `target.path` to this README's absolute path with `mode: "audit"`. Save it as `profile.json` in that directory. Put the absolute path to the built `target/debug/policy-document` in `providers.toml`:
 
 ```toml
 [providers.policy-document]

@@ -264,6 +264,19 @@ fn verify_external_shape(result: &Value, spec: &ProofCommand) -> Result<(), Stri
             {
                 return Err(format!("invalid {key}"));
             }
+            if key.ends_with("_ref") {
+                let reference = Path::new(value.as_str().unwrap());
+                let resolved = if reference.is_absolute() {
+                    reference.to_path_buf()
+                } else {
+                    cwd.join(reference)
+                };
+                let file = fs::File::open(&resolved)
+                    .map_err(|e| format!("unreadable {key} {}: {e}", resolved.display()))?;
+                if !file.metadata().map_err(|e| e.to_string())?.is_file() {
+                    return Err(format!("{key} is not a file: {}", resolved.display()));
+                }
+            }
         }
     }
     Ok(())
@@ -1019,7 +1032,7 @@ mod tests {
     #[test]
     fn external_result_shape_requires_attribution_output_and_integer_status() {
         let spec: ProofCommand = serde_json::from_value(json!({"id":"proof","command":"cargo","args":["test"],"owner":"driver","obligation":"outcome"})).unwrap();
-        let result = json!({"id":"proof","command":"cargo","args":["test"],"cwd":std::env::current_dir().unwrap(),"exit_code":0,"stdout_ref":"driver.log","producer":{"name":"local-driver","kind":"external"},"source":{"head":"head","state_sha256":"sha256:digest"}});
+        let result = json!({"id":"proof","command":"cargo","args":["test"],"cwd":std::env::current_dir().unwrap(),"exit_code":0,"stdout":"driver output","producer":{"name":"local-driver","kind":"external"},"source":{"head":"head","state_sha256":"sha256:digest"}});
         verify_external_shape(&result, &spec).unwrap();
         for (field, value) in [
             ("exit_code", json!(0.5)),
@@ -1033,10 +1046,24 @@ mod tests {
             assert!(verify_external_shape(&bad, &spec).is_err(), "{field}");
         }
         let mut missing = result;
-        missing.as_object_mut().unwrap().remove("stdout_ref");
+        missing.as_object_mut().unwrap().remove("stdout");
         assert!(verify_external_shape(&missing, &spec).is_err());
         missing["stdout"] = json!("");
         verify_external_shape(&missing, &spec).unwrap();
+    }
+
+    #[test]
+    fn external_output_references_resolve_against_declared_cwd() {
+        let spec: ProofCommand = serde_json::from_value(json!({"id":"proof","command":"cargo","args":["test"],"owner":"driver","obligation":"outcome"})).unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        let mut result = json!({"id":"proof","command":"cargo","args":["test"],"cwd":cwd,"exit_code":0,"stdout_ref":"Cargo.toml","producer":{"name":"driver","kind":"external"},"source":{"head":"head","state_sha256":"sha256:digest"}});
+        verify_external_shape(&result, &spec).unwrap();
+        result["stderr_ref"] = json!(cwd.join("Cargo.toml"));
+        verify_external_shape(&result, &spec).unwrap();
+        result["stdout_ref"] = json!("missing-external-proof-output.log");
+        assert!(verify_external_shape(&result, &spec).is_err());
+        result["stdout_ref"] = json!(".");
+        assert!(verify_external_shape(&result, &spec).is_err());
     }
 
     #[test]

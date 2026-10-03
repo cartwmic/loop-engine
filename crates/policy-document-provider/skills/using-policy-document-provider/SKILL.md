@@ -34,7 +34,7 @@ explicit owner-attested amendments for supported count changes.
 ## Setup
 
 Materialize installed data with `policy-document data-dump DIR` into an empty directory.
-Copy data/readme.json or data/agents.json to a per-run profile. Set mode to draft or
+Prepare with `policy-document setup --rigor readme` (or `agents`) `--output /absolute/profile.json`. Set mode to draft or
 audit and target.path to the absolute document. Preserve target.id and profile_version
 unless intentionally making a custom profile. Both modes use the same checked topology.
 artifact_root is accepted but ignored; this provider need not write artifacts.
@@ -83,7 +83,9 @@ For shared intake, a JSON return uses items with policy_id, result and findings.
 Multi-axis assignments must stay within one declared group and provide assessment_id;
 one assessment is not extra independent authors. Non-JSON returns need a driver-confirmed
 projection while retaining original text. Top-level self_review must be truthful and
-allowed by policy; declaring it does not exempt the subject-author exclusion otherwise.
+explicitly enabled for eligible authors by the frozen profile. Eligible subject authors
+then count once as labeled self-review, not independent or cold review. Required counts
+change only through authorized durable author-count amendment.
 
 ## Explicit historical review context
 
@@ -138,3 +140,12 @@ still require evidence, violated obligation and concrete consequence.
 Verify external cleanup and inspect partial edits before retry. End only on checked
 terminal completion; return exact target digest/profile, run/catalog identity,
 review decisions, residual risks and any pending owner application/Git authorization.
+
+Small pre-start overrides use `--set review.GATE.AXIS.required_authors=N`,
+`--set review.GATE.AXIS.self_review=true`, and `--set review.GATE.AXIS.group=NAME`.
+Policy-document uses gate `semantic-review`; research uses `verify` or `synthesize`.
+Use `--add-axis GATE.NEW=GATE.EXISTING` or `--remove-axis GATE.AXIS` for membership.
+Inspect the output and `FILE.explain.json` (base identity, overrides, effective policy).
+To select a newer base, replay the options with `--previous-explain OLD.explain.json`;
+inspect drift and resolve refused missing targets before start. Raw prompt/schema
+replacement remains a full custom file; preparation never launches work or changes a run.

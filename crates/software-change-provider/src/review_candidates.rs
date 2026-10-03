@@ -47,6 +47,11 @@ pub fn project(input: &Value) -> Result<Value, String> {
     let original = content(&input["original"])?;
     let request = content(&input["request"])?;
     let projection = input.get("projection").unwrap_or(&original["structured"]);
+    loop_integrations::external_work::check_projection(
+        &original["structured"],
+        projection,
+        "judgments",
+    )?;
     let judgments = projection["judgments"]
         .as_array()
         .ok_or("original is not a JSON review batch; supply projection.judgments")?;

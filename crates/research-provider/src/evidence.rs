@@ -145,6 +145,7 @@ impl EvidenceEvaluation {
 
 #[derive(Clone, Debug)]
 struct ConformingEvidence {
+    assessment_id: Option<String>,
     result: EvidenceResult,
     findings: String,
     author: AuthorIdentity,
@@ -310,7 +311,31 @@ pub(crate) fn evaluate_with_authors(
             distinct_present.insert(record.author.clone());
             match record.result {
                 EvidenceResult::Pass => {
-                    pass_authors.insert(record.author.clone());
+                    let peers: Vec<_> = axes
+                        .iter()
+                        .filter(|(_, p)| p.group() == policy.group())
+                        .collect();
+                    if peers.len() == 1
+                        || (record
+                            .assessment_id
+                            .as_ref()
+                            .is_some_and(|s| !s.trim().is_empty())
+                            && peers.iter().all(|(peer, _)| {
+                                latest
+                                    .get(&(
+                                        (*peer).clone(),
+                                        record.subject_revision.clone(),
+                                        record.author.clone(),
+                                    ))
+                                    .is_some_and(|other| {
+                                        other.result == EvidenceResult::Pass
+                                            && other.config_version == record.config_version
+                                            && other.assessment_id == record.assessment_id
+                                    })
+                            }))
+                    {
+                        pass_authors.insert(record.author.clone());
+                    }
                 }
                 EvidenceResult::Fail => failed_findings.push(record.findings.clone()),
             }
@@ -479,6 +504,10 @@ fn parse_conforming(
     }
 
     Ok(ConformingEvidence {
+        assessment_id: data
+            .get("assessment_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
         result: result.expect("result checked by empty-reasons branch"),
         findings: findings.expect("findings checked by empty-reasons branch"),
         author: author.expect("author checked by empty-reasons branch"),

@@ -102,8 +102,55 @@ pub fn assemble_items(items: &[Value], known: &Map<String, Value>) -> Vec<ItemDi
         .collect()
 }
 
+/// Reject substantive outcome changes while allowing mechanical locator corrections.
+pub fn check_projection(original: &Value, projection: &Value, field: &str) -> Result<(), String> {
+    let Some(items) = original[field].as_array() else {
+        return Ok(());
+    };
+    let projected = projection[field]
+        .as_array()
+        .ok_or("projection omits decoded outcomes")?;
+    if items.len() != projected.len() {
+        return Err("projection changes decoded outcomes".into());
+    }
+    for (before, after) in items.iter().zip(projected) {
+        for key in ["result", "verdict"] {
+            if before.get(key).is_some_and(|v| after.get(key) != Some(v)) {
+                return Err(format!("projection contradicts decoded {key}"));
+            }
+        }
+        let nonempty = |v: &Value| match v {
+            Value::String(s) => !s.trim().is_empty(),
+            Value::Array(a) => !a.is_empty(),
+            Value::Null => false,
+            _ => true,
+        };
+        if before
+            .get("findings")
+            .is_some_and(|v| nonempty(v) != after.get("findings").is_some_and(nonempty))
+        {
+            return Err("projection contradicts decoded findings".into());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn projection_preserves_outcomes_but_allows_locator_correction() {
+        let original =
+            serde_json::json!({"items":[{"result":"fail","findings":"defect","locator":"wrong"}]});
+        let mut projection = original.clone();
+        projection["items"][0]["locator"] = serde_json::json!("correct");
+        assert!(super::check_projection(&original, &projection, "items").is_ok());
+        projection["items"][0]["result"] = serde_json::json!("pass");
+        assert!(super::check_projection(&original, &projection, "items").is_err());
+        projection["items"][0]["result"] = serde_json::json!("fail");
+        projection["items"][0]["findings"] = serde_json::json!("");
+        assert!(super::check_projection(&original, &projection, "items").is_err());
+    }
+
     use super::*;
     use serde_json::json;
 

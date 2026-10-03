@@ -211,14 +211,17 @@ command_candidates with their proposed IDs, then complete report_draft.
 The fixed index links current implementation_revision, command_evidence_ids, exactly
 one criterion row per current AC-N and separate goal_verdict_ids. Choose genuine unused
 verdict IDs before checkpointing; no placeholders or rewriting index after judgment.
-Independent criterion/goal authors cannot be implementation/report authors. Final coverage
+Criterion/goal authors exclude implementation/report authors by default. Explicit frozen
+profile permission lets eligible authors count once as labeled self-review, not independent
+or cold review. Required counts change only through authorized author-count amendment. Final coverage
 needs all required genuine judgments, matching implementation history and no unresolved fail.
 Challenge consumes that collection, not another proof run or criterion review.
 
 After repair, append criterion-revalidation with subject_revision, affected_criteria,
-change_kind material/report-index-only and reason. Affected criteria need fresh judgment;
-unaffected rows may carry explicitly applicable originals. Material repair needs fresh
-goal; only justified report-index-only correction permits goal carry.
+change_kind material/report-index-only and reason. Materially affected judgments need fresh assessment;
+criterion and whole-goal rows may carry only when the driver explicitly declares with a
+reason that their complete scope and judging meaning remain applicable. Material repair
+does not categorically require fresh goal judgment.
 
 ## External advice, recovery and final handoff
 

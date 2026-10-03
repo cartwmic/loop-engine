@@ -78,6 +78,23 @@ pub fn project(
     if groups.len() != 1 {
         return Err("assignment combines independent review groups".into());
     }
+    let group = groups.first().unwrap();
+    let expected: Vec<_> = policies
+        .iter()
+        .filter(|p| {
+            p["gate"] == gate
+                && p["group"]
+                    .as_str()
+                    .unwrap_or(p["id"].as_str().unwrap_or(""))
+                    == group
+        })
+        .collect();
+    if expected
+        .iter()
+        .any(|p| !ids.contains(&p["id"].as_str().unwrap_or("")))
+    {
+        return Err("assignment must cover the whole review group".into());
+    }
     if ids.len() > 1 {
         text(assignment, "assessment_id")?;
     }
@@ -92,6 +109,7 @@ pub fn project(
             json!({"request":request,"original":original,"candidates":[],"diagnostics":[{"diagnostic":"result is not JSON; driver projection required"}]}),
         );
     };
+    crate::external_work::check_projection(&original["structured"], &projection, "items")?;
     let items = projection["items"]
         .as_array()
         .ok_or("projection.items must be an array")?;
@@ -102,7 +120,7 @@ pub fn project(
         metadata.insert(key.clone(), value.clone());
     }
     for item in assemble_items(items, &metadata) {
-        let Some(candidate) = item.candidate else {
+        let Some(mut candidate) = item.candidate else {
             diagnostics.push(json!({"index":item.index,"diagnostics":item.diagnostics}));
             continue;
         };
@@ -128,6 +146,7 @@ pub fn project(
                     assignment["subject_revision"].as_str().unwrap()
                 )
             });
+        candidate["assessment_id"] = json!(assessment);
         candidates.push(json!({"kind":"review-evidence","assessment_id":assessment,"self_review":direct,"data":candidate}));
     }
     Ok(

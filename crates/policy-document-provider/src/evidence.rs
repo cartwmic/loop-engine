@@ -8,6 +8,8 @@ use std::collections::{HashMap, HashSet};
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Evidence {
+    #[serde(default)]
+    assessment_id: Option<String>,
     gate: String,
     policy_id: String,
     result: String,
@@ -26,6 +28,7 @@ struct Author {
 
 #[derive(Debug)]
 struct CurrentEvidence {
+    assessment_id: Option<String>,
     result: String,
     findings: String,
     author: Author,
@@ -134,6 +137,7 @@ pub fn evaluate(
                 if sequence > current.get().sequence =>
             {
                 current.insert(CurrentEvidence {
+                    assessment_id: e.assessment_id,
                     result: e.result,
                     findings: e.findings,
                     author,
@@ -143,6 +147,7 @@ pub fn evaluate(
             }
             std::collections::hash_map::Entry::Vacant(current) => {
                 current.insert(CurrentEvidence {
+                    assessment_id: e.assessment_id,
                     result: e.result,
                     findings: e.findings,
                     author,
@@ -187,7 +192,32 @@ pub fn evaluate(
         let has_fail = verdicts.iter().any(|evidence| evidence.result == "fail");
         let has_pass = verdicts
             .iter()
-            .filter(|evidence| evidence.result == "pass")
+            .filter(|evidence| {
+                if evidence.result != "pass" {
+                    return false;
+                }
+                let peers: Vec<_> = config
+                    .semantic_policies
+                    .iter()
+                    .filter(|p| {
+                        p.group.as_ref().unwrap_or(&p.id)
+                            == policy.group.as_ref().unwrap_or(&policy.id)
+                    })
+                    .collect();
+                peers.len() == 1
+                    || (evidence
+                        .assessment_id
+                        .as_ref()
+                        .is_some_and(|s| !s.trim().is_empty())
+                        && peers.iter().all(|p| {
+                            valid
+                                .get(&(p.id.clone(), evidence.author.clone()))
+                                .is_some_and(|other| {
+                                    other.result == "pass"
+                                        && other.assessment_id == evidence.assessment_id
+                                })
+                        }))
+            })
             .count() as u64
             >= required;
         if has_fail || !has_pass {

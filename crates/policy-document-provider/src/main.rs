@@ -22,6 +22,19 @@ fn run() -> i32 {
     let mut args = std::env::args_os();
     let _ = args.next();
     if let Some(command) = args.next() {
+        if command == "setup" {
+            let rest: Vec<String> = args.map(|arg| arg.to_string_lossy().into_owned()).collect();
+            return loop_integrations::profile_setup::run(
+                &rest,
+                |name| match name {
+                    "standard" | "readme" => Some(include_bytes!("../data/readme.json")),
+                    "agents" => Some(include_bytes!("../data/agents.json")),
+                    _ => None,
+                },
+                |profile| config::InitialInput::parse(profile).map(|_| ()),
+                true,
+            );
+        }
         if command == "author-counts" || command == "review-candidates" {
             let rest: Vec<String> = args.map(|arg| arg.to_string_lossy().into_owned()).collect();
             return external::run(&command.to_string_lossy(), &rest);

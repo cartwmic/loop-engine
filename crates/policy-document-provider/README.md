@@ -41,3 +41,11 @@ cargo test -p policy-document-provider
 ```
 
 These are mechanical tests, not genuine semantic review. The root agent guide owns journey and final-proof requirements. For stalls involving missing inputs, stale evidence, author floors or observation permits, load the [skill](skills/using-policy-document-provider/SKILL.md); do not infer acceptance from process exit. Typed advice answers, where applicable, are externally supplied context of kind `advice-answer`.
+
+## Base-derived profiles
+
+Use `policy-document setup --rigor standard --output /absolute/profile.json`
+(or `--profile FILE` for a selected custom base). `setup --help` lists review
+count, eligible-self, group and axis overrides. Inspect `profile.json.explain.json`
+for base/override/effective identity; replay options with `--previous-explain FILE`
+when selecting a newer base to see drift. No active run follows changed defaults.
