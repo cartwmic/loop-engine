@@ -32,9 +32,8 @@ fn help_flags_return_conventional_stdout_without_reading_protocol() {
         assert!(help.contains("describe"));
         assert!(help.contains("evaluate"));
         assert!(help.contains("data-dump"));
-        assert!(help.contains("run-plan-graph"));
+        assert!(!help.contains("run-plan-graph"));
         assert!(help.contains("review-candidates"));
-        assert!(help.contains('4'));
     }
 }
 
@@ -234,4 +233,156 @@ fn review_candidates_cli_rejects_foreign_workflow() {
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).contains("software-change"));
+}
+
+#[test]
+fn external_validation_packet_accepts_results_and_fails_closed() {
+    let repo = candidate_temp_dir();
+    let artifacts = candidate_temp_dir();
+    for args in [
+        vec!["init", "-q"],
+        vec![
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "fixture",
+        ],
+    ] {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .status()
+            .unwrap()
+            .success());
+    }
+    let spec = json!({"id":"proof","command":"driver-proof","args":["check"],"owner":"driver","obligation":"observable outcome"});
+    fs::write(
+        artifacts.join("plan.json"),
+        json!({"revision":"r1","tasks":[],"proof_commands":[spec]}).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        artifacts.join("intent.json"),
+        json!({"acceptance":[{"id":"AC-1","statement":"outcome"}]}).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        artifacts.join("implementation-report.json"),
+        json!({"revision":"i1","author":{"name":"implementer","kind":"agent"}}).to_string(),
+    )
+    .unwrap();
+    let identity = invoke(
+        &[
+            "source-identity",
+            "--working-directory",
+            repo.to_str().unwrap(),
+        ],
+        b"",
+    );
+    assert!(identity.status.success(), "{:?}", identity.stderr);
+    let source: Value = serde_json::from_slice(&identity.stdout).unwrap();
+    let describe = invoke(&[], br#"{"operation":"describe"}"#);
+    let graph: Value = serde_json::from_slice(&describe.stdout).unwrap();
+    let result = json!({"id":"proof","command":"driver-proof","args":["check"],"cwd":repo,"exit_code":0,"stdout":"proof passed","producer":{"name":"external-driver","kind":"script"},"source":source});
+    let mut packet = json!({"working_directory":repo,"revision":"v1","verdict_prefix":"verdict","author":{"name":"proof-owner","kind":"human"},"command_results":[result],"show":{"operation":"show","status":"completed","result":{"current_state":"validation","work_slots":graph["work_slots"],"context":[],"initial_input":{"artifact_root":artifacts,"contract_version":3,"criterion_policy":{"required_authors":1,"goal_required_authors":1}}}}});
+    let prepare = |packet: &Value| {
+        let output = invoke(
+            &["prepare-validation"],
+            &serde_json::to_vec(packet).unwrap(),
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    let success = prepare(&packet);
+    assert_eq!(success["commands_complete"], true);
+    assert_eq!(
+        success["command_candidates"][0]["data"]["external_result"]["external"],
+        true
+    );
+    assert!(success["command_candidates"][0]["data"]
+        .get("origin")
+        .is_none());
+    assert_eq!(
+        success["command_candidates"][0]["data"]["external_result"],
+        {
+            let mut result = packet["command_results"][0].clone();
+            result["external"] = json!(true);
+            result
+        }
+    );
+    assert!(success["command_candidates"][0]["data"]
+        .get("capture")
+        .is_none());
+    packet["command_results"][0]["exit_code"] = json!(7);
+    assert_eq!(prepare(&packet)["diagnostics"][0]["status"], "failed");
+    packet["command_results"][0]["exit_code"] = json!(0);
+    packet["command_results"][0]["source"]["head"] = json!("stale");
+    assert_eq!(prepare(&packet)["diagnostics"][0]["status"], "stale-source");
+    packet["command_results"][0]["command"] = json!("different");
+    assert_eq!(
+        invoke(
+            &["prepare-validation"],
+            &serde_json::to_vec(&packet).unwrap()
+        )
+        .status
+        .code(),
+        Some(2)
+    );
+    fs::remove_dir_all(repo).unwrap();
+    fs::remove_dir_all(artifacts).unwrap();
+}
+
+#[test]
+fn setup_is_policy_only_and_retired_commands_refuse() {
+    let root = candidate_temp_dir();
+    let output = root.join("profile.json");
+    let setup = invoke(
+        &[
+            "setup",
+            "--rigor",
+            "standard",
+            "--output",
+            output.to_str().unwrap(),
+            "--enable-advice",
+        ],
+        b"",
+    );
+    assert!(setup.status.success(), "{:?}", setup.stderr);
+    let profile: Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+    assert!(profile.get("work_slot_bindings").is_none());
+    assert!(profile.get("advice_command").is_none());
+    assert_eq!(profile["extra"]["advice"]["enabled"], true);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&setup.stdout).unwrap(),
+        profile
+    );
+    for command in [
+        "run-plan-graph",
+        "run-validation",
+        "validation-command",
+        "stdin-exec",
+    ] {
+        assert_eq!(invoke(&[command], b"").status.code(), Some(2));
+    }
+    for flag in [
+        "--roster",
+        "--engine",
+        "--provider",
+        "--advice-config",
+        "--implementation",
+    ] {
+        assert_eq!(
+            invoke(&["setup", flag, "/bin/true"], b"").status.code(),
+            Some(2)
+        );
+    }
+    fs::remove_dir_all(root).unwrap();
 }

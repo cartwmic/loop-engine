@@ -124,7 +124,7 @@ pub fn select(
         .filter_map(|t| t.get("id").and_then(Value::as_str))
         .collect();
     if let Some(task) = task_id {
-        if slot_id != "implement" || (task != "summarizer" && !tasks.contains(task)) {
+        if slot_id != "implement" || !tasks.contains(task) {
             return Err(format!(
                 "unknown commission task `{task}` for slot `{slot_id}`"
             ));

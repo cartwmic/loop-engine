@@ -3,9 +3,7 @@
 //! This module only prepares requests from an explicit full-show selection. It
 //! neither launches the configured advisor nor decides or records its answers.
 
-use loop_core::{
-    AdviceAdmissibility, AdviceQuestion, AdviceRequest, AdviceScoreLevel, ADVICE_COMMAND_INPUT_KEY,
-};
+use loop_core::{AdviceAdmissibility, AdviceQuestion, AdviceRequest, AdviceScoreLevel};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -89,12 +87,14 @@ fn prepare(packet: PreparationPacket) -> Result<Value, String> {
         .get("initial_input")
         .and_then(Value::as_object)
         .ok_or("full show omitted frozen initial_input")?;
-    let advice_command = initial
-        .get(ADVICE_COMMAND_INPUT_KEY)
-        .ok_or("advice is disabled for this run; setup must configure a command")?;
-    let command: loop_core::AdviceCommandConfig = serde_json::from_value(advice_command.clone())
-        .map_err(|error| format!("frozen advice command is invalid: {error}"))?;
-    command.validate()?;
+    if initial
+        .get("extra")
+        .and_then(|v| v.pointer("/advice/enabled"))
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err("advice is disabled for this run".into());
+    }
 
     let family = packet
         .occasion_id
@@ -117,20 +117,9 @@ fn prepare(packet: PreparationPacket) -> Result<Value, String> {
     }
     let run_id = text(result, "run_id")?;
     let current_state = text(result, "current_state")?;
-    let mapped = initial
-        .get("advice_departures")
-        .and_then(|map| map.get("occasions"))
-        .and_then(Value::as_array)
-        .and_then(|rows| {
-            rows.iter().find(|row| {
-                row.get("occasion_id").and_then(Value::as_str) == Some(packet.occasion_id.as_str())
-            })
-        });
-    if mapped.is_none() {
-        return Err(format!(
-            "occasion `{}` is not in the frozen departure map",
-            packet.occasion_id
-        ));
+    let parts: Vec<_> = packet.occasion_id.split(':').collect();
+    if parts.len() != 3 || parts[1] != current_state || parts[2].is_empty() {
+        return Err("occasion must name the current state and an event".into());
     }
     let state_visit = result
         .get("state_visit")
@@ -1400,7 +1389,7 @@ mod tests {
                     "contract_version":3,"config_version":"high-rigor-11","artifact_root":root,
                     "advice_command":{"command":"/bin/true","args":[],"timeout_ms":500,
                         "max_request_bytes":4096,"max_response_bytes":4096},
-                    "extra":{"advice":{"occasion_map":families}},
+                    "extra":{"advice":{"enabled":true,"occasion_map":families}},
                     "advice_departures":{"version":1,"occasions":departures},
                     "review_policies":{"intent-review":[{"id":"solution-agnostic","description":"The intent states a product outcome.",
                         "example_prompt":"Judge the selected intent outcome.","review_stage":"aggregate","required_authors":2}]}

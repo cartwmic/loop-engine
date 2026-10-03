@@ -140,59 +140,40 @@ pub(crate) fn prepare(input: &Value) -> Result<Value, String> {
         additions.push(json!({"kind":"validation-command","record_id":format!("validation-{revision}-addition-{}",spec.id),"data":{"spec":spec}}));
         specs.push(spec);
     }
-    let indexes: Vec<String> =
-        serde_json::from_value(input["capture_indexes"].clone()).map_err(|e| e.to_string())?;
-    let settings = &input["execution_settings"];
-    let implementation = read(&root.join("implementation-report.json"))?;
     let intent = read(&root.join("intent.json"))?;
-    let prefix = format!("validation-{revision}");
+    let implementation = read(&root.join("implementation-report.json"))?;
     let author = author_identity(&input["author"])?;
+    let prefix = format!("validation-{revision}");
     let mut report = json!({"revision":revision,"author":author,"implementation_revision":implementation["revision"],"command_evidence_ids":[],"criteria":[],"goal_verdict_ids":[]});
-    let mut diagnostics = vec![];
+    let results = input["command_results"]
+        .as_array()
+        .ok_or("missing command_results array")?;
     let mut candidates = vec![];
+    let mut diagnostics = vec![];
     for spec in &specs {
-        let id = format!("{prefix}-command-{}", spec.id);
+        let id = format!("validation-{revision}-command-{}", spec.id);
         report["command_evidence_ids"]
             .as_array_mut()
             .unwrap()
             .push(json!(id));
-        let row = capture_row(spec, settings)?;
-        let mut valid = vec![];
-        for index in &indexes {
-            let path = match contained(root, Path::new(index)) {
-                Ok(path) => path,
-                Err(error) => {
-                    diagnostics.push(format!("{}: {error}", spec.id));
-                    continue;
-                }
-            };
-            let selection = match read(&path) {
-                Ok(value) => value,
-                Err(error) => {
-                    diagnostics.push(format!("{}: {error}", spec.id));
-                    continue;
-                }
-            };
-            if !selection["receipts"]
-                .as_array()
-                .is_some_and(|r| r.iter().any(|s| s["id"] == spec.id))
-            {
-                continue;
-            }
-            match loop_integrations::proof_metadata::verify_selected(&path, &row, cwd) {
-                Ok(_) => valid.push(path),
-                Err(e) => diagnostics.push(format!("{}: {e}", spec.id)),
-            }
-        }
-        if valid.len() != 1 {
-            diagnostics.push(format!(
-                "{}: expected one valid selected receipt, got {}",
-                spec.id,
-                valid.len()
-            ));
+        let selected: Vec<_> = results.iter().filter(|r| r["id"] == spec.id).collect();
+        if selected.len() != 1 {
+            diagnostics.push(json!({"proof_id":spec.id,"status":"missing-or-duplicate"}));
             continue;
         }
-        candidates.push(json!({"kind":"command-evidence","record_id":id,"data":{"proof_id":spec.id,"spec":spec,"execution_settings":settings,"capture":{"format":"common-capture-v1","index":valid[0]}}}));
+        let result = selected[0];
+        verify_external_shape(result, spec)?;
+        let identity = crate::source_identity::read(Path::new(text(result, "cwd")?))?;
+        if result["source"]["head"] != identity["head"]
+            || result["source"]["state_sha256"] != identity["state_sha256"]
+        {
+            diagnostics.push(json!({"proof_id":spec.id,"status":"stale-source"}));
+        } else if result["exit_code"] != 0 {
+            diagnostics.push(json!({"proof_id":spec.id,"status":"failed"}));
+        }
+        let mut external_result = result.clone();
+        external_result["external"] = json!(true);
+        candidates.push(json!({"kind":"command-evidence","record_id":id,"data":{"proof_id":spec.id,"spec":spec,"external_result":external_result}}));
     }
     let mut batches = vec![];
     for criterion in current_criteria(&intent)? {
@@ -234,6 +215,50 @@ pub(crate) fn prepare(input: &Value) -> Result<Value, String> {
     )
 }
 
+fn verify_external_shape(result: &Value, spec: &ProofCommand) -> Result<(), String> {
+    if result["id"] != spec.id
+        || result["command"] != spec.command
+        || result["args"] != json!(spec.args)
+    {
+        return Err("external command result does not match proof command".into());
+    }
+    let cwd = Path::new(text(result, "cwd")?);
+    if !cwd.is_absolute() || !cwd.is_dir() || result["exit_code"].as_i64().is_none() {
+        return Err("external result requires existing absolute cwd and integer exit_code".into());
+    }
+    let producer = &result["producer"];
+    if [text(producer, "name")?, text(producer, "kind")?]
+        .iter()
+        .any(|v| v.to_ascii_lowercase().contains("engine"))
+    {
+        return Err("external producer must not claim engine execution".into());
+    }
+    text(&result["source"], "head")?;
+    text(&result["source"], "state_sha256")?;
+    if result["source"]
+        .get("scope")
+        .is_some_and(|scope| !scope.is_string())
+    {
+        return Err("source.scope must be a string".into());
+    }
+    if !["stdout", "stdout_ref", "stderr", "stderr_ref"]
+        .iter()
+        .any(|key| result[*key].is_string())
+    {
+        return Err("external result requires output text or reference".into());
+    }
+    for key in ["stdout", "stderr", "stdout_ref", "stderr_ref"] {
+        if let Some(value) = result.get(key) {
+            if !value.is_string()
+                || (key.ends_with("_ref") && value.as_str().unwrap().trim().is_empty())
+            {
+                return Err(format!("invalid {key}"));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn contained(root: &Path, path: &Path) -> Result<std::path::PathBuf, String> {
     let path =
         fs::canonicalize(path).map_err(|e| format!("missing capture {}: {e}", path.display()))?;
@@ -250,6 +275,37 @@ fn command_evidence(
     current_repository: Option<&Value>,
     require_pass: bool,
 ) -> Result<Value, String> {
+    if let Some(result) = data.get("external_result") {
+        let spec: ProofCommand =
+            serde_json::from_value(data["spec"].clone()).map_err(|e| e.to_string())?;
+        if expected.is_some_and(|expected| expected != &spec) || data["proof_id"] != spec.id {
+            return Err("external result differs from effective proof obligation".into());
+        }
+        if result["external"] != true
+            || data.get("origin").is_some()
+            || data.get(loop_core::ENGINE_ORIGIN_KEY).is_some()
+        {
+            return Err("external command evidence must not claim engine origin".into());
+        }
+        verify_external_shape(result, &spec)?;
+        let cwd = Path::new(text(result, "cwd")?);
+        let evaluation_cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+        if checkpoint::repository_identity(cwd)?
+            != checkpoint::repository_identity(&evaluation_cwd)?
+        {
+            return Err("external result is not from the checkpoint repository".into());
+        }
+        let identity = crate::source_identity::read(cwd)?;
+        if result["source"]["head"] != identity["head"]
+            || result["source"]["state_sha256"] != identity["state_sha256"]
+        {
+            return Err("stale-source: external command result identity changed".into());
+        }
+        if require_pass && result["exit_code"] != 0 {
+            return Err("failed external command result".into());
+        }
+        return Ok(result.clone());
+    }
     if data["capture"]["format"] == "common-capture-v1" {
         let declared: ProofCommand =
             serde_json::from_value(data["spec"].clone()).map_err(|e| e.to_string())?;
@@ -869,6 +925,29 @@ pub(crate) fn evaluate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn external_result_shape_requires_attribution_output_and_integer_status() {
+        let spec: ProofCommand = serde_json::from_value(json!({"id":"proof","command":"cargo","args":["test"],"owner":"driver","obligation":"outcome"})).unwrap();
+        let result = json!({"id":"proof","command":"cargo","args":["test"],"cwd":std::env::current_dir().unwrap(),"exit_code":0,"stdout_ref":"driver.log","producer":{"name":"local-driver","kind":"external"},"source":{"head":"head","state_sha256":"sha256:digest"}});
+        verify_external_shape(&result, &spec).unwrap();
+        for (field, value) in [
+            ("exit_code", json!(0.5)),
+            ("producer", json!({"name":"loop-engine","kind":"script"})),
+            ("producer", json!({"name":"driver","kind":""})),
+            ("stdout_ref", json!("")),
+            ("args", json!(["wrong"])),
+        ] {
+            let mut bad = result.clone();
+            bad[field] = value;
+            assert!(verify_external_shape(&bad, &spec).is_err(), "{field}");
+        }
+        let mut missing = result;
+        missing.as_object_mut().unwrap().remove("stdout_ref");
+        assert!(verify_external_shape(&missing, &spec).is_err());
+        missing["stdout"] = json!("");
+        verify_external_shape(&missing, &spec).unwrap();
+    }
+
     #[test]
     fn recovery_criterion_named_commands_are_closed_not_shell_prose() {
         let command = json!({"id":"proof","command":"cargo","args":["test"],"owner":"driver","obligation":"retained outcome"});

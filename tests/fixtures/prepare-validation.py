@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
-"""Prepare the validation fixture from one real common-capture matrix.
+"""External fixture driver: execute proof commands and submit attributed results.
 
-Only tests call this helper.  It executes the commissioned proof commands
-through loop-engine's existing capture-matrix path, then asks the provider's
-inert prepare-validation command to index those fresh receipts.  It never
-appends, advances, or claims semantic review.
+Synthetic judgments exercise schema/checkpoint mechanics, not semantic review.
 """
 import argparse
 import json
@@ -48,71 +45,36 @@ def _proof_commands(provider, show):
     return commands
 
 
-def _capture_matrix(engine, root, cwd, commands, revision):
-    matrix = {
-        "rows": [
-            {
-                "id": command["id"],
-                "argv": [command["command"], *command["args"]],
-                "environment": {},
-                "inherit_environment": [],
-                "timeout_ms": CAPTURE_TIMEOUT_MS,
-                "obligations": [command["obligation"]],
-            }
-            for command in commands
-        ]
-    }
-    matrix_path = root / f"validation-capture-matrix-{revision}.json"
-    capture_root = root / f"validation-capture-matrix-{revision}"
-    matrix_path.write_text(json.dumps(matrix, indent=2) + "\n")
-    # The report is intentionally invalidated before fresh admission.  A
-    # failed matrix therefore cannot leave an older passing report current.
-    (root / "validation-report.json").unlink(missing_ok=True)
-    result = subprocess.run(
-        [
-            str(engine),
-            "capture-matrix",
-            "--matrix",
-            str(matrix_path),
-            "--working-directory",
-            str(cwd),
-            "--output-dir",
-            str(capture_root),
-        ],
-        cwd=cwd,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    (root / "validation-capture-matrix.stdout").write_text(result.stdout)
-    (root / "validation-capture-matrix.stderr").write_text(result.stderr)
-    if result.returncode:
-        raise RuntimeError(
-            f"capture-matrix failed ({result.returncode}): {result.stdout}\n{result.stderr}"
+def _command_results(provider, cwd, commands):
+    results = []
+    for command in commands:
+        source = _run_json([provider, "source-identity", "--working-directory", cwd])
+        completed = subprocess.run(
+            [command["command"], *command["args"]], cwd=cwd,
+            capture_output=True, text=True, check=False, timeout=CAPTURE_TIMEOUT_MS / 1000,
         )
-    index = capture_root / "index.json"
-    if not index.is_file():
-        raise RuntimeError(f"capture-matrix omitted its index: {index}")
-    return matrix, capture_root, index
+        results.append({
+            "id": command["id"], "command": command["command"], "args": command["args"],
+            "cwd": str(cwd), "exit_code": completed.returncode,
+            "stdout": completed.stdout, "stderr": completed.stderr,
+            "producer": {"name": "validation-fixture-driver", "kind": "script"},
+            "source": source,
+        })
+    return results
 
 
 def prepare(provider, engine, cwd, show, revision):
     root = Path(show["result"]["initial_input"]["artifact_root"])
     cwd = Path(cwd).resolve()
     commands = _proof_commands(provider, show)
-    matrix, capture_root, capture_index = _capture_matrix(engine, root, cwd, commands, revision)
-    settings = {
-        "environment": {},
-        "inherit_environment": [],
-        "timeout_ms": CAPTURE_TIMEOUT_MS,
-    }
+    (root / "validation-report.json").unlink(missing_ok=True)
+    results = _command_results(provider, cwd, commands)
     packet = {
         "show": show,
         "working_directory": str(cwd),
         "revision": revision,
         "author": {"name": "software-change journey", "kind": "script"},
-        "capture_indexes": [str(capture_index)],
-        "execution_settings": settings,
+        "command_results": results,
         "additions": [],
     }
     prepared = _run_json(
@@ -178,9 +140,7 @@ def prepare(provider, engine, cwd, show, revision):
         "report": report,
         "records": complete_records,
         "execution": prepared,
-        "matrix": matrix,
-        "capture_root": str(capture_root),
-        "capture_index": str(capture_index),
+        "command_results": results,
         "checkpoint": checkpoint,
     }
 

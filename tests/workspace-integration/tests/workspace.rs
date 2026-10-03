@@ -41,8 +41,6 @@ mod research_shipped_data;
 mod software_change_cli;
 #[path = "../../../crates/software-change-provider/tests/contracts.rs"]
 mod software_change_contracts;
-#[path = "../../../crates/software-change-provider/tests/plan_graph.rs"]
-mod software_change_plan_graph;
 #[path = "../../../crates/software-change-provider/tests/provider.rs"]
 mod software_change_provider;
 #[path = "../../../crates/software-change-provider/tests/recovery_dispatch.rs"]

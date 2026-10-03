@@ -4,7 +4,7 @@ use super::support;
 use loop_core::{OperationOutcome, TransitionKind};
 use serde_json::{json, Value};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use support::{metadata_schema, provider_binary, valid_metadata, Engine, TestDir};
 
@@ -771,45 +771,8 @@ fn append_review_records(
     }));
 }
 
-fn selected_validation_paths(context: &Value) -> (PathBuf, PathBuf) {
-    let evidence = context["context"]
-        .as_array()
-        .expect("validation context")
-        .iter()
-        .find(|record| record["kind"] == "command-evidence")
-        .expect("command evidence");
-    let index_path = PathBuf::from(
-        evidence["data"]["capture"]["index"]
-            .as_str()
-            .expect("capture index"),
-    );
-    let index: Value =
-        serde_json::from_slice(&fs::read(&index_path).expect("read validation capture index"))
-            .expect("validation capture index JSON");
-    let receipt = index["receipts"]
-        .as_array()
-        .and_then(|receipts| receipts.first())
-        .and_then(|row| row["receipt"].as_str())
-        .expect("selected receipt");
-    let receipt_path = PathBuf::from(receipt);
-    let receipt_path = if receipt_path.is_absolute() {
-        receipt_path
-    } else {
-        index_path
-            .parent()
-            .expect("capture index parent")
-            .join(receipt_path)
-    };
-    let receipt_value: Value =
-        serde_json::from_slice(&fs::read(&receipt_path).expect("read validation receipt"))
-            .expect("validation receipt JSON");
-    let stdout = receipt_value["stdout"].as_str().expect("receipt stdout");
-    let stdout_path = receipt_path.parent().expect("receipt parent").join(stdout);
-    (receipt_path, stdout_path)
-}
-
 #[test]
-fn validation_rechecks_changed_capture_and_reference_inputs_on_each_public_call() {
+fn validation_rechecks_external_results_and_reference_inputs_on_each_public_call() {
     let artifacts = TestDir::new("validation-cache-artifacts");
     let repository = TestDir::new("validation-cache-repository");
     init_validation_repository(repository.path());
@@ -935,32 +898,26 @@ fn validation_rechecks_changed_capture_and_reference_inputs_on_each_public_call(
         json!({"result": "allow"})
     );
 
-    let (receipt_path, stdout_path) = selected_validation_paths(&request);
-    let stdout = fs::read(&stdout_path).expect("selected stdout");
-    let mut altered_stdout = stdout.clone();
-    altered_stdout.extend_from_slice(b"tampered");
-    fs::write(&stdout_path, altered_stdout).expect("alter selected stdout");
-    assert_validation_denied(
-        &request,
-        repository.path(),
-        "software-change-criterion-incomplete",
-    );
-    fs::write(&stdout_path, stdout).expect("restore selected stdout");
-
-    let receipt = fs::read(&receipt_path).expect("selected receipt");
-    let mut altered_receipt: Value = serde_json::from_slice(&receipt).expect("receipt JSON");
-    altered_receipt["id"] = json!("tampered-receipt");
-    fs::write(
-        &receipt_path,
-        serde_json::to_vec(&altered_receipt).expect("altered receipt JSON"),
-    )
-    .expect("alter selected receipt");
-    assert_validation_denied(
-        &request,
-        repository.path(),
-        "software-change-criterion-incomplete",
-    );
-    fs::write(&receipt_path, receipt).expect("restore selected receipt");
+    for (field, value) in [
+        ("exit_code", json!(1)),
+        ("command", json!("wrong-command")),
+        ("producer", json!({"name":"loop-engine","kind":"script"})),
+        ("source", json!({"head":"stale","state_sha256":"stale"})),
+    ] {
+        let mut altered = request.clone();
+        let record = altered["context"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|r| r["kind"] == "command-evidence")
+            .unwrap();
+        record["data"]["external_result"][field] = value;
+        assert_validation_denied(
+            &altered,
+            repository.path(),
+            "software-change-criterion-incomplete",
+        );
+    }
 
     let marker = repository.path().join("marker.txt");
     let marker_bytes = fs::read(&marker).expect("read marker");

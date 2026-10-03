@@ -219,44 +219,6 @@ fn t10_context_record(show: &mut Value, id: &str, data: Value) {
 }
 
 #[test]
-fn backlog_t10_run_plan_graph_rejects_multiline_task_worker_before_dagu() {
-    let working_directory = std::env::current_dir().expect("current directory");
-    let marker = std::env::temp_dir().join(format!(
-        "software-change-backlog-t10-task-worker-marker-{}",
-        std::process::id()
-    ));
-    let _ = fs::remove_file(&marker);
-    let worker = json!({
-        "command": "/bin/sh",
-        "args": ["-c", format!("touch '{}'\n", marker.display())]
-    })
-    .to_string();
-
-    let output = Command::new(workspace_integration::binary("software-change"))
-        .args([
-            "run-plan-graph",
-            "--working-directory",
-            working_directory.to_str().expect("working directory UTF-8"),
-            "--task-worker",
-            &worker,
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .expect("run-plan-graph process");
-
-    assert_eq!(
-        output.status.code(),
-        Some(2),
-        "unexpected output: {output:?}"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("line break"), "unexpected stderr: {stderr}");
-    assert!(!stderr.contains("dagu start"), "Dagu was reached: {stderr}");
-    assert!(!marker.exists(), "malformed task worker was started");
-    let _ = fs::remove_file(&marker);
-}
-
-#[test]
 fn backlog_t10_prepare_validation_addition_is_publicly_appendable_and_collected() {
     let root = t10_temp_root();
     let repository = t10_repository(root.path());
@@ -383,64 +345,40 @@ fn backlog_t10_prepare_validation_addition_is_publicly_appendable_and_collected(
     assert_eq!(forged["code"], "selected-output-linkage-refused");
     assert!(forged["message"].as_str().unwrap().contains("`command`"));
 
-    let matrix_path = actual_artifact_root.join("t10-capture-matrix.json");
-    let capture_root = actual_artifact_root.join("t10-capture");
-    write_json(
-        &matrix_path,
-        &json!({
-            "rows": [
-                {
-                    "id": required["id"],
-                    "argv": [required["command"], required["args"][0], required["args"][1]],
-                    "environment": {},
-                    "inherit_environment": [],
-                    "timeout_ms": 120000,
-                    "obligations": [required["obligation"]]
-                },
-                {
-                    "id": extra["id"],
-                    "argv": [extra["command"], extra["args"][0], extra["args"][1], extra["args"][2]],
-                    "environment": {},
-                    "inherit_environment": [],
-                    "timeout_ms": 120000,
-                    "obligations": [extra["obligation"]]
-                }
-            ]
-        }),
-    );
-    let capture = Command::new(t10_engine())
-        .current_dir(&repository)
-        .args([
-            "capture-matrix",
-            "--matrix",
-            matrix_path.to_str().expect("matrix"),
-            "--working-directory",
-            repository.to_str().expect("repository"),
-            "--output-dir",
-            capture_root.to_str().expect("capture root"),
-        ])
-        .output()
-        .expect("capture matrix");
-    assert!(
-        capture.status.success(),
-        "capture matrix failed: stdout={:?}, stderr={:?}",
-        capture.stdout,
-        capture.stderr
-    );
-    let capture_index = capture_root.join("index.json");
-    assert!(capture_index.is_file(), "capture index missing");
-    assert_eq!(
-        fs::read_to_string(&marker).expect("prepared extra output"),
-        "extra\n"
-    );
+    let mut results = Vec::new();
+    for spec in [&required, &extra] {
+        let identity = provider_json(
+            &repository,
+            &[
+                "source-identity".into(),
+                "--working-directory".into(),
+                repository.to_str().unwrap().into(),
+            ],
+            &json!({}),
+        );
+        let output = Command::new(spec["command"].as_str().unwrap())
+            .args(
+                spec["args"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|a| a.as_str().unwrap()),
+            )
+            .current_dir(&repository)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        results.push(json!({"id":spec["id"],"command":spec["command"],"args":spec["args"],"cwd":repository,"exit_code":output.status.code().unwrap(),"stdout":String::from_utf8(output.stdout).unwrap(),"stderr":String::from_utf8(output.stderr).unwrap(),"producer":{"name":"backlog-t10-driver","kind":"script"},"source":identity}));
+    }
+    // The extra command writes outside the repository, so both sources remain current.
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "extra\n");
 
     let preparation_packet = json!({
         "show": validation_show,
         "working_directory": repository,
         "revision": "validation-t10",
         "author": {"name": "backlog_t10", "kind": "script"},
-        "capture_indexes": [capture_index],
-        "execution_settings": {"environment": {}, "inherit_environment": [], "timeout_ms": 120000},
+        "command_results": results,
         "additions": [extra]
     });
     let prepared_output = provider_output(
@@ -468,8 +406,7 @@ fn backlog_t10_prepare_validation_addition_is_publicly_appendable_and_collected(
         "working_directory": repository,
         "revision": "validation-t10-duplicate",
         "author": {"name": "backlog_t10", "kind": "script"},
-        "capture_indexes": [capture_index],
-        "execution_settings": {"environment": {}, "inherit_environment": [], "timeout_ms": 120000},
+        "command_results": results,
         "additions": [required]
     });
     let duplicate_output = provider_output(
@@ -512,42 +449,18 @@ fn backlog_t10_prepare_validation_addition_is_publicly_appendable_and_collected(
         "python3"
     );
 
-    // Execute the newly commissioned command through the public validation
-    // runner, then append the real captured command-evidence record.
-    let run_output = provider_output(
-        &repository,
-        &[
-            "run-validation".into(),
-            "--engine".into(),
-            t10_engine().to_string_lossy().into_owned(),
-            "--working-directory".into(),
-            repository.to_string_lossy().into_owned(),
-            "--revision".into(),
-            "validation-t10-execution".into(),
-            "--commands".into(),
-            "extra-proof".into(),
-        ],
-        &t10_show(&database, &repository, run_id),
+    // External preparation is inert; the driver writes the index and appends
+    // the genuine externally executed evidence without asking the provider to run.
+    write_json(
+        &actual_artifact_root.join("validation-report.json"),
+        &prepared["report_draft"],
     );
-    assert_eq!(
-        run_output.status.code(),
-        Some(0),
-        "run-validation failed: {:?}",
-        run_output.stderr
-    );
-    let executed: Value = serde_json::from_slice(&run_output.stdout).expect("run-validation JSON");
-    assert_eq!(executed["commands_passed"], true);
-    assert_eq!(executed["command_candidates"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        executed["command_candidates"][0]["data"]["proof_id"],
-        "extra-proof"
-    );
-    assert_eq!(
-        fs::read_to_string(&marker).expect("executed extra output"),
-        "extra\nextra\n"
-    );
-
-    let candidate = &executed["command_candidates"][0];
+    let candidate = prepared["command_candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["data"]["proof_id"] == "extra-proof")
+        .unwrap();
     t10_append(
         &database,
         &repository,
@@ -661,19 +574,4 @@ fn backlog_t10_prepare_validation_addition_is_publicly_appendable_and_collected(
     );
     assert_eq!(blank_commission.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&blank_commission.stderr).contains("blank fields"));
-}
-
-#[test]
-fn backlog_t10_run_plan_graph_help_is_discoverable_without_a_working_directory() {
-    let output = Command::new(workspace_integration::binary("software-change"))
-        .args(["run-plan-graph", "--help"])
-        .output()
-        .expect("run-plan-graph help");
-
-    assert!(output.status.success(), "help failed: {output:?}");
-    assert!(output.stderr.is_empty(), "help wrote stderr: {output:?}");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Usage: software-change run-plan-graph"));
-    assert!(stdout.contains("existing absolute working directory"));
-    assert!(stdout.contains("mandatory summarizer"));
 }

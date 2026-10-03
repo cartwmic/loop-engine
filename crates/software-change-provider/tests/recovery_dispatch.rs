@@ -82,45 +82,6 @@ fn recovery_steering_public_commission_and_delivery() {
 }
 
 #[test]
-fn recovery_batch_public_capture_candidates_and_confirmation() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let work = std::env::temp_dir().join(format!("recovery-batch-central-{}", std::process::id()));
-    let output = Command::new("python3")
-        .current_dir(&root)
-        .args([
-            "scripts/software-change-journey.py",
-            "--mode",
-            "source",
-            "--engine",
-        ])
-        .arg(workspace_integration::binary("loop-engine"))
-        .arg("--provider")
-        .arg(workspace_integration::binary("software-change"))
-        .args(["--data-root", ".", "--work-root"])
-        .arg(&work)
-        .args([
-            "--profile",
-            "crates/software-change-provider/data/configs/high-rigor.json",
-            "--traversal-depth",
-            "full",
-            "--scenario",
-            "batched-review",
-        ])
-        .output()
-        .expect("public batched-review journey");
-    assert!(
-        output.status.success(),
-        "stdout={} stderr={} captures={}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-        work.display()
-    );
-    assert!(
-        String::from_utf8_lossy(&output.stdout).contains("recovery batched-review scenario passed")
-    );
-}
-
-#[test]
 fn recovery_criterion_public_commands_checkpoint_repair_carry_and_terminal() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let work =

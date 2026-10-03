@@ -7,8 +7,9 @@ mod artifacts;
 mod checkpoint;
 mod config;
 mod criterion;
-mod dagu;
 mod evidence;
+// Retain task-routing ledger projections for external-driver policy consumers.
+#[allow(dead_code)]
 mod finding_ledger;
 mod gates;
 mod overlay;
@@ -16,25 +17,17 @@ mod protocol;
 mod recovery_contract;
 mod review_batch;
 mod review_candidates;
-mod run_plan_graph;
 mod schema;
+mod source_identity;
 mod validation;
 mod workflow;
 
 use protocol::{DescribeRequest, EvaluateRequest};
-use run_plan_graph::{parse_run_plan_graph_args, MAX_CONCURRENCY};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{self, Command, Stdio};
-
-const STDIN_EXEC_USAGE: &str =
-    "usage: software-change stdin-exec --stdin-file ABS --exit-mode sidecar|propagate [--sidecar-file ABS] -- COMMAND [ARG]...";
-const RUN_PLAN_GRAPH_USAGE: &str =
-    "software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--task ID ... | --tasks ID,ID,...] [--max-active N]";
-const EXIT_STDIN_EXEC_ERROR: i32 = 20;
 
 fn main() {
     std::process::exit(run());
@@ -97,6 +90,22 @@ fn run() -> i32 {
                 }
             };
             return software_change_provider::setup::run_from_args(&rest);
+        }
+        Some(command) if command == "source-identity" => {
+            let rest = match args
+                .map(|arg| arg.into_string())
+                .collect::<Result<Vec<_>, _>>()
+            {
+                Ok(rest) => rest,
+                Err(_) => return 2,
+            };
+            return match source_identity::run(&rest) {
+                Ok(value) => write_json(&value),
+                Err(error) => {
+                    eprintln!("source-identity: {error}");
+                    2
+                }
+            };
         }
         Some(command) if command == "prepare-validation" => {
             if args.next().is_some() {
@@ -177,52 +186,6 @@ fn run() -> i32 {
                     eprintln!(
                         "{error}; usage: software-change checkpoint --phase implementation|validation --artifact-root ABS --working-directory ABS"
                     );
-                    2
-                }
-            };
-        }
-        Some(command) if command == "run-plan-graph" => {
-            let rest = match args
-                .map(|token| token.into_string())
-                .collect::<Result<Vec<String>, _>>()
-            {
-                Ok(rest) => rest,
-                Err(_) => {
-                    eprintln!(
-                        "run-plan-graph arguments must be valid UTF-8; usage: software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--task ID ... | --tasks ID,ID,...] [--max-active N]"
-                    );
-                    return 2;
-                }
-            };
-            if rest.len() == 1 && matches!(rest[0].as_str(), "--help" | "-h") {
-                println!(
-                    "Usage: {RUN_PLAN_GRAPH_USAGE} [--help]\n\nExecute the plan graph in the existing absolute working directory.\nThe command runs selected tasks and the mandatory summarizer through Dagu."
-                );
-                return 0;
-            }
-            return match parse_run_plan_graph_args(&rest) {
-                Ok(parsed) => run_plan_graph::execute(&parsed),
-                Err(error) => {
-                    eprintln!("{error}; usage: {RUN_PLAN_GRAPH_USAGE}");
-                    2
-                }
-            };
-        }
-        Some(command) if command == "stdin-exec" => {
-            let rest = match args
-                .map(|token| token.into_string())
-                .collect::<Result<Vec<String>, _>>()
-            {
-                Ok(rest) => rest,
-                Err(_) => {
-                    eprintln!("stdin-exec arguments must be valid UTF-8; {STDIN_EXEC_USAGE}");
-                    return 2;
-                }
-            };
-            return match parse_stdin_exec_args(&rest) {
-                Ok(parsed) => execute_stdin_exec(parsed),
-                Err(error) => {
-                    eprintln!("{error}; {STDIN_EXEC_USAGE}");
                     2
                 }
             };
@@ -317,29 +280,13 @@ fn bookends_preview_from_args(args: &[String]) -> i32 {
 }
 
 fn provider_help() -> i32 {
-    println!(
-        "software-change\n\nUsage:\n  software-change < stdin\n  software-change data-dump DIR\n  software-change bookends-preview --working-directory ABS\n  software-change setup (--rigor minimal|standard|high | --profile PATH) --roster PATH --engine ABS --provider ABS --output PATH (--advice-config PATH | --decline-advice) [--bookends] [--implementation PATH]\n  software-change advice-request < packet.json\n  software-change checkpoint [--json] --phase implementation|validation --artifact-root ABS --working-directory ABS\n  software-change review-candidates\n  software-change prepare-validation < packet.json\n  software-change commission [--slot SLOT] [--task TASK] [--stage individual|aggregate] [--call-budgets JSON]\n  software-change run-validation --engine ABS --working-directory ABS --revision REV [--commands ID,...] [--timeout-ms N]\n  software-change run-plan-graph --working-directory ABS [--task-worker JSON] [--task ID ... | --tasks ID,ID,...] [--max-active N]\n  software-change --help | -h\n  software-change --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nReview candidates:\n  review-candidates  read one completed `show` JSON envelope from stdin and emit inert selected-review candidates\n  advice-request     prepare evidence-selected, provider-owned typed questions from a completed full-show selection; performs no advice call or disposition\n\nData and pre-plan preview:\n  data-dump  materialize embedded provider data under DIR\n  bookends-preview  read-only inspect of Bookends prerequisites; runs no tests or gate\n\nPlan graph:\n  run-plan-graph  requires --working-directory ABS (one existing driver-selected directory for every selected task and summarizer; no Git/worktree management) and executes plan.json as a Dagu type:graph (--max-active N; omitted means {MAX_CONCURRENCY} ordinary tasks) with a mandatory summarizer"
-    );
+    println!("software-change\n\nCommands: data-dump, bookends-preview, setup, advice-request, checkpoint, review-candidates, prepare-validation, commission, source-identity\nStdin operations: describe, evaluate\nsetup (--rigor minimal|standard|high | --profile FILE) --output FILE (--enable-advice | --decline-advice) [--bookends]");
     0
 }
 
 fn data_dump_usage(message: &str) -> i32 {
     eprintln!("{message}; usage: software-change data-dump DIR");
     2
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum StdinExecExitMode {
-    Sidecar,
-    Propagate,
-}
-
-struct StdinExecArgs {
-    stdin_file: PathBuf,
-    exit_mode: StdinExecExitMode,
-    sidecar_file: Option<PathBuf>,
-    command: String,
-    args: Vec<String>,
 }
 
 struct CheckpointArgs {
@@ -433,233 +380,6 @@ fn parse_checkpoint_args(args: &[String]) -> Result<CheckpointArgs, String> {
         artifact_root,
         working_directory,
     })
-}
-
-fn parse_stdin_exec_args(args: &[String]) -> Result<StdinExecArgs, String> {
-    let mut stdin_file = None;
-    let mut exit_mode = None;
-    let mut sidecar_file = None;
-    let mut command = Vec::new();
-    let mut after_options = false;
-    let mut index = 0;
-    while index < args.len() {
-        let token = &args[index];
-        if !after_options && token == "--" {
-            after_options = true;
-            index += 1;
-            continue;
-        }
-        if !after_options {
-            if let Some(value) = take_option_value(args, &mut index, token, "--stdin-file")? {
-                stdin_file = Some(value);
-                continue;
-            }
-            if let Some(value) = take_option_value(args, &mut index, token, "--exit-mode")? {
-                exit_mode = Some(value);
-                continue;
-            }
-            if let Some(value) = take_option_value(args, &mut index, token, "--sidecar-file")? {
-                sidecar_file = Some(value);
-                continue;
-            }
-            if token.starts_with('-') {
-                return Err(format!("unknown option `{token}`"));
-            }
-        }
-        command.push(token.clone());
-        index += 1;
-    }
-
-    let stdin_file = stdin_file.ok_or_else(|| "missing --stdin-file path".to_owned())?;
-    let exit_mode_raw = exit_mode.ok_or_else(|| "missing --exit-mode".to_owned())?;
-    let exit_mode = match exit_mode_raw.as_str() {
-        "sidecar" => StdinExecExitMode::Sidecar,
-        "propagate" => StdinExecExitMode::Propagate,
-        other => {
-            return Err(format!(
-                "unknown --exit-mode `{other}`; expected sidecar or propagate"
-            ))
-        }
-    };
-    match exit_mode {
-        StdinExecExitMode::Sidecar => {
-            if sidecar_file.is_none() {
-                return Err("sidecar mode requires --sidecar-file".to_owned());
-            }
-        }
-        StdinExecExitMode::Propagate => {
-            if sidecar_file.is_some() {
-                return Err("--sidecar-file is rejected in propagate mode".to_owned());
-            }
-        }
-    }
-    let mut command = command.into_iter();
-    let program = command.next().ok_or_else(|| "missing COMMAND".to_owned())?;
-    Ok(StdinExecArgs {
-        stdin_file: PathBuf::from(stdin_file),
-        exit_mode,
-        sidecar_file: sidecar_file.map(PathBuf::from),
-        command: program,
-        args: command.collect(),
-    })
-}
-
-fn take_option_value(
-    args: &[String],
-    index: &mut usize,
-    token: &str,
-    name: &str,
-) -> Result<Option<String>, String> {
-    if token == name {
-        let value = args
-            .get(*index + 1)
-            .ok_or_else(|| format!("missing value for {name}"))?;
-        *index += 2;
-        return Ok(Some(value.clone()));
-    }
-    let prefix = format!("{name}=");
-    if let Some(value) = token.strip_prefix(&prefix) {
-        *index += 1;
-        return Ok(Some(value.to_owned()));
-    }
-    Ok(None)
-}
-
-const PI_CODING_AGENT_SESSION_DIR: &str = "PI_CODING_AGENT_SESSION_DIR";
-
-/// When `PI_CODING_AGENT_SESSION_DIR` is already present in the inherited
-/// environment, leave it unchanged. Otherwise, if `--stdin-file` has a non-empty
-/// parent, create `<parent>/sessions` and return that absolute path for the child.
-fn prepare_child_session_dir(stdin_file: &Path) -> Result<Option<PathBuf>, String> {
-    if std::env::var_os(PI_CODING_AGENT_SESSION_DIR).is_some() {
-        return Ok(None);
-    }
-    let Some(parent) = stdin_file.parent() else {
-        return Ok(None);
-    };
-    if parent.as_os_str().is_empty() {
-        return Ok(None);
-    }
-    let sessions = parent.join("sessions");
-    fs::create_dir_all(&sessions).map_err(|error| {
-        format!(
-            "could not create sessions directory {}: {error}",
-            sessions.display()
-        )
-    })?;
-    if sessions.is_absolute() {
-        return Ok(Some(sessions));
-    }
-    let cwd = std::env::current_dir().map_err(|error| {
-        format!("could not resolve current directory for sessions path: {error}")
-    })?;
-    Ok(Some(cwd.join(sessions)))
-}
-
-fn execute_stdin_exec(args: StdinExecArgs) -> i32 {
-    let stdin = match fs::File::open(&args.stdin_file) {
-        Ok(file) => file,
-        Err(error) => {
-            return stdin_exec_failed(
-                format!(
-                    "could not open --stdin-file {}: {error}",
-                    args.stdin_file.display()
-                ),
-                EXIT_STDIN_EXEC_ERROR,
-            )
-        }
-    };
-    let session_dir = match prepare_child_session_dir(&args.stdin_file) {
-        Ok(path) => path,
-        Err(message) => return stdin_exec_failed(message, EXIT_STDIN_EXEC_ERROR),
-    };
-    let mut command = Command::new(&args.command);
-    command
-        .args(&args.args)
-        .stdin(Stdio::from(stdin))
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
-    if let Some(session_dir) = session_dir.as_ref() {
-        command.env(PI_CODING_AGENT_SESSION_DIR, session_dir);
-    }
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            return stdin_exec_failed(
-                format!("could not spawn `{}`: {error}", args.command),
-                EXIT_STDIN_EXEC_ERROR,
-            )
-        }
-    };
-    let status = match child.wait() {
-        Ok(status) => status,
-        Err(error) => {
-            return stdin_exec_failed(
-                format!("could not wait for `{}`: {error}", args.command),
-                EXIT_STDIN_EXEC_ERROR,
-            )
-        }
-    };
-    let exit_code = inner_waitpid_as_i32(status);
-    match args.exit_mode {
-        StdinExecExitMode::Sidecar => {
-            let Some(sidecar_file) = args.sidecar_file.as_ref() else {
-                return stdin_exec_failed("sidecar mode requires --sidecar-file".to_owned(), 2);
-            };
-            if let Some(parent) = sidecar_file.parent() {
-                if !parent.as_os_str().is_empty() {
-                    if let Err(error) = fs::create_dir_all(parent) {
-                        return stdin_exec_failed(
-                            format!(
-                                "could not create sidecar directory {}: {error}",
-                                parent.display()
-                            ),
-                            EXIT_STDIN_EXEC_ERROR,
-                        );
-                    }
-                }
-            }
-            let body = match serde_json::to_vec(&json!({ "exit_code": exit_code })) {
-                Ok(body) => body,
-                Err(error) => {
-                    return stdin_exec_failed(
-                        format!("could not serialize sidecar JSON: {error}"),
-                        EXIT_STDIN_EXEC_ERROR,
-                    )
-                }
-            };
-            if let Err(error) = fs::write(sidecar_file, body) {
-                return stdin_exec_failed(
-                    format!(
-                        "could not write sidecar {}: {error}",
-                        sidecar_file.display()
-                    ),
-                    EXIT_STDIN_EXEC_ERROR,
-                );
-            }
-            0
-        }
-        StdinExecExitMode::Propagate => exit_code,
-    }
-}
-
-fn inner_waitpid_as_i32(status: process::ExitStatus) -> i32 {
-    if let Some(code) = status.code() {
-        return code;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::ExitStatusExt;
-        if let Some(signal) = status.signal() {
-            return signal;
-        }
-    }
-    1
-}
-
-fn stdin_exec_failed(message: String, exit_code: i32) -> i32 {
-    eprintln!("stdin-exec error: {message}");
-    exit_code
 }
 
 fn describe(request: Value) -> i32 {

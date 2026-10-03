@@ -196,7 +196,7 @@ fn reconciliation_instructions(bookends_enabled: bool) -> String {
         "With Bookends disabled, inspect only the relevant authoritative repository documents against the approved intent and delivered behavior; do not add PRD IDs, Bookends citations, candidate machinery, or overlay obligations."
     };
     format!(
-        "Reconcile the frozen intent `operating_context`, approved intent, delivered behavior, and current authoritative repository documents. Author exactly `{}` using `{}`. Set `{}`. {mode} Distinguish sufficient existing wording (including an implementation defect corrected under sufficient wording), change-specific proof, and missing or changed enduring meaning. A justified no-document-change action is valid. A requirements amendment needs exact owner acceptance and separately authorized application and commit; a wrong implementation is corrected as code. A blocked decision must retain its concrete blockers. This state does not approve, progress, commit, or write `implementation-report.json`, `validation-report.json`, or checkpoint files. The graph summarizer remains the sole implementation-report writer. Report finalization, repository checkpoint, implementation review, validation, and final proof consume the post-reconciliation tree downstream. If an implementation report or checkpoint is stale after an authorized reconciliation edit, use check-free `revise-implementation` to return to `implement`, invoke the existing bound implementation/report owner through its supported selection, and return here through `implementation-ready`; preserve the authorized document edits and do not reapply them.",
+        "Reconcile the frozen intent `operating_context`, approved intent, delivered behavior, and current authoritative repository documents. Author exactly `{}` using `{}`. Set `{}`. {mode} Distinguish sufficient existing wording (including an implementation defect corrected under sufficient wording), change-specific proof, and missing or changed enduring meaning. A justified no-document-change action is valid. A requirements amendment needs exact owner acceptance and separately authorized application and commit; a wrong implementation is corrected as code. A blocked decision must retain its concrete blockers. This state does not approve, progress, commit, or write `implementation-report.json`, `validation-report.json`, or checkpoint files. The external driver writes the implementation report. Report finalization, repository checkpoint, implementation review, validation, and final proof consume the post-reconciliation tree downstream. If an implementation report or checkpoint is stale after an authorized reconciliation edit, use check-free `revise-implementation` to return to `implement`, use the external implementation/report owner, and return here through `implementation-ready`; preserve the authorized document edits and do not reapply them.",
         RECONCILIATION_SUBJECT,
         RECONCILIATION_SCHEMA_PATH,
         RECONCILIATION_RESULT_FIELDS.join("`, `"),
@@ -394,7 +394,7 @@ pub(crate) fn describe_workflow(initial_input: Option<&Value>) -> Result<Workflo
             "advice": advice_action_guidance(state.id.as_str(), initial_input),
             "repair": "Keep validation-report-only corrections in validation. For an implementation defect owned by a frozen task, select that task and its dependants. Use repair_finding_ids only for an accepted unresolved implementation finding honestly owned by no task. Revise plan/design/intent only when that phase obligation is materially wrong; reconfirm affected downstream proof and explicitly carry unaffected original evidence.",
             "review": "First review is comprehensive. Confirm accepted fixes and fix-introduced holes, with explicit unaffected applicability; no rerun-until-pass. Falsify circular proof and evidence compatible with opposite outcomes against frozen obligations, without adding axes.",
-            "execution": "Bound: invoke the shown frozen slot; do not perform its worker body. Unbound: follow the provider skill externally. Triage captures before append or progression. Budget serial tasks, summarizer, proof and review together; overrun is attention, not retry permission.",
+            "execution": "External drivers execute all workers, advisors and proof commands. Inspect their outputs before append or progression; the provider never launches them.",
             "git": "After implementation triage and before independent review, ask the owner for the Git decision. Inspect staged names and diff; perform or confirm only the owner-authorized human/driver commit and verify its resulting identity with `git rev-parse HEAD`, or record pending/declined without Git changes or claiming a created commit. Workers do not independently commit. A commit changes proof identity: refresh invalidated receipts/report/checkpoints before review; then keep source/Git identity stable. This reminder grants no authorization."
         }));
     }
@@ -414,54 +414,17 @@ pub(crate) fn advice_occasion_descriptions() -> Value {
     })
 }
 
-fn advice_action_guidance(state_id: &str, initial_input: Option<&Value>) -> Value {
-    let Some(input) = initial_input else {
-        return json!({
-            "enabled": false,
-            "reason": "advice is disabled for this run; no backend is selected"
-        });
-    };
-    let Some(command) = input.get("advice_command") else {
-        return json!({
-            "enabled": false,
-            "reason": "advice is disabled for this run; no backend is selected"
-        });
-    };
-    let due = input
-        .get("advice_departures")
-        .and_then(|map| map.get("occasions"))
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|occasion| occasion.get("state").and_then(Value::as_str) == Some(state_id))
-        .map(|occasion| {
-            let occasion_id = occasion
-                .get("occasion_id")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            json!({
-                "event": occasion.get("event"),
-                "occasion_id": occasion_id,
-                "family": occasion_id.split(':').next().unwrap_or_default()
-            })
-        })
-        .collect::<Vec<_>>();
+fn advice_action_guidance(_state_id: &str, initial_input: Option<&Value>) -> Value {
+    let enabled = initial_input
+        .and_then(|v| v.pointer("/extra/advice/enabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     json!({
-        "enabled": true,
-        "command": command,
-        "limits": {
-            "timeout_ms": command.get("timeout_ms"),
-            "max_request_bytes": command.get("max_request_bytes"),
-            "max_response_bytes": command.get("max_response_bytes")
-        },
-        "occasion_map": input.pointer("/extra/advice/occasion_map"),
+        "enabled": enabled,
+        "occasion_map": initial_input.and_then(|v| v.pointer("/extra/advice/occasion_map")),
         "occasion_descriptions": advice_occasion_descriptions(),
-        "due_departures": due,
-        "request_path": "Select actual source context IDs and artifact excerpts from full show, run `software-change advice-request` to prepare the provider-owned typed request, then call `loop-engine advise RUN_ID @REQUEST_FILE`.",
-        "ad_hoc": "While the run is ACTIVE, the driver may call `loop-engine advise RUN_ID @REQUEST_FILE` with any valid named typed questions.",
-        "disposition": "Before any normal departure, append one reasoned advice-disposition for every answer in every successful response, including rejected, ad hoc, and superseded answers. A rejection is ordinary driver progress, not an exception or approval.",
-        "occasion_record": "For every due departure listed here, append exactly one source-linked advice-occasion for this state_visit: triggered with source/response IDs, or not-triggered with a reason.",
-        "authority": "Advice is not a finding, route, permission, review verdict, proof result, or gate approval. Continue the normal ledger, reviewer, criterion, Bookends, and proof checks."
+        "request_path": "Select source context IDs and artifact excerpts from full show; software-change advice-request prepares typed questions. An external driver calls the advisor and appends advice-answer context.",
+        "authority": "Advice is not a finding, route, permission, review verdict, proof result, or gate approval."
     })
 }
 
@@ -1679,7 +1642,7 @@ mod tests {
         }
         assert!(state
             .instructions
-            .contains("sole implementation-report writer"));
+            .contains("external driver writes the implementation report"));
         assert!(state.instructions.contains("Bookends disabled"));
         assert!(state
             .instructions

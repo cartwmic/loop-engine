@@ -283,6 +283,7 @@ pub(crate) fn verify_accepted_implementation_from_cwd(artifact_root: &Path) -> R
 /// Repair admission treats a missing history directory as empty; validation
 /// callers continue to use [`verify_accepted_implementation_from_cwd`], which
 /// still requires an accepted history entry for the current report.
+#[allow(dead_code)] // Retained historical checkpoint policy, no executor caller.
 pub(crate) fn accepted_implementation_report_revisions(
     artifact_root: &Path,
 ) -> Result<BTreeSet<String>, String> {

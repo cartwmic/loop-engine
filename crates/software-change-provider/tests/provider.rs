@@ -30,10 +30,6 @@ fn reconciliation_fixture() -> serde_json::Value {
 
 #[path = "provider/backlog_t05.rs"]
 mod backlog_t05;
-#[path = "provider/backlog_t05_validation.rs"]
-mod backlog_t05_validation;
-#[path = "provider/backlog_t06.rs"]
-mod backlog_t06;
 #[path = "provider/backlog_t07.rs"]
 mod backlog_t07;
 #[path = "provider/backlog_t10.rs"]
