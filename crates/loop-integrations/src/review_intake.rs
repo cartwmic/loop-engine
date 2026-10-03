@@ -156,6 +156,8 @@ pub fn project(
                 )
             });
         candidate["assessment_id"] = json!(assessment);
+        candidate["external_review"] =
+            json!({"request":request,"original":original,"direct":direct});
         candidates.push(json!({"kind":"review-evidence","assessment_id":assessment,"self_review":direct,"data":candidate}));
     }
     Ok(
@@ -233,4 +235,37 @@ pub fn carry(
     }
     result.sort_by_key(|r| r.sequence);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn candidates_retain_exchange_for_each_provider_and_direct_review() {
+        for provider in ["policy-document", "research"] {
+            for direct in [false, true] {
+                let packet = json!({
+                    "show":{"operation":"show","status":"completed","result":{"workflow_id":provider}},
+                    "assignment":{"gate":"review","review_stage":"ordinary","subject":"target",
+                                  "subject_revision":"v1","policy_ids":["quality"]},
+                    "author":{"name":"reviewer","kind":"human"},"self_review":direct,
+                    "request":{"text":"Instructions actually followed.\n"},
+                    "result":{"text":"Original judgment: passes.\n"},
+                    "projection":{"items":[{"policy_id":"quality","result":"pass","findings":""}]}
+                });
+                let result = project(
+                    &packet,
+                    provider,
+                    &[json!({"gate":"review","id":"quality","self_review":true})],
+                    &json!({}),
+                )
+                .unwrap();
+                let exchange = &result["candidates"][0]["data"]["external_review"];
+                assert_eq!(exchange["request"]["original"], packet["request"]["text"]);
+                assert_eq!(exchange["original"]["original"], packet["result"]["text"]);
+                assert_eq!(exchange["direct"], direct);
+            }
+        }
+    }
 }

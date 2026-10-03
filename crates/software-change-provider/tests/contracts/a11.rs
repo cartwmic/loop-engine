@@ -2725,8 +2725,14 @@ fn sufficiency_packets_supply_neutral_subjects_and_stage_specific_companions() {
     }) {
         count += 1;
         let row = entry.as_object().unwrap();
-        assert!(matches!(entry["observed"].as_str(), Some("pass" | "fail")));
-        assert!(!entry["attested_by"].as_str().unwrap().is_empty());
+        if entry["observed"] == "pending" {
+            assert_eq!(entry["model"], "");
+            assert_eq!(entry["attested_by"], "");
+            assert_eq!(entry["invocation"], "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.");
+        } else {
+            assert!(matches!(entry["observed"].as_str(), Some("pass" | "fail")));
+            assert!(!entry["attested_by"].as_str().unwrap().is_empty());
+        }
         assert!(entry.get("applicability").is_none());
         let identity = row_key(row);
         let key = format!(

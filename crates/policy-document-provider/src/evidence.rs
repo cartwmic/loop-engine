@@ -8,6 +8,8 @@ use std::collections::{HashMap, HashSet};
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Evidence {
+    #[serde(default, rename = "external_review")]
+    _external_review: Option<Value>,
     #[serde(default)]
     assessment_id: Option<String>,
     gate: String,

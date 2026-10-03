@@ -512,7 +512,7 @@ pub fn inspect_with_stage(
 ) -> Result<Value, String> {
     match inspect_with_budgets(input, requested_slot, task, requested_stage, None) {
         Ok(mut output) => {
-            output["missing_inputs"] = json!([]);
+            output["missing_inputs"] = json!(missing_parent_claims(input, requested_slot)?);
             Ok(output)
         }
         Err(error)
@@ -522,11 +522,45 @@ pub fn inspect_with_stage(
                     || error.contains("missing current parent aggregate grounds")) =>
         {
             let mut output = inspect_with_stage_raw(input, requested_slot, task, requested_stage)?;
-            output["missing_inputs"] = json!([error]);
+            let mut missing = missing_parent_claims(input, requested_slot).unwrap_or_default();
+            if missing.is_empty() || !error.contains("missing current parent aggregate grounds") {
+                missing.push(error);
+            }
+            output["missing_inputs"] = json!(missing);
             Ok(output)
         }
         Err(error) => Err(error),
     }
+}
+
+fn missing_parent_claims(
+    input: &Value,
+    requested_slot: Option<&str>,
+) -> Result<Vec<String>, String> {
+    let packet = input.get("result").unwrap_or(input);
+    let gate = requested_slot
+        .or_else(|| packet.get("slot_id").and_then(Value::as_str))
+        .ok_or("commission requires --slot SLOT for show inspection")?;
+    let Some(parent) = parent_gate(gate) else {
+        return Ok(Vec::new());
+    };
+    let Some(axes) = packet["initial_input"]["review_policies"][gate].as_array() else {
+        return Ok(Vec::new());
+    };
+    let subject = review_subject(gate).ok_or("challenge has no review subject")?;
+    let root = packet
+        .get("artifact_root")
+        .or_else(|| packet["initial_input"].get("artifact_root"))
+        .and_then(Value::as_str)
+        .ok_or("missing artifact_root")?;
+    let (revision, _) = read_review_sources(Path::new(root), subject)?;
+    let records: Vec<ContextRecord> =
+        serde_json::from_value(packet["context"].clone()).map_err(|error| error.to_string())?;
+    let available = latest_aggregate_by_axis_author(&records, parent, subject, &revision)?;
+    Ok(axes.iter().filter_map(|axis| axis["id"].as_str())
+        .filter(|axis| !available.keys().any(|(available_axis, _, _)| available_axis == axis))
+        .map(|axis| format!("challenge `{gate}` is missing current parent aggregate claim `{axis}` for `{subject}`"))
+        .collect())
 }
 
 #[derive(Clone)]
@@ -2182,6 +2216,71 @@ mod tests {
             "parent inspected the accepted constraint"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn challenge_preparation_discloses_partial_and_complete_parent_claims() {
+        let root = std::env::temp_dir().join(format!(
+            "software-change-partial-parent-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("intent.json"), br#"{"revision":"1"}"#).unwrap();
+        let bytes = br#"{"revision":"4"}"#;
+        std::fs::write(root.join("design.json"), bytes).unwrap();
+        let digest = format!("sha256:{:x}", Sha256::digest(bytes));
+        let parent = typed_record(
+            "parent-a",
+            "review-evidence",
+            1,
+            json!({
+                "gate":"design-review","subject":"design.json","subject_revision":"4",
+                "review_stage":"aggregate","policy_id":"a","author":{"name":"A","kind":"agent"},
+                "result":"pass","findings":"","review_contract_version":2,
+                "grounds":{"reason":"inspected design","evidence":[{"locator":"design.json#/revision","sha256":digest}]}
+            }),
+        );
+        let slot = WorkSlot::new(
+            "design-adversarial-review",
+            "design-adversarial-review",
+            "approved",
+        )
+        .with_stdin_context_kinds(vec!["review-evidence".into()]);
+        let mut input = json!({"status":"completed","result":{
+            "artifact_root":root,"work_slots":[slot],"context":[parent],
+            "initial_input":{"review_policies":{"design-adversarial-review":[
+                {"id":"a","group":"design"},{"id":"b","group":"design"},{"id":"c","group":"design"}
+            ]}}
+        }});
+        let before = input.clone();
+        let output =
+            inspect_with_stage(&input, Some("design-adversarial-review"), None, None).unwrap();
+        assert_eq!(input, before);
+        assert_eq!(output["missing_inputs"].as_array().unwrap().len(), 2);
+        assert!(output["missing_inputs"][0]
+            .as_str()
+            .unwrap()
+            .contains("`b`"));
+        assert!(output["missing_inputs"][1]
+            .as_str()
+            .unwrap()
+            .contains("`c`"));
+        assert_eq!(output["context"][0]["id"], "parent-a");
+        for axis in ["b", "c"] {
+            let mut record = input["result"]["context"][0].clone();
+            record["id"] = json!(format!("parent-{axis}"));
+            record["data"]["policy_id"] = json!(axis);
+            record["sequence"] = json!(if axis == "b" { 2 } else { 3 });
+            input["result"]["context"]
+                .as_array_mut()
+                .unwrap()
+                .push(record);
+        }
+        let output =
+            inspect_with_stage(&input, Some("design-adversarial-review"), None, None).unwrap();
+        assert_eq!(output["missing_inputs"], json!([]));
+        assert_eq!(output["context"].as_array().unwrap().len(), 3);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

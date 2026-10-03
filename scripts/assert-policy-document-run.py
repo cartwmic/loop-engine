@@ -91,7 +91,7 @@ def evidence_fields(data: Mapping[str, Any]) -> bool:
         "target_sha256",
         "profile_version",
     }
-    if set(data) not in (expected, expected | {"assessment_id"}):
+    if not expected <= set(data) or set(data) - expected - {"assessment_id", "external_review"}:
         return False
     if "assessment_id" in data and (
         not isinstance(data["assessment_id"], str) or not data["assessment_id"].strip()

@@ -917,7 +917,7 @@ fn reviewer_protocol_defines_convergence_contract() {
         "quiet, progress, and thrash count per review state on the post-triage accepted-finding set",
         "confirmation consumes the durable ledger set and does not search again except for fix-introduced holes",
         "extra mechanism, unlisted requirements, and hypothetical-future fails are not appended",
-        "bound workers do not use previously overlooked",
+        "external agent reviewers do not use previously overlooked",
         "humans still may with full failure burden",
         "known accepted material defects are never waived",
         "operating_context",
@@ -934,9 +934,11 @@ fn reviewer_protocol_defines_convergence_contract() {
         "retry the next checked hop",
         "`revise-implementation`",
         "evidence-applicability",
-        "selected-assignment-output",
+        "external_review",
+        "review-candidates",
+        "driver-confirmed `projection`",
         "context-record",
-        "engine-resolved",
+        "preserve originals",
         "current target",
         "exact source record",
         "satisfied-by-disposition",
@@ -951,6 +953,10 @@ fn reviewer_protocol_defines_convergence_contract() {
         );
     }
     for forbidden in [
+        "recover-output",
+        "selected-assignment-output",
+        "work_slot_bindings",
+        "repair-first-v2",
         "three-round",
         "circuit breaker",
         "verdict cap",

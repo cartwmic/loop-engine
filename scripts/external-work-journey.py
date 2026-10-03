@@ -583,26 +583,77 @@ def paired_and_command_proof(args, root):
 # bookends:LE-107 bookends:LE-150 bookends:LE-154 — explicit affected checks preserve applicable original siblings, authors and command results without ceremonial suite replay.
 def lint_only_reuse(args, root):
     state = {'reused':False}
+    # Match a11.rs::parse_retained_return: recognize review returns, then exclude duplicates.
+    nested = """import json
+
+
+def parse_retained_return(output):
+    values = []
+    offset = 0
+    decoder = json.JSONDecoder()
+    while (start := output.find('{', offset)) != -1:
+        try:
+            value, consumed = decoder.raw_decode(output[start:])
+            offset = start + consumed
+            if (value.get("kind") == "review-evidence" or ("result" in value and "gate" in value)):
+                if value not in values:
+                    values.append(value)
+        except json.JSONDecodeError:
+            offset = start + 1
+    if len(values) != 1:
+        raise ValueError("prior raw return has missing or ambiguous judgments")
+    return values[0]
+"""
+    collapsed = nested.replace(
+        'if (value.get("kind") == "review-evidence" or ("result" in value and "gate" in value)):\n                if value not in values:\n                    values.append(value)',
+        'if (value.get("kind") == "review-evidence" or ("result" in value and "gate" in value)) and value not in values:\n                values.append(value)')
+    helper_tests = """import json
+import unittest
+from helper import parse_retained_return
+
+
+class RetainedReturnTests(unittest.TestCase):
+    def test_recognition_and_duplicate_exclusion(self):
+        for value in [{"kind": "review-evidence", "data": {}}, {"result": "pass", "gate": "validation-review"}]:
+            with self.subTest(value=value):
+                text = json.dumps(value)
+                self.assertEqual(parse_retained_return('noise {invalid ' + text + text + '{"other": true}'), value)
+
+    def test_missing_and_ambiguous_judgments(self):
+        for text in ['', '{"result": "pass"}', '{"gate": "validation-review"}', '{"other": true}',
+                     '{"kind": "review-evidence"}{"result": "pass", "gate": "validation-review"}']:
+            with self.subTest(text=text):
+                with self.assertRaisesRegex(ValueError, "missing or ambiguous judgments"):
+                    parse_retained_return(text)
+
+
+if __name__ == '__main__':
+    unittest.main()
+"""
     def configure(profile, repository, artifacts):
         policy = copy.deepcopy(next(p for p in profile['review_policies']['validation-review'] if p['review_stage'] == 'aggregate'))
         for gate in profile['review_policies']:
             profile['review_policies'][gate] = []
         policy.update(required_authors=1,group='validation-review.aggregate')
         profile['review_policies']['validation-review'] = [policy]
-        (repository / 'helper.py').write_text('def helper(p, q, value):\n    values = []\n    if p:\n        if q:\n            values.append(value)\n    return values\n')
-        subprocess.run(['git','add','helper.py'],cwd=repository,check=True)
-        subprocess.run(['git','commit','-qm','nested test helper'],cwd=repository,check=True)
+        (repository / 'helper.py').write_text(nested)
+        (repository / 'test_helper.py').write_text(helper_tests)
+        # Keep both exact variants accessible as retained controlled-repository fixtures.
+        (repository / 'helper-nested.txt').write_text(nested)
+        (repository / 'helper-collapsed.txt').write_text(collapsed)
+        subprocess.run(['git','add','helper.py','test_helper.py','helper-nested.txt','helper-collapsed.txt'],cwd=repository,check=True)
+        subprocess.run(['git','commit','-qm','nested retained-return test helper'],cwd=repository,check=True)
         counter = artifacts.parent / 'suite-runs'
-        assertion = 'from helper import helper; ' + '; '.join(
-            f'assert helper({p}, {q}, 7) == {expected}' for p,q,expected in
-            [(False,False,[]),(False,True,[]),(True,False,[]),(True,True,[7])])
+        assertion = 'import runpy; runpy.run_path("test_helper.py", run_name="__main__")'
+        # unittest exits normally; count the suite before executing its assertions.
+        suite_assertion = f'open({str(counter)!r}, "a").write("suite\\n"); ' + assertion
         state['assertion'] = assertion
         state['counter'] = counter
         plan_path = artifacts / 'plan.json'
         plan = json.loads(plan_path.read_text())
         plan['proof_commands'] = [{'id':'prior-suite','command':sys.executable,
-                                  'args':['-B','-c',assertion+f'; open({str(counter)!r}, "a").write("suite\\n")'],
-                                  'owner':'driver','obligation':'Assert the complete helper truth table.'}]
+                                  'args':['-B','-c',suite_assertion],
+                                  'owner':'driver','obligation':'Assert review-return recognition, duplicate exclusion, and missing/ambiguous rejection.'}]
         plan_path.write_text(json.dumps(plan))
     def hook(phase, ctx):
         if phase == 'validation-review' and not state['reused']:
@@ -614,7 +665,7 @@ def lint_only_reuse(args, root):
                       'author':{'name':'prior-reviewer','kind':'agent'},'subject':'validation-report.json',
                       'subject_revision':original_report['revision']},'request':{'text':'Inspect the prior suite and goal judgments.'},
                       'original':{'text':json.dumps({'judgments':[{'axis':policy['id'],'result':'pass','findings':'',
-                                  'grounds':{'reason':'The actual helper truth table passed.',
+                                  'grounds':{'reason':'The actual retained-return recognition and deduplication tests passed.',
                                              'evidence':[{'locator':'validation-report.json#/command_evidence_ids'}]}}]})}}
             for candidate in provider(ctx,['review-candidates'],packet)['records']:
                 append(ctx,candidate['kind'],candidate['data'])
@@ -623,21 +674,21 @@ def lint_only_reuse(args, root):
             assert prior['result'] == 'allow', prior
             originals = ctx['show']()['result']['context']
             ctx['event']('revise-implementation')
-            (ctx['repository'] / 'helper.py').write_text('def helper(p, q, value):\n    values = []\n    if p and q:\n        values.append(value)\n    return values\n')
+            (ctx['repository'] / 'helper.py').write_text(collapsed)
             subprocess.run(['git','add','helper.py'],cwd=ctx['repository'],check=True)
             subprocess.run(['git','commit','-qm','collapse lint-only nested condition'],cwd=ctx['repository'],check=True)
             implementation = json.loads((artifacts / 'implementation-report.json').read_text())
             implementation['revision'] = 'lint-i2'
-            implementation['summary'] += ' Lint-only conjunction collapse preserves all four truth-table outcomes.'
+            implementation['summary'] += ' Lint-only conjunction collapse preserves review-return recognition and unchanged duplicate exclusion.'
             (artifacts / 'implementation-report.json').write_text(json.dumps(implementation))
             ctx['checkpoint']('implementation')
             ctx['event']('implementation-ready')
             ctx['event']('reconciliation-ready')
             assert ctx['show']()['result']['current_state'] == 'validation'
             additions = [{'id':'helper-rerun','command':sys.executable,'args':['-B','-c',state['assertion']],
-                          'owner':'driver','obligation':'Rerun the affected helper truth table.'},
+                          'owner':'driver','obligation':'Rerun the affected parse_retained_return recognition and deduplication tests.'},
                          {'id':'lint-rerun','command':sys.executable,
-                          'args':['-B','-c','import ast, pathlib; s = pathlib.Path("helper.py").read_text(); ast.parse(s); assert "if p and q:" in s; assert "if q:" not in s'],
+                          'args':['-B','-c','import ast, pathlib; s = pathlib.Path("helper.py").read_text(); ast.parse(s); tree = ast.parse(s); conditions = [n for n in ast.walk(tree) if isinstance(n, ast.If) and any(isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute) and v.func.attr == "append" for v in ast.walk(n))]; assert len(conditions) == 1; assert isinstance(conditions[0].test, ast.BoolOp) and isinstance(conditions[0].test.op, ast.And); assert "and value not in values:" in s'],
                           'owner':'driver','obligation':'Check syntax and the exact requested conjunction collapse.'}]
             previous_command = next(row for row in originals if row['kind'] == 'command-evidence')
             results = [copy.deepcopy(previous_command['data']['external_result'])]
@@ -671,7 +722,7 @@ def lint_only_reuse(args, root):
                 target['subject_revision' if kind in ['criterion-verdict','goal-verdict'] else 'revision'] = 'lint-v2'
                 append(ctx,'evidence-applicability',{'origin':{'kind':'context-record','id':source_id},'target':target,
                        'attesting_driver':{'name':'lint-driver','kind':'agent'},
-                       'reason':'Only the equivalent nested helper condition was collapsed; retained suite and judgments remain applicable.'},carry_id)
+                       'reason':'Only parse_retained_return review-return recognition (P) and unchanged duplicate exclusion (Q) were collapsed from nested ifs to P and Q. Both retained variants have identical parsing, recognition, deduplication and error behavior; current helper tests and lint pass. The earlier suite, complete aggregate review, criterion and whole-goal judgments keep their original identities and remain applicable because their complete scope and judging meaning are unchanged.'},carry_id)
                 report['command_evidence_ids'] = [carry_id if value == source_id else value for value in report['command_evidence_ids']]
                 for criterion in report['criteria']:
                     criterion['verdict_ids'] = [carry_id if value == source_id else value for value in criterion['verdict_ids']]
@@ -745,7 +796,11 @@ def provider_specific(args, root):
             show()
             return call('event',run_id,event)
         def record(kind,data,id):
-            return call('append','--record-id',id,run_id,kind,json.dumps(data))
+            result = call('append','--record-id',id,run_id,kind,json.dumps(data))
+            if kind == 'review-evidence':
+                retained = next(row for row in show()['result']['context'] if row['id'] == id)
+                assert retained['data']['external_review'] == data['external_review'], retained
+            return result
         call('start','--id',run_id,kind,'@'+str(selected),'provider-specific external evidence')
         if kind == 'policy-document':
             move('ready')
@@ -779,6 +834,10 @@ def provider_specific(args, root):
             failed_original['projection'] = json.loads(packet['result']['text'])
             refused([binary,'review-candidates'],failed_original,needle='contradicts decoded result')
             assert len(result['candidates']) == len(grouped), result
+            for candidate in result['candidates']:
+                exchange = candidate['data']['external_review']
+                assert exchange['request']['original'] == packet['request']['text'], candidate
+                assert exchange['original']['original'] == packet['result']['text'], candidate
             return [c['data'] for c in result['candidates']]
         for i, data in enumerate(intake(owner)):
             record('review-evidence',data,'self-evidence-'+str(i))

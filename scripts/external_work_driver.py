@@ -35,9 +35,17 @@ def record_reviews(engine, database, config, provider, run_id, gate, policies,
             evidence = candidate['data']
             if 'gate' not in evidence:
                 raise RuntimeError(f'Unexpected candidate shape: {candidate}')
+            exchange = evidence.get('external_review', {})
+            if (exchange.get('request', {}).get('original') != packet['request']['text']
+                    or exchange.get('original', {}).get('original') != packet['result']['text']):
+                raise RuntimeError(f'Candidate lost commissioning exchange: {candidate}')
             response = engine_call(engine, database, config,
                                    ['append', '--record-id', f'{gate}-{index}', run_id,
                                     'review-evidence', json.dumps(evidence)])
             if response.get('status') != 'completed':
                 raise RuntimeError(f'Could not record external evidence: {response}')
+            retained = engine_call(engine, database, config, ['show', '--view', 'full', run_id])
+            row = next(row for row in retained['result']['context'] if row['id'] == f'{gate}-{index}')
+            if row['data']['external_review'] != exchange:
+                raise RuntimeError(f'Appended evidence lost commissioning exchange: {row}')
     return shown
