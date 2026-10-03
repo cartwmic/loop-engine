@@ -542,7 +542,6 @@ dependencies = [
  "loop-integrations",
  "serde",
  "serde_json",
- "tempfile",
 ]
 
 [[package]]
