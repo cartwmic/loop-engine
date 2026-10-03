@@ -16,10 +16,8 @@ pub struct InitialInput {
     #[allow(dead_code)]
     #[serde(default)]
     pub artifact_root: Option<String>,
-    /// Reserved engine key for frozen slot CLI bindings. Accepted and ignored.
-    #[allow(dead_code)]
     #[serde(default)]
-    pub work_slot_bindings: Option<Value>,
+    pub target_author: Option<Author>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -77,6 +75,24 @@ pub struct SemanticPolicy {
     pub id: String,
     pub description: String,
     pub example_prompt: String,
+    #[serde(default = "default_required_authors")]
+    pub required_authors: u64,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub group: Option<String>,
+    #[serde(default)]
+    pub self_review: bool,
+}
+
+fn default_required_authors() -> u64 {
+    1
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Author {
+    pub name: String,
+    pub kind: String,
 }
 
 impl InitialInput {
@@ -112,7 +128,19 @@ impl InitialInput {
         for policy in &input.deterministic_policies {
             validate_deterministic(policy)?;
         }
+        if let Some(author) = &input.target_author {
+            nonempty("target_author.name", &author.name)?;
+            if !["human", "agent", "script"].contains(&author.kind.as_str()) {
+                return Err("target_author.kind must be human, agent, or script".into());
+            }
+        }
         for policy in &input.semantic_policies {
+            if policy.required_authors == 0 {
+                return Err("required_authors must be >= 1".into());
+            }
+            if let Some(group) = &policy.group {
+                nonempty("group", group)?;
+            }
             nonempty("semantic policy id", &policy.id)?;
             nonempty("semantic policy description", &policy.description)?;
             nonempty("semantic policy example_prompt", &policy.example_prompt)?;
@@ -183,8 +211,8 @@ mod tests {
     #[test]
     fn shipped_profiles_have_frozen_policy_sets() {
         for (name, version, target, count, semantic) in [
-            ("readme", "readme-3", "README.md", 9, 7),
-            ("agents", "agents-3", "AGENTS.md", 6, 9),
+            ("readme", "readme-4", "README.md", 9, 7),
+            ("agents", "agents-4", "AGENTS.md", 6, 9),
         ] {
             let raw = if name == "readme" {
                 include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/readme.json"))
@@ -198,7 +226,6 @@ mod tests {
             assert_eq!(parsed.target.id, target);
             assert_eq!(parsed.deterministic_policies.len(), count);
             assert_eq!(parsed.semantic_policies.len(), semantic);
-            assert!(parsed.work_slot_bindings.is_none());
             assert!(!raw.contains("work_slot_bindings"));
             let ids = parsed
                 .deterministic_policies
@@ -302,19 +329,6 @@ mod tests {
         assert!(err.contains("unknown field"), "{err}");
     }
 
-    #[test]
-    fn initial_input_accepts_reserved_work_slot_bindings_and_ignores_them() {
-        let mut value = base();
-        value["work_slot_bindings"] = serde_json::json!({
-            "deterministic-review": {"command": "echo", "args": []}
-        });
-        let parsed = InitialInput::parse(&value).unwrap();
-        assert!(parsed.work_slot_bindings.is_some());
-        assert_eq!(parsed.target.path, "/tmp/README.md");
-        value["work_slot_bindings"] = Value::String("opaque".into());
-        assert!(InitialInput::parse(&value).is_ok());
-    }
-
     fn base() -> Value {
         let mut value: Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -324,7 +338,6 @@ mod tests {
         value["target"]["path"] = Value::String("/tmp/README.md".into());
         value
     }
-
     #[test]
     fn rejects_invalid_modes_types_duplicates_paths_and_obligations() {
         let mut invalid = base();

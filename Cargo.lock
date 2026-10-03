@@ -719,6 +719,7 @@ name = "policy-document-provider"
 version = "0.23.1"
 dependencies = [
  "loop-core",
+ "loop-integrations",
  "serde",
  "serde_json",
 ]
@@ -842,6 +843,7 @@ name = "research-provider"
 version = "0.23.1"
 dependencies = [
  "loop-core",
+ "loop-integrations",
  "serde",
  "serde_json",
 ]

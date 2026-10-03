@@ -4,7 +4,7 @@ Provider checks evidence shape and aggregation. A review worker decides truth ex
 
 ## Review worker deliverable
 
-A bound review worker is read-only and returns only one JSON object with top-level keys `axis`, `author`, `result`, and `findings`. The shipped `review-worker-preamble.txt` defines the worker role, artifact lookup through the mechanically forwarded `artifact_root`, and the authority of its frozen assignment. The shipped `review-worker-output-schema.json` declares the mechanically required keys used by opt-in bindings.
+An externally commissioned reviewer is read-only and returns candidate judgments. The driver owns assignments, delivery, projection, triage, and evidence recording; the engine and provider execute no reviewer.
 
 The judgment is candidate data, not provider evidence. The worker does not conduct web research, author artifacts, run deterministic checks, call `show`, append evidence, request an event, or progress the run. Those are driver duties. Exit 0 and mechanical key presence do not establish a valid deliverable; the driver must compare the values to the frozen assignment, inspect reviewer independence, and triage the captured judgment before append.
 
@@ -21,7 +21,7 @@ The judgment is candidate data, not provider evidence. The worker does not condu
     "author": {"name": "reviewer-sol", "kind": "agent"},
     "subject": "verification.json",
     "subject_revision": "3",
-    "config_version": "research-1"
+    "config_version": "research-2"
   }
 }
 ```

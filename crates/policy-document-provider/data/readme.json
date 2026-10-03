@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "profile_version": "readme-3",
+  "profile_version": "readme-4",
   "mode": "audit",
   "target": {"id": "README.md", "path": "/abs/path/to/README.md"},
   "deterministic_policies": [

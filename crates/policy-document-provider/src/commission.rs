@@ -1,6 +1,6 @@
 //! Provider-owned historical context selection; core only transports originals.
 use crate::{config::InitialInput, document::Snapshot};
-use loop_core::{ContextRecord, WorkSlot};
+use loop_core::ContextRecord;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -19,7 +19,6 @@ struct Selection {
 
 pub fn prepare(input: &Value, profile: &Value) -> Result<Value, String> {
     let config = InitialInput::parse(profile)?;
-    let snapshot = Snapshot::read(&config.target)?;
     let show = input.get("result");
     if show.is_some() && input["status"] != "completed" {
         return Err("commission requires completed show".into());
@@ -38,15 +37,28 @@ pub fn prepare(input: &Value, profile: &Value) -> Result<Value, String> {
             return Err("commission profile does not match frozen target/profile".into());
         }
     }
-    let slots: Vec<WorkSlot> = serde_json::from_value(packet["work_slots"].clone())
-        .map_err(|e| format!("work_slots: {e}"))?;
-    let slot = slots
-        .iter()
-        .find(|s| s.id.as_str() == slot_id)
-        .ok_or("missing semantic-review slot")?;
-    let mut records: Vec<ContextRecord> =
-        serde_json::from_value(packet["context"].clone()).map_err(|e| format!("context: {e}"))?;
-    records.retain(|r| slot.stdin_context_kinds.contains(&r.kind));
+    let resolution = crate::external::counts(
+        profile,
+        &packet.get("context").cloned().unwrap_or(json!([])),
+    );
+    let author_counts = loop_integrations::author_counts::inspect(&resolution);
+    let mut policies = profile["semantic_policies"].clone();
+    for p in policies.as_array_mut().into_iter().flatten() {
+        if let Some(id) = p["id"].as_str() {
+            p["required_authors"] = resolution.effective[format!("semantic-review.{id}")].clone();
+        }
+    }
+    let snapshot = match Snapshot::read(&config.target) {
+        Ok(snapshot) => snapshot,
+        Err(reason) => {
+            return Ok(
+                json!({"target_id":config.target.id,"target_path":config.target.path,"profile_version":config.profile_version,"review_policies":policies,"author_counts":author_counts,"missing_inputs":[{"input":"target","reason":reason}]}),
+            )
+        }
+    };
+    let records: Vec<ContextRecord> =
+        serde_json::from_value(packet.get("context").cloned().unwrap_or(json!([])))
+            .map_err(|e| format!("context: {e}"))?;
     let mut selections = Vec::new();
     for record in records
         .iter()
@@ -152,17 +164,18 @@ pub fn prepare(input: &Value, profile: &Value) -> Result<Value, String> {
         data["receipt"] = receipt;
         return Ok(data);
     }
-    // Filter stdout stays reference-only. Only a genuine appended selection
-    // carries a receipt into bound stdin; successful stderr is not delivery.
+    // The external driver owns delivery and review execution.
     eprintln!(
         "{}",
         json!({"current_target":identity,"diagnostics":diagnostics})
     );
     if show.is_none() {
-        Ok(json!({"record_ids":ids}))
+        Ok(
+            json!({"record_ids":ids,"current_target":identity,"missing_inputs":[],"review_policies":policies,"author_counts":author_counts}),
+        )
     } else {
         Ok(
-            json!({"record_ids":ids,"context":selected,"current_target":identity,"diagnostics":diagnostics}),
+            json!({"record_ids":ids,"context":selected,"current_target":identity,"diagnostics":diagnostics,"missing_inputs":[],"review_policies":policies,"author_counts":author_counts}),
         )
     }
 }

@@ -14,3 +14,7 @@ pub use provider::{
 };
 pub use provider_gateway::SubprocessProviderGateway;
 pub use sqlite::{SqlitePersistence, TargetedReadRequest};
+
+pub mod author_counts;
+
+pub mod review_intake;

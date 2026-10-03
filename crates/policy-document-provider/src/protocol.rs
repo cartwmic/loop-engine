@@ -2,9 +2,7 @@ use loop_core::{ContextRecord, DurableEvaluation, Transition, Workflow};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-/// Topology stays input-independent. Describe uses optional initial bindings only
-/// to preserve the no-attachment catalog for older unfiltered bound workers.
-/// Unknown request keys fail closed.
+/// Describe returns input-independent topology.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DescribeRequest {

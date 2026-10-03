@@ -29,7 +29,7 @@ DATA_ROOT="$HOME/.local/share/research-provider"
 research data-dump "$DATA_ROOT"
 ```
 
-The command creates `DATA_ROOT/crates/research-provider/...` with the profile, templates, reviewer protocol, review-worker preamble and output schema, skill, README, and AGENTS embedded in the binary. It preserves those repository-relative paths so guidance citations resolve under `DATA_ROOT`; it refuses to overwrite an existing target file. Copy the selected profile from that tree to a run-specific file. The engine allocates the durable directory and records that absolute path in object `initial_input`; `show` reveals it. Register the installed provider under an exact, case-sensitive alias:
+The command creates `DATA_ROOT/crates/research-provider/...` with the profile, templates, reviewer protocol, skill, README, and AGENTS embedded in the binary. It preserves those repository-relative paths so guidance citations resolve under `DATA_ROOT`; it refuses to overwrite an existing target file. Copy the selected profile from that tree to a run-specific file. The engine allocates the durable directory and records that absolute path in object `initial_input`; `show` reveals it. Register the installed provider under an exact, case-sensitive alias:
 
 ```toml
 [providers.research]
@@ -87,7 +87,7 @@ cargo test -p research-provider --lib
 cargo clippy -p research-provider --all-targets -- -D warnings
 ```
 
-Source and packaged journeys live in `scripts/research-journey.py` at the repository root. Those journey commands are harness examples, distinct from the production start; do not copy isolation flags from them into production start. The central integration suites are the local proof surface for protocol, schema, evidence and shipped data; focused checks supplement the workspace completion gate in repository-root AGENTS.md. `scripts/assert-generate-prd-profile.py` proves that the Generate-PRD profile uses the existing research binary and does not add a provider. The source Generate-PRD journey drives that profile with deterministic bound workers, writes `prd-candidate.md` plus exact repository evidence, reaches `end`, and runs `bookends-check candidate`; it does not edit `docs/PRD.md` or commit. The software-change journey `--self-test` executes this crate's verify and synthesize constructors against `data/configs/standard.json` and prints `worker-data skill/root policy assertions passed` only after worker count/order, axis/`example_prompt`/author/model metadata, required keys/data bytes/preview visibility, and fail-closed invalid cases pass.
+Source and packaged journeys live in `scripts/research-journey.py` at the repository root. Those journey commands are harness examples, distinct from the production start; do not copy isolation flags from them into production start. The central integration suites are the local proof surface for protocol, schema, evidence and shipped data; focused checks supplement the workspace completion gate in repository-root AGENTS.md. `scripts/assert-generate-prd-profile.py` proves that the Generate-PRD profile uses the existing research binary and does not add a provider. The source Generate-PRD journey drives that profile through externally supplied review evidence, writes `prd-candidate.md` plus exact repository evidence, reaches `end`, and runs `bookends-check candidate`; it does not edit `docs/PRD.md` or commit.
 
 ## Shipped data
 
@@ -95,7 +95,7 @@ These are the shipped files consumed by provider tests, guidance, and review pro
 
 ### Config profiles
 
-- [data/configs/standard.json](data/configs/standard.json) (`config_version` `research-1`; verify axes `claim-grounded` and `adversarial`; synthesize axes `cited-conclusion` and `scope-faithful`)
+- [data/configs/standard.json](data/configs/standard.json) (`config_version` `research-2`; verify axes `claim-grounded` and `adversarial`; synthesize axes `cited-conclusion` and `scope-faithful`)
 - [data/configs/generate-prd.json](data/configs/generate-prd.json) (the same research topology and schemas, with Generate-PRD templates)
 
 The synthetic Generate-PRD journey fixture performs three predetermined repository lookups; that bounded test is not an exhaustive semantic audit. Real extraction follows the [Generate-PRD skill](skills/using-generate-prd/SKILL.md), which requires repository discovery without a predetermined requirement list. Generate-PRD candidate IDs are provisional proposals. A human must accept or reject `prd-candidate.md` before any commit to `docs/PRD.md`; the profile never auto-commits or claims semantic completeness.
@@ -114,13 +114,23 @@ The synthetic Generate-PRD journey fixture performs three predetermined reposito
 ### Reviewer protocol and worker contract
 
 - [data/reviewer-protocol.md](data/reviewer-protocol.md)
-- [data/review-worker-preamble.txt](data/review-worker-preamble.txt)
-- [data/review-worker-output-schema.json](data/review-worker-output-schema.json)
 
-The shipped research skill constructs opt-in `verify` or `synthesize` bindings from the selected per-run profile and freezes one assigned worker per configured axis and required author. Review workers return judgments only; the driver owns research, artifact authoring, deterministic checks, evidence recording, and run progression. The Generate-PRD skill uses the same provider workflow for candidate extraction and requires human acceptance before PRD authority.
+External drivers commission reviewers, triage judgments, append evidence, and progress the run. The provider performs no execution. Generate-PRD candidate IDs remain provisional; human acceptance is required before PRD authority.
 
 ## Topology
 
 `scope → gather → verify → synthesize → end`, plus check-free owning-phase `revise`, `revise-brief`, and `revise-sources` edges. Checked `scoped` and `gathered` are schema and revision-link only. Checked `verified` and `completed` require independent review-evidence after schema and links. Check-free revise events do not evaluate artifacts.
 
 Local markdown links in this crate's documents must resolve under this crate directory. Do not use parent-directory segments in those links.
+
+## External review contract (research-2)
+
+Review policies accept `group` (non-empty string) and `self_review` (boolean, default false), alongside `required_authors` (>= 1, default 1). Groups are gate-scoped. Brief, sources, report and current subject authors are excluded unless that axis permits self review. Exact `(name,kind)` identity counts once. Any standing failure blocks irrespective of the count.
+
+`commission [verify|synthesize] < full-show.json` works in any state and returns current artifacts, frozen policies, historical context, and `missing_inputs` for absent or unreadable inputs.
+
+`review-candidates < packet.json` accepts `{show,assignment,author,request,result,projection?,self_review?}`. Assignment fields are `gate`, `review_stage`, `subject`, `subject_revision`, `policy_ids`, and a shared `assessment_id` for combined groups. Subject is verification.json for verify or report.json for synthesize. Request/result contain exactly one `text` or file `reference`; prose needs driver `projection:{items:[{policy_id,result,findings}]}`. Originals remain intact; malformed siblings do not discard valid candidates. Direct self review requires an explicit marker and permitted policies. Candidates are inert, not appended evidence.
+
+`author-counts [--propose JSON] < full-show.json` inspects base/effective counts and proposals. Append `author-count-amendment` data `{targets:[{gate,axis}],before,after,actor,authority:{kind,reference},reason,corrects?}`; authority kind is `owner` or `standing-delegation`. Invalid amendments block their targets, unknown targets block all, and a valid correction names the invalid record ID. Changing a floor does not clear failures.
+
+Explicit `evidence-applicability` data `{origin:{kind:"context-record",id},target:{subject,revision},attesting_driver:{name,kind},reason}` carries earlier review-evidence to the current artifact revision, preserving verdict/author and requiring the same subject/config version. Current schema and revision-link checks still run. `adversarial` remains contrary-evidence review, not authorship independence. Scope/gather/verify/synthesize and provisional Generate-PRD authority are unchanged.

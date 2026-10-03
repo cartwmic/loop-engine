@@ -181,6 +181,31 @@ pub(crate) fn evaluate_evidence(
     axes: &BTreeMap<String, PolicyAxis>,
     axis_namespace: &BTreeMap<String, BTreeSet<String>>,
 ) -> EvidenceEvaluation {
+    evaluate_with_authors(
+        context,
+        gate,
+        subject,
+        current_revision,
+        subject_author,
+        config_version,
+        axes,
+        axis_namespace,
+        &[],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn evaluate_with_authors(
+    context: &[ContextRecord],
+    gate: &str,
+    subject: &str,
+    current_revision: &str,
+    subject_author: &AuthorIdentity,
+    config_version: &str,
+    axes: &BTreeMap<String, PolicyAxis>,
+    axis_namespace: &BTreeMap<String, BTreeSet<String>>,
+    excluded_authors: &[AuthorIdentity],
+) -> EvidenceEvaluation {
     let mut malformed: BTreeMap<String, Vec<String>> = axes
         .keys()
         .cloned()
@@ -275,7 +300,9 @@ pub(crate) fn evaluate_evidence(
 
             // Subject-author evidence is structurally valid but never counts
             // toward any axis, using exact (name, kind) equality.
-            if record.author == *subject_author {
+            if !policy.self_review()
+                && (record.author == *subject_author || excluded_authors.contains(&record.author))
+            {
                 continue;
             }
 

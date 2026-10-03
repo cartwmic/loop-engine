@@ -3,6 +3,7 @@ mod config;
 mod document;
 mod embedded_data;
 mod evidence;
+mod external;
 mod policy;
 mod protocol;
 mod workflow;
@@ -21,6 +22,10 @@ fn run() -> i32 {
     let mut args = std::env::args_os();
     let _ = args.next();
     if let Some(command) = args.next() {
+        if command == "author-counts" || command == "review-candidates" {
+            let rest: Vec<String> = args.map(|arg| arg.to_string_lossy().into_owned()).collect();
+            return external::run(&command.to_string_lossy(), &rest);
+        }
         if command == "commission" {
             let args: Vec<String> = args.map(|arg| arg.to_string_lossy().into_owned()).collect();
             return commission::run(&args);
@@ -63,17 +68,8 @@ fn run() -> i32 {
 fn describe(value: Value) -> i32 {
     match serde_json::from_value::<DescribeRequest>(value) {
         Ok(req) if req.operation == "describe" => {
-            let binding = req
-                .initial_input
-                .as_ref()
-                .and_then(|input| input.get("work_slot_bindings"))
-                .and_then(|bindings| bindings.get("semantic-review"));
-            // Existing unfiltered bindings must not begin receiving all history.
-            if binding.is_some_and(|b| b.get("context_filter").is_none_or(Value::is_null)) {
-                write_json(&workflow::legacy_workflow())
-            } else {
-                write_json(&workflow::workflow())
-            }
+            let _ = req.initial_input;
+            write_json(&workflow::workflow())
         }
         Ok(_) => protocol_error("describe request has wrong operation".into()),
         Err(e) => protocol_error(format!("invalid describe request: {e}")),
@@ -91,7 +87,7 @@ fn evaluate(value: Value) -> i32 {
     }
 }
 fn evaluation_response(request: &EvaluateRequest) -> Result<Value, String> {
-    if request.workflow != workflow::workflow() && request.workflow != workflow::legacy_workflow() {
+    if request.workflow != workflow::workflow() {
         return Ok(protocol::unsupported());
     }
     let checked = request.transition.kind == TransitionKind::Checked;
@@ -335,34 +331,6 @@ mod tests {
         req.initial_input["artifact_root"] = json!("/tmp/unused");
         let response = evaluation_response(&req).unwrap_or_else(|error| {
             panic!("composed object with artifact_root must parse; got evaluation error: {error}")
-        });
-        let result = response["result"].as_str().unwrap_or("");
-        assert!(
-            result == "allow" || result == "deny",
-            "expected allow or policy deny, got {response}"
-        );
-        assert_ne!(
-            response["feedback"]["code"], "invalid-initial-input",
-            "{response}"
-        );
-        fs::remove_file(path).unwrap();
-    }
-
-    #[test]
-    fn checked_passed_evaluate_parses_composed_object_with_work_slot_bindings() {
-        let path = target("# Title\n");
-        let mut req = request(
-            &path,
-            Transition::checked("deterministic-review", "passed", "semantic-review"),
-            Vec::new(),
-        );
-        req.initial_input["work_slot_bindings"] = json!({
-            "deterministic-review": {"command": "echo", "args": []}
-        });
-        let response = evaluation_response(&req).unwrap_or_else(|error| {
-            panic!(
-                "composed object with work_slot_bindings must parse; got evaluation error: {error}"
-            )
         });
         let result = response["result"].as_str().unwrap_or("");
         assert!(

@@ -6,6 +6,7 @@
 mod artifacts;
 mod config;
 mod evidence;
+mod external;
 mod gates;
 mod protocol;
 mod schema;
@@ -37,6 +38,14 @@ fn run() -> i32 {
             }
             println!("research {}", env!("CARGO_PKG_VERSION"));
             return 0;
+        }
+        Some(command)
+            if command == "author-counts"
+                || command == "review-candidates"
+                || command == "commission" =>
+        {
+            let rest: Vec<String> = args.map(|arg| arg.to_string_lossy().into_owned()).collect();
+            return external::run(&command.to_string_lossy(), &rest);
         }
         Some(command) if command == "data-dump" => {
             let Some(destination) = args.next() else {
@@ -96,7 +105,7 @@ fn run_protocol() -> i32 {
 
 fn provider_help() -> i32 {
     println!(
-        "research\n\nUsage:\n  research < stdin\n  research data-dump DIR\n  research --help | -h\n  research --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nData:\n  data-dump  materialize embedded provider data under DIR"
+        "research\n\nUsage:\n  research < stdin\n  research data-dump DIR\n  research commission [verify|synthesize] < full-show.json\n  research review-candidates < packet.json\n  research author-counts [--propose JSON] < full-show.json\n  research --help | -h\n  research --version | -V\n\nStdin operations:\n  describe   return workflow topology\n  evaluate   validate one checked transition\n\nData:\n  data-dump  materialize embedded provider data under DIR"
     );
     0
 }

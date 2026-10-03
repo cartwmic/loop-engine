@@ -1,6 +1,6 @@
 # Policy-document reviewer protocol
 
-Semantic judgment stays external. A bound review worker is read-only and returns only a judgment object with top-level `axis`, `author`, `result`, and `findings`; it does not run deterministic checks, call `show`, `append`, or `event`, or progress the workflow. The worker follows the frozen assignment immediately before the separator and treats later state text as driver context only. The driver verifies the returned values against that assignment, computes the current target digest, and appends one ordinary `review-evidence` context record per configured semantic policy:
+Semantic judgment and reviewer execution stay external. Reviewers return judgments only; drivers run checks, observe, triage, append, and progress. The driver computes the current digest and appends one ordinary `review-evidence` per accepted policy judgment:
 
 ```json
 {
@@ -13,9 +13,9 @@ Semantic judgment stays external. A bound review worker is read-only and returns
     "author": {"name": "reviewer", "kind": "agent"},
     "target_id": "README.md",
     "target_sha256": "<64 lowercase hexadecimal SHA-256 of exact target bytes>",
-    "profile_version": "readme-3"
+    "profile_version": "readme-4"
   }
 }
 ```
 
-`result` is `pass` or `fail`; failure requires non-empty findings. Author kind is `human`, `agent`, or `script`. Provider validates shape, current policy/target/profile/digest, and latest verdict per exact reviewer. One pass and no standing fail are required for every axis. Any target byte change requires fresh evidence. Values are caller claims, not signatures or provenance; provider never invokes a reviewer, model, or editor. Mechanical worker-output conformance establishes only that the required top-level keys exist; exit 0 and conformance do not establish semantic validity or reviewer independence.
+`result` is `pass` or `fail`; failure requires non-empty findings. Author kind is `human`, `agent`, or `script`. Provider validates shape, current policy/target/profile/digest, and latest verdict per exact reviewer. The effective distinct-author floor and no standing fail are required for every axis. Target-author evidence is excluded by default. Explicit applicability may reuse prior judgments, but deterministic checks always rerun. Values are caller claims, not signatures or provenance; provider never invokes a reviewer, model, or editor. 

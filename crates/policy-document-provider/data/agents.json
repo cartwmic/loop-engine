@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "profile_version": "agents-3",
+  "profile_version": "agents-4",
   "mode": "audit",
   "target": {"id": "AGENTS.md", "path": "/abs/path/to/AGENTS.md"},
   "deterministic_policies": [

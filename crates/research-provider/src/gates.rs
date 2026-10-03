@@ -9,7 +9,7 @@ use crate::artifacts::{
     LinkCheckOutcome, LinkViolation,
 };
 use crate::config::parse_initial_input;
-use crate::evidence::{evaluate_evidence, AuthorIdentity as EvidenceAuthorIdentity};
+use crate::evidence::{evaluate_with_authors, AuthorIdentity as EvidenceAuthorIdentity};
 use crate::protocol::{allow_response, deny_response, unsupported_response, EvaluateRequest};
 use loop_core::{DurableEvaluationResult, Transition, TransitionKind};
 use serde_json::{json, Value};
@@ -133,7 +133,23 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
         return EvaluationOutcome::Response(unsupported_response());
     };
 
-    let config = match parse_initial_input(&request.initial_input) {
+    if let Err(error) = parse_initial_input(&request.initial_input) {
+        return EvaluationOutcome::EvaluationError(error.to_string());
+    }
+    let resolution = crate::external::counts(&request.initial_input, &json!(request.context));
+    let mut effective_input = request.initial_input.clone();
+    for (gate, entries) in effective_input["review_policies"]
+        .as_object_mut()
+        .into_iter()
+        .flatten()
+    {
+        for p in entries.as_array_mut().into_iter().flatten() {
+            if let Some(id) = p["id"].as_str() {
+                p["required_authors"] = resolution.effective[format!("{gate}.{id}")].clone();
+            }
+        }
+    }
+    let config = match parse_initial_input(&effective_input) {
         Ok(config) => config,
         Err(error) => return EvaluationOutcome::EvaluationError(error.to_string()),
     };
@@ -212,10 +228,41 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
     }
 
     if let (Some(gate), Some(axes), Some(metadata)) = (route.gate, axes, metadata.as_ref()) {
+        if axes
+            .keys()
+            .any(|axis| resolution.blocked.contains(&format!("{gate}.{axis}")))
+        {
+            return EvaluationOutcome::Response(deny_response(
+                EVIDENCE_DENY_CODE,
+                EVIDENCE_DENY_MESSAGE,
+                Some(json!({"invalid_author_count_amendments":resolution.amendments})),
+            ));
+        }
+        let carried = loop_integrations::review_intake::carry(
+            &request.context,
+            subject,
+            metadata.revision(),
+            "config_version",
+            config.config_version(),
+            false,
+        );
         let subject_author =
             EvidenceAuthorIdentity::new(metadata.author().name(), metadata.author().kind());
-        let evidence = evaluate_evidence(
-            &request.context,
+        let mut excluded_authors = Vec::new();
+        for name in ["brief.json", "sources.json", "report.json"] {
+            if let ArtifactReadOutcome::Present(document) =
+                read_artifact(config.artifact_root(), name)
+            {
+                if let Ok(metadata) = extract_metadata(name, document.value()) {
+                    excluded_authors.push(EvidenceAuthorIdentity::new(
+                        metadata.author().name(),
+                        metadata.author().kind(),
+                    ));
+                }
+            }
+        }
+        let evidence = evaluate_with_authors(
+            &carried,
             gate,
             subject,
             metadata.revision(),
@@ -223,6 +270,7 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
             config.config_version(),
             axes,
             config.axis_namespace(),
+            &excluded_authors,
         );
         if !evidence.is_satisfied() {
             let details = evidence.details_value();

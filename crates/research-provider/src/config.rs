@@ -1,8 +1,8 @@
 //! Initial-input parsing and obligation-independent configuration validation.
 //!
 //! This module owns the provider's configuration namespace and subject
-//! metadata invariants.  It does not read `artifact_root` or
-//! `work_slot_bindings`, and it knows nothing about transition routing;
+//! metadata invariants. It does not read artifacts or execute external work,
+//! and it knows nothing about transition routing;
 //! callers query the semantically keyed result.
 
 #![allow(dead_code)]
@@ -29,7 +29,6 @@ pub(crate) const SUBJECT_NAMES: &[&str] = &[
 const TOP_LEVEL_KEYS: &[&str] = &[
     "config_version",
     "artifact_root",
-    "work_slot_bindings",
     "review_policies",
     "artifact_schemas",
     "revision_links",
@@ -46,6 +45,8 @@ pub(crate) struct PolicyAxis {
     id: String,
     description: String,
     required_authors: u64,
+    group: Option<String>,
+    self_review: bool,
 }
 
 impl PolicyAxis {
@@ -55,6 +56,10 @@ impl PolicyAxis {
 
     pub(crate) fn description(&self) -> &str {
         &self.description
+    }
+
+    pub(crate) fn self_review(&self) -> bool {
+        self.self_review
     }
 
     pub(crate) fn required_authors(&self) -> u64 {
@@ -88,13 +93,11 @@ impl RevisionLink {
 ///
 /// Every collection is semantically keyed for downstream evaluation:
 /// schemas by subject, links by their `from` subject, and policy axes by gate
-/// then axis id.  `artifact_root` and `work_slot_bindings` are retained as
-/// raw JSON and intentionally remain unexamined here.
+/// then axis id. `artifact_root` is retained as raw JSON and unexamined here.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ValidatedConfig {
     config_version: String,
     artifact_root: Option<Value>,
-    work_slot_bindings: Option<Value>,
     extra: Option<Value>,
     schemas_by_subject: BTreeMap<String, ValidatedSchema>,
     links_by_from: BTreeMap<String, Vec<RevisionLink>>,
@@ -111,12 +114,6 @@ impl ValidatedConfig {
     /// checks happen in this module.
     pub(crate) fn artifact_root(&self) -> Option<&Value> {
         self.artifact_root.as_ref()
-    }
-
-    /// Return raw caller input.  Slot identity, CLI shape, and binding
-    /// validity are engine concerns; this module does not inspect the value.
-    pub(crate) fn work_slot_bindings(&self) -> Option<&Value> {
-        self.work_slot_bindings.as_ref()
     }
 
     pub(crate) fn extra(&self) -> Option<&Value> {
@@ -211,6 +208,10 @@ pub(crate) enum ConfigViolation {
         index: usize,
     },
     RequiredAuthorsInvalid {
+        gate: String,
+        index: usize,
+    },
+    ReviewIdentityInvalid {
         gate: String,
         index: usize,
     },
@@ -327,6 +328,7 @@ impl ConfigViolation {
             Self::PolicyDescriptionMissing { .. } => "policy-description-missing",
             Self::PolicyDescriptionNotString { .. } => "policy-description-not-string",
             Self::RequiredAuthorsInvalid { .. } => "bad-required-authors",
+            Self::ReviewIdentityInvalid { .. } => "bad-review-identity",
             Self::DuplicateAxisId { .. } => "duplicate-axis-id",
             Self::ArtifactSchemasNotObject => "artifact-schemas-shape",
             Self::UnknownArtifactName { .. } => "unknown-artifact-name",
@@ -419,6 +421,7 @@ impl fmt::Display for ConfigViolation {
                 "{}: policy `{gate}[{index}]` `required_authors` must be an integer >= 1",
                 self.class()
             ),
+            Self::ReviewIdentityInvalid { gate, index } => write!(formatter, "{}: policy `{gate}[{index}]` group must be a non-empty string and self_review must be boolean", self.class()),
             Self::DuplicateAxisId { gate, id } => write!(
                 formatter,
                 "{}: duplicate policy id `{id}` in gate `{gate}`",
@@ -514,7 +517,7 @@ impl fmt::Display for LinkSchemaViolation {
 
 /// Parse and fully meta-validate one initial-input value.
 ///
-/// `artifact_root` and `work_slot_bindings` are copied without inspecting
+/// `artifact_root` is copied without inspecting
 /// type or contents.  The evaluation algorithm validates `artifact_root` only
 /// when a selected obligation needs a schema/link read. Binding shape is an
 /// engine concern.
@@ -595,7 +598,6 @@ pub(crate) fn parse_initial_input(
     Ok(ValidatedConfig {
         config_version,
         artifact_root: root.get("artifact_root").cloned(),
-        work_slot_bindings: root.get("work_slot_bindings").cloned(),
         extra: root.get("extra").cloned(),
         schemas_by_subject,
         links_by_from,
@@ -642,6 +644,17 @@ fn parse_review_policies(
                 continue;
             };
 
+            if entry
+                .get("group")
+                .is_some_and(|v| v.as_str().is_none_or(|s| s.trim().is_empty()))
+                || entry.get("self_review").is_some_and(|v| !v.is_boolean())
+            {
+                violations.push(ConfigViolation::ReviewIdentityInvalid {
+                    gate: gate.clone(),
+                    index,
+                });
+                continue;
+            }
             let id = match entry.get("id") {
                 None => {
                     violations.push(ConfigViolation::PolicyIdMissing {
@@ -719,6 +732,14 @@ fn parse_review_policies(
                     id,
                     description,
                     required_authors,
+                    group: entry
+                        .get("group")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    self_review: entry
+                        .get("self_review")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
                 },
             );
         }
@@ -1146,27 +1167,8 @@ mod tests {
     fn explicitly_empty_policies_and_missing_artifact_root_validate_clean() {
         let parsed = parse_initial_input(&empty_config()).expect("zero-obligation config is valid");
         assert!(parsed.artifact_root().is_none());
-        assert!(parsed.work_slot_bindings().is_none());
         assert!(parsed.schemas_by_subject().is_empty());
         assert!(parsed.axes_by_gate().is_empty());
-    }
-
-    #[test]
-    fn reserved_work_slot_bindings_are_accepted_unread() {
-        let mut config = empty_config();
-        config["work_slot_bindings"] = json!(42);
-        let parsed = parse_initial_input(&config).expect("reserved key must not be unknown");
-        assert_eq!(parsed.work_slot_bindings(), Some(&json!(42)));
-        assert!(parsed.artifact_root().is_none());
-
-        config["work_slot_bindings"] = json!({
-            "scope": {"command": "echo", "args": ["ok"]}
-        });
-        let parsed = parse_initial_input(&config).expect("object bindings must be unread");
-        assert_eq!(
-            parsed.work_slot_bindings(),
-            Some(&json!({"scope": {"command": "echo", "args": ["ok"]}}))
-        );
     }
 
     #[test]

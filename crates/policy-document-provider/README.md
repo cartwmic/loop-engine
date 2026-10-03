@@ -4,9 +4,9 @@
 
 `policy-document` is the release- and source-distributed external provider for PRD section 11. It never edits the target, invokes a reviewer, or judges semantic quality. It reads exact UTF-8 target bytes, applies run-frozen deterministic policies, and aggregates externally supplied semantic verdicts bound to the current digest.
 
-Fixed topology is `prepare` → `deterministic-review` → `semantic-review` → `end`; both revision edges are check-free. Initial input is closed JSON containing `schema_version`, `profile_version`, `mode` (`draft` or `audit`), absolute target `{id,path}`, non-empty deterministic policies, and non-empty semantic policies. Reserved `artifact_root` and `work_slot_bindings` are accepted and ignored by this provider. This provider-only treatment does not bypass the engine's binding validation at normal `start`; arbitrary binding JSON is not a supported engine-start contract. The provider is not required to write artifact files. Other unknown `initial_input` keys still fail. Agent procedure for this crate is [AGENTS.md](AGENTS.md). Drive a run with [skills/using-policy-document-provider/SKILL.md](skills/using-policy-document-provider/SKILL.md).
+Fixed topology is `prepare` → `deterministic-review` → `semantic-review` → `end`; both revision edges are check-free. Initial input is closed JSON containing `schema_version`, `profile_version`, `mode` (`draft` or `audit`), absolute target `{id,path}`, non-empty deterministic policies, and non-empty semantic policies. Reserved `artifact_root` is accepted and ignored. Optional `target_author: {name,kind}` identifies the document author. Execution and reviewer delivery belong to the external driver. The provider is not required to write artifact files. Other unknown `initial_input` keys still fail. Agent procedure for this crate is [AGENTS.md](AGENTS.md). Drive a run with [skills/using-policy-document-provider/SKILL.md](skills/using-policy-document-provider/SKILL.md).
 
-README profile `readme-3` keeps the title, purpose, onboarding, usage, validation, command, and local-reference deterministic floors. Its semantic axes also cover honest fitness, verifiable claims, and troubleshooting; onboarding review traces prerequisites through the first useful result, including compatible external-service setup or an explicit bring-your-own contract. AGENTS profile `agents-3` keeps the scope/authority, workflow/validation, completion/handoff, command, and local-reference floors, without a title or exact heading spelling requirement. Its semantic axes also cover non-discoverable sharp edges, ambiguity resolution, signal density, and living config; operational review checks fresh-checkout and post-edit command dependencies, and risk review checks cleanup/installation boundaries when relevant. Neither revision changes existing run-frozen inputs or adds a semantic axis. The skill describes an optional blind-first document assessment before independent repository-backed review; it is not a provider gate.
+README profile `readme-4` keeps the title, purpose, onboarding, usage, validation, command, and local-reference deterministic floors. Its semantic axes also cover honest fitness, verifiable claims, and troubleshooting; onboarding review traces prerequisites through the first useful result, including compatible external-service setup or an explicit bring-your-own contract. AGENTS profile `agents-4` keeps the scope/authority, workflow/validation, completion/handoff, command, and local-reference floors, without a title or exact heading spelling requirement. Its semantic axes also cover non-discoverable sharp edges, ambiguity resolution, signal density, and living config; operational review checks fresh-checkout and post-edit command dependencies, and risk review checks cleanup/installation boundaries when relevant. Neither revision changes existing run-frozen inputs or adds a semantic axis. The skill describes an optional blind-first document assessment before independent repository-backed review; it is not a provider gate.
 
 ## Setup
 
@@ -22,11 +22,9 @@ Dump refuses to overwrite any directory entry, including dangling symlinks. On w
 - `/tmp/policy-data/crates/policy-document-provider/data/readme.json`
 - `/tmp/policy-data/crates/policy-document-provider/data/agents.json`
 - `/tmp/policy-data/crates/policy-document-provider/data/reviewer-protocol.md`
-- `/tmp/policy-data/crates/policy-document-provider/data/semantic-review-worker-preamble.md`
-- `/tmp/policy-data/crates/policy-document-provider/data/semantic-review-worker-output-schema.json`
 - `/tmp/policy-data/crates/policy-document-provider/data/target-guidance.md`
 
-Copy chosen JSON profile, set `mode`, and replace target path with an absolute path. Keep target ID `README.md` or `AGENTS.md` for shipped profiles. The shipped skill uses the dumped worker files and that same selected profile to construct assigned semantic-review workers, then previews and hash-confirms the resulting profile before starting it unchanged. Current semantic policies reject `required_authors` as an unknown field: the provider requires at least one current pass and no standing fail per axis, not a configurable author floor. The generic constructor's roster/count handling does not extend that public input contract.
+Copy chosen JSON profile, set `mode`, and replace target path with an absolute path. Keep target ID `README.md` or `AGENTS.md` for shipped profiles. Semantic policies accept `required_authors` (integer >= 1, default 1), `group` (non-empty string), and `self_review` (boolean, default false). Distinct exact `(name,kind)` identities count once; target-author evidence is excluded unless the policy allows self review. Shared groups are scoped to semantic-review and combined intake assignments carry one `assessment_id`.
 
 ## Usage
 
@@ -50,11 +48,11 @@ Before starting with the copied profile, load [Setup](skills/using-policy-docume
 
 ## External evidence
 
-Current-source `policy-document commission "$FROZEN_PROFILE_JSON"` consumes a completed full-show envelope (or bound filter packet) to prepare explicitly selected historical review context, not a verdict. See [Explicit historical review context](skills/using-policy-document-provider/SKILL.md#explicit-historical-review-context) for selection and receipt freshness. Historical findings never become current proof by attachment.
+Current-source `policy-document commission "$FROZEN_PROFILE_JSON"` consumes a completed full-show envelope (or provider context packet) to prepare explicitly selected historical review context, not a verdict. See [Explicit historical review context](skills/using-policy-document-provider/SKILL.md#explicit-historical-review-context) for selection and receipt freshness. Historical findings never become current proof by attachment.
 
 For digest-bound evidence shape and recording, use [Evidence record](skills/using-policy-document-provider/SKILL.md#evidence-record) and [Evidence rules](skills/using-policy-document-provider/SKILL.md#evidence-rules). The provider never invokes a reviewer/model or edits the target. Candidate focused views and default compact delivery with independent full verification do not change document evidence rules or upgrade released v0.19.0 runs. Monitor/advisory output cannot approve a document; source integration is not a semantic audit.
 
-Evidence requires exact frozen fields and enums. One current pass and no current standing fail are required per semantic axis. Malformed attributable evidence blocks until any later shape-conforming record for that axis. Wrong profile, target, or digest is stale and never satisfies current conformance. Any target byte change requires fresh evidence.
+Evidence requires exact frozen fields and enums. Each semantic axis requires its effective author floor and no current standing fail. Malformed attributable evidence blocks until any later shape-conforming record for that axis. Wrong profile, target, or digest is stale and never satisfies current conformance. Prior evidence may be reused only through explicit `evidence-applicability`; deterministic checks always rerun on current bytes.
 
 Reviewer identity, digest, and verdict remain caller claims, not signatures or provenance. Provider reads target once per evaluation but cannot lock it between evaluation and engine transition commit. Evaluation receives a fixed context snapshot; a concurrent append can be absent from an in-flight decision. Serialize `append` and `event` operations per run using one logical mutator.
 
@@ -76,6 +74,15 @@ for mode in draft audit; do
 done
 ```
 
-The software-change journey `--self-test` executes this crate's semantic-review constructor against the shipped readme and agents profile shapes (temporary absolute targets) and prints `worker-data skill/root policy assertions passed` only after those fixtures, required keys/data bytes/preview visibility, and fail-closed invalid cases pass.
 
 Packaged archive smoke extracts `loop-engine` and `policy-document`, runs `policy-document data-dump` into an empty temporary root, then runs both modes from an empty working directory using only dumped profile bytes. macOS arm64 and Linux x86_64 archive smoke must pass before release publication.
+
+## External review commands
+
+`commission FROZEN_PROFILE_JSON < full-show.json` works before semantic review and reports `missing_inputs` instead of requiring a target to exist. Existing explicit historical selections remain context, not proof.
+
+`review-candidates < packet.json` accepts `{show, assignment, author, request, result, projection?, self_review?}`. Assignment contains `gate`, `review_stage`, `subject` and `subject_revision` (both current target digest), `policy_ids`, and `assessment_id` for combined groups. Request/result contain exactly one `text` or file `reference`. Prose needs driver `projection: {items:[{policy_id,result,findings}]}`. Original request/result are retained, malformed siblings are isolated, and candidates are never appended automatically. Direct self review requires `self_review: true` and permitted policies.
+
+`author-counts [--propose JSON] < full-show.json` inspects base/effective counts and append-only amendments. Amendment data is `{targets:[{gate:"semantic-review",axis:POLICY_ID}],before,after,actor,authority:{kind,reference},reason,corrects?}`. Authority kind is `owner` or `standing-delegation`; `after` is >= 1. Invalid amendments block named targets (unknown targets block all) until a valid correction references the invalid record ID. Count changes never remove standing failures.
+
+Applicability data is `{origin:{kind:"context-record",id:REVIEW_RECORD_ID},target:{subject:TARGET_ID,revision:CURRENT_DIGEST},attesting_driver:{name,kind},reason}`. Origin must be earlier review-evidence from the same target/profile. Reviewer identity and verdict are retained.

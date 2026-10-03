@@ -38,6 +38,17 @@ pub fn evaluate(
     config: &InitialInput,
     snapshot: &Snapshot,
 ) -> (bool, Value) {
+    let raw = json!({"semantic_policies":config.semantic_policies.iter().map(|p| json!({"id":p.id,"required_authors":p.required_authors})).collect::<Vec<_>>()});
+    let resolution = crate::external::counts(&raw, &json!(context));
+    let carried = loop_integrations::review_intake::carry(
+        context,
+        &snapshot.target_id,
+        &snapshot.sha256,
+        "profile_version",
+        &config.profile_version,
+        true,
+    );
+    let context = &carried;
     let ids: HashSet<&str> = config
         .semantic_policies
         .iter()
@@ -100,6 +111,21 @@ pub fn evaluate(
             diagnostics.push(json!({"policy_id": policy_id, "kind": "stale", "record_id": record.id, "reason": "profile, target, or digest does not match current evaluation"}));
             continue;
         }
+        let policy = config
+            .semantic_policies
+            .iter()
+            .find(|p| p.id == policy_id)
+            .unwrap();
+        if !policy.self_review
+            && config
+                .target_author
+                .as_ref()
+                .is_some_and(|author| author.name == e.author.name && author.kind == e.author.kind)
+        {
+            diagnostics
+                .push(json!({"policy_id":policy_id,"kind":"self-excluded","record_id":record.id}));
+            continue;
+        }
         let sequence = record.sequence.as_u64();
         let author = e.author.clone();
         let entry = valid.entry((policy_id.to_owned(), author.clone()));
@@ -129,6 +155,17 @@ pub fn evaluate(
     }
     let mut failed = false;
     for policy in &config.semantic_policies {
+        if resolution
+            .blocked
+            .contains(&format!("semantic-review.{}", policy.id))
+        {
+            failed = true;
+            diagnostics.push(json!({"policy_id":policy.id,"kind":"invalid-author-count-amendment","amendments":resolution.amendments}));
+            continue;
+        }
+        let required = resolution.effective[format!("semantic-review.{}", policy.id)]
+            .as_u64()
+            .unwrap_or(policy.required_authors);
         let malformed_active =
             malformed
                 .get(policy.id.as_str())
@@ -148,7 +185,11 @@ pub fn evaluate(
             .collect();
         verdicts.sort_by_key(|evidence| evidence.sequence);
         let has_fail = verdicts.iter().any(|evidence| evidence.result == "fail");
-        let has_pass = verdicts.iter().any(|evidence| evidence.result == "pass");
+        let has_pass = verdicts
+            .iter()
+            .filter(|evidence| evidence.result == "pass")
+            .count() as u64
+            >= required;
         if has_fail || !has_pass {
             failed = true;
             if has_fail {
