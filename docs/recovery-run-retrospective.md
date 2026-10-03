@@ -1,5 +1,7 @@
 # Recovery-run retrospective
 
+Historical-only: execution procedures described here are retired by the external-work successor. Use current skills for operations.
+
 Reviewed 2026-09-07 against v0.19.0 (`d756d74f00078a18fcb839674b7cee6055807407`). This is a retrospective and a set of proposals, not new product requirements. [The backlog](../BACKLOG.md) holds the remaining work; [PRD.md](PRD.md) remains the requirement-ID authority.
 
 ## Bottom line

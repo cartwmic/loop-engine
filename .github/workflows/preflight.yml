@@ -53,18 +53,6 @@ jobs:
           set -euo pipefail
           curl --proto '=https' --tlsv1.2 -LsSf \
             https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh
-      - name: Install operator-provided dagu
-        shell: bash
-        run: |
-          set -euo pipefail
-          version=2.14.0
-          url="https://github.com/dagu-org/dagu/releases/download/v${version}/dagu_${version}_linux_amd64.tar.gz"
-          bin="$RUNNER_TEMP/dagu-bin"
-          mkdir -p "$bin"
-          curl -fsSL "$url" | tar -xz -C "$bin" dagu
-          chmod +x "$bin/dagu"
-          echo "$bin" >> "$GITHUB_PATH"
-          "$bin/dagu" version
       # sccache's GHA backend uses the runner-provided cache service; it does
       # not require a repository secret or an object-store credential.
       - name: Install pinned sccache
@@ -246,6 +234,13 @@ jobs:
         run: python3 scripts/research-journey.py --self-test
       - name: Run Generate-PRD journey self-test
         run: python3 scripts/generate-prd-journey.py --self-test
+      - name: Collect external-work public journey surface for Bookends
+        run: python3 scripts/external-work-journey.py
+      - name: Run external-work journey self-test
+        run: python3 scripts/external-work-journey.py --self-test
+      - name: Run external-work source journey
+        run: |
+          python3 scripts/external-work-journey.py --engine target/debug/loop-engine --software target/debug/software-change --policy target/debug/policy-document --research target/debug/research --checker target/debug/bookends-check --output-root "$RUNNER_TEMP/external-work-journey"
       - name: Run full software-change source journey
         shell: bash
         run: |

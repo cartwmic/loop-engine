@@ -63,6 +63,7 @@ def ledger(ctx, gate, subject, revision):
                                'subject_revision':revision,'author':{'name':'driver','kind':'agent'},'findings':[]})
 
 
+# bookends:LE-176 — retired public commands are rejected; sentinel never runs.
 def retirement(args, root):
     for binary, retired in [(args.engine,RETIRED_ENGINE),(args.software,RETIRED_PROVIDER),
                             (args.policy,RETIRED_PROVIDER),(args.research,RETIRED_PROVIDER)]:
@@ -89,6 +90,7 @@ def retirement(args, root):
     print('external-work retirement passed')
 
 
+# bookends:LE-168 bookends:LE-170 bookends:LE-174 bookends:LE-177 bookends:LE-178 bookends:LE-182 — grouped external returns, early commissions/evidence, explicit counts and ordinary-first challenges.
 def intake_counts_advice(args, root):
     software = software_module()
     state = {'early':False,'post':False,'answered':False}
@@ -239,6 +241,7 @@ assert call('show', '--view', 'full', run_id)['result']['current_state'] == 'int
     return work
 
 
+# bookends:LE-179 bookends:LE-181 bookends:LE-183 — two source scopes, stale/wrong-source refusal and truthful final residuals.
 def paired_and_command_proof(args, root):
     state = {}
     def configure(profile, repository, artifacts):
@@ -300,6 +303,7 @@ def paired_and_command_proof(args, root):
                                  configure=configure,exercise=hook)
 
 
+# bookends:LE-171 — retained suite and whole-goal judgments remain applicable after affected lint checks.
 def lint_only_reuse(args, root):
     state = {'reused':False}
     def configure(profile, repository, artifacts):
@@ -411,6 +415,7 @@ def lint_only_reuse(args, root):
                                  configure=configure,exercise=hook)
 
 
+# bookends:LE-167 bookends:LE-172 — external policy/research judgments and external typed advice complete normally.
 def provider_specific(args, root):
     import hashlib
     from external_work_driver import engine_call, record_reviews

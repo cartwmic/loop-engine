@@ -1,18 +1,25 @@
 ---
 name: coordinating-loop-engine
-description: Delegate independent Loop Engine work to provider drivers and resume durable handoffs without controlling peer runs. Use when coordinating multiple outcomes or providers.
+description: Drive durable workflow state with externally executed work.
 ---
 
-# Coordinate independent drivers
+# coordinating-loop-engine
 
-Outcome: each driver can finish or return a durable blocker independently, without chat history or control over another driver's run.
+## External-driver loop
 
-1. Confirm the desired outcomes, acceptance boundaries, risks and non-goals. Ask the owner to supply checkout/write ownership and coordination ownership; do not allocate worktrees, invent a scheduler, or infer permission to share a writer. Stop on ambiguous ownership.
-2. Select the appropriate provider procedure: repository paths `crates/software-change-provider/skills/using-software-change-provider/SKILL.md`, `crates/policy-document-provider/skills/using-policy-document-provider/SKILL.md`, or `crates/research-provider/skills/using-research-provider/SKILL.md` (Generate-PRD additionally uses `using-generate-prd/SKILL.md` beside it). Read the selected skill and the [engine skill](../using-loop-engine/SKILL.md) before delegating. The coordinator does not replace provider policy.
-3. Obtain exact owner-confirmed role/model assignments and profile/binding bytes/hash/preview through those procedures. Verify each model against `pi --list-models` and pass it explicitly; no default, fallback or substitution. Independent driver launches need their own authority even when a different run has frozen bindings.
-4. Give each driver a durable handoff: outcome; provider and required skill; working directory and source references; owner-supplied write/coordination ownership; model/binding confirmation references; approved serial budget; monitor and escalation owner; run ID and actual catalog path if started; artifact/output locators; next observation and return destination. Omit production isolation overrides unless the owner explicitly requested isolation this session.
-5. Follow the engine skill's **Choose an observation**: `loop-engine monitor --run RUN_A --run RUN_B --json --attention-seconds 300` watches independent sources; attach external executions with `--capture-dir ABS`. Notify the responsible driver on source-specific completion/attention, not routine samples. When a meaningful packet change is observed, the responsible coordinating assistant must read the status/monitor lanes and post the concise observed-change plus needed-action/decision update in the active Pi conversation before its first later wait, inspect, or help decision; machine attention is not owner chat. Stop the observer when finished; it does not stop work. Use `--engine ABS` for released compatibility. Optional summaries need a confirmed command/model and budget, and remain advisory. Observing authorizes no mutation or cancellation; each driver reads its own action/full show before acting.
-6. A blocked driver returns the durable reason, completed outcomes, retained failed captures, unresolved ownership/cleanup, required owner decision and resume references. Keep successful peers independent; do not cancel, restart or advance them to unblock another. Resume from the named current run observation and files, not a chat summary. Budget serial closure, proof and review honestly; escalate before expensive unapproved re-execution.
-7. Return execution facts, output conformance and external judgment separately. Task exit 0 is not semantic approval. Preserve pending calibration, owner decisions and Git/hosted delivery; do not manufacture final completion.
+The engine stores and evaluates workflow state; it never executes agents, advisors or proof commands. The driver may use any agents or harness.
 
-Example: a research driver returns a missing-source blocker while a document driver completes its own authorized outcome. Retain both run/output references. Ask the source owner for the missing material, then return it only to the blocked research driver, which observes its own current state before resuming. The coordinator never requests an event on the completed document run.
+1. Inspect action/full `show` and provider `commission`. Early commissions return `missing_inputs`; supply those inputs before treating a commission as ready.
+2. Do the work externally. Reviewers return judgments; the driver runs deterministic checks and owns progression.
+3. Submit external judgments through `review-candidates`, external `command_results` through `prepare-validation`, and accepted context through engine `append`.
+4. Read action/full `show`, then send the checked `event`; re-read after each transition. A successful process exit alone does not prove the deliverable.
+
+Preserve review groups, self-review declarations, author counts and amendments. Declare evidence applicability explicitly; check ordinary review clearance before challenge review. Respect declared source scopes and current source identity. Record residual risks honestly and cover every applicable sufficiency axis; zero axes do not require invented reviews. Reuse evidence only while its declared applicability remains true. Typed advice answers are externally authored context of kind `advice-answer`.
+## Public surface
+
+Primary commands: `start`, `list`, `show`, `append`, `event`, `history`, `terminate`. Additional commands: targeted `read`, terminal `explore`, passive `monitor`. Monitoring observes durable state, not external execution. Providers use `describe` and `evaluate` transport.
+
+Use an explicit catalog `--config`, inspect unintended LOOP/XDG/home redirects, and keep artifacts outside the checkout. Never use a user catalog for tests. Load CLI `--help` for exact arguments. Mutations require a fresh action/full observation; compact/status views do not arm them.
+## Provider tools
+
+Use `describe`/`evaluate`, `checkpoint`, `commission`, `review-candidates`, `prepare-validation`, `source-identity`, `author-counts`, and `data-dump`. `setup` edits policy only with `--set`, `--add-axis`, `--remove-axis`; use explain/drift to inspect policy changes. Tools prepare or evaluate data, not external execution. Keep frozen run obligations and original runtime; no active-run migration is authorized.

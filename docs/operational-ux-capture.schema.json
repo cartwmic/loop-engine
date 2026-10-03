@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Operational UX capture matrix",
+  "title": "Historical proof receipt validation",
+  "description": "Retained for existing durable receipt validation; no engine command execution surface is supported.",
   "type": "object",
   "additionalProperties": false,
   "required": ["rows"],

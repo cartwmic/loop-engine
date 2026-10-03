@@ -1,5 +1,7 @@
 # Bound-work UX findings and suggestions
 
+Historical-only: execution procedures described here are retired by the external-work successor. Use current skills for operations.
+
 Written 2026-08-16 against loop-engine 0.9.0. Re-triaged 2026-08-17 against 0.11.0.
 
 Source run: `shared-catalog-agent-default-0.9` (software-change `standard`), abandoned at `plan`

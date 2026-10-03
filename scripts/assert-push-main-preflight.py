@@ -92,12 +92,9 @@ def validate_runner_scripts() -> None:
 
 def validate_preflight(preflight: str) -> None:
     required = (
-        # Tool setup and exact versions.
-        "Install operator-provided dagu",
-        "version=2.14.0",
-        "github.com/dagu-org/dagu/releases/download/v${version}/",
-        'echo "$bin" >> "$GITHUB_PATH"',
-        "$RUNNER_TEMP/dagu-bin",
+        # External work and tool setup.
+        "python3 scripts/external-work-journey.py --self-test",
+        "--output-root",
         "mozilla-actions/sccache-action@v0.0.11",
         'version: "v0.17.0"',
         "name: Export GitHub Actions cache runtime variables",
@@ -253,7 +250,6 @@ def validate_preflight(preflight: str) -> None:
 
     # The cache must be running before *any* Cargo compilation, including the
     # source-built tool installs.  It must also remain observable at the end.
-    dagu_at = position(preflight, "Install operator-provided dagu")
     runtime_export = position(preflight, "name: Export GitHub Actions cache runtime variables")
     cache_start = position(preflight, '"$SCCACHE_PATH" --start-server')
     build_cache = position(preflight, "Restore Cargo build outputs")
@@ -284,7 +280,6 @@ def validate_preflight(preflight: str) -> None:
     # There must be no unrecognized Cargo invocation before the cache is
     # running.  The literal space avoids matching the cargo-dist installer URL.
     first_cargo = position(preflight, "cargo ")
-    require(dagu_at < first_cargo, "preflight must install dagu before its first Cargo invocation")
     require(cache_start < first_cargo, "preflight must start sccache before its first Cargo invocation")
     final_stats = preflight.rfind('"$SCCACHE_PATH" --show-stats')
     require(final_stats > first_cargo, "preflight must emit final sccache statistics after compilation")

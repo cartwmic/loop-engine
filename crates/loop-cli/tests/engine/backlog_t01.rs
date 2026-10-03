@@ -451,6 +451,7 @@ fn assert_rejected_code(value: &Value, code: &str) {
 }
 
 #[test]
+// bookends:LE-2 — assertions below drive fresh public CLI processes.
 fn backlog_t01_graph_validation_public_cli_cases() {
     let invalid = [
         (
@@ -579,6 +580,7 @@ fn backlog_t01_graph_validation_public_cli_cases() {
 }
 
 #[test]
+// bookends:LE-8 bookends:LE-9 bookends:LE-26 — assertions below drive fresh public CLI processes.
 fn backlog_t01_history_failure_public_cli_is_atomic() {
     let fixture = ProviderFixture::new(checked_workflow());
     let run_id = "history-failure";
@@ -638,6 +640,7 @@ fn backlog_t01_history_failure_public_cli_is_atomic() {
 }
 
 #[test]
+// bookends:LE-12 bookends:LE-24 bookends:LE-29 bookends:LE-30 bookends:LE-31 bookends:LE-32 bookends:LE-34 — assertions below drive fresh public CLI processes.
 fn backlog_t01_exact_transition_lineage_public_cli() {
     let fixture = ProviderFixture::new(lineage_workflow());
     let run_id = "exact-lineage";
@@ -867,6 +870,7 @@ fn backlog_t01_context_append_races_preserve_allow_and_deny_snapshots() {
 }
 
 #[test]
+// bookends:LE-15 bookends:LE-36 bookends:LE-37 — assertions below drive fresh public CLI processes.
 fn backlog_t01_state_and_lifecycle_races_invalidate_late_evaluations() {
     for (behavior, mutation) in [
         ("block-allow", "terminate"),
@@ -993,6 +997,7 @@ fn backlog_t01_state_and_lifecycle_races_invalidate_late_evaluations() {
 }
 
 #[test]
+// bookends:LE-11 — assertions below drive fresh public CLI processes.
 fn backlog_t01_frozen_topology_and_work_slot_catalog_survive_provider_change() {
     let original = slotted_workflow("slot-original", "Original", "approve");
     let changed = slotted_workflow("slot-changed", "Changed", "review");

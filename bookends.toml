@@ -2,6 +2,7 @@ prd = "docs/PRD.md"
 
 [classes.e2e_journey]
 pathspecs = [
+  "scripts/external-work-journey.py",
   "scripts/software-change-journey.py",
   "scripts/policy-document-journey.py",
   "scripts/research-journey.py",

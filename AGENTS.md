@@ -26,108 +26,41 @@ The journey self-test checks the following LE-107 and execution-ownership remind
 
 Operationally, before the commit introducing `LE-107`, the owner-accepted wording is a proposal; once it is present in committed `docs/PRD.md`, that PRD is authoritative. This AGENTS summary is subordinate and referential, not a second product policy: for any new provenance burden, name the observed ordinary-use failure and why a smaller mechanism using existing durable state, history, capture, or driver judgment is insufficient. Keep driver-authored metadata small, trust explicit materiality and applicability declarations except for cheap mechanical identity mismatches, prefer the narrowest honest correction, and preserve rich engine-generated history. Apply these limits with reference to [`docs/PRD.md`](docs/PRD.md) LE-107.
 
-Fan-out spawn/capture/conformance mechanics belong to the engine. Providers/callers own role framing and output content. Reviewers produce judgments only. Drivers run deterministic checks, `show`, capture triage, `append`, `event`, and progression. Exit 0 alone does not establish deliverable validity. Before fan-out or plan-graph execution, load the engine and software-change skills below plus [docs/agent-usage.md](docs/agent-usage.md) for working-directory, selection, stdin, capture, Dagu, overrun re-show and zero-axis review-binding rules.
+## External-driver loop
 
-### Load before acting
+The engine stores and evaluates workflow state; it never executes agents, advisors or proof commands. The driver may use any agents or harness.
 
-When using Loop Engine, select software-change for code delivery and research for research; generate-PRD is a research profile. README/AGENTS authoring or assessment requires policy-document, including those document portions of a software-change run. Its checks are additional to the software-change workflow. These choices do not require a new software-change run for every repository edit. Revision or audit of an existing PRD is owner/driver requirements work; research can investigate unresolved claims, while generate-PRD extracts candidates. Policy-document does not accept requirements. Code-related PRD amendments belong to that software-change run's intent/requirements work, with Bookends and code proof remaining additive.
+1. Inspect action/full `show` and provider `commission`. Early commissions return `missing_inputs`; supply those inputs before treating a commission as ready.
+2. Do the work externally. Reviewers return judgments; the driver runs deterministic checks and owns progression.
+3. Submit external judgments through `review-candidates`, external `command_results` through `prepare-validation`, and accepted context through engine `append`.
+4. Read action/full `show`, then send the checked `event`; re-read after each transition. A successful process exit alone does not prove the deliverable.
 
-| Work | Owning procedure |
-|---|---|
-| Start, observe, invoke, record, progress, recover or reuse evidence | [skills/using-loop-engine/SKILL.md](skills/using-loop-engine/SKILL.md) plus the active provider skill: [software-change](crates/software-change-provider/skills/using-software-change-provider/SKILL.md), [policy-document](crates/policy-document-provider/skills/using-policy-document-provider/SKILL.md), or [research](crates/research-provider/skills/using-research-provider/SKILL.md) |
-| Confirm a software-change launch | [Exact profile confirmation](crates/software-change-provider/skills/using-software-change-provider/SKILL.md#exact-profile-confirmation): live review states, when to rehash that same file immediately before start, and how to preserve launch evidence |
-| Route a software-change finding or choose AC-N/Bookends obligations | [Software-change skill](crates/software-change-provider/skills/using-software-change-provider/SKILL.md), including its proportional late-finding guide |
-| Capture, monitor, summarize or publish a delivery pointer | [Operational UX contracts](docs/operational-ux-contracts.md) |
-| Coordinate separate drivers | [Coordinator guidance](skills/coordinating-loop-engine/SKILL.md) |
-| Extract a PRD candidate | [Generate-PRD skill](crates/research-provider/skills/using-generate-prd/SKILL.md) |
-| Change provider initial-input parsing | [Allocation contract](docs/agent-usage.md#deterministic-setup); preserve reserved `artifact_root` acceptance |
+Preserve review groups, self-review declarations, author counts and amendments. Declare evidence applicability explicitly; check ordinary review clearance before challenge review. Respect declared source scopes and current source identity. Record residual risks honestly and cover every applicable sufficiency axis; zero axes do not require invented reviews. Reuse evidence only while its declared applicability remains true. Typed advice answers are externally authored context of kind `advice-answer`.
 
-Existing runs keep their original runtime, guidance and frozen obligations. No active-run migration is authorized. A graph runner grants no worktree lifecycle authority.
+## Workflow and proof
 
-## Workflow
-
-Run commands from the repository root. During iteration, use focused checks:
+Run from the repository root. Load the engine and active provider skills. Use policy-document for README/AGENTS authoring or assessment. Requirement changes require owner acceptance. The designated final-proof owner supplies tool/cache startup, then runs the current stable-tree matrix, nextest/doctests, stock-Cargo compatibility, dependency audit, clippy and formatting. Workers run focused checks only. Missing proof blocks completion.
 
 ```sh
-cargo test -p loop-cli --lib
-cargo test -p software-change-provider --lib
-python3 scripts/run-nextest.py --filter TEST_SUBSTRING
-python3 scripts/run-central-tests.py --filter TEST_SUBSTRING
-```
-
-For final proof, first load the [workspace test/cache procedure](docs/agent-usage.md#workspace-rust-test-and-preflight-path) and [.github/workflows/preflight.yml](.github/workflows/preflight.yml). Run nextest/doctests and the required stock-Cargo compatibility gate through that procedure's ordered fresh-handoff commands. A bare `cargo test --workspace` is not the final compatibility gate.
-
-The designated final-proof owner supplies and executes local tool/cache startup and verification through the current matrix, before workspace compilation. Hosted startup belongs to preflight. The CI workflow is not a local startup script. Missing local setup coordinates block proof. These additional baseline checks remain required:
-
-```sh
-cargo install cargo-machete --version 0.9.2 --locked
-python3 scripts/dependency-audit.py
-cargo clippy --workspace --all-targets -- -D warnings
-cargo fmt --all -- --check
-```
-
-### Maintenance traps
-
-- Before operating a run, use [deterministic setup](skills/using-loop-engine/SKILL.md#deterministic-setup) to inspect the operation's `LOOP_*`, XDG and home overrides, record the resolved catalog, pass explicit `--config`, and unset only unintended redirects.
-- Before mutation and after every transition, read action/full `show`. Status/compact, monitor, list, history and invocation-progress do not arm mutation; follow [the observation interlock](skills/using-loop-engine/SKILL.md#choose-an-observation).
-- The global `--timeout-ms` default is 30000 for provider calls and invocation allowance. Choose an adequate explicit value before slow calls or bound work; use the engine skill's recovery procedure on overrun.
-- Integration roots are modules in the one central executable. Use `--test workspace`. Old source-module names are not Cargo test targets. Register new roots with `#[path] mod` in `tests/workspace-integration/tests/workspace.rs`. With `autotests = false`, an unregistered root can be invisible to both Cargo and inventory checks. Require topology and inventory assertions from the linked test procedure.
-- When adding or renaming public tests, check eligibility in [bookends.toml](bookends.toml) and the [runner grammar](crates/bookends-check/schema/runner-grammar.md). Update pathspecs when the new location is not covered, retain a recognized CI collection command, and run the repository gate. A citation alone cannot add an ineligible file to coverage.
-- When adding or renaming binaries, update `scripts/run-central-tests.py` (`REQUIRED`), `scripts/test_contract.py` (`REQUIRED_BINARIES`), and `tests/workspace-integration/src/lib.rs` (`REQUIRED_BINARIES`, `FRESH_BUILD_ARGS`). `tests/fixtures` executables are protocol fixtures; do not substitute them for production providers. Use the supported fresh handoff and independent stock-Cargo compatibility gate from the test procedure.
-- Provider data shipping uses hand-maintained `FILES` inventories: [software-change](crates/software-change-provider/src/embedded_data.rs), [policy-document](crates/policy-document-provider/src/embedded_data.rs), and [research](crates/research-provider/src/embedded_data.rs). Update the matching inventory for every data-file addition/rename; tests of listed entries can miss an omitted new file. For policy-document, run `cargo test -p policy-document-provider --bin policy-document manifest_exactly_matches_focused_data` and both applicable journey modes.
-- One designated proof owner runs the current plan-owned final stable-tree matrix once. Workers run assigned focused checks; reviewers consume retained results. Repeat only checks invalidated by later changes. Missing matrix, benchmark argv/inputs or receipts block final proof; use the [receipt procedure](docs/implementation-report-proof.md). Do not invent a benchmark CLI or substitute an earlier pilot result.
-
-### Required public boundaries
-
-These checks are additive to the workspace baseline. The table selects coverage; the local templates below supply the argv. Run the applicable commands after required tool/cache setup, building once. The [preflight workflow](.github/workflows/preflight.yml) and [proof-boundary reference](docs/agent-usage.md#executable-proof-boundaries) describe the corresponding CI coverage.
-
-| Changed boundary | Required source proof |
-|---|---|
-| Engine, CLI, core, integrations, shared scripts, work slots, or unclear boundary | All four journeys below |
-| Software-change | `software-change-journey.py`: source, full traversal; default `--jobs 2`. The driver may declare `--jobs 1` for serial proof before execution. |
-| Policy-document | `policy-document-journey.py`: both draft and audit |
-| Research | `research-journey.py` and `generate-prd-journey.py`: source |
-| Bookends checker or repository gate | `cargo test -p bookends-check --offline` and the enabled repository gate |
-
-```sh
-cargo build --locked -p loop-cli -p software-change-provider -p policy-document-provider -p research-provider -p bookends-check
-ENGINE="$PWD/target/debug/loop-engine"
-python3 scripts/software-change-journey.py --mode source --engine "$ENGINE" --provider "$PWD/target/debug/software-change" --data-root "$PWD" --work-root "${TMPDIR:-/tmp}/loop-engine-software-change-journey" --profile crates/software-change-provider/data/configs/high-rigor.json --traversal-depth full --jobs 2
+cargo build --workspace --all-targets
+python3 scripts/external-work-journey.py --engine target/debug/loop-engine --software target/debug/software-change --policy target/debug/policy-document --research target/debug/research --checker target/debug/bookends-check --output-root /absolute/fresh-external-work
+python3 scripts/software-change-journey.py --mode source --engine target/debug/loop-engine --provider target/debug/software-change --profile crates/software-change-provider/data/configs/high-rigor.json --traversal-depth full --jobs 2
 for mode in draft audit; do
-  python3 scripts/policy-document-journey.py --engine "$ENGINE" --provider "$PWD/target/debug/policy-document" --profile crates/policy-document-provider/data/readme.json --mode "$mode"
+  python3 scripts/policy-document-journey.py --engine target/debug/loop-engine --provider target/debug/policy-document --profile crates/policy-document-provider/data/readme.json --mode "$mode"
 done
-python3 scripts/research-journey.py --mode source --engine "$ENGINE" --provider "$PWD/target/debug/research" --profile crates/research-provider/data/configs/standard.json
-python3 scripts/generate-prd-journey.py --mode source --engine "$ENGINE" --provider "$PWD/target/debug/research" --checker "$PWD/target/debug/bookends-check" --profile crates/research-provider/data/configs/generate-prd.json
+python3 scripts/research-journey.py --mode source --engine target/debug/loop-engine --provider target/debug/research --profile crates/research-provider/data/configs/standard.json
+python3 scripts/generate-prd-journey.py --mode source --engine target/debug/loop-engine --provider target/debug/research --checker target/debug/bookends-check --profile crates/research-provider/data/configs/generate-prd.json
 ```
 
-For journey-harness changes, also run its `--self-test` when available and every affected journey variant it runs. For package/archive adapters or release-boundary changes, add packaged validation; source proof does not replace it. Use installed mode for installer/installed-path changes, archive mode for archive layout/extraction, and both for shared wrapper logic, embedded/package identity, or release metadata/workflow changes. [archive-smoke.yml](.github/workflows/archive-smoke.yml) owns archive preparation, identity inputs and the complete `scripts/packaged-smoke.py` invocation. That script has no self-test; exercise its packaged path. For release metadata/workflow changes, also run the dist plan/generation and release-gate assertions listed in preflight.
+For packaging boundaries additionally run the applicable installed/archive packaged-smoke mode with actual package identity. Keep hand-maintained embedded_data.rs FILES inventories current. Register central integration modules in tests/workspace-integration/tests/workspace.rs and verify inventory/topology. Public tests need eligible bookends.toml pathspecs and recognized CI collection commands.
 
-Local packaged templates follow. Replace `X.Y.Z`, `NATIVE_TARGET`, paths and checksum placeholders with actual package evidence. Use a distinct external output root per invocation. [Shared packaged smoke](docs/operational-ux-contracts.md#shared-packaged-smoke) defines the identity JSON; archive hashes and installed-executable hashes are different inputs.
-
-```sh
-python3 scripts/packaged-smoke.py --mode installed --expected-version X.Y.Z --platform NATIVE_TARGET --output-root /absolute/installed-proof --package-identity /absolute/installed-identity.json \
-  --binary "loop-cli=/absolute/bin/loop-engine" --binary "software-change-provider=/absolute/bin/software-change" \
-  --binary "policy-document-provider=/absolute/bin/policy-document" --binary "research-provider=/absolute/bin/research"
-python3 scripts/packaged-smoke.py --mode archive --expected-version X.Y.Z --platform NATIVE_TARGET --output-root /absolute/archive-proof --package-identity /absolute/archive-identity.json \
-  --archive "loop-cli=/absolute/loop-cli.tar.xz" --checksum "loop-cli=ENGINE_ARCHIVE_SHA256" \
-  --archive "software-change-provider=/absolute/software-change-provider.tar.xz" --checksum "software-change-provider=SOFTWARE_ARCHIVE_SHA256" \
-  --archive "policy-document-provider=/absolute/policy-document-provider.tar.xz" --checksum "policy-document-provider=POLICY_ARCHIVE_SHA256" \
-  --archive "research-provider=/absolute/research-provider.tar.xz" --checksum "research-provider=RESEARCH_ARCHIVE_SHA256"
-```
-
-For skill/constructor or root policy changes, `python3 scripts/software-change-journey.py --self-test` must reach `worker-data skill/root policy assertions passed` after testing setup/constructors and root rules. Full source must reach `contracted fan-out failure` after proving the actual contracted-worker failure path. Synthetic evidence establishes mechanics and persistence; it supplies no semantic review.
-
-Before every push, run `scripts/bookends-check-gate.sh` from the root; do not assume the checkout's `.githooks/pre-push` has been activated. The gate prefers any `bookends-check` on `PATH` over compiling the checkout, so a stale installed checker can be selected. For a current-source gate, after the required local tool/cache setup, use the same Cargo environment to resolve the actual target directory, build the current checker, and prepend its build-output directory to `PATH`:
+Before push, build the current checker and run the repository gate:
 
 ```sh
-set -eu
 CHECKER_BIN_DIR="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"] + "/debug")')"
 cargo build --locked -p bookends-check --bin bookends-check
-test -x "$CHECKER_BIN_DIR/bookends-check"
-PATH="$CHECKER_BIN_DIR:$PATH" scripts/bookends-check-gate.sh
+PATH="$CHECKER_BIN_DIR:$PATH" scripts/bookends-check-gate.sh </dev/null
 ```
-
-Required CI also runs the gate. Only explicit `BOOKENDS_BYPASS=<class>:<reason>` may bypass RED, with durable evidence; recording failure refuses bypass. Follow the [Bookends command contract](crates/bookends-check/schema/runner-grammar.md) and [operational UX contract](docs/operational-ux-contracts.md) for publication history, shallow acquisition and proof eligibility. README.md and AGENTS.md are outside Bookends coverage.
 
 ## Document and Git safety
 
@@ -173,8 +106,4 @@ gh workflow run release.yml --ref main -f "tag=$TAG"
 
 ## Completion and handoff
 
-Completion requires the accepted behavior, current authoritative documentation, passing workspace baseline and all applicable public-boundary proof. Missing or failed required checks block completion. Record an explicit owner exception with its scope and risk; never report it as a pass.
-
-For software-change report finalization, load [docs/implementation-report-proof.md](docs/implementation-report-proof.md). It owns the exact current Git/path identity, matrix/receipt and post-report checker contract. The graph summarizer is the sole report writer for full or selected plan-graph execution and for report-only execution where supported. Supported no-task repair instead has its repair worker write the report, with no summarizer. Follow the owning [software-change skill](crates/software-change-provider/skills/using-software-change-provider/SKILL.md) and the run's frozen runtime, graph and obligations; this guidance does not enable a recovery route that run does not support. Keep separately authorized Git/hosted work pending until observed. Hosted delivery requires successful preflight for the exact owner-authorized commit, including cache startup, final statistics and wall time; require that proof before Package 7b.
-
-Handoff includes changed files and why; command outcomes including failures/skips; current Git revision and staged/committed/pushed/uncommitted state; run IDs and actual database path; remaining risks and out-of-scope follow-up. A checked transition alone establishes no semantic review. Use the engine skill for durable resumption and terminal-state limits.
+Report changed files, exact command outcomes and missing checks, Git identity and staged/committed/pushed state, actual run/catalog paths, residual risks and owner follow-up. No checked transition establishes semantic review.
