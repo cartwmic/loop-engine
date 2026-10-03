@@ -104,6 +104,8 @@ pub(crate) struct PolicyAxis {
     description: String,
     required_authors: u64,
     review_stage: ReviewStage,
+    group: Option<String>,
+    self_review: bool,
 }
 
 impl PolicyAxis {
@@ -117,6 +119,14 @@ impl PolicyAxis {
 
     pub(crate) fn required_authors(&self) -> u64 {
         self.required_authors
+    }
+
+    pub(crate) fn group(&self) -> Option<&str> {
+        self.group.as_deref()
+    }
+
+    pub(crate) fn self_review(&self) -> bool {
+        self.self_review
     }
 
     pub(crate) fn review_stage(&self) -> ReviewStage {
@@ -880,11 +890,48 @@ fn parse_review_policies(
                 continue;
             }
 
+            let self_review = entry
+                .get("self_review")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let cold = entry.get("cold").and_then(Value::as_bool).unwrap_or(false);
+            for field in ["self_review", "cold"] {
+                if entry.get(field).is_some_and(|v| !v.is_boolean()) {
+                    violations.push(ConfigViolation::SemanticContract {
+                        message: format!("{gate}[{index}].{field} must be boolean"),
+                    });
+                }
+            }
+            if cold && self_review {
+                violations.push(ConfigViolation::SemanticContract {
+                    message: format!("{gate}[{index}]: cold and self_review cannot both be true"),
+                });
+            }
+            if entry
+                .get("group")
+                .is_some_and(|v| v.as_str().is_none_or(|v| v.trim().is_empty()))
+            {
+                violations.push(ConfigViolation::SemanticContract {
+                    message: format!("{gate}[{index}].group must be a nonempty string"),
+                });
+            }
+            let group = entry
+                .get("group")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .or_else(|| {
+                    (contract_version >= 4).then(|| match review_stage {
+                        ReviewStage::Aggregate => format!("{gate}.aggregate"),
+                        ReviewStage::Individual => format!("{gate}.individual.{id}"),
+                    })
+                });
             let axis = PolicyAxis {
                 id: id.clone(),
                 description,
                 required_authors,
                 review_stage,
+                group,
+                self_review,
             };
             staged.insert(id.clone(), axis.clone());
 

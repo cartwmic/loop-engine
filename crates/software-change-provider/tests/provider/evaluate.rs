@@ -1352,3 +1352,200 @@ fn downstream_criterion_references_are_optional_but_current_and_unique() {
             .contains("not present in the current intent")
     );
 }
+
+fn run_software_change_policy(mut request: Value) -> Output {
+    let mut ledger = finding_ledger_record("intent-review", "intent.json", "1", json!([]));
+    ledger["sequence"] = json!(1000);
+    request["context"].as_array_mut().unwrap().push(ledger);
+    run_provider(request)
+}
+
+fn software_change_count_amendment(id: &str, targets: Value, before: u64, after: u64) -> Value {
+    json!({"id":id,"kind":"author-count-amendment","sequence":10,"created_at":1,
+        "data":{"targets":targets,"before":before,"after":after,"actor":{"name":"owner","kind":"human"},
+        "authority":{"kind":"owner","reference":"owner approval"},"reason":"adjust count"}})
+}
+
+#[test]
+fn software_change_count_amendments_preserve_failures_increase_and_correct_invalid_records() {
+    let root = TestDir::new();
+    root.write_json("intent.json", &valid_metadata("1"));
+    let mut config = config_with_axis(&root);
+    config["contract_version"] = json!(4);
+    config["review_policies"]["intent-review"][0]["required_authors"] = json!(2);
+    let mut request = base_request(config, checked("intent-review", "approved", "design"));
+    let target = json!([{"gate":"intent-review","stage":"aggregate","axis":"axis"}]);
+    let pass = passing_evidence();
+    let mut fail = passing_evidence();
+    fail["id"] = json!("failure");
+    fail["sequence"] = json!(2);
+    fail["data"]["author"]["name"] = json!("other");
+    fail["data"]["result"] = json!("fail");
+    fail["data"]["findings"] = json!("material failure");
+    request["context"] = json!([
+        pass,
+        fail,
+        software_change_count_amendment("decrease", target.clone(), 2, 1)
+    ]);
+    assert_eq!(
+        response(&run_software_change_policy(request.clone()))["result"],
+        "deny"
+    );
+    request["context"] = json!([
+        pass,
+        software_change_count_amendment("decrease", target.clone(), 2, 1)
+    ]);
+    let result = response(&run_software_change_policy(request.clone()));
+    assert_eq!(result["result"], "allow", "{result}");
+    request["context"]
+        .as_array_mut()
+        .unwrap()
+        .push(software_change_count_amendment(
+            "increase",
+            target.clone(),
+            1,
+            2,
+        ));
+    assert_eq!(
+        response(&run_software_change_policy(request.clone()))["result"],
+        "deny"
+    );
+    fail["data"]["result"] = json!("pass");
+    fail["data"]["findings"] = json!("");
+    request["context"].as_array_mut().unwrap().push(fail);
+    let result = response(&run_software_change_policy(request.clone()));
+    assert_eq!(result["result"], "allow", "{result}");
+    for bad_target in [target.clone(), json!([{"goal":"not-a-target"}])] {
+        let mut bad = software_change_count_amendment("bad", bad_target, 9, 1);
+        bad["sequence"] = json!(11);
+        let mut candidate = request.clone();
+        candidate["context"].as_array_mut().unwrap().push(bad);
+        let output = response(&run_software_change_policy(candidate.clone()));
+        assert_eq!(output["result"], "deny");
+        assert!(output
+            .to_string()
+            .contains("author-count-amendment-invalid"));
+        let mut correction = software_change_count_amendment("correction", target.clone(), 2, 2);
+        correction["data"]["corrects"] = json!("bad");
+        correction["sequence"] = json!(12);
+        candidate["context"]
+            .as_array_mut()
+            .unwrap()
+            .push(correction);
+        assert_eq!(
+            response(&run_software_change_policy(candidate))["result"],
+            "allow"
+        );
+    }
+}
+
+#[test]
+fn software_change_groups_and_self_review_are_explicit() {
+    let root = TestDir::new();
+    root.write_json("intent.json", &valid_metadata("1"));
+    let mut config = config_with_axis(&root);
+    config["contract_version"] = json!(4);
+    config["review_policies"]["intent-review"][0]["required_authors"] = json!(2);
+    let mut request = base_request(
+        config.clone(),
+        checked("intent-review", "approved", "design"),
+    );
+    let mut self_record = passing_evidence();
+    self_record["id"] = json!("self");
+    self_record["sequence"] = json!(2);
+    self_record["data"]["author"] = json!({"name":"owner","kind":"human"});
+    request["context"] = json!([passing_evidence(), self_record]);
+    assert_eq!(
+        response(&run_software_change_policy(request.clone()))["result"],
+        "deny"
+    );
+    request["initial_input"]["review_policies"]["intent-review"][0]["self_review"] = json!(true);
+    let result = response(&run_software_change_policy(request.clone()));
+    assert_eq!(result["result"], "allow", "{result}");
+    request["initial_input"]["review_policies"]["intent-review"][0]["cold"] = json!(true);
+    assert_exit(&run_software_change_policy(request), 1);
+    config["review_policies"]["intent-review"][0]["required_authors"] = json!(1);
+    let mut second = config["review_policies"]["intent-review"][0].clone();
+    second["id"] = json!("second");
+    config["review_policies"]["intent-review"]
+        .as_array_mut()
+        .unwrap()
+        .push(second);
+    let mut request = base_request(config, checked("intent-review", "approved", "design"));
+    let mut second_record = passing_evidence();
+    second_record["id"] = json!("second");
+    second_record["sequence"] = json!(2);
+    second_record["data"]["policy_id"] = json!("second");
+    request["context"] = json!([passing_evidence(), second_record]);
+    assert_eq!(
+        response(&run_software_change_policy(request.clone()))["result"],
+        "deny"
+    );
+    for record in request["context"].as_array_mut().unwrap() {
+        record["data"]["group"] = json!("intent-review.aggregate");
+        record["data"]["assessment_id"] = json!("combined-1");
+    }
+    let result = response(&run_software_change_policy(request.clone()));
+    assert_eq!(result["result"], "allow", "{result}");
+    request["context"][1]["data"]["assessment_id"] = json!("isolated-2");
+    assert_eq!(
+        response(&run_software_change_policy(request))["result"],
+        "deny"
+    );
+}
+
+#[test]
+fn software_change_setup_knobs_explain_drift_and_author_counts_cli() {
+    let root = TestDir::new();
+    let output = root.path.join("profile.json");
+    let run_setup = |additional: &[String]| {
+        let mut command = Command::new(workspace_integration::binary("software-change"));
+        command
+            .args(["setup", "--rigor", "minimal", "--output"])
+            .arg(&output)
+            .args(["--decline-advice", "--set", "criterion.required_authors=2"]);
+        command.args(additional);
+        command.bounded_output("setup policy").unwrap()
+    };
+    assert_exit(&run_setup(&[]), 0);
+    let explain_path = root.path.join("profile.json.explain.json");
+    let mut explain: Value = serde_json::from_slice(&fs::read(&explain_path).unwrap()).unwrap();
+    assert_eq!(explain["base"]["id"], "minimal-14");
+    explain["overrides"][1]["base_value"] = json!(7);
+    fs::write(&explain_path, serde_json::to_vec(&explain).unwrap()).unwrap();
+    assert_exit(
+        &run_setup(&[
+            "--previous-explain".into(),
+            explain_path.to_string_lossy().into_owned(),
+        ]),
+        0,
+    );
+    let explain: Value = serde_json::from_slice(&fs::read(&explain_path).unwrap()).unwrap();
+    assert_eq!(explain["drift"][0]["key"], "criterion.required_authors");
+    assert_exit(&run_setup(&["--set".into(), "unknown.setting=2".into()]), 2);
+    let input: Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+    let show = json!({"operation":"show","status":"completed","result":{"initial_input":input,"context":[]}});
+    let mut command = Command::new(workspace_integration::binary("software-change"));
+    command.arg("author-counts");
+    let output = super::bounded_process::run_with_stdin(
+        &mut command,
+        "author counts",
+        &serde_json::to_vec(&show).unwrap(),
+    )
+    .unwrap()
+    .output;
+    assert_exit(&output, 0);
+    assert_eq!(response(&output)["effective"]["criterion"], 2);
+    let proposal = json!({"targets":[{"criterion":"all"}],"after":1,"actor":{"name":"owner","kind":"human"},"authority":{"kind":"owner","reference":"approval"},"reason":"lower floor"});
+    let mut command = Command::new(workspace_integration::binary("software-change"));
+    command.args(["author-counts", "--propose", &proposal.to_string()]);
+    let output = super::bounded_process::run_with_stdin(
+        &mut command,
+        "author counts proposal",
+        &serde_json::to_vec(&show).unwrap(),
+    )
+    .unwrap()
+    .output;
+    assert_exit(&output, 0);
+    assert_eq!(response(&output)["data"]["before"], 2);
+}

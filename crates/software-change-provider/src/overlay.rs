@@ -97,7 +97,9 @@ pub(crate) fn apply(initial_input: &Value) -> Value {
     {
         inject_axes(
             policies,
-            initial_input["contract_version"].as_u64() == Some(3),
+            initial_input["contract_version"]
+                .as_u64()
+                .is_some_and(|version| version >= 3),
             semantic_coverage_enabled(initial_input),
         );
     }

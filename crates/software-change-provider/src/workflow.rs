@@ -321,7 +321,12 @@ pub(crate) fn describe_workflow(initial_input: Option<&Value>) -> Result<Workflo
         .and_then(Value::as_object)
         .and_then(|object| object.get("review_policies"));
     let reconciliation_enabled = initial_input
-        .filter(|input| input.get("contract_version").and_then(Value::as_u64) == Some(3))
+        .filter(|input| {
+            input
+                .get("contract_version")
+                .and_then(Value::as_u64)
+                .is_some_and(|version| version >= 3)
+        })
         .is_some_and(|input| {
             // Version-10 contract-v3 inputs are historical snapshots. New
             // profile revisions gain the provider-owned phase; custom/test
@@ -341,7 +346,7 @@ pub(crate) fn describe_workflow(initial_input: Option<&Value>) -> Result<Workflo
         semantic_coverage,
     )?;
     apply_driver_act_opt_in(&mut workflow, initial_input)?;
-    if initial_input.is_some_and(|v| matches!(v["contract_version"].as_u64(), Some(2 | 3))) {
+    if initial_input.is_some_and(|v| matches!(v["contract_version"].as_u64(), Some(2..=4))) {
         for slot in &mut workflow.work_slots {
             if slot.id.as_str().starts_with("validation") || slot.id.as_str() == "implement" {
                 slot.stdin_context_kinds.extend(
@@ -367,7 +372,7 @@ pub(crate) fn describe_workflow(initial_input: Option<&Value>) -> Result<Workflo
                 .map(|row| {
                     let mut axis = serde_json::json!({
                         "id": row["id"],
-                        "required_authors": row
+                        "base_required_authors": row
                             .get("required_authors")
                             .cloned()
                             .unwrap_or(Value::from(1))
@@ -375,7 +380,7 @@ pub(crate) fn describe_workflow(initial_input: Option<&Value>) -> Result<Workflo
                     if initial_input
                         .and_then(|input| input.get("contract_version"))
                         .and_then(Value::as_u64)
-                        == Some(3)
+                        .is_some_and(|version| version >= 3)
                     {
                         axis["review_stage"] = row
                             .get("review_stage")
@@ -390,7 +395,8 @@ pub(crate) fn describe_workflow(initial_input: Option<&Value>) -> Result<Workflo
         state.action_guidance = Some(serde_json::json!({
             "review_axes": axes,
             "policy_status": if review_policies.is_some() { "frozen" } else { "unknown: inspect full initial_input" },
-            "criterion_policy": initial_input.and_then(|v| v.get("criterion_policy")),
+            "author_count_note": "Normalized review and criterion counts are base values. Use software-change author-counts with full show JSON for effective counts.",
+            "base_criterion_policy": initial_input.and_then(|v| v.get("criterion_policy")),
             "advice": advice_action_guidance(state.id.as_str(), initial_input),
             "repair": "Keep validation-report-only corrections in validation. For an implementation defect owned by a frozen task, select that task and its dependants. Use repair_finding_ids only for an accepted unresolved implementation finding honestly owned by no task. Revise plan/design/intent only when that phase obligation is materially wrong; reconfirm affected downstream proof and explicitly carry unaffected original evidence.",
             "review": "First review is comprehensive. Confirm accepted fixes and fix-introduced holes, with explicit unaffected applicability; no rerun-until-pass. Falsify circular proof and evidence compatible with opposite outcomes against frozen obligations, without adding axes.",

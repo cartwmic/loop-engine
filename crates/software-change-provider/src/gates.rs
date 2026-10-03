@@ -77,6 +77,25 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
         return EvaluationOutcome::Response(unsupported_response());
     }
 
+    let counts = software_change_provider::author_counts::resolve(
+        &initial_input,
+        &serde_json::to_value(&request.context).expect("context JSON"),
+    );
+    let initial_input = counts.effective;
+    let (count_subject, count_gate) = match duties {
+        TransitionDuties::Checked { subject, gate } => (Some(subject), gate),
+        _ => (None, None),
+    };
+    if counts.blocked.iter().any(|key| {
+        ((key == "criterion" || key == "goal") && count_subject == Some("validation-report.json"))
+            || count_gate.is_some_and(|gate| key.starts_with(&format!("review.{gate}.")))
+    }) {
+        return EvaluationOutcome::Response(deny_response(
+            "software-change-author-count-amendment-invalid",
+            "invalid author-count amendment blocks fulfillment until corrected",
+            Some(json!({"amendments":counts.amendments,"blocked":counts.blocked})),
+        ));
+    }
     let config = match parse_initial_input(&initial_input) {
         Ok(config) => config,
         Err(error) => return EvaluationOutcome::EvaluationError(error.to_string()),
@@ -174,7 +193,7 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
         // draft hops need no metadata extraction.
         if gate.is_some() {
             let extracted = if subject == "validation-report.json"
-                && matches!(initial_input["contract_version"].as_u64(), Some(2 | 3))
+                && matches!(initial_input["contract_version"].as_u64(), Some(2..=4))
             {
                 crate::artifacts::extract_index_metadata(document.value())
             } else {
@@ -228,7 +247,7 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
     }
 
     if let Some(document) = document.as_ref() {
-        match check_criterion_rules(&config, subject, document, config.contract_version() == 3) {
+        match check_criterion_rules(&config, subject, document, config.contract_version() >= 3) {
             Ok(violations) if !violations.is_empty() => {
                 return EvaluationOutcome::Response(schema_deny_for_criteria(request, violations))
             }
@@ -311,7 +330,7 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
     // The fixed criterion/goal index applies to both supported semantic
     // contract generations when evaluating an already-readable artifact.
     if subject == "validation-report.json"
-        && matches!(initial_input["contract_version"].as_u64(), Some(2 | 3))
+        && matches!(initial_input["contract_version"].as_u64(), Some(2..=4))
     {
         let result = (|| {
             let root = std::path::Path::new(
@@ -400,7 +419,7 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
                 config.axis_namespace(),
                 config.artifact_root(),
                 ledger.current_snapshot(),
-                config.contract_version() == 3,
+                config.contract_version() >= 3,
             )
         });
         if let Some(evidence) = evidence {

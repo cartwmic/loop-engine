@@ -78,6 +78,25 @@ fn run() -> i32 {
             };
             return bookends_preview_from_args(&rest);
         }
+        Some(command) if command == "author-counts" => {
+            let rest: Vec<String> = args.map(|v| v.to_string_lossy().into_owned()).collect();
+            let mut stdin = String::new();
+            let result = io::stdin()
+                .read_to_string(&mut stdin)
+                .map_err(|e| e.to_string())
+                .and_then(|_| serde_json::from_str::<Value>(&stdin).map_err(|e| e.to_string()))
+                .and_then(|show| software_change_provider::author_counts::run(&rest, &show));
+            return match result {
+                Ok(value) => {
+                    println!("{value}");
+                    0
+                }
+                Err(error) => {
+                    eprintln!("author-counts: {error}");
+                    2
+                }
+            };
+        }
         Some(command) if command == "setup" => {
             let rest = match args
                 .map(|arg| arg.into_string())
@@ -280,7 +299,7 @@ fn bookends_preview_from_args(args: &[String]) -> i32 {
 }
 
 fn provider_help() -> i32 {
-    println!("software-change\n\nCommands: data-dump, bookends-preview, setup, advice-request, checkpoint, review-candidates, prepare-validation, commission, source-identity\nStdin operations: describe, evaluate\nsetup (--rigor minimal|standard|high | --profile FILE) --output FILE (--enable-advice | --decline-advice) [--bookends]");
+    println!("software-change\n\nCommands: author-counts, data-dump, bookends-preview, setup, advice-request, checkpoint, review-candidates, prepare-validation, commission, source-identity\nStdin operations: describe, evaluate\nsetup (--rigor minimal|standard|high | --profile FILE) --output FILE (--enable-advice | --decline-advice) [--bookends]");
     0
 }
 

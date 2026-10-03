@@ -281,9 +281,9 @@ fn all_profiles_pass_production_config_validation_and_have_exact_subjects() {
     for profile in PROFILES {
         let config = load_profile(profile);
         let expected_version = match *profile {
-            "minimal" => "minimal-13",
-            "standard" => "standard-13",
-            "high-rigor" => "high-rigor-13",
+            "minimal" => "minimal-14",
+            "standard" => "standard-14",
+            "high-rigor" => "high-rigor-14",
             _ => unreachable!("unknown profile {profile}"),
         };
         assert_eq!(config["config_version"], expected_version);
@@ -851,7 +851,7 @@ fn implementation_keeps_coverage_and_validation_is_a_checkpoint_bound_index() {
         let shipped_index: Value =
             serde_json::from_str(include_str!("../../data/validation-report-schema.json")).unwrap();
         assert_eq!(validation, &shipped_index);
-        assert_eq!(config["contract_version"], 3);
+        assert_eq!(config["contract_version"], 4);
         let expected_floor = if *profile == "minimal" { 1 } else { 2 };
         assert_eq!(
             config["criterion_policy"],

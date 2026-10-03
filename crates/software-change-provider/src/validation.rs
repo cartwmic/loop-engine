@@ -121,7 +121,17 @@ pub(crate) fn prepare(input: &Value) -> Result<Value, String> {
     let revision = text(input, "revision")?;
     let packet = &show["result"];
     let root = Path::new(text(&packet["initial_input"], "artifact_root")?);
-    let policy = contract(&packet["initial_input"])?;
+    let counts = software_change_provider::author_counts::resolve(
+        &packet["initial_input"],
+        &packet["context"],
+    );
+    if !counts.blocked.is_empty() {
+        return Err(format!(
+            "invalid author-count amendment: {:?}",
+            counts.amendments
+        ));
+    }
+    let policy = contract(&counts.effective)?;
     let commission =
         software_change_provider::commission::inspect(show, Some("validation-draft"), None)?;
     let mut specs = commands(&commission["commission"]["proof_commands"])?;
@@ -783,6 +793,7 @@ pub(crate) fn evaluate(
     }
     for (criterion, verdict_ids, floor) in groups {
         let mut authors: BTreeSet<(String, String)> = BTreeSet::new();
+        let mut self_authors = 0usize;
         for id in verdict_ids {
             if !selected_ids.insert(id.clone()) {
                 return Err("duplicate selected verdict ID".into());
@@ -868,7 +879,12 @@ pub(crate) fn evaluate(
             if !carried && d["subject_revision"] != revision {
                 return Err("stale verdict target".into());
             }
-            if d["author"] == report_author || d["author"] == implementation_author {
+            if !(if criterion.is_some() {
+                policy.criterion_policy.self_review
+            } else {
+                policy.criterion_policy.goal_self_review
+            }) && (d["author"] == report_author || d["author"] == implementation_author)
+            {
                 return Err("self-authorship cannot satisfy criterion policy".into());
             }
             if ledger.current_snapshot().is_some_and(|s| {
@@ -884,6 +900,9 @@ pub(crate) fn evaluate(
                 text(&d["author"], "name")?.to_owned(),
                 text(&d["author"], "kind")?.to_owned(),
             );
+            if d["author"] == report_author || d["author"] == implementation_author {
+                self_authors += 1;
+            }
             if !authors.insert(author_key) {
                 return Err("duplicate criterion author".into());
             }
@@ -912,7 +931,7 @@ pub(crate) fn evaluate(
             }
             projection.push(json!({"selected_id":id,"source_id":original.id,"mode":if carried{"carried"}else{"fresh"},"verdict":d}));
         }
-        if complete && authors.len() < floor {
+        if complete && authors.len().saturating_sub(self_authors.saturating_sub(1)) < floor {
             return Err(format!(
                 "insufficient independent authors for {}",
                 criterion.unwrap_or("whole-intent goal")

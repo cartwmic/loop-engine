@@ -9,6 +9,7 @@ mod schema;
 mod workflow;
 
 pub mod advice;
+pub mod author_counts;
 pub mod commission;
 pub mod embedded_data;
 pub mod setup;

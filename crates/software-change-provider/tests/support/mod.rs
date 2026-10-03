@@ -163,7 +163,7 @@ pub fn evidence(
     subject_revision: &str,
     config_version: &str,
 ) -> Value {
-    json!({
+    let mut value = json!({
         "gate": gate,
         "policy_id": policy_id,
         "review_stage": "aggregate",
@@ -173,7 +173,13 @@ pub fn evidence(
         "subject": subject,
         "subject_revision": subject_revision,
         "config_version": config_version
-    })
+    });
+    if config_version.ends_with("-14") {
+        value["group"] = json!(format!("{gate}.aggregate"));
+        value["assessment_id"] =
+            json!(format!("{gate}-aggregate-{author_name}-{subject_revision}"));
+    }
+    value
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -578,6 +584,19 @@ impl Engine {
             config_version,
         );
         record.data["review_stage"] = json!(review_stage);
+        if config_version.ends_with("-14") {
+            record.data["group"] = json!(format!(
+                "{gate}.{review_stage}{}",
+                if review_stage == "individual" {
+                    format!(".{policy_id}")
+                } else {
+                    String::new()
+                }
+            ));
+            record.data["assessment_id"] = json!(format!(
+                "{gate}-{review_stage}-{author_name}-{subject_revision}"
+            ));
+        }
         self.append(run_id, record);
     }
 

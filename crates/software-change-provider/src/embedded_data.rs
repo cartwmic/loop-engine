@@ -490,3 +490,26 @@ fn ensure_parent_paths_are_directories(path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn embedded_profile_inventory_ships_contract_four_explicit_groups() {
+        for name in ["minimal", "standard", "high-rigor"] {
+            let path = format!("crates/software-change-provider/data/configs/{name}.json");
+            let file = FILES
+                .iter()
+                .find(|file| file.path == path)
+                .expect("profile is in FILES");
+            let profile: serde_json::Value = serde_json::from_slice(file.bytes).unwrap();
+            assert_eq!(profile["contract_version"], 4);
+            assert_eq!(profile["config_version"], format!("{name}-14"));
+            for entries in profile["review_policies"].as_object().unwrap().values() {
+                for entry in entries.as_array().unwrap() {
+                    assert!(entry["group"].is_string());
+                }
+            }
+        }
+    }
+}

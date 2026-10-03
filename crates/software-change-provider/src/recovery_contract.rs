@@ -3,11 +3,19 @@
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroUsize;
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CriterionPolicy {
     pub required_authors: NonZeroUsize,
     pub goal_required_authors: NonZeroUsize,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub self_review: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub goal_self_review: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -27,7 +35,7 @@ impl RecoveryContract {
 
     pub(crate) fn parse(value: serde_json::Value) -> Result<Self, String> {
         match value["contract_version"].as_u64() {
-            Some(2 | 3) => {}
+            Some(2..=4) => {}
             _ => {
                 return Err("unsupported software-change semantic contract; use the fixed original provider for old-profile runs".into())
             }

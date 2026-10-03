@@ -596,7 +596,7 @@ fn report_ledger_derives_current_checkpoint_instead_of_copying_state() {
                 axis,
                 "pass",
                 "",
-                &format!("reviewer-{axis}"),
+                "combined-reviewer",
                 "agent",
                 "implementation-report.json",
                 "r15",

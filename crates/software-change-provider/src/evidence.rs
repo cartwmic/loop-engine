@@ -199,6 +199,8 @@ pub(crate) struct ConformingEvidence {
     pub(crate) author: AuthorIdentity,
     pub(crate) subject_revision: String,
     pub(crate) config_version: String,
+    pub(crate) group: Option<String>,
+    pub(crate) assessment_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -430,7 +432,7 @@ pub(crate) fn evaluate_evidence_with_dispositions(
 
             // Subject-author evidence is structurally valid but never counts
             // toward any axis, using exact (name, kind) equality.
-            if record.author == *subject_author
+            if (record.author == *subject_author && !policy.self_review())
                 || ledger.is_some_and(|ledger| {
                     ledger.findings.iter().any(|finding| {
                         finding.disposition
@@ -758,7 +760,7 @@ pub(crate) fn evaluate_staged_evidence_with_dispositions(
                 {
                     continue;
                 }
-                if record.author == *subject_author
+                if (record.author == *subject_author && !policy.self_review())
                     || ledger.is_some_and(|ledger| {
                         ledger.findings.iter().any(|finding| {
                             finding.disposition
@@ -802,6 +804,44 @@ pub(crate) fn evaluate_staged_evidence_with_dispositions(
                     }
                 }
             }
+            if let Some(group) = policy.group() {
+                let members: Vec<_> = axes
+                    .values()
+                    .filter(|axis| axis.group() == Some(group))
+                    .collect();
+                if members.len() > 1 {
+                    let complete = |author: &AuthorIdentity| {
+                        let mut assessment = None;
+                        members.iter().all(|member| {
+                            let peer = latest.get(&(
+                                stage.clone(),
+                                member.id().to_owned(),
+                                current_revision.to_owned(),
+                                author.clone(),
+                            ));
+                            peer.is_some_and(|peer| {
+                                if peer.config_version != config_version
+                                    || peer.group.as_deref() != Some(group)
+                                {
+                                    return false;
+                                }
+                                let Some(id) = peer.assessment_id.as_deref() else {
+                                    return false;
+                                };
+                                match assessment {
+                                    Some(previous) => previous == id,
+                                    None => {
+                                        assessment = Some(id);
+                                        true
+                                    }
+                                }
+                            })
+                        })
+                    };
+                    satisfied_authors.retain(&complete);
+                    present_authors.retain(complete);
+                }
+            }
             current_authors.insert(key.clone(), present_authors);
 
             let malformed_reasons = malformed.get(&key).expect("configured stage/axis");
@@ -831,10 +871,10 @@ pub(crate) fn evaluate_staged_evidence_with_dispositions(
                         .cloned()
                         .map(|reason| EvidenceDiagnostic::Unverified { reason }),
                 );
-                if (distinct_present.len() as u64) < policy.required_authors() {
+                if (satisfied_authors.len() as u64) < policy.required_authors() {
                     axis_diagnostics.push(EvidenceDiagnostic::Independence {
                         required: policy.required_authors(),
-                        distinct_present: distinct_present.len(),
+                        distinct_present: satisfied_authors.len(),
                     });
                 }
                 diagnostics.push(AxisDiagnostic {
@@ -1084,6 +1124,14 @@ fn parse_conforming_with_stage(
     require_stage: bool,
 ) -> Result<ConformingEvidence, EvidenceParseError> {
     let mut reasons = Vec::new();
+    for field in ["group", "assessment_id"] {
+        if data
+            .get(field)
+            .is_some_and(|v| v.as_str().is_none_or(|s| s.trim().is_empty()))
+        {
+            reasons.push(format!("{field} must be a nonempty string when present"));
+        }
+    }
     let gate = non_empty_string(data, "gate", &mut reasons);
     let policy_id = non_empty_string(data, "policy_id", &mut reasons);
     let result = match data.get("result").and_then(Value::as_str) {
@@ -1228,6 +1276,12 @@ fn parse_conforming_with_stage(
         author,
         subject_revision,
         config_version,
+        group: data.get("group").and_then(Value::as_str).map(str::to_owned),
+        assessment_id: data
+            .get("assessment_id")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned),
     })
 }
 
