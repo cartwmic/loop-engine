@@ -21,7 +21,7 @@ unset BOOKENDS_BYPASS
 grep -qx GREEN "$ARTIFACT_ROOT/candidate-check.txt"
 ```
 
-A human must accept or reject the candidate before any commit to `docs/PRD.md`; a parser pass is not acceptance. Hosted preflight also requires `python3 scripts/assert-generate-prd-profile.py`. The current selected skill lacks that checker's required human-acceptance wording, so the profile gate currently fails: preserve the failure and report repository final proof blocked pending an authorized skill correction. Do not bypass the gate or claim an ordinary journey repaired it.
+A human must accept or reject the candidate before any commit to `docs/PRD.md`; a parser pass is not acceptance. Hosted preflight also requires `python3 scripts/assert-generate-prd-profile.py`. Run that assertion against the freshly built research binary using the root guide's metadata-resolved `RESEARCH_PROVIDER` handoff. If it fails, preserve the failure and report repository final proof blocked; do not bypass the gate or substitute an ordinary journey.
 
 When editing or driving this provider, load the selected skill for general external-loop concepts; the supported crate-specific command set below overrides its generic tool list; load the [reviewer protocol](data/reviewer-protocol.md) when commissioning judgments. The engine never executes agents, advisors or proof commands. Drivers own external execution and semantic acceptance.
 

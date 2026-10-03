@@ -26,6 +26,8 @@ When proposing provenance obligations, load [docs/PRD.md](docs/PRD.md) LE-107; t
 
 Before driving the CLI, load [the engine skill](skills/using-loop-engine/SKILL.md) and [agent usage](docs/agent-usage.md). Before commissioning provider work, load its crate-local guide to select supported commands and its skill. Each run has one logical mutating driver: serialize all mutations through that driver, rather than starting independent concurrent mutators. Test catalogs and captures belong in driver-owned directories outside the checkout: explicitly set database and provider config, and unset unintended LOOP/XDG redirects rather than using user state.
 
+Before rebuilding or replacing a provider executable, inspect active runs in each driver-owned catalog with explicit database/config and full show. Runs freeze command/args paths, not executable bytes. If an active run points to a build output that would be overwritten, stop the build: retain that executable and its required runtime dependencies at the exact frozen path, and build new binaries into a separate `CARGO_TARGET_DIR`. Do not move the old binary and assume the run follows it; there is no migration. Resume only with the compatible runtime preserved or after an authorized termination of the affected run.
+
 ### Load before acting
 
 | Work | Owning procedure |
@@ -80,6 +82,7 @@ Do not stop another driver's cache server or clean unrelated state. Retain the p
 
 ```sh
 cargo build --workspace --all-targets
+RESEARCH_PROVIDER="$BIN_DIR/research" python3 scripts/assert-generate-prd-profile.py
 python3 scripts/external-work-journey.py --engine "$BIN_DIR"/loop-engine --software "$BIN_DIR"/software-change --policy "$BIN_DIR"/policy-document --research "$BIN_DIR"/research --checker "$BIN_DIR"/bookends-check --output-root "$PROOF_ROOT/external-work"
 python3 scripts/software-change-journey.py --mode source --engine "$BIN_DIR"/loop-engine --provider "$BIN_DIR"/software-change --profile crates/software-change-provider/data/configs/high-rigor.json --traversal-depth full --jobs 2
 for mode in draft audit; do
