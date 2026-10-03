@@ -299,4 +299,4 @@ def self_test(output: Path | None = None) -> int:
         print(f"public checker proof retained: {output}")
         return result
     with tempfile.TemporaryDirectory(prefix="implementation-report-proof-") as temp:
-        return prove(Path(temp))
+        return prove(Path(temp).resolve())
