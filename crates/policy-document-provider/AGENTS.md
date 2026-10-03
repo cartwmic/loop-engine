@@ -6,9 +6,9 @@ Root `AGENTS.md` governs checkout operations and authority; this guide adds only
 
 ## Workflow
 
-When editing or driving this provider, load the [skill](skills/using-policy-document-provider/SKILL.md) for general external-loop concepts; the supported crate-specific command set below overrides its generic tool list; load the [reviewer protocol](data/reviewer-protocol.md) when commissioning judgments.
+When editing or driving this provider, load the [skill](skills/using-policy-document-provider/SKILL.md) for general external-loop concepts; the supported crate-specific command set below overrides the generic tool list in checkout-root `docs/agent-usage.md`; load the [reviewer protocol](data/reviewer-protocol.md) when commissioning judgments.
 
-This provider supports `commission`, `review-candidates`, `author-counts` and `data-dump`, plus stdin describe/evaluate transport. The skill's generic references to `checkpoint`, `prepare-validation`, `source-identity` and `setup` do not apply here.
+This provider supports `commission`, `review-candidates`, `author-counts`, `setup` and `data-dump`, plus stdin describe/evaluate transport. The generic references in checkout-root `docs/agent-usage.md` to `checkpoint`, `prepare-validation` and `source-identity` do not apply here.
 
 For an executable packet example, use checkout-root `scripts/policy-document-journey.py` and `scripts/external_work_driver.py` (`record_reviews` demonstrates intake shape, but its synthetic judgments are mechanical fixtures, never semantic proof). Draft progression is `ready` from prepare, `passed` from deterministic-review, then `passed` from semantic-review; `revise` returns either review state to prepare.
 
@@ -19,7 +19,7 @@ BIN_DIR="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json
 "$BIN_DIR/policy-document" commission "$(cat /absolute/proof/profile.json)" < /absolute/proof/full-show.json
 ```
 
-`review-candidates` takes `show`, `assignment`, `author`, `request` and `result`. The assignment declares `gate: "semantic-review"`, `review_stage: "ordinary"`, and one commissioned policy ID per independent group. Both `subject` and `subject_revision` must equal commission's current `target_sha256`. A top-level projection can interpret original text when necessary. Append each accepted candidate's `data` as `review-evidence`. Commission's author counts and frozen policies govern reviewer coverage.
+When recording reviewer judgments, load the skill’s Run loop section for `review-candidates` intake and evidence append procedure.
 
 Two provider-local traps require explicit handling: keep target bytes quiescent throughout review because file edits are not atomically locked/versioned with workflow commit; compare the final file SHA-256 with the digest in accepted review evidence after completion, and obtain new evidence if it changed. Load [target guidance](data/target-guidance.md) for this assessment boundary. `data-dump DIR` preserves the `crates/policy-document-provider/data/` prefix under DIR; find exported profiles there, not directly under DIR.
 
@@ -34,7 +34,7 @@ assert actual == expected, "target changed after commissioned review"
 PYHASH
 ```
 
-Full show alone does not select prior judgments for reviewer delivery. During revisions, add top-level `selection_data` to the completed full-show envelope with `target_id`, `slot_id: "semantic-review"` and `record_ids` naming the retained original `review-evidence` records. Pass it to commission to prepare a receipt, inspect the returned selection data and append it as `review-context-selection`; then re-read full show and commission again to deliver the selected `context`. If replacing a selection, name its record ID in `supersedes` and obtain a fresh receipt after target changes; never reuse a stale receipt. Selected stale findings are historical context, not current proof.
+When delivering historical judgments during revisions, load the skill’s Explicit historical review context section. Full show alone does not select prior judgments for reviewer delivery; selected stale findings are historical context, not current proof.
 
 From the repository root, rebuild before testing changed provider behavior:
 

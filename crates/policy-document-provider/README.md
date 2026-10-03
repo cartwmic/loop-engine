@@ -44,7 +44,7 @@ These are mechanical tests, not genuine semantic review. The root agent guide ow
 
 ## Base-derived profiles
 
-Use `policy-document setup --rigor standard --output /absolute/profile.json`
+Use `target/debug/policy-document setup --rigor standard --output /absolute/profile.json`
 (or `--profile FILE` for a selected custom base). `setup --help` lists review
 count, eligible-self, group and axis overrides. Inspect `profile.json.explain.json`
 for base/override/effective identity; replay options with `--previous-explain FILE`
