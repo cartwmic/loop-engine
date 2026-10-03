@@ -2725,8 +2725,8 @@ fn sufficiency_packets_supply_neutral_subjects_and_stage_specific_companions() {
     }) {
         count += 1;
         let row = entry.as_object().unwrap();
-        assert_eq!(entry["observed"], "pending");
-        assert_eq!(entry["attested_by"], "");
+        assert!(matches!(entry["observed"].as_str(), Some("pass" | "fail")));
+        assert!(!entry["attested_by"].as_str().unwrap().is_empty());
         assert!(entry.get("applicability").is_none());
         let identity = row_key(row);
         let key = format!(
