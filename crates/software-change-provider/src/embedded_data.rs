@@ -347,6 +347,13 @@ pub static FILES: &[EmbeddedFile] = &[
         )),
     },
     EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/returned-v14-r4.json",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/returned-v14-r4.json"
+        )),
+    },
+    EmbeddedFile {
         path: "crates/software-change-provider/data/configs/high-rigor.json",
         bytes: include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),

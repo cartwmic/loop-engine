@@ -33,7 +33,7 @@
     },
     {
       "id": "AC-2",
-      "statement": "The external dispatcher reads recorded approvals and sends their receipts; when delivery is unavailable, operators can still record and inspect approvals, and receipts not yet delivered are sent automatically once delivery is available again."
+      "statement": "The external dispatcher reads recorded approvals and sends each receipt that has not yet been delivered, including receipts left undelivered by an outage once delivery is available again; a receipt already delivered, including one delivered before this change, is not sent again. When delivery is unavailable, operators can still record and inspect approvals."
     }
   ],
   "constraints": [
