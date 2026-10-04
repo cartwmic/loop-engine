@@ -1523,7 +1523,79 @@ def findings_and_steering(args, root):
 
 
 
-# bookends:LE-120 bookends:LE-143 bookends:LE-145 — passive snapshots/attention expose workflow and source-backed owner-update guidance while external execution stays unknown and observer shutdown changes no run state.
+# bookends:LE-143 — real changed packets and unchanged stdout silence describe the assistant-owned posting checkpoint; conversation delivery remains external evidence.
+def owner_update_proof(ctx):
+    import queue
+    import threading
+    skill = (ROOT / 'skills/using-loop-engine/SKILL.md').read_text()
+    for instruction in ['coordinating assistant', 'concise source-backed owner update',
+                        'active Pi conversation', 'meaningful observed change',
+                        'before the next wait, inspect, or owner-help decision',
+                        'stay quiet for unchanged observations']:
+        assert instruction in skill, instruction
+    before = ctx['call']('history',ctx['run_id'])
+    packets = queue.Queue()
+    child = subprocess.Popen([ctx['engine'],'monitor','--run',ctx['run_id'],
+                              '--database',str(ctx['database']),'--json','--poll-seconds','0.05'],
+                             stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+    def collect():
+        for line in child.stdout:
+            packets.put(json.loads(line))
+    reader = threading.Thread(target=collect,daemon=True)
+    reader.start()
+    def receive():
+        try:
+            return packets.get(timeout=5)
+        except queue.Empty:
+            raise AssertionError('monitor did not emit expected packet')
+    def quiet():
+        try:
+            unexpected = packets.get(timeout=0.4)
+        except queue.Empty:
+            assert child.poll() is None
+            return
+        raise AssertionError(('unchanged monitor repeated a packet',unexpected))
+    try:
+        initial = receive()
+        assert initial['event'] == 'snapshot', initial
+        quiet()
+        assert ctx['call']('history',ctx['run_id']) == before
+        append(ctx,'driver-note',{'reason':'Non-meaningful owner-update proof annotation.'},'owner-update-note')
+        noted = ctx['call']('history',ctx['run_id'])
+        unchanged = receive()['owner_update']
+        assert unchanged['required_before_next_decision'] is False, unchanged
+        assert unchanged['unchanged_observation'] == 'suppress the heartbeat', unchanged
+        quiet()
+        assert ctx['call']('history',ctx['run_id']) == noted
+        ctx['event']('intent-ready')
+        changed_history = ctx['call']('history',ctx['run_id'])
+        current = ctx['show']()['result']
+        changed = receive()
+        deadline = time.monotonic() + 5
+        while not changed['owner_update']['required_before_next_decision']:
+            assert time.monotonic() < deadline, changed
+            changed = receive()
+        update = changed['owner_update']
+        assert update['required_before_next_decision'] is True, changed
+        assert 'workflow' in update['observed_change'], update
+        assert changed['workflow_lane']['current_state'] == current['current_state'] == 'intent-review', changed
+        assert update['needed_action_or_decision'] == changed['next_action'], changed
+        assert changed['workflow']['requestable_events'] == current['requestable_events'], changed
+        assert changed['workflow']['current_state_instructions'] == current['current_state_instructions'], changed
+        assert update['channel'] == 'active Pi conversation', update
+        assert update['machine_notification_is_not_owner_update'] is True, update
+        quiet()
+    finally:
+        child.terminate()
+        child.wait(timeout=5)
+        reader.join(timeout=5)
+        child.stdout.close()
+        child.stderr.close()
+    assert ctx['call']('history',ctx['run_id']) == changed_history
+    print('external-work owner-update changed packets, unchanged silence and shipped assistant guidance passed')
+
+
+# bookends:LE-120 bookends:LE-145 — passive snapshots/attention expose workflow and source-backed owner-update guidance while external execution stays unknown and observer shutdown changes no run state.
 # bookends:LE-148 — focused action is smaller than retained full detail; public history paging returns explicit cursors/totals without mutation.
 def passive_views(ctx):
     import fcntl, pty, select, struct, termios
@@ -2001,6 +2073,17 @@ def main():
     software_runs = [bookends_outcome_spine(args,root),findings_and_steering(args,root),revision_and_observation(args,root),intake_counts_advice(args,root),paired_and_command_proof(args,root),lint_only_reuse(args,root)]
     software_runs.append(reshaped_plan_applicability(args,root))
     software_runs.append(invalid_reuse_fresh_sibling(args,root))
+    owner_update_done = False
+    def owner_update_hook(phase, ctx):
+        nonlocal owner_update_done
+        if phase == 'explore' and not owner_update_done:
+            owner_update_done = True
+            owner_update_proof(ctx)
+            return True
+    software_runs.append(software_module().run(
+        SimpleNamespace(engine=args.engine,provider=args.software,data_root=str(ROOT),mode='source'),
+        ROOT / 'crates/software-change-provider/data/configs/minimal.json',root,
+        exercise=owner_update_hook))
     provider_specific(args,root)
     early_review_briefs(args,root)
     generated = raw([sys.executable,ROOT / 'scripts/generate-prd-journey.py','--mode','source',

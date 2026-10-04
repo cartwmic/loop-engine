@@ -74,6 +74,8 @@ start returns result.run.id. Initial input and append data accept inline JSON,
 Use the same resolved database for every operation; pass --database explicitly when
 isolation is authorized. terminate changes workflow state, never cancels external work.
 
+The coordinating assistant must post a concise source-backed owner update in the active Pi conversation after a meaningful observed change, before the next wait, inspect, or owner-help decision, and stay quiet for unchanged observations.
+
 ## Choose an observation
 
 - Action show (default) reveals current instructions/events and arms mutation.

@@ -152,7 +152,7 @@ fn run_source(o: &Options, id: &str) -> Value {
             .unwrap_or(0)
             .saturating_sub(20)
             .to_string();
-        let history = backend(
+        let mut history = backend(
             o,
             &[
                 "read".into(),
@@ -165,6 +165,7 @@ fn run_source(o: &Options, id: &str) -> Value {
                 "20".into(),
             ],
         )?;
+        visibility::strip_observation_clocks(&mut history);
         p["judgment"] = json!({"state":"unknown","reason":"history is attributed historical evidence, not current semantic approval","history":history});
         let mut observations = Vec::new();
         for path in &o.observations {
