@@ -237,6 +237,16 @@ def intake_counts_advice(args, root):
             for index, record in enumerate(early_challenges):
                 append(ctx,'review-evidence',copy.deepcopy(record['data']),
                        'challenge-after-clearance-'+str(index))
+            denial = evaluate(ctx,'intent-adversarial-review','approved','design')
+            assert denial['result'] == 'deny' and 'challenge-before-ordinary-clearance' in json.dumps(denial), denial
+            for index in range(2):
+                fresh_batch = {'assessment_id':f'cleared-challenge-{index}','judgments':judgments}
+                packet = {'show':ctx['show'](),'assignment':{'gate':'intent-adversarial-review','stage':'aggregate',
+                          'group':'intent-adversarial-review.aggregate','author':{'name':f'cleared-challenger-{index}','kind':'agent'},
+                          'subject':'intent.json','subject_revision':subject['revision']},
+                          'request':{'text':json.dumps(challenge_packet)},'original':{'text':json.dumps(fresh_batch)}}
+                for candidate in provider(ctx,['review-candidates'],packet)['records']:
+                    append(ctx,candidate['kind'],candidate['data'])
             assert evaluate(ctx,'intent-adversarial-review','approved','design')['result'] == 'allow'
             print('external-work ordinary-before-challenge success passed')
             print('external-work grouped intake and early evidence qualification passed')
@@ -1042,6 +1052,17 @@ def provider_specific(args, root):
             refused([binary,'review-candidates'],subset,needle='whole review group')
             corrected = copy.deepcopy(packet)
             corrected['projection'] = json.loads(packet['result']['text'])
+            # bookends:LE-93 — canonical policy identity cannot contradict the retained original axis.
+            alias_conflict = copy.deepcopy(packet)
+            axis_original = json.loads(packet['result']['text'])
+            for row in axis_original['items']:
+                row['axis'] = row.pop('policy_id')
+            alias_conflict['result']['text'] = json.dumps(axis_original)
+            alias_conflict['projection'] = copy.deepcopy(axis_original)
+            alias_conflict['projection']['items'][0]['policy_id'] = grouped[1]['id']
+            before_alias = show()['result']['context']
+            refused([binary,'review-candidates'],alias_conflict,needle='projection axis and policy_id disagree')
+            assert show()['result']['context'] == before_alias
             corrected['projection']['items'][0]['locator'] = 'corrected-locator'
             assert len(process([binary,'review-candidates'],corrected)['candidates']) == len(grouped)
             corrected['projection']['items'][0]['result'] = 'fail'

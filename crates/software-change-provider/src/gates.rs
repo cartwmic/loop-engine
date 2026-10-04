@@ -1419,6 +1419,19 @@ fn intake_data<'a>(
     }
 }
 
+fn challenge_assessment_identity(data: &Value) -> Option<String> {
+    if let Some(id) = data.get("assessment_id").filter(|id| !id.is_null()) {
+        return Some(format!("assessment:{id}"));
+    }
+    let exchange = data.get("external_review")?;
+    let request = exchange.get("request")?;
+    let original = exchange.get("original")?;
+    Some(format!(
+        "exchange:{:x}",
+        Sha256::digest(serde_json::to_vec(&(request, original)).ok()?)
+    ))
+}
+
 fn retain_challenges_after_clearance(
     context: &[loop_core::ContextRecord],
     retained: &mut Vec<loop_core::ContextRecord>,
@@ -1479,7 +1492,23 @@ fn retain_challenges_after_clearance(
                     record.kind.as_str(),
                     "review-evidence" | "evidence-applicability"
                 )
-                && record.sequence <= clearance)
+                && (if record.kind == "review-evidence" {
+                    challenge_assessment_identity(data)
+                        .and_then(|identity| {
+                            context
+                                .iter()
+                                .filter(|prior| {
+                                    prior.kind == "review-evidence"
+                                        && challenge_assessment_identity(&prior.data)
+                                            == Some(identity.clone())
+                                })
+                                .map(|prior| prior.sequence)
+                                .min()
+                        })
+                        .unwrap_or(record.sequence)
+                } else {
+                    record.sequence
+                }) <= clearance)
         });
     }
 }
@@ -1524,12 +1553,16 @@ mod tests {
         };
         // Canonical evidence names its axis with policy_id; raw axis is optional.
         let ordinary = json!({"gate":"intent-review","subject":"intent.json","policy_id":"axis"});
-        let challenge =
-            json!({"gate":"intent-adversarial-review","subject":"intent.json","policy_id":"axis"});
+        let challenge = json!({"gate":"intent-adversarial-review","subject":"intent.json","policy_id":"axis","assessment_id":"early-assessment"});
         let context = vec![
             record("early", "review-evidence", 1, challenge.clone()),
             record("ordinary", "review-evidence", 2, ordinary),
-            record("fresh", "review-evidence", 3, challenge),
+            record("copy", "review-evidence", 3, challenge.clone()),
+            record("fresh", "review-evidence", 3, {
+                let mut fresh = challenge;
+                fresh["assessment_id"] = json!("fresh-assessment");
+                fresh
+            }),
             record(
                 "carry",
                 "evidence-applicability",
@@ -1556,7 +1589,23 @@ mod tests {
         assert!(!retained.iter().any(|r| r.id.as_str() == "early"));
         assert!(retained.iter().any(|r| r.id.as_str() == "fresh"));
         assert!(retained.iter().any(|r| r.id.as_str() == "carry"));
-        assert_eq!(context.len(), 5);
+        assert!(!retained.iter().any(|r| r.id.as_str() == "copy"));
+        assert_eq!(context.len(), 6);
+    }
+
+    #[test]
+    fn challenge_identity_falls_back_to_retained_exchange() {
+        let exchange = json!({"external_review": {
+            "request": {"text": "Challenge this parent."},
+            "original": {"text": "Scripted assessment."}
+        }});
+        let identity = challenge_assessment_identity(&exchange).unwrap();
+        let mut copied = exchange.clone();
+        copied["grounds"] = json!({"reason": "Additional citation."});
+        assert_eq!(challenge_assessment_identity(&copied).unwrap(), identity);
+        copied["external_review"]["request"]["text"] = json!("Challenge a cleared parent.");
+        assert_ne!(challenge_assessment_identity(&copied).unwrap(), identity);
+        assert!(challenge_assessment_identity(&json!({"axis": "axis"})).is_none());
     }
 
     #[test]

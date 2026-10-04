@@ -123,7 +123,7 @@ def run(args, profile_source, root, *, configure=None, exercise=None):
                                        'evidence':[{'locator':subject+'#/revision'}]}}
                     packet = {'show':shown,'assignment':assignment,
                               'author':{'name':f'external-{state}-{index}','kind':'agent'},
-                              'request':{'text':f'Review {subject}.'},'original':{'text':json.dumps({'assessment_id':f'{state}-{index}', 'judgments':[item]})}}
+                              'request':{'text':f'Review {subject}.'},'original':{'text':json.dumps({'assessment_id':f'{state}-{shown["result"]["state_visit"]}-{index}', 'judgments':[item]})}}
                     intake = process([provider,'review-candidates'],packet,cwd=repository)
                     assert intake.get('records'), intake
                     # bookends:LE-44 bookends:LE-47 bookends:LE-137 — external author judgments are opaque durable rows; checked progression, not intake, validates configured obligations.
