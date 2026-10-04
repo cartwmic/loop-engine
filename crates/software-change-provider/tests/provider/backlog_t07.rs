@@ -873,7 +873,29 @@ fn external_intake_early_commission_and_ordinary_first_public_path() {
         "completed"
     );
     let cleared = evaluate(show(&run, "cleared show")["result"]["context"].clone());
-    assert_eq!(cleared["result"], "allow", "{cleared}");
+    assert_eq!(cleared["result"], "deny", "{cleared}");
+    assert!(cleared["feedback"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("challenge-before-ordinary-clearance"));
+    append(
+        &run,
+        "evidence-applicability",
+        "challenge-current-attestation",
+        json!({"origin":{"kind":"context-record","id":"early-challenge"},"target":{"subject":"intent.json","revision":intent["revision"]},"attesting_driver":{"name":"driver","kind":"human"},"reason":"The retained challenge applies to the now-cleared conclusion."}),
+        "attest challenge after clearance",
+    );
+    let carried = evaluate(show(&run, "carried challenge show")["result"]["context"].clone());
+    assert_eq!(carried["result"], "allow", "{carried}");
+    append(
+        &run,
+        "review-evidence",
+        "fresh-challenge",
+        challenge["records"][0]["data"].clone(),
+        "challenge cleared conclusion",
+    );
+    let fresh = evaluate(show(&run, "fresh challenge show")["result"]["context"].clone());
+    assert_eq!(fresh["result"], "allow", "{fresh}");
     assert_eq!(
         event(&run, "approved", "challenge after ordinary")["status"],
         "completed"

@@ -407,6 +407,7 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
                 Some(Value::Object(details)),
             ));
         }
+        let mut challenge_context = request.context.clone();
         if let Some(parent) = gate
             .strip_suffix("-adversarial-review")
             .map(|prefix| format!("{prefix}-review"))
@@ -473,6 +474,18 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
                             parent_ledger.current_snapshot(),
                             config.contract_version() >= 3,
                         );
+                        retain_challenges_after_clearance(
+                            &request.context,
+                            &mut challenge_context,
+                            &parent,
+                            gate,
+                            subject,
+                            policy.id(),
+                            &corresponding
+                                .values()
+                                .flat_map(|axes| axes.keys().cloned())
+                                .collect::<std::collections::BTreeSet<_>>(),
+                        );
                         if blocked || !ordinary.is_satisfied() {
                             return EvaluationOutcome::Response(deny_response(
                                 EVIDENCE_DENY_CODE,
@@ -487,7 +500,7 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
             }
         }
         let evidence = staged_axes.map(|axes| {
-            crate::evidence::evaluate_staged_evidence_with_dispositions(
+            crate::evidence::evaluate_staged_evidence_excluding(
                 &request.context,
                 gate,
                 subject,
@@ -499,9 +512,18 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
                 config.artifact_root(),
                 ledger.current_snapshot(),
                 config.contract_version() >= 3,
+                &request
+                    .context
+                    .iter()
+                    .filter(|r| !challenge_context.iter().any(|kept| kept.id == r.id))
+                    .map(|r| r.id.as_str().to_owned())
+                    .collect(),
             )
         });
         if let Some(evidence) = evidence {
+            if !evidence.is_satisfied() && challenge_context.len() != request.context.len() {
+                return EvaluationOutcome::Response(deny_response(EVIDENCE_DENY_CODE, "challenge-before-ordinary-clearance: retained early challenge is non-qualifying", Some(evidence.details_value())));
+            }
             if !evidence.is_satisfied() {
                 let details = evidence.details_value();
                 let details = json!({
@@ -1381,6 +1403,87 @@ impl fmt::Display for EvaluationOutcome {
     }
 }
 
+// Applicability is a new attestation to the cleared conclusion, not a new verdict.
+fn intake_data<'a>(
+    context: &'a [loop_core::ContextRecord],
+    record: &'a loop_core::ContextRecord,
+) -> &'a Value {
+    if record.kind == "evidence-applicability" {
+        context
+            .iter()
+            .find(|r| r.id.as_str() == record.data["origin"]["id"].as_str().unwrap_or(""))
+            .map(|r| &r.data)
+            .unwrap_or(&record.data)
+    } else {
+        &record.data
+    }
+}
+
+fn retain_challenges_after_clearance(
+    context: &[loop_core::ContextRecord],
+    retained: &mut Vec<loop_core::ContextRecord>,
+    parent: &str,
+    gate: &str,
+    subject: &str,
+    axis: &str,
+    parent_axes: &std::collections::BTreeSet<String>,
+) {
+    let clearance = context
+        .iter()
+        .filter(|record| {
+            let data = intake_data(context, record);
+            if record.kind == "author-count-amendment"
+                && data["targets"].as_array().is_some_and(|targets| {
+                    targets.iter().any(|target| {
+                        target["gate"] == parent
+                            && parent_axes.contains(target["axis"].as_str().unwrap_or(""))
+                    })
+                })
+            {
+                return true;
+            }
+            if record.kind == "intent-comparison"
+                && subject == "intent.json"
+                && parent_axes.contains("intent-sufficient")
+            {
+                return true;
+            }
+            if data["gate"] != parent || data["subject"] != subject {
+                return false;
+            }
+            if matches!(
+                record.kind.as_str(),
+                "review-evidence" | "evidence-applicability"
+            ) {
+                return parent_axes.contains(data["axis"].as_str().unwrap_or(""));
+            }
+            record.kind == "finding-ledger"
+                && data["findings"].as_array().is_some_and(|findings| {
+                    findings.iter().any(|finding| {
+                        parent_axes.contains(finding["policy_id"].as_str().unwrap_or(""))
+                            || finding["review_axes"].as_array().is_some_and(|ids| {
+                                ids.iter()
+                                    .any(|id| parent_axes.contains(id.as_str().unwrap_or("")))
+                            })
+                    })
+                })
+        })
+        .map(|r| r.sequence)
+        .max();
+    if let Some(clearance) = clearance {
+        retained.retain(|record| {
+            let data = intake_data(context, record);
+            !(data["gate"] == gate
+                && data["axis"] == axis
+                && matches!(
+                    record.kind.as_str(),
+                    "review-evidence" | "evidence-applicability"
+                )
+                && record.sequence <= clearance)
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1406,6 +1509,53 @@ mod tests {
             prior_evaluations: Vec::new(),
             driver_act: None,
         }
+    }
+
+    #[test]
+    fn challenge_fulfillment_requires_later_attestation_and_is_group_local() {
+        let record = |id: &str, kind: &str, sequence, data| {
+            loop_core::ContextRecord::new(
+                id,
+                kind,
+                data,
+                loop_core::SemanticSequence::new(sequence),
+                loop_core::Timestamp::from_unix_millis(0),
+            )
+        };
+        let ordinary = json!({"gate":"intent-review","subject":"intent.json","axis":"axis"});
+        let challenge =
+            json!({"gate":"intent-adversarial-review","subject":"intent.json","axis":"axis"});
+        let context = vec![
+            record("early", "review-evidence", 1, challenge.clone()),
+            record("ordinary", "review-evidence", 2, ordinary),
+            record("fresh", "review-evidence", 3, challenge),
+            record(
+                "carry",
+                "evidence-applicability",
+                4,
+                json!({"origin":{"id":"early"}}),
+            ),
+            record(
+                "unrelated",
+                "review-evidence",
+                5,
+                json!({"gate":"intent-review","subject":"intent.json","axis":"other"}),
+            ),
+        ];
+        let mut retained = context.clone();
+        super::retain_challenges_after_clearance(
+            &context,
+            &mut retained,
+            "intent-review",
+            "intent-adversarial-review",
+            "intent.json",
+            "axis",
+            &std::collections::BTreeSet::from(["axis".into()]),
+        );
+        assert!(!retained.iter().any(|r| r.id.as_str() == "early"));
+        assert!(retained.iter().any(|r| r.id.as_str() == "fresh"));
+        assert!(retained.iter().any(|r| r.id.as_str() == "carry"));
+        assert_eq!(context.len(), 5);
     }
 
     #[test]

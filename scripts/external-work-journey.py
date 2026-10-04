@@ -226,10 +226,18 @@ def intake_counts_advice(args, root):
                     append(ctx,candidate['kind'],candidate['data'])
             ledger(ctx,'intent-review','intent.json',subject['revision'])
             assert evaluate(ctx,'intent-review','approved','intent-adversarial-review')['result'] == 'allow'
-            assert evaluate(ctx,'intent-adversarial-review','approved','design')['result'] == 'allow'
+            assert evaluate(ctx,'intent-adversarial-review','approved','design')['result'] == 'deny'
             challenge_packet = provider(ctx,['commission','--slot','intent-adversarial-review','--stage','aggregate'],ctx['show']())
             # bookends:LE-155 — challenge grounds are the actual retained parent reasons, not a fabricated pass summary.
             assert ground_reason in json.dumps(challenge_packet), challenge_packet
+            denial = evaluate(ctx,'intent-adversarial-review','approved','design')
+            assert 'challenge-before-ordinary-clearance' in json.dumps(denial), denial
+            early_challenges = [r for r in ctx['show']()['result']['context']
+                                if r['kind'] == 'review-evidence' and r['data'].get('gate') == 'intent-adversarial-review']
+            for index, record in enumerate(early_challenges):
+                append(ctx,'review-evidence',copy.deepcopy(record['data']),
+                       'challenge-after-clearance-'+str(index))
+            assert evaluate(ctx,'intent-adversarial-review','approved','design')['result'] == 'allow'
             print('external-work ordinary-before-challenge success passed')
             print('external-work grouped intake and early evidence qualification passed')
             decreased = amend(ctx,1)
@@ -1116,14 +1124,41 @@ def provider_specific(args, root):
             revision = '2'
         show()
         refused([args.engine,'--database',database,'--config',config,'--json','event',run_id,event],needle='review-incomplete')
+        # bookends:LE-171 — an older carried PASS cannot erase this author's current FAIL.
+        failure_packet = {'show':show(), 'assignment':{'gate':gate,'review_stage':'ordinary',
+                          'subject':revision if kind == 'policy-document' else subject,
+                          'subject_revision':revision,'policy_ids':[p['id'] for p in grouped],
+                          'assessment_id':'current-failure'},
+                          'author':{'name':'external-independent','kind':'agent'},
+                          'request':{'text':'Review the current revision for remaining defects.'},
+                          'result':{'text':json.dumps({'items':[{'policy_id':p['id'],'result':'fail',
+                          'findings':'standing current-revision defect'} for p in grouped]})}}
+        for i, candidate in enumerate(process([binary,'review-candidates'],failure_packet)['candidates']):
+            record(candidate['kind'],candidate['data'],'current-failure-'+str(i))
         for i in range(len(grouped)):
             record('evidence-applicability',{'origin':{'kind':'context-record','id':'independent-evidence-'+str(i)},
                    'target':{'subject':subject,'revision':revision},'attesting_driver':owner,
                    'reason':'Only immaterial fixture metadata changed; judgment scope remains unchanged.'},'carry-independent-'+str(i))
+        show()
+        refused([args.engine,'--database',database,'--config',config,'--json','event',run_id,event],
+                needle='standing current-revision defect')
+        # Correct the defect and obtain fresh confirmation, preserving all historical records.
+        if kind == 'policy-document':
+            target.write_text(target.read_text()+'\n<!-- corrected current-revision fixture defect -->\n')
+            revision = hashlib.sha256(target.read_bytes()).hexdigest()
+            declare_target_authorship(Path(args.engine), database, config, run_id, target,
+                                      owner, 'authorship-corrected')
+        else:
+            value = json.loads(target.read_text())
+            value['revision'] = '3'
+            target.write_text(json.dumps(value))
+            revision = '3'
+        for i, data in enumerate(intake({'name':'external-independent','kind':'agent'})):
+            record('review-evidence',data,'fresh-confirmation-'+str(i))
         move(event)
         if kind == 'research':
             value = research.report()
-            value['verification_revision'] = '2'
+            value['verification_revision'] = revision
             (artifacts / 'report.json').write_text(json.dumps(value))
             record_reviews(Path(args.engine),database,config,Path(binary),run_id,'synthesize',
                            [p['id'] for p in profile['review_policies']['synthesize']],'report.json','1')

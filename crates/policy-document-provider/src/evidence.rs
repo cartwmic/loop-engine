@@ -351,6 +351,26 @@ mod tests {
     }
 
     #[test]
+    fn old_carry_leaves_current_failure_standing() {
+        let cfg = config();
+        let snap = snapshot();
+        let mut old = record(1, "axis-a", "pass", "reader");
+        old.data["target_sha256"] = json!("b".repeat(64));
+        let mut context = vec![
+            old,
+            record(2, "axis-a", "fail", "reader"),
+            record(3, "axis-b", "pass", "reader"),
+        ];
+        context.push(ContextRecord::new("carry", "evidence-applicability", json!({"origin":{"kind":"context-record","id":"record-1"},"target":{"subject":"doc","revision":DIGEST},"attesting_driver":{"name":"driver","kind":"human"},"reason":"unchanged"}), SemanticSequence::new(4), Timestamp::from_unix_millis(4)));
+        let (ok, details) = evaluate(&context, &cfg, &snap);
+        assert!(!ok);
+        assert!(details.to_string().contains("standing-fail"));
+        assert!(details.to_string().contains("material"));
+        context.push(record(5, "axis-a", "pass", "reader"));
+        assert!(evaluate(&context, &cfg, &snap).0);
+    }
+
+    #[test]
     fn current_authorship_is_required_and_self_review_is_explicit() {
         let mut cfg = config();
         let snap = snapshot();

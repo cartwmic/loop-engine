@@ -719,6 +719,77 @@ mod tests {
     }
 
     #[test]
+    fn old_carry_leaves_current_failure_standing() {
+        let config = config_with_axes(1);
+        let reviewer = author("reader", "agent");
+        let mut context = vec![
+            context_record(
+                1,
+                evidence(
+                    GATE,
+                    "axis",
+                    "pass",
+                    "",
+                    &reviewer,
+                    SUBJECT,
+                    "1",
+                    RUN_VERSION,
+                ),
+            ),
+            context_record(
+                2,
+                evidence(
+                    GATE,
+                    "axis",
+                    "fail",
+                    "standing defect",
+                    &reviewer,
+                    SUBJECT,
+                    "2",
+                    RUN_VERSION,
+                ),
+            ),
+        ];
+        context.push(ContextRecord::new("carry", "evidence-applicability", json!({"origin":{"kind":"context-record","id":"context-1"},"target":{"subject":SUBJECT,"revision":"2"},"attesting_driver":{"name":"driver","kind":"human"},"reason":"unchanged"}), SemanticSequence::new(3), Timestamp::from_unix_millis(3)));
+        let carried = loop_integrations::review_intake::carry(
+            &context,
+            SUBJECT,
+            "2",
+            "config_version",
+            RUN_VERSION,
+            false,
+        );
+        let result = evaluate(&config, &carried, "2", &author("owner", "human"));
+        assert!(!result.is_satisfied());
+        assert!(result
+            .details_value()
+            .to_string()
+            .contains("standing defect"));
+        context.push(context_record(
+            4,
+            evidence(
+                GATE,
+                "axis",
+                "pass",
+                "",
+                &reviewer,
+                SUBJECT,
+                "2",
+                RUN_VERSION,
+            ),
+        ));
+        let carried = loop_integrations::review_intake::carry(
+            &context,
+            SUBJECT,
+            "2",
+            "config_version",
+            RUN_VERSION,
+            false,
+        );
+        assert!(evaluate(&config, &carried, "2", &author("owner", "human")).is_satisfied());
+    }
+
+    #[test]
     fn filter_ignores_non_review_kind_and_non_object_data() {
         let config = config_with_axes(1);
         let reviewer = author("reviewer", "agent");

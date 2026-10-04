@@ -325,6 +325,9 @@ pub(crate) fn evaluate_evidence_with_dispositions(
                 Attribution::Inert(inert) => inert_records.push(inert),
             }
         } else if record.kind == EVIDENCE_APPLICABILITY_KIND {
+            if loop_integrations::review_intake::superseded_origin(context, record) {
+                continue;
+            }
             let attribution =
                 applicability_attribution(context, record, context_index, gate, axis_namespace);
             match (
@@ -572,6 +575,37 @@ pub(crate) fn evaluate_staged_evidence_with_dispositions(
     ledger: Option<&crate::finding_ledger::FindingLedgerSnapshot>,
     require_stage: bool,
 ) -> EvidenceEvaluation {
+    evaluate_staged_evidence_excluding(
+        context,
+        gate,
+        subject,
+        current_revision,
+        subject_author,
+        config_version,
+        stages,
+        axis_namespace,
+        artifact_root,
+        ledger,
+        require_stage,
+        &std::collections::BTreeSet::new(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn evaluate_staged_evidence_excluding(
+    context: &[ContextRecord],
+    gate: &str,
+    subject: &str,
+    current_revision: &str,
+    subject_author: &AuthorIdentity,
+    config_version: &str,
+    stages: &BTreeMap<String, BTreeMap<String, PolicyAxis>>,
+    axis_namespace: &BTreeMap<String, BTreeSet<String>>,
+    artifact_root: Option<&Value>,
+    ledger: Option<&crate::finding_ledger::FindingLedgerSnapshot>,
+    require_stage: bool,
+    excluded_records: &std::collections::BTreeSet<String>,
+) -> EvidenceEvaluation {
     type StageAxis = (String, String);
 
     let mut malformed: BTreeMap<StageAxis, Vec<String>> = stages
@@ -602,6 +636,10 @@ pub(crate) fn evaluate_staged_evidence_with_dispositions(
         };
 
     for (context_index, record) in context.iter().enumerate() {
+        if excluded_records.contains(record.id.as_str()) {
+            continue;
+        }
+
         if record.kind == REVIEW_EVIDENCE_KIND {
             let Some(data) = record.data.as_object() else {
                 continue;
@@ -646,6 +684,9 @@ pub(crate) fn evaluate_staged_evidence_with_dispositions(
                 Attribution::Inert(inert) => inert_records.push(inert),
             }
         } else if record.kind == EVIDENCE_APPLICABILITY_KIND {
+            if loop_integrations::review_intake::superseded_origin(context, record) {
+                continue;
+            }
             let attribution =
                 applicability_attribution(context, record, context_index, gate, axis_namespace);
             match (
@@ -3236,6 +3277,62 @@ mod tests {
         );
         assert!(result.is_satisfied());
         assert!(result.inert_records().is_empty());
+    }
+
+    #[test]
+    fn older_carried_pass_cannot_supersede_current_same_author_failure() {
+        let config = config_with_axes(1);
+        let reviewer = author("reviewer", "agent");
+        let mut context = vec![
+            context_record(
+                1,
+                evidence(
+                    GATE,
+                    "axis",
+                    "pass",
+                    "",
+                    &reviewer,
+                    SUBJECT,
+                    "1",
+                    RUN_VERSION,
+                ),
+            ),
+            context_record(
+                2,
+                evidence(
+                    GATE,
+                    "axis",
+                    "fail",
+                    "standing current defect",
+                    &reviewer,
+                    SUBJECT,
+                    "2",
+                    RUN_VERSION,
+                ),
+            ),
+        ];
+        context.push(ContextRecord::new("carry", EVIDENCE_APPLICABILITY_KIND,
+            json!({"origin":{"kind":"context-record","id":"context-1"},"target":{"subject":SUBJECT,"revision":"2"},"attesting_driver":{"name":"driver","kind":"human"},"reason":"unchanged"}), SemanticSequence::new(3), Timestamp::from_unix_millis(3)));
+        let result = evaluate(&config, &context, "2", &author("owner", "human"));
+        assert!(!result.is_satisfied());
+        assert!(result
+            .details_value()
+            .to_string()
+            .contains("standing current defect"));
+        context.push(context_record(
+            4,
+            evidence(
+                GATE,
+                "axis",
+                "pass",
+                "",
+                &reviewer,
+                SUBJECT,
+                "2",
+                RUN_VERSION,
+            ),
+        ));
+        assert!(evaluate(&config, &context, "2", &author("owner", "human")).is_satisfied());
     }
 
     #[test]

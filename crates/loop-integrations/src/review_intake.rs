@@ -165,6 +165,35 @@ pub fn project(
     )
 }
 
+/// Applicability preserves verdict chronology, even though its attestation is later.
+pub fn superseded_origin(
+    context: &[loop_core::ContextRecord],
+    record: &loop_core::ContextRecord,
+) -> bool {
+    let Some(source) = context
+        .iter()
+        .find(|r| r.id.as_str() == record.data["origin"]["id"].as_str().unwrap_or(""))
+    else {
+        return false;
+    };
+    context.iter().any(|later| {
+        later.kind == "review-evidence"
+            && later.sequence > source.sequence
+            && later.sequence < record.sequence
+            && [
+                "author",
+                "gate",
+                "policy_id",
+                "axis",
+                "review_stage",
+                "subject",
+                "target_id",
+            ]
+            .iter()
+            .all(|key| later.data[*key] == source.data[*key])
+    })
+}
+
 /// Carry only explicit earlier immutable review records, retaining reviewer identity.
 pub fn carry(
     context: &[loop_core::ContextRecord],
@@ -179,6 +208,9 @@ pub fn carry(
         .iter()
         .filter(|r| r.kind == "evidence-applicability")
     {
+        if superseded_origin(context, record) {
+            continue;
+        }
         let d = &record.data;
         let origins: Vec<_> = context
             .iter()
@@ -240,6 +272,62 @@ pub fn carry(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn carry_preserves_newer_original_verdict_for_both_providers() {
+        for policy_document in [false, true] {
+            let record = |id: &str, kind: &str, sequence, data| {
+                loop_core::ContextRecord::new(
+                    id,
+                    kind,
+                    data,
+                    loop_core::SemanticSequence::new(sequence),
+                    loop_core::Timestamp::from_unix_millis(0),
+                )
+            };
+            let subject_field = if policy_document {
+                "target_id"
+            } else {
+                "subject"
+            };
+            let revision_field = if policy_document {
+                "target_sha256"
+            } else {
+                "subject_revision"
+            };
+            let mut pass = json!({"gate":"review","policy_id":"quality","author":{"name":"A","kind":"agent"},"result":"pass","version":"v1"});
+            pass[subject_field] = json!("target");
+            pass[revision_field] = json!("1");
+            let mut fail = pass.clone();
+            fail[revision_field] = json!("2");
+            fail["result"] = json!("fail");
+            fail["findings"] = json!("standing defect");
+            let applicability = |origin| json!({"origin":{"kind":"context-record","id":origin},"target":{"subject":"target","revision":"2"},"attesting_driver":{"name":"driver","kind":"human"},"reason":"unchanged"});
+            let context = vec![
+                record("pass", "review-evidence", 1, pass),
+                record("fail", "review-evidence", 2, fail),
+                record(
+                    "old-carry",
+                    "evidence-applicability",
+                    3,
+                    applicability("pass"),
+                ),
+                record(
+                    "new-carry",
+                    "evidence-applicability",
+                    4,
+                    applicability("fail"),
+                ),
+            ];
+            let carried = carry(&context, "target", "2", "version", "v1", policy_document);
+            assert!(!carried
+                .iter()
+                .any(|r| r.id.as_str() == "old-carry" && r.kind == "review-evidence"));
+            assert!(carried.iter().any(|r| r.id.as_str() == "new-carry"
+                && r.kind == "review-evidence"
+                && r.data["result"] == "fail"));
+        }
+    }
 
     #[test]
     fn candidates_retain_exchange_for_each_provider_and_direct_review() {
