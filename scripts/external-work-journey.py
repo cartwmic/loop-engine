@@ -1062,6 +1062,12 @@ def provider_specific(args, root):
             alias_conflict['projection']['items'][0]['policy_id'] = grouped[1]['id']
             before_alias = show()['result']['context']
             refused([binary,'review-candidates'],alias_conflict,needle='projection axis and policy_id disagree')
+            # A prose original has no decoded rows; its projection still cannot name two obligations.
+            prose_conflict = copy.deepcopy(packet)
+            prose_conflict['result']['text'] = 'Prose review: every grouped obligation passes.'
+            prose_conflict['projection'] = {'items':[{'axis':grouped[0]['id'],'policy_id':grouped[1]['id'],'result':'pass','findings':''}]
+                                            +[{'policy_id':p['id'],'result':'pass','findings':''} for p in grouped[1:]]}
+            refused([binary,'review-candidates'],prose_conflict,needle='projection axis and policy_id disagree')
             assert show()['result']['context'] == before_alias
             corrected['projection']['items'][0]['locator'] = 'corrected-locator'
             assert len(process([binary,'review-candidates'],corrected)['candidates']) == len(grouped)

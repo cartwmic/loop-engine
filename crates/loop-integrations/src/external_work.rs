@@ -121,17 +121,27 @@ pub fn check_projection(
         Ok(())
     }
     check_author(original, projection)?;
+    let prefix = format!("{gate}.");
+    let normalize_axis = |value: &Value| match value.as_str() {
+        Some(axis) => Value::String(axis.strip_prefix(&prefix).unwrap_or(axis).to_owned()),
+        None => value.clone(),
+    };
+    // One judgment names one obligation: a projected item whose axis and policy_id
+    // disagree would re-attribute the judgment to another obligation. This holds
+    // for prose/YAML originals too, which have no decoded items to compare.
+    for after in projection[field].as_array().into_iter().flatten() {
+        if let (Some(axis), Some(policy)) = (after.get("axis"), after.get("policy_id")) {
+            if normalize_axis(axis) != normalize_axis(policy) {
+                return Err("projection axis and policy_id disagree".into());
+            }
+        }
+    }
     let Some(items) = original[field].as_array() else {
         return Ok(());
     };
     let projected = projection[field]
         .as_array()
         .ok_or("projection omits decoded outcomes")?;
-    let prefix = format!("{gate}.");
-    let normalize_axis = |value: &Value| match value.as_str() {
-        Some(axis) => Value::String(axis.strip_prefix(&prefix).unwrap_or(axis).to_owned()),
-        None => value.clone(),
-    };
     let identity = |item: &Value| {
         item.get("axis")
             .or_else(|| item.get("policy_id"))
@@ -139,15 +149,6 @@ pub fn check_projection(
             .unwrap_or(Value::Null)
             .to_string()
     };
-    // One judgment names one obligation: a projected item whose axis and policy_id
-    // disagree would re-attribute the decoded judgment to another obligation.
-    for after in projected {
-        if let (Some(axis), Some(policy)) = (after.get("axis"), after.get("policy_id")) {
-            if normalize_axis(axis) != normalize_axis(policy) {
-                return Err("projection axis and policy_id disagree".into());
-            }
-        }
-    }
     let mut remaining: Vec<_> = projected.iter().collect();
     for before in items {
         let index = remaining
@@ -253,6 +254,15 @@ mod tests {
             let mut projection = original.clone();
             projection[field][1]["policy_id"] = serde_json::json!("review.B");
             assert!(super::check_projection(&original, &projection, field, "review").is_ok());
+            // Prose/YAML originals have no decoded items; the projection itself still
+            // cannot name two different obligations for one judgment.
+            let prose = serde_json::json!({"author":{"name":"Alice","kind":"agent"}});
+            let mut projection = serde_json::json!({"author":{"name":"Alice","kind":"agent"},
+                field:[{"axis":"A","policy_id":"B","result":"pass","findings":""}]});
+            let error = super::check_projection(&prose, &projection, field, "review");
+            assert_eq!(error.unwrap_err(), "projection axis and policy_id disagree");
+            projection[field][0]["policy_id"] = serde_json::json!("A");
+            assert!(super::check_projection(&prose, &projection, field, "review").is_ok());
         }
     }
 
