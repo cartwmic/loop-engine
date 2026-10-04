@@ -1105,6 +1105,17 @@ fn review_worker_preamble_carries_yagni_bar_and_confirmation_stdin_rule() {
 }
 
 #[test]
+fn challenge_guidance_targets_the_clean_conclusion_not_ordinary_findings() {
+    let skill = shipped_text("skills/using-software-change-provider/SKILL.md");
+    assert!(skill.contains("Challenge review tests the ordinary group's clean conclusion"));
+    assert!(skill.contains("not targets to overturn"));
+    assert!(skill.contains("outside a run or gate"));
+    let preamble = shipped_text("data/review-worker-preamble.txt");
+    assert!(preamble.contains("Challenge tests the ordinary group's clean conclusion"));
+    assert!(preamble.contains("not targets to overturn"));
+}
+
+#[test]
 fn setup_replaces_the_inline_skill_constructor() {
     let skill = shipped_text("skills/using-software-change-provider/SKILL.md");
     assert!(skill.contains("`setup` edits policy only"));

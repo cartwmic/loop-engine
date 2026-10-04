@@ -142,6 +142,16 @@ stay in validation; repository-state mismatch uses shown revise-implementation.
    observe and request approved/passed as shown. A process exit or projector success
    never supplies semantic judgment. Ordinary clearance precedes challenge clearance.
 
+### Challenge review targets the clean conclusion
+
+Challenge review tests the ordinary group's clean conclusion. Its question is: what
+material defect remains in the current subject despite that conclusion? Commission it
+only after ordinary review has no unresolved accepted findings. Prior findings and their
+dispositions are context for exposing a bad fix or an unjustified dismissal; they are
+not targets to overturn. Disputes over open ordinary findings belong to triage
+reconsideration (step 5), never to challenge. The same sequence applies to reviews
+performed outside a run or gate, such as pre-run intent review, where nothing enforces it.
+
 ## Ledger, applicability and finding routing
 
 Use data/templates/finding-ledger.json. The schema-version-1 snapshot has driver author,
