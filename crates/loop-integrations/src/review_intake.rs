@@ -165,6 +165,14 @@ pub fn project(
     )
 }
 
+/// Canonical evidence axis: `policy_id`, falling back to the optional raw `axis`.
+pub fn evidence_axis(data: &Value) -> &str {
+    data["policy_id"]
+        .as_str()
+        .or_else(|| data["axis"].as_str())
+        .unwrap_or("")
+}
+
 /// Applicability preserves verdict chronology, even though its attestation is later.
 pub fn superseded_origin(
     context: &[loop_core::ContextRecord],
@@ -180,17 +188,10 @@ pub fn superseded_origin(
         later.kind == "review-evidence"
             && later.sequence > source.sequence
             && later.sequence < record.sequence
-            && [
-                "author",
-                "gate",
-                "policy_id",
-                "axis",
-                "review_stage",
-                "subject",
-                "target_id",
-            ]
-            .iter()
-            .all(|key| later.data[*key] == source.data[*key])
+            && evidence_axis(&later.data) == evidence_axis(&source.data)
+            && ["author", "gate", "review_stage", "subject", "target_id"]
+                .iter()
+                .all(|key| later.data[*key] == source.data[*key])
     })
 }
 
@@ -299,6 +300,8 @@ mod tests {
             pass[subject_field] = json!("target");
             pass[revision_field] = json!("1");
             let mut fail = pass.clone();
+            // Canonical policy_id-only original beside a projected record that also carries axis.
+            pass["axis"] = json!("quality");
             fail[revision_field] = json!("2");
             fail["result"] = json!("fail");
             fail["findings"] = json!("standing defect");

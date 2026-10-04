@@ -1455,7 +1455,7 @@ fn retain_challenges_after_clearance(
                 record.kind.as_str(),
                 "review-evidence" | "evidence-applicability"
             ) {
-                return parent_axes.contains(data["axis"].as_str().unwrap_or(""));
+                return parent_axes.contains(loop_integrations::review_intake::evidence_axis(data));
             }
             record.kind == "finding-ledger"
                 && data["findings"].as_array().is_some_and(|findings| {
@@ -1474,7 +1474,7 @@ fn retain_challenges_after_clearance(
         retained.retain(|record| {
             let data = intake_data(context, record);
             !(data["gate"] == gate
-                && data["axis"] == axis
+                && loop_integrations::review_intake::evidence_axis(data) == axis
                 && matches!(
                     record.kind.as_str(),
                     "review-evidence" | "evidence-applicability"
@@ -1522,9 +1522,10 @@ mod tests {
                 loop_core::Timestamp::from_unix_millis(0),
             )
         };
-        let ordinary = json!({"gate":"intent-review","subject":"intent.json","axis":"axis"});
+        // Canonical evidence names its axis with policy_id; raw axis is optional.
+        let ordinary = json!({"gate":"intent-review","subject":"intent.json","policy_id":"axis"});
         let challenge =
-            json!({"gate":"intent-adversarial-review","subject":"intent.json","axis":"axis"});
+            json!({"gate":"intent-adversarial-review","subject":"intent.json","policy_id":"axis"});
         let context = vec![
             record("early", "review-evidence", 1, challenge.clone()),
             record("ordinary", "review-evidence", 2, ordinary),

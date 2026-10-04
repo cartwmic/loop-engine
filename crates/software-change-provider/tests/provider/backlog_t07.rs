@@ -1016,14 +1016,6 @@ fn singleton_challenge_clears_independently_of_open_broad_group() {
         );
         let context = json!([
             record(
-                "owner-comparison",
-                "intent-comparison",
-                json!({"subject_revision":intent["revision"],"baseline":intent["baseline"],
-                "reconstruction_ids":["singleton-pass"],"actor":{"name":"fixture-owner","kind":"human"},"authority":"owner",
-                "dispositions":[{"reconstruction_id":"singleton-pass","alternative":"Fixture freedom","disposition":"implementation-freedom","note":"Mechanics only."}]}),
-                6
-            ),
-            record(
                 "singleton-pass",
                 "review-evidence",
                 evidence(
@@ -1053,11 +1045,20 @@ fn singleton_challenge_clears_independently_of_open_broad_group() {
                 ordinary_ledger.clone(),
                 3
             ),
+            // The owner comparison precedes the challenge that relies on it (AC-9, AC-19).
+            record(
+                "owner-comparison",
+                "intent-comparison",
+                json!({"subject_revision":intent["revision"],"baseline":intent["baseline"],
+                "reconstruction_ids":["singleton-pass"],"actor":{"name":"fixture-owner","kind":"human"},"authority":"owner",
+                "dispositions":[{"reconstruction_id":"singleton-pass","alternative":"Fixture freedom","disposition":"implementation-freedom","note":"Mechanics only."}]}),
+                4
+            ),
             record(
                 "challenge-pass",
                 "review-evidence",
                 evidence("intent-adversarial-review", id, group, "pass", ""),
-                4
+                5
             ),
             record(
                 "challenge-ledger",
@@ -1067,7 +1068,7 @@ fn singleton_challenge_clears_independently_of_open_broad_group() {
                     "intent.json",
                     intent["revision"].as_str().unwrap()
                 ),
-                5
+                6
             )
         ]);
         let result = prepare(
