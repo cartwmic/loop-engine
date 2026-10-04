@@ -27,7 +27,7 @@ def self_test():
 
 
 # bookends:LE-39 bookends:LE-40 bookends:LE-43 bookends:LE-53 bookends:LE-85 — externally driven fixture artifacts complete under selected, materially different policies without invocation receipts.
-def run(args, profile_source, root, *, configure=None, exercise=None):
+def run(args, profile_source, root, *, configure=None, exercise=None, judgment_reason=None):
     engine, provider = Path(args.engine).resolve(), Path(args.provider).resolve()
     work = Path(tempfile.mkdtemp(prefix='software-external-', dir=root))
     artifacts = work / 'artifacts'
@@ -192,7 +192,7 @@ def run(args, profile_source, root, *, configure=None, exercise=None):
                 verdict = {'subject':'validation-report.json','subject_revision':report['revision'],
                            'checkpoint':'validation-checkpoint.json',
                            'author':{'name':f'external-judge-{index}','kind':'agent'},
-                           'result':'pass','findings':[],'reason':'Inspected actual driver command outcome.',
+                           'result':'pass','findings':[],'reason':judgment_reason or 'Inspected actual driver command outcome.',
                            'evidence_context_ids':report['command_evidence_ids']}
                 if batch['kind'] == 'criterion-verdict':
                     verdict['criterion_id'] = batch['criterion_id']

@@ -609,6 +609,17 @@ def paired_and_command_proof(args, root):
 # bookends:LE-107 — explicit affected checks preserve applicable original siblings, authors and command results without ceremonial suite replay.
 def lint_only_reuse(args, root):
     state = {'reused':False}
+    acceptance = [
+        {'id':'AC-1','statement':'parse_retained_return recognizes review returns (P): kind review-evidence or both result and gate; ignores malformed JSON and unrelated objects; rejects missing or ambiguous judgments.'},
+        {'id':'AC-2','statement':'parse_retained_return excludes duplicate recognized values (Q), returning one unique judgment even when repeated; behavior is unchanged by collapsing nested P/Q conditions to P and Q.'},
+    ]
+    suite_reason = ('test_recognition_and_duplicate_exclusion asserts equal returned values for both kind=review-evidence '
+                    'and result/pass plus gate/validation-review, each repeated amid malformed JSON and an unrelated object. '
+                    'test_missing_and_ambiguous_judgments asserts ValueError for empty input, result-only, gate-only, '
+                    'unrelated objects and two distinct recognized judgments. These assertions cover the entire parser-only '
+                    'intent and both criteria. In the retained nested and collapsed variants, the only difference is '
+                    'if P: if Q: append versus if P and Q: append; the predicates, append and error handling are identical, '
+                    'so the collapse preserves the behavior established by these assertions.')
     # Match a11.rs::parse_retained_return: recognize review returns, then exclude duplicates.
     nested = """import json
 
@@ -675,8 +686,26 @@ if __name__ == '__main__':
         suite_assertion = f'open({str(counter)!r}, "a").write("suite\\n"); ' + assertion
         state['assertion'] = assertion
         state['counter'] = counter
+        intent_path = artifacts / 'intent.json'
+        intent = json.loads(intent_path.read_text())
+        intent.update(problem='The retained-return parser needs regression coverage during a behavior-equivalent lint collapse.',
+                      outcome='parse_retained_return recognizes review returns (P) and excludes duplicates (Q), with parsing and missing/ambiguous rejection behavior unchanged by the lint collapse.',
+                      acceptance=copy.deepcopy(acceptance),
+                      constraints=['Preserve parser behavior when collapsing nested P/Q conditions to P and Q.'],
+                      non_goals=['Policy/schema inspection, artifact diagnostics and workflow evidence refusals.'])
+        intent['baseline']['commit'] = subprocess.check_output(['git','rev-parse','HEAD'],cwd=repository,text=True).strip()
+        intent_path.write_text(json.dumps(intent))
+        assert json.loads(intent_path.read_text())['acceptance'] == acceptance, 'Lint fixture acceptance must name only suite-covered parser behavior.'
         plan_path = artifacts / 'plan.json'
         plan = json.loads(plan_path.read_text())
+        task = copy.deepcopy(plan['tasks'][0])
+        task.update(id='parser-lint-collapse', objective=intent['outcome'], dependencies=[],
+                    source_of_truth=['intent.json#/acceptance','helper-nested.txt','helper-collapsed.txt'],
+                    deliverables=['helper.py with behavior-equivalent P/Q conjunction collapse'],
+                    out_of_scope=intent['non_goals'], validation=[suite_reason],
+                    handoff='Retain original parser suite proof; run current lint and affected helper tests after the collapse.',
+                    criterion_ids=[item['id'] for item in acceptance])
+        plan.update(objective=intent['outcome'], tasks=[task])
         plan['proof_commands'] = [{'id':'prior-suite','command':sys.executable,
                                   'args':['-B','-c',suite_assertion],
                                   'owner':'driver','obligation':'Assert review-return recognition, duplicate exclusion, and missing/ambiguous rejection.'}]
@@ -689,9 +718,9 @@ if __name__ == '__main__':
             policy = ctx['profile']['review_policies']['validation-review'][0]
             packet = {'show':ctx['show'](),'assignment':{'gate':'validation-review','stage':'aggregate','group':policy['group'],
                       'author':{'name':'prior-reviewer','kind':'agent'},'subject':'validation-report.json',
-                      'subject_revision':original_report['revision']},'request':{'text':'Inspect the prior suite and goal judgments.'},
+                      'subject_revision':original_report['revision']},'request':{'text':'Assess the complete parser-only intent and both criteria using test_helper.py assertions and retained suite and goal judgments.'},
                       'original':{'text':json.dumps({'judgments':[{'axis':policy['id'],'result':'pass','findings':'',
-                                  'grounds':{'reason':'The actual retained-return recognition and deduplication tests passed.',
+                                  'grounds':{'reason':suite_reason,
                                              'evidence':[{'locator':'validation-report.json#/command_evidence_ids'}]}}]})}}
             for candidate in provider(ctx,['review-candidates'],packet)['records']:
                 append(ctx,candidate['kind'],candidate['data'])
@@ -766,7 +795,7 @@ if __name__ == '__main__':
             return True
     return software_module().run(SimpleNamespace(engine=args.engine,provider=args.software,data_root=str(ROOT),mode='source'),
                                  ROOT / 'crates/software-change-provider/data/configs/high-rigor.json',root,
-                                 configure=configure,exercise=hook)
+                                 configure=configure,exercise=hook,judgment_reason=suite_reason)
 
 
 # bookends:LE-154 — invalid confirmation reuse is row-local; a fresh sibling survives and the corrected carry completes the gate.
