@@ -139,6 +139,15 @@ pub fn check_projection(
             .unwrap_or(Value::Null)
             .to_string()
     };
+    // One judgment names one obligation: a projected item whose axis and policy_id
+    // disagree would re-attribute the decoded judgment to another obligation.
+    for after in projected {
+        if let (Some(axis), Some(policy)) = (after.get("axis"), after.get("policy_id")) {
+            if normalize_axis(axis) != normalize_axis(policy) {
+                return Err("projection axis and policy_id disagree".into());
+            }
+        }
+    }
     let mut remaining: Vec<_> = projected.iter().collect();
     for before in items {
         let index = remaining
@@ -235,6 +244,14 @@ mod tests {
             let mut projection = original.clone();
             projection[field][0]["findings"] = serde_json::json!(" first   defect second defect ");
             projection[field][0]["locator"] = serde_json::json!("corrected");
+            assert!(super::check_projection(&original, &projection, field, "review").is_ok());
+            // An added conflicting canonical policy_id cannot re-attribute the judgment.
+            let mut projection = original.clone();
+            projection[field][1]["policy_id"] = serde_json::json!("C");
+            let error = super::check_projection(&original, &projection, field, "review");
+            assert_eq!(error.unwrap_err(), "projection axis and policy_id disagree");
+            let mut projection = original.clone();
+            projection[field][1]["policy_id"] = serde_json::json!("review.B");
             assert!(super::check_projection(&original, &projection, field, "review").is_ok());
         }
     }
