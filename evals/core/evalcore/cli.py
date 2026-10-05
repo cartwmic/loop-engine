@@ -34,7 +34,7 @@ def load_target(spec: str):
 def campaign(args):
     data = read_settings(args.settings)
     for key in ("target", "campaign", "preset", "case_count", "trials_per_case", "profile", "cases_path",
-                "simulator_model", "judge_model", "time_limit_seconds"):
+                "simulator_model", "judge_model", "idle_limit_seconds", "hard_limit_seconds"):
         value = getattr(args, key)
         if value is not None:
             data[key] = value
@@ -71,7 +71,8 @@ def build_parser(plugins: list[str] = ()) -> argparse.ArgumentParser:
     cmd.add_argument("--cases-path")
     cmd.add_argument("--simulator-model")
     cmd.add_argument("--judge-model")
-    cmd.add_argument("--time-limit-seconds", type=int)
+    cmd.add_argument("--idle-limit-seconds", type=int)
+    cmd.add_argument("--hard-limit-seconds", type=int)
     cmd.add_argument("--provider-config", action="append", default=[], help="host-only resolved provider config path to protect from export")
     cmd.set_defaults(handler=campaign)
     # Targets register case-check, image-check, ac5-demo, calibrate, check-results

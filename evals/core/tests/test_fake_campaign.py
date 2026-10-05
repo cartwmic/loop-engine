@@ -97,7 +97,7 @@ def test_per_role_combination_changes_actual_calls(campaign_root):
 
 def test_actual_time_limit_is_failure(campaign_root):
     summary = run(campaign_root, models=["fake/a"], case_count=1, trials_per_case=1,
-                  time_limit_seconds=1, target_options={"sleep": True})
+                  hard_limit_seconds=1, target_options={"sleep": True})
     assert summary["trials"][0]["outcome"] == "failure"
     assert summary["comparisons"][0]["core"]["timeouts"] == 1
     assert summary["comparisons"][0]["core"]["success_rate"]["denominator"] == 1

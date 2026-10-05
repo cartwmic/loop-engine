@@ -91,10 +91,27 @@ is required.
 After terminal observation, scoring copies tests and reference into the sandbox;
 it never applies reference to delivered code. Public show/history data, SQLite,
 artifacts and the pre-test delivery snapshot are copied out as ignored captures.
+Idle/hard stops and non-terminal driver exits retain DB (including any WAL),
+artifacts, show/history and the delivery snapshot as `nonterminal.tar` in the same
+ignored campaign/sample capture location. If no run was created yet, show/history
+retain the CLI error and no nonexistent DB/artifacts are invented. Hidden tests
+and reference are still never copied before terminal observation.
 Private artifacts and raw Inspect logs must never be selected for publication.
 The reports contain only metrics/IDs and safe evidence, not source or brief prose.
 
 ## Target-specific scores and limits
+
+Defaults are idle 1800 seconds and hard 28800 seconds, set by
+`idle_limit_seconds` / `hard_limit_seconds`. While the driver runs, the host polls
+public engine show/history and Inspect sample role usage about every 60 seconds
+(more frequently for small idle limits). Changed history/context sequence or an
+increase in any role's total tokens resets the idle clock. A long progressing
+trial is not idle. An idle stop kills the driver process group; hard stops retain
+`DRIVER_LIMIT_MARGIN_SECONDS = 300` (minimum driver budget 60 seconds) for capture
+and scoring. Driver timeout failures report `driver_timeout_kind` and
+`run_health.timeout_kind` as `idle` or `hard`. Inspect's sample limit is the hard
+limit. Abrupt infrastructure/cancellation failure outside the driver hook can
+still prevent capture; unknown dimensions remain null.
 
 See [scoring](scoring.md) for exact definitions:
 

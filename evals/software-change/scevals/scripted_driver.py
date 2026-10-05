@@ -4,6 +4,8 @@ This is controlled harness proof, not a model's semantic review. No hidden files
 are read. The asks-and-builds fixture implements the public example independently.
 """
 import json
+import os
+import time
 from pathlib import Path
 import shutil
 import subprocess
@@ -84,7 +86,12 @@ def main():
 
     call('start', '--id', run_id, 'software-change', '@' + str(selected),
          Path('/workspace/public/request.md').read_text())
+    if os.environ.get("SC_SCRIPTED_EXIT_AFTER_START"):
+        return
+    if os.environ.get("SC_SCRIPTED_HANG"):
+        time.sleep(1000)
     while True:
+        time.sleep(float(os.environ.get("SC_SCRIPTED_STEP_DELAY", "0")))
         shown = show()
         # bookends:LE-41 bookends:LE-42 — fresh-process inspection recovers the exact frozen review policies.
         assert shown['result']['initial_input']['review_policies'] == profile['review_policies'], shown

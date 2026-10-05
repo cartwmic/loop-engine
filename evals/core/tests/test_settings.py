@@ -23,7 +23,7 @@ def test_defaults_and_deterministic_assignment():
 
 @pytest.mark.parametrize("overrides", [
     {"models": []}, {"models": ["missing-provider"]}, {"models": ["mockllm/model"] * 2},
-    {"trials_per_case": 0}, {"case_count": -1}, {"time_limit_seconds": 0},
+    {"trials_per_case": 0}, {"case_count": -1}, {"hard_limit_seconds": 0}, {"idle_limit_seconds": 0},
     {"preset": "large"}, {"campaign": "../escape"}, {"simulator_model": ""},
     {"prices": {"mockllm/model": {"input_per_million": -1, "output_per_million": 0}}},
     {"prices": {"mockllm/model": {"input_per_million": float("nan"), "output_per_million": 0}}},

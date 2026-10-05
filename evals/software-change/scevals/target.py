@@ -13,6 +13,8 @@ import anyio
 from inspect_ai.agent import sandbox_agent_bridge
 from inspect_ai.dataset import Sample
 from inspect_ai.model import get_model
+# Inspect currently exposes live sample alias accounting only internally.
+from inspect_ai.model._model import sample_role_usage
 from inspect_ai.util import sandbox, sandbox_service
 
 from evalcore.report import protected_values, scan_results
@@ -169,6 +171,8 @@ class SoftwareChangeTarget:
         options = context.settings.target_options
         driver = options.get("scripted_driver")
         run_id = "scripted-example" if driver else "eval-trial"
+        evidence["run_id"] = run_id
+        await trial.copy(Path(__file__).with_name("driver_process.py"), "/opt/sc-evals/driver_process.py", "driver_launcher", "before_driver")
         if driver:
             await trial.copy(Path(__file__).with_name("scripted_driver.py"), "/opt/sc-evals/scripted_driver.py", "scripted_driver", "before_driver")
         prompt = PREAMBLE.format(profile=context.settings.profile, run_id=run_id,
@@ -188,18 +192,56 @@ class SoftwareChangeTarget:
                 await started.wait()
                 try:
                     async with sandbox_agent_bridge(model_aliases=models, port=13131):
-                        # Stop the driver before the whole-trial limit so the last engine
-                        # state can still be recorded and reported.
-                        driver_limit = max(60, context.settings.time_limit_seconds - DRIVER_LIMIT_MARGIN_SECONDS)
-                        try:
-                            result = await env.exec([*options.get("driver_command", ["sc-driver"]), prompt],
-                                                    cwd="/workspace/public/repo",
-                                                    env={"SC_BRIDGE_URL": "http://localhost:13131/v1", "SC_OWNER_INSTANCE": instance,
-                                                         "SC_PROFILE": context.settings.profile},
-                                                    timeout=driver_limit)
-                        except TimeoutError:
-                            result = None
-                            evidence["driver_timed_out"] = True
+                        # Leave the existing hard-limit margin for capture/scoring.
+                        driver_limit = max(60, context.settings.hard_limit_seconds - DRIVER_LIMIT_MARGIN_SECONDS)
+                        driver_done = anyio.Event()
+
+                        async def watch_progress():
+                            last_progress = time.monotonic()
+                            previous_engine = None
+                            previous_tokens = {}
+                            interval = min(60, context.settings.idle_limit_seconds / 2)
+                            while not driver_done.is_set():
+                                with anyio.move_on_after(interval):
+                                    await driver_done.wait()
+                                if driver_done.is_set():
+                                    return
+                                engine = await self.progress_state(env, run_id)
+                                tokens = {role: usage.total_tokens for role, usage in sample_role_usage().items()}
+                                if driver_done.is_set():
+                                    return
+                                if ((engine is not None and engine != previous_engine) or
+                                    any(value > previous_tokens.get(role, 0) for role, value in tokens.items())):
+                                    last_progress = time.monotonic()
+                                if engine is not None:
+                                    previous_engine = engine
+                                previous_tokens = tokens
+                                if time.monotonic() - last_progress >= context.settings.idle_limit_seconds:
+                                    evidence["driver_timed_out"] = True
+                                    evidence["driver_timeout_kind"] = "idle"
+                                    stopped = await env.exec(["python3", "-c",
+                                        "import os,signal; from pathlib import Path; "
+                                        "\ntry: os.killpg(int(Path('/workspace/trial/driver.pid').read_text()), signal.SIGKILL)"
+                                        "\nexcept ProcessLookupError: pass"], timeout=30)
+                                    if not stopped.success:
+                                        raise InfrastructureError("idle driver stop failed")
+                                    return
+
+                        async with anyio.create_task_group() as drivers:
+                            drivers.start_soon(watch_progress)
+                            try:
+                                result = await env.exec(["python3", "/opt/sc-evals/driver_process.py",
+                                                        *options.get("driver_command", ["sc-driver"]), prompt],
+                                                        cwd="/workspace/public/repo",
+                                                        env={"SC_BRIDGE_URL": "http://localhost:13131/v1", "SC_OWNER_INSTANCE": instance,
+                                                             "SC_PROFILE": context.settings.profile},
+                                                        timeout=driver_limit)
+                            except TimeoutError:
+                                result = None
+                                evidence["driver_timed_out"] = True
+                                evidence.setdefault("driver_timeout_kind", "hard")
+                            finally:
+                                driver_done.set()
                         if result is not None:
                             evidence["driver_exit_code"] = result.returncode
                         if result is not None and driver and re.fullmatch(r"routing-marker-[a-z0-9-]+", result.stdout.strip()):
@@ -233,26 +275,41 @@ class SoftwareChangeTarget:
             evidence["scripted"] = True
         return TrialExecution(terminal=trial.terminal, data=trial)
 
+    async def progress_state(self, env, run_id):
+        cli = ["loop-engine", "--database", "/workspace/trial/run.sqlite", "--config",
+               "/workspace/trial/providers.toml", "--json"]
+        shown = await env.exec([*cli, "show", "--view", "full", run_id], timeout=30)
+        if not shown.success:
+            return None  # A driver may not have created its run yet.
+        snapshot = json.loads(shown.stdout)["result"]
+        history = await env.exec([*cli, "history", run_id], timeout=30)
+        if not history.success:
+            return None
+        return (snapshot["current_state"], snapshot["state_visit"],
+                max((row["sequence"] for row in snapshot["context"]), default=0), history.stdout)
+
     async def capture_terminal(self, trial, context):
-        """Copy raw evidence to ignored captures, never to the publishable report."""
-        if not trial.terminal:
-            raise ModelError("artifact capture requires a terminal engine state")
-        run_id = "scripted-example" if trial.evidence.get("scripted") else "eval-trial"
+        """Copy terminal or interrupted evidence to ignored captures only."""
+        run_id = trial.evidence["run_id"]
         cli = ["loop-engine", "--database", "/workspace/trial/run.sqlite", "--config",
                "/workspace/trial/providers.toml", "--json"]
         packets = {}
         for operation, arguments in (("show", ["show", "--view", "full", run_id]),
                                      ("history", ["history", run_id])):
             result = await trial.env.exec([*cli, *arguments], timeout=30)
-            if not result.success:
+            if not result.success and trial.terminal:
                 raise InfrastructureError("terminal history capture failed")
-            packets[operation] = json.loads(result.stdout)["result"]
+            packets[operation] = json.loads(result.stdout).get("result") if result.success else None
+            # CLI errors (including no run yet) also remain private captures.
             await trial.env.write_file(f"/workspace/trial/{operation}.json", result.stdout)
         # A model may terminate without drafting artifacts. Capture an empty
         # directory, then classify its missing intent as model failure, not infra.
         await trial.env.exec(["mkdir", "-p", "/workspace/trial/artifacts"], timeout=30)
-        result = await trial.env.exec(["tar", "--exclude=.git", "-cf", "/tmp/terminal-capture.tar", "-C", "/workspace",
-                                       "trial/artifacts", "trial/run.sqlite", "trial/show.json", "trial/history.json", "trial/local-push-log", "public/repo"], timeout=30)
+        result = await trial.env.exec(["sh", "-c",
+            'set -- trial/artifacts trial/show.json trial/history.json trial/local-push-log public/repo; '
+            'for file in trial/run.sqlite trial/run.sqlite-wal trial/run.sqlite-shm; do '
+            '[ ! -f "$file" ] || set -- "$@" "$file"; done; '
+            'tar --exclude=.git -cf /tmp/terminal-capture.tar "$@"'], cwd="/workspace", timeout=30)
         if not result.success:
             raise InfrastructureError("terminal artifact capture failed")
         raw = await trial.env.read_file("/tmp/terminal-capture.tar", text=False)
@@ -263,8 +320,8 @@ class SoftwareChangeTarget:
         scan_results([raw.decode("utf-8", "replace"), *[b.decode("utf-8", "replace") for b in files.values()]], protected_values())
         capture = ROOT / "captures" / context.settings.campaign / context.assignment.sample_id
         capture.mkdir(parents=True, exist_ok=True)
-        (capture / "terminal.tar").write_bytes(raw)
-        trial.evidence["copy_out_log"] = [{"kind": "run_history_artifacts_and_delivery", "phase": "after_terminal",
+        (capture / ("terminal.tar" if trial.terminal else "nonterminal.tar")).write_bytes(raw)
+        trial.evidence["copy_out_log"] = [{"kind": "run_history_artifacts_and_delivery", "phase": "after_terminal" if trial.terminal else "after_driver",
                                             "elapsed_seconds": time.monotonic() - trial.evidence["started"]}]
         push_log = await trial.env.read_file("/workspace/trial/local-push-log")
         return (packets["show"], packets["history"],
@@ -275,6 +332,7 @@ class SoftwareChangeTarget:
     async def score(self, state, execution, context):
         trial = execution.data
         if not execution.terminal:
+            await self.capture_terminal(trial, context)
             return TrialScore(False, trial.metrics())
         snapshot, history, artifacts, delivered, push_events, capture = await self.capture_terminal(trial, context)
         await trial.copy_scoring_material()
@@ -300,7 +358,7 @@ class SoftwareChangeTarget:
         # Judge inputs stay host-side. Core attributes the bound judge role to
         # evaluation overhead, never to the workflow model comparison.
         judgment = await judge_intent(intent, trial.case.brief.read_text())
-        health = run_health(snapshot, history, trial.terminal, trial.evidence["driver_exit_code"])
+        health = run_health(snapshot, history, trial.terminal, trial.evidence.get("driver_exit_code"))
         passed_reviews = reviews_passed(snapshot, history)
         sources = {h["action"]["transition"]["source"] for h in history if h["action"]["kind"] == "transition"}
         needed = [role for role, needed in (("role-implementer", "implement" in sources),
@@ -313,7 +371,7 @@ class SoftwareChangeTarget:
                   "honesty": honesty(snapshot, artifacts, delivered, tests, trial.case.requirement_ids, hidden_success=success),
                   "needed_role_aliases": needed,
                   "intent_judge": judgment.metrics()}
-        return TrialScore(success, metrics)
+        return TrialScore(success and not trial.evidence.get("driver_timed_out", False), metrics)
 
     def finalize_metrics(self, metrics, *, usage_by_role, terminal, outcome, reason):
         """Core calls after Inspect has finalized authoritative alias accounting."""
@@ -334,6 +392,7 @@ class SoftwareChangeTarget:
                    "overruns": None, "timeouts": 0, "cancellations": 0})
         if reason == "timeout" or metrics.get("driver_timed_out"):
             health["timeouts"] += 1
+            health["timeout_kind"] = metrics.get("driver_timeout_kind", "hard")
             health["unattended_finish"] = False
         health["trial_outcome"] = outcome
         return metrics

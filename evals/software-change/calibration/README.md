@@ -7,7 +7,7 @@ past Loop Engine runs. No engine/provider changes or paid model defaults are use
 From the checkout root:
 
 ```sh
-uv run --project evals evalctl calibrate extract --database "$HOME/.local/share/loop-engine/loop.db"
+uv run --project evals evalctl calibrate extract --database "$HOME/.local/share/loop-engine/loop.db" --sessions "$HOME/.pi/agent/sessions"
 uv run --project evals pytest -q evals/software-change/tests/test_calibration.py
 uv run --project evals evalctl calibrate score --labels evals/software-change/calibration/labels.json
 ```
@@ -21,7 +21,7 @@ The JSON extraction summary and CLI report completed runs examined, candidates,
 and skipped completed runs with separate `skipped_reasons` counts:
 `artifact_folder_missing`, `no_owner_request` (no usable steering instructions),
 and `intent_unreadable` (missing, unreadable, invalid JSON or missing revision).
-Reasons are exclusive, checked in that order; malformed/blank steering records
+Without `--sessions`, reasons are exclusive, checked in that order; malformed/blank steering records
 are ignored. Counts cover examined completed runs, stopping at either bound. All owner steering
 instructions are retained in sequence as the request plus clarifications. This is
 not a hidden brief: the owner must check that the captured request is sufficient
@@ -30,7 +30,26 @@ revision and SHA-256. Completion is an eligibility gate, not a quality label;
 extraction does not infer quality from run state or review verdicts.
 
 Default bounds are 20 candidates from at most 200 runs. `--limit`, `--scan-limit`
-and `--output PATH` override them. Existing files are never overwritten. The
+and `--output PATH` override them. Without `--sessions`, existing files are never
+overwritten. With `--sessions DIR`, missing artifact roots can be reconstructed:
+extraction first requires a usable owner request, then uses `subject_revision` in
+the latest (by sequence) `review-evidence` data whose `subject` is `intent.json`.
+It streams read-only JSONL transcripts mentioning the run ID and raw-decodes
+message text for objects with `revision`, `outcome`, and `acceptance`, matching
+only that final revision. It chooses the most frequent distinct object (stable
+lexical tie-break), recording all ambiguity rather than inferring owner approval.
+Recovered `source` metadata includes `reconstructed: true`, `session_file_count`,
+`match_count`, `selected_match_count`, `ambiguous`, and `distinct_match_count`.
+The reconstructed hash covers canonical sorted-key JSON, not lost original bytes.
+Counts include `recovered`, `not_found`, `ambiguous`, and `skipped_no_request`.
+Session-file count is the number of transcripts mentioning the run; match count
+is every matching object occurrence, including repeated tool output.
+
+Reconstruction mode merges an existing output by ID, preserving `owner_label`,
+`owner_confirmed`, the judge pin and previously extracted entries not found this
+time. Content is secret-scanned before atomic replacement; extraction never
+assigns or confirms a label. Use `--limit 200 --scan-limit 200` to examine the
+whole current catalog instead of stopping at the default 20 candidates. The
 private default `labels.json` is gitignored; do not publish it. Receipts and raw
 logs belong under ignored `captures/`. Only synthetic test labels are public.
 The secret/config guard scans label content before writing it or sending it to a

@@ -4,6 +4,8 @@ import asyncio
 import hashlib
 import json
 import sqlite3
+import re
+from collections import Counter
 from contextlib import closing
 from pathlib import Path
 
@@ -24,15 +26,86 @@ def write_safe_json(path: Path, data: dict) -> None:
         stream.write(text)
 
 
-def extract_candidates(database: Path, *, limit: int = 20, scan_limit: int = 200) -> dict:
+def session_intents(directory: Path, revisions: dict[str, str]) -> dict:
+    """Two streaming passes per relevant file; retain only matching intent objects.
+
+    First identify all runs mentioned anywhere in a transcript (reviewer tool
+    output may not repeat the ID next to the intent). Then decode message text.
+    No session contents or paths are printed or modified.
+    """
+    if not directory.is_dir():
+        raise ValueError("sessions directory is missing")
+    if not revisions:
+        return {}
+    mentions = re.compile("|".join(re.escape(run_id) for run_id in revisions))
+    counts = {run_id: Counter() for run_id in revisions}
+    file_counts = Counter()
+    decoder = json.JSONDecoder()
+    for path in sorted(directory.rglob("*.jsonl")):
+        runs = set()
+        with path.open(errors="replace") as stream:
+            for line in stream:
+                runs.update(mentions.findall(line))
+        if not runs:
+            continue
+        file_counts.update(runs)
+        with path.open(errors="replace") as stream:
+            for line in stream:
+                if 'acceptance' not in line or 'outcome' not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                message = row.get("message", row) if isinstance(row, dict) else None
+                if not isinstance(message, dict):
+                    continue
+                content = message.get("content", [])
+                texts = [content] if isinstance(content, str) else [
+                    block.get("text", "") for block in content
+                    if isinstance(block, dict) and block.get("type") == "text"
+                ] if isinstance(content, list) else []
+                for text in texts:
+                    if not isinstance(text, str):
+                        continue
+                    index = text.find("{")
+                    while index != -1:
+                        try:
+                            obj, end = decoder.raw_decode(text, index)
+                        except ValueError:
+                            index = text.find("{", index + 1)
+                            continue
+                        if isinstance(obj, dict) and {"revision", "outcome", "acceptance"} <= obj.keys():
+                            canonical = json.dumps(obj, sort_keys=True, ensure_ascii=False)
+                            for run_id in runs:
+                                if str(obj["revision"]) == revisions[run_id]:
+                                    counts[run_id][canonical] += 1
+                        index = text.find("{", end)
+    result = {}
+    for run_id, matches in counts.items():
+        if not matches:
+            continue
+        # Stable lexical tie-break, while explicitly recording any ambiguity.
+        selected = min(matches, key=lambda obj: (-matches[obj], obj))
+        result[run_id] = (json.loads(selected), {
+            "reconstructed": True, "session_file_count": file_counts[run_id],
+            "match_count": sum(matches.values()), "selected_match_count": matches[selected],
+            "ambiguous": len(matches) > 1, "distinct_match_count": len(matches),
+        })
+    return result
+
+
+def extract_candidates(database: Path, *, limit: int = 20, scan_limit: int = 200,
+                       sessions: Path | None = None) -> dict:
     if limit < 1 or scan_limit < limit:
         raise ValueError("invalid extraction limits")
     entries = []
     examined = 0
     skipped_reasons = {"artifact_folder_missing": 0, "no_owner_request": 0,
                        "intent_unreadable": 0}
+    recovery = {"recovered": 0, "not_found": 0, "ambiguous": 0, "skipped_no_request": 0}
+    pending = []
     # mode=ro preserves SQLite's WAL view (do not use immutable=1 on a live DB).
-    # Both SQLite query_only and URI read-only are applied; no engine is invoked.
     with closing(sqlite3.connect(database.expanduser().resolve().as_uri() + "?mode=ro", uri=True)) as connection:
         connection.execute("PRAGMA query_only=ON")
         runs = connection.execute(
@@ -41,22 +114,16 @@ def extract_candidates(database: Path, *, limit: int = 20, scan_limit: int = 200
             "ORDER BY created_at DESC, id DESC LIMIT ?", (scan_limit,)
         ).fetchall()
         for run_id, artifact_root in runs:
-            if len(entries) >= limit:
-                break
-            examined += 1
-            # Reasons are exclusive: folder first, then request, then intent.
             root = Path(artifact_root) if artifact_root else None
-            if root is None or not root.is_dir():
-                skipped_reasons["artifact_folder_missing"] += 1
+            missing = root is None or not root.is_dir()
+            if missing and sessions is None:
+                pending.append((run_id, None, "artifact_folder_missing"))
                 continue
-            # The catalog stores context and artifact locations, not intent bytes.
-            # Read only the current intent.json, never workflow/provider configs.
             records = connection.execute(
                 "SELECT record_id, data_json FROM context_records "
                 "WHERE run_id=? AND kind='user-steering' ORDER BY sequence", (run_id,)
             ).fetchall()
-            instructions = []
-            source_ids = []
+            instructions, source_ids = [], []
             for record_id, raw in records:
                 try:
                     record = json.loads(raw)
@@ -67,7 +134,28 @@ def extract_candidates(database: Path, *, limit: int = 20, scan_limit: int = 200
                     instructions.append(instruction)
                     source_ids.append(record_id)
             if not instructions:
-                skipped_reasons["no_owner_request"] += 1
+                pending.append((run_id, None, "no_owner_request"))
+                continue
+            entry = {"id": run_id, "source": {"run_id": run_id, "request_record_ids": source_ids},
+                     "owner_request": "\n\n".join(instructions),
+                     "owner_label": None, "owner_confirmed": False}
+            if missing:
+                revision = None
+                # Inspected catalog schema: subject and subject_revision live in
+                # review-evidence data_json, ordered by context record sequence.
+                for (raw,) in connection.execute(
+                    "SELECT data_json FROM context_records WHERE run_id=? "
+                    "AND kind='review-evidence' ORDER BY sequence DESC", (run_id,)
+                ):
+                    try:
+                        record = json.loads(raw)
+                    except ValueError:
+                        continue
+                    if isinstance(record, dict) and record.get("subject") == "intent.json":
+                        revision = record.get("subject_revision")
+                        break
+                entry["source"]["intent_revision"] = str(revision) if revision is not None else None
+                pending.append((run_id, entry, "reconstruct"))
                 continue
             try:
                 content = (root / "intent.json").read_bytes()
@@ -75,22 +163,43 @@ def extract_candidates(database: Path, *, limit: int = 20, scan_limit: int = 200
                 if not isinstance(intent, dict) or not intent.get("revision"):
                     raise ValueError()
             except (OSError, ValueError, TypeError):
-                skipped_reasons["intent_unreadable"] += 1
+                pending.append((run_id, None, "intent_unreadable"))
                 continue
-            entries.append({
-                "id": run_id,
-                "source": {"run_id": run_id, "request_record_ids": source_ids,
-                           "intent_revision": intent["revision"],
-                           "intent_sha256": hashlib.sha256(content).hexdigest()},
-                "owner_request": "\n\n".join(instructions),
-                "intent": intent,
-                "owner_label": None,
-                "owner_confirmed": False,
-            })
+            entry.update(intent=intent)
+            entry["source"].update(intent_revision=intent["revision"], intent_sha256=hashlib.sha256(content).hexdigest())
+            pending.append((run_id, entry, None))
+    revisions = {run_id: entry["source"]["intent_revision"] for run_id, entry, reason in pending
+                 if reason == "reconstruct" and entry["source"]["intent_revision"] is not None}
+    reconstructed = session_intents(sessions.expanduser(), revisions) if sessions is not None else {}
+    for run_id, entry, reason in pending:
+        if len(entries) >= limit:
+            break
+        examined += 1
+        if reason == "reconstruct":
+            if run_id not in reconstructed:
+                recovery["not_found"] += 1
+                reason = "artifact_folder_missing"
+            else:
+                intent, metadata = reconstructed[run_id]
+                entry["intent"] = intent
+                entry["source"].update(metadata, intent_sha256=hashlib.sha256(
+                    json.dumps(intent, sort_keys=True, ensure_ascii=False).encode()).hexdigest())
+                recovery["recovered"] += 1
+                recovery["ambiguous"] += int(metadata["ambiguous"])
+                reason = None
+        if reason:
+            skipped_reasons[reason] += 1
+            if reason == "no_owner_request":
+                recovery["skipped_no_request"] += 1
+        else:
+            entries.append(entry)
+    extraction = {"candidates": len(entries), "completed_runs_examined": examined,
+                  "skipped": sum(skipped_reasons.values()), "skipped_reasons": skipped_reasons,
+                  "scan_limit": scan_limit}
+    if sessions is not None:
+        extraction.update(recovery)
     return {"schema_version": 1, "judge_model": None, "judge_contract": JUDGE_CONTRACT,
-            "entries": entries, "extraction": {"candidates": len(entries),
-                "completed_runs_examined": examined, "skipped": sum(skipped_reasons.values()),
-                "skipped_reasons": skipped_reasons, "scan_limit": scan_limit}}
+            "entries": entries, "extraction": extraction}
 
 
 def confirmed_entries(labels: dict) -> list[dict]:
@@ -174,13 +283,33 @@ def calibration_for_report(path: Path, *, judge_model: str) -> dict:
 
 
 def extract_command(args):
-    labels = extract_candidates(args.database, limit=args.limit, scan_limit=args.scan_limit)
+    labels = extract_candidates(args.database, limit=args.limit, scan_limit=args.scan_limit, sessions=args.sessions)
     print("Extraction summary: " + json.dumps(labels["extraction"], sort_keys=True))
     if not labels["entries"]:
         print("No usable candidate pairs found; no labelling file written.")
         return 2
-    write_safe_json(args.output, labels)
-    print(f"Extracted {len(labels['entries'])} candidates; owner labels remain empty. Database opened read-only.")
+    if args.sessions is not None and args.output.exists():
+        existing = json.loads(args.output.read_text())
+        by_id = {entry["id"]: entry for entry in existing["entries"]}
+        for entry in labels["entries"]:
+            previous = by_id.get(entry["id"])
+            if previous is not None:
+                entry["owner_label"] = previous.get("owner_label")
+                entry["owner_confirmed"] = previous.get("owner_confirmed", False)
+            by_id[entry["id"]] = entry
+        labels["entries"] = list(by_id.values())
+        labels["judge_model"] = existing.get("judge_model")
+        text = json.dumps(labels, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+        scan_results((text,), protected_values())
+        # Atomic replacement only in explicit reconstruction mode; scoring
+        # receipts and legacy extraction retain their no-overwrite contract.
+        temporary = args.output.with_name(args.output.name + ".tmp")
+        with temporary.open("x") as stream:
+            stream.write(text)
+        temporary.replace(args.output)
+    else:
+        write_safe_json(args.output, labels)
+    print(f"Extracted {len(labels['entries'])} candidates; new owner labels remain empty and existing labels are preserved. Database opened read-only.")
     return 0
 
 
@@ -219,6 +348,7 @@ def register_subcommands(subparsers):
     commands = parser.add_subparsers(dest="calibration_command", required=True)
     extract = commands.add_parser("extract", help="read-only candidate extraction; never assign labels")
     extract.add_argument("--database", type=Path, required=True)
+    extract.add_argument("--sessions", type=Path, help="read-only Pi transcripts for missing artifact roots; merge existing labels by id")
     extract.add_argument("--output", type=Path, default=DEFAULT_LABELS)
     extract.add_argument("--limit", type=int, default=20)
     extract.add_argument("--scan-limit", type=int, default=200)

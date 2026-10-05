@@ -7,7 +7,6 @@ case_count = 1
 trials_per_case = 1
 profile = "standard-14"
 # A full standard-14 run took over 40 minutes with GPT-6.1 Sol.
-time_limit_seconds = 7200
 simulator_model = "openrouter/openai/gpt-6-luna"
 judge_model = "openrouter/openai/gpt-6-luna"
 models = ["codex/gpt-6.1-sol"]

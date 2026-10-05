@@ -43,7 +43,8 @@ class CampaignSettings(StrictModel):
     cases_path: Path
     simulator_model: str = Field(pattern=r"^[^/\s]+/\S+$")
     judge_model: str = Field(pattern=r"^[^/\s]+/\S+$")
-    time_limit_seconds: int = Field(default=3600, ge=1)
+    idle_limit_seconds: int = Field(default=1800, ge=1)
+    hard_limit_seconds: int = Field(default=28800, ge=1)
     prices: dict[str, Price] = Field(default_factory=dict)
     # Per-model Inspect provider arguments, e.g. {"openrouter/x" = {strict_tools = false}}.
     model_args: dict[str, dict] = Field(default_factory=dict)

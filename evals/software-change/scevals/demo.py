@@ -15,7 +15,7 @@ def ac5_demo(args):
         settings = CampaignSettings(campaign="ac5-" + timestamp + "-" + driver, models=("sc-scripted/driver",),
                                     cases_path=ROOT / "example-case", case_count=1, trials_per_case=1,
                                     simulator_model="sc-scripted/simulator", judge_model="sc-scripted/judge",
-                                    time_limit_seconds=600, target_options={"scripted_driver": driver})
+                                    hard_limit_seconds=600, target_options={"scripted_driver": driver})
         destination = run_campaign(SoftwareChangeTarget(), settings, report_directory=directory / driver)
         trial = json.loads((destination / "summary.json").read_text())["trials"][0]
         metrics = trial["target_metrics"]

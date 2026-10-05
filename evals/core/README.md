@@ -21,7 +21,7 @@ trials. A target supplies:
   definition. Core assigns a unique sample ID; each software-change sample must
   have its own mount-free container. Preparation must not run the workflow.
 - `async run_trial(TaskState, TrialContext) -> TrialExecution`: execute using the
-  context's role combination, profile and time limit. `data` is opaque host-side
+  context's role combination, profile and hard limit. `data` is opaque host-side
   state and is never exported by core.
 - `async score(TaskState, TrialExecution, TrialContext) -> TrialScore`: return a
   success boolean and export-safe metrics. Core success requires both terminal
@@ -63,8 +63,10 @@ Supply explicit Inspect model IDs and pinned simulator/judge IDs: core invents n
 paid-model defaults. `models` compares each model in all three workflow roles;
 `combinations` instead accepts `{id, driver, implementer, reviewer}` objects.
 Use exactly one. Defaults are `preset = "small"` (3 cases x 3 trials),
-`profile = "standard-14"`, engine/provider ref `v0.24.0`, and a 3600-second trial
-limit. `medium` is 6 x 3; `case_count` and `trials_per_case` override either count.
+`profile = "standard-14"`, engine/provider ref `v0.24.0`, and limits `idle_limit_seconds = 1800`, `hard_limit_seconds = 28800`.
+Inspect and core execution/scoring use the hard limit; idle detection belongs to
+the target. CLI overrides are `--idle-limit-seconds` and `--hard-limit-seconds`.
+The old `time_limit_seconds` setting is no longer accepted. `medium` is 6 x 3; `case_count` and `trials_per_case` override either count.
 Targets may supply settings TOML files; paths resolve relative to the invocation
 working directory. `target_options` holds target-owned options such as a scripted
 driver command. All effective counts, explicit/default setting sources and role

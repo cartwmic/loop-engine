@@ -38,7 +38,7 @@ def trial_solver(target: Target, contexts: dict[str, TrialContext], records: dic
         started = time.monotonic()
         try:
             # Include scoring in the same limit. Target subprocesses must also honour it.
-            async with asyncio.timeout(context.settings.time_limit_seconds):
+            async with asyncio.timeout(context.settings.hard_limit_seconds):
                 execution = await target.run_trial(state, context)
                 record.terminal = execution.terminal
                 scored = await target.score(state, execution, context)
@@ -88,7 +88,7 @@ def run_campaign(target: Target, settings: CampaignSettings, *, provider_config_
             name=f"{target.name}-{len(tasks)}", dataset=samples,
             solver=trial_solver(target, contexts, records), scorer=trial_scorer(records),
             model=role_models["role-driver"], model_roles=role_models,
-            fail_on_error=False, time_limit=settings.time_limit_seconds,
+            fail_on_error=False, time_limit=settings.hard_limit_seconds,
         ))
     started = time.monotonic()
     logs = eval(tasks, log_dir=str(target.logs_dir), display="none", retry_on_error=0,

@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import tomllib
+import tarfile
 import uuid
 
 import pytest
@@ -138,11 +139,84 @@ def test_real_settings_record_owner_selection_without_any_generation():
 def test_driver_stops_before_trial_limit_so_the_outcome_is_recorded():
     # A driver that never finishes is stopped DRIVER_LIMIT_MARGIN_SECONDS before
     # the trial limit (minimum 60 s), so the trial is scored, not lost.
-    summary, markdown = campaign("scripted-example.toml", time_limit_seconds=120,
+    summary, markdown = campaign("scripted-example.toml", hard_limit_seconds=120,
                                  target_options={"driver_command": ["sh", "-c", "sleep 1000", "sh"]})
     trial = summary["trials"][0]
     assert trial["outcome"] == "failure" and trial["terminal"] is False
     metrics = trial["target_metrics"]
     assert metrics.get("driver_timed_out") is True, (trial["reason"], metrics)
     assert metrics["run_health"]["timeouts"] == 1
+    assert metrics["run_health"]["timeout_kind"] == "hard"
     assert "driver_timed_out" in markdown
+    assert_nonterminal_capture(summary, trial)
+
+
+def assert_nonterminal_capture(summary, trial):
+    metrics = trial["target_metrics"]
+    capture = ROOT / "captures" / summary["settings"]["campaign"] / trial["sample_id"] / "nonterminal.tar"
+    assert capture.is_file()
+    with tarfile.open(capture) as archive:
+        names = archive.getnames()
+        assert "trial/show.json" in names and "trial/history.json" in names
+        if metrics.get("lifecycle"):
+            assert "trial/run.sqlite" in names
+            assert "trial/artifacts/intent.json" in names
+    assert all(row["phase"] == "before_driver" for row in metrics["copy_log"])
+    assert metrics["copy_out_log"][0]["phase"] == "after_driver"
+
+
+def test_idle_real_pi_driver_is_stopped_and_captured():
+    summary, _ = campaign("scripted-example.toml", idle_limit_seconds=4,
+        target_options={"scripted_driver": "asks-and-builds", "driver_command": [
+            "sh", "-c", 'export SC_SCRIPTED_HANG=1; exec sc-driver "$@"', "sh"]})
+    trial = summary["trials"][0]
+    assert trial["outcome"] == "failure" and trial["terminal"] is False
+    assert trial["target_metrics"]["driver_timeout_kind"] == "idle"
+    assert trial["target_metrics"]["run_health"]["timeout_kind"] == "idle"
+    assert trial["target_metrics"]["run_health"]["timeouts"] == 1
+    assert trial["usage_by_role"]["role-driver"]["total_tokens"] > 0
+    assert_nonterminal_capture(summary, trial)
+
+
+def test_real_pi_engine_progress_outlives_idle_limit():
+    summary, _ = campaign("scripted-example.toml", idle_limit_seconds=10,
+        target_options={"scripted_driver": "asks-and-builds", "driver_command": [
+            "sh", "-c", 'export SC_SCRIPTED_STEP_DELAY=2; exec sc-driver "$@"', "sh"]})
+    trial = summary["trials"][0]
+    assert trial["wall_seconds"] > 10
+    assert_lifecycle(trial, 3)
+    assert trial["outcome"] == "success"
+    assert not trial["target_metrics"].get("driver_timed_out")
+
+
+def test_real_pi_role_token_progress_outlives_idle_limit():
+    summary, _ = campaign("scripted-example.toml", idle_limit_seconds=6,
+        target_options={"scripted_driver": "asks-and-builds", "driver_command": [
+            "sh", "-c", 'for i in 1 2 3 4 5 6; do sc-review "Return a routing marker."; sleep 2; done; exec sc-driver "$@"', "sh"]})
+    trial = summary["trials"][0]
+    assert trial["wall_seconds"] > 6
+    assert_lifecycle(trial, 3)
+    assert trial["outcome"] == "success"
+    assert not trial["target_metrics"].get("driver_timed_out")
+
+
+def test_real_pi_nonterminal_driver_exit_retains_evidence():
+    summary, _ = campaign("scripted-example.toml",
+        target_options={"scripted_driver": "asks-and-builds", "driver_command": [
+            "sh", "-c", 'export SC_SCRIPTED_EXIT_AFTER_START=1; exec sc-driver "$@"', "sh"]})
+    trial = summary["trials"][0]
+    assert trial["outcome"] == "failure" and trial["terminal"] is False
+    assert trial["target_metrics"]["driver_exit_code"] == 0
+    assert not trial["target_metrics"].get("driver_timed_out")
+    assert_nonterminal_capture(summary, trial)
+
+
+def test_real_pi_hang_after_terminal_is_still_a_failure():
+    summary, _ = campaign("scripted-example.toml", idle_limit_seconds=10,
+        target_options={"scripted_driver": "asks-and-builds", "driver_command": [
+            "sh", "-c", 'sc-driver "$@"; sleep 1000', "sh"]})
+    trial = summary["trials"][0]
+    assert trial["terminal"] is True and trial["outcome"] == "failure"
+    assert trial["target_metrics"]["hidden_test_outcome"]["passed"] is True
+    assert trial["target_metrics"]["run_health"]["timeout_kind"] == "idle"
+    assert trial["target_metrics"]["run_health"]["unattended_finish"] is False

@@ -255,3 +255,77 @@ def test_extract_empty_prints_reasons(tmp_path):
     assert '"artifact_folder_missing": 1' in result.stdout
     assert '"completed_runs_examined": 1' in result.stdout
     assert not labels.exists()
+
+
+def reconstruction_fixture(tmp_path):
+    database = tmp_path / 'loop.db'
+    database_fixture(database, tmp_path / 'artifacts')
+    import shutil
+    shutil.rmtree(tmp_path / 'artifacts/run-11')
+    shutil.rmtree(tmp_path / 'artifacts/run-10')
+    with sqlite3.connect(database) as connection:
+        for run_id in ('run-11', 'run-10'):
+            for sequence, subject, revision in ((4, 'intent.json', '1'), (5, 'intent.json', '3'), (6, 'plan.json', '99')):
+                connection.execute('INSERT INTO context_records VALUES (?,?,?,?,?)',
+                    (run_id, f'review-{sequence}', sequence, 'review-evidence',
+                     json.dumps({'subject': subject, 'subject_revision': revision})))
+        # Missing artifacts and no request must not be recovered from transcripts.
+        connection.execute('INSERT INTO context_records VALUES (?,?,?,?,?)',
+            ('missing', 'review', 1, 'review-evidence', json.dumps({'subject': 'intent.json', 'subject_revision': '3'})))
+    sessions = tmp_path / 'sessions'
+    sessions.mkdir()
+    good = {'revision': '3', 'outcome': 'Recovered outcome.', 'acceptance': ['Check it.']}
+    other = dict(good, outcome='Less frequent alternative.')
+    wrong = dict(good, revision='1', outcome='Obsolete intent.')
+    for name, objects in (('one', [wrong] * 5 + [good, good, other]), ('two', [good])):
+        rows = [{'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': 'run-11 missing'}]}}]
+        rows += [{'message': {'role': 'toolResult', 'content': [{'type': 'text', 'text': 'intent:\n' + json.dumps(obj, indent=2)}]}} for obj in objects]
+        (sessions / (name + '.jsonl')).write_text('\n'.join(json.dumps(row) for row in rows) + '\nnot json\n')
+    # Different revision in a matching transcript is not a reconstruction.
+    (sessions / 'unmatched.jsonl').write_text(json.dumps({'message': {'content': 'run-10 ' + json.dumps(wrong)}}))
+    return database, sessions, good
+
+
+def test_reconstruct_final_revision_majority_read_only(tmp_path):
+    database, sessions, good = reconstruction_fixture(tmp_path)
+    paths = [database, *sessions.glob('*.jsonl')]
+    before = {path: path.read_bytes() for path in paths}
+    data = extract_candidates(database, sessions=sessions, limit=50, scan_limit=50)
+    entry = next(e for e in data['entries'] if e['id'] == 'run-11')
+    assert entry['intent'] == good
+    assert entry['source']['intent_revision'] == '3'
+    assert entry['source']['reconstructed'] is True
+    assert entry['source']['session_file_count'] == 2
+    assert entry['source']['match_count'] == 4
+    assert entry['source']['selected_match_count'] == 3
+    assert entry['source']['ambiguous'] is True
+    assert entry['source']['distinct_match_count'] == 2
+    assert entry['owner_label'] is None and entry['owner_confirmed'] is False
+    assert data['extraction']['recovered'] == 1
+    assert data['extraction']['not_found'] == 1
+    assert data['extraction']['ambiguous'] == 1
+    assert data['extraction']['skipped_no_request'] == 1
+    assert all(path.read_bytes() == before[path] for path in paths)
+    assert not any(e['id'] in ('missing', 'run-10') for e in data['entries'])
+
+
+def test_reconstruct_cli_merges_owner_labels_by_id(tmp_path):
+    database, sessions, good = reconstruction_fixture(tmp_path)
+    output = tmp_path / 'labels.json'
+    assert invoke('extract', '--database', database, '--sessions', sessions,
+                  '--output', output, '--limit', 50, '--scan-limit', 50).returncode == 0
+    labels = json.loads(output.read_text())
+    entry = next(e for e in labels['entries'] if e['id'] == 'run-11')
+    entry.update(owner_label='deficient', owner_confirmed=True)
+    labels['judge_model'] = 'calibration-fixture/pinned-v1'
+    labels['entries'].append(dict(entry, id='previous-only'))
+    output.write_text(json.dumps(labels))
+    result = invoke('extract', '--database', database, '--sessions', sessions,
+                    '--output', output, '--limit', 50, '--scan-limit', 50)
+    assert result.returncode == 0, result.stderr
+    labels = json.loads(output.read_text())
+    assert labels['judge_model'] == 'calibration-fixture/pinned-v1'
+    for entry in labels['entries']:
+        if entry['id'] in ('run-11', 'previous-only'):
+            assert entry['owner_label'] == 'deficient' and entry['owner_confirmed'] is True
+    assert '"recovered": 1' in result.stdout

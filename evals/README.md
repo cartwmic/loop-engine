@@ -110,14 +110,17 @@ that case is rejected rather than silently reducing counts. `--preset medium`,
 `--case-count N`, `--trials-per-case K`, `--profile CONFIG_VERSION`, repeated
 `--model ID`, or repeated `--combination JSON` override settings. Default profile
 is shipped `standard-14` at `v0.24.0`; other shipped profiles require exact
-config-version IDs. Default per-trial limit is 3600 seconds, including scoring.
+config-version IDs. Defaults are `idle_limit_seconds = 1800` and `hard_limit_seconds = 28800`.
+The hard limit includes scoring; software-change stops idle drivers on unchanged
+engine history/sequence and role token usage. The former `time_limit_seconds`
+setting is replaced (update local TOMLs).
 All settings and versions are recorded. Paths resolve relative to invocation cwd.
 See the core README for price tables and the target README for target options.
 
 ## Calibration
 
 ```sh
-uv run --project evals evalctl calibrate extract --database "$HOME/.local/share/loop-engine/loop.db"
+uv run --project evals evalctl calibrate extract --database "$HOME/.local/share/loop-engine/loop.db" --sessions "$HOME/.pi/agent/sessions"
 uv run --project evals pytest -q evals/software-change/tests/test_calibration.py
 uv run --project evals evalctl calibrate score --labels evals/software-change/calibration/labels.json
 ```
@@ -139,7 +142,10 @@ The command prints the actual destination. **results/ is not gitignored**: the
 owner selects only report/summary pairs to commit, never all runtime evidence.
 Old report layouts are still scanned by the recursive audit; no old results are
 migrated or deleted. Raw Inspect logs and captures remain under ignored `logs/`
-and `captures/`, including private histories/artifacts and local proof receipts.
+and `captures/`, including private histories/artifacts and local proof receipts. Interrupted
+software-change drivers retain `nonterminal.tar` (DB, artifacts and show/history)
+in the same campaign/sample captures directory; hidden scoring files never enter
+a non-terminal sandbox.
 Normal campaign capture paths are keyed by campaign/sample, so use a distinct
 campaign name when retaining raw evidence across reruns; timestamped reports alone
 do not version those captures.
