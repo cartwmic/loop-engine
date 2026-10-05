@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "judge_model": "calibration-fixture/pinned-v1",
+  "judge_contract": "intent-judge-v1",
+  "entries": [
+    {"id": "good-pass", "owner_request": "Keep labels stable.", "intent": {"fixture_id": "good-pass"}, "owner_label": "good", "owner_confirmed": true},
+    {"id": "good-fail", "owner_request": "Keep labels stable.", "intent": {"fixture_id": "good-fail"}, "owner_label": "good", "owner_confirmed": true},
+    {"id": "deficient-pass", "owner_request": "Keep labels stable.", "intent": {"fixture_id": "deficient-pass"}, "owner_label": "deficient", "owner_confirmed": true},
+    {"id": "deficient-fail", "owner_request": "Keep labels stable.", "intent": {"fixture_id": "deficient-fail"}, "owner_label": "deficient", "owner_confirmed": true},
+    {"id": "unlabelled", "owner_request": "Keep labels stable.", "intent": {"fixture_id": "unlabelled"}, "owner_label": null, "owner_confirmed": false}
+  ]
+}

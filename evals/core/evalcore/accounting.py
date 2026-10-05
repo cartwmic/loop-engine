@@ -1,0 +1,126 @@
+"""Fixed-k accounting. Infrastructure is never silently retried or dropped."""
+from dataclasses import asdict, dataclass, field
+from typing import Literal
+
+from inspect_ai.model import ModelRefusalError
+from inspect_ai.util import SandboxUnavailableError
+
+from .settings import CampaignSettings, OVERHEAD_ROLES, WORKFLOW_ROLES
+from .target import InfrastructureError, ModelError
+
+Outcome = Literal["success", "failure", "infrastructure"]
+
+CLASSIFICATION_RULES = (
+    "Success requires a terminal trial and target success. Timeouts, hangs, limits and model errors "
+    "are failures. Harness/container/bridge errors and provider-service failures (including exhausted "
+    "429/5xx responses) are infrastructure. Unknown exceptions are failures unless the target marks "
+    "them InfrastructureError. Infrastructure is excluded from success rate and fixed-k pass^k; "
+    "cases with fewer than k scorable trials are listed as incomplete. No automatic trial retries."
+)
+
+
+def classify_exception(error: Exception) -> tuple[Outcome, str]:
+    # Do not classify by error message: model text must not be able to spoof infrastructure.
+    chain = []
+    seen = set()
+    current = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    if any(isinstance(e, TimeoutError) or type(e).__name__ in {
+        "APITimeoutError", "AttemptTimeoutError", "StreamIdleTimeoutError"
+    } for e in chain):
+        return "failure", "timeout"
+    if any(isinstance(e, (ModelError, ModelRefusalError)) for e in chain):
+        return "failure", "model_error"
+    if any(isinstance(e, (InfrastructureError, SandboxUnavailableError, ConnectionError)) for e in chain):
+        return "infrastructure", "infrastructure_error"
+    for e in chain:
+        module = type(e).__module__
+        inspect_provider_error = module.startswith("inspect_ai.") and type(e).__name__ == "ModelGenerateError"
+        if inspect_provider_error or module.split(".")[0] in {
+            "openai", "anthropic", "httpx", "aiohttp", "botocore", "mistralai", "groq"
+        } or module.startswith(("google.genai.", "google.api_core.")):
+            status = getattr(e, "status_code", None) or getattr(e, "code", None)
+            if status == 408:
+                return "failure", "timeout"
+            if status in (401, 403, 429) or isinstance(status, int) and status >= 500:
+                return "infrastructure", "provider_service_error"
+            if type(e).__name__ in {"APIConnectionError", "ConnectError", "ClientConnectionError"}:
+                return "infrastructure", "provider_service_error"
+            if inspect_provider_error:
+                # Inspect wraps provider errors, not bad model text. Inspect's wrapper
+                # preserves status_code; do not mistake a 503 wrapper for model error.
+                return ("infrastructure", "provider_service_error") if status is None else ("failure", "model_error")
+    return "failure", "unclassified_error"
+
+
+@dataclass
+class TrialRecord:
+    sample_id: str
+    combination_id: str
+    case_id: str
+    case_version: str
+    trial: int
+    outcome: Outcome
+    reason: str
+    terminal: bool = False
+    wall_seconds: float = 0
+    # Inspect role_usage, not model_usage: one model can serve both workflow and overhead.
+    usage_by_role: dict[str, dict] = field(default_factory=dict)
+    target_metrics: dict = field(default_factory=dict)
+
+    def recorded(self) -> dict:
+        return asdict(self)
+
+
+def rate(numerator: int, denominator: int) -> dict:
+    return {"numerator": numerator, "denominator": denominator,
+            "rate": numerator / denominator if denominator else None}
+
+
+def cost_by_role(records: list[TrialRecord], settings: CampaignSettings, role_models: dict[str, str], roles: tuple) -> dict:
+    result = {}
+    for role in roles:
+        inputs = sum(r.usage_by_role.get(role, {}).get("input_tokens", 0) for r in records)
+        outputs = sum(r.usage_by_role.get(role, {}).get("output_tokens", 0) for r in records)
+        model = role_models[role]
+        price = settings.prices.get(model)
+        result[role] = {
+            "model": model, "input_tokens": inputs, "output_tokens": outputs,
+            "total_tokens": inputs + outputs,
+            "estimated_usd": (inputs * price.input_per_million + outputs * price.output_per_million) / 1_000_000 if price else None,
+            "price_available": price is not None,
+        }
+    dollars = [v["estimated_usd"] for v in result.values()]
+    return {"by_role": result, "total_tokens": sum(v["total_tokens"] for v in result.values()),
+            "estimated_usd": sum(dollars) if all(v is not None for v in dollars) else None}
+
+
+def core_metrics(records: list[TrialRecord], settings: CampaignSettings, role_models: dict[str, str]) -> dict:
+    _, k = settings.counts
+    scorable = [r for r in records if r.outcome != "infrastructure"]
+    case_ids = sorted({r.case_id for r in records})
+    eligible = []
+    incomplete = []
+    for case_id in case_ids:
+        trials = [r for r in scorable if r.case_id == case_id]
+        if len(trials) == k:
+            eligible.append(trials)
+        else:
+            incomplete.append({"case_id": case_id, "scorable_trials": len(trials), "required_trials": k})
+    return {
+        "trial_count": len(records),
+        "success_rate": rate(sum(r.outcome == "success" for r in scorable), len(scorable)),
+        "pass_k": {"k": k, **rate(sum(all(r.outcome == "success" for r in ts) for ts in eligible), len(eligible))},
+        "incomplete_cases": incomplete,
+        "infrastructure_failure_rate": rate(sum(r.outcome == "infrastructure" for r in records), len(records)),
+        "timeouts": sum(r.reason == "timeout" for r in records),
+        "model_errors": sum(r.reason == "model_error" for r in records),
+        "failures": sum(r.outcome == "failure" for r in records),
+        "workflow_completion": rate(sum(r.terminal for r in records), len(records)),
+        "workflow_cost": cost_by_role(records, settings, role_models, WORKFLOW_ROLES),
+        "evaluation_overhead": cost_by_role(records, settings, role_models, OVERHEAD_ROLES),
+        "wall_seconds": sum(r.wall_seconds for r in records),
+    }

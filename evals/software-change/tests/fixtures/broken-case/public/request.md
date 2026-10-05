@@ -1,0 +1,1 @@
+Please make label_key more useful for grouping labels on my personal task board. Different spellings of the same label currently end up in separate groups. Keep this small; ask me about the behavior you need to settle before implementing it.

@@ -62,6 +62,20 @@ Owner-observed compliance signal (2026-09-22, other runs): agents pipe `show` ou
 
 Extend the investigation to every read primitive agents actually consume — show views (status/action/full, human and JSON), history, invocation-progress, monitor packets, list, and the instruction/guidance surfaces — and audit for duplicated information across them: the same evaluation text, lane prose, ledger content, or invocation detail repeated in multiple outputs or repeated per record. Machine consumers stay complete (agents read this output; nothing they need is removed), but each fact should have one authoritative home with locators elsewhere, so agents stop paying context-window rent on the same bytes N times. Demonstrate byte counts per primitive on a live run before and after; do not merely assert efficiency. A separate 0.22.0 run reported 211 context records / 18.8 MB, a 47 MB fan-out spec and `show` taking over 100 seconds; repeated full-intent steering and per-worker context copying are leads to measure, not established causes here.
 
+### Refuse unusable evidence at intake and let a later valid record replace it
+
+Observed 2026-10-04 on 0.24.0 (run-1791141043221020000-1-57519, high-rigor-14-1author): reviewers cited context records as `owner-steering-1`. `software-change review-candidates` accepted those locators, but the intent-review gate later refused them ("needs a JSON Pointer or line selector"; "not found beneath artifact_root or repository cwd"). A malformed `review-evidence` record keeps its axis blocked: a later valid record from the same author, a finding-ledger disposition or an intent revision does not clear it, so the only way forward was an owner override. Make intake refuse anything the gate will refuse. Then either let a later valid record from the same author, gate, stage and subject replace a malformed one, or give a supported way to cite context records (for example the owner-source steering that intent reviewers are told to compare against). Also note that a multi-axis aggregate batch needs a shared `assessment_id` that the shipped worker preamble never mentions.
+
+### Make high-rigor intent review clear without overrides
+
+Observed 2026-10-04 on 0.24.0 (run-1791151179920088000-1-87013, high-rigor-14-1author). Every judgment passed, but the run still needed overrides:
+- **Same-author rule caught late.** High-rigor requires each axis to have the same reviewer identity in the individual and aggregate stages (`mixed_authors`). Nothing at commission or intake warned when separate identities were used; it surfaced only at `approved`. The only repair is a `reviewer-manifest` roster change plus `retired-author` ledger entries and replacement reviews.
+- **One override forces another.** After ordinary `intent-review` is overridden, the challenge gate denies `challenge-before-ordinary-clearance` even when every challenge judgment passes, so a second override is unavoidable.
+- **Challenge commission omits the owner's comparison.** `commission --slot intent-adversarial-review` did not deliver the `intent-comparison` record, although the `intent-sufficient` challenge prompt requires it.
+- **Challenge context is mostly duplicated packets.** The challenge commission context was ~1.4 MB, mostly each parent record's duplicated `external_review.request` packet (~130 KB × 8).
+
+Warn about stage/author mismatches at commission or intake, include the comparison in challenge commissions, and stop repeating request packets in delivered context.
+
 ### Preserve applicable work and evidence through correction
 
 LE-150 and the shipped selected-work/applicability paths already support meaningful same-run reuse after plan reshaping. The external-work refactor extends this to flexible commissions and proportionate aggregate/goal reuse. Close only demonstrated remaining gaps: preserve original work and failed attempts, inspect real dependency/scope effects, refresh affected proof and finish normally without replaying unaffected work for ceremony. Do not build generalized replay or a second criterion ledger merely because older notes described repeated work.

@@ -1,0 +1,12 @@
+# OWNER-PENDING: choose all model IDs and approve paid calls before launching.
+# These required placeholders fail before a container or model call is started.
+target = "scevals.target:create_target"
+campaign = "real-example"
+cases_path = "evals/software-change/example-case"
+case_count = 1
+trials_per_case = 1
+profile = "standard-14"
+time_limit_seconds = 600
+simulator_model = "owner-required/SIMULATOR_MODEL"
+judge_model = "owner-required/JUDGE_MODEL"
+models = ["owner-required/WORKFLOW_MODEL"]

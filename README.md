@@ -38,6 +38,8 @@ Continue with the [policy-document operator guide](crates/policy-document-provid
 
 Primary commands are `start`, `list`, `show`, `append`, `event`, `history`, `terminate`; targeted `read`, terminal `explore` and passive `monitor` expose retained state. Monitoring does not track external execution. Providers implement describe/evaluate transport.
 
+Whole-workflow model comparisons: [evaluation harness](evals/README.md).
+
 ## Validation
 
 A local mechanical smoke check (not semantic product proof):
