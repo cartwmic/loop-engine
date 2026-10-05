@@ -70,6 +70,7 @@ class TrialRecord:
     # Inspect role_usage, not model_usage: one model can serve both workflow and overhead.
     usage_by_role: dict[str, dict] = field(default_factory=dict)
     target_metrics: dict = field(default_factory=dict)
+    error_type: str | None = None
 
     def recorded(self) -> dict:
         return asdict(self)

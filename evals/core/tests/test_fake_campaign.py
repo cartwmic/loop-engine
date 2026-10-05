@@ -160,3 +160,12 @@ def test_inspect_wrapped_provider_errors(campaign_root, model, outcome, reason):
     core = summary["comparisons"][0]["core"]
     assert core["success_rate"]["denominator"] == int(outcome == "failure")
     assert bool(core["incomplete_cases"]) == (outcome == "infrastructure")
+
+
+def test_unclassified_error_reports_type_and_keeps_traceback_local(campaign_root):
+    summary = run(campaign_root, models=["fake/a"], case_count=1, trials_per_case=1,
+                  target_options={"raise_unknown": True})
+    trial = summary["trials"][0]
+    assert (trial["outcome"], trial["reason"], trial["error_type"]) == ("failure", "unclassified_error", "KeyError")
+    tracebacks = list((campaign_root / "logs" / "errors").glob("test-*.txt"))
+    assert len(tracebacks) == 1 and "KeyError" in tracebacks[0].read_text()

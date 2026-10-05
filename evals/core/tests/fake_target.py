@@ -43,6 +43,8 @@ class FakeTarget:
         for role in ("role-driver", "role-implementer", "role-reviewer", "simulator", "judge"):
             output = await get_model(role=role).generate("deterministic usage probe")
             roles[role] = output.completion
+        if context.settings.target_options.get("raise_unknown"):
+            raise KeyError("intent.json")
         if context.settings.target_options.get("inject_errors", True):
             if context.case.id == "case-1" and context.assignment.trial == 1:
                 raise InfrastructureError("injected container failure")

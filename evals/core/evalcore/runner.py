@@ -4,6 +4,7 @@ import importlib.metadata
 import platform
 import subprocess
 import time
+import traceback
 from pathlib import Path
 
 from inspect_ai import Task, eval
@@ -47,6 +48,13 @@ def trial_solver(target: Target, contexts: dict[str, TrialContext], records: dic
                 record.reason = "passed" if record.outcome == "success" else "target_failure"
         except Exception as error:
             record.outcome, record.reason = classify_exception(error)
+            # The exception class name is safe to report; the full traceback may
+            # contain private case text, so it stays in the ignored local logs.
+            record.error_type = type(error).__name__
+            errors = Path(target.logs_dir) / "errors"
+            errors.mkdir(parents=True, exist_ok=True)
+            (errors / f"{context.settings.campaign}-{assignment.sample_id}.txt").write_text(
+                "".join(traceback.format_exception(error)))
         finally:
             record.wall_seconds = time.monotonic() - started
         state.completed = True
