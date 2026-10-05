@@ -16,6 +16,9 @@ class StrictModel(BaseModel):
 class Price(StrictModel):
     input_per_million: float = Field(ge=0, allow_inf_nan=False)
     output_per_million: float = Field(ge=0, allow_inf_nan=False)
+    # Cached input is billed too; defaults to the input price when unset.
+    cache_read_per_million: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    cache_write_per_million: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 class Combination(StrictModel):
@@ -42,6 +45,8 @@ class CampaignSettings(StrictModel):
     judge_model: str = Field(pattern=r"^[^/\s]+/\S+$")
     time_limit_seconds: int = Field(default=3600, ge=1)
     prices: dict[str, Price] = Field(default_factory=dict)
+    # Per-model Inspect provider arguments, e.g. {"openrouter/x" = {strict_tools = false}}.
+    model_args: dict[str, dict] = Field(default_factory=dict)
     # Read on the host for the pre-write scan; contents are never serialized.
     provider_config_paths: tuple[Path, ...] = ()
     loop_engine_version: str = "v0.24.0"
@@ -56,6 +61,12 @@ class CampaignSettings(StrictModel):
         combos = self.resolved_combinations()
         if len({c.id for c in combos}) != len(combos):
             raise ValueError("combination IDs must be unique")
+        models = [self.simulator_model, self.judge_model,
+                  *(model for combo in combos for model in combo.role_models().values())]
+        if any(model.startswith("codex/") for model in models):
+            from .codex import codex_auth_path
+            paths = tuple(dict.fromkeys((*self.provider_config_paths, codex_auth_path())))
+            object.__setattr__(self, "provider_config_paths", paths)
         return self
 
     @property

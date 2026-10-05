@@ -42,6 +42,12 @@ def audit_results(directory: Path, cases_path: Path, *, provider_config_paths=()
     if not files:
         raise ValueError("no result files found")
     hidden, binary, count = hidden_values(cases_path)
+    # Standalone audits lack campaign settings. Protect host Pi auth whenever
+    # present, including old Codex reports audited from another invocation.
+    from evalcore.codex import codex_auth_path
+    auth = codex_auth_path()
+    if auth.exists():
+        provider_config_paths = (*provider_config_paths, auth)
     protected = protected_values(environment, provider_config_paths)
     byte_needles = binary | {value.encode("utf-8") for value in hidden | protected}
     for file in files:

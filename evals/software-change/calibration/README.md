@@ -13,13 +13,21 @@ uv run --project evals evalctl calibrate score --labels evals/software-change/ca
 ```
 
 Extraction opens SQLite with URI `mode=ro` and `query_only=ON`, queries only recent
-software-change run IDs/artifact roots and their indexed `user-steering` records,
-and reads each linked `intent.json`. The database stores artifact locations, not
-intent bytes. Missing/unusable local artifacts are skipped. All owner steering
+software-change run IDs/artifact roots with **both** `lifecycle = 'final'` and
+`current_state = 'end'`, then their indexed `user-steering` records and linked
+`intent.json`. Active, paused, failed/non-end and other-workflow runs are excluded
+before the scan limit. The database stores artifact locations, not intent bytes.
+The JSON extraction summary and CLI report completed runs examined, candidates,
+and skipped completed runs with separate `skipped_reasons` counts:
+`artifact_folder_missing`, `no_owner_request` (no usable steering instructions),
+and `intent_unreadable` (missing, unreadable, invalid JSON or missing revision).
+Reasons are exclusive, checked in that order; malformed/blank steering records
+are ignored. Counts cover examined completed runs, stopping at either bound. All owner steering
 instructions are retained in sequence as the request plus clarifications. This is
 not a hidden brief: the owner must check that the captured request is sufficient
 for labelling. Live artifacts can change later; extraction retains their bytes,
-revision and SHA-256. It does not infer quality from run state or review verdicts.
+revision and SHA-256. Completion is an eligibility gate, not a quality label;
+extraction does not infer quality from run state or review verdicts.
 
 Default bounds are 20 candidates from at most 200 runs. `--limit`, `--scan-limit`
 and `--output PATH` override them. Existing files are never overwritten. The

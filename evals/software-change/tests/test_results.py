@@ -88,3 +88,16 @@ def test_empty_missing_and_symlink_inputs_fail_closed(tmp_path):
     assert invoke(directory, tmp_path / "missing").returncode == 2
     (directory / "link").symlink_to(directory / "report.md")
     assert invoke(directory).returncode == 2
+
+
+@pytest.mark.parametrize("field", ["access", "refresh", "accountId"])
+def test_check_results_automatically_protects_codex_auth(tmp_path, field):
+    auth = tmp_path / ".pi/agent/auth.json"
+    auth.parent.mkdir(parents=True)
+    credentials = {"access": "synthetic-codex-access", "refresh": "synthetic-codex-refresh",
+                   "accountId": "synthetic-codex-account", "expires": 9999999999999}
+    auth.write_text(json.dumps({"openai-codex": credentials}))
+    directory = results(tmp_path, json.dumps({"reason": credentials[field]}))
+    result = invoke(directory, extra_env={"HOME": str(tmp_path), "UV_NO_SYNC": "1"})
+    assert result.returncode == 1 and "FAIL" in result.stdout
+    assert credentials[field] not in result.stdout + result.stderr

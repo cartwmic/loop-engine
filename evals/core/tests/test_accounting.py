@@ -2,7 +2,7 @@ import pytest
 from inspect_ai.model import ModelOutput, ModelRefusalError
 from inspect_ai.util import SandboxUnavailableError
 
-from evalcore.accounting import TrialRecord, classify_exception, core_metrics
+from evalcore.accounting import TrialRecord, classify_exception, core_metrics, cost_by_role
 from evalcore.settings import CampaignSettings
 from evalcore.target import InfrastructureError, ModelError
 
@@ -61,3 +61,16 @@ def test_fixed_k_and_empty_denominators(outcomes, success, pass_k, incomplete):
         assert result[name]["rate"] == (counts[0] / counts[1] if counts[1] else None)
     assert bool(result["incomplete_cases"]) is incomplete
     assert result["workflow_cost"]["estimated_usd"] is None  # missing price is not free
+
+
+def test_cached_input_counts_toward_tokens_and_cost():
+    s = settings(prices={"mockllm/model": {"input_per_million": 1, "output_per_million": 2,
+                                           "cache_read_per_million": 0.1}})
+    r = record("c", 1, "success")
+    r.usage_by_role = {"role-driver": {"input_tokens": 10, "output_tokens": 5,
+                                       "input_tokens_cache_read": 1_000_000, "input_tokens_cache_write": 100}}
+    cost = cost_by_role([r], s, {"role-driver": "mockllm/model"}, ("role-driver",))
+    row = cost["by_role"]["role-driver"]
+    assert row["total_tokens"] == 10 + 5 + 1_000_000 + 100
+    # cache write falls back to the input price
+    assert row["estimated_usd"] == pytest.approx((10 * 1 + 5 * 2 + 1_000_000 * 0.1 + 100 * 1) / 1_000_000)

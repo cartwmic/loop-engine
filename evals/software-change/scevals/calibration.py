@@ -28,41 +28,54 @@ def extract_candidates(database: Path, *, limit: int = 20, scan_limit: int = 200
     if limit < 1 or scan_limit < limit:
         raise ValueError("invalid extraction limits")
     entries = []
-    skipped = 0
+    examined = 0
+    skipped_reasons = {"artifact_folder_missing": 0, "no_owner_request": 0,
+                       "intent_unreadable": 0}
     # mode=ro preserves SQLite's WAL view (do not use immutable=1 on a live DB).
     # Both SQLite query_only and URI read-only are applied; no engine is invoked.
     with closing(sqlite3.connect(database.expanduser().resolve().as_uri() + "?mode=ro", uri=True)) as connection:
         connection.execute("PRAGMA query_only=ON")
         runs = connection.execute(
             "SELECT id, artifact_root FROM runs WHERE workflow_id='software-change' "
+            "AND lifecycle='final' AND current_state='end' "
             "ORDER BY created_at DESC, id DESC LIMIT ?", (scan_limit,)
         ).fetchall()
         for run_id, artifact_root in runs:
             if len(entries) >= limit:
                 break
+            examined += 1
+            # Reasons are exclusive: folder first, then request, then intent.
+            root = Path(artifact_root) if artifact_root else None
+            if root is None or not root.is_dir():
+                skipped_reasons["artifact_folder_missing"] += 1
+                continue
             # The catalog stores context and artifact locations, not intent bytes.
             # Read only the current intent.json, never workflow/provider configs.
             records = connection.execute(
                 "SELECT record_id, data_json FROM context_records "
                 "WHERE run_id=? AND kind='user-steering' ORDER BY sequence", (run_id,)
             ).fetchall()
+            instructions = []
+            source_ids = []
+            for record_id, raw in records:
+                try:
+                    record = json.loads(raw)
+                    instruction = record.get("instruction") if isinstance(record, dict) else None
+                except (ValueError, TypeError):
+                    instruction = None
+                if isinstance(instruction, str) and instruction.strip():
+                    instructions.append(instruction)
+                    source_ids.append(record_id)
+            if not instructions:
+                skipped_reasons["no_owner_request"] += 1
+                continue
             try:
-                instructions = []
-                source_ids = []
-                for record_id, raw in records:
-                    instruction = json.loads(raw).get("instruction")
-                    if isinstance(instruction, str) and instruction.strip():
-                        instructions.append(instruction)
-                        source_ids.append(record_id)
-                path = Path(artifact_root) / "intent.json" if artifact_root else None
-                if not instructions or path is None:
-                    raise ValueError()
-                content = path.read_bytes()
+                content = (root / "intent.json").read_bytes()
                 intent = json.loads(content)
                 if not isinstance(intent, dict) or not intent.get("revision"):
                     raise ValueError()
             except (OSError, ValueError, TypeError):
-                skipped += 1
+                skipped_reasons["intent_unreadable"] += 1
                 continue
             entries.append({
                 "id": run_id,
@@ -75,8 +88,9 @@ def extract_candidates(database: Path, *, limit: int = 20, scan_limit: int = 200
                 "owner_confirmed": False,
             })
     return {"schema_version": 1, "judge_model": None, "judge_contract": JUDGE_CONTRACT,
-            "entries": entries, "extraction": {"candidates": len(entries), "skipped": skipped,
-                                                   "scan_limit": scan_limit}}
+            "entries": entries, "extraction": {"candidates": len(entries),
+                "completed_runs_examined": examined, "skipped": sum(skipped_reasons.values()),
+                "skipped_reasons": skipped_reasons, "scan_limit": scan_limit}}
 
 
 def confirmed_entries(labels: dict) -> list[dict]:
@@ -161,6 +175,7 @@ def calibration_for_report(path: Path, *, judge_model: str) -> dict:
 
 def extract_command(args):
     labels = extract_candidates(args.database, limit=args.limit, scan_limit=args.scan_limit)
+    print("Extraction summary: " + json.dumps(labels["extraction"], sort_keys=True))
     if not labels["entries"]:
         print("No usable candidate pairs found; no labelling file written.")
         return 2

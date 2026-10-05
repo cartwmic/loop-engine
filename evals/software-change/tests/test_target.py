@@ -20,11 +20,16 @@ ROOT = REPO / "evals/software-change"
 CAPTURES = ROOT / "captures/T4/tests"
 
 
-def campaign(settings_name, driver=None):
+def campaign(settings_name, driver=None, **overrides):
     CAPTURES.mkdir(parents=True, exist_ok=True)
     settings = tomllib.loads((ROOT / "campaigns" / settings_name).read_text())
     if driver:
         settings["target_options"]["scripted_driver"] = driver
+    for key, value in overrides.items():
+        if key == "target_options":
+            settings["target_options"] = value
+        else:
+            settings[key] = value
     name = "t4-" + uuid.uuid4().hex
     settings["campaign"] = name
     config = CAPTURES / (name + ".json")
@@ -120,8 +125,24 @@ def test_owner_gate_cli_message_is_clear_without_launch(monkeypatch, capsys):
     assert "private text" not in error
 
 
-def test_real_settings_require_owner_selection_before_any_generation():
+def test_real_settings_record_owner_selection_without_any_generation():
     data = tomllib.loads((ROOT / "campaigns/real-example.toml").read_text())
-    for model in (*data["models"], data["simulator_model"], data["judge_model"]):
-        with pytest.raises(ValueError, match="Owner-pending.*paid-call approval"):
-            get_model(model, memoize=False)
+    assert data["models"] == ["codex/gpt-6.1-sol"]
+    assert data["simulator_model"] == data["judge_model"] == "openrouter/openai/gpt-6-luna"
+    assert data["model_args"][data["judge_model"]] == {"strict_tools": False}
+    assert data["prices"][data["judge_model"]]["cache_read_per_million"] == 0.01
+    # Selection is owner-authorized; tests must not construct credentialed models
+    # or launch the real campaign to prove this settings contract.
+
+
+def test_driver_stops_before_trial_limit_so_the_outcome_is_recorded():
+    # A driver that never finishes is stopped DRIVER_LIMIT_MARGIN_SECONDS before
+    # the trial limit (minimum 60 s), so the trial is scored, not lost.
+    summary, markdown = campaign("scripted-example.toml", time_limit_seconds=120,
+                                 target_options={"driver_command": ["sh", "-c", "sleep 1000", "sh"]})
+    trial = summary["trials"][0]
+    assert trial["outcome"] == "failure" and trial["terminal"] is False
+    metrics = trial["target_metrics"]
+    assert metrics.get("driver_timed_out") is True, (trial["reason"], metrics)
+    assert metrics["run_health"]["timeouts"] == 1
+    assert "driver_timed_out" in markdown

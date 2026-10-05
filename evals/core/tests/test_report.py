@@ -84,3 +84,16 @@ def test_writer_rejects_directory_escape(campaign_root):
     with pytest.raises(ValueError):
         write_report(campaign_root / "results", data, environment={})
     assert not (campaign_root / "results").exists()
+
+
+def test_short_config_words_do_not_refuse_reports(tmp_path):
+    # Pi's auth file shape: ordinary words like "profile" and "oauth" must not
+    # block a report whose settings mention "profile"; the token still does.
+    auth = tmp_path / "auth.json"
+    token = "synthetic-access-token-0123456789abcdef"
+    auth.write_text(json.dumps({"openai-codex": {"type": "oauth", "access": token,
+                                                  "scopes": ["openid", "profile", "email"]}}, indent=2))
+    protected = protected_values({}, [auth])
+    scan_results([json.dumps({"profile": "standard-14", "auth": "oauth email"})], protected)
+    with pytest.raises(UnsafeReportError):
+        scan_results([json.dumps({"leak": token})], protected)

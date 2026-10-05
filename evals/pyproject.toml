@@ -12,6 +12,9 @@ dependencies = ["inspect-ai==0.3.276", "openai==3.1.0", "pytest==9.0.2"]
 [project.scripts]
 evalctl = "evalcore.cli:main"
 
+[project.entry-points."inspect_ai"]
+codex = "evalcore.codex"
+
 [project.entry-points."loop_engine_evals.commands"]
 software-change-image = "scevals.image:register_subcommands"
 software-change-cases = "scevals.cases:register_subcommands"

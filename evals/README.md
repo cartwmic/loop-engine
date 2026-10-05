@@ -65,17 +65,32 @@ building: elicitation and delivery recall change separately.
 ## Real campaigns (owner-gated)
 
 Copy `software-change/campaigns/real-example.toml` to a local ignored capture
-location, replace all `owner-required/...` model IDs with approved Inspect
-`provider/model` IDs, and obtain paid-call approval before launching:
+location and obtain owner approval before launching. The shipped example uses
+`codex/gpt-6.1-sol` for workflow roles and `openrouter/openai/gpt-6-luna` for
+simulator/judge; the latter still requires separate paid-call approval:
 
 ```sh
 uv run --project evals evalctl campaign --settings LOCAL_SETTINGS.toml
 ```
 
-Read model credentials from the host environment at runtime; never put keys or
-resolved provider configuration into campaign settings, prompts or reports.
-Subscription-only Pi models may not be available through Inspect APIs. The shipped
-real-example placeholders refuse launch until chosen; no paid model is invented.
+Read model credentials on the host at runtime; never put keys or resolved
+provider configuration into campaign settings, prompts or reports. The registered
+Inspect `codex` provider reads `~/.pi/agent/auth.json` (`openai-codex`) at model
+creation and uses the owner's ChatGPT/Codex subscription, never container auth.
+Expired/missing/invalid credentials fail with instructions to run Pi once; there
+is no OAuth refresh implementation. Requests use the fixed Codex Responses endpoint,
+`stream=true`, `store=false`, system instructions and encrypted reasoning replay.
+Completed streamed output items fill an empty terminal response, preserving text,
+parsed tool calls and cached-token usage. Inspect's extra organization probe is
+disabled. Batch/background are unsupported, and the backend's unsupported
+`max_output_tokens` field is omitted; use campaign time limits to bound execution.
+No paid model is invented and no real campaign is launched by tests. Offline
+provider proofs use scripted SSE through the real SDK, including a public Inspect
+bridge/real-Pi bash tool loop:
+
+```sh
+uv run --project evals pytest -q evals/core/tests/test_codex.py evals/software-change/tests/test_image_bridge.py
+```
 
 Settings require `cases_path`, `simulator_model`, `judge_model`, and either
 `models = ["provider/model", ...]` (each model in every workflow role) or explicit
@@ -145,7 +160,13 @@ markers. A match exits 1 without printing matching content; missing/empty/invali
 inputs exit 2, never a vacuous pass. Conservative common-line matches are possible.
 This is a content-string check, not detection of paraphrases or arbitrary encodings.
 
-Supply every resolved host provider config via repeated `--provider-config FILE`
+Codex campaign settings automatically add the host Pi auth file to provider
+configuration protection when **any** workflow/simulator/judge role uses `codex/`.
+Standalone `check-results` also protects that file whenever present, without
+printing its values. Whole configs, meaningful (non-punctuation-only) lines and
+parsed string values are protected; formatting braces alone are not secrets.
+
+Supply every other resolved host provider config via repeated `--provider-config FILE`
 (to `campaign` and `check-results`), `provider_config_paths` campaign settings, or
 provider-config-named environment variables (path or inline content). The audit
 cannot discover arbitrary config files or credentials absent from its environment.

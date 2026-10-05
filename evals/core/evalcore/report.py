@@ -13,6 +13,11 @@ CONFIG_NAME = re.compile(r"(?:PROVIDER.*CONFIG|CONFIG.*PROVIDER)", re.I)
 CONFIG_MARKERS = re.compile(r"\[\[?providers?(?:[.\]])|[\"'](?:api_key|apiKey|base_url|provider_config|resolved_provider_config)[\"']\s*:|\b(?:api_key|apiKey|base_url|provider_config|resolved_provider_config)\s*=", re.I)
 
 
+# Minimum length of a config-derived string treated as secret. Environment
+# credential values are always protected regardless of length.
+MIN_SECRET_LENGTH = 16
+
+
 class UnsafeReportError(ValueError):
     """A result matched protected material. Never include the matched text."""
 
@@ -33,7 +38,11 @@ def protected_values(environment: Mapping[str, str] | None = None, provider_conf
         if config.strip():
             protected.add(config.strip())
         # Catch copied fragments as well as whole resolved files. Never export these values.
-        protected.update(line.strip() for line in config.splitlines() if line.strip() and not line.lstrip().startswith("#"))
+        # Short fragments ("profile", "oauth", "email") are ordinary words, not secrets,
+        # and would refuse every report; key/value markers are caught by CONFIG_MARKERS.
+        protected.update(line.strip() for line in config.splitlines()
+                         if len(line.strip()) >= MIN_SECRET_LENGTH and any(c.isalnum() for c in line)
+                         and not line.lstrip().startswith("#"))
         try:
             parsed = json.loads(config)
         except ValueError:
@@ -44,7 +53,7 @@ def protected_values(environment: Mapping[str, str] | None = None, provider_conf
                 parsed = None
         if parsed is not None:
             def strings(value):
-                if isinstance(value, str) and value:
+                if isinstance(value, str) and len(value) >= MIN_SECRET_LENGTH:
                     protected.add(value)
                 elif isinstance(value, dict):
                     for item in value.values():

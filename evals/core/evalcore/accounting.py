@@ -83,15 +83,23 @@ def rate(numerator: int, denominator: int) -> dict:
 def cost_by_role(records: list[TrialRecord], settings: CampaignSettings, role_models: dict[str, str], roles: tuple) -> dict:
     result = {}
     for role in roles:
-        inputs = sum(r.usage_by_role.get(role, {}).get("input_tokens", 0) for r in records)
-        outputs = sum(r.usage_by_role.get(role, {}).get("output_tokens", 0) for r in records)
+        def total(key):
+            return sum(r.usage_by_role.get(role, {}).get(key) or 0 for r in records)
+        inputs, outputs = total("input_tokens"), total("output_tokens")
+        cache_read, cache_write = total("input_tokens_cache_read"), total("input_tokens_cache_write")
         model = role_models[role]
         price = settings.prices.get(model)
+        usd = None
+        if price:
+            read_price = price.input_per_million if price.cache_read_per_million is None else price.cache_read_per_million
+            write_price = price.input_per_million if price.cache_write_per_million is None else price.cache_write_per_million
+            usd = (inputs * price.input_per_million + outputs * price.output_per_million
+                   + cache_read * read_price + cache_write * write_price) / 1_000_000
         result[role] = {
             "model": model, "input_tokens": inputs, "output_tokens": outputs,
-            "total_tokens": inputs + outputs,
-            "estimated_usd": (inputs * price.input_per_million + outputs * price.output_per_million) / 1_000_000 if price else None,
-            "price_available": price is not None,
+            "cache_read_tokens": cache_read, "cache_write_tokens": cache_write,
+            "total_tokens": inputs + outputs + cache_read + cache_write,
+            "estimated_usd": usd, "price_available": price is not None,
         }
     dollars = [v["estimated_usd"] for v in result.values()]
     return {"by_role": result, "total_tokens": sum(v["total_tokens"] for v in result.values()),

@@ -13,7 +13,7 @@ from inspect_ai.dataset import Sample
 from inspect_ai.model import get_model
 from inspect_ai.solver import solver
 
-from scevals.calibration import calibration_figures, calibration_for_report
+from scevals.calibration import calibration_figures, calibration_for_report, extract_candidates
 from scevals.judge import judge_intent
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -39,7 +39,8 @@ def invoke(*args, environment=None):
 def database_fixture(path, artifact_root):
     with sqlite3.connect(path) as connection:
         connection.executescript("""
-            CREATE TABLE runs (id TEXT PRIMARY KEY, workflow_id TEXT, artifact_root TEXT, created_at INTEGER);
+            CREATE TABLE runs (id TEXT PRIMARY KEY, workflow_id TEXT, artifact_root TEXT, created_at INTEGER,
+                               lifecycle TEXT, current_state TEXT);
             CREATE TABLE context_records (run_id TEXT, record_id TEXT, sequence INTEGER, kind TEXT, data_json TEXT,
                                           PRIMARY KEY(run_id, record_id), UNIQUE(run_id, sequence));
         """)
@@ -48,14 +49,23 @@ def database_fixture(path, artifact_root):
             root = artifact_root / run_id
             root.mkdir(parents=True)
             (root / "intent.json").write_text(json.dumps({"revision": str(i), "outcome": f"Outcome {i}"}))
-            connection.execute("INSERT INTO runs VALUES (?,?,?,?)", (run_id, "software-change", str(root), i))
+            connection.execute("INSERT INTO runs VALUES (?,?,?,?,?,?)", (run_id, "software-change", str(root), i, "final", "end"))
             for sequence, instruction in ((1, "The original owner request."), (2, "The owner's clarification.")):
                 connection.execute("INSERT INTO context_records VALUES (?,?,?,?,?)",
                                    (run_id, f"owner-{sequence}", sequence, "user-steering", json.dumps({"instruction": instruction})))
             connection.execute("INSERT INTO context_records VALUES (?,?,?,?,?)",
                                (run_id, "noise", 3, "review-evidence", '{"irrelevant": true}'))
-        connection.execute("INSERT INTO runs VALUES ('missing','software-change',NULL,99)")
-        connection.execute("INSERT INTO runs VALUES ('other','research',NULL,100)")
+        connection.execute("INSERT INTO runs VALUES ('missing','software-change',NULL,99,'final','end')")
+        connection.execute("INSERT INTO runs VALUES ('other','research',NULL,100,'final','end')")
+        # Newer non-completed runs must neither become candidates nor consume
+        # the completed scan budget; test each half of the eligibility AND.
+        for i, (lifecycle, state) in enumerate((("active", "end"), ("final", "execute"),
+                                               ("active", "execute"))):
+            connection.execute("INSERT INTO runs VALUES (?,?,?,?,?,?)",
+                               (f"incomplete-{i}", "software-change", str(artifact_root / "run-11"),
+                                101 + i, lifecycle, state))
+            connection.execute("INSERT INTO context_records VALUES (?,?,?,?,?)",
+                               (f"incomplete-{i}", "owner", 1, "user-steering", '{"instruction":"Not completed"}'))
 
 
 def test_extract_cli_read_only_unlabelled(tmp_path):
@@ -70,6 +80,11 @@ def test_extract_cli_read_only_unlabelled(tmp_path):
     data = json.loads(labels.read_text())
     assert len(data["entries"]) == 10
     assert data["extraction"]["skipped"] == 1
+    assert data["extraction"]["completed_runs_examined"] == 11
+    assert data["extraction"]["skipped_reasons"] == {
+        "artifact_folder_missing": 1, "no_owner_request": 0, "intent_unreadable": 0}
+    assert "artifact_folder_missing" in result.stdout
+    assert all(entry["id"].startswith("run-") for entry in data["entries"])
     for entry in data["entries"]:
         assert entry["owner_label"] is None and entry["owner_confirmed"] is False
         assert "original owner request" in entry["owner_request"] and "clarification" in entry["owner_request"]
@@ -201,3 +216,42 @@ def test_judge_bound_role_is_evaluation_overhead(monkeypatch):
     sample = logs[0].samples[0]
     assert sample.role_usage["judge"].total_tokens == 12
     assert sample.role_usage["role-driver"].total_tokens == 12
+
+
+@pytest.mark.parametrize("bad_intent", [None, "{", "[]", '{"outcome":"missing revision"}', b"\xff"])
+def test_completed_skip_reasons_and_scan_budget(tmp_path, bad_intent):
+    database = tmp_path / "loop.db"
+    root = tmp_path / "artifacts"
+    database_fixture(database, root)
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE runs SET artifact_root=? WHERE id='missing'", (str(root / "absent"),))
+        connection.execute("DELETE FROM context_records WHERE run_id='run-11'")
+        connection.execute("INSERT INTO context_records VALUES ('run-11','bad',1,'user-steering','[]')")
+        connection.execute("INSERT INTO context_records VALUES ('run-11','empty',2,'user-steering',?)",
+                           (json.dumps({"instruction": " "}),))
+    path = root / "run-10/intent.json"
+    if bad_intent is None:
+        path.unlink()
+    elif isinstance(bad_intent, bytes):
+        path.write_bytes(bad_intent)
+    else:
+        path.write_text(bad_intent)
+    data = extract_candidates(database, limit=10, scan_limit=10)
+    assert data["extraction"] == {
+        "candidates": 7, "completed_runs_examined": 10, "skipped": 3,
+        "skipped_reasons": {"artifact_folder_missing": 1, "no_owner_request": 1, "intent_unreadable": 1},
+        "scan_limit": 10}
+    assert all(entry["id"].startswith("run-") for entry in data["entries"])
+
+
+def test_extract_empty_prints_reasons(tmp_path):
+    database = tmp_path / "loop.db"
+    database_fixture(database, tmp_path / "artifacts")
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE runs SET lifecycle='active' WHERE id!='missing'")
+    labels = tmp_path / "labels.json"
+    result = invoke("extract", "--database", database, "--output", labels)
+    assert result.returncode == 2
+    assert '"artifact_folder_missing": 1' in result.stdout
+    assert '"completed_runs_examined": 1' in result.stdout
+    assert not labels.exists()

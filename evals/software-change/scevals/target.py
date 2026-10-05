@@ -21,6 +21,9 @@ from evalcore.target import InfrastructureError, ModelError, TrialExecution, Tri
 from .cases import RUNTIME, load_case
 from .calibration import calibration_for_report
 from .judge import JUDGE_CONTRACT, judge_intent
+
+# Time reserved after the driver stops for state capture and scoring.
+DRIVER_LIMIT_MARGIN_SECONDS = 300
 from .image import DEFAULT_IMAGE, REPOSITORY, output
 from .owner import SimulatedOwner
 from .scoring import discipline, honesty, recall, reviews_passed, run_health
@@ -185,13 +188,21 @@ class SoftwareChangeTarget:
                 await started.wait()
                 try:
                     async with sandbox_agent_bridge(model_aliases=models, port=13131):
-                        result = await env.exec([*options.get("driver_command", ["sc-driver"]), prompt],
-                                                cwd="/workspace/public/repo",
-                                                env={"SC_BRIDGE_URL": "http://localhost:13131/v1", "SC_OWNER_INSTANCE": instance,
-                                                     "SC_PROFILE": context.settings.profile},
-                                                timeout=context.settings.time_limit_seconds)
-                        evidence["driver_exit_code"] = result.returncode
-                        if driver and re.fullmatch(r"routing-marker-[a-z0-9-]+", result.stdout.strip()):
+                        # Stop the driver before the whole-trial limit so the last engine
+                        # state can still be recorded and reported.
+                        driver_limit = max(60, context.settings.time_limit_seconds - DRIVER_LIMIT_MARGIN_SECONDS)
+                        try:
+                            result = await env.exec([*options.get("driver_command", ["sc-driver"]), prompt],
+                                                    cwd="/workspace/public/repo",
+                                                    env={"SC_BRIDGE_URL": "http://localhost:13131/v1", "SC_OWNER_INSTANCE": instance,
+                                                         "SC_PROFILE": context.settings.profile},
+                                                    timeout=driver_limit)
+                        except TimeoutError:
+                            result = None
+                            evidence["driver_timed_out"] = True
+                        if result is not None:
+                            evidence["driver_exit_code"] = result.returncode
+                        if result is not None and driver and re.fullmatch(r"routing-marker-[a-z0-9-]+", result.stdout.strip()):
                             evidence["role_observations"] = {"role-driver": result.stdout.strip()}
                         # Model-controlled stdout is not a terminal receipt or an export.
                 finally:
@@ -321,7 +332,7 @@ class SoftwareChangeTarget:
         health = metrics.setdefault("run_health", {"unattended_finish": terminal, "provider_denials": None, "overrides": None,
                    "revise_loops_per_gate": None, "schema_failures": None, "correction_retries": None,
                    "overruns": None, "timeouts": 0, "cancellations": 0})
-        if reason == "timeout":
+        if reason == "timeout" or metrics.get("driver_timed_out"):
             health["timeouts"] += 1
             health["unattended_finish"] = False
         health["trial_outcome"] = outcome
