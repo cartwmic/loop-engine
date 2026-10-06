@@ -24,6 +24,9 @@ from .cases import RUNTIME, load_case
 from .calibration import calibration_for_report
 from .judge import JUDGE_CONTRACT, judge_intent
 
+# Inspect limits one sandbox file read to 100 MiB, so captures are read in parts.
+CAPTURE_CHUNK_BYTES = 64 * 1024 * 1024
+
 # Time reserved after the driver stops for state capture and scoring.
 DRIVER_LIMIT_MARGIN_SECONDS = 300
 from .image import DEFAULT_IMAGE, REPOSITORY, output
@@ -309,10 +312,16 @@ class SoftwareChangeTarget:
             'set -- trial/artifacts trial/show.json trial/history.json trial/local-push-log public/repo; '
             'for file in trial/run.sqlite trial/run.sqlite-wal trial/run.sqlite-shm; do '
             '[ ! -f "$file" ] || set -- "$@" "$file"; done; '
-            'tar --exclude=.git -cf /tmp/terminal-capture.tar "$@"'], cwd="/workspace", timeout=30)
+            'tar --exclude=.git -cf /tmp/terminal-capture.tar "$@" && '
+            # Inspect caps a single sandbox read at 100 MiB; real runs grow larger.
+            'rm -rf /tmp/capture-parts && mkdir /tmp/capture-parts && '
+            'split -b ' + str(int(context.settings.target_options.get("capture_chunk_bytes", CAPTURE_CHUNK_BYTES))) + ' -d -a 4 /tmp/terminal-capture.tar /tmp/capture-parts/part-'],
+            cwd="/workspace", timeout=120)
         if not result.success:
             raise InfrastructureError("terminal artifact capture failed")
-        raw = await trial.env.read_file("/tmp/terminal-capture.tar", text=False)
+        parts = await trial.env.exec(["sh", "-c", "ls /tmp/capture-parts"], timeout=30)
+        raw = b"".join([await trial.env.read_file(f"/tmp/capture-parts/{name}", text=False)
+                        for name in sorted(parts.stdout.split())])
         with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
             files = {m.name: archive.extractfile(m).read() if m.isfile() else m.linkname.encode()
                      for m in archive.getmembers() if m.isfile() or m.issym()}

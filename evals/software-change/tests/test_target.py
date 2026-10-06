@@ -227,3 +227,11 @@ def test_judge_failure_does_not_fail_the_trial():
     trial = summary["trials"][0]
     assert trial["outcome"] == "success", trial
     assert trial["target_metrics"]["intent_judge"] == {"status": "judge_error", "model": "sc-scripted/broken-judge"}
+
+
+def test_capture_is_read_in_parts():
+    # Real captures exceed Inspect's 100 MiB single-read limit; tiny parts prove reassembly.
+    summary, _ = campaign("scripted-example.toml", "asks-and-builds",
+                          target_options={"scripted_driver": "asks-and-builds", "capture_chunk_bytes": 65536})
+    trial = summary["trials"][0]
+    assert trial["outcome"] == "success", trial
