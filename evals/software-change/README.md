@@ -24,6 +24,7 @@ hidden/reference/...
 id = "stable-case-id"
 version = "1"
 allowed_edit_scope = ["labels.py"]
+test_timeout_seconds = 60  # optional; raise it for cases that build first (e.g. Rust)
 ```
 
 - IDs are safe identifiers; versions are nonempty strings. Increment the version

@@ -66,6 +66,16 @@ def test_format_rejects_bad_cases(case_copy, problem):
         load_case(case_copy)
 
 
+def test_case_test_timeout(case_copy):
+    assert load_case(case_copy).test_timeout_seconds == 60
+    manifest = case_copy / "case.toml"
+    manifest.write_text(manifest.read_text() + "test_timeout_seconds = 1200\n")
+    assert load_case(case_copy).test_timeout_seconds == 1200
+    manifest.write_text(manifest.read_text().replace("1200", "0"))
+    with pytest.raises(CaseFormatError):
+        load_case(case_copy)
+
+
 def test_loading_never_executes_case_code(case_copy):
     sentinel = case_copy / "executed"
     tests = case_copy / "hidden/tests/test_labels.py"

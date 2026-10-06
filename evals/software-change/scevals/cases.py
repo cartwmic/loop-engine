@@ -28,6 +28,8 @@ class EvalCase:
     allowed_edit_scope: tuple[str, ...]
     requirement_ids: tuple[str, ...]
     test_requirements: tuple[str, ...]
+    # Hidden-test run limit; Rust cases need a cold build first.
+    test_timeout_seconds: int = 60
 
     @property
     def repository(self):
@@ -106,7 +108,10 @@ def load_case(path: Path) -> EvalCase:
             relative = file.relative_to(path / "hidden/reference").as_posix()
             if not _relative_path(relative) or not any(fnmatchcase(relative, pattern) for pattern in scope):
                 raise CaseFormatError("reference edits outside allowed scope")
-        return EvalCase(path, case_id, version, tuple(scope), tuple(requirements), tuple(tags))
+        timeout = metadata.get("test_timeout_seconds", 60)
+        if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= 7200:
+            raise CaseFormatError("test_timeout_seconds must be an integer from 1 to 7200")
+        return EvalCase(path, case_id, version, tuple(scope), tuple(requirements), tuple(tags), timeout)
     except CaseFormatError:
         raise
     except (KeyError, TypeError, ValueError, SyntaxError, UnicodeError):
@@ -137,7 +142,7 @@ def run_hidden_tests(case: EvalCase, *, reference: bool, image=DEFAULT_IMAGE):
         run(["docker", "exec", "--workdir", "/workspace/repo", container, "python3",
              "/opt/case-check/case_runtime.py", "--tests", "/opt/case-check/tests",
              "--output", "/tmp/case-results.json"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            timeout=60)
+            timeout=case.test_timeout_seconds)
         report = json.loads(output(["docker", "exec", container, "cat", "/tmp/case-results.json"]))
         report["container"] = {"image_id": config["Image"], "mounts": config["Mounts"],
                                "copies": copies}

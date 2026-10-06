@@ -70,7 +70,7 @@ def check_image(args):
     built = build_image(args.ref, args.tag)
     with trial_container(args.tag) as (container, config):
         versions = {}
-        for tool in ("loop-engine", "software-change", "dagu", "pi", "node", "git"):
+        for tool in ("loop-engine", "software-change", "dagu", "pi", "node", "git", "cargo", "rustc"):
             versions[tool] = output(["docker", "exec", container, tool,
                                      "version" if tool == "dagu" else "--version"])
             print(f"{tool}: {versions[tool]}")
@@ -81,6 +81,8 @@ def check_image(args):
         match = re.search(r"\b(\d+)\.(\d+)\.(\d+)\b", versions["dagu"])
         if not match or tuple(map(int, match.groups())) < (2, 14, 0):
             raise RuntimeError("Dagu 2.14.0 or newer is required")
+        if not versions["rustc"].startswith("rustc 1.98.0"):
+            raise RuntimeError("trial image must carry Rust 1.98.0")
         if versions["pi"] != "1.0.0":
             raise RuntimeError("unexpected pi version")
         image_config = json.loads(output(["docker", "image", "inspect", config["Image"]]))[0]

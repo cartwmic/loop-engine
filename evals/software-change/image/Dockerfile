@@ -25,6 +25,12 @@ RUN curl -fsSL https://github.com/dagu-org/dagu/releases/download/v2.14.0/dagu_2
     && rm /tmp/dagu.tar.gz
 RUN npm install --global @earendil-works/pi-coding-agent@1.0.0 \
     && npm cache clean --force
+# Rust 1.98.0 (cargo, rustc, clippy, rustfmt) for cases in Rust repositories.
+# The node bookworm base already carries gcc and the C linker.
+COPY --from=build /usr/local/rustup /usr/local/rustup
+COPY --from=build /usr/local/cargo/bin /usr/local/cargo/bin
+ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:$PATH
+RUN cargo --version && rustc --version && cargo clippy --version && cargo fmt --version
 COPY --from=build /src/target/release/loop-engine /src/target/release/software-change /usr/local/bin/
 COPY --from=build /src/skills/using-loop-engine /opt/sc-evals/skills/using-loop-engine
 COPY --from=build /src/crates/software-change-provider/skills/using-software-change-provider /opt/sc-evals/skills/using-software-change-provider

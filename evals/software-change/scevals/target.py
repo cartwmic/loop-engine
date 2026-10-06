@@ -347,7 +347,7 @@ class SoftwareChangeTarget:
         await trial.copy_scoring_material()
         result = await trial.env.exec(["python3", "/opt/scoring/case_runtime.py", "--tests", "/opt/scoring/tests",
                                        "--output", "/workspace/trial/hidden-results.json"],
-                                      cwd="/workspace/public/repo", timeout=60)
+                                      cwd="/workspace/public/repo", timeout=trial.case.test_timeout_seconds)
         if not result.success:
             raise InfrastructureError("hidden-test runner failed")
         tests = json.loads(await trial.env.read_file("/workspace/trial/hidden-results.json"))
